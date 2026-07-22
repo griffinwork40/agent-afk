@@ -1335,9 +1335,17 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       config: baseConfig({ autoCompact: true }),
     });
     await collect(q);
-    // Exactly one compaction: history-too-short after turn 1, nothing-to-
-    // summarize after turn 2 (boundary 0), then a real splice after turn 3.
-    expect(summarizeCalls).toHaveLength(1);
+    // Each turn reports ~200k — far over the window — so the adaptive
+    // keep-window (see shared/compaction.ts:findCompactionBoundaryAdaptive)
+    // engages whenever there is an older turn to summarize:
+    //   turn 1 → still history-too-short (a single fresh user turn can't be
+    //            compacted — shrinking to keepLastN=1 lands the boundary at 0);
+    //   turn 2 → 2 fresh user turns + full window → keep-window relaxes 2→1 and
+    //            turn 1 is summarized (summarize call #1);
+    //   turn 3 → normal boundary (3 fresh user turns) → summarize call #2.
+    // Before the fullness fallback this was 1 call (compaction only at turn 3);
+    // firing earlier on a full window is the point of the feature.
+    expect(summarizeCalls).toHaveLength(2);
   });
 
   it('does NOT auto-compact when config.autoCompact is unset (default off)', async () => {

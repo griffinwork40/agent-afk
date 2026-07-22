@@ -32,6 +32,7 @@ import type { CompactionTrigger } from '../../trace/types.js';
 import {
   COMPACT_ACK_TEXT,
   COMPACT_SUMMARY_HEADER,
+  DEFAULT_COMPACT_SHRINK_THRESHOLD,
   runCompactionCore,
   type CompactionOps,
 } from '../shared/compaction.js';
@@ -133,6 +134,20 @@ export function readKeepLastN(): number {
   return DEFAULT_COMPACT_KEEP_LAST_TURNS;
 }
 
+/**
+ * Fullness fraction at/above which the keep-window may shrink so a
+ * short-but-full session can still be compacted. `AFK_COMPACT_SHRINK_FRACTION`
+ * overrides it; values outside (0, 1) exclusive fall back to the default.
+ */
+export function readShrinkFraction(): number {
+  const raw = env.AFK_COMPACT_SHRINK_FRACTION;
+  if (raw !== undefined && raw.length > 0) {
+    const n = Number.parseFloat(raw);
+    if (Number.isFinite(n) && n > 0 && n < 1) return n;
+  }
+  return DEFAULT_COMPACT_SHRINK_THRESHOLD;
+}
+
 /** Injected collaborators for {@link compactOpenAIHistory}. */
 export interface CompactOpenAIHistoryDeps {
   /** The query's mutable running history — mutated in place on success. */
@@ -158,6 +173,15 @@ export interface CompactOpenAIHistoryDeps {
    */
   trigger?: CompactionTrigger;
   traceWriter?: TraceWriter;
+  /**
+   * Context-window fullness fraction (0–1) at compaction time. Enables the
+   * adaptive keep-window so a short-but-full session can still be compacted.
+   * See `shared/compaction.ts:findCompactionBoundaryAdaptive`. Defaults to `0`
+   * (unknown → no shrink) when omitted.
+   */
+  usedFraction?: number;
+  /** Fullness fraction at/above which the keep-window may shrink. */
+  shrinkAtFraction?: number;
 }
 
 /**
@@ -184,6 +208,8 @@ export async function compactOpenAIHistory(
       messages: deps.priorTurns,
       ops: openaiCompactionOps,
       keepLastN: readKeepLastN(),
+      usedFraction: deps.usedFraction,
+      shrinkAtFraction: deps.shrinkAtFraction,
       summarize: (transcript) => deps.summarize(transcript, controller.signal),
       isAborted: () => controller.signal.aborted,
       abortInFlight: () => controller.abort(),

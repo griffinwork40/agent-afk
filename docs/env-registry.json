@@ -107,6 +107,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_COMPACT_SHRINK_FRACTION",
+      "description": "Context-fullness fraction (0–1, exclusive) at/above which /compact and auto-compaction relax the keep-window so a short-but-full session (few turns, huge tool exchanges) can still be summarized instead of no-oping on turn count. Default 0.7 (see shared/compaction.ts DEFAULT_COMPACT_SHRINK_THRESHOLD).",
+      "type": "number",
+      "required": false,
+      "example": "0.8",
+      "category": "model"
+    },
+    {
       "name": "AFK_COMPANION_PRIMER",
       "description": "Opt-in: absolute path to a single companion-primer file. When set, its content is bounded (capped, fenced as <companion-primer>) and appended to the system prompt at session start for top-level sessions (chat/REPL/telegram/daemon), as lower-authority \"reflections, not facts\" context. Unset (default) = no-op. Only the one named file is ever read — never a directory or repo walk.",
       "type": "string",

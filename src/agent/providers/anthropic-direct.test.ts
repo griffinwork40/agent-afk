@@ -210,6 +210,19 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
   ];
 }
 
+/**
+ * Like {@link makeTextStream} but reports `input_tokens` high enough to cross
+ * 0.7 of the sonnet auto-compaction budget (200k), so `state.lastUsage` marks
+ * the session "full" and the adaptive compaction keep-window engages. 181k of
+ * 200k = 0.905 — comfortably above the 0.7 shrink gate.
+ */
+function makeHighUsageTextStream(text: string): RawMessageStreamEvent[] {
+  const evts = makeTextStream(text);
+  const start = evts[0] as unknown as { message: { usage: { input_tokens: number } } };
+  start.message.usage.input_tokens = 181_000;
+  return evts;
+}
+
 /** Build a stream that emits a single tool_use block, ending with stop_reason=tool_use. */
 function makeToolUseStream(
   toolId: string,
@@ -1304,6 +1317,44 @@ describe('AnthropicDirectProvider', () => {
     expect(result.reason).toBe('nothing-to-summarize');
     // No summarization call should have been made.
     expect(messagesCreateMock).toHaveBeenCalledTimes(2); // only the 2 user turns
+
+    harness.stop();
+    query.close();
+    await drive;
+  });
+
+  it('compact() summarizes a short-but-full session (2 turns, window near limit)', async () => {
+    // The mirror of the test above: the SAME 2-turn shape that returns
+    // nothing-to-summarize when the window is empty MUST compact once the
+    // window is full. Both turns report high usage (181k of the 200k sonnet
+    // budget → 0.9), so the adaptive keep-window relaxes from 2 → 1 fresh user
+    // turn and the older turn is summarized. Regression guard for the
+    // "compact refuses on a full 1-2 turn session" gap.
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      // Calls 1-2 are the user turns (high usage); call 3 is the summarization.
+      if (callIdx <= 2) return fromArray(makeHighUsageTextStream('reply'));
+      return fromArray(makeTextStream('## Summary\n\nOlder turn compressed.'));
+    });
+    const harness = makeMultiTurnHarness(2);
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: harness.prompt,
+      // No autoCompactThreshold → auto-compaction stays disabled; the only
+      // compaction is the manual compact() call below.
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
+    });
+    const drive = drainQuery(query, harness);
+    await harness.fireTurn(0, 'u1');
+    await harness.fireTurn(1, 'u2');
+
+    const result = await query.compact!();
+    expect(result.compacted).toBe(true);
+    // The summarization request fired (3rd create call) — proof the adaptive
+    // shrink engaged rather than short-circuiting to a no-op.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(3);
+    expect(result.messagesBefore).toBeGreaterThan(0);
 
     harness.stop();
     query.close();

@@ -30,6 +30,7 @@ import {
   applyCompaction as sharedApplyCompaction,
   estimateTokensSaved as sharedEstimateTokensSaved,
   findCompactionBoundary as sharedFindCompactionBoundary,
+  findCompactionBoundaryAdaptive as sharedFindCompactionBoundaryAdaptive,
   renderTranscript as sharedRenderTranscript,
   wrapTranscriptForSummary,
   type CompactionOps,
@@ -137,6 +138,28 @@ export function findCompactionBoundary(
   keepLastN: number,
 ): number {
   return sharedFindCompactionBoundary(messages, keepLastN, anthropicCompactionOps);
+}
+
+/**
+ * Boundary selection with the token-fullness fallback. Thin adapter over the
+ * shared {@link sharedFindCompactionBoundaryAdaptive} bound to
+ * {@link anthropicCompactionOps}. See the shared docs: when the turn-count
+ * keep-window is a no-op but `usedFraction >= shrinkAtFraction`, the keep-window
+ * relaxes toward 1 turn so a short-but-full session can still be compacted.
+ */
+export function findCompactionBoundaryAdaptive(
+  messages: ReadonlyArray<MessageParam>,
+  keepLastN: number,
+  usedFraction: number,
+  shrinkAtFraction: number,
+): number {
+  return sharedFindCompactionBoundaryAdaptive(
+    messages,
+    keepLastN,
+    anthropicCompactionOps,
+    usedFraction,
+    shrinkAtFraction,
+  );
 }
 
 /**

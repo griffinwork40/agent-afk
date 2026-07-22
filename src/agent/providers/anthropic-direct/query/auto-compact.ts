@@ -13,6 +13,7 @@
 export {
   computeUsedTokens,
   contextWindowTokensUsed,
+  contextFullnessFraction,
   buildContextUsageFields,
   shouldAutoCompact,
 } from '../../shared/auto-compact.js';
