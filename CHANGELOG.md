@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.62.0] - 2026-07-22
+
+### Added
+- tool-result microcompaction to reclaim context on short-but-full sessions (#671) (9b7b3ec)
+
+### Fixed
+- count commits vs main HEAD when meta has no baseSha (#670) (97b3619)
+
 ## [5.61.0] - 2026-07-22
 
 ### Added
