@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.61.0] - 2026-07-22
+
+### Added
+- stamp a provenance header on cross-model subagent results (#656) (71b8601)
+- notify the model when its provider is swapped mid-session (#655) (39a9ef7)
+- token-aware keep-window so /compact works on short-but-full sessions (#667) (c5b6354)
+
 ## [5.60.0] - 2026-07-21
 
 ### Added
