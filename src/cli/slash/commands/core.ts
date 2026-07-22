@@ -15,6 +15,13 @@ import { REPL_SPINNER_OPTIONS } from '../../commands/interactive/shared.js';
 import { HookBlockedError, AbortError } from '../../../utils/errors.js';
 import type { SlashCommand } from '../types.js';
 
+/** Compact human-readable byte size for the /compact microcompaction notice. */
+function formatBytes(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}MB`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}KB`;
+  return `${n}B`;
+}
+
 const exitCmd: SlashCommand = {
   name: '/exit',
   aliases: ['/quit'],
@@ -75,6 +82,14 @@ const compactCmd: SlashCommand = {
           ctx.out.info('Compaction cancelled.');
         } else if (reason.startsWith('summarization-failed')) {
           ctx.out.error(`Compaction failed: ${reason}. History unchanged.`);
+        } else if (reason === 'microcompacted') {
+          // Deterministic tool-result microcompaction reclaimed bytes on a
+          // short-but-full session where turn-granular summarization no-ops.
+          const mc = result.microcompaction;
+          const detail = mc
+            ? ` — cleared ${mc.blocksCleared} tool result${mc.blocksCleared === 1 ? '' : 's'} (~${formatBytes(mc.bytesReclaimed)} reclaimed)`
+            : '';
+          ctx.out.success(`Reclaimed context${detail}.`);
         } else if (reason === 'nothing-to-summarize') {
           ctx.out.info('Nothing to compact — all history is within the keep window.');
         } else if (reason === 'not-supported') {

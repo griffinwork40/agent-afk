@@ -110,6 +110,202 @@ export const DEFAULT_COMPACT_TIMEOUT_MS = 60_000;
 export const DEFAULT_COMPACT_SHRINK_THRESHOLD = 0.7;
 
 /**
+ * Default byte threshold (content length) at/above which a `tool_result` block
+ * becomes a microcompaction candidate. Small results (a short shell exit line, a
+ * one-line file edit ack) are cheap to keep and carry high signal, so they are
+ * left intact; only fat payloads (a 40 KB file read, a giant grep dump) are worth
+ * clearing. Overridable via `AFK_MICROCOMPACT_TOOL_RESULT_BYTES`.
+ */
+export const DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES = 2_048;
+
+/**
+ * Default number of most-recent `tool_result` blocks microcompaction keeps
+ * intact regardless of size. The agent is usually reasoning over the freshest
+ * few tool outputs, so clearing those would erase the context it is actively
+ * using. Older results are the safe ones to trim. Overridable via
+ * `AFK_MICROCOMPACT_KEEP_LAST`.
+ */
+export const DEFAULT_MICROCOMPACT_KEEP_LAST = 4;
+
+/**
+ * Sentinel that marks a `tool_result` whose content microcompaction already
+ * cleared. Detection of this exact prefix is what makes the pass IDEMPOTENT: a
+ * second run skips any block whose content already starts with it, so bytes are
+ * never double-counted and an already-cleared block is never re-cleared.
+ */
+export const MICROCOMPACT_PLACEHOLDER_SENTINEL = '[tool result cleared to reclaim context';
+
+/**
+ * Build the placeholder string that replaces a cleared `tool_result`'s content.
+ * Carries a hint of how many bytes were reclaimed so a human reading the
+ * transcript understands what happened. Always begins with
+ * {@link MICROCOMPACT_PLACEHOLDER_SENTINEL} so {@link isMicrocompactPlaceholder}
+ * can recognise it on a later pass.
+ */
+export function buildMicrocompactPlaceholder(bytes: number): string {
+  return `${MICROCOMPACT_PLACEHOLDER_SENTINEL} — was ${bytes} bytes]`;
+}
+
+/** True when `text` is (or begins with) a microcompaction placeholder. */
+export function isMicrocompactPlaceholder(text: string): boolean {
+  return text.startsWith(MICROCOMPACT_PLACEHOLDER_SENTINEL);
+}
+
+/**
+ * Provider-neutral handle to one `tool_result` unit inside a message array. The
+ * shape of a tool result differs per provider — an Anthropic `tool_result`
+ * content block nested in a `role:'user'` message vs. a whole OpenAI
+ * `role:'tool'` message — so {@link microcompactToolResults} never touches the
+ * raw structure directly; it walks these handles instead. `clear()` is the ONLY
+ * mutation and it replaces content in place, preserving the block/message and
+ * its id so the tool_use/tool_result pairing the Messages API requires is never
+ * disturbed.
+ */
+export interface ToolResultRef {
+  /** Current content length in bytes (UTF-8) — the selection/threshold metric. */
+  byteLength: number;
+  /** True when this result's content is already a microcompaction placeholder. */
+  isPlaceholder: boolean;
+  /**
+   * Replace this result's content in place with `placeholder`. Must NOT remove
+   * the block/message or alter its id — only swap the content payload.
+   */
+  clear(placeholder: string): void;
+}
+
+/**
+ * Provider primitive for microcompaction: enumerate the `tool_result` units in a
+ * message array in transcript order (oldest first). Each returned
+ * {@link ToolResultRef} exposes its byte size, whether it is already a
+ * placeholder, and an in-place `clear()` mutator. Pure w.r.t. iteration — reading
+ * the list has no side effects; only `ref.clear()` mutates.
+ */
+export interface MicrocompactOps<M> {
+  listToolResults(messages: ReadonlyArray<M>): ToolResultRef[];
+}
+
+/** Options for {@link microcompactToolResults}. */
+export interface MicrocompactOptions {
+  /** Byte threshold; results with `byteLength < thresholdBytes` are never cleared. */
+  thresholdBytes?: number;
+  /** Keep this many of the most-recent tool_result blocks intact regardless of size. */
+  keepLast?: number;
+}
+
+/** Outcome of one {@link microcompactToolResults} pass. */
+export interface MicrocompactResult {
+  /** Number of `tool_result` blocks whose content was replaced by a placeholder. */
+  blocksCleared: number;
+  /** Total content bytes reclaimed (sum of pre-clear byte lengths minus placeholders). */
+  bytesReclaimed: number;
+  /** Total `tool_result` blocks seen (cleared, kept-recent, already-placeholder, or below threshold). */
+  blocksScanned: number;
+}
+
+/**
+ * Deterministically reclaim context by clearing large/old `tool_result` block
+ * CONTENT in place — no LLM call, no message removal. This is the pass that lets
+ * a single-turn-but-full session (all its tool exchanges inside the one kept
+ * turn, where turn-granular summarization cannot reach) still shed the bytes that
+ * filled the window.
+ *
+ * Algorithm:
+ *   1. Enumerate every `tool_result` unit via `ops.listToolResults` (oldest
+ *      first).
+ *   2. Protect the most-recent `keepLast` blocks — the agent is usually
+ *      reasoning over the freshest tool outputs, so those stay intact.
+ *   3. Among the remaining (older) blocks, clear those whose content is at/above
+ *      `thresholdBytes`, LARGEST FIRST, replacing content with a short
+ *      placeholder that records the reclaimed byte count.
+ *   4. Skip any block already carrying the placeholder sentinel — this is what
+ *      makes a second pass a no-op (IDEMPOTENT).
+ *
+ * Invariants (a violation breaks the Anthropic/OpenAI Messages API contract):
+ *   - Never removes a `tool_use` or a `tool_result`; only swaps a result's
+ *     CONTENT for a placeholder. Every tool_use keeps its matching tool_result
+ *     at the same position/id.
+ *   - No model call — a pure array/content transform.
+ *   - Selection does NOT depend on the fresh-user-turn boundary, so it works at
+ *     any turn count including one.
+ *
+ * Mutates the underlying messages in place through `ref.clear()`. Returns the
+ * counts for the caller's UX/telemetry. When nothing qualifies, returns
+ * `blocksCleared: 0, bytesReclaimed: 0` and mutates nothing.
+ */
+export function microcompactToolResults<M>(
+  messages: ReadonlyArray<M>,
+  ops: MicrocompactOps<M>,
+  opts: MicrocompactOptions = {},
+): MicrocompactResult {
+  const thresholdBytes = opts.thresholdBytes ?? DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES;
+  const keepLast = Math.max(0, opts.keepLast ?? DEFAULT_MICROCOMPACT_KEEP_LAST);
+
+  const refs = ops.listToolResults(messages);
+  const blocksScanned = refs.length;
+  if (blocksScanned === 0) {
+    return { blocksCleared: 0, bytesReclaimed: 0, blocksScanned };
+  }
+
+  // Protect the most-recent `keepLast` results: everything at index
+  // >= (length - keepLast) is off-limits. The rest (older) are candidates.
+  const protectedFrom = Math.max(0, refs.length - keepLast);
+  const candidates = refs
+    .slice(0, protectedFrom)
+    .filter((ref) => !ref.isPlaceholder && ref.byteLength >= thresholdBytes);
+
+  // Largest first so the biggest window-fillers are reclaimed with priority;
+  // tie-break is irrelevant since every candidate is cleared in a single pass.
+  candidates.sort((a, b) => b.byteLength - a.byteLength);
+
+  let blocksCleared = 0;
+  let bytesReclaimed = 0;
+  for (const ref of candidates) {
+    const placeholder = buildMicrocompactPlaceholder(ref.byteLength);
+    const before = ref.byteLength;
+    ref.clear(placeholder);
+    // Net reclaim = original content bytes minus the placeholder we wrote back.
+    bytesReclaimed += Math.max(0, before - byteLengthOf(placeholder));
+    blocksCleared += 1;
+  }
+
+  return { blocksCleared, bytesReclaimed, blocksScanned };
+}
+
+/** UTF-8 byte length of a string — the metric microcompaction thresholds on. */
+export function byteLengthOf(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
+}
+
+/**
+ * Parse the two microcompaction env strings into a validated
+ * {@link MicrocompactOptions}. Pure (no `process.env` read) so it unit-tests
+ * without touching the environment — each provider handler reads
+ * `AFK_MICROCOMPACT_TOOL_RESULT_BYTES` / `AFK_MICROCOMPACT_KEEP_LAST` through
+ * `config/env.ts` and passes the raw strings here.
+ *
+ *   - `rawBytes`: a finite integer `>= 1` overrides the threshold; anything else
+ *     falls back to {@link DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES}.
+ *   - `rawKeepLast`: a finite integer `>= 0` overrides keepLast (0 = protect
+ *     nothing); anything else falls back to {@link DEFAULT_MICROCOMPACT_KEEP_LAST}.
+ */
+export function resolveMicrocompactOptions(
+  rawBytes: string | undefined,
+  rawKeepLast: string | undefined,
+): Required<MicrocompactOptions> {
+  let thresholdBytes = DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES;
+  if (rawBytes !== undefined && rawBytes.length > 0) {
+    const n = Number.parseInt(rawBytes, 10);
+    if (Number.isFinite(n) && n >= 1) thresholdBytes = n;
+  }
+  let keepLast = DEFAULT_MICROCOMPACT_KEEP_LAST;
+  if (rawKeepLast !== undefined && rawKeepLast.length > 0) {
+    const n = Number.parseInt(rawKeepLast, 10);
+    if (Number.isFinite(n) && n >= 0) keepLast = n;
+  }
+  return { thresholdBytes, keepLast };
+}
+
+/**
  * Provider-specific message-representation primitives. Pure — no I/O, no SDK
  * client, no logging — so they unit-test without a network. Everything a
  * provider must supply to participate in compaction lives here; the generic

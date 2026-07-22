@@ -351,6 +351,24 @@
       "category": "misc"
     },
     {
+      "name": "AFK_MICROCOMPACT_KEEP_LAST",
+      "description": "Number of the most-recent tool_result blocks that tool-result microcompaction keeps intact regardless of size, so the agent does not lose the tool output it is actively reasoning over. Older results are the safe ones to trim. Default 4 (see shared/compaction.ts DEFAULT_MICROCOMPACT_KEEP_LAST). Values <= 0 protect nothing.",
+      "type": "number",
+      "required": false,
+      "default": "4",
+      "example": "3",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MICROCOMPACT_TOOL_RESULT_BYTES",
+      "description": "Byte threshold (tool_result content length) at/above which a tool_result block becomes a microcompaction candidate. When /compact and auto-compaction would otherwise no-op on a short-but-full session, microcompaction clears large/old tool_result CONTENT in place (largest first) — replacing it with a short placeholder, never removing the block — to reclaim context deterministically (no LLM call). Blocks below this size are left intact. Default 2048 (see shared/compaction.ts DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES).",
+      "type": "number",
+      "required": false,
+      "default": "2048",
+      "example": "4096",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL",
       "description": "Default model for agent turns. Accepts slot names (local, small, medium, large), fixed-identity aliases (opus, sonnet, haiku, fable), or full model IDs. Migration: AFK_MODEL=sonnet now pins the fixed Sonnet identity rather than following a rebound medium tier.",
       "type": "string",
