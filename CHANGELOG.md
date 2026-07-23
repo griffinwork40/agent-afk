@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.70.0] - 2026-07-23
+
+### Added
+- per-chat tag-only response policy (#680) (f0f52d9)
+
 ## [5.69.0] - 2026-07-23
 
 ### Added
