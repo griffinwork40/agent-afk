@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.71.1] - 2026-07-23
+
+### Fixed
+- ESC interrupt halts promptly and never strands the next turn (#676) (e108475)
+
+### Changed
+- /simplify wins for the terminal-compositor pair (#682) (#684) (afd3eda)
+
 ## [5.71.0] - 2026-07-23
 
 ### Added
