@@ -644,7 +644,14 @@ export type SessionPhaseName =
   // a pair, but a pause may end without a resume (auto-resume off, abort, or the
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
-  | 'usage_limit_resume';
+  | 'usage_limit_resume'
+  // Progress-aware idle watchdog fired on a forked sub-agent turn: the child
+  // produced no observable OutputEvent for the idle window and its controller
+  // was aborted (see subagent/idle-watchdog.ts). A single event (no paired
+  // start); carries `idleTimeoutMs`, `elapsedSinceLastProgressMs`, and
+  // `lastEventType` in `metadata`. Distinct from `rate_limit`/`usage_limit_*`,
+  // which mark LEGITIMATE waits — this marks an unexplained stall that fired.
+  | 'idle_watchdog_fired';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

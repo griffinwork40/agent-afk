@@ -16,6 +16,28 @@ export class TimeoutError extends Error {
 }
 
 /**
+ * Thrown when a forked sub-agent's progress-aware idle watchdog fires: the
+ * child produced NO observable {@code OutputEvent} for a full idle window
+ * (default 8 min — see {@link import('../agent/subagent.js').SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS}),
+ * distinct from the blunt wall-clock budget that bounds total turn time. The
+ * watchdog aborts the SAME controller {@code withTimeout} targets, so the
+ * existing timeout-abort → partial-output path in
+ * {@code SubagentHandleImpl.run} applies unchanged.
+ *
+ * Extends {@link TimeoutError} deliberately: the {@code instanceof
+ * TimeoutError} own-budget classification in `subagent/handle.ts` then treats
+ * an idle-fire as a `failed` (own-budget expiry) termination — NOT a
+ * `cancelled` one — with the child's `partialOutput` preserved, exactly like a
+ * wall-clock timeout. {@code timeoutMs} carries the idle window that elapsed.
+ */
+export class IdleWatchdogError extends TimeoutError {
+  constructor(message: string, idleTimeoutMs: number) {
+    super(message, idleTimeoutMs);
+    this.name = "IdleWatchdogError";
+  }
+}
+
+/**
  * Thrown when a harness hook handler returns a blocking decision
  * ({@code continue: false} or {@code decision: 'block'}) or throws. The
  * wrapped cause — if any — is preserved on {@link HookBlockedError.cause}.
