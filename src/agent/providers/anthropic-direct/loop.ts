@@ -48,6 +48,7 @@ import {
   withMessagesBreakpoint,
 } from './cache-policy.js';
 import { translateMessageStream } from './translate.js';
+import { StreamIncompleteError } from '../../../utils/errors.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
@@ -97,6 +98,28 @@ export function toWireTool(tool: AnthropicToolDef): WireToolDef {
 
 export const OVERLOAD_MAX_RETRIES = 3;
 const OVERLOAD_BASE_DELAY_MS = 5_000;
+
+// Bounded re-drive for a mid-stream CLEAN close — a `StreamIncompleteError`
+// that translate.ts surfaces as an in-band error event when the SSE stream
+// ended with NEITHER a `message_stop` NOR a `stop_reason` AFTER content had
+// already streamed (an intermediary proxy/gateway/LB dropped the connection
+// mid-generation; the raw SDK stream ends without throwing). This is distinct
+// from both existing retry classes: not a TTFB stall (a first byte WAS seen,
+// so the stall timer never fires) and not an overload (no `overloaded_error`
+// / 529), so without this branch it falls straight through to the fatal path.
+//
+// Kept LOW (below OVERLOAD_MAX_RETRIES = 3): each failed attempt burns a
+// partial — often long — generation before the cut, so a retry costs far more
+// here than a fast 529 rejection. Two attempts rescue the common transient
+// blip while capping wasted token/latency spend on a deterministic
+// (too-long-for-the-proxy) cut; the companion default-subagent contract (write
+// bulk output to files, keep the final message short) shrinks the generation
+// so these retries stay cheap. The delay is short (1s → 2s, not overload's
+// 5s/10s/20s): a dropped connection is not a server-overload signal, so we
+// reconnect promptly while still avoiding a tight loop against a flapping
+// intermediary.
+export const STREAM_INCOMPLETE_MAX_RETRIES = 2;
+const STREAM_INCOMPLETE_BASE_DELAY_MS = 1_000;
 
 export function isTransientServerError(err: Error): boolean {
   if (!('status' in err)) return false;
@@ -297,6 +320,10 @@ export async function* runTurn(
   // and reset to 0 after every clean round so each tool-use round gets its own
   // allowance — mirroring createWithRetry's per-call (not per-turn) scope.
   let overloadRetries = 0;
+  // Same per-round scope for the mid-stream clean-close (StreamIncompleteError)
+  // re-drive budget — see STREAM_INCOMPLETE_MAX_RETRIES. Accumulates across the
+  // retries of ONE round; reset to 0 once the round resolves.
+  let streamIncompleteRetries = 0;
   // Per-round time-to-first-token stall bound (issue #583). A degrading upstream
   // call that never streams a first CONTENT token (text/thinking delta or
   // tool_use — message_start + pings do NOT count) is aborted at this bound and
@@ -444,6 +471,7 @@ export async function* runTurn(
     let turnResult: TurnResult | null = null;
     let translatorErrored = false;
     let retryOverload = false;
+    let retryStreamIncomplete = false;
     // Witness layer: emit model_ttfb exactly once for this API call, on the
     // first translated stream event. Reset per while-iteration so each model
     // call reports its own time-to-first-byte.
@@ -515,6 +543,24 @@ export async function* runTurn(
               !input.signal.aborted
             ) {
               retryOverload = true;
+              break;
+            }
+            // Mid-stream CLEAN close (StreamIncompleteError): the stream ended
+            // with no message_stop and no stop_reason AFTER content streamed —
+            // an intermediary dropped the connection mid-generation. translate.ts
+            // surfaces it as this in-band error event (it is constructed and
+            // yielded, never thrown, so it cannot reach the catch below). Neither
+            // the TTFB branch (a first byte was seen) nor the overload branch
+            // (not an overloaded_error) matches it, so without this it would fall
+            // through to the fatal path. Re-drive like overload: input.messages
+            // is unmutated for the round, so the retry re-sends identical history
+            // (already-streamed text may re-emit — reset via stream.retry below).
+            if (
+              out.event.error instanceof StreamIncompleteError &&
+              streamIncompleteRetries < STREAM_INCOMPLETE_MAX_RETRIES &&
+              !input.signal.aborted
+            ) {
+              retryStreamIncomplete = true;
               break;
             }
             yield out.event;
@@ -603,6 +649,44 @@ export async function* runTurn(
       continue;
     }
 
+    if (retryStreamIncomplete) {
+      streamIncompleteRetries += 1;
+      // Witness layer: log the mid-stream-cut re-drive so it is legible in
+      // `afk trace show`. Reuse the `rate_limit` phase as the generic
+      // retry/backoff marker (the TTFB and overload re-drives do the same) with
+      // a distinct `reason`. Fire-and-forget; trace latency must never stall
+      // the retry.
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'rate_limit',
+        metadata: {
+          reason: 'stream-incomplete',
+          source: 'mid-stream',
+          attempt: streamIncompleteRetries,
+        },
+      });
+      // Tell surfaces to discard the current round's already-streamed text: the
+      // re-driven request re-streams the round from scratch, so without a reset
+      // any partial text visibly duplicates. Emitted before the delay so the UI
+      // clears immediately rather than after the wait.
+      yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
+      // Short settle delay (1s → 2s), NOT overload's 5s/10s/20s: a dropped
+      // connection is not a server-overload signal, so reconnect promptly while
+      // still avoiding a tight hammer loop against a flapping intermediary.
+      await sleepWithAbort(
+        STREAM_INCOMPLETE_BASE_DELAY_MS * Math.pow(2, streamIncompleteRetries - 1),
+        input.signal,
+      );
+      if (input.signal.aborted) {
+        yield {
+          type: 'turn.completed',
+          usage: withTurnDuration(accumulatedUsage),
+          sessionId: input.ctx.sessionId,
+        };
+        return;
+      }
+      continue;
+    }
+
     // Past the overload-retry decision for this round (retryOverload is
     // false), so this round's mid-stream overload budget is spent — restore
     // the full allowance for the next tool-use round. Reset here, ABOVE the
@@ -612,6 +696,8 @@ export async function* runTurn(
     // placing it above them makes the invariant unconditional and survives a
     // future refactor that turns a terminal path into a `continue`.
     overloadRetries = 0;
+    // Same per-round scope for the mid-stream clean-close re-drive budget.
+    streamIncompleteRetries = 0;
     // Same per-round scope for the TTFB single-retry allowance: a round that
     // streamed a first byte spends its budget, so the next tool-use round gets a
     // fresh one. A round only reaches here after a clean first byte, so this

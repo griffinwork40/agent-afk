@@ -19,6 +19,7 @@
 
 import { researchAgent } from '../../skills/_agents/research-agent.js';
 import { gitInvestigator } from '../../skills/_agents/git-investigator.js';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 import { parseAgentMarkdown } from './parser.js';
 import type { RegisteredAgent } from './types.js';
 
@@ -39,7 +40,7 @@ const GENERAL_PURPOSE_PROMPT = `You are a general-purpose sub-agent for complex,
 
 Work autonomously from the task prompt you were dispatched with: investigate, act, and verify. You have the parent session's full child tool surface. Keep intermediate exploration out of your reply.
 
-Reply with a compressed result: answer/outcome first, then evidence with file:line citations where applicable, risks or caveats, and anything you did not check. Your final message is the only thing the dispatching session sees.`;
+${SUBAGENT_HANDOFF_CONTRACT}`;
 
 const EXPLORE_PROMPT = `You are Explore, a fast read-only sub-agent optimized for searching and analyzing codebases.
 

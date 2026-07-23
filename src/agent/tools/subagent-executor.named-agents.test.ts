@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 
 const appendRoutingDecision = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../routing-telemetry.js', () => ({ appendRoutingDecision }));
@@ -289,11 +290,15 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkArgs.config.provider).toBeDefined();
   });
 
-  it('unnamed dispatch remains unchanged (no provider restriction, base prompt)', async () => {
+  it('unnamed dispatch keeps the base prompt with the handoff contract appended (no provider restriction)', async () => {
     const executor = makeExecutor();
     await executor.execute(makeCall({ prompt: 'plain dispatch' }));
     const forkArgs = forkSubagent.mock.calls[0]?.[0];
-    expect(forkArgs.config.systemPrompt).toBe('BASE PROMPT');
+    // Unnamed dispatch inherits the parent base prompt, then has the default
+    // handoff contract appended so the child itself keeps its reply short /
+    // offloads bulk output to files (see SUBAGENT_HANDOFF_CONTRACT).
+    expect(forkArgs.config.systemPrompt).toMatch(/^BASE PROMPT/);
+    expect(forkArgs.config.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
     expect(factoryCalls[0]?.['allowedTools']).toBeUndefined();
     expect(forkArgs.agentType).toBe('plain dispatch');
   });
