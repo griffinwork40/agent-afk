@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.67.0] - 2026-07-23
+
+### Added
+- self-reported convergence/stop criterion for general-purpose (#675) (cc68e72)
+
+## [5.66.0] - 2026-07-23
+
+### Added
+- bound general-purpose subagent with a generous tool-use ceiling (#673) (5e2974e)
+
 ## [5.65.0] - 2026-07-22
 
 ### Added
