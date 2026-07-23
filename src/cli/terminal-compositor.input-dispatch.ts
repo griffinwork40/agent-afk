@@ -836,18 +836,49 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   return true;
 }
 
+/**
+ * The buffer-edit commit contract shared by the "transform, commit only if it
+ * changed" bindings (meta word-delete, Ctrl+W/U/K kills): apply a pure
+ * InputCore transition only when it actually changes the buffer, resetting
+ * history recall FIRST on a real edit (the convention documented in
+ * handleCursorAndEdit). Returns `true` so a handled binding can tail-call it
+ * as `return commitIfChanged(self, InputCore.x(self.input))`.
+ */
+function commitIfChanged(self: KeyDispatchHost, next: InputCoreState): true {
+  if (next !== self.input) {
+    self.history?.resetRecall();
+    self.applyEdit(next);
+  }
+  return true;
+}
+
+/**
+ * Atomic paste-placeholder delete shared by Backspace (backward) and Delete
+ * (forward): when the cursor abuts a `[Pasted text #N +M lines]` token, the
+ * whole token (and its side-table entry) is removed in one keystroke. Returns
+ * `true` when a token was consumed (caller stops), `false` to fall through to
+ * the normal character delete.
+ */
+function applyAtomicPlaceholderDelete(
+  self: KeyDispatchHost,
+  direction: 'backward' | 'forward',
+): boolean {
+  const atomic = Paste.maybeAtomicPlaceholderDelete(self, direction);
+  if (atomic) {
+    self.history?.resetRecall();
+    self.applyEdit(atomic);
+    return true;
+  }
+  return false;
+}
+
 function handleBackspace(self: KeyDispatchHost, key: KeyInfo): boolean {
   if (key?.name !== 'backspace') return false;
   // Option+Delete on macOS → meta+backspace: delete previous word.
   // Mirrors reader.ts:677 so word-erase is consistent across both
   // input surfaces.
   if (key?.meta) {
-    const next = InputCore.deleteWordBackward(self.input);
-    if (next !== self.input) {
-      self.history?.resetRecall();
-      self.applyEdit(next);
-    }
-    return true;
+    return commitIfChanged(self, InputCore.deleteWordBackward(self.input));
   }
   // Atomic placeholder delete — when the cursor sits at the
   // trailing `]` of a `[Pasted text #N +M lines]` token, single
@@ -855,12 +886,7 @@ function handleBackspace(self: KeyDispatchHost, key: KeyInfo): boolean {
   // entry). Without this, deleting a freshly-pasted blob requires
   // ~30 backspaces. Run BEFORE the InputCore.backspace fallback
   // so the atomic path wins when both would fire.
-  const atomic = Paste.maybeAtomicPlaceholderDelete(self, 'backward');
-  if (atomic) {
-    self.history?.resetRecall();
-    self.applyEdit(atomic);
-    return true;
-  }
+  if (applyAtomicPlaceholderDelete(self, 'backward')) return true;
   const next = InputCore.backspace(self.input);
   if (next !== self.input) {
     self.history?.resetRecall();
@@ -941,35 +967,20 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
 
   // Ctrl+W → delete word backward (readline `backward-kill-word`).
   if (key?.ctrl && key?.name === 'w') {
-    const next = InputCore.deleteWordBackward(self.input);
-    if (next !== self.input) {
-      self.history?.resetRecall();
-      self.applyEdit(next);
-    }
-    return true;
+    return commitIfChanged(self, InputCore.deleteWordBackward(self.input));
   }
 
   // Ctrl+U → delete from cursor to start of current line
   // (readline `backward-kill-line`). Also fires on Cmd+Delete in
   // iTerm2 profiles that remap it to ^U.
   if (key?.ctrl && key?.name === 'u') {
-    const next = InputCore.deleteToLineStart(self.input);
-    if (next !== self.input) {
-      self.history?.resetRecall();
-      self.applyEdit(next);
-    }
-    return true;
+    return commitIfChanged(self, InputCore.deleteToLineStart(self.input));
   }
 
   // Ctrl+K → delete from cursor to end of current line
   // (readline `kill-line`). Symmetric counterpart to Ctrl+U.
   if (key?.ctrl && key?.name === 'k') {
-    const next = InputCore.deleteToLineEnd(self.input);
-    if (next !== self.input) {
-      self.history?.resetRecall();
-      self.applyEdit(next);
-    }
-    return true;
+    return commitIfChanged(self, InputCore.deleteToLineEnd(self.input));
   }
 
   // Ctrl+L → clear screen and repaint the live frame.
@@ -1041,23 +1052,13 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
   if (key?.name === 'delete') {
     // Option+Fn-Delete → meta+delete: delete next word.
     if (key?.meta) {
-      const next = InputCore.deleteWordForward(self.input);
-      if (next !== self.input) {
-        self.history?.resetRecall();
-        self.applyEdit(next);
-      }
-      return true;
+      return commitIfChanged(self, InputCore.deleteWordForward(self.input));
     }
     // Atomic placeholder delete (forward) — symmetric counterpart
     // to the backspace branch above. When the cursor sits at the
     // leading `[` of a placeholder, Delete removes the whole
     // token.
-    const atomic = Paste.maybeAtomicPlaceholderDelete(self, 'forward');
-    if (atomic) {
-      self.history?.resetRecall();
-      self.applyEdit(atomic);
-      return true;
-    }
+    if (applyAtomicPlaceholderDelete(self, 'forward')) return true;
     self.history?.resetRecall();
     self.applyEdit(InputCore.deleteForward(self.input));
     return true;
