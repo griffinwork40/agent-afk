@@ -24,6 +24,19 @@
  * the idle budget. On `resumed`, the window collapses back to a normal idle
  * bound.
  *
+ * Tool-aware (never fires while a tool is legitimately executing): a forked
+ * child's tool call runs SILENTLY between its `tool_use_detail` chunk and its
+ * matching `tool_result` chunk — both providers yield every `tool.use.start`,
+ * then `await` the tool dispatch with zero intervening events, then yield every
+ * `tool.output`. That wait is bounded by the tool's OWN limit (bash ≤10min via
+ * `handlers/bash.ts`, a nested `agent` turn by its own wall-clock, a slow
+ * network tool by its timeout), so counting it against the idle budget would
+ * abort exactly the "healthy child grinding" case this watchdog protects. The
+ * idle clock is therefore SUSPENDED while ≥1 tool is in flight and re-armed
+ * when the last one returns. A tool that hangs with no bound of its own is
+ * still caught by the un-resettable wall-clock ceiling — the same guarantee as
+ * before this watchdog existed.
+ *
  * On fire the watchdog aborts the SAME `AbortController` `withTimeout` already
  * targets in `SubagentHandleImpl.run`, so the existing `AbortGraph` cascade,
  * own-budget-vs-cascade classification, and partial-output preservation all
@@ -67,6 +80,15 @@ export class IdleWatchdog {
   private fired = false;
 
   /**
+   * Tool-use ids currently executing on the child — populated on each
+   * `tool_use_detail` chunk and drained on the matching `tool_result`. While
+   * non-empty the idle clock is SUSPENDED: a running tool is a bounded wait on
+   * the tool's own limit, not unexplained silence. A `Set` (not a counter) so
+   * duplicate starts and results-without-starts can never drive it negative.
+   */
+  private readonly inFlightTools = new Set<string>();
+
+  /**
    * @param controller — the sub-agent's abort controller (the SAME one
    *   `withTimeout` targets). Aborted with an {@link IdleWatchdogError} on fire.
    * @param idleTimeoutMs — the idle window in ms. `<= 0` disables the watchdog.
@@ -103,23 +125,56 @@ export class IdleWatchdog {
   }
 
   /**
-   * Feed one streamed {@link OutputEvent}, re-arming the idle deadline per the
-   * event's semantics:
+   * Feed one streamed {@link OutputEvent}, re-arming (or suspending) the idle
+   * deadline per the event's semantics:
    *
+   * - `chunk`/`tool_use_detail` (a tool started): SUSPEND the idle clock — the
+   *   child is now in a bounded wait on the tool's own limit, not idle. Held
+   *   suspended until every in-flight tool reports back.
+   * - `chunk`/`tool_result` (a tool finished): re-arm a normal idle window once
+   *   the LAST in-flight tool completes (a parallel batch stays suspended until
+   *   all of its results arrive).
    * - `paused` (OAuth subscription park): extend to `resetsAt + slack` when a
    *   reset time is known, else a generous fixed park window — the turn is
    *   legitimately waiting, not stalled.
    * - `rate_limit` with `retryAfterMs`: extend to `now + retryAfterMs + slack`.
    *   A `rate_limit` without `retryAfterMs` is treated as ordinary progress
    *   (a plain re-arm) — it still proves the stream is live.
-   * - `resumed`: collapse back to a normal idle window.
-   * - anything else (`chunk`/`message`/`tool_use`/`thinking`/…): ordinary
+   * - `resumed` and any other event (`chunk`/`content`, `message`, …): ordinary
    *   progress → re-arm at `now + idleTimeoutMs`.
    *
    * No-op when the watchdog is disabled, already disposed, or already fired.
    */
   onEvent(event: OutputEvent): void {
     if (!this.isEnabled() || this.disposed || this.fired) return;
+
+    // Invariant: the idle clock is SUSPENDED while ≥1 tool is in flight. A
+    // forked child's tool call runs silently between its `tool_use_detail`
+    // chunk (yielded before dispatch) and its matching `tool_result` chunk
+    // (yielded after) — both providers yield every start, `await` the dispatch
+    // with zero intervening events, then yield every result. That wait is
+    // bounded by the tool's own limit (bash ≤10min, a nested `agent` turn by
+    // its wall-clock, a network tool by its timeout), so counting it as idle
+    // would abort the "healthy child grinding" case this watchdog protects.
+    // Suspend on start, re-arm when the last in-flight tool returns; a tool
+    // that hangs with no bound of its own stays caught by the wall-clock.
+    if (event.type === 'chunk') {
+      if (event.chunk.type === 'tool_use_detail') {
+        this.inFlightTools.add(event.chunk.toolUseId);
+        this.clearTimer(); // a running tool is a bounded wait, not idle
+        return;
+      }
+      if (event.chunk.type === 'tool_result') {
+        this.inFlightTools.delete(event.chunk.toolUseId);
+        if (this.inFlightTools.size === 0) this.arm(this.idleTimeoutMs, event.chunk.type);
+        return;
+      }
+    }
+
+    // Any other signal while a tool is still executing is part of that bounded
+    // wait — leave the suspend intact. (In practice the providers emit none
+    // mid-dispatch; this keeps the invariant robust regardless of ordering.)
+    if (this.inFlightTools.size > 0) return;
 
     if (event.type === 'paused') {
       this.arm(this.pausedWindowMs(event.resetsAt), event.type);
@@ -174,6 +229,19 @@ export class IdleWatchdog {
   }
 
   /**
+   * Clear any armed timer WITHOUT re-arming — SUSPENDS the watchdog. Used while
+   * a tool is in flight (a bounded wait, not idle). Distinct from {@link dispose}:
+   * a suspended watchdog is still live and re-arms on the next progress event or
+   * tool completion; a disposed one is permanently done.
+   */
+  private clearTimer(): void {
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  /**
    * Fire: abort the sub-agent's controller with an {@link IdleWatchdogError}.
    * Guarded so it runs at most once. The `onFire` callback (trace emission) is
    * invoked before the abort and its errors are swallowed — a trace-emit
@@ -217,9 +285,7 @@ export class IdleWatchdog {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.timer !== undefined) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
+    this.inFlightTools.clear();
+    this.clearTimer();
   }
 }

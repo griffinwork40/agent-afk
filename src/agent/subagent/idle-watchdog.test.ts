@@ -6,6 +6,9 @@
  * arm → advance → assert the controller aborted (or did not). Covers:
  *   - fires after the idle window with no events (aborts with IdleWatchdogError)
  *   - an ordinary OutputEvent resets the clock (never fires while progressing)
+ *   - a tool in flight SUSPENDS the clock (a long silent tool is not idle);
+ *     a parallel batch stays suspended until the last result; re-arms after
+ *   - lastEventType is "tool_result" when it fires after a tool completes
  *   - `paused` (OAuth) extends the deadline to resetsAt + slack, then collapses
  *   - `rate_limit` with retryAfterMs extends by retryAfterMs + slack
  *   - `resumed` collapses back to a normal idle window
@@ -31,6 +34,18 @@ const progressEvent: OutputEvent = {
   type: 'chunk',
   chunk: { type: 'content', content: 'hi' },
 };
+
+// Tool lifecycle brackets: a `tool_use_detail` chunk marks a tool starting
+// (yielded before dispatch); a `tool_result` chunk marks it finishing (yielded
+// after). Between them the provider stream is silent for the tool's duration.
+const toolStart = (toolUseId = 't1'): OutputEvent => ({
+  type: 'chunk',
+  chunk: { type: 'tool_use_detail', toolUseId, toolName: 'bash', toolInput: 'sleep 540' },
+});
+const toolResult = (toolUseId = 't1'): OutputEvent => ({
+  type: 'chunk',
+  chunk: { type: 'tool_result', toolUseId, content: 'done' },
+});
 
 describe('IdleWatchdog', () => {
   beforeEach(() => {
@@ -86,6 +101,99 @@ describe('IdleWatchdog', () => {
       wd.onEvent(progressEvent);
       expect(controller.signal.aborted).toBe(false);
     }
+
+    wd.dispose();
+  });
+
+  it('suspends the idle clock while a tool is in flight (does not fire on a long silent tool)', () => {
+    const controller = new AbortController();
+    const wd = new IdleWatchdog(controller, IDLE, 'child-tool-1');
+
+    // Tool starts, then runs SILENTLY far past the idle window (e.g. a 9-min
+    // `bash`/test command). The bounded wait must not be counted as idle.
+    wd.onEvent(toolStart());
+    vi.advanceTimersByTime(IDLE * 3);
+    expect(controller.signal.aborted).toBe(false);
+
+    // The tool finishes; a fresh idle window is armed from completion.
+    wd.onEvent(toolResult());
+    vi.advanceTimersByTime(IDLE - 1);
+    expect(controller.signal.aborted).toBe(false);
+
+    // Silence AFTER the tool returns is real idle → fires.
+    vi.advanceTimersByTime(1);
+    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.reason).toBeInstanceOf(IdleWatchdogError);
+
+    wd.dispose();
+  });
+
+  it('stays suspended until the LAST tool of a parallel batch completes', () => {
+    const controller = new AbortController();
+    const wd = new IdleWatchdog(controller, IDLE, 'child-tool-2');
+
+    // Two tools dispatched in one parallel wave (both starts before dispatch).
+    wd.onEvent(toolStart('a'));
+    wd.onEvent(toolStart('b'));
+    vi.advanceTimersByTime(IDLE * 2);
+    expect(controller.signal.aborted).toBe(false);
+
+    // First result arrives — sibling `b` is still running, so stay suspended.
+    wd.onEvent(toolResult('a'));
+    vi.advanceTimersByTime(IDLE * 2);
+    expect(controller.signal.aborted).toBe(false);
+
+    // Last result arrives — now a normal idle window is armed.
+    wd.onEvent(toolResult('b'));
+    vi.advanceTimersByTime(IDLE - 1);
+    expect(controller.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(controller.signal.aborted).toBe(true);
+
+    wd.dispose();
+  });
+
+  it('re-arms normally after a tool completes, then across a following tool', () => {
+    const controller = new AbortController();
+    const wd = new IdleWatchdog(controller, IDLE, 'child-tool-3');
+
+    // Progress, then a long tool, then progress, then another long tool — a
+    // realistic turn. None of it should fire while the child is doing work.
+    wd.onEvent(progressEvent);
+    vi.advanceTimersByTime(IDLE - 1_000);
+    wd.onEvent(toolStart('x'));
+    vi.advanceTimersByTime(IDLE * 5); // long silent tool
+    wd.onEvent(toolResult('x'));
+    vi.advanceTimersByTime(IDLE - 1_000);
+    wd.onEvent(progressEvent);
+    vi.advanceTimersByTime(IDLE - 1_000);
+    wd.onEvent(toolStart('y'));
+    vi.advanceTimersByTime(IDLE * 5); // another long silent tool
+    expect(controller.signal.aborted).toBe(false);
+
+    // Only sustained silence after the final tool returns fires.
+    wd.onEvent(toolResult('y'));
+    vi.advanceTimersByTime(IDLE);
+    expect(controller.signal.aborted).toBe(true);
+
+    wd.dispose();
+  });
+
+  it('reports lastEventType "tool_result" when it fires after a tool completes', () => {
+    const controller = new AbortController();
+    const onFire = vi.fn();
+    const wd = new IdleWatchdog(controller, IDLE, 'child-tool-4', onFire);
+
+    wd.onEvent(toolStart());
+    vi.advanceTimersByTime(IDLE * 2); // suspended, no fire
+    wd.onEvent(toolResult());
+    vi.advanceTimersByTime(IDLE);
+
+    expect(onFire).toHaveBeenCalledTimes(1);
+    expect((onFire.mock.calls[0]![0] as { lastEventType: string }).lastEventType).toBe(
+      'tool_result',
+    );
+    expect(controller.signal.aborted).toBe(true);
 
     wd.dispose();
   });

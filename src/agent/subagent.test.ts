@@ -1123,6 +1123,49 @@ describe('SubagentManager', () => {
       }
     });
 
+    it('never cuts off a child running a long silent tool (in-flight tool is a bounded wait)', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', idleTimeoutMs: 5_000 },
+        });
+        // The child streams a bit, STARTS a tool, then the provider stream goes
+        // silent for 30s while the tool runs (6× the 5s idle window — e.g. a
+        // long `bash`/test command or a nested `agent` turn), then the result
+        // arrives and the child answers. The watchdog must treat the in-flight
+        // tool as a bounded wait and NOT idle-fire. Regression guard for the
+        // codex P2: without the suspend this 30s silent tool trips the idle bound.
+        lastSessionState().streamEvents = streamWithGaps([
+          { afterMs: 1_000, event: contentChunk('starting') },
+          {
+            afterMs: 1_000,
+            event: {
+              type: 'chunk',
+              chunk: { type: 'tool_use_detail', toolUseId: 't1', toolName: 'bash', toolInput: 'pnpm test' },
+            },
+          },
+          // 30s of legitimate tool-execution silence — well past the idle window.
+          {
+            afterMs: 30_000,
+            event: { type: 'chunk', chunk: { type: 'tool_result', toolUseId: 't1', content: 'ok' } },
+          },
+          { afterMs: 1_000, event: assistantMessage('tool answer') },
+          { afterMs: 0, event: { type: 'done' } },
+        ]);
+
+        const run = h.run('long tool');
+        await vi.advanceTimersByTimeAsync(40_000);
+        const msg = await run;
+
+        expect(msg.content).toBe('tool answer');
+        expect(h.status).toBe('succeeded');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not fire during an OAuth paused→resumed park, then completes', async () => {
       vi.useFakeTimers();
       try {
