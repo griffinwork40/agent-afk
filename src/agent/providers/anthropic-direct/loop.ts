@@ -48,6 +48,7 @@ import {
   withMessagesBreakpoint,
 } from './cache-policy.js';
 import { translateMessageStream } from './translate.js';
+import { abortableStream } from './abortable-stream.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
@@ -450,8 +451,18 @@ export async function* runTurn(
     let ttfbEmitted = false;
     try {
       if (env.AFK_TELEGRAM_TRACE) console.log('[loop] awaiting translateMessageStream events');
+      // Race every SSE pull against the turn signal so an ESC interrupt halts
+      // the stream PROMPTLY (same event-loop turn) instead of waiting for the
+      // SDK's parked read to settle — which for a mid-stream Opus thinking
+      // response lags seconds behind the keypress (there is no per-delta abort
+      // check downstream). On abort the wrapper throws an AbortError, which
+      // `translateMessageStream`'s catch converts to an in-band `error` event;
+      // the error branch below then sees `input.signal.aborted` and breaks
+      // WITHOUT yielding, so the post-loop `turnResult === null` path emits a
+      // single clean `turn.completed`. Uses `input.signal` (the user/turn
+      // interrupt), NOT `ttfb.signal`, so the TTFB stall-timer path is untouched.
       for await (const out of translateMessageStream(
-        events as Parameters<typeof translateMessageStream>[0],
+        abortableStream(events, input.signal) as Parameters<typeof translateMessageStream>[0],
         input.ctx,
       )) {
         // First-byte boundary = the first NON-error translated output (a real
@@ -515,6 +526,24 @@ export async function* runTurn(
               !input.signal.aborted
             ) {
               retryOverload = true;
+              break;
+            }
+            // User interrupt (ESC soft-stop): translate.ts converted the abort
+            // throw into this in-band `error` event, but on an interrupt the
+            // "error" IS the abort — not a real failure. Do NOT yield it. If we
+            // did, the turn would emit TWO terminal events (this error AND the
+            // `turn.completed` from the `turnResult === null` path below), and a
+            // consumer that breaks on the FIRST terminal (AgentSession's
+            // sendMessageStreamInternal breaks on `done`|`error`) would strand
+            // the trailing turn.completed — the NEXT turn's first pull then eats
+            // it as a no-op `done`, so the user's next message runs a full turn
+            // late (the "type after ESC → nothing happens → poke '.' to start it"
+            // bug). Break WITHOUT yielding + WITHOUT setting translatorErrored so
+            // the post-loop `turnResult === null` branch emits exactly ONE
+            // terminal turn.completed. `sawProviderError` correctly stays false —
+            // an interrupt seals as cancelled, not failed. Real (non-abort)
+            // errors fall through to the yield below unchanged.
+            if (input.signal.aborted) {
               break;
             }
             yield out.event;

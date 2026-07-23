@@ -207,15 +207,28 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
   // buffer to an editable draft that required a SECOND explicit Enter, which
   // read as "looks like it sends but no turn starts, and I have to send again."
   //
-  // Why this is safe now: the soft-stop handler fires session.interrupt()
-  // SYNCHRONOUSLY on ESC (turn-handler.ts / run-skill-dispatch-turn.ts), so
-  // the stream halts promptly. The "perpetual input-lag-of-one" this branch
-  // previously guarded against came from the OLD deferred-interrupt window —
-  // the compositor lingered in streaming mode for a network round-trip, so
-  // every Enter queued instead of submitting and each message landed one turn
-  // late. With the synchronous interrupt that window is gone, so auto-flushing
-  // the queued buffer is just normal sequential-turn submission, not a phantom
-  // unconfirmed turn.
+  // Why this is safe now: the soft-stop handler CALLS session.interrupt()
+  // synchronously on ESC (turn-handler.ts / run-skill-dispatch-turn.ts), but
+  // interrupt() itself only fires an AbortController — it does NOT synchronously
+  // stop the model stream. Two provider-side fixes make the halt actually prompt
+  // and single-turn (without them this branch reopened the very lag it claims to
+  // close — the reason ESC "input lag" persisted across releases):
+  //   1. abortable-stream.ts races each SSE pull against the turn signal, so the
+  //      stream halts within an event-loop turn instead of lagging until the
+  //      SDK's parked read settles (seconds, for a mid-stream Opus thinking
+  //      response). Without it the turn lingered in 'streaming' and every Enter
+  //      queued instead of submitting — the "landed one turn late" symptom.
+  //   2. loop.ts suppresses the abort's in-band `error` event so an interrupted
+  //      turn emits EXACTLY ONE terminal (turn.completed). Without it the turn
+  //      emitted [error, turn.completed]; AgentSession breaks on the first, and
+  //      the stranded turn.completed was eaten by the NEXT turn's first pull as a
+  //      no-op — so the post-ESC message ran a full turn late (the "type after
+  //      ESC → nothing happens → poke to start it" bug).
+  // Caveat: a turn parked on a SUBAGENT await still tears down only after the
+  // child cancels (see the teardown-gap note in terminal-compositor.input-
+  // dispatch.ts) — but that path also ends in a single terminal, so it delays
+  // the flush without stranding a turn. With both fixes, auto-flushing the queued
+  // buffer is normal sequential-turn submission, not a phantom unconfirmed turn.
   //
   // `softStopped` is set only by ESC; its remaining roles are the second-ESC
   // no-op (handleEscape) and the idle→streaming reset above. Clearing it here
