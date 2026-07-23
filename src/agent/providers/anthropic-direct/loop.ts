@@ -48,7 +48,7 @@ import {
   withMessagesBreakpoint,
 } from './cache-policy.js';
 import { translateMessageStream } from './translate.js';
-import { abortableStream } from './abortable-stream.js';
+import { abortableStream } from '../shared/abortable-stream.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';

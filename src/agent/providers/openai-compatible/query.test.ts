@@ -1151,6 +1151,100 @@ describe('OpenAICompatibleQuery — lifecycle', () => {
     expect(remaining.some((e) => e.type === 'turn.completed')).toBe(true);
   });
 
+  it('emits exactly ONE terminal on interrupt so the next turn is not wasted (the "poke to start" bug)', async () => {
+    // Ported from anthropic-direct/interrupt-resume.test.ts. AgentSession's real
+    // consumer (sendMessageStreamInternal) breaks on the FIRST terminal event
+    // (`done` OR `error`). If an interrupted turn yields BOTH an `error` (e.g. a
+    // spurious StreamIncompleteError) AND a turn.completed, the consumer stops on
+    // the error and the trailing turn.completed is stranded — the NEXT turn's
+    // first pull consumes it as a no-op, so the user's next message runs a turn
+    // late ("type after ESC → nothing happens → poke '.'").
+    //
+    // This wire's sharp edge: openai@6 SWALLOWS a mid-stream abort and ends the
+    // stream cleanly (streaming.mjs `if (isAbortError(e)) return;`). We model that
+    // exactly — turn 1 interrupts, then RETURNS (no throw) with no content — the
+    // empty-turn shape that pre-fix tripped the incomplete-stream guard into
+    // yielding an `error`.
+    let queryRef: { interrupt(): Promise<void> } | null = null;
+    let turnIdx = 0;
+    const factory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (
+              args: { stream?: boolean },
+              options?: { signal?: AbortSignal },
+            ) => {
+              turnIdx += 1;
+              if (!args.stream) throw new Error('mock only supports streaming');
+              if (turnIdx === 1) {
+                // Turn 1: self-interrupt mid-stream, then end CLEANLY (SDK
+                // swallow) — no chunks, no throw.
+                return (async function* (): AsyncGenerator<OpenAIChunk> {
+                  await queryRef!.interrupt();
+                  // Cooperative: the abortableStream wrapper wins the race on the
+                  // parked pull; this generator ending cleanly models the SDK's
+                  // swallow-and-return so the test holds even without the wrapper
+                  // (the incomplete-guard short-circuit is what it exercises).
+                  if (options?.signal?.aborted) return;
+                  return;
+                })();
+              }
+              // Turn 2: a normal text reply — the message that "wouldn't send".
+              return (async function* (): AsyncGenerator<OpenAIChunk> {
+                yield {
+                  choices: [{ delta: { content: 'resumed reply' }, finish_reason: 'stop' }],
+                  usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+                };
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(factory);
+
+    const controlled = makeControlledPromptStream();
+    const q = buildQueryFromConfig(baseConfig(), controlled.stream);
+    queryRef = q;
+    const iter = q[Symbol.asyncIterator]();
+
+    // session.init handshake.
+    const init = await iter.next();
+    expect(init.value).toMatchObject({ type: 'session.init' });
+
+    // Turn 1 — drive until the FIRST terminal event, exactly as AgentSession does.
+    controlled.send('first');
+    const isTerminal = (t: string): boolean => t === 'turn.completed' || t === 'error';
+    let r = await iter.next();
+    while (!r.done && !isTerminal((r.value as ProviderEvent).type)) {
+      r = await iter.next();
+    }
+    expect(r.done).toBe(false);
+    // The aborted turn's FIRST (and only) terminal must be turn.completed — never
+    // an `error` that strands a trailing turn.completed for the next turn to eat.
+    expect((r.value as ProviderEvent).type).toBe('turn.completed');
+
+    // Turn 2 — the real message must run THIS turn, not a turn late.
+    controlled.send('second');
+    let assistantText = '';
+    r = await iter.next();
+    while (!r.done) {
+      const ev = r.value as ProviderEvent;
+      if (ev.type === 'delta.text') assistantText += ev.text;
+      if (ev.type === 'assistant.message' && ev.text.length > 0) assistantText = ev.text;
+      if (ev.type === 'turn.completed') break;
+      r = await iter.next();
+    }
+    // No wasted turn: the model was actually called again (turnIdx===2) and the
+    // reply streamed. Pre-fix, turn 2 consumed the stranded turn.completed as a
+    // no-op and turnIdx stayed 1.
+    expect(assistantText).toContain('resumed reply');
+    expect(turnIdx).toBe(2);
+
+    controlled.end();
+    await iter.return?.();
+  });
+
   it('close() stops the loop cleanly even with no input pending', async () => {
     const controlled = makeControlledPromptStream();
     const q = buildQueryFromConfig(baseConfig(), controlled.stream);
