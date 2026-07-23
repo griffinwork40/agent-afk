@@ -651,7 +651,19 @@ export type SessionPhaseName =
   // start); carries `idleTimeoutMs`, `elapsedSinceLastProgressMs`, and
   // `lastEventType` in `metadata`. Distinct from `rate_limit`/`usage_limit_*`,
   // which mark LEGITIMATE waits — this marks an unexplained stall that fired.
-  | 'idle_watchdog_fired';
+  | 'idle_watchdog_fired'
+  // OBSERVE-ONLY loop telemetry (see tools/suspected-loop-detector.ts): a
+  // FORKED sub-agent issued the same (tool, normalized-args) fingerprint
+  // >= N times within the last M tool rounds on one dispatcher (per-turn).
+  // A single event (no paired start), emitted AT MOST ONCE per detected loop
+  // (debounced), carrying `tool`, `count`, and `windowSize` in `metadata`.
+  // PURE OBSERVABILITY: unlike the repeat/denial circuit breakers, this NEVER
+  // aborts the fork, sets a failureClass, or alters a tool result — it only
+  // records that a genuine (tool,args) repetition was observed, so we can
+  // measure whether real busy-loops occur before deciding if an enforcing
+  // detector is ever warranted. Distinct from `idle_watchdog_fired` (a stall
+  // with NO output) — this marks the opposite: a fork actively repeating work.
+  | 'suspected_loop';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
