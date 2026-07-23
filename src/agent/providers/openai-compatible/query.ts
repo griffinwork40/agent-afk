@@ -389,12 +389,44 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     const turnStartTime = Date.now();
     const taskId = randomUUID();
 
+    // Interrupt→halt latency instrumentation. Stamp the instant the turn signal
+    // fires so the `finally` can report ESC→terminal wall-clock in the
+    // `interrupt_halt` phase — the field-visible proof the ESC-lag fix keeps the
+    // halt within an event-loop turn (openai@6 swallows a mid-stream abort, so
+    // without abortableStream the halt lagged the parked read). One long-lived,
+    // idempotent listener; registered only when a writer is present so a
+    // no-trace session pays nothing. `close()` also aborts this controller but
+    // with reason `'closed'`; the emit gate below fires ONLY for `'interrupted'`.
+    let interruptedAt: number | null = controller.signal.aborted ? Date.now() : null;
+    const onInterruptForTrace = (): void => {
+      if (interruptedAt === null) interruptedAt = Date.now();
+    };
+    if (this.traceWriter && !controller.signal.aborted) {
+      controller.signal.addEventListener('abort', onInterruptForTrace, { once: true });
+    }
+
     // Witness layer: mark loop entry. Mirrors anthropic-direct/loop.ts:229.
     // Fire-and-forget — a broken trace writer must never stall the turn.
     void emitSessionPhase(this.traceWriter, { phase: 'loop_start' });
     try {
     yield* this._runTurnInner(content, controller, turnStartTime, taskId);
     } finally {
+      controller.signal.removeEventListener('abort', onInterruptForTrace);
+      // Interrupt→halt latency: emit ONLY when THIS turn ended because of an ESC
+      // soft-stop (`interrupt()` aborts with reason `'interrupted'`). The abort
+      // paths funnel through finishTurn, which yields the single terminal
+      // `turn.completed` immediately before _runTurnInner returns into this
+      // finally, so `Date.now()` here is that terminal instant; `interruptedAt`
+      // is when the signal fired. A session `close()` (reason `'closed'`) and a
+      // clean/error/capped end are excluded. Fire-and-forget; mirrors
+      // anthropic-direct/loop.ts.
+      if (interruptedAt !== null && controller.signal.reason === 'interrupted') {
+        void emitSessionPhase(this.traceWriter, {
+          phase: 'interrupt_halt',
+          durationMs: Date.now() - interruptedAt,
+          metadata: { provider: 'openai-compatible' },
+        });
+      }
       // Witness layer: loop_end fires regardless of which exit path fired —
       // abort, error, clean end-of-turn, or iteration cap. Mirrors
       // anthropic-direct/loop.ts:728–734.

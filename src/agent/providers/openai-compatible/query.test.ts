@@ -2873,4 +2873,152 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     const events = await collect(q);
     expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
   });
+
+  // Deliverable B: interrupt→halt latency. `interrupt_halt` records the
+  // wall-clock from the turn signal firing (ESC soft-stop → interrupt() aborts
+  // with reason 'interrupted') to the terminal turn.completed on the abort path.
+  it('emits interrupt_halt with a non-negative durationMs when the turn is interrupted mid-stream', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let queryRef: { interrupt(): Promise<void> } | null = null;
+    const factory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (
+              args: { stream?: boolean },
+              options?: { signal?: AbortSignal },
+            ) => {
+              if (!args.stream) throw new Error('mock only supports streaming');
+              // Model the ESC soft-stop: interrupt the in-flight turn, then end
+              // the stream cleanly (openai@6 swallows a mid-stream abort). The
+              // abortableStream wrapper resolves the halt; the loop funnels to a
+              // single turn.completed and the finally emits interrupt_halt.
+              return (async function* (): AsyncGenerator<OpenAIChunk> {
+                await queryRef!.interrupt();
+                if (options?.signal?.aborted) return;
+                return;
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(factory);
+
+    const controlled = makeControlledPromptStream();
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'halt-session',
+      promptStream: controlled.stream,
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+    queryRef = q;
+    const iter = q[Symbol.asyncIterator]();
+
+    // session.init, then drive turn 1 to its (single) terminal.
+    await iter.next();
+    controlled.send('long task');
+    let r = await iter.next();
+    while (!r.done && (r.value as ProviderEvent).type !== 'turn.completed') {
+      r = await iter.next();
+    }
+    expect((r.value as ProviderEvent).type).toBe('turn.completed');
+    controlled.end();
+    // Drain to completion so the runTurn finally (which emits interrupt_halt) runs.
+    while (!r.done) r = await iter.next();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const halts = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'interrupt_halt',
+    );
+    expect(halts).toHaveLength(1);
+    const halt = halts[0]!;
+    if (halt.kind !== 'session_phase') throw new Error('unreachable');
+    expect(halt.payload.durationMs).toBeTypeOf('number');
+    expect(halt.payload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(halt.payload.metadata).toMatchObject({ provider: 'openai-compatible' });
+  });
+
+  it('does NOT emit interrupt_halt on a clean (non-interrupted) turn', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'clean-session',
+      promptStream: singleInput('hi'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const halts = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'interrupt_halt',
+    );
+    expect(halts).toHaveLength(0);
+  });
+
+  it('does NOT emit interrupt_halt when the session is closed mid-stream (reason "closed")', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let queryRef: { close(): void } | null = null;
+    const factory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (
+              args: { stream?: boolean },
+              options?: { signal?: AbortSignal },
+            ) => {
+              if (!args.stream) throw new Error('mock only supports streaming');
+              // close() aborts the per-turn signal with reason 'closed' — a
+              // session teardown, NOT an ESC halt. interrupt_halt must be absent.
+              return (async function* (): AsyncGenerator<OpenAIChunk> {
+                queryRef!.close();
+                if (options?.signal?.aborted) return;
+                return;
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(factory);
+
+    const controlled = makeControlledPromptStream();
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'closed-session',
+      promptStream: controlled.stream,
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+    queryRef = q;
+    const iter = q[Symbol.asyncIterator]();
+    await iter.next();
+    controlled.send('task');
+    // Drain to completion — close() ends the generator (done:true).
+    let r = await iter.next();
+    while (!r.done) r = await iter.next();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const halts = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'interrupt_halt',
+    );
+    expect(halts).toHaveLength(0);
+  });
 });

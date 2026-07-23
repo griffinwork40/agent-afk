@@ -395,6 +395,9 @@ export const SessionPhaseNameSchema = z.enum([
   'loop_start',
   'loop_end',
   'model_ttfb',
+  // Interrupt→halt latency (single event, no paired start). See SessionPhaseName
+  // JSDoc in types.ts — carries the ESC→terminal wall-clock in durationMs.
+  'interrupt_halt',
   'rate_limit',
   'usage_limit_pause',
   'usage_limit_resume',

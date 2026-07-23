@@ -327,6 +327,22 @@ export async function* runTurn(
   // a broken trace writer must never stall tool dispatch.
   void emitSessionPhase(input.traceWriter, { phase: 'loop_start' });
 
+  // Interrupt→halt latency instrumentation. Stamp the instant the turn signal
+  // fires so the `finally` below can report ESC→terminal wall-clock in the
+  // `interrupt_halt` phase — the field-visible proof the ESC-lag fix keeps the
+  // halt within an event-loop turn. A single long-lived listener (not per-event)
+  // records the time at most once; `{ once: true }` + the null-guard make it
+  // idempotent. Registered only when a writer is present so a no-trace session
+  // pays nothing. `close()` also aborts this signal but with reason `'closed'`;
+  // the emit gate below fires ONLY for reason `'interrupted'`.
+  let interruptedAt: number | null = input.signal.aborted ? Date.now() : null;
+  const onInterruptForTrace = (): void => {
+    if (interruptedAt === null) interruptedAt = Date.now();
+  };
+  if (input.traceWriter && !input.signal.aborted) {
+    input.signal.addEventListener('abort', onInterruptForTrace, { once: true });
+  }
+
   // Witness layer: loop_end fires from the generator's finally block so
   // all eight return paths — abort, error, clean end-of-turn, capped —
   // are covered without per-site annotation. Fire-and-forget; trace
@@ -1056,6 +1072,22 @@ export async function* runTurn(
     }
   }
   } finally {
+    input.signal.removeEventListener('abort', onInterruptForTrace);
+    // Interrupt→halt latency: emit ONLY when THIS turn ended because of an ESC
+    // soft-stop (`interrupt()` aborts with reason `'interrupted'`). Every abort
+    // exit above yields its terminal `turn.completed` immediately before the
+    // generator returns into this finally, so `Date.now()` here is that terminal
+    // instant; `interruptedAt` is when the signal fired. A session `close()`
+    // (reason `'closed'`) and a clean/error/capped end are all excluded — the
+    // former is not a halt-latency event, the latter never aborted the signal.
+    // Fire-and-forget; trace latency must never stall an already-returning turn.
+    if (interruptedAt !== null && input.signal.reason === 'interrupted') {
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'interrupt_halt',
+        durationMs: Date.now() - interruptedAt,
+        metadata: { provider: 'anthropic-direct' },
+      });
+    }
     // Emit loop_end regardless of which exit path above fired.
     void emitSessionPhase(input.traceWriter, {
       phase: 'loop_end',
