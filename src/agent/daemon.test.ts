@@ -722,6 +722,66 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(res.status).toBe(400);
   });
 
+  it('POST /tasks preserves a numeric notifyChat through GET /tasks', async () => {
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'nc-task',
+        command: '/cmd',
+        cron: '* * * * *',
+        notifyChat: -1001234567890,
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string; notifyChat?: number | string }>;
+    const task = tasks.find((t) => t.taskId === 'nc-task');
+    expect(task?.notifyChat).toBe(-1001234567890);
+  });
+
+  it('POST /tasks preserves a string (alias) notifyChat', async () => {
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'nc-alias-task',
+        command: '/cmd',
+        cron: '* * * * *',
+        notifyChat: 'ops',
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string; notifyChat?: number | string }>;
+    const task = tasks.find((t) => t.taskId === 'nc-alias-task');
+    expect(task?.notifyChat).toBe('ops');
+  });
+
+  it('POST /tasks ignores a non-number/non-string notifyChat (default routing)', async () => {
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'nc-bad-task',
+        command: '/cmd',
+        cron: '* * * * *',
+        notifyChat: { nope: true },
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string; notifyChat?: number | string }>;
+    const task = tasks.find((t) => t.taskId === 'nc-bad-task');
+    expect(task?.notifyChat).toBeUndefined();
+  });
+
   it('DELETE /tasks/:id for registered task → 200', async () => {
     const h = await spinDaemon();
     // Register first
@@ -835,6 +895,106 @@ describe('notifyOn filter in CronScheduler', () => {
     await scheduler.tick('t');
 
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('notifyChat threading in CronScheduler', () => {
+  let telemetryPath: string;
+  let scheduler: CronScheduler;
+
+  beforeEach(() => {
+    telemetryPath = tmpTelemetryFile();
+  });
+
+  afterEach(async () => {
+    await scheduler.stop();
+    rmSync(telemetryPath, { force: true });
+  });
+
+  it("threads the task's numeric notifyChat onto TaskCompletionDetails", async () => {
+    const callback = vi.fn();
+    scheduler = new CronScheduler({
+      telemetryPath,
+      onTaskComplete: callback,
+      sessionFactory: (_config: AgentConfig) =>
+        makeFakeSession('ok') as unknown as ReturnType<SessionFactoryReturn>,
+    });
+    scheduler.register({
+      taskId: 't',
+      command: 'x',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      notifyChat: -1001234567890,
+    });
+    await scheduler.tick('t');
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const details = callback.mock.calls[0]![1] as { notifyChat?: number | string } | undefined;
+    expect(details?.notifyChat).toBe(-1001234567890);
+  });
+
+  it("threads the task's string (alias) notifyChat onto TaskCompletionDetails", async () => {
+    const callback = vi.fn();
+    scheduler = new CronScheduler({
+      telemetryPath,
+      onTaskComplete: callback,
+      sessionFactory: (_config: AgentConfig) =>
+        makeFakeSession('ok') as unknown as ReturnType<SessionFactoryReturn>,
+    });
+    scheduler.register({
+      taskId: 't',
+      command: 'x',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      notifyChat: 'ops',
+    });
+    await scheduler.tick('t');
+
+    const details = callback.mock.calls[0]![1] as { notifyChat?: number | string } | undefined;
+    expect(details?.notifyChat).toBe('ops');
+  });
+
+  it('leaves notifyChat undefined when the task has none (default routing)', async () => {
+    const callback = vi.fn();
+    scheduler = new CronScheduler({
+      telemetryPath,
+      onTaskComplete: callback,
+      sessionFactory: (_config: AgentConfig) =>
+        makeFakeSession('ok') as unknown as ReturnType<SessionFactoryReturn>,
+    });
+    scheduler.register({
+      taskId: 't',
+      command: 'x',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+    await scheduler.tick('t');
+
+    const details = callback.mock.calls[0]![1] as { notifyChat?: number | string } | undefined;
+    expect(details?.notifyChat).toBeUndefined();
+  });
+
+  it('threads notifyChat on the error path too', async () => {
+    const callback = vi.fn();
+    scheduler = new CronScheduler({
+      telemetryPath,
+      onTaskComplete: callback,
+      sessionFactory: (_config: AgentConfig) =>
+        makeFakeSession(new Error('boom')) as unknown as ReturnType<SessionFactoryReturn>,
+    });
+    scheduler.register({
+      taskId: 't',
+      command: 'x',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      notifyChat: 555,
+    });
+    await scheduler.tick('t');
+
+    const record = callback.mock.calls[0]![0] as { status: string };
+    const details = callback.mock.calls[0]![1] as { notifyChat?: number | string } | undefined;
+    expect(record.status).toBe('error');
+    expect(details?.notifyChat).toBe(555);
   });
 });
 

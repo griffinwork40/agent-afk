@@ -385,4 +385,45 @@ describe('pushIfConfigured', () => {
       }
     }
   });
+
+  test('target override routes to the explicit chat, ignoring notify config', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    // Broadcast would normally fan out to all three; target overrides that.
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222,333';
+    process.env['AFK_TELEGRAM_NOTIFY_MODE'] = 'broadcast';
+    const fetchImpl = makeFetchOk();
+    const result = await pushIfConfigured('hi', { fetchImpl, target: -100999 });
+    expect(result).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body).chat_id).toBe(-100999);
+  });
+
+  test('target override accepts an array of chat ids', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111';
+    const fetchImpl = makeFetchOk();
+    const result = await pushIfConfigured('hi', { fetchImpl, target: [222, 333] });
+    expect(result).toHaveLength(2);
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => JSON.parse(c[1].body).chat_id)).toEqual([222, 333]);
+  });
+
+  test('empty/invalid target falls back to default notify routing', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111';
+    const fetchImpl = makeFetchOk();
+    // 0 is filtered out → override empty → fall back to primary (111).
+    const result = await pushIfConfigured('hi', { fetchImpl, target: 0 });
+    expect(result).toHaveLength(1);
+    expect(JSON.parse((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body).chat_id).toBe(111);
+  });
+
+  test('omitted target preserves default routing (byte-identical to legacy)', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222,333';
+    process.env['AFK_TELEGRAM_NOTIFY_MODE'] = 'broadcast';
+    const fetchImpl = makeFetchOk();
+    const result = await pushIfConfigured('hi', { fetchImpl });
+    expect(result).toHaveLength(3);
+  });
 });

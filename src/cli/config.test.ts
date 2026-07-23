@@ -754,6 +754,35 @@ describe('Config Loader', () => {
       mockConfig({ telegram: { tagOnlyChats: [-100123], someFutureKnob: true } });
       expect(loadConfig().telegram?.tagOnlyChats).toEqual([-100123]);
     });
+
+    it('parses telegram.chatAliases as a name→id map', () => {
+      mockConfig({ telegram: { chatAliases: { ops: -1001234567890, me: 42 } } });
+      expect(loadConfig().telegram?.chatAliases).toEqual({ ops: -1001234567890, me: 42 });
+    });
+
+    it('drops non-numeric, non-finite, and zero alias values', () => {
+      mockConfig({
+        telegram: {
+          chatAliases: { ok: 111, bad: 'nope', zero: 0, nan: NaN, nul: null, good: -100200 },
+        },
+      });
+      expect(loadConfig().telegram?.chatAliases).toEqual({ ok: 111, good: -100200 });
+    });
+
+    it('defaults chatAliases to undefined when absent', () => {
+      mockConfig({ telegram: { notify: { mode: 'primary' } } });
+      expect(loadConfig().telegram?.chatAliases).toBeUndefined();
+    });
+
+    it('drops an all-invalid chatAliases map to undefined (no empty object)', () => {
+      mockConfig({ telegram: { chatAliases: { a: 'x', b: 0 } } });
+      expect(loadConfig().telegram?.chatAliases).toBeUndefined();
+    });
+
+    it('ignores a non-object chatAliases (defensive parse → undefined)', () => {
+      mockConfig({ telegram: { chatAliases: [1, 2, 3] } });
+      expect(loadConfig().telegram?.chatAliases).toBeUndefined();
+    });
   });
 
   describe('enforceDoneEvidence (afk.config.json parsing)', () => {

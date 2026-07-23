@@ -261,6 +261,7 @@ async function handleRequestAsync(
       );
       return;
     }
+    const notifyChatRaw = obj['notifyChat'];
     const task: ScheduledTask = {
       taskId: obj['taskId'] as string,
       command: obj['command'] as string,
@@ -268,6 +269,9 @@ async function handleRequestAsync(
       cronExpression: cronValue,
       ...(obj['notifyOn'] !== undefined
         ? { notifyOn: obj['notifyOn'] as ScheduledTask['notifyOn'] }
+        : {}),
+      ...(typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
+        ? { notifyChat: notifyChatRaw }
         : {}),
     };
     try {

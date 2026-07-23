@@ -175,6 +175,17 @@ export interface TaskCompletionDetails {
    * `src/cli/commands/daemon.ts`. Never persisted to telemetry.
    */
   doneUnverified?: boolean;
+  /**
+   * Explicit chat target for this task's completion notification, copied from
+   * the triggering `ScheduledTask.notifyChat`. A number is a raw chat id; a
+   * string is a numeric id or an alias name (resolved by the CLI push wiring
+   * against `telegram.chatAliases`). The scheduler itself does NOT resolve or
+   * validate it — routing/allowlist enforcement lives in the injected
+   * `onTaskComplete` callback (`src/cli/commands/daemon.ts`), preserving the
+   * `src/agent/` → no-`src/cli/`-import layering invariant. Absent when the task
+   * has no `notifyChat` (default routing). Never persisted to telemetry.
+   */
+  notifyChat?: number | string;
 }
 
 interface RegisteredEntry {
@@ -702,10 +713,20 @@ export class CronScheduler {
       if (task.notifyOn === 'failure' && record.status !== 'error') return;
       // 'always' or undefined (legacy behavior) falls through
     }
+    // Thread the task's explicit chat target (if any) onto the details so the
+    // injected callback can route the push. Merged here — rather than at every
+    // writeTelemetry call site — because this is the single funnel every
+    // completion path flows through, and the scheduler must not resolve/validate
+    // the target itself (layering: no src/cli import). An explicit
+    // details.notifyChat (should never happen today) is preserved.
+    const effectiveDetails: TaskCompletionDetails | undefined =
+      task?.notifyChat !== undefined
+        ? { ...(details ?? {}), notifyChat: details?.notifyChat ?? task.notifyChat }
+        : details;
     // Fire-and-forget. Notification callbacks must not block telemetry
     // writes or crash the scheduler — every error is swallowed and logged.
     try {
-      const result = cb(record, details);
+      const result = cb(record, effectiveDetails);
       if (result instanceof Promise) {
         void result.catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);

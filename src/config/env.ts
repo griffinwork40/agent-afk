@@ -702,10 +702,10 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'TELEGRAM_VERBOSE',
-    description: 'Set to 1 to log per-message details from the Telegram bot — chat IDs, message text, latency.',
+    description: "Set to 'true' to log per-message details from the Telegram bot — chat IDs, message text, latency. (The code checks the literal string 'true'.)",
     type: 'boolean',
     required: false,
-    example: '1',
+    example: 'true',
     category: 'telegram',
   },
   {
