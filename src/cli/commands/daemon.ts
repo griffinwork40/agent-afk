@@ -7,6 +7,8 @@ import os from 'os';
 import { startDaemon } from '../../agent/daemon.js';
 import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { resolveChatTarget, loadChatAliases } from '../../telegram/notify-routing.js';
+import { parseAllowedChatIds, isChatAllowed } from '../../telegram/allowlist.js';
 import { parseTerminalState } from './interactive/terminal-state.js';
 import { DONE_EVIDENCE_TOOLS } from './interactive/afk-push.js';
 import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
@@ -287,6 +289,38 @@ const DAEMON_DONE_UNVERIFIED_CAVEAT =
   '⚠️ Unverified: no file write/edit or successful command recorded this turn — confirm before relying on this.';
 
 /**
+ * Resolve a scheduled task's `notifyChat` to a concrete, allowlisted chat id for
+ * the completion push, or `undefined` to fall back to the default notify routing.
+ *
+ * Two-step, both FAIL-CLOSED to the default target (never drops the notification):
+ *   1. Resolve the alias/number via `telegram.chatAliases` (`resolveChatTarget`).
+ *   2. Enforce the inbound allowlist (`isChatAllowed`) — the agent may only push
+ *      to a chat the operator has already authorized.
+ * A resolution or allowlist failure logs one stderr warning (so a misconfigured
+ * notifyChat is visible in daemon logs) and returns `undefined`, letting
+ * `pushIfConfigured` deliver to the configured default instead.
+ */
+export function resolveNotifyChatTarget(
+  notifyChat: number | string | undefined,
+  taskId: string,
+): number | undefined {
+  if (notifyChat === undefined) return undefined;
+  const resolved = resolveChatTarget(notifyChat, loadChatAliases());
+  if (!resolved.ok) {
+    // eslint-disable-next-line no-console
+    console.error(`[daemon] task ${taskId}: ignoring notifyChat — ${resolved.message} Falling back to default routing.`);
+    return undefined;
+  }
+  const allowlist = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
+  if (!isChatAllowed(resolved.id, allowlist)) {
+    // eslint-disable-next-line no-console
+    console.error(`[daemon] task ${taskId}: ignoring notifyChat ${resolved.id} — not in AFK_TELEGRAM_ALLOWED_CHAT_IDS. Falling back to default routing.`);
+    return undefined;
+  }
+  return resolved.id;
+}
+
+/**
  * Format a daemon telemetry record for an out-of-band notification
  * (e.g. Telegram push). Short, scannable, status-first.
  *
@@ -557,9 +591,17 @@ export function registerDaemonCommand(program: Command): void {
             // showing their literal markers (plain-text fallback on parse error).
             // config.daemon?.verifyDone gates the opt-in Done-verification
             // downgrade; when unset/false the formatted message is unchanged.
+            //
+            // notifyChat routing: when the triggering task set an explicit
+            // notifyChat, resolve it (alias/number) and FAIL-CLOSED against the
+            // allowlist here — the scheduler deliberately doesn't (layering).
+            // A resolvable, allowlisted target overrides the default routing;
+            // anything else logs a warning and falls back to the default target
+            // (never silently drops the completion notification).
+            const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
             void pushIfConfigured(
               formatTaskCompletion(record, details, config.daemon?.verifyDone === true),
-              { markdown: true },
+              { markdown: true, ...(target !== undefined ? { target } : {}) },
             ).catch(() => undefined);
           },
         });

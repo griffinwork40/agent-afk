@@ -86,6 +86,69 @@ export function resolveNotifyTargets(
   return primary !== undefined ? [primary] : [];
 }
 
+/**
+ * Result of resolving an explicit chat target (`send_telegram`'s `chat` param
+ * or a scheduled task's `notifyChat`). Discriminated on `ok` so callers can
+ * surface a precise, actionable error instead of silently dropping the send.
+ */
+export type ChatTargetResolution =
+  | { ok: true; id: number }
+  | { ok: false; reason: 'invalid' | 'unknown-alias'; message: string };
+
+/**
+ * Resolve an explicit chat target to a numeric chat id.
+ *
+ * - `number` → used verbatim (must be finite and non-zero).
+ * - numeric string (`"-100123"`, `" 42 "`) → parsed as a chat id.
+ * - any other string → looked up as a NAME in `aliases`
+ *   (`telegram.chatAliases`), returning the mapped id or an `unknown-alias`
+ *   error that lists the available names.
+ *
+ * Pure — never reads env or files. Allowlist enforcement is a SEPARATE step the
+ * caller applies (`isChatAllowed`); this function only turns a name/number into
+ * an id (or a typed error).
+ */
+export function resolveChatTarget(
+  chat: number | string,
+  aliases: Readonly<Record<string, number>> = {},
+): ChatTargetResolution {
+  if (typeof chat === 'number') {
+    if (!Number.isFinite(chat) || chat === 0) {
+      return { ok: false, reason: 'invalid', message: `Invalid chat id: ${chat}` };
+    }
+    return { ok: true, id: chat };
+  }
+
+  const trimmed = chat.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, reason: 'invalid', message: 'Invalid chat: empty string' };
+  }
+
+  // A numeric string is a raw chat id; anything else is an alias NAME.
+  const asId = parseChatId(trimmed);
+  if (asId !== undefined) {
+    return { ok: true, id: asId };
+  }
+
+  const aliasNames = Object.keys(aliases);
+  const mapped = Object.prototype.hasOwnProperty.call(aliases, trimmed)
+    ? aliases[trimmed]
+    : undefined;
+  if (mapped !== undefined && Number.isFinite(mapped) && mapped !== 0) {
+    return { ok: true, id: mapped };
+  }
+
+  const available =
+    aliasNames.length > 0
+      ? `Available aliases: ${aliasNames.join(', ')}.`
+      : 'No chat aliases are configured (set telegram.chatAliases in afk.config.json).';
+  return {
+    ok: false,
+    reason: 'unknown-alias',
+    message: `Unknown chat alias "${trimmed}". ${available}`,
+  };
+}
+
 /** Parse a single chat id from an env string. Returns undefined when absent/invalid. */
 export function parseChatId(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
@@ -126,4 +189,14 @@ export function loadNotifyConfig(): TelegramNotifyConfig {
 export function resolveConfiguredNotifyTargets(): number[] {
   const allowlist = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
   return resolveNotifyTargets(allowlist, loadNotifyConfig());
+}
+
+/**
+ * IO convenience: read the named-chat alias map (`telegram.chatAliases`) from
+ * afk.config.json. Returns `{}` when unset. Consumed by the `send_telegram`
+ * handler and the daemon's `notifyChat` resolution to turn an alias name into a
+ * chat id via {@link resolveChatTarget}.
+ */
+export function loadChatAliases(): Record<string, number> {
+  return loadTelegramConfig().chatAliases ?? {};
 }

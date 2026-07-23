@@ -138,6 +138,18 @@ export interface CliConfig {
      * moot. Env override: `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` (config value wins).
      */
     tagOnlyChats?: number[];
+    /**
+     * Named-chat aliases for outbound targeting. Maps a human-friendly name
+     * (e.g. `"ops"`, `"family"`) to a Telegram chat ID. Consulted when a
+     * caller targets a specific chat by name — the `send_telegram` tool's
+     * `chat` param and a scheduled task's `notifyChat` both accept an alias
+     * from this map in place of a raw numeric ID. Strictly additive: when a
+     * caller omits an explicit target, aliases are never consulted and routing
+     * is unchanged (see `resolveConfiguredNotifyTargets`). An explicitly-targeted
+     * send must still resolve to an allowlisted chat ID (fail-closed) — see
+     * `isChatAllowed` in `src/telegram/allowlist.ts`.
+     */
+    chatAliases?: Record<string, number>;
   };
   /**
    * `afk interactive` defaults.
@@ -349,6 +361,8 @@ export interface ConfigFileSchema {
     verifyDone?: boolean;
     /** Opt-in per-chat "tag-only" response policy. See `CliConfig.telegram.tagOnlyChats`. */
     tagOnlyChats?: number[];
+    /** Named-chat aliases for outbound targeting. See `CliConfig.telegram.chatAliases`. */
+    chatAliases?: Record<string, number>;
   };
   interactive?: {
     worktreeAutoname?: boolean;

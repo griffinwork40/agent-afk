@@ -3,6 +3,7 @@ import type { Context } from 'telegraf';
 import {
   parseAllowedChatIds,
   createAllowlistMiddleware,
+  isChatAllowed,
 } from './allowlist';
 
 function ctxWithChat(id: number | undefined): Context {
@@ -114,6 +115,38 @@ describe('tag-only chat resolution precedence', () => {
 
   test('neither set → empty set (policy applies to no chat)', () => {
     expect(resolveTagOnlyChats(undefined, undefined).size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isChatAllowed — the OUTBOUND allowlist predicate (fail-closed). Used to gate
+// explicitly-targeted send_telegram sends and scheduled-task notifyChat routing.
+// No outbound enforcement existed before this; these tests lock the contract.
+// ---------------------------------------------------------------------------
+
+describe('isChatAllowed (outbound targeting)', () => {
+  test('true when id is a member', () => {
+    expect(isChatAllowed(123, new Set([123, 456]))).toBe(true);
+  });
+
+  test('false when id is not a member', () => {
+    expect(isChatAllowed(999, new Set([123, 456]))).toBe(false);
+  });
+
+  test('fail-closed on an empty allowlist', () => {
+    expect(isChatAllowed(123, new Set())).toBe(false);
+  });
+
+  test('supports negative (group/channel) ids', () => {
+    expect(isChatAllowed(-100987654321, new Set([-100987654321]))).toBe(true);
+    expect(isChatAllowed(-100987654321, new Set([-1]))).toBe(false);
+  });
+
+  test('composes with parseAllowedChatIds end-to-end (outbound gate)', () => {
+    const allowlist = parseAllowedChatIds('111, 222 ,-100333');
+    expect(isChatAllowed(222, allowlist)).toBe(true);
+    expect(isChatAllowed(-100333, allowlist)).toBe(true);
+    expect(isChatAllowed(444, allowlist)).toBe(false);
   });
 });
 
