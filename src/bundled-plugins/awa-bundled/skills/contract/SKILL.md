@@ -17,6 +17,8 @@ For each sub-agent you plan to dispatch, define a schema before the call:
 
 Embed the schema at the top of every sub-agent's prompt and require results in that exact shape. Instruct each sub-agent explicitly: "Return ONLY the schema fields. No preamble, no analysis prose, no explanation — begin your response with the first schema field." When sub-agents return, validate field-by-field. If any artifact is missing, malformed, or wrapped in prose, re-dispatch only the failing sub-agent with the gap cited. Merge only schema-valid responses.
 
+Also instruct each sub-agent to stop on non-convergence: if repeated attempts at the same sub-goal stop making progress after a few tries, do not keep retrying — return the best partial result via `failure_modes` with what could not be resolved. Activity is not progress.
+
 ## Epistemic confidence
 
 Recommended for all sub-agents. Add to your return schema:
