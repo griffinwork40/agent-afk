@@ -320,6 +320,29 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_SUBAGENT_IDLE_TIMEOUT_MS',
+    description:
+      'Forked-subagent progress-aware idle-watchdog window in ms; 0 disables the watchdog; an ' +
+      'explicit per-fork config.idleTimeoutMs still wins. Fires when a forked child produces no ' +
+      'observable output event for this window, aborting the same controller the wall-clock ' +
+      'timeout targets so partial output is preserved and the run classifies as a failure. This ' +
+      'is distinct from AFK_SUBAGENT_TIMEOUT_MS, the blunt wall-clock that bounds total turn ' +
+      'time: the idle watchdog is the tighter first-to-fire bound and never fires while the ' +
+      'stream is legitimately parked on a provider-communicated backoff (OAuth pause, or a ' +
+      'rate-limit event carrying a retry-after), extending the deadline for the pause window ' +
+      'instead. Default 480000 (8 min) clears the worst-case transient-429 backoff the watchdog ' +
+      'is currently blind to (about 363s) with roughly 2 min of margin, while staying ' +
+      'materially tighter than the 45-min wall-clock. Unset, empty, or unparseable input falls ' +
+      'back to the default; a negative value is treated as invalid and also falls back. Set to 0 ' +
+      'to disable the idle watchdog for a whole session (the wall-clock still applies). v1 ' +
+      'applies to forked sub-agent turns only, not top-level or daemon sessions.',
+    type: 'number',
+    required: false,
+    default: '480000',
+    example: '300000',
+    category: 'model',
+  },
+  {
     name: 'AFK_VISION_MODELS',
     description: 'Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. "qwen2.5-vl" matches a local VL id); prefix a token with "!" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families.',
     type: 'string',
@@ -1373,6 +1396,7 @@ export const env = {
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
   get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
   get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
+  get AFK_SUBAGENT_IDLE_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_IDLE_TIMEOUT_MS']; },
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
