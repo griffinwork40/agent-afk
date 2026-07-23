@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.71.0] - 2026-07-23
+
+### Added
+- per-target chat selection for send_telegram + scheduled tasks (#681) (0d0a50e)
+
 ## [5.70.0] - 2026-07-23
 
 ### Added
