@@ -727,6 +727,33 @@ describe('Config Loader', () => {
       mockConfig({ telegram: { verifyDone: 'yes' } });
       expect(loadConfig().telegram?.verifyDone).toBeUndefined();
     });
+
+    it('parses telegram.tagOnlyChats: [-100123, 456]', () => {
+      mockConfig({ telegram: { tagOnlyChats: [-100123, 456] } });
+      expect(loadConfig().telegram?.tagOnlyChats).toEqual([-100123, 456]);
+    });
+
+    it('filters non-numeric entries out of tagOnlyChats', () => {
+      mockConfig({ telegram: { tagOnlyChats: [123, 'nope', null, 456, NaN] } });
+      expect(loadConfig().telegram?.tagOnlyChats).toEqual([123, 456]);
+    });
+
+    it('defaults tagOnlyChats to undefined when absent', () => {
+      mockConfig({ telegram: { notify: { mode: 'primary' } } });
+      expect(loadConfig().telegram?.tagOnlyChats).toBeUndefined();
+    });
+
+    it('drops an all-non-numeric tagOnlyChats to undefined (no empty array)', () => {
+      mockConfig({ telegram: { tagOnlyChats: ['a', 'b'] } });
+      expect(loadConfig().telegram?.tagOnlyChats).toBeUndefined();
+    });
+
+    it('loads tagOnlyChats even alongside an unknown extra telegram key (backward-safe)', () => {
+      // The manual JSON loader ignores unknown keys, so a future/foreign field
+      // sitting next to tagOnlyChats must not break parsing of the known one.
+      mockConfig({ telegram: { tagOnlyChats: [-100123], someFutureKnob: true } });
+      expect(loadConfig().telegram?.tagOnlyChats).toEqual([-100123]);
+    });
   });
 
   describe('enforceDoneEvidence (afk.config.json parsing)', () => {

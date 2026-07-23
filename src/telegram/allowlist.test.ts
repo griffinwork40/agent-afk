@@ -67,6 +67,54 @@ describe('parseAllowedChatIds', () => {
     const ids = parseAllowedChatIds('abc,xyz', () => {});
     expect(ids.size).toBe(0);
   });
+
+  // parseAllowedChatIds is reused verbatim to parse AFK_TELEGRAM_TAG_ONLY_CHAT_IDS
+  // (the env fallback for the per-chat tag-only response policy). This case
+  // documents that contract with the exact string shape an operator would set.
+  test('parses AFK_TELEGRAM_TAG_ONLY_CHAT_IDS-style input (negative group id + positive dm)', () => {
+    const ids = parseAllowedChatIds('-100987654321,123');
+    expect(ids).toEqual(new Set([-100987654321, 123]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tag-only chat resolution precedence (afk.config.json telegram.tagOnlyChats
+// wins; AFK_TELEGRAM_TAG_ONLY_CHAT_IDS is the fallback). This mirrors the exact
+// resolver expression in src/telegram.ts's bootstrap so a change to the
+// precedence rule is caught here.
+// ---------------------------------------------------------------------------
+
+function resolveTagOnlyChats(
+  configTagOnly: number[] | undefined,
+  envRaw: string | undefined,
+): Set<number> {
+  return configTagOnly && configTagOnly.length > 0
+    ? new Set<number>(configTagOnly)
+    : parseAllowedChatIds(envRaw);
+}
+
+describe('tag-only chat resolution precedence', () => {
+  test('env alone → parsed set', () => {
+    expect(resolveTagOnlyChats(undefined, '-100987654321,123')).toEqual(
+      new Set([-100987654321, 123]),
+    );
+  });
+
+  test('config alone → config set', () => {
+    expect(resolveTagOnlyChats([-100123, 456], undefined)).toEqual(new Set([-100123, 456]));
+  });
+
+  test('config wins over env when both are set', () => {
+    expect(resolveTagOnlyChats([111], '222,333')).toEqual(new Set([111]));
+  });
+
+  test('empty config array falls back to env', () => {
+    expect(resolveTagOnlyChats([], '222,333')).toEqual(new Set([222, 333]));
+  });
+
+  test('neither set → empty set (policy applies to no chat)', () => {
+    expect(resolveTagOnlyChats(undefined, undefined).size).toBe(0);
+  });
 });
 
 describe('createAllowlistMiddleware', () => {

@@ -713,6 +713,14 @@
       "category": "telegram"
     },
     {
+      "name": "AFK_TELEGRAM_TAG_ONLY_CHAT_IDS",
+      "description": "Comma-separated list of Telegram chat IDs where the bot answers only when addressed (a reply to the bot, an @mention of the bot, or a text_mention resolving to the bot). Slash-commands are unaffected; chats not listed behave as usual. The afk.config.json telegram.tagOnlyChats block takes precedence. Requires Telegram privacy mode OFF (BotFather /setprivacy Disable) for non-addressed group messages to reach the bot.",
+      "type": "string",
+      "required": false,
+      "example": "-100987654321,123456789",
+      "category": "telegram"
+    },
+    {
       "name": "AFK_TELEGRAM_TRACE",
       "description": "Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only.",
       "type": "boolean",
