@@ -237,6 +237,34 @@ describe('MessageHandler tag-only gate — text', () => {
 
     expect(getSession).not.toHaveBeenCalled();
   });
+
+  it('un-addressed message in a tag-only chat with a LIVE pending elicitation is still consumed by the resolver (not dropped)', async () => {
+    // Reviewer P2 regression: the pending-elicitation intercept must run BEFORE
+    // the tag-only gate, so an answer to an active ask_question elicitation is
+    // never silently dropped just because it isn't a reply/@mention. Use the
+    // ledger-originated bypass (handler.ledgerOriginatedPendingChats) so the
+    // resolver fires regardless of session state — see the field doc on
+    // MessageHandler.ledgerOriginatedPendingChats.
+    const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
+    const resolved: string[] = [];
+    handler.pendingElicitations.set(TAG_CHAT, (text) => resolved.push(text));
+    handler.ledgerOriginatedPendingChats.add(TAG_CHAT);
+
+    const { ctx, react } = makeTextCtx({ chatId: TAG_CHAT, text: 'my answer, no mention' });
+
+    await handler.handle(ctx);
+
+    // Resolver fired with the message text — the elicitation answer was consumed.
+    expect(resolved).toEqual(['my answer, no mention']);
+    // Entry cleaned up on both maps.
+    expect(handler.pendingElicitations.has(TAG_CHAT)).toBe(false);
+    expect(handler.ledgerOriginatedPendingChats.has(TAG_CHAT)).toBe(false);
+    // The message never reached the tag-only gate's drop path or processOne:
+    // no ack react, no getSession, no queued turn.
+    expect(react).not.toHaveBeenCalled();
+    expect(getSession).not.toHaveBeenCalled();
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

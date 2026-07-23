@@ -511,25 +511,6 @@ export class MessageHandler {
       return;
     }
 
-    // Tag-only response policy: in a configured chat, ignore any non-command
-    // message that is not addressed to the bot. Runs AFTER the slash-command
-    // early-return (commands are always honored) and BEFORE the ack/elicitation
-    // path so an un-addressed message produces NO reaction and NO reply — just
-    // a log line. Fail-closed if the bot identity is unknown (botInfo is
-    // populated by Telegraf via getMe() on launch and present on every ctx).
-    if (this.tagOnlyChats.has(chatId)) {
-      const botId = ctx.botInfo?.id;
-      if (botId === undefined) {
-        this.log(`[tag-only] Dropping message in chat ${chatId}: bot identity unknown (botInfo missing)`);
-        return;
-      }
-      const msg = ctx.message as Message.TextMessage;
-      if (!addressedToBot(msg.text, msg.entities, msg.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
-        this.log(`[tag-only] Dropping un-addressed message in chat ${chatId}`);
-        return;
-      }
-    }
-
     // Answer consumed by active ask_question elicitation — never reaches
     // session message queue. Intercept BEFORE the session.state check so
     // that elicitation replies are never swallowed by the busy-queue branch.
@@ -570,6 +551,29 @@ export class MessageHandler {
       // Stale entry — session was reset while elicitation was in flight.
       this.log('[message] dropping stale pendingElicitation for chatId', chatId);
       this.pendingElicitations.delete(chatId);
+    }
+
+    // Tag-only response policy: in a configured chat, ignore any non-command
+    // message that is not addressed to the bot. Runs AFTER the slash-command
+    // early-return (commands are always honored) and AFTER the
+    // pending-elicitation interception above (a live elicitation answer is
+    // consumed there and returns before reaching this gate, so it is never
+    // dropped regardless of tag-only status) — but BEFORE the
+    // ack/react/processOne path, so an un-addressed message produces NO
+    // reaction and NO reply — just a log line. Fail-closed if the bot
+    // identity is unknown (botInfo is populated by Telegraf via getMe() on
+    // launch and present on every ctx).
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping message in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      const msg = ctx.message as Message.TextMessage;
+      if (!addressedToBot(msg.text, msg.entities, msg.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed message in chat ${chatId}`);
+        return;
+      }
     }
 
     let alreadyClaimed = false;
