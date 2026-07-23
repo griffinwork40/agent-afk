@@ -123,6 +123,21 @@ export interface CliConfig {
      * when it finishes" notification honest without blocking the turn.
      */
     verifyDone?: boolean;
+    /**
+     * Per-chat "tag-only" response policy (opt-in; default: bot answers every
+     * non-command message in every allowlisted chat). For each chat ID listed
+     * here, the bot responds to a non-command text/photo message ONLY when it is
+     * addressed to the bot — i.e. the message replies to one of the bot's own
+     * messages, @mentions the bot's username, or carries a `text_mention` entity
+     * resolving to the bot's id. Slash-commands are unaffected. Chats not listed
+     * behave exactly as before.
+     *
+     * Requires Telegram privacy mode to be OFF for the bot (via @BotFather →
+     * /setprivacy → Disable) so that non-addressed group messages are actually
+     * delivered to the bot; otherwise Telegram never sends them and the policy is
+     * moot. Env override: `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` (config value wins).
+     */
+    tagOnlyChats?: number[];
   };
   /**
    * `afk interactive` defaults.
@@ -332,6 +347,8 @@ export interface ConfigFileSchema {
     };
     /** Opt-in AFK "Done" verification gate; default off. See `CliConfig.telegram.verifyDone`. */
     verifyDone?: boolean;
+    /** Opt-in per-chat "tag-only" response policy. See `CliConfig.telegram.tagOnlyChats`. */
+    tagOnlyChats?: number[];
   };
   interactive?: {
     worktreeAutoname?: boolean;

@@ -1,5 +1,5 @@
 import { Context } from 'telegraf';
-import type { Message } from 'telegraf/types';
+import type { Message, MessageEntity } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
 import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatMicrocompact, formatQueued, escapeHtml } from '../formatter.js';
@@ -102,6 +102,51 @@ async function readResponseBytesWithLimit(response: Response, maxBytes: number):
 }
 
 /**
+ * Decide whether a message is "addressed to the bot" for the per-chat tag-only
+ * response policy. A message counts as addressed when ANY of:
+ *
+ *   1. It replies to one of the bot's own messages (`replyFromId === botId`).
+ *   2. It carries a `mention` entity whose text is `@<botUsername>` (the entity
+ *      text is sliced from `text` at [offset, offset+length) and compared
+ *      case-insensitively — Telegram usernames are case-insensitive).
+ *   3. It carries a `text_mention` entity (used for users without a public
+ *      username) whose `user.id` equals the bot's id.
+ *
+ * Fail-closed on the mention paths when the inputs needed to evaluate them are
+ * missing (no text, no entities, or no known bot username) — those simply don't
+ * match, so an un-addressed message stays un-addressed.
+ */
+export function addressedToBot(
+  text: string | undefined,
+  entities: MessageEntity[] | undefined,
+  replyFromId: number | undefined,
+  botId: number,
+  botUsername: string | undefined,
+): boolean {
+  // (a) Reply to one of the bot's own messages.
+  if (replyFromId !== undefined && replyFromId === botId) return true;
+
+  if (!entities || entities.length === 0) return false;
+
+  const wantMention = botUsername ? `@${botUsername.toLowerCase()}` : undefined;
+
+  for (const e of entities) {
+    // (c) text_mention: discriminated narrowing exposes `user` without a cast.
+    if (e.type === 'text_mention') {
+      if (e.user?.id === botId) return true;
+      continue;
+    }
+    // (b) mention: the entity text is the @username; compare case-insensitively.
+    if (e.type === 'mention' && wantMention && text !== undefined) {
+      const mentionText = text.slice(e.offset, e.offset + e.length).toLowerCase();
+      if (mentionText === wantMention) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Message handler with queueing support
  */
 export class MessageHandler {
@@ -198,16 +243,27 @@ export class MessageHandler {
    */
   public ledgerOriginatedPendingChats = new Set<number>();
 
+  /**
+   * Chat IDs under the opt-in "tag-only" response policy. In these chats a
+   * non-command text/photo message is answered only when addressed to the bot
+   * (see {@link addressedToBot}); everything else is dropped silently (a log
+   * line only, no reaction, no reply). Empty set ⇒ the policy applies to no
+   * chat and every allowlisted chat behaves exactly as before.
+   */
+  private readonly tagOnlyChats: Set<number>;
+
   constructor(
     bot: Telegraf,
     sessionManager: SessionManager,
     registeredCommandChats: Set<number>,
-    log: LogFn
+    log: LogFn,
+    tagOnlyChats: Set<number> = new Set()
   ) {
     this.bot = bot;
     this.sessionManager = sessionManager;
     this.registeredCommandChats = registeredCommandChats;
     this.log = log;
+    this.tagOnlyChats = tagOnlyChats;
   }
 
   /**
@@ -228,6 +284,23 @@ export class MessageHandler {
     if (!chatId || !photo?.length) {
       this.log(`Photo handling: missing chatId or photo array for chat ${chatId ?? '(unknown)'}`);
       return;
+    }
+
+    // Tag-only response policy (mirrors handle()): in a configured chat, drop a
+    // photo that is not addressed to the bot BEFORE the ack/getFileLink path, so
+    // an un-addressed photo produces no reaction and no CDN download — just a log
+    // line. A photo's caption carries the mention entities (caption_entities).
+    // Fail-closed if the bot identity is unknown.
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping photo in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      if (!addressedToBot(msg?.caption, msg?.caption_entities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed photo in chat ${chatId}`);
+        return;
+      }
     }
 
     this.log(`📷 Photo from chat ID: ${chatId}`);
@@ -478,6 +551,29 @@ export class MessageHandler {
       // Stale entry — session was reset while elicitation was in flight.
       this.log('[message] dropping stale pendingElicitation for chatId', chatId);
       this.pendingElicitations.delete(chatId);
+    }
+
+    // Tag-only response policy: in a configured chat, ignore any non-command
+    // message that is not addressed to the bot. Runs AFTER the slash-command
+    // early-return (commands are always honored) and AFTER the
+    // pending-elicitation interception above (a live elicitation answer is
+    // consumed there and returns before reaching this gate, so it is never
+    // dropped regardless of tag-only status) — but BEFORE the
+    // ack/react/processOne path, so an un-addressed message produces NO
+    // reaction and NO reply — just a log line. Fail-closed if the bot
+    // identity is unknown (botInfo is populated by Telegraf via getMe() on
+    // launch and present on every ctx).
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping message in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      const msg = ctx.message as Message.TextMessage;
+      if (!addressedToBot(msg.text, msg.entities, msg.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed message in chat ${chatId}`);
+        return;
+      }
     }
 
     let alreadyClaimed = false;

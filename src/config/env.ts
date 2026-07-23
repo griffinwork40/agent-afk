@@ -670,6 +670,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'telegram',
   },
   {
+    name: 'AFK_TELEGRAM_TAG_ONLY_CHAT_IDS',
+    description: 'Comma-separated list of Telegram chat IDs where the bot answers only when addressed (a reply to the bot, an @mention of the bot, or a text_mention resolving to the bot). Slash-commands are unaffected; chats not listed behave as usual. The afk.config.json telegram.tagOnlyChats block takes precedence. Requires Telegram privacy mode OFF (BotFather /setprivacy Disable) for non-addressed group messages to reach the bot.',
+    type: 'string',
+    required: false,
+    example: '-100987654321,123456789',
+    category: 'telegram',
+  },
+  {
     name: 'AFK_TELEGRAM_PRIMARY_CHAT_ID',
     description: 'Default chat ID for outbound notifications (primary-mode routing). When unset, notifications go to the first private/DM chat in AFK_TELEGRAM_ALLOWED_CHAT_IDS. The afk.config.json telegram.notify block takes precedence.',
     type: 'string',
@@ -1425,6 +1433,7 @@ export const env = {
   get TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['TELEGRAM_BOT_TOKEN']; },
   get AFK_TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['AFK_TELEGRAM_BOT_TOKEN']; },
   get AFK_TELEGRAM_ALLOWED_CHAT_IDS(): string | undefined { return process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS']; },
+  get AFK_TELEGRAM_TAG_ONLY_CHAT_IDS(): string | undefined { return process.env['AFK_TELEGRAM_TAG_ONLY_CHAT_IDS']; },
   get AFK_TELEGRAM_PRIMARY_CHAT_ID(): string | undefined { return process.env['AFK_TELEGRAM_PRIMARY_CHAT_ID']; },
   get AFK_TELEGRAM_NOTIFY_MODE(): string | undefined { return process.env['AFK_TELEGRAM_NOTIFY_MODE']; },
   get TELEGRAM_DATA_DIR(): string | undefined { return process.env['TELEGRAM_DATA_DIR']; },

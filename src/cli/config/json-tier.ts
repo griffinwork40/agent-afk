@@ -188,6 +188,12 @@ export function loadJsonConfig(): {
           if (typeof json.telegram.verifyDone === 'boolean') {
             telegram.verifyDone = json.telegram.verifyDone;
           }
+          if (Array.isArray(json.telegram.tagOnlyChats)) {
+            const tagOnly = json.telegram.tagOnlyChats.filter(
+              (t): t is number => typeof t === 'number' && Number.isFinite(t),
+            );
+            if (tagOnly.length > 0) telegram.tagOnlyChats = tagOnly;
+          }
           config.telegram = telegram;
         }
 
