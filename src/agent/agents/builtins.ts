@@ -57,8 +57,7 @@ Reply compactly: the answer first, then evidence as file:line citations, then op
  * resolves a named dispatch's `maxToolUseIterations` to 0 (no cap) when neither
  * the call-site nor the definition sets one, deliberately bypassing
  * SubagentManager's `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` (50) — which only
- * guards internal skill/compose forks. Unbounded is defensible for a real
- * multi-step worker (`general-purpose`), but a READ-ONLY research/review agent
+ * guards internal skill/compose forks. A READ-ONLY research/review agent
  * never legitimately needs many rounds; without a bound it can loop on a hard
  * task until an external cutoff aborts it mid-loop, surfacing as an opaque
  * failure. Bounding it routes a runaway through the graceful capped-partial
@@ -67,6 +66,25 @@ Reply compactly: the answer first, then evidence as file:line citations, then op
  * graph — same rationale as the KNOWN_AFK_TOOL_NAMES dup in resolve.ts.
  */
 const READONLY_AGENT_MAX_TOOL_USE_ITERATIONS = 50;
+
+/**
+ * Anti-runaway ceiling for the inherit-all worker (`general-purpose`).
+ *
+ * general-purpose does exploration AND action across many dependent steps, so
+ * it legitimately needs more rounds than a read-only leaf — it was previously
+ * left UNCAPPED on the (uncapped-by-default) agent-tool dispatch path. But
+ * "uncapped" means a busy, non-converging worker (one that keeps tool-calling
+ * without making progress) has no bound short of the 45-min wall-clock and
+ * dies opaquely there. This generous ceiling (3× the read-only cap) bounds
+ * such a runaway through the SAME graceful capped-partial wind-down, while
+ * staying well above any legitimate multi-step dispatch's round count so real
+ * work is never cut off. A caller with a genuinely longer task opts out
+ * per-dispatch via an explicit `max_tool_use_iterations` (including `0` =
+ * uncapped) — see `child-config.ts`. The cap is PER-TURN, so a single-shot
+ * fork gets one budget for its whole task, which is why it is deliberately
+ * generous rather than matching the read-only 50.
+ */
+const GENERAL_PURPOSE_MAX_TOOL_USE_ITERATIONS = 150;
 
 /**
  * Build the built-in agents, keyed by name.
@@ -134,6 +152,12 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
           'multiple dependent steps, not just research.',
         prompt: GENERAL_PURPOSE_PROMPT,
         // No `tools` — inherit-all (Claude Code parity for general-purpose).
+        // Generous anti-runaway ceiling (see GENERAL_PURPOSE_MAX_TOOL_USE_ITERATIONS):
+        // bounds a busy, non-converging worker to a graceful capped-partial
+        // wind-down instead of the 45-min wall-clock, without cutting legit
+        // multi-step work. Opt out per-dispatch with an explicit
+        // max_tool_use_iterations (`0` = uncapped).
+        maxToolUseIterations: GENERAL_PURPOSE_MAX_TOOL_USE_ITERATIONS,
       },
     },
     {
