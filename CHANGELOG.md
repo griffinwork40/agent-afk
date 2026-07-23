@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.69.0] - 2026-07-23
+
+### Added
+- non-convergence stop criterion in sub-agent contract (#679) (2daf898)
+
+## [5.68.0] - 2026-07-23
+
+### Added
+- progress-aware idle watchdog for forked turns (#672) (74543b6)
+
 ## [5.67.0] - 2026-07-23
 
 ### Added

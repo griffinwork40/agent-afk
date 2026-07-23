@@ -28,7 +28,7 @@ import { classifyBashCommand } from './readonly-bash.js';
 import { headAndTail } from './handlers/_output-cap.js';
 import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
 import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
-import { emitHookDecision } from '../trace/emit.js';
+import { emitHookDecision, emitSessionPhase } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
@@ -40,6 +40,13 @@ import {
   extractDeniedReadPath,
   buildDenialBreakerMessage,
 } from './denial-circuit-breaker.js';
+import {
+  createSuspectedLoopWindow,
+  fingerprintToolCall,
+  observeToolCall,
+  SUSPECTED_LOOP_WINDOW_SIZE,
+  type SuspectedLoopWindow,
+} from './suspected-loop-detector.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -271,6 +278,21 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * has been seen since the last success. See {@link recordForkReadDenial}.
    */
   private denialBreaker: { count: number; deniedPaths: string[] } | null = null;
+
+  /**
+   * OBSERVE-ONLY suspected-loop telemetry window (see
+   * {@link import('./suspected-loop-detector.js')}). Per-dispatcher (one per
+   * forked `query()`), so it tracks the last {@link SUSPECTED_LOOP_WINDOW_SIZE}
+   * tool-call fingerprints within a single turn and resets between turns via
+   * dispatcher reconstruction — exactly like the two breakers above.
+   *
+   * Lazily created on the first FORKED tool call (see
+   * {@link observeSuspectedLoop}); stays `null` for top-level sessions, which are
+   * never observed. Its ONLY effect is emitting a `suspected_loop` session-phase
+   * event on first detection — it NEVER aborts, sets a failureClass, or alters a
+   * result. This is pure data-gathering, not enforcement.
+   */
+  private suspectedLoopWindow: SuspectedLoopWindow | null = null;
 
   /**
    * Shared grant-state machine (issues #361/#362). The hooks bind the
@@ -568,6 +590,53 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
+   * OBSERVE-ONLY suspected-loop telemetry (see
+   * {@link import('./suspected-loop-detector.js')}). Pushes this call's
+   * normalized fingerprint into the per-dispatcher sliding window and, on the
+   * FIRST time a fingerprint recurs past the threshold within the window,
+   * fire-and-forgets a `suspected_loop` session-phase event carrying
+   * `{ tool, count, windowSize }`.
+   *
+   * CRITICAL INVARIANT — this method has NO effect on dispatch. It returns
+   * `void`, never a `ToolResult`; it never aborts, never sets a `failureClass`,
+   * never mutates or delays the tool result, and never changes control flow.
+   * The trace write is `void`-ed (fire-and-forget) so a slow witness write can
+   * never delay a tool call. It exists purely to gather data on whether real
+   * (tool, args) busy-loops occur in forked sub-agents.
+   *
+   * Scope: FORKED children only (`parentSessionId` set), mirroring the denial
+   * breaker — interactive sessions, where the operator drives repetition, are
+   * never observed and the window stays `null`.
+   *
+   * Placement: called once per tool call on the sequential pre-execution path
+   * (execute() step 2d and executeBatch() phase 1), AFTER the repeat breaker —
+   * so a call the repeat breaker already short-circuited is not double-counted
+   * here, and the fingerprint order reflects real call order. Because it is
+   * observe-only, it does not matter whether the underlying call later succeeds
+   * or errors; we are measuring the REPETITION, not the outcome.
+   */
+  private observeSuspectedLoop(call: ToolCall): void {
+    // Top-level sessions are out of scope: never observed, no window allocated.
+    if (this.parentSessionId === undefined) return;
+    if (this.suspectedLoopWindow === null) {
+      this.suspectedLoopWindow = createSuspectedLoopWindow();
+    }
+    const fingerprint = fingerprintToolCall(call);
+    const observation = observeToolCall(this.suspectedLoopWindow, fingerprint);
+    if (!observation.fired) return;
+    // Fire-and-forget: emission must never delay or perturb dispatch, and
+    // emitSessionPhase already swallows writer errors internally.
+    void emitSessionPhase(this.traceWriter, {
+      phase: 'suspected_loop',
+      metadata: {
+        tool: call.name,
+        count: observation.count,
+        windowSize: SUSPECTED_LOOP_WINDOW_SIZE,
+      },
+    });
+  }
+
+  /**
    * Denial circuit breaker (#546). Called from the `HookBlockedError` catch with
    * the block `reason` and the just-built `hook-block` result. Counts the denial
    * ONLY when ALL of:
@@ -746,6 +815,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const repeatBlock = this.checkRepeatCircuitBreaker(call);
     if (repeatBlock) return repeatBlock;
 
+    // 2d. OBSERVE-ONLY suspected-loop telemetry (forked children only). Records
+    // the fingerprint and emits a `suspected_loop` trace signal on first
+    // recurrence past threshold. Pure observability — never blocks, never
+    // alters the result, never changes control flow. Runs after the repeat
+    // breaker so a short-circuited call is not counted twice.
+    this.observeSuspectedLoop(call);
+
     // 3. Agent routing + handler dispatch + PostToolUse. Delegates to
     // executeCore() — the shared core executeBatch() already calls per-tool
     // (see lines ~936/972). execute() previously inlined a verbatim copy of
@@ -859,6 +935,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
         blocked.add(i);
         continue;
       }
+
+      // OBSERVE-ONLY suspected-loop telemetry (forked children only). Same
+      // placement as execute() step 2d — after the repeat breaker, on the
+      // sequential phase-1 path so the fingerprint window sees every
+      // non-short-circuited call in real order. Never blocks: it does not set
+      // `results[i]`, add to `blocked`, or `continue`; the call proceeds to
+      // phase-2 execution exactly as before.
+      this.observeSuspectedLoop(call);
     }
 
     // Phase 2: partition non-blocked calls into batches and execute.

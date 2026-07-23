@@ -129,6 +129,57 @@ export function resolveSubagentTimeoutMs(): number {
 }
 
 /**
+ * Default progress-aware IDLE budget applied to every forked subagent turn.
+ *
+ * Distinct from {@link SUBAGENT_DEFAULT_TIMEOUT_MS} (the 45-min blunt
+ * wall-clock that bounds total turn TIME): this bounds time since the child last
+ * produced an observable `OutputEvent`. The incident that motivated it — a
+ * `/review` run that hung ~43 min producing zero output — was a subagent's model
+ * call stalling under HTTP 429 / provider throttling with NO detection: round
+ * caps bound *work done*, wall-clock bounds *time elapsed*, and neither bounds
+ * *time since anything observable happened*. The idle watchdog (see
+ * {@link import('./subagent/idle-watchdog.js').IdleWatchdog}) fires materially
+ * sooner than the wall-clock on a genuine stall and never fires while the stream
+ * is legitimately parked on a provider-communicated backoff (OAuth `paused`,
+ * `rate_limit` with `retryAfterMs`).
+ *
+ * 8 minutes: a companion follow-up SPLITS OUT the transient-429 stream signal
+ * (the `retry-layer.ts` change that would make a transient backoff wait a
+ * visible, deadline-extending stream event). Until it lands, THIS watchdog is
+ * blind to the retry-layer's transient backoff. The verified worst case there is
+ * `RATE_LIMIT_TRANSIENT_MAX_RETRIES (3)` × `RATE_LIMIT_RETRY_MAX_WAIT_MS (120s)`
+ * + jitter ≈ 363s of legitimate near-silence; an 8-min (480s) default clears
+ * that with ~2 min margin, so a transient backoff can never false-fire the
+ * watchdog, while it is still 5.6× tighter than the wall-clock. Once the
+ * follow-up lands the default can tighten toward ~5 min. Env-tunable via
+ * `AFK_SUBAGENT_IDLE_TIMEOUT_MS` (see {@link resolveSubagentIdleTimeoutMs});
+ * per-fork override via `config.idleTimeoutMs`; `0` disables the watchdog (the
+ * wall-clock still applies).
+ */
+export const SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS = 8 * 60_000;
+
+/**
+ * Resolve the forked-subagent idle-watchdog budget from
+ * `AFK_SUBAGENT_IDLE_TIMEOUT_MS`.
+ *
+ * Mirrors {@link resolveSubagentTimeoutMs} byte-for-byte: returns the parsed
+ * value when it is a finite integer `>= 0`. A value of `0` is the explicit
+ * disable escape hatch (returned as `0` = watchdog off). Unset, empty, or
+ * unparseable input falls back to {@link SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS};
+ * negative values are treated as invalid and also fall back to the default.
+ *
+ * Only consulted for the DEFAULT budget: an explicit per-fork
+ * `config.idleTimeoutMs` still wins via the `??` at the fork site.
+ */
+export function resolveSubagentIdleTimeoutMs(): number {
+  const raw = env.AFK_SUBAGENT_IDLE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') return SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS;
+  return n;
+}
+
+/**
  * Wall-clock budget for BACKGROUND-mode agent dispatches (fire-and-forget
  * jobs whose results auto-deliver later). Background children don't park
  * their parent, so the anti-hang pressure is lower — but an unbounded
@@ -935,6 +986,14 @@ export class SubagentManager {
       // onSubagentSucceeded: propagate completion data to the parent
       // session's session_sealed rollup accumulators.
       this.onSubagentSucceededCb,
+      // Progress-aware idle-watchdog window for the child's turn (see
+      // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS above). Explicit caller values win,
+      // including `0` to disable the watchdog for this fork — `??` preserves that
+      // precedence. The default is env-tunable via AFK_SUBAGENT_IDLE_TIMEOUT_MS
+      // (resolveSubagentIdleTimeoutMs); an unset/invalid env value returns
+      // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS, so behaviour is unchanged when the var
+      // is not set. Runs concurrently with the wall-clock budget above.
+      options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
     );
     this.active.set(id, handle as SubagentHandleImpl<unknown>);
 

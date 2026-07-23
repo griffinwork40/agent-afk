@@ -374,6 +374,23 @@ export interface AgentConfig {
   timeoutMs?: number;
 
   /**
+   * Per-fork progress-aware idle-watchdog window in ms, applied ONLY to forked
+   * sub-agent turns (v1 scope — top-level/daemon sessions are a fast-follow).
+   * Fires when the child produces NO observable `OutputEvent` for this window,
+   * distinct from the blunt wall-clock {@link timeoutMs} that bounds total turn
+   * time. On fire the watchdog aborts the same controller `withTimeout` targets,
+   * so the existing timeout-abort → partial-output path applies unchanged and
+   * the termination classifies as `failed` (own-budget expiry).
+   *
+   * Precedence at the fork site mirrors {@link timeoutMs}:
+   * `config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs()`. Unset → the
+   * env-tunable default (`AFK_SUBAGENT_IDLE_TIMEOUT_MS`, default 8 min). `0`
+   * disables the watchdog for this fork (the wall-clock still applies). Ignored
+   * for top-level sessions, which never run through `forkSubagent`.
+   */
+  idleTimeoutMs?: number;
+
+  /**
    * Harness-owned hook registry. When provided, `AgentSession` dispatches
    * `SessionStart` before the SDK query is consumed and `SessionEnd` when
    * the session closes. `SubagentManager` uses the same registry (or a
