@@ -189,6 +189,21 @@ describe('session_phase payload schema — acceptance', () => {
     // Bare name-schema acceptance.
     expect(() => SessionPhaseNameSchema.parse('idle_watchdog_fired')).not.toThrow();
   });
+
+  it('accepts the suspected_loop phase with its OBSERVE-ONLY loop metadata', () => {
+    // Emitted by SessionToolDispatcher for a FORKED child on first detection of
+    // a recurring (tool, args) fingerprint. Single event (no paired *_start);
+    // carries the loop diagnostics as metadata. Pure observability — never
+    // aborts the fork or alters a result.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'suspected_loop',
+        metadata: { tool: 'read_file', count: 5, windowSize: 20 },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance.
+    expect(() => SessionPhaseNameSchema.parse('suspected_loop')).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -222,6 +237,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     usage_limit_pause: true,
     usage_limit_resume: true,
     idle_watchdog_fired: true,
+    suspected_loop: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {
