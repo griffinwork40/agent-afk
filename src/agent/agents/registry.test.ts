@@ -62,18 +62,23 @@ describe('loadAgentRegistry', () => {
     // git-investigator is a read-only git-archaeology leaf (dispatched by
     // research-agent) and must carry the same cap.
     expect(registry.get('git-investigator')?.definition.maxToolUseIterations).toBe(50);
-    // general-purpose stays UNBOUNDED — a real multi-step worker legitimately
-    // needs an uncapped loop, so it must NOT gain the read-only bound.
-    expect(registry.get('general-purpose')?.definition.maxToolUseIterations).toBeUndefined();
+    // general-purpose now carries a GENEROUS ceiling (not the read-only 50): a
+    // full-tool multi-step worker needs headroom, but leaving it "uncapped" let
+    // a busy, non-converging worker run to the 45-min wall-clock. 150 bounds a
+    // runaway to the graceful capped-partial wind-down while clearing legit
+    // multi-step work; opt out per-dispatch via explicit max_tool_use_iterations.
+    expect(registry.get('general-purpose')?.definition.maxToolUseIterations).toBe(150);
   });
 
   // Drift-catcher: iterate the BUILTIN registry (not the vendored consts) so a
-  // newly-added read-only builtin that forgets the anti-runaway cap fails here.
-  // Structural predicate (no hardcoded per-agent list): a builtin with an
-  // explicit `tools` allowlist is a restricted/read-only leaf and MUST carry
-  // maxToolUseIterations; a builtin that OMITS `tools` (inherit-all, the full
-  // tool surface — only general-purpose today) is the uncapped exemption.
-  it('every read-only builtin (explicit tools) carries the anti-runaway cap; inherit-all exempt', () => {
+  // newly-added builtin that forgets its anti-runaway cap fails here.
+  // Structural predicate (no hardcoded per-agent list): EVERY builtin must be
+  // bounded — a builtin with an explicit `tools` allowlist is a
+  // restricted/read-only leaf capped at 50; a builtin that OMITS `tools`
+  // (inherit-all, the full tool surface — only general-purpose today) is the
+  // multi-step worker, capped at the generous worker ceiling (150), never
+  // uncapped.
+  it('every builtin is bounded: read-only leaves cap at 50, the inherit-all worker at the generous ceiling', () => {
     const builtins = builtinAgents();
     // Guard the guard: ensure we actually iterated real builtins and covered
     // BOTH arms (at least one capped read-only leaf and the inherit-all worker),
@@ -92,8 +97,8 @@ describe('loadAgentRegistry', () => {
         sawInheritAll = true;
         expect(
           entry.definition.maxToolUseIterations,
-          `inherit-all builtin ${name} must stay uncapped (full tool surface)`,
-        ).toBeUndefined();
+          `inherit-all builtin ${name} must carry the generous worker ceiling (never uncapped)`,
+        ).toBe(150);
       }
     }
     expect(sawRestricted, 'expected ≥1 restricted read-only builtin').toBe(true);
