@@ -1,14 +1,12 @@
 /**
  * Grep tool handler.
  *
- * Searches for a pattern in files using `grep -rn` with optional include filter.
- * Runs in basic-regex (BRE) mode by default — where `|` is a *literal* pipe, not
- * alternation — and exposes an `extended` flag that adds `-E` for extended-regex
- * (ERE) semantics. The BRE default is deliberate: a bare `|` is a common literal
- * in source (TS union types `string | number`, shell pipes, bitwise OR), so the
- * tool must not silently reinterpret it. To keep the BRE `|`-is-literal footgun
- * from masquerading as proven absence, the no-match path appends a self-correcting
- * ERE hint when the pattern contains an unescaped `|` (see the `close` handler).
+ * Searches for a pattern in files using bundled ripgrep (`@vscode/ripgrep`'s
+ * `rgPath`) with optional include filter. Ripgrep has no basic-regex (BRE)
+ * mode: `|` `+` `?` `(` `)` `{` `}` are always regex metacharacters (e.g. a
+ * bare `foo|bar` alternates, matching either branch) — a deliberate contract
+ * change from the previous system-`grep`-backed implementation, which ran in
+ * BRE mode by default and required an `extended` opt-in for alternation.
  * Respects signal-based cancellation. Output is governed by two decoupled
  * thresholds (see `_output-cap.ts`): the accumulator is bounded at
  * HARD_CAP_BYTES (8MB) with a mid-stream SIGKILL only when it is crossed — a
@@ -21,11 +19,13 @@
  */
 
 import { spawn } from 'child_process';
+import { rgPath } from '@vscode/ripgrep';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
+import { describeRgUnavailable } from './_rg-availability.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
 
 /**
@@ -35,7 +35,6 @@ interface GrepInput {
   pattern?: unknown;
   path?: unknown;
   include?: unknown;
-  extended?: unknown;
 }
 
 /**
@@ -54,7 +53,6 @@ function parseGrepInput(
   pattern: string;
   path: string;
   include?: string;
-  extended: boolean;
 } {
   if (typeof input !== 'object' || input === null) {
     throw new Error('Input must be an object');
@@ -86,32 +84,11 @@ function parseGrepInput(
     include = grepInput.include;
   }
 
-  let extended = false;
-  if (grepInput.extended !== undefined) {
-    if (typeof grepInput.extended !== 'boolean') {
-      throw new Error('extended must be a boolean');
-    }
-    extended = grepInput.extended;
-  }
-
   return {
     pattern: grepInput.pattern,
     path: resolvedPath,
     include,
-    extended,
   };
-}
-
-/**
- * Detect an unescaped `|` in a search pattern. In basic-regex (BRE) mode — the
- * grep default — `|` is a *literal pipe*, not alternation, so a pattern like
- * `foo|bar` silently matches the literal text `foo|bar` and returns zero hits
- * when the model meant "foo OR bar". This predicate gates the educational hint
- * on the no-match path. A preceding backslash means the `|` was escaped
- * deliberately (the model wants the literal), so we suppress the hint there.
- */
-function hasUnescapedAlternation(pattern: string): boolean {
-  return /(?<!\\)\|/.test(pattern);
 }
 
 /**
@@ -125,7 +102,7 @@ function hasUnescapedAlternation(pattern: string): boolean {
  */
 export function createGrepHandler(cwd?: string): ToolHandler {
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
-  const { pattern, path, include, extended } = parseGrepInput(input, context, cwd);
+  const { pattern, path, include } = parseGrepInput(input, context, cwd);
 
   if (signal.aborted) {
     return { content: 'Search aborted', isError: true };
@@ -141,17 +118,22 @@ export function createGrepHandler(cwd?: string): ToolHandler {
       resolve(result);
     }
 
-    const args = ['-rn'];
-
-    // ERE opt-in: `-E` makes `|` alternation and `+ ? ( ) { }` metacharacters.
-    // Default (BRE) leaves them literal — see the module header for why.
-    if (extended) {
-      args.push('-E');
-    }
+    // Base flags. `-n` = line numbers. `--no-heading`/`--color=never` force the
+    // flat `path:line:content` shape on a pipe (don't rely on rg's tty auto-
+    // detection). `--hidden` makes rg search dotfiles/dirs (.github, .env,
+    // .claude) that the old `grep -rn` reached and agents grep constantly — rg
+    // skips them by default; .gitignore is still honored (node_modules/dist
+    // stay skipped). Do NOT add `-r`/`-rn`: in ripgrep `-r` is `--replace=TEXT`
+    // and would silently rewrite every match.
+    const args = ['-n', '--no-heading', '--color=never', '--hidden'];
 
     if (include) {
-      args.push(`--include=${include}`);
+      args.push('-g', include);
     }
+
+    // `--hidden` re-includes .git (a dot-dir not covered by .gitignore); exclude
+    // it explicitly. Pushed AFTER any include glob so it always wins for .git paths.
+    args.push('-g', '!.git');
 
     args.push(pattern, path);
 
@@ -162,10 +144,10 @@ export function createGrepHandler(cwd?: string): ToolHandler {
     //   3. factory-level `cwd` — session worktree isolation (createGrepHandler)
     // Computed ONCE so the spawn cwd and the ENOENT diagnosis below cannot
     // disagree: a stale factory `cwd` would otherwise make the diagnosis stat a
-    // different dir than spawn used, reverting to a raw `spawn grep ENOENT`
+    // different dir than spawn used, reverting to a raw `spawn <rgPath> ENOENT`
     // (Codex P2 on #471). spawn treats `cwd: undefined` as inherit process.cwd().
     const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
-    const proc = spawn('grep', args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
+    const proc = spawn(rgPath, args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
 
     let stdout = '';
     let stderr = '';
@@ -257,27 +239,14 @@ export function createGrepHandler(cwd?: string): ToolHandler {
       if (overflowKilled) return;
 
       if (code === 1) {
-        let message = `No matches found for '${pattern}' in ${path}`;
-        // BRE footgun guard: in basic-regex mode `|` is a literal pipe, so
-        // `foo|bar` silently returns zero hits when the model meant "foo OR
-        // bar" — the classic false-negative this tool is prone to. Append a
-        // self-correcting hint so an empty result is never mistaken for proven
-        // absence. Suppressed in `extended` mode (where `|` already alternated)
-        // and when the `|` was explicitly escaped (deliberate literal).
-        if (!extended && hasUnescapedAlternation(pattern)) {
-          message +=
-            "\n\nNote: this search ran in basic-regex (BRE) mode, where '|' is a " +
-            "literal pipe — not alternation. If you intended \"A or B\", retry with " +
-            'extended: true (extended regex / ERE). If you meant the literal ' +
-            "character '|', this empty result stands.";
-        }
+        const message = `No matches found for '${pattern}' in ${path}`;
         settle({ content: message });
         return;
       }
 
       if (code === 2) {
-        // stderr may accumulate up to HARD_CAP_BYTES (e.g. `-r` across a tree
-        // with many unreadable files), so cap it to the model budget.
+        // stderr may accumulate up to HARD_CAP_BYTES (e.g. a recursive search
+        // across a tree with many unreadable files), so cap it to the model budget.
         const capped = capForModel(stderr.trim());
         settle({
           content: `grep error: ${capped.content}`,
@@ -293,6 +262,18 @@ export function createGrepHandler(cwd?: string): ToolHandler {
     });
 
     proc.on('error', (err) => {
+      // Dual-cause ENOENT: a missing or non-executable bundled `rgPath` (e.g. a
+      // @vscode/ripgrep platform optional-dep that didn't install) also surfaces
+      // as `spawn <rgPath> ENOENT`, indistinguishable by error shape from the
+      // dead-cwd masquerade below. Check rg-binary availability FIRST (stats
+      // rgPath on the error path only) so a bad binary is diagnosed as such and
+      // never misattributed to a deleted worktree.
+      const rgUnavailable = describeRgUnavailable(rgPath);
+      if (rgUnavailable !== undefined) {
+        settle({ content: `Failed to execute grep: ${rgUnavailable}`, isError: true });
+        return;
+      }
+
       // Spawn ENOENT masquerade: a dead working directory (e.g. a git worktree
       // reaped mid-session) surfaces as `spawn grep ENOENT` — naming the binary,
       // not the missing dir — so an agent retries blindly. Translate it into an
