@@ -52,8 +52,18 @@ function makeHandler(
   );
 }
 
-function makeTextCtx(opts: { chatId: number; text: string; type: ChatType; from?: Sender }): Context {
-  const message = { text: opts.text, ...(opts.from ? { from: opts.from } : {}) } as Partial<Message.TextMessage>;
+function makeTextCtx(opts: {
+  chatId: number;
+  text: string;
+  type: ChatType;
+  from?: Sender;
+  replyToMessage?: Partial<Message.TextMessage>;
+}): Context {
+  const message = {
+    text: opts.text,
+    ...(opts.from ? { from: opts.from } : {}),
+    ...(opts.replyToMessage ? { reply_to_message: opts.replyToMessage } : {}),
+  } as Partial<Message.TextMessage>;
   return {
     chat: { id: opts.chatId, type: opts.type },
     message,
@@ -166,6 +176,70 @@ describe('sender attribution — text (handle)', () => {
 
     expect(resolver).toHaveBeenCalledWith('blue');
     expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  // PR #688 review Item 1 (Codex bot inline P2): replying to the bot's own
+  // pending-question message is the natural way to answer an ask_question
+  // elicitation. The resolver must receive the literal answer — a
+  // `[in reply to the assistant: "…"] ` marker prepended ahead of it would
+  // break number/multi-choice validation and pollute text answers. This is
+  // the primary DM elicitation surface (senderPrefix is '' in private chats,
+  // so before #688 the resolver always saw the clean answer).
+  it('resolves a pending elicitation to the CLEAN answer when the reply targets the bot\'s own question (private chat)', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(500, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: 500, text: '5', type: 'private', from: { id: 7, first_name: 'Alice' },
+      // reply_to_message.from.id === botInfo.id (42) — this is what would make
+      // replyContextPrefix emit a non-empty `[in reply to the assistant: …]`
+      // marker if the elicitation path still used attributedMessageText.
+      replyToMessage: { text: 'What number?', from: { id: 42, first_name: 'Bot' } } as Partial<Message.TextMessage>,
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('5');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  // Same scenario in a group: senderPrefix (non-empty in groups) must still be
+  // retained on the elicitation answer — only the reply-context marker is
+  // excluded. Guards against a fix that overcorrects by stripping senderPrefix
+  // too (see the hard constraint: item 1 restores senderPrefix + text, not text
+  // alone).
+  it('resolves a pending elicitation to sender-prefixed (but reply-context-free) text in a group', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(-100, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: '5', type: 'group', from: { id: 7, first_name: 'Alice' },
+      replyToMessage: { text: 'What number?', from: { id: 42, first_name: 'Bot' } } as Partial<Message.TextMessage>,
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('[from Alice (id 7)]: 5');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  // PR #688 review Item 5 (positive wiring, review findings 4-6): a NORMAL
+  // reply (reply_to_message present, NO pending elicitation) must still carry
+  // the `[in reply to …]` prefix through to the model — pinning the wiring in
+  // both directions (elicitation path excludes it; enqueue/processOne path
+  // includes it).
+  it('a normal reply (no pending elicitation) includes the [in reply to …] prefix in the processed content', async () => {
+    const handler = makeHandler('idle');
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'sounds good', type: 'group', from: { id: 7, first_name: 'Alice' },
+      replyToMessage: { text: 'shall we ship it?', from: { id: 9, first_name: 'Bob' } } as Partial<Message.TextMessage>,
+    }));
+
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    expect(content).toBe('[in reply to Bob: "shall we ship it?"] [from Alice (id 7)]: sounds good');
   });
 });
 
