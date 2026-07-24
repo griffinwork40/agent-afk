@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.74.0] - 2026-07-24
+
+### Added
+- harden handoff against mid-stream truncation (#678) (c60dec0)
+
 ## [5.73.0] - 2026-07-24
 
 ### Added
