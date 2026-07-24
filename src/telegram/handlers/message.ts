@@ -12,6 +12,7 @@ import { withTypingIndicator } from '../typing-indicator.js';
 import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
 import { HookBlockedError } from '../../utils/errors.js';
+import { senderPrefix } from '../sender-attribution.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 type QueueItem =
@@ -449,9 +450,16 @@ export class MessageHandler {
       // Use spread-then-slice to count Unicode code points, not UTF-16 code units:
       // emoji and other non-BMP characters span two code units, and slicing at a
       // surrogate-pair boundary with plain .slice() produces malformed text.
+      // Prepend a system-trusted sender marker in group/supergroup chats so the
+      // model knows who sent the image (byte-identical no-op in private chats).
+      // See sender-attribution.ts for the sanitization / anti-spoofing rationale.
+      const prefix = senderPrefix(msg?.from, ctx.chat?.type);
       const contentBlocks: ContentBlockParam[] = [];
       if (caption != null) {
-        contentBlocks.push({ type: 'text', text: `[User caption]: ${[...caption].slice(0, 1024).join('')}` });
+        contentBlocks.push({ type: 'text', text: `${prefix}[User caption]: ${[...caption].slice(0, 1024).join('')}` });
+      } else if (prefix) {
+        // No caption, but still attribute the sender of the image in a group.
+        contentBlocks.push({ type: 'text', text: `${prefix}(image, no caption)` });
       }
       contentBlocks.push({
         type: 'image',
@@ -511,6 +519,15 @@ export class MessageHandler {
       return;
     }
 
+    // Prepend a system-trusted sender marker in group/supergroup chats so the
+    // model can tell participants apart (the whole group shares one per-chat
+    // session). Byte-identical no-op in private chats. Computed AFTER the
+    // slash-command check above (commands need the raw leading slash) and used
+    // for pending elicitation, enqueue, and processOne paths. The tag-only gate
+    // below still uses raw text + entity offsets for addressed-to-bot checks.
+    // See sender-attribution.ts.
+    const attributedMessageText = senderPrefix((ctx.message as Message.TextMessage).from, ctx.chat?.type) + messageText;
+
     // Answer consumed by active ask_question elicitation — never reaches
     // session message queue. Intercept BEFORE the session.state check so
     // that elicitation replies are never swallowed by the busy-queue branch.
@@ -538,14 +555,14 @@ export class MessageHandler {
       if (this.ledgerOriginatedPendingChats.has(chatId)) {
         this.pendingElicitations.delete(chatId);
         this.ledgerOriginatedPendingChats.delete(chatId);
-        elicitResolver(messageText);
+        elicitResolver(attributedMessageText);
         return;
       }
       // Case 2: session-local — fire only when the session is genuinely busy.
       const existingSession = this.sessionManager.getSessionIfExists(chatId);
       if (existingSession && existingSession.state !== 'idle') {
         this.pendingElicitations.delete(chatId);
-        elicitResolver(messageText);
+        elicitResolver(attributedMessageText);
         return;
       }
       // Stale entry — session was reset while elicitation was in flight.
@@ -603,13 +620,15 @@ export class MessageHandler {
         this.log('Failed to register chat commands:', err)
       );
 
+      const content = attributedMessageText;
+
       if (session.state !== 'idle' || alreadyClaimed) {
-        const depth = this.enqueueMessage(chatId, ctx, messageText);
+        const depth = this.enqueueMessage(chatId, ctx, content);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         return;
       }
 
-      await this.processOne(chatId, ctx, messageText);
+      await this.processOne(chatId, ctx, content);
     } catch (error) {
       this.log('Message handling error:', error);
       // Note: 'session is busy' is no longer handled here — that race is covered
