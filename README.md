@@ -145,7 +145,7 @@ afk chat "refactor this" --model gpt-5.5
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
 | `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
 | `medium` | `claude-sonnet-5` | General-use default |
-| `large` | `claude-opus-4-8` | Most capable |
+| `large` | `claude-opus-5` | Most capable |
 
 The `haiku`/`sonnet`/`opus`/`fable` handles are **fixed identities**, not tier
 aliases: they always resolve to their Claude model even after you rebind a tier

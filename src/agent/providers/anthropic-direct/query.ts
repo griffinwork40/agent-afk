@@ -89,9 +89,9 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Latest balanced Claude — recommended default',
   },
   {
-    value: 'claude-opus-4-5-20250929',
-    displayName: 'Claude Opus 4.5',
-    description: 'Highest-capability Claude',
+    value: 'claude-opus-5',
+    displayName: 'Claude Opus 5',
+    description: 'Highest-capability Claude for agentic coding',
   },
   {
     value: 'claude-haiku-4-5-20250929',

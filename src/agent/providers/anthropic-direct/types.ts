@@ -461,6 +461,10 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map([
   // $2 / $10 pricing applies through 2026-08-31; the standard rate is used here
   // for post-intro durability of long-lived persisted cost reports.
   ['claude-sonnet-5', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
+  // Claude Opus 5 (GA 2026-07-24): $5 / $25 per MTok (input/output) per
+  // Anthropic's models/pricing docs. Cache write/read follow the standard
+  // 1.25× / 0.10× multipliers.
+  ['claude-opus-5', { inputPerMTok: 5.0, outputPerMTok: 25.0, cacheWritePerMTok: 6.25, cacheReadPerMTok: 0.50 }],
   // Claude 4.5 family (kept for backward compat with persisted sessions)
   ['claude-sonnet-4-5-20250929', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
   ['claude-opus-4-5-20250929',   { inputPerMTok: 15.0, outputPerMTok: 75.0, cacheWritePerMTok: 18.75, cacheReadPerMTok: 1.50 }],
