@@ -3,7 +3,8 @@
  * `resolveEffort`, `resolveThinkingParam`, and `resolveMaxTokens`.
  *
  * `resolveEffort` auto-defaults to `'max'` on the production-verified
- * allowlist (`opus-4-6`, `opus-4-7`, `opus-4-8`, `sonnet-4-6`, `sonnet-4-7`)
+ * allowlist (`opus-4-6`, `opus-4-7`, `opus-4-8`, `opus-5`, `sonnet-4-6`,
+ * `sonnet-4-7`, `sonnet-5`)
  * and passes explicit values through unchanged for all models. Older 4-x
  * variants and Haiku return HTTP 400 when `output_config.effort` is set, so
  * the auto-default is gated to known-good ids; explicit overrides still flow
@@ -52,6 +53,15 @@ describe('resolveEffort', () => {
   it('defaults to "max" for claude-sonnet-5 (adaptive-thinking Sonnet tier)', () => {
     expect(resolveEffort(undefined, 'claude-sonnet-5')).toBe('max');
     expect(resolveEffort(undefined, 'claude-sonnet-5-20260630')).toBe('max');
+  });
+
+  it('defaults to "max" for claude-opus-5 (adaptive-thinking Opus tier)', () => {
+    // Opus 5's server-side default effort is `high`; we override to `max` for
+    // thinking depth, same as the rest of the allowlist. Guards the regex that
+    // was widened from `sonnet-5` to `(opus|sonnet)-(4-[678]|5)` — a refactor
+    // there must not silently drop the new default model off the allowlist.
+    expect(resolveEffort(undefined, 'claude-opus-5')).toBe('max');
+    expect(resolveEffort(undefined, 'claude-opus-5-20260724')).toBe('max');
   });
 
   // ── Explicit caller overrides always win ───────────────────────────────
@@ -187,6 +197,18 @@ describe('resolveThinkingParam', () => {
 
   it('promotes enabled to adaptive on claude-sonnet-5 (adaptive-only; no budget leaks through)', () => {
     const p = resolveThinkingParam(enabled(60_000), 64_000, 'claude-sonnet-5') as {
+      type: string;
+      budget_tokens?: number;
+    };
+    expect(p.type).toBe('adaptive');
+    expect(p.budget_tokens).toBeUndefined();
+  });
+
+  it('promotes enabled to adaptive on claude-opus-5 (adaptive-only; no budget leaks through)', () => {
+    // Opus 5's model card is "Extended thinking: No / Adaptive thinking: Yes",
+    // so a manual {type:'enabled'} must never reach the wire — the API rejects
+    // it. Guards requiresAdaptiveThinking's widened `(opus|sonnet)-5` branch.
+    const p = resolveThinkingParam(enabled(60_000), 64_000, 'claude-opus-5') as {
       type: string;
       budget_tokens?: number;
     };

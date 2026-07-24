@@ -3,10 +3,12 @@
  * working budget), contextLimitFor (context window), and maxOutputTokensFor
  * (output ceiling).
  *
- * Base `sonnet` has a truthful 1M window (see MODEL_CONTEXT_LIMITS) but is
- * capped at a 200k compaction budget so long default sessions compact early for
- * cost/latency. The `sonnet_1m` opt-in and every non-sonnet model use their
- * full context window. The GPT-5.6-family suites additionally guard the
+ * Base `sonnet` and base `opus` have truthful 1M windows (see
+ * MODEL_CONTEXT_LIMITS) but are capped at a 200k compaction budget so long
+ * default sessions compact early for cost/latency. The `*_1m` opt-ins and every
+ * model with no MODEL_AUTOCOMPACT_BUDGET entry use their full context window.
+ * Note 200k means two different things here: a reduced budget for opus/sonnet,
+ * but the real window for haiku. The GPT-5.6-family suites additionally guard the
  * output-cap path — provider-agnostic and shared with openai-compatible — so
  * new gpt-5.x ids do not silently fall through to the 64k default. See
  * src/agent/model-limits.ts.
@@ -31,9 +33,26 @@ describe('autoCompactLimitFor', () => {
     expect(autoCompactLimitFor('sonnet_1m')).toBe(1_000_000);
   });
 
-  it('leaves opus / opus_1m / haiku / fable at their full window (no budget)', () => {
+  it('caps the default opus alias at the 200k working budget (not its 1M window)', () => {
+    // Opus 5 ships a native 1M window, so base `opus` has the same profile as
+    // base `sonnet`: truthful 1M window, reduced 200k compaction trigger. This
+    // 200k is a CAP on a 1M window — not the window itself (contrast haiku
+    // below, whose 200k is its actual window).
+    expect(contextLimitFor('opus')).toBe(1_000_000);
     expect(autoCompactLimitFor('opus')).toBe(200_000);
+  });
+
+  it('caps the claude-opus-5 wire id at 200k (requestedModel may be the wire id)', () => {
+    expect(autoCompactLimitFor('claude-opus-5')).toBe(200_000);
+  });
+
+  it('the opus_1m opt-in bypasses the budget and uses the full 1M window', () => {
     expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
+  });
+
+  it('leaves haiku / fable at their full window (no budget entry)', () => {
+    // haiku's 200k is its ACTUAL context window, not a reduced budget.
+    expect(contextLimitFor('haiku')).toBe(200_000);
     expect(autoCompactLimitFor('haiku')).toBe(200_000);
     expect(autoCompactLimitFor('fable')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5')).toBe(1_000_000);

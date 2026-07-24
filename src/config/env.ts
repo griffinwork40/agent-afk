@@ -278,7 +278,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     type: 'string',
     required: false,
     default: 'medium',
-    example: 'claude-opus-4-5',
+    example: 'claude-opus-5',
     category: 'model',
   },
   {
@@ -379,7 +379,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     description: 'Bind the "large" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large.',
     type: 'string',
     required: false,
-    example: 'claude-opus-4-8',
+    example: 'claude-opus-5',
     category: 'model',
   },
   {

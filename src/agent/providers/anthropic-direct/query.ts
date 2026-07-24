@@ -94,7 +94,7 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Highest-capability Claude for agentic coding',
   },
   {
-    value: 'claude-haiku-4-5-20250929',
+    value: 'claude-haiku-4-5-20251001',
     displayName: 'Claude Haiku 4.5',
     description: 'Fastest, cheapest Claude',
   },

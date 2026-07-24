@@ -64,6 +64,18 @@ describe('deriveCallCostUsd', () => {
     expect(cost).toBeCloseTo(expected, 8);
   });
 
+  it('claude-opus-5 uses the published $5.00/$25.00 rates', () => {
+    // Golden value: 1M input + 1M output = $5.00 + $25.00 = $30.00. Pinned
+    // exactly (not just cost > 0) because a wrong rate here fails silently and
+    // persists into saved cost reports. Cache multipliers follow the standard
+    // 1.25x write / 0.10x read: $6.25 and $0.50 per MTok.
+    const cost = deriveCallCostUsd('claude-opus-5', 1_000_000, 1_000_000, 0, 0);
+    expect(cost).toBeCloseTo(30.0, 8);
+
+    const cached = deriveCallCostUsd('claude-opus-5', 0, 0, 1_000_000, 1_000_000);
+    expect(cached).toBeCloseTo(6.75, 8);
+  });
+
   it('all models in the pricing table produce a positive cost for non-zero tokens', () => {
     for (const [model] of MODEL_PRICING) {
       const cost = deriveCallCostUsd(model, 1000, 500, 0, 0);
