@@ -158,11 +158,12 @@ export const grepTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'Search file contents for lines matching a pattern. Returns matches in file:line:content format. ' +
-    'Runs `grep -rn` in basic-regex (BRE) mode by default, where `|` is a LITERAL pipe — not ' +
-    'alternation; set extended: true for extended-regex (ERE) alternation. A no-match result on a ' +
-    'pattern containing `|` is often a false negative — re-read the returned hint. Output is capped ' +
-    'to a ~100KB head+tail view; if a search is truncated, narrow it (a more specific pattern, an ' +
-    '`include` glob, or a subdirectory `path`) rather than re-running the same broad query. ' +
+    'Runs on ripgrep: `|` `+` `?` `(` `)` `{` `}` are regex metacharacters by default (e.g. `foo|bar` ' +
+    'alternates, matching either branch) — escape with a backslash for the literal character. Honors ' +
+    '.gitignore (so build/dependency dirs like node_modules are skipped) but DOES search hidden ' +
+    'files/dirs like .github and .env; the .git directory and binary files are skipped. ' +
+    'Output is capped to a ~100KB head+tail view; if a search is truncated, narrow it (a more specific ' +
+    'pattern, an `include` glob, or a subdirectory `path`) rather than re-running the same broad query. ' +
     'Use for finding symbols, strings, or patterns across the codebase.',
   input_schema: {
     type: 'object',
@@ -170,8 +171,9 @@ export const grepTool: AnthropicToolDef = {
       pattern: {
         type: 'string',
         description:
-          'Search pattern. Basic regex (BRE) by default: `|` `+` `?` `(` `)` `{` `}` are LITERAL ' +
-          'characters. Set extended: true for extended regex (ERE) where `|` means alternation.',
+          'Search pattern (ripgrep regex syntax). `|` `+` `?` `(` `)` `{` `}` are metacharacters — ' +
+          'e.g. `foo|bar` matches either "foo" or "bar". Escape with a backslash (e.g. `\\|`) to match ' +
+          'the literal character.',
       },
       path: {
         type: 'string',
@@ -179,13 +181,7 @@ export const grepTool: AnthropicToolDef = {
       },
       include: {
         type: 'string',
-        description: 'File glob to restrict search (e.g., "*.ts"). Passed as --include to grep.',
-      },
-      extended: {
-        type: 'boolean',
-        description:
-          'Use extended regex (ERE, `grep -E`) so `|` is alternation and `+ ? ( ) { }` are ' +
-          'metacharacters. Default false (BRE — those characters match literally).',
+        description: 'File glob to restrict search (e.g., "*.ts"). Passed as -g to ripgrep.',
       },
     },
     required: ['pattern'],
