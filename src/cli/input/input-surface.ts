@@ -128,7 +128,9 @@ export interface InputSurfaceRefs {
 /**
  * Options for {@link InputSurface.armCompositor} — arms a persistent
  * TerminalCompositor that lives across turns. Stable refs (set once
- * at arm time); per-turn callbacks are swapped via setOnBackground.
+ * at arm time); per-turn callbacks are swapped via setBackgroundHandler
+ * (which mutates the backgroundHandler ref the arm-time onBackground
+ * closure dereferences — see line ~330).
  */
 export interface InputSurfaceArmOpts {
   /**
