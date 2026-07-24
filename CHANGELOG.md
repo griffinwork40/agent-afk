@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.0] - 2026-07-24
+
+### Added
+- record resolved agent_type distinctly from the render label (#695) (4b0f726)
+- back the grep tool with bundled ripgrep for cross-platform support (#690) (3472496)
+- add Claude Opus 5 as the opus/large default (#694) (43097ce)
+
 ## [5.75.3] - 2026-07-24
 
 ### Fixed
