@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.75.2] - 2026-07-24
+
+### Fixed
+- port diagnose/shadow-verify/devils-advocate refinements from private plugins (#691) (87b6ccf)
+
 ## [5.75.1] - 2026-07-24
 
 ### Changed
