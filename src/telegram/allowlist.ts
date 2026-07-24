@@ -38,6 +38,20 @@ export function parseAllowedChatIds(
 }
 
 /**
+ * Fail-closed membership check for outbound targeting. Returns `true` only when
+ * `id` is a member of the allowlist. Mirrors the inbound middleware's contract
+ * (an empty allowlist rejects everything) but is reusable off the Telegraf path
+ * — used to gate EXPLICITLY-targeted `send_telegram` sends and scheduled-task
+ * `notifyChat` routing so the agent can only push to a chat the operator has
+ * already authorized. Note: this does NOT retro-constrain `telegram.notify`
+ * custom-mode broadcast targets (those are intentionally allowlist-independent —
+ * see `resolveNotifyTargets`); it only guards a caller's explicit target.
+ */
+export function isChatAllowed(id: number, allowlist: ReadonlySet<number>): boolean {
+  return allowlist.has(id);
+}
+
+/**
  * Build a Telegraf middleware that drops updates from chat IDs outside the
  * allowlist. Missing `ctx.chat?.id` is also rejected — fail-closed.
  *

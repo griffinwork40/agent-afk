@@ -57,6 +57,14 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const notifyChat = obj['notifyChat'];
+  if (notifyChat !== undefined && typeof notifyChat !== 'number' && typeof notifyChat !== 'string') {
+    return {
+      content: 'Invalid input: notifyChat must be a number (chat id) or string (chat id or alias name)',
+      isError: true,
+    };
+  }
+
   const config = addSchedule({
     name: obj['name'] as string,
     command: obj['command'] as string,
@@ -64,6 +72,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     trigger:
       (obj['trigger'] as 'cron' | 'sessionstart' | 'both' | undefined) ?? 'cron',
     notifyOn: obj['notifyOn'] as 'failure' | 'always' | 'never' | undefined,
+    ...(notifyChat !== undefined ? { notifyChat: notifyChat as number | string } : {}),
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
@@ -78,6 +87,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         cron: config.cron,
         trigger: config.trigger,
         notifyOn: config.notifyOn,
+        ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
       })
     : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 

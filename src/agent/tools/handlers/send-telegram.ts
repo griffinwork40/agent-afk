@@ -11,7 +11,12 @@
 import { env } from '../../../config/env.js';
 import { push, type PushOptions, type PushResult } from '../../../telegram/push.js';
 import type { ToolHandler } from '../types.js';
-import { resolveConfiguredNotifyTargets } from '../../../telegram/notify-routing.js';
+import {
+  resolveConfiguredNotifyTargets,
+  resolveChatTarget,
+  loadChatAliases,
+} from '../../../telegram/notify-routing.js';
+import { parseAllowedChatIds, isChatAllowed } from '../../../telegram/allowlist.js';
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
@@ -27,9 +32,17 @@ export function createSendTelegramHandler(
 
     const obj = input as Record<string, unknown>;
     const message = obj['message'];
+    const chat = obj['chat'];
 
     if (typeof message !== 'string') {
       return { content: 'Invalid input: message must be a string', isError: true };
+    }
+
+    if (chat !== undefined && typeof chat !== 'number' && typeof chat !== 'string') {
+      return {
+        content: 'Invalid input: chat must be a number (chat id) or string (chat id or alias name)',
+        isError: true,
+      };
     }
 
     if (message.length === 0) {
@@ -55,7 +68,38 @@ export function createSendTelegramHandler(
       };
     }
 
-    const targets = resolveConfiguredNotifyTargets();
+    // Target resolution.
+    //   - `chat` omitted → default routing (byte-identical to legacy behavior):
+    //     resolveConfiguredNotifyTargets() (primary/broadcast/custom).
+    //   - `chat` present → resolve the alias/number to a single id, then
+    //     FAIL-CLOSED against the inbound allowlist. This gate does NOT apply to
+    //     the default path, so custom-mode broadcast targets keep their
+    //     intentional allowlist-independence.
+    let targets: number[];
+    if (chat !== undefined) {
+      const resolved = resolveChatTarget(chat, loadChatAliases());
+      if (!resolved.ok) {
+        return { content: resolved.message, isError: true };
+      }
+      const allowlist = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
+      if (!isChatAllowed(resolved.id, allowlist)) {
+        const allowed = [...allowlist];
+        return {
+          content:
+            `Refusing to send: chat ${resolved.id} is not in the allowlist ` +
+            `(AFK_TELEGRAM_ALLOWED_CHAT_IDS). ` +
+            (allowed.length > 0
+              ? `Allowed chat id(s): ${allowed.join(', ')}. `
+              : 'The allowlist is empty or unset. ') +
+            'Add the chat id to the allowlist before targeting it.',
+          isError: true,
+        };
+      }
+      targets = [resolved.id];
+    } else {
+      targets = resolveConfiguredNotifyTargets();
+    }
+
     if (targets.length === 0) {
       return {
         content:

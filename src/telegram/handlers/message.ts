@@ -1,5 +1,5 @@
 import { Context } from 'telegraf';
-import type { Message } from 'telegraf/types';
+import type { Message, MessageEntity } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
 import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatMicrocompact, formatQueued, escapeHtml } from '../formatter.js';
@@ -12,6 +12,8 @@ import { withTypingIndicator } from '../typing-indicator.js';
 import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
 import { HookBlockedError } from '../../utils/errors.js';
+import { senderPrefix } from '../sender-attribution.js';
+import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 type QueueItem =
@@ -99,6 +101,51 @@ async function readResponseBytesWithLimit(response: Response, maxBytes: number):
   }
 
   return { status: 'ok', bytes: Buffer.concat(chunks, total) };
+}
+
+/**
+ * Decide whether a message is "addressed to the bot" for the per-chat tag-only
+ * response policy. A message counts as addressed when ANY of:
+ *
+ *   1. It replies to one of the bot's own messages (`replyFromId === botId`).
+ *   2. It carries a `mention` entity whose text is `@<botUsername>` (the entity
+ *      text is sliced from `text` at [offset, offset+length) and compared
+ *      case-insensitively — Telegram usernames are case-insensitive).
+ *   3. It carries a `text_mention` entity (used for users without a public
+ *      username) whose `user.id` equals the bot's id.
+ *
+ * Fail-closed on the mention paths when the inputs needed to evaluate them are
+ * missing (no text, no entities, or no known bot username) — those simply don't
+ * match, so an un-addressed message stays un-addressed.
+ */
+export function addressedToBot(
+  text: string | undefined,
+  entities: MessageEntity[] | undefined,
+  replyFromId: number | undefined,
+  botId: number,
+  botUsername: string | undefined,
+): boolean {
+  // (a) Reply to one of the bot's own messages.
+  if (replyFromId !== undefined && replyFromId === botId) return true;
+
+  if (!entities || entities.length === 0) return false;
+
+  const wantMention = botUsername ? `@${botUsername.toLowerCase()}` : undefined;
+
+  for (const e of entities) {
+    // (c) text_mention: discriminated narrowing exposes `user` without a cast.
+    if (e.type === 'text_mention') {
+      if (e.user?.id === botId) return true;
+      continue;
+    }
+    // (b) mention: the entity text is the @username; compare case-insensitively.
+    if (e.type === 'mention' && wantMention && text !== undefined) {
+      const mentionText = text.slice(e.offset, e.offset + e.length).toLowerCase();
+      if (mentionText === wantMention) return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -198,16 +245,27 @@ export class MessageHandler {
    */
   public ledgerOriginatedPendingChats = new Set<number>();
 
+  /**
+   * Chat IDs under the opt-in "tag-only" response policy. In these chats a
+   * non-command text/photo message is answered only when addressed to the bot
+   * (see {@link addressedToBot}); everything else is dropped silently (a log
+   * line only, no reaction, no reply). Empty set ⇒ the policy applies to no
+   * chat and every allowlisted chat behaves exactly as before.
+   */
+  private readonly tagOnlyChats: Set<number>;
+
   constructor(
     bot: Telegraf,
     sessionManager: SessionManager,
     registeredCommandChats: Set<number>,
-    log: LogFn
+    log: LogFn,
+    tagOnlyChats: Set<number> = new Set()
   ) {
     this.bot = bot;
     this.sessionManager = sessionManager;
     this.registeredCommandChats = registeredCommandChats;
     this.log = log;
+    this.tagOnlyChats = tagOnlyChats;
   }
 
   /**
@@ -228,6 +286,23 @@ export class MessageHandler {
     if (!chatId || !photo?.length) {
       this.log(`Photo handling: missing chatId or photo array for chat ${chatId ?? '(unknown)'}`);
       return;
+    }
+
+    // Tag-only response policy (mirrors handle()): in a configured chat, drop a
+    // photo that is not addressed to the bot BEFORE the ack/getFileLink path, so
+    // an un-addressed photo produces no reaction and no CDN download — just a log
+    // line. A photo's caption carries the mention entities (caption_entities).
+    // Fail-closed if the bot identity is unknown.
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping photo in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      if (!addressedToBot(msg?.caption, msg?.caption_entities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed photo in chat ${chatId}`);
+        return;
+      }
     }
 
     this.log(`📷 Photo from chat ID: ${chatId}`);
@@ -376,9 +451,26 @@ export class MessageHandler {
       // Use spread-then-slice to count Unicode code points, not UTF-16 code units:
       // emoji and other non-BMP characters span two code units, and slicing at a
       // surrogate-pair boundary with plain .slice() produces malformed text.
+      // Prepend a system-trusted sender marker in group/supergroup chats so the
+      // model knows who sent the image (byte-identical no-op in private chats).
+      // See sender-attribution.ts for the sanitization / anti-spoofing rationale.
+      const prefix = senderPrefix(msg?.from, ctx.chat?.type);
+      // Prepend reply/quote context (if the photo replies to or quotes a message)
+      // before the sender marker, so `attribution` is the combined system-trusted
+      // preamble. Empty in the common case (no reply + private chat), keeping the
+      // no-caption path byte-identical. See reply-context.ts.
+      const replyCtx = replyContextPrefix({
+        replyToMessage: msg?.reply_to_message as RepliedMessage | undefined,
+        quote: msg?.quote,
+        botId: ctx.botInfo?.id,
+      });
+      const attribution = replyCtx + prefix;
       const contentBlocks: ContentBlockParam[] = [];
       if (caption != null) {
-        contentBlocks.push({ type: 'text', text: `[User caption]: ${[...caption].slice(0, 1024).join('')}` });
+        contentBlocks.push({ type: 'text', text: `${attribution}[User caption]: ${[...caption].slice(0, 1024).join('')}` });
+      } else if (attribution) {
+        // No caption, but still attribute the sender and/or reply target of the image.
+        contentBlocks.push({ type: 'text', text: `${attribution}(image, no caption)` });
       }
       contentBlocks.push({
         type: 'image',
@@ -438,6 +530,26 @@ export class MessageHandler {
       return;
     }
 
+    // Prepend a system-trusted sender marker in group/supergroup chats so the
+    // model can tell participants apart (the whole group shares one per-chat
+    // session). Byte-identical no-op in private chats. Computed AFTER the
+    // slash-command check above (commands need the raw leading slash) and used
+    // for pending elicitation, enqueue, and processOne paths. The tag-only gate
+    // below still uses raw text + entity offsets for addressed-to-bot checks.
+    // See sender-attribution.ts.
+    const tgMsg = ctx.message as Message.TextMessage;
+    const replyCtx = replyContextPrefix({
+      replyToMessage: tgMsg.reply_to_message as RepliedMessage | undefined,
+      quote: tgMsg.quote,
+      botId: ctx.botInfo?.id,
+    });
+    const attributedMessageText = replyCtx + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
+    // Elicitation answers must NOT carry the reply-context marker: answering an
+    // ask_question by replying to the bot's own question is the natural gesture, and
+    // the resolver needs the literal answer (a "[in reply to …] 5" breaks number/
+    // choice validation). Restores the pre-#688 elicitation value (senderPrefix + text).
+    const elicitationAnswer = senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
+
     // Answer consumed by active ask_question elicitation — never reaches
     // session message queue. Intercept BEFORE the session.state check so
     // that elicitation replies are never swallowed by the busy-queue branch.
@@ -465,19 +577,42 @@ export class MessageHandler {
       if (this.ledgerOriginatedPendingChats.has(chatId)) {
         this.pendingElicitations.delete(chatId);
         this.ledgerOriginatedPendingChats.delete(chatId);
-        elicitResolver(messageText);
+        elicitResolver(elicitationAnswer);
         return;
       }
       // Case 2: session-local — fire only when the session is genuinely busy.
       const existingSession = this.sessionManager.getSessionIfExists(chatId);
       if (existingSession && existingSession.state !== 'idle') {
         this.pendingElicitations.delete(chatId);
-        elicitResolver(messageText);
+        elicitResolver(elicitationAnswer);
         return;
       }
       // Stale entry — session was reset while elicitation was in flight.
       this.log('[message] dropping stale pendingElicitation for chatId', chatId);
       this.pendingElicitations.delete(chatId);
+    }
+
+    // Tag-only response policy: in a configured chat, ignore any non-command
+    // message that is not addressed to the bot. Runs AFTER the slash-command
+    // early-return (commands are always honored) and AFTER the
+    // pending-elicitation interception above (a live elicitation answer is
+    // consumed there and returns before reaching this gate, so it is never
+    // dropped regardless of tag-only status) — but BEFORE the
+    // ack/react/processOne path, so an un-addressed message produces NO
+    // reaction and NO reply — just a log line. Fail-closed if the bot
+    // identity is unknown (botInfo is populated by Telegraf via getMe() on
+    // launch and present on every ctx).
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping message in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      const msg = ctx.message as Message.TextMessage;
+      if (!addressedToBot(msg.text, msg.entities, msg.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed message in chat ${chatId}`);
+        return;
+      }
     }
 
     let alreadyClaimed = false;
@@ -507,13 +642,15 @@ export class MessageHandler {
         this.log('Failed to register chat commands:', err)
       );
 
+      const content = attributedMessageText;
+
       if (session.state !== 'idle' || alreadyClaimed) {
-        const depth = this.enqueueMessage(chatId, ctx, messageText);
+        const depth = this.enqueueMessage(chatId, ctx, content);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         return;
       }
 
-      await this.processOne(chatId, ctx, messageText);
+      await this.processOne(chatId, ctx, content);
     } catch (error) {
       this.log('Message handling error:', error);
       // Note: 'session is busy' is no longer handled here — that race is covered

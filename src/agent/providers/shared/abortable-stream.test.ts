@@ -46,6 +46,30 @@ describe('abortableStream', () => {
     await expect(pull).rejects.toMatchObject({ name: 'AbortError', message: 'interrupted' });
   });
 
+  it('does not wait for iterator cleanup after abort wins the race', async () => {
+    const ac = new AbortController();
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            return new Promise<IteratorResult<number>>(() => {
+              /* parked read */
+            });
+          },
+          return() {
+            return new Promise<IteratorResult<number>>(() => {
+              /* cleanup is stuck behind the parked read */
+            });
+          },
+        };
+      },
+    };
+    const gen = abortableStream(source, ac.signal);
+    const pull = gen.next();
+    ac.abort('interrupted');
+    await expect(pull).rejects.toMatchObject({ name: 'AbortError', message: 'interrupted' });
+  });
+
   it('passes values through in order and ends cleanly on done', async () => {
     const ac = new AbortController();
     const out: number[] = [];

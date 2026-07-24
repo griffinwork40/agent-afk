@@ -13,8 +13,11 @@ import {
   parseMode,
   loadNotifyConfig,
   resolveConfiguredNotifyTargets,
+  resolveChatTarget,
+  loadChatAliases,
   type TelegramNotifyConfig,
 } from './notify-routing.js';
+import { isChatAllowed, parseAllowedChatIds } from './allowlist.js';
 import { loadTelegramConfig } from '../cli/config.js';
 
 const mockLoadTelegramConfig = vi.mocked(loadTelegramConfig);
@@ -208,4 +211,122 @@ describe('loadNotifyConfig + resolveConfiguredNotifyTargets (IO)', () => {
 
   const _typecheck: TelegramNotifyConfig = { mode: 'primary' };
   void _typecheck;
+});
+
+describe('resolveChatTarget (pure)', () => {
+  const aliases = { ops: -1001234567890, family: 999, zero: 0 } as Record<string, number>;
+
+  it('accepts a positive numeric chat id verbatim', () => {
+    expect(resolveChatTarget(42)).toEqual({ ok: true, id: 42 });
+  });
+
+  it('accepts a negative numeric chat id (group/channel)', () => {
+    expect(resolveChatTarget(-100200)).toEqual({ ok: true, id: -100200 });
+  });
+
+  it('rejects a zero numeric chat id', () => {
+    const r = resolveChatTarget(0);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('invalid');
+  });
+
+  it('rejects a non-finite numeric chat id', () => {
+    const r = resolveChatTarget(Number.NaN);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('invalid');
+  });
+
+  it('parses a numeric string as a raw chat id', () => {
+    expect(resolveChatTarget('-100987654321')).toEqual({ ok: true, id: -100987654321 });
+  });
+
+  it('parses a whitespace-padded numeric string', () => {
+    expect(resolveChatTarget('  42  ')).toEqual({ ok: true, id: 42 });
+  });
+
+  it('rejects an empty string', () => {
+    const r = resolveChatTarget('   ');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('invalid');
+  });
+
+  it('resolves a known alias name to its chat id', () => {
+    expect(resolveChatTarget('ops', aliases)).toEqual({ ok: true, id: -1001234567890 });
+  });
+
+  it('resolves a positive-id alias', () => {
+    expect(resolveChatTarget('family', aliases)).toEqual({ ok: true, id: 999 });
+  });
+
+  it('rejects an unknown alias and lists available names', () => {
+    const r = resolveChatTarget('nope', aliases);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('unknown-alias');
+      expect(r.message).toMatch(/Unknown chat alias "nope"/);
+      expect(r.message).toMatch(/ops/);
+      expect(r.message).toMatch(/family/);
+    }
+  });
+
+  it('rejects an alias mapped to zero (defensive; treated as unknown)', () => {
+    const r = resolveChatTarget('zero', aliases);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('unknown-alias');
+  });
+
+  it('reports no configured aliases when the map is empty', () => {
+    const r = resolveChatTarget('ops', {});
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/No chat aliases are configured/);
+  });
+
+  it('does not treat a numeric-looking value as an alias even if a same-named alias exists', () => {
+    // "999" is numeric → parsed as chat id 999, NOT looked up as alias name.
+    expect(resolveChatTarget('999', { '999': -1 })).toEqual({ ok: true, id: 999 });
+  });
+});
+
+describe('isChatAllowed (pure)', () => {
+  it('returns true for a member of the allowlist', () => {
+    expect(isChatAllowed(123, new Set([123, 456]))).toBe(true);
+  });
+
+  it('returns false for a non-member', () => {
+    expect(isChatAllowed(789, new Set([123, 456]))).toBe(false);
+  });
+
+  it('fails closed on an empty allowlist', () => {
+    expect(isChatAllowed(123, new Set())).toBe(false);
+  });
+
+  it('handles negative (group/channel) ids', () => {
+    expect(isChatAllowed(-100200, new Set([-100200]))).toBe(true);
+    expect(isChatAllowed(-100200, new Set([-100999]))).toBe(false);
+  });
+
+  it('composes with parseAllowedChatIds end-to-end', () => {
+    const allowlist = parseAllowedChatIds('111, 222 ,-100333');
+    expect(isChatAllowed(222, allowlist)).toBe(true);
+    expect(isChatAllowed(-100333, allowlist)).toBe(true);
+    expect(isChatAllowed(444, allowlist)).toBe(false);
+  });
+});
+
+describe('loadChatAliases (IO)', () => {
+  beforeEach(() => {
+    mockLoadTelegramConfig.mockReturnValue({});
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns {} when no aliases are configured', () => {
+    expect(loadChatAliases()).toEqual({});
+  });
+
+  it('returns the configured alias map', () => {
+    mockLoadTelegramConfig.mockReturnValue({ chatAliases: { ops: -100123, me: 42 } });
+    expect(loadChatAliases()).toEqual({ ops: -100123, me: 42 });
+  });
 });

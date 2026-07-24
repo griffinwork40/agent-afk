@@ -180,6 +180,45 @@ describe('addSchedule', () => {
     const loaded = loadSchedules(path);
     expect(loaded[0]?.notifyOn).toBe('always');
   });
+
+  it('round-trips a numeric notifyChat', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    const config = addSchedule(
+      { name: 'Group Task', command: '/cmd', cron: '* * * * *', enabled: true, notifyChat: -1001234567890 },
+      path,
+    );
+
+    expect(config.notifyChat).toBe(-1001234567890);
+    const loaded = loadSchedules(path);
+    expect(loaded[0]?.notifyChat).toBe(-1001234567890);
+  });
+
+  it('round-trips a string (alias) notifyChat', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    const config = addSchedule(
+      { name: 'Ops Task', command: '/cmd', cron: '* * * * *', enabled: true, notifyChat: 'ops' },
+      path,
+    );
+
+    expect(config.notifyChat).toBe('ops');
+    const loaded = loadSchedules(path);
+    expect(loaded[0]?.notifyChat).toBe('ops');
+  });
+
+  it('omits notifyChat when not provided (default routing)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    const config = addSchedule(
+      { name: 'Default Task', command: '/cmd', cron: '* * * * *', enabled: true },
+      path,
+    );
+
+    expect(config.notifyChat).toBeUndefined();
+    const loaded = loadSchedules(path);
+    expect(loaded[0]?.notifyChat).toBeUndefined();
+  });
 });
 
 // ── removeSchedule ───────────────────────────────────────────────────────────
@@ -285,6 +324,50 @@ describe('toScheduledTask', () => {
     };
     const task = toScheduledTask(config);
     expect((task as { notifyOn?: string }).notifyOn).toBe('failure');
+  });
+
+  it('maps a numeric notifyChat when present', () => {
+    const config: ScheduledTaskConfig = {
+      id: 'nc-num',
+      name: 'NC Num',
+      command: '/nc',
+      cron: '* * * * *',
+      enabled: true,
+      notifyChat: -100777,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect(task.notifyChat).toBe(-100777);
+  });
+
+  it('maps a string (alias) notifyChat when present', () => {
+    const config: ScheduledTaskConfig = {
+      id: 'nc-alias',
+      name: 'NC Alias',
+      command: '/nc',
+      cron: '* * * * *',
+      enabled: true,
+      notifyChat: 'family',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect(task.notifyChat).toBe('family');
+  });
+
+  it('omits notifyChat when absent', () => {
+    const config: ScheduledTaskConfig = {
+      id: 'nc-none',
+      name: 'NC None',
+      command: '/nc',
+      cron: '* * * * *',
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect('notifyChat' in task).toBe(false);
   });
 
   it('saveSchedules + loadSchedules round-trips correctly', () => {

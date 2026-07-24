@@ -28,6 +28,7 @@ import type { AgentConfig } from '../types/config-types.js';
 import type { ToolCall } from './types.js';
 import type { ModelProvider } from '../provider.js';
 import { SubagentExecutor, DEFAULT_MAX_NESTING_DEPTH, type SubagentExecutorContext } from './subagent-executor.js';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 function mockHandle(
@@ -202,10 +203,15 @@ describe('SubagentExecutor', () => {
             maxToolUseIterations: 0,
             model: 'sonnet',
             apiKey: 'resolved-test-credential',
-            systemPrompt: 'test system prompt',
+            // Unnamed dispatch: parent base prompt + appended handoff contract.
+            systemPrompt: expect.stringContaining('test system prompt'),
           }),
         }),
       );
+      const forkArg = mockSubagentMgr.forkSubagent.mock.calls[0]?.[0] as {
+        config: { systemPrompt: string };
+      };
+      expect(forkArg.config.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
     });
   });
 

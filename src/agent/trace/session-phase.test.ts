@@ -26,6 +26,7 @@ import {
 } from './events.js';
 import { emitSessionPhase } from './emit.js';
 import { InMemoryTraceWriter } from './writer.js';
+import type { SessionPhaseName } from './types.js';
 
 // ---------------------------------------------------------------------------
 // 1. SessionPhasePayloadSchema — acceptance
@@ -185,6 +186,103 @@ describe('session_phase payload schema — acceptance', () => {
     // Bare name-schema acceptance.
     expect(() => SessionPhaseNameSchema.parse('usage_limit_pause')).not.toThrow();
     expect(() => SessionPhaseNameSchema.parse('usage_limit_resume')).not.toThrow();
+  });
+
+  it('accepts the idle_watchdog_fired phase with its watchdog metadata', () => {
+    // Emitted by SubagentHandleImpl on an idle-watchdog fire. Single event (no
+    // paired *_start); carries the watchdog diagnostics as metadata.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'idle_watchdog_fired',
+        metadata: {
+          idleTimeoutMs: 480_000,
+          elapsedSinceLastProgressMs: 481_200,
+          lastEventType: 'chunk',
+        },
+      }),
+    ).not.toThrow();
+    // Also accepted with the pre-first-event shape (lastEventType 'none').
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'idle_watchdog_fired',
+        metadata: { idleTimeoutMs: 480_000, elapsedSinceLastProgressMs: 480_003, lastEventType: 'none' },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance.
+    expect(() => SessionPhaseNameSchema.parse('idle_watchdog_fired')).not.toThrow();
+  });
+
+  it('accepts the suspected_loop phase with its OBSERVE-ONLY loop metadata', () => {
+    // Emitted by SessionToolDispatcher for a FORKED child on first detection of
+    // a recurring (tool, args) fingerprint. Single event (no paired *_start);
+    // carries the loop diagnostics as metadata. Pure observability — never
+    // aborts the fork or alters a result.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'suspected_loop',
+        metadata: { tool: 'read_file', count: 5, windowSize: 20 },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance.
+    expect(() => SessionPhaseNameSchema.parse('suspected_loop')).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. SessionPhaseName (TS union) ↔ SessionPhaseNameSchema (Zod enum) parity
+//
+// The union in types.ts and the Zod enum in events.ts MUST stay in lockstep:
+// a phase added to one but not the other is either unvalidated (union-only) or
+// unrepresentable (schema-only). This is exactly the failure mode the
+// idle_watchdog_fired addition had to avoid — this test makes the invariant
+// mechanical for every current and future phase.
+// ---------------------------------------------------------------------------
+
+describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
+  // Source of truth = the TS union. This Record is COMPILE-TIME exhaustive:
+  // every SessionPhaseName member must appear as a key (a missing member is a
+  // type error), and no non-member may appear. Its keys are therefore exactly
+  // the union at runtime.
+  const unionMembers: Record<SessionPhaseName, true> = {
+    bootstrap_start: true,
+    bootstrap_done: true,
+    session_init_start: true,
+    session_init_done: true,
+    mcp_connect_start: true,
+    mcp_connect_done: true,
+    mcp_server_start: true,
+    mcp_server_done: true,
+    loop_start: true,
+    loop_end: true,
+    model_ttfb: true,
+    interrupt_halt: true,
+    rate_limit: true,
+    usage_limit_pause: true,
+    usage_limit_resume: true,
+    idle_watchdog_fired: true,
+    suspected_loop: true,
+  };
+
+  it('the Zod enum contains exactly the union members (no drift either way)', () => {
+    const unionSet = new Set(Object.keys(unionMembers));
+    const schemaSet = new Set<string>(SessionPhaseNameSchema.options);
+
+    // Every union member is representable by the schema (catches union-only additions).
+    const missingFromSchema = [...unionSet].filter((p) => !schemaSet.has(p));
+    expect(missingFromSchema).toEqual([]);
+
+    // Every schema value is a real union member (catches schema-only additions).
+    const missingFromUnion = [...schemaSet].filter((p) => !unionSet.has(p));
+    expect(missingFromUnion).toEqual([]);
+
+    // Belt-and-braces: identical cardinality.
+    expect(schemaSet.size).toBe(unionSet.size);
+  });
+
+  it('every schema option round-trips through the name schema', () => {
+    for (const phase of SessionPhaseNameSchema.options) {
+      expect(() => SessionPhaseNameSchema.parse(phase)).not.toThrow();
+    }
   });
 });
 
@@ -374,6 +472,30 @@ describe('emitSessionPhase', () => {
     if (events[0]!.kind !== 'session_phase') throw new Error('unreachable');
     expect(events[0]!.payload.origin).toBe('daemon');
     expect(events[0]!.payload.actor).toBe('main');
+  });
+
+  it('round-trips idle_watchdog_fired with its watchdog metadata', async () => {
+    // The exact shape SubagentHandleImpl emits on an idle-watchdog fire.
+    const writer = new InMemoryTraceWriter();
+    await emitSessionPhase(writer, {
+      phase: 'idle_watchdog_fired',
+      metadata: {
+        idleTimeoutMs: 480_000,
+        elapsedSinceLastProgressMs: 480_500,
+        lastEventType: 'chunk',
+      },
+    });
+    const events = writer.events;
+    expect(events).toHaveLength(1);
+    if (events[0]!.kind !== 'session_phase') throw new Error('unreachable');
+    expect(events[0]!.payload.phase).toBe('idle_watchdog_fired');
+    expect(events[0]!.payload.metadata).toEqual({
+      idleTimeoutMs: 480_000,
+      elapsedSinceLastProgressMs: 480_500,
+      lastEventType: 'chunk',
+    });
+    // No paired *_start → no durationMs.
+    expect(events[0]!.payload.durationMs).toBeUndefined();
   });
 });
 

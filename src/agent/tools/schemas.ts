@@ -230,7 +230,12 @@ export const sendTelegramTool: AnthropicToolDef = {
     'Use sparingly: this is a real push notification to a human. Reserve for terminal states ' +
     '(Done/Blocked/Asking) and material progress, not running commentary. ' +
     'When running inside the Telegram bot, prefer replying normally — your response already ' +
-    'reaches the operator through the bot. Use this tool only from CLI or daemon sessions.',
+    'reaches the operator through the bot. Use this tool only from CLI or daemon sessions.\n\n' +
+    'Optionally set `chat` to route to a SPECIFIC chat instead of the default primary target: ' +
+    'pass a numeric chat id (e.g. -1001234567890 for a group) or a chat alias name defined in ' +
+    'afk.config.json `telegram.chatAliases` (e.g. "ops"). An explicitly-targeted chat must be ' +
+    'in the inbound allowlist (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — a non-allowlisted target is ' +
+    'rejected (fail-closed). Omit `chat` for the default behavior (unchanged).',
   input_schema: {
     type: 'object',
     properties: {
@@ -239,6 +244,15 @@ export const sendTelegramTool: AnthropicToolDef = {
         description:
           'Plain-text message body to send to the operator. ' +
           'Max 4096 characters (Telegram API limit). Must be non-empty.',
+      },
+      chat: {
+        type: ['number', 'string'],
+        description:
+          'Optional. Target a specific chat instead of the default primary target. ' +
+          'A number (or numeric string) is a raw Telegram chat id; a non-numeric string is ' +
+          'looked up as a name in afk.config.json `telegram.chatAliases`. The resolved chat ' +
+          'must be allowlisted (AFK_TELEGRAM_ALLOWED_CHAT_IDS) or the send is rejected. ' +
+          'Omit to send to the configured default (primary DM chat / notify targets).',
       },
     },
     required: ['message'],
@@ -319,7 +333,10 @@ export const agentTool: AnthropicToolDef = {
     'Subagents return their final assistant message verbatim — instruct them ' +
     'explicitly to compress their findings into: answer, evidence with file:line ' +
     'citations, confidence, risks, recommended next action, unresolved questions, ' +
-    'and what was not checked. Specify expected response length.\n\n' +
+    'and what was not checked. Specify expected response length. For large outputs ' +
+    '(long analysis, generated content, verbatim excerpts), tell the subagent to ' +
+    'write the bulk to a file and return the path plus a short summary — a very ' +
+    'long final message can be truncated in transit.\n\n' +
     'Foreground vs. background: by default (mode="foreground") this tool waits ' +
     'for the subagent to finish and returns its final message. Pass mode="background" ' +
     'to fire-and-forget — the tool returns a jobId immediately so you can keep ' +
@@ -573,6 +590,15 @@ export const createScheduleTool: AnthropicToolDef = {
         type: 'string',
         enum: ['failure', 'always', 'never'],
         description: 'When to push Telegram notifications. Default: failure.',
+      },
+      notifyChat: {
+        type: ['number', 'string'],
+        description:
+          'Optional. Route this task\'s completion notification to a SPECIFIC chat instead of ' +
+          'the default primary target. A number (or numeric string) is a raw Telegram chat id; ' +
+          'a non-numeric string is a chat alias name from afk.config.json `telegram.chatAliases`. ' +
+          'The resolved chat must be allowlisted (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — otherwise the ' +
+          'daemon ignores the override and uses the default target. Omit for default routing.',
       },
       enabled: {
         type: 'boolean',

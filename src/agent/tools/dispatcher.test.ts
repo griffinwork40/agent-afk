@@ -1439,6 +1439,50 @@ describe('SessionToolDispatcher — repeat-loop circuit breaker', () => {
   });
 });
 
+describe('SessionToolDispatcher — suspected-loop telemetry coexists with the repeat breaker (OBSERVE-ONLY)', () => {
+  // The observe-only suspected_loop signal shares the sequential pre-execution
+  // path with the repeat circuit breaker. These tests lock in that (a) it does
+  // NOT perturb the top-level session (which is out of its forked-only scope),
+  // and (b) it emits — without ever changing a result — for a forked child.
+
+  it('top-level session: no suspected_loop event and repeat-breaker behavior is unchanged', async () => {
+    const writer = new InMemoryTraceWriter();
+    // makeDispatcher() sets no parentSessionId → a top-level session.
+    const dispatcher = makeDispatcher({ traceWriter: writer });
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1; i++) {
+      expect((await dispatcher.execute(makeCall())).isError).toBeUndefined();
+    }
+    // The repeat breaker still trips at its threshold, exactly as before.
+    const tripped = await dispatcher.execute(makeCall());
+    expect(tripped.isError).toBe(true);
+    expect(tripped.circuitBreaker).toBe(true);
+    // And no observe-only loop signal is emitted for a top-level session.
+    const loopEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'suspected_loop',
+    );
+    expect(loopEvents).toHaveLength(0);
+  });
+
+  it('forked child: emits suspected_loop but returns the normal tool result', async () => {
+    const writer = new InMemoryTraceWriter();
+    const dispatcher = makeDispatcher({ parentSessionId: 'parent-1', traceWriter: writer });
+    let last;
+    // Below the repeat-breaker threshold (8) so the calls actually run; the
+    // suspected-loop threshold (5) is crossed first, purely as telemetry.
+    for (let i = 0; i < 5; i++) {
+      last = await dispatcher.execute(makeCall());
+    }
+    // OBSERVE-ONLY: the result is the real handler output — no error/breaker flag.
+    expect(last?.isError).toBeUndefined();
+    expect(last?.content).toBe('hello');
+    expect(last?.circuitBreaker).toBeUndefined();
+    const loopEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'suspected_loop',
+    );
+    expect(loopEvents).toHaveLength(1);
+  });
+});
+
 describe('SessionToolDispatcher — canUseTool (Dim 8 in-process permission policy)', () => {
   const allowAll: CanUseTool = async () => ({ behavior: 'allow' });
 

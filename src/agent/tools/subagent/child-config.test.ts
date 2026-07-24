@@ -27,6 +27,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { buildChildConfig, type BuildChildConfigArgs } from './child-config.js';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 import type { AgentInput } from './input-parse.js';
 import type { RegisteredAgent } from '../../agents/index.js';
@@ -193,15 +194,36 @@ describe('buildChildConfig', () => {
   });
 
   describe('systemPrompt selection', () => {
-    it('uses the parent base prompt for an unnamed dispatch', () => {
+    it('appends the handoff contract to the parent base prompt for an unnamed dispatch', () => {
       const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));
-      expect(childConfig.systemPrompt).toBe('parent base prompt');
+      // Unnamed dispatch inherits the parent base prompt, then has the default
+      // handoff contract appended (see SUBAGENT_HANDOFF_CONTRACT) so the child
+      // itself is told to keep its reply short / offload bulk output to files.
+      expect(childConfig.systemPrompt).toMatch(/^parent base prompt/);
+      expect(childConfig.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
+    });
+
+    it('falls back to the handoff contract alone when there is no parent base prompt', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({
+          namedAgent: undefined,
+          defaultConfig: {
+            apiKey: 'parent-anthropic-key',
+            systemPrompt: undefined,
+            baseUrl: undefined,
+            openaiBaseUrl: undefined,
+          },
+        }),
+      );
+      expect(childConfig.systemPrompt).toBe(SUBAGENT_HANDOFF_CONTRACT);
     });
 
     it("uses the named agent's definition prompt (markdown body) for a named dispatch", () => {
       const { childConfig } = buildChildConfig(
         baseArgs({ namedAgent: namedAgent({ prompt: 'You are the research agent.' }) }),
       );
+      // A named agent owns its own handoff guidance — the contract is NOT
+      // appended here (general-purpose bakes it into its prompt directly).
       expect(childConfig.systemPrompt).toBe('You are the research agent.');
     });
   });

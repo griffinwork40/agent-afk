@@ -87,8 +87,9 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   'AFK_WORKTREE_BASE',
   'AFK_WORKTREE_BRANCH_PREFIX',
   // Telegram routing + allowlist — who may drive the bot, where notifications go
-  // (env twins of human-tier `telegram.notify.*`).
+  // (env twins of human-tier `telegram.notify.*` / `telegram.tagOnlyChats`).
   'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
+  'AFK_TELEGRAM_TAG_ONLY_CHAT_IDS',
   'AFK_TELEGRAM_NOTIFY_MODE',
   'AFK_TELEGRAM_PRIMARY_CHAT_ID',
   // State / credential-tree relocation — where AFK's own config, state, memory,
@@ -209,6 +210,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'telegram.notify.mode', tier: 'human', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
+  { path: 'telegram.tagOnlyChats', tier: 'human', type: 'number-array', description: 'Chat ids where the bot answers only when addressed (reply to the bot, @mention, or text_mention resolving to the bot). Human-tier: it governs which chats the bot will respond in — a message-routing / who-can-drive-the-bot control, same class as the allowlist and telegram.notify.*. Requires Telegram privacy mode OFF for the bot to matter in groups.' },
   { path: 'telegram.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode).' },
   { path: 'enforceDoneEvidence', tier: 'human', type: 'boolean', description: 'Opt-in AFK terminal-state enforcement gate: in autonomous mode a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config, same rationale as telegram.verifyDone. Sibling of telegram.verifyDone (which only relabels the Telegram push; this one bounces the turn).' },
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },

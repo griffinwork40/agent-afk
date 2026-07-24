@@ -401,6 +401,8 @@ export const SessionPhaseNameSchema = z.enum([
   'rate_limit',
   'usage_limit_pause',
   'usage_limit_resume',
+  'idle_watchdog_fired',
+  'suspected_loop',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

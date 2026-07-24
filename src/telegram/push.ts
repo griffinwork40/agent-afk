@@ -171,11 +171,27 @@ export async function pushIfConfigured(
     markdown?: boolean;
     replyMarkup?: PushOptions['replyMarkup'];
     fetchImpl?: typeof fetch;
+    /**
+     * Explicit delivery target(s) that OVERRIDE the configured notify routing.
+     * When provided (and non-empty), the push goes to exactly these chat ids
+     * instead of `resolveConfiguredNotifyTargets()`. Callers are responsible for
+     * having already resolved aliases and enforced the allowlist (fail-closed) —
+     * `pushIfConfigured` does not re-validate. Used by the daemon to route a
+     * scheduled task's completion push to its `notifyChat`. Omit/empty for
+     * default routing (unchanged behavior).
+     */
+    target?: number | readonly number[];
   } = {},
 ): Promise<PushResult[] | null> {
   const token = env.TELEGRAM_BOT_TOKEN;
   if (!token) return null;
-  const chatIds = resolveConfiguredNotifyTargets();
+  const override =
+    opts.target === undefined
+      ? []
+      : (typeof opts.target === 'number' ? [opts.target] : [...opts.target]).filter(
+          (id) => Number.isFinite(id) && id !== 0,
+        );
+  const chatIds = override.length > 0 ? override : resolveConfiguredNotifyTargets();
   if (chatIds.length === 0) return null;
 
   // Split the RAW markdown first, then render each chunk — splitting already

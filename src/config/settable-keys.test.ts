@@ -36,6 +36,7 @@ describe('classifyEnvKey', () => {
       'AFK_WORKTREE_BASE',
       'AFK_WORKTREE_BRANCH_PREFIX',
       'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
+      'AFK_TELEGRAM_TAG_ONLY_CHAT_IDS',
       'AFK_TELEGRAM_NOTIFY_MODE',
       'AFK_TELEGRAM_PRIMARY_CHAT_ID',
       'AFK_HOME',
@@ -88,6 +89,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('temperature')).toBe('agent');
     expect(classifyConfigKey('telegram.notify.mode')).toBe('human'); // notification-redirect vector
     expect(classifyConfigKey('telegram.notify.targets')).toBe('human');
+    expect(classifyConfigKey('telegram.tagOnlyChats')).toBe('human'); // who-can-drive-the-bot / message-routing control
     expect(classifyConfigKey('telegram.verifyDone')).toBe('human'); // self-honesty gate — agent must not disable its own verification
     expect(classifyConfigKey('enforceDoneEvidence')).toBe('human'); // self-honesty gate — agent must not disable its own enforcement
     expect(classifyConfigKey('daemon.verifyDone')).toBe('human'); // daemon self-honesty gate — agent must not disable its own push verification

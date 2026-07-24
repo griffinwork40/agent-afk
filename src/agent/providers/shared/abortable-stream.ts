@@ -38,6 +38,7 @@ export async function* abortableStream<T>(
   if (signal.aborted) throw abortErrorFrom(signal);
 
   const iterator = source[Symbol.asyncIterator]();
+  let abortWonRace = false;
 
   // Single long-lived abort listener for the whole stream (not per-event: a
   // high-frequency thinking-delta stream would otherwise add/remove a listener
@@ -59,6 +60,7 @@ export async function* abortableStream<T>(
         // same `signal`. Attach a no-op catch so the abandoned read's eventual
         // rejection cannot crash the process as an unhandledRejection.
         void Promise.resolve(nextP).catch(() => { /* transport aborting */ });
+        abortWonRace = true;
         throw abortErrorFrom(signal);
       }
       if (result.done) return;
@@ -68,8 +70,16 @@ export async function* abortableStream<T>(
     signal.removeEventListener('abort', onAbort);
     // Best-effort: signal the source we are done so the SDK closes the HTTP
     // stream instead of leaking a dangling connection. `return()` is optional
-    // on the async-iterator protocol; swallow if absent or if it rejects.
-    await Promise.resolve(iterator.return?.()).catch(() => { /* best-effort */ });
+    // on the async-iterator protocol; swallow if absent or if it rejects. When
+    // abort won the race, do not await cleanup: async-generator-style sources
+    // can keep `return()` blocked behind the same parked read that this wrapper
+    // bypasses, so awaiting it would reintroduce interrupt lag.
+    const closeP = Promise.resolve(iterator.return?.()).catch(() => { /* best-effort */ });
+    if (abortWonRace) {
+      void closeP;
+    } else {
+      await closeP;
+    }
   }
 }
 

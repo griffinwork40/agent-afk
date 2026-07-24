@@ -20,6 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -260,8 +261,22 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
     // A named agent's markdown body IS the child's system prompt (Claude
     // Code parity: subagents receive the definition prompt, not the parent
-    // surface's full prompt). Unnamed dispatches keep the raw base prompt.
-    systemPrompt: namedAgent !== undefined ? namedAgent.definition.prompt : defaultConfig.systemPrompt,
+    // surface's full prompt) — a named agent owns its own handoff guidance
+    // (general-purpose bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored
+    // agents are already compact), so it is passed through unchanged.
+    //
+    // An UNNAMED dispatch inherits the parent's full base prompt, which frames
+    // delegation from the DISPATCHER's side but never tells the child itself to
+    // keep its reply short / write bulk output to files. Append the handoff
+    // contract so the truly-default dispatch cannot emit an unbounded final
+    // message that gets truncated mid-stream (the StreamIncompleteError class
+    // this change also adds a bounded retry for in loop.ts).
+    systemPrompt:
+      namedAgent !== undefined
+        ? namedAgent.definition.prompt
+        : defaultConfig.systemPrompt
+          ? `${defaultConfig.systemPrompt}\n\n${SUBAGENT_HANDOFF_CONTRACT}`
+          : SUBAGENT_HANDOFF_CONTRACT,
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     maxTurns: effectiveMaxTurns,
     // Always set (default 0 = unlimited) so forkSubagent's `?? 50` fallback is

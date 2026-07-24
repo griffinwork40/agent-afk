@@ -17,8 +17,9 @@ import type { IAgentSession, Message } from '../types.js';
 import type { OutputEvent, SubagentProgressSink, SubagentProgressMeta } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { dispatchSubagentStop } from '../subagent-hooks.js';
-import { emitSubagentLifecycle } from '../trace/emit.js';
+import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
+import { IdleWatchdog } from './idle-watchdog.js';
 import {
   buildResultFromMessage,
   buildResultFromError,
@@ -162,6 +163,18 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       usage: SubagentTrace['usage'],
       costUsd: number | undefined,
     ) => void,
+    /**
+     * Progress-aware idle-watchdog window (ms) for this fork's turn. `0` (or
+     * any non-positive value) disables the watchdog; the wall-clock
+     * {@link timeoutMs} still applies. Runs concurrently with `withTimeout` and
+     * aborts the SAME controller, so an idle-fire flows through the identical
+     * classification + partial-output path. Resolved at the fork site
+     * (`config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs()`). Defaults to
+     * `0` for the rare direct constructor callers (tests/bare harnesses), which
+     * keeps the watchdog opt-in there — the production fork path always supplies
+     * the resolved value.
+     */
+    private readonly idleTimeoutMs: number = 0,
   ) {
     this.progressSink = progressSink;
     this.parentId = parentId;
@@ -356,63 +369,103 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       ...(this.agentType !== undefined && { agentType: this.agentType }),
     };
 
-    for await (const event of this.session.sendMessageStream(prompt)) {
-      if (activeSink) {
-        activeSink(event, meta);
-      }
+    // Progress-aware idle watchdog: fires when the child stream produces no
+    // observable OutputEvent for `idleTimeoutMs`, aborting THIS handle's
+    // controller — the same one `withTimeout` targets in run() — with an
+    // IdleWatchdogError (extends TimeoutError). Because it reuses the controller,
+    // the existing AbortGraph cascade, own-budget-vs-cascade classification, and
+    // partial-output preservation all apply unchanged; the classification check
+    // in run()'s catch reads it as an OWN-budget timeout → 'failed'. A window of
+    // `0` (the default for direct constructor callers; the fork site resolves the
+    // real value) disables it entirely. Disposed in the `finally` below on every
+    // exit path (completion, break, or throw). On fire it emits the
+    // `idle_watchdog_fired` trace phase for observability (fire-and-forget so a
+    // slow trace write can never delay the abort).
+    const idleWatchdog = new IdleWatchdog(
+      this.controller,
+      this.idleTimeoutMs,
+      this.id,
+      (info) => {
+        void emitSessionPhase(this.traceWriter, {
+          phase: 'idle_watchdog_fired',
+          metadata: {
+            idleTimeoutMs: info.idleTimeoutMs,
+            elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
+            lastEventType: info.lastEventType,
+          },
+        });
+      },
+    );
 
-      if (event.type === 'chunk') {
-        const chunk = event.chunk;
-        if (chunk.type === 'content') {
-          this.lastStreamedContent += chunk.content;
-        } else if (chunk.type === 'tool_use_detail') {
-          this.currentTrace.toolCalls.push({
-            id: chunk.toolUseId,
-            name: chunk.toolName,
-            // Privacy: store byte length only — never raw input content, which
-            // routinely contains secrets (tokens, file contents, env vars).
-            inputBytes: Buffer.byteLength(chunk.toolInput, 'utf8'),
-          });
-        } else if (chunk.type === 'tool_result') {
-          this.currentTrace.toolResults.push({
-            toolUseId: chunk.toolUseId,
-            isError: chunk.isError,
-            truncated: chunk.truncated,
-            sizeBytes: chunk.sizeBytes,
-          });
-        } else if (chunk.type === 'thinking') {
-          this.currentTrace.thinkingPresent = true;
+    try {
+      for await (const event of this.session.sendMessageStream(prompt)) {
+        if (activeSink) {
+          activeSink(event, meta);
         }
-      }
+        // Reset (or extend, on a recognized pause) the idle deadline on every
+        // streamed event. This is the ONLY progress signal — a real OutputEvent
+        // from the provider loop, never a caller-facing heartbeat.
+        idleWatchdog.onEvent(event);
 
-      if (event.type === 'message') {
-        finalMessage = event.message;
-        // Count the turn as soon as the assistant message is received; this
-        // ensures error-path traces (where 'done' is never reached) also
-        // reflect completed turns.
-        this.currentTrace.turnCount++;
-      } else if (event.type === 'error') {
-        streamError = event.error;
-        break;
-      } else if (event.type === 'done') {
-        // Capture the turn's stop reason so the post-loop fallback can tell a
-        // tool-use-cap termination (which yields a `done` with no assistant
-        // message) apart from a genuinely empty stream — and so `runToResult`
-        // can surface it on the SubagentResult (persisted on the handle).
-        if (typeof event.metadata?.stopReason === 'string') {
-          this.lastStopReason = event.metadata.stopReason;
+        if (event.type === 'chunk') {
+          const chunk = event.chunk;
+          if (chunk.type === 'content') {
+            this.lastStreamedContent += chunk.content;
+          } else if (chunk.type === 'tool_use_detail') {
+            this.currentTrace.toolCalls.push({
+              id: chunk.toolUseId,
+              name: chunk.toolName,
+              // Privacy: store byte length only — never raw input content, which
+              // routinely contains secrets (tokens, file contents, env vars).
+              inputBytes: Buffer.byteLength(chunk.toolInput, 'utf8'),
+            });
+          } else if (chunk.type === 'tool_result') {
+            this.currentTrace.toolResults.push({
+              toolUseId: chunk.toolUseId,
+              isError: chunk.isError,
+              truncated: chunk.truncated,
+              sizeBytes: chunk.sizeBytes,
+            });
+          } else if (chunk.type === 'thinking') {
+            this.currentTrace.thinkingPresent = true;
+          }
         }
-        if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
-          const u = event.metadata.usage as Record<string, unknown>;
-          this.currentTrace.usage = {
-            inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
-            outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
-            cacheReadTokens: typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : undefined,
-            cacheCreationTokens: typeof u['cache_creation_input_tokens'] === 'number' ? u['cache_creation_input_tokens'] : undefined,
-          };
+
+        if (event.type === 'message') {
+          finalMessage = event.message;
+          // Count the turn as soon as the assistant message is received; this
+          // ensures error-path traces (where 'done' is never reached) also
+          // reflect completed turns.
+          this.currentTrace.turnCount++;
+        } else if (event.type === 'error') {
+          streamError = event.error;
+          break;
+        } else if (event.type === 'done') {
+          // Capture the turn's stop reason so the post-loop fallback can tell a
+          // tool-use-cap termination (which yields a `done` with no assistant
+          // message) apart from a genuinely empty stream — and so `runToResult`
+          // can surface it on the SubagentResult (persisted on the handle).
+          if (typeof event.metadata?.stopReason === 'string') {
+            this.lastStopReason = event.metadata.stopReason;
+          }
+          if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
+            const u = event.metadata.usage as Record<string, unknown>;
+            this.currentTrace.usage = {
+              inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
+              outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
+              cacheReadTokens: typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : undefined,
+              cacheCreationTokens: typeof u['cache_creation_input_tokens'] === 'number' ? u['cache_creation_input_tokens'] : undefined,
+            };
+          }
+          break;
         }
-        break;
       }
+    } finally {
+      // Idempotent: releases the idle timer on EVERY exit path — normal
+      // completion, an `error`/`done` break, or a thrown/aborted iterator.
+      // Disposing before the post-loop return/throw logic guarantees a
+      // completed run never leaves a live (if `.unref()`'d) timer behind.
+      idleWatchdog.dispose();
     }
 
     if (streamError) throw streamError;

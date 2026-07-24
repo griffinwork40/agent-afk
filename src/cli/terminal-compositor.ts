@@ -656,16 +656,6 @@ export class TerminalCompositor {
   }
 
   /**
-   * Install or clear the soft-stop handler — see
-   * {@link TerminalCompositorOptions.onSoftStop}. Wired once at REPL
-   * startup via InputSurface.armCompositor; no per-turn swap needed
-   * because the once-only `softStopped` guard handles idempotency.
-   */
-  setOnSoftStop(handler: (() => void) | null): void {
-    this.onSoftStop = handler ?? undefined;
-  }
-
-  /**
    * Install or clear the background handler — see
    * {@link TerminalCompositorOptions.onBackground}. Typically cleared
    * in idle mode (Ctrl+B has no meaningful between-turn semantics).
@@ -681,16 +671,6 @@ export class TerminalCompositor {
    */
   setOnRewindRequest(handler: (() => void) | null): void {
     this.onRewindRequest = handler ?? undefined;
-  }
-
-  /**
-   * Install or clear the Shift+Tab handler — see
-   * {@link TerminalCompositorOptions.onShiftTab}. The persistent
-   * InputSurface typically installs this once at REPL start (the
-   * plan-mode toggle is REPL-global, not per-turn).
-   */
-  setOnShiftTab(handler: (() => void) | null): void {
-    this.onShiftTab = handler ?? undefined;
   }
 
   /**
