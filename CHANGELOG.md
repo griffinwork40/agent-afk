@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.1] - 2026-07-24
+
+### Fixed
+- anchor git verbs to subcommand position + wrapper/indirection handling (#577) (#697) (b9973e7)
+
 ## [5.76.0] - 2026-07-24
 
 ### Added
