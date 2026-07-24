@@ -135,7 +135,14 @@ export function createGrepHandler(cwd?: string): ToolHandler {
     // it explicitly. Pushed AFTER any include glob so it always wins for .git paths.
     args.push('-g', '!.git');
 
-    args.push(pattern, path);
+    // Invariant: `pattern` and `path` MUST follow a `--` end-of-options separator.
+    // Without it, ripgrep parses any argument beginning with `-` as a FLAG, not a
+    // positional: a benign pattern like `->` fails ("unrecognized flag"), and a
+    // prompt-injected `--pre=<cmd>` reaches rg's preprocessor flag and EXECUTES
+    // <cmd> for every file (argument-injection → command execution — system `grep`
+    // had no such flag, so the swap to rg makes the missing `--` exploitable).
+    // `--` forces rg to treat everything after it as positionals: pattern, then path.
+    args.push('--', pattern, path);
 
     // Effective cwd priority (parity with the bash handler, #441):
     //   1. context?.resolveBase — permission anchor (updated in place on an

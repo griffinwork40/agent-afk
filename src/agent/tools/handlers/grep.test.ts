@@ -195,6 +195,45 @@ describe('grepHandler', () => {
     });
   });
 
+  // Regression: the handler passes `pattern`/`path` after a `--` end-of-options
+  // separator so ripgrep can never parse the pattern as a flag. Without `--`, a
+  // pattern like `->` errors ("unrecognized flag") and a `--pre=<cmd>` pattern
+  // would reach rg's preprocessor flag and EXECUTE <cmd> per file (argument-
+  // injection → command execution). These lock that separator in place.
+  describe('argument-injection / leading-dash safety (-- separator)', () => {
+    it('treats a leading-dash pattern as a literal search string, not an rg flag', async () => {
+      writeFileSync(join(tempDir, 'arrow.txt'), 'fn f() -> i32');
+
+      const result = await grepHandler(
+        { pattern: '->', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('arrow.txt');
+      expect(result.content).toContain('-> i32');
+    });
+
+    it('does not let a flag-shaped pattern inject an rg option', async () => {
+      // `--files` is a real rg option (it lists files). As a bare arg it would be
+      // parsed as that option; after `--` it is a literal search string matching
+      // nothing here — proving the pattern never reaches rg's option parser. If
+      // injection were possible this would instead list a.txt/b.txt.
+      writeFileSync(join(tempDir, 'a.txt'), 'hello');
+      writeFileSync(join(tempDir, 'b.txt'), 'world');
+
+      const result = await grepHandler(
+        { pattern: '--files', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('No matches found');
+      expect(result.content).not.toContain('a.txt');
+      expect(result.content).not.toContain('b.txt');
+    });
+  });
+
   describe('include filter', () => {
     it('restricts search to matching file patterns', async () => {
       writeFileSync(join(tempDir, 'test.ts'), 'const hello = 1;');
