@@ -202,3 +202,153 @@ describe('driveStream — zero-output stream-incomplete guard', () => {
     expect(result?.needsToolDispatch).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Interrupt-halt parity with anthropic-direct (the ESC-lag fix, ported).
+//
+// Two mechanisms of the interrupt-lag bug are exercised here:
+//   1. PROMPT halt — each stream pull is raced against the turn signal
+//      (abortableStream), so an ESC interrupt settles the iteration within the
+//      current event-loop turn instead of waiting for a parked SSE read.
+//   2. SINGLE terminal — an interrupted turn must NOT yield a spurious `error`
+//      event. This wire is the sharper case: openai@6's SSE iterator SWALLOWS a
+//      mid-stream abort and ends its `for await` CLEANLY (streaming.mjs
+//      `if (isAbortError(e)) return;`). Pre-fix, that clean end fell through to
+//      the stream-incomplete guard and yielded a StreamIncompleteError alongside
+//      the caller's turn.completed — the double-terminal that strands the next
+//      turn. abortableStream throws promptly on abort (surfacing as a caught
+//      throw → clean null return), and a belt-and-suspenders abort check guards
+//      the incomplete-stream branch.
+// ---------------------------------------------------------------------------
+
+/** A source whose `next()` never resolves — models a parked SSE read. */
+function parkedStream(): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          return new Promise<IteratorResult<unknown>>(() => {
+            /* never resolves — the read is parked awaiting the next SSE frame */
+          });
+        },
+      };
+    },
+  };
+}
+
+/**
+ * A source that models the OpenAI SDK's swallow-on-abort behaviour: the parked
+ * read RESOLVES `{done:true}` (rather than rejecting) the instant the signal
+ * fires — exactly what `Stream.fromSSEResponse` does via `if (isAbortError(e))
+ * return;`. Yields nothing before the abort → an empty-turn interrupt, the shape
+ * that pre-fix tripped the stream-incomplete guard.
+ */
+function sdkSwallowOnAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          return new Promise<IteratorResult<unknown>>((resolve) => {
+            if (signal.aborted) {
+              resolve({ value: undefined, done: true });
+              return;
+            }
+            signal.addEventListener(
+              'abort',
+              () => resolve({ value: undefined, done: true }),
+              { once: true },
+            );
+          });
+        },
+      };
+    },
+  };
+}
+
+describe('driveStream — interrupt halt (ESC-lag parity)', () => {
+  it('halts PROMPTLY when the signal aborts while a read is parked (no hang)', async () => {
+    // Without the per-pull abort race this would hang forever on the parked
+    // read. The abort must win the race and settle the generator on the next
+    // microtasks — driveStream returns null (no clean completion, no error).
+    const ctx = makeCtx();
+    const strategy: StreamDriveStrategy<unknown> = {
+      createStream: async () => parkedStream(),
+      translate: () => [],
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const gen = driveStream(ctx, strategy);
+    const events: ProviderEvent[] = [];
+    const drained = (async () => {
+      let step = await gen.next();
+      while (!step.done) {
+        events.push(step.value);
+        step = await gen.next();
+      }
+      return step.value;
+    })();
+
+    // Interrupt while parked. If the pull were not raced, `drained` never
+    // resolves and the test times out (the bug).
+    ctx.controller.abort('interrupted');
+    const result = await drained;
+
+    expect(result).toBeNull();
+    // An interrupt is not a failure: no error event may be emitted.
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  it('yields NO spurious error on an interrupt the SDK swallows (single-terminal regression)', async () => {
+    // Pre-fix repro: openai@6 swallows a mid-stream abort and ends the for-await
+    // cleanly, so an empty-turn interrupt fell through to the stream-incomplete
+    // guard and emitted a StreamIncompleteError. Because the caller ALSO emits
+    // turn.completed on abort, that produced TWO terminal-ish events — the
+    // stranded-terminal bug. The fix must return a clean null with no error.
+    const ctx = makeCtx();
+    const strategy: StreamDriveStrategy<unknown> = {
+      createStream: async (signal) => sdkSwallowOnAbortStream(signal),
+      translate: () => [],
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const gen = driveStream(ctx, strategy);
+    const events: ProviderEvent[] = [];
+    const drained = (async () => {
+      let step = await gen.next();
+      while (!step.done) {
+        events.push(step.value);
+        step = await gen.next();
+      }
+      return step.value;
+    })();
+
+    ctx.controller.abort('interrupted');
+    const result = await drained;
+
+    // Clean abort return — the caller (query.ts) owns the single turn.completed.
+    expect(result).toBeNull();
+    // The load-bearing assertion: an interrupt must not surface as an `error`
+    // (a StreamIncompleteError here would strand the trailing turn.completed).
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  it('still surfaces the incomplete-stream error on a genuine empty completion (not aborted)', async () => {
+    // Guard against over-correction: the abort short-circuit must NOT suppress
+    // the real silent-truncation guard when the signal is NOT aborted. An empty
+    // stream that ends cleanly with no finish_reason is still a loud error.
+    const ctx = makeCtx();
+    const strategy: StreamDriveStrategy<unknown> = {
+      createStream: async () =>
+        (async function* (): AsyncIterable<unknown> {
+          /* yields nothing, ends cleanly, signal never aborts */
+        })(),
+      translate: () => [],
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const { events, result } = await drive(ctx, strategy);
+
+    expect(result).toBeNull();
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+});

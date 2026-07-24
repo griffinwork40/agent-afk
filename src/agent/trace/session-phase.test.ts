@@ -139,6 +139,28 @@ describe('session_phase payload schema — acceptance', () => {
     ).not.toThrow();
   });
 
+  it('accepts the interrupt_halt phase with durationMs + provider metadata', () => {
+    // Deliverable B: the ESC→terminal halt-latency marker. A single event
+    // carrying the interrupt→terminal wall-clock in durationMs, tagged with the
+    // emitting provider.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'interrupt_halt',
+        durationMs: 12,
+        metadata: { provider: 'openai-compatible' },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'interrupt_halt',
+        durationMs: 0,
+        metadata: { provider: 'anthropic-direct' },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance so readers of older/newer JSONL don't reject it.
+    expect(() => SessionPhaseNameSchema.parse('interrupt_halt')).not.toThrow();
+  });
+
   it('accepts the usage_limit_pause / usage_limit_resume phases', () => {
     // Pause: no durationMs, park metadata (both the reset-ts and no-ts shapes).
     expect(() =>
@@ -233,6 +255,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     loop_start: true,
     loop_end: true,
     model_ttfb: true,
+    interrupt_halt: true,
     rate_limit: true,
     usage_limit_pause: true,
     usage_limit_resume: true,

@@ -13,14 +13,22 @@
  * ends the generator, and a source rejection propagates unchanged (only an
  * abort-won race swallows the trailing read — real errors are never masked).
  *
- * Why this exists: the anthropic-direct streaming loop passes the turn signal
- * to the SDK's `messages.create`, so an abort DOES cancel the fetch — but the
- * SDK's SSE async-iterator only surfaces that abort when its pending read
- * rejects, which for a mid-stream extended-thinking (Opus) response can lag
- * seconds behind the ESC keypress (there is no per-delta abort check in the
- * translate loop). Racing each pull against the signal makes the halt
- * deterministic regardless of the transport's read cadence. See the
- * interrupt-halt regression tests alongside this module.
+ * Why this exists: a provider streaming loop passes the turn signal to its
+ * SDK's stream call, so an abort DOES cancel the fetch — but the SDK's SSE
+ * async-iterator surfaces that abort only once its pending read settles, which
+ * for a mid-stream extended-thinking (Opus) response can lag seconds behind the
+ * ESC keypress (there is no per-delta abort check in the translate loop).
+ * Racing each pull against the signal makes the halt deterministic regardless
+ * of the transport's read cadence.
+ *
+ * History: extracted from `anthropic-direct/abortable-stream.ts` to this
+ * provider-neutral `shared/` home so the `openai-compatible` provider can reuse
+ * the exact same racing wrapper (its SDK — openai@6 — actually SWALLOWS a
+ * mid-stream abort and ends its iterator cleanly rather than rejecting the
+ * parked read, so without this wrapper an interrupt both lags AND slips past the
+ * stream-incomplete guard as a spurious `error` event). Both providers now wrap
+ * their SDK stream with this helper. See the interrupt-halt regression tests
+ * alongside this module and in each provider.
  */
 export async function* abortableStream<T>(
   source: AsyncIterable<T>,

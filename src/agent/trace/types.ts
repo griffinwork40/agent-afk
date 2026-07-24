@@ -636,6 +636,16 @@ export type SessionPhaseName =
   | 'loop_start'
   | 'loop_end'
   | 'model_ttfb'
+  // Interrupt→halt latency. A SINGLE event (no paired start) emitted on the
+  // turn's abort path when an ESC soft-stop (`interrupt()`) is what ended the
+  // stream, carrying in `durationMs` the wall-clock from the abort signal firing
+  // to the terminal `turn.completed` being emitted. This is the field-visible
+  // proof of the ESC-lag fix: `abortableStream` races each stream pull against
+  // the interrupt so the halt lands within an event-loop turn instead of lagging
+  // seconds behind the keypress. Emitted fire-and-forget by both the
+  // anthropic-direct and openai-compatible loops; absent on non-interrupted
+  // turns and on a session `close()` (only a user/turn interrupt qualifies).
+  | 'interrupt_halt'
   | 'rate_limit'
   // OAuth subscription usage-limit park/unpark. Unlike `rate_limit` (a short,
   // bounded retry-after backoff), these bracket a potentially multi-HOUR pause

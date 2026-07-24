@@ -1151,6 +1151,100 @@ describe('OpenAICompatibleQuery — lifecycle', () => {
     expect(remaining.some((e) => e.type === 'turn.completed')).toBe(true);
   });
 
+  it('emits exactly ONE terminal on interrupt so the next turn is not wasted (the "poke to start" bug)', async () => {
+    // Ported from anthropic-direct/interrupt-resume.test.ts. AgentSession's real
+    // consumer (sendMessageStreamInternal) breaks on the FIRST terminal event
+    // (`done` OR `error`). If an interrupted turn yields BOTH an `error` (e.g. a
+    // spurious StreamIncompleteError) AND a turn.completed, the consumer stops on
+    // the error and the trailing turn.completed is stranded — the NEXT turn's
+    // first pull consumes it as a no-op, so the user's next message runs a turn
+    // late ("type after ESC → nothing happens → poke '.'").
+    //
+    // This wire's sharp edge: openai@6 SWALLOWS a mid-stream abort and ends the
+    // stream cleanly (streaming.mjs `if (isAbortError(e)) return;`). We model that
+    // exactly — turn 1 interrupts, then RETURNS (no throw) with no content — the
+    // empty-turn shape that pre-fix tripped the incomplete-stream guard into
+    // yielding an `error`.
+    let queryRef: { interrupt(): Promise<void> } | null = null;
+    let turnIdx = 0;
+    const factory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (
+              args: { stream?: boolean },
+              options?: { signal?: AbortSignal },
+            ) => {
+              turnIdx += 1;
+              if (!args.stream) throw new Error('mock only supports streaming');
+              if (turnIdx === 1) {
+                // Turn 1: self-interrupt mid-stream, then end CLEANLY (SDK
+                // swallow) — no chunks, no throw.
+                return (async function* (): AsyncGenerator<OpenAIChunk> {
+                  await queryRef!.interrupt();
+                  // Cooperative: the abortableStream wrapper wins the race on the
+                  // parked pull; this generator ending cleanly models the SDK's
+                  // swallow-and-return so the test holds even without the wrapper
+                  // (the incomplete-guard short-circuit is what it exercises).
+                  if (options?.signal?.aborted) return;
+                  return;
+                })();
+              }
+              // Turn 2: a normal text reply — the message that "wouldn't send".
+              return (async function* (): AsyncGenerator<OpenAIChunk> {
+                yield {
+                  choices: [{ delta: { content: 'resumed reply' }, finish_reason: 'stop' }],
+                  usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+                };
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(factory);
+
+    const controlled = makeControlledPromptStream();
+    const q = buildQueryFromConfig(baseConfig(), controlled.stream);
+    queryRef = q;
+    const iter = q[Symbol.asyncIterator]();
+
+    // session.init handshake.
+    const init = await iter.next();
+    expect(init.value).toMatchObject({ type: 'session.init' });
+
+    // Turn 1 — drive until the FIRST terminal event, exactly as AgentSession does.
+    controlled.send('first');
+    const isTerminal = (t: string): boolean => t === 'turn.completed' || t === 'error';
+    let r = await iter.next();
+    while (!r.done && !isTerminal((r.value as ProviderEvent).type)) {
+      r = await iter.next();
+    }
+    expect(r.done).toBe(false);
+    // The aborted turn's FIRST (and only) terminal must be turn.completed — never
+    // an `error` that strands a trailing turn.completed for the next turn to eat.
+    expect((r.value as ProviderEvent).type).toBe('turn.completed');
+
+    // Turn 2 — the real message must run THIS turn, not a turn late.
+    controlled.send('second');
+    let assistantText = '';
+    r = await iter.next();
+    while (!r.done) {
+      const ev = r.value as ProviderEvent;
+      if (ev.type === 'delta.text') assistantText += ev.text;
+      if (ev.type === 'assistant.message' && ev.text.length > 0) assistantText = ev.text;
+      if (ev.type === 'turn.completed') break;
+      r = await iter.next();
+    }
+    // No wasted turn: the model was actually called again (turnIdx===2) and the
+    // reply streamed. Pre-fix, turn 2 consumed the stranded turn.completed as a
+    // no-op and turnIdx stayed 1.
+    expect(assistantText).toContain('resumed reply');
+    expect(turnIdx).toBe(2);
+
+    controlled.end();
+    await iter.return?.();
+  });
+
   it('close() stops the loop cleanly even with no input pending', async () => {
     const controlled = makeControlledPromptStream();
     const q = buildQueryFromConfig(baseConfig(), controlled.stream);
@@ -2778,5 +2872,153 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     // Should not throw.
     const events = await collect(q);
     expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
+  });
+
+  // Deliverable B: interrupt→halt latency. `interrupt_halt` records the
+  // wall-clock from the turn signal firing (ESC soft-stop → interrupt() aborts
+  // with reason 'interrupted') to the terminal turn.completed on the abort path.
+  it('emits interrupt_halt with a non-negative durationMs when the turn is interrupted mid-stream', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let queryRef: { interrupt(): Promise<void> } | null = null;
+    const factory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (
+              args: { stream?: boolean },
+              options?: { signal?: AbortSignal },
+            ) => {
+              if (!args.stream) throw new Error('mock only supports streaming');
+              // Model the ESC soft-stop: interrupt the in-flight turn, then end
+              // the stream cleanly (openai@6 swallows a mid-stream abort). The
+              // abortableStream wrapper resolves the halt; the loop funnels to a
+              // single turn.completed and the finally emits interrupt_halt.
+              return (async function* (): AsyncGenerator<OpenAIChunk> {
+                await queryRef!.interrupt();
+                if (options?.signal?.aborted) return;
+                return;
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(factory);
+
+    const controlled = makeControlledPromptStream();
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'halt-session',
+      promptStream: controlled.stream,
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+    queryRef = q;
+    const iter = q[Symbol.asyncIterator]();
+
+    // session.init, then drive turn 1 to its (single) terminal.
+    await iter.next();
+    controlled.send('long task');
+    let r = await iter.next();
+    while (!r.done && (r.value as ProviderEvent).type !== 'turn.completed') {
+      r = await iter.next();
+    }
+    expect((r.value as ProviderEvent).type).toBe('turn.completed');
+    controlled.end();
+    // Drain to completion so the runTurn finally (which emits interrupt_halt) runs.
+    while (!r.done) r = await iter.next();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const halts = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'interrupt_halt',
+    );
+    expect(halts).toHaveLength(1);
+    const halt = halts[0]!;
+    if (halt.kind !== 'session_phase') throw new Error('unreachable');
+    expect(halt.payload.durationMs).toBeTypeOf('number');
+    expect(halt.payload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(halt.payload.metadata).toMatchObject({ provider: 'openai-compatible' });
+  });
+
+  it('does NOT emit interrupt_halt on a clean (non-interrupted) turn', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'clean-session',
+      promptStream: singleInput('hi'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const halts = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'interrupt_halt',
+    );
+    expect(halts).toHaveLength(0);
+  });
+
+  it('does NOT emit interrupt_halt when the session is closed mid-stream (reason "closed")', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let queryRef: { close(): void } | null = null;
+    const factory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async (
+              args: { stream?: boolean },
+              options?: { signal?: AbortSignal },
+            ) => {
+              if (!args.stream) throw new Error('mock only supports streaming');
+              // close() aborts the per-turn signal with reason 'closed' — a
+              // session teardown, NOT an ESC halt. interrupt_halt must be absent.
+              return (async function* (): AsyncGenerator<OpenAIChunk> {
+                queryRef!.close();
+                if (options?.signal?.aborted) return;
+                return;
+              })();
+            },
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(factory);
+
+    const controlled = makeControlledPromptStream();
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'closed-session',
+      promptStream: controlled.stream,
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+    queryRef = q;
+    const iter = q[Symbol.asyncIterator]();
+    await iter.next();
+    controlled.send('task');
+    // Drain to completion — close() ends the generator (done:true).
+    let r = await iter.next();
+    while (!r.done) r = await iter.next();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const halts = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'interrupt_halt',
+    );
+    expect(halts).toHaveLength(0);
   });
 });

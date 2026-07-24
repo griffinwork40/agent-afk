@@ -20,6 +20,7 @@
 import type { ProviderEvent } from '../../../provider.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import type { TraceWriter } from '../../../trace/index.js';
+import { abortableStream } from '../../shared/abortable-stream.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import { createStreamState, isToolCallStop, type StreamState } from '../translate.js';
 import { StreamIncompleteError } from '../../../../utils/errors.js';
@@ -132,7 +133,20 @@ export async function* driveStream<TEvent>(
     // anthropic-direct/loop.ts:307–327.
     let ttfbEmitted = false;
     try {
-      for await (const event of stream!) {
+      // Race every stream pull against the turn signal so an ESC interrupt halts
+      // PROMPTLY (same event-loop turn) instead of waiting for the SDK's parked
+      // read to settle — mirrors anthropic-direct/loop.ts. This matters MORE on
+      // this wire: openai@6's SSE iterator SWALLOWS a mid-stream abort and ends
+      // cleanly (node_modules/openai/core/streaming.mjs — `if (isAbortError(e))
+      // return;`), so without the wrapper an interrupt not only lags behind the
+      // keypress but the clean end falls THROUGH to the stream-incomplete guard
+      // below and yields a spurious `error` event. `abortableStream` throws an
+      // AbortError the instant the signal fires; the catch's `aborted` branch
+      // then returns null and the caller emits exactly one terminal
+      // `turn.completed` (openai-compatible/query.ts:_runTurnInner) — no double
+      // terminal, no bogus error. Uses `controller.signal` (the user/turn
+      // interrupt) — the same signal handed to `createStream`.
+      for await (const event of abortableStream(stream!, ctx.controller.signal)) {
         if (ctx.isClosed()) return null;
         for (const ev of strategy.translate(event, state)) {
           if (!ttfbEmitted) {
@@ -176,6 +190,16 @@ export async function* driveStream<TEvent>(
       yield { type: 'error', error: strategy.clarifyError(streamError) };
       return null;
     }
+
+    // Interrupt short-circuit: if the turn signal fired we are here because the
+    // stream ended on abort — return a clean null so the caller emits a single
+    // terminal `turn.completed`, NEVER an error. The `abortableStream` wrapper
+    // above normally throws an AbortError on interrupt (caught → the `aborted`
+    // branch returns null before we reach this point), so this is defense in
+    // depth: it guarantees an interrupt can never fall through to the
+    // stream-incomplete guard below and yield a spurious `error` event even if a
+    // future transport ends the pull cleanly on abort instead of rejecting.
+    if (ctx.controller.signal.aborted) return null;
 
     // Tool-dispatch intent, computed once: the incomplete-stream guard below and
     // the clean-completion return value both key off it. `isToolCallStop` is a
