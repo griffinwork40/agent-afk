@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.75.0] - 2026-07-24
+
+### Added
+- openai-compatible ESC-halt parity + interrupt-halt trace event (#677) (7055df6)
+
+### Changed
+- Delete Star History section from README (bdae56b)
+
 ## [5.74.0] - 2026-07-24
 
 ### Added
