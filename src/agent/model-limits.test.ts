@@ -82,3 +82,25 @@ describe('maxOutputTokensFor — GPT-5.6 family output ceiling', () => {
     expect(resolveEffectiveMaxOutputTokens('gpt-5.6', 8_000)).toBe(8_000);
   });
 });
+
+describe('maxOutputTokensFor — retired-but-Active Opus pin', () => {
+  it('keeps the 128k cap for the raw claude-opus-4-8 wire id (not the 64k fallback)', () => {
+    // Opus 5 replaced opus-4-8 as the `opus`/`large` default, but 4.8 stays
+    // Active per Anthropic's deprecation table and reachable by its wire id
+    // (--model claude-opus-4-8 / config / env override). resolveModelInput
+    // passes the wire id through unchanged, so dropping its explicit entry would
+    // miss the table and fall to the 64k DEFAULT_MAX_OUTPUT — halving the real
+    // 128k output cap. This guards that regression.
+    expect(maxOutputTokensFor('claude-opus-4-8')).toBe(128_000);
+    // The new default resolves correctly too.
+    expect(maxOutputTokensFor('claude-opus-5')).toBe(128_000);
+    expect(maxOutputTokensFor('opus')).toBe(128_000);
+  });
+
+  it('reports opus-4-8 true 200k context window via the raw wire id', () => {
+    // No explicit MODEL_CONTEXT_LIMITS entry: the Anthropic DEFAULT_CONTEXT_LIMIT
+    // (200k) fallback already yields opus-4-8's real window, so no regression on
+    // the context path — documented here so the pin stays fully usable.
+    expect(contextLimitFor('claude-opus-4-8')).toBe(200_000);
+  });
+});

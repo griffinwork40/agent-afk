@@ -34,10 +34,14 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   fable: 128_000,
   // Claude Opus 5 (GA 2026-07-24): 128k max output.
   'claude-opus-5': 128_000,
-  // 'claude-opus-4-8' removed — retired model; MODEL_MAP.opus now points to
-  // claude-opus-5. Kept here as a comment so git blame reveals the removal.
-  // (Prior retirements: 'claude-opus-4-6' → 4-7 on 2026-04, 4-7 → 4-8 on
-  // 2026-05-28, then 4-8 → opus-5 on 2026-07-24.)
+  // 'claude-opus-4-8' is no longer a first-class alias (MODEL_MAP.opus now
+  // resolves to claude-opus-5) but remains Active per Anthropic's deprecation
+  // table and reachable by its raw wire id (`--model claude-opus-4-8`, a config
+  // or env override), so its 128k output cap is retained. Dropping it would
+  // silently halve maxOutputTokensFor('claude-opus-4-8') to the 64k
+  // DEFAULT_MAX_OUTPUT fallback. (Alias lineage, for git blame: 'claude-opus-4-6'
+  // → 4-7 on 2026-04, 4-7 → 4-8 on 2026-05-28, 4-8 → opus-5 on 2026-07-24.)
+  'claude-opus-4-8': 128_000,
   // Claude Sonnet 5 (GA 2026-06): 128k max output (up from 64k on Sonnet 4.6).
   'claude-sonnet-5': 128_000,
   'claude-haiku-4-5-20251001': 64_000,
