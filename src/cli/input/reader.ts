@@ -16,7 +16,7 @@
 import { emitKeypressEventsImmediateEscape } from './emit-keypress.js';
 import * as ansiEscapes from 'ansi-escapes';
 import stringWidth from 'string-width';
-import { list as listSlashCommands, aliasEntries, registryVersion } from '../slash/registry.js';
+import { list as listSlashCommands, aliasEntries, createSlashRegistryView } from '../slash/registry.js';
 import { stripAnsi } from '../display.js';
 import { acquireStdinClaim } from './stdin-claim.js';
 import { isPrintableGrapheme } from './printable.js';
@@ -115,16 +115,11 @@ export async function readWithAutocompleteTty(
       let repaintPending = false;
       const PASTE_WINDOW_MS = 8;
 
-      // Adapter for the slash highlighter — registered command names from
-      // `listSlashCommands()` include the leading `/`, so we strip it before
-      // membership-check so the highlighter (which passes the bare name)
-      // matches correctly.
-      const slashRegistryView: SlashRegistryView = {
-        has: (name) => listSlashCommands().some((c) => c.name === `/${name}`),
-        // Lets `colorizeInputBuffer` memoize per-keystroke repaints and drop
-        // the cache the instant a plugin/skill command is hot-swapped in.
-        version: registryVersion,
-      };
+      // Adapter for the slash highlighter. Delegates membership to the
+      // registry's alias-aware `has()` (via `createSlashRegistryView`) so
+      // aliased commands (e.g. `/quit`) colorize brand, not dim — and so the
+      // per-keystroke memo still invalidates on any mid-session hot-swap.
+      const slashRegistryView: SlashRegistryView = createSlashRegistryView();
 
       /**
        * Fully redraw the input line (and optional dropdown) at whatever row the
