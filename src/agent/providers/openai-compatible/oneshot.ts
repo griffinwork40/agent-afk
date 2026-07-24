@@ -19,6 +19,10 @@
 import OpenAI from 'openai';
 import { resolveOpenAIAuth } from './auth.js';
 import { isReasoningModel } from '../../model-capabilities.js';
+import type { OpenAIMessage } from './messages.js';
+import { buildResponsesRequestBody } from './query/request-body.js';
+import { createStreamState } from './translate.js';
+import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 
 /** Test injection hook — supplants the real `OpenAI` constructor. */
 export type OneShotOpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
@@ -129,4 +133,101 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
 
   const content = response.choices?.[0]?.message?.content;
   return typeof content === 'string' ? content.trim() : '';
+}
+
+export interface OpenAIResponsesOneShotInput {
+  /**
+   * Pre-built client, used verbatim (its baseURL, credentials, ChatGPT-OAuth
+   * headers, and account-id). REQUIRED — unlike {@link oneShotChatCompletion}
+   * there is no auth-resolution fallback: a Responses-wire summarize is only
+   * meaningful reusing a live session's client, which is where the Responses
+   * wire (and the private ChatGPT/Codex backend) is configured.
+   */
+  client: OpenAI;
+  /** Model id, passed straight through to the API (no alias expansion). */
+  model: string;
+  /** System prompt. Becomes the Responses `instructions` field. */
+  system: string;
+  /** User message content. Becomes the single Responses `input` item. */
+  user: string;
+  /**
+   * True on the private ChatGPT/Codex subscription backend. Scopes the
+   * request-body quirks that {@link buildResponsesRequestBody} applies: omit
+   * every output-cap param (the backend 400s on them), force `store: false`,
+   * and require a non-empty `instructions`. Mirror the caller's own
+   * `auth.source === 'chatgpt-oauth'` check.
+   */
+  isChatGptBackend: boolean;
+  /**
+   * Soft output cap, applied ONLY on the public API-key path. Default 1024 —
+   * summary-sized. Omitted entirely when `isChatGptBackend` (that backend
+   * rejects `max_output_tokens`).
+   */
+  maxTokens?: number;
+  /** Caller-controlled cancellation. Aborts the in-flight request. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Single one-shot summarization over the OpenAI **Responses** wire. The
+ * Responses-wire sibling of {@link oneShotChatCompletion}; it exists so history
+ * compaction works on responses-mode sessions (ChatGPT-OAuth and the
+ * `AFK_OPENAI_USE_RESPONSES` opt-in), where `chat.completions.create` is
+ * rejected by the backend — issue #653.
+ *
+ * Design:
+ *   - Reuses {@link buildResponsesRequestBody} (so every ChatGPT-backend quirk
+ *     stays in one place) and {@link translateResponsesEvent} (the single
+ *     source of truth for which stream event carries assistant text), so the
+ *     summarize path can never drift from the turn path.
+ *   - Streams (`stream: true`, set by the body builder) rather than issuing a
+ *     non-streaming call. Deliberate: the ChatGPT/Codex backend is only ever
+ *     streamed to, so a throwaway summarize rides the one proven wire.
+ *   - Drains the stream in ISOLATION — its own {@link createStreamState}, the
+ *     yielded `ProviderEvent`s discarded — so it never touches session state
+ *     (`lastUsage`, `priorTurns`), emits no trace, and dispatches no tools.
+ *   - Has no retry opinion (like `oneShotChatCompletion`): it throws on SDK
+ *     error, and the compaction core treats that as a safe no-op (history
+ *     untouched).
+ *
+ * Returns the accumulated assistant text, trimmed.
+ */
+export async function oneShotResponses(input: OpenAIResponsesOneShotInput): Promise<string> {
+  const { client, model, system, user, isChatGptBackend, maxTokens = 1024, signal } = input;
+
+  const messages: OpenAIMessage[] = [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+  const requestBody = buildResponsesRequestBody({
+    model,
+    messages,
+    // A summarize advertises no tools — with none, the model must answer in text.
+    activeTools: undefined,
+    // Public path: bound the summary length. On the ChatGPT backend the builder
+    // omits the cap entirely (it 400s there), so this value is simply ignored.
+    maxOutputTokens: maxTokens,
+    // No reasoning on a summarize — cheaper/faster, and a compaction summary
+    // needs none. resolveReasoningEffort(undefined, ...) yields no reasoning key.
+    effort: undefined,
+    isChatGptBackend,
+  });
+
+  const stream = (await client.responses.create(
+    requestBody as never,
+    signal ? { signal } : undefined,
+  )) as unknown as AsyncIterable<ResponsesStreamEvent>;
+
+  // Drain into a private StreamState. `translateResponsesEvent` mutates only the
+  // state we pass (accumulating `response.output_text.delta` into
+  // `assistantText`); the ProviderEvents it yields have no consumer here, so we
+  // exhaust the generator purely for its state mutation.
+  const state = createStreamState();
+  for await (const event of stream) {
+    const events = translateResponsesEvent(event, state, 'compact-oneshot');
+    while (!events.next().done) {
+      // Discard — assistant text is accumulated into `state`, not emitted.
+    }
+  }
+  return state.assistantText.trim();
 }

@@ -91,7 +91,7 @@ import {
 import { HookBlockedError, DenialCircuitBreakerError } from '../../../utils/errors.js';
 import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
 import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
-import { oneShotChatCompletion } from './oneshot.js';
+import { oneShotChatCompletion, oneShotResponses } from './oneshot.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -192,6 +192,16 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   private currentModel: string;
   private currentPermissionMode: string;
+
+  /**
+   * Latched `true` when a Responses-wire summarize (history compaction) fails
+   * for a non-abort reason — e.g. the ChatGPT/Codex backend rejects the
+   * throwaway summarize turn. Once set, further compaction attempts no-op
+   * immediately (see `compactHistory`) instead of re-issuing a doomed request
+   * every turn boundary. Per-session; never reset. Aborts/timeouts do NOT set
+   * it (those are transient, not a backend incompatibility). Issue #653.
+   */
+  private responsesCompactionUnavailable = false;
 
   private abortController: AbortController | null = null;
   private pendingAbortReason: 'interrupted' | 'closed' | null = null;
@@ -885,11 +895,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * is intentionally NOT wired here: a mismatched id simply fails the summarize
    * call, which the core treats as a safe no-op, leaving history untouched.
    *
-   * Only Chat Completions sessions are supported. The summarizer runs through
-   * `oneShotChatCompletion` (Chat Completions wire), so a responses-mode session
-   * (ChatGPT-OAuth, or the `AFK_OPENAI_USE_RESPONSES` opt-in) bails early with
-   * `unsupported-wire-mode` rather than issuing a chat.completions call its
-   * backend would reject.
+   * Both wires are supported. Chat Completions sessions summarize through
+   * `oneShotChatCompletion`; responses-mode sessions (ChatGPT-OAuth, or the
+   * `AFK_OPENAI_USE_RESPONSES` opt-in) summarize through `oneShotResponses`,
+   * which streams over the Responses wire the backend actually accepts —
+   * issue #653. The splice machinery is wire-agnostic; only the summarize
+   * transport differs. If a responses-wire summarize fails for a non-abort
+   * reason (e.g. the backend rejects the throwaway summarize turn), the session
+   * latches `responsesCompactionUnavailable` so subsequent boundaries no-op
+   * cheaply instead of re-issuing a doomed request.
    */
   async compact(): Promise<ProviderCompactResult> {
     // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
@@ -908,14 +922,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // than reusing 'session-closed'.
       return { compacted: false, reason: 'no-usable-auth', messagesBefore, messagesAfter: messagesBefore };
     }
-    if (this.wireMode === 'responses') {
-      // oneShotChatCompletion speaks only Chat Completions; a responses-mode
-      // backend (ChatGPT-OAuth / AFK_OPENAI_USE_RESPONSES) would reject that
-      // call. Surface an explicit, honest no-op instead of a generic
-      // summarization failure so the reason is actionable.
+    if (this.wireMode === 'responses' && this.responsesCompactionUnavailable) {
+      // A prior responses-wire summarize failed for a non-abort reason (e.g. the
+      // ChatGPT/Codex backend rejected the throwaway summarize turn). Don't
+      // re-issue a doomed request every turn boundary — no-op with an actionable
+      // reason. Latched by `summarizeViaResponses` below; never reset this session.
       return {
         compacted: false,
-        reason: 'unsupported-wire-mode',
+        reason: 'responses-compaction-unavailable',
         messagesBefore,
         messagesAfter: messagesBefore,
       };
@@ -934,14 +948,16 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       usedFraction,
       shrinkAtFraction: readShrinkFraction(),
       summarize: (transcript, signal) =>
-        oneShotChatCompletion({
-          client: this.client,
-          model: compactModel,
-          system: COMPACT_SYSTEM_PROMPT,
-          user: wrapTranscriptForSummary(transcript),
-          maxTokens: 1024,
-          signal,
-        }),
+        this.wireMode === 'responses'
+          ? this.summarizeViaResponses(transcript, signal, compactModel)
+          : oneShotChatCompletion({
+              client: this.client,
+              model: compactModel,
+              system: COMPACT_SYSTEM_PROMPT,
+              user: wrapTranscriptForSummary(transcript),
+              maxTokens: 1024,
+              signal,
+            }),
       isClosed: this.closed,
       isIdle: this.abortController === null,
       beginAbort: () => {
@@ -955,6 +971,39 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       trigger,
       traceWriter: this.traceWriter,
     });
+  }
+
+  /**
+   * Responses-wire summarize for {@link compactHistory}. Delegates to
+   * {@link oneShotResponses} (streams over the Responses wire the backend
+   * accepts), reusing THIS session's `client` so the call inherits the same
+   * endpoint, credentials, and ChatGPT-OAuth headers as the conversation.
+   *
+   * On a NON-abort failure it latches `responsesCompactionUnavailable` so the
+   * next boundary no-ops cheaply instead of re-issuing a doomed request, then
+   * re-throws so the compaction core records a safe no-op (history untouched).
+   * Aborts/timeouts (`signal.aborted`) are transient — they do NOT latch, so a
+   * user interrupt never permanently disables compaction for the session.
+   */
+  private async summarizeViaResponses(
+    transcript: string,
+    signal: AbortSignal,
+    model: string,
+  ): Promise<string> {
+    try {
+      return await oneShotResponses({
+        client: this.client,
+        model,
+        system: COMPACT_SYSTEM_PROMPT,
+        user: wrapTranscriptForSummary(transcript),
+        isChatGptBackend: this.opts.auth.source === 'chatgpt-oauth',
+        maxTokens: 1024,
+        signal,
+      });
+    } catch (err) {
+      if (!signal.aborted) this.responsesCompactionUnavailable = true;
+      throw err;
+    }
   }
 
   async setModel(model?: string): Promise<void> {

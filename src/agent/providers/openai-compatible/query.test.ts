@@ -22,6 +22,7 @@ import {
 } from './query.js';
 import { OpenAICompatibleProvider } from './index.js';
 import type { OpenAIChunk } from './translate.js';
+import { COMPACT_SYSTEM_PROMPT } from '../shared/compaction.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
 import { createPlanModeGate } from '../../plan-mode-gate.js';
@@ -1336,7 +1337,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('compact bails `unsupported-wire-mode` on a responses-mode (ChatGPT-OAuth) session', async () => {
+  it('compact now ATTEMPTS on a responses-mode session (no-ops history-too-short when empty) (#653)', async () => {
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'k', source: 'chatgpt-oauth', last4: 'kkkk' },
       model: 'gpt-4o-mini',
@@ -1344,13 +1345,110 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       promptStream: singleInput('x'),
       config: baseConfig(),
     });
-    // A ChatGPT-OAuth session is forced to the responses wire, whose backend
-    // would reject the Chat Completions summarize call — so compact() must bail
-    // early with an actionable reason rather than issue a doomed request.
+    // Responses-mode compaction is now wired (#653): the old 'unsupported-wire-mode'
+    // early bail is gone. With no turns run there is nothing older than the keep
+    // window, so the shared core no-ops 'history-too-short' BEFORE any summarize
+    // is issued — identical to the Chat-Completions empty-session case above, and
+    // proving compaction is no longer structurally refused on the responses wire.
     const result = await q.compact();
     expect(result.compacted).toBe(false);
-    expect(result.reason).toBe('unsupported-wire-mode');
+    expect(result.reason).toBe('history-too-short');
     q.close();
+  });
+
+  it('auto-compacts on the responses wire via responses.create, never chat.completions (#653)', async () => {
+    // The responses-mode compaction fix: the summarize must ride the Responses
+    // wire (the ChatGPT/Codex backend rejects chat.completions). Both the
+    // streaming turns AND the throwaway summarize go through responses.create;
+    // the summarize is the call whose `instructions` is COMPACT_SYSTEM_PROMPT.
+    const summarizeCalls: Array<Record<string, unknown>> = [];
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error('chat.completions.create must not run on the responses wire');
+              },
+            },
+          },
+          responses: {
+            create: async (args: Record<string, unknown>) => {
+              if (args['instructions'] === COMPACT_SYSTEM_PROMPT) summarizeCalls.push(args);
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'AUTO-SUMMARY' };
+                yield {
+                  type: 'response.completed',
+                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    // Each turn reports ~200k tokens — far over gpt-4o-mini's 128k window — so the
+    // turn-boundary trigger fires compaction, and the summarize rode responses.create
+    // (a chat.completions.create would have thrown above and failed the run).
+    expect(summarizeCalls.length).toBeGreaterThanOrEqual(1);
+    // Public API-key path (source 'config', not chatgpt-oauth) DOES carry the cap.
+    expect(summarizeCalls[0]?.['max_output_tokens']).toBeDefined();
+    installMockClient();
+  });
+
+  it('latches after a responses summarize failure and stops re-issuing the doomed call (#653)', async () => {
+    // If the responses-wire summarize throws (e.g. the backend rejects the
+    // throwaway summarize turn), the session latches so later boundaries no-op
+    // cheaply instead of hammering the backend every turn.
+    let summarizeAttempts = 0;
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error('chat.completions.create must not run on the responses wire');
+              },
+            },
+          },
+          responses: {
+            create: async (args: Record<string, unknown>) => {
+              if (args['instructions'] === COMPACT_SYSTEM_PROMPT) {
+                summarizeAttempts++;
+                throw new Error('backend rejected summarize');
+              }
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'ok' };
+                yield {
+                  type: 'response.completed',
+                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    // The first summarize attempt throws and latches the flag; every later
+    // boundary short-circuits, so the backend is asked to summarize exactly once.
+    expect(summarizeAttempts).toBe(1);
+    // A subsequent manual compact() confirms the latch: no-op without re-calling.
+    const manual = await q.compact();
+    expect(manual.compacted).toBe(false);
+    expect(manual.reason).toBe('responses-compaction-unavailable');
+    expect(summarizeAttempts).toBe(1);
+    q.close();
+    installMockClient();
   });
 
   it("compact bails 'no-usable-auth' when no client was constructed (null auth)", async () => {
