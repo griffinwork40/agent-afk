@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.75.3] - 2026-07-24
+
+### Fixed
+- make ** match zero path segments (root-level files) (#692) (944382f)
+
 ## [5.75.2] - 2026-07-24
 
 ### Fixed
