@@ -119,43 +119,17 @@ describe('grepHandler', () => {
     });
   });
 
-  // Regression: the grep tool runs in basic-regex (BRE) mode, where `|` is a
-  // literal pipe — so `alpha|beta` silently returns "No matches" when the model
-  // meant alternation. That false-negative (previously misattributed to a
-  // "stale index") is the bug this suite locks down. The fix keeps BRE as the
-  // default (a literal `|` is common in code — TS union types, shell pipes) but
-  // (a) adds an `extended` ERE opt-in and (b) appends a self-correcting hint on
-  // the no-match path so an empty result is never mistaken for proven absence.
-  describe('regex dialect (BRE default / extended ERE)', () => {
-    it('default BRE: a bare | is literal — alternation does NOT match', async () => {
+  // Ripgrep has no basic-regex (BRE) mode: `|` `+` `?` `(` `)` `{` `}` are
+  // always regex metacharacters. This is a deliberate contract change from the
+  // previous system-`grep`-backed tool (which defaulted to BRE — a literal `|`
+  // — and offered an `extended` opt-in plus a no-match ERE hint, all now
+  // removed). These tests lock down the ripgrep-regex semantics.
+  describe('regex dialect (ripgrep regex — no BRE mode)', () => {
+    it('a bare | alternates and matches either branch', async () => {
       writeFileSync(join(tempDir, 'test.txt'), 'alpha\nbeta\ngamma');
 
       const result = await grepHandler(
         { pattern: 'alpha|beta', path: tempDir },
-        createSignal(),
-      );
-
-      expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('No matches found');
-    });
-
-    it('default BRE: no-match on a |-pattern appends an ERE hint', async () => {
-      writeFileSync(join(tempDir, 'test.txt'), 'alpha\nbeta\ngamma');
-
-      const result = await grepHandler(
-        { pattern: 'alpha|beta', path: tempDir },
-        createSignal(),
-      );
-
-      expect(result.content).toContain('basic-regex (BRE)');
-      expect(result.content).toContain('extended: true');
-    });
-
-    it('extended: true enables ERE alternation', async () => {
-      writeFileSync(join(tempDir, 'test.txt'), 'alpha\nbeta\ngamma');
-
-      const result = await grepHandler(
-        { pattern: 'alpha|beta', path: tempDir, extended: true },
         createSignal(),
       );
 
@@ -165,53 +139,11 @@ describe('grepHandler', () => {
       expect(result.content).not.toContain('gamma');
     });
 
-    // No regression: a literal `|` (TS union types, shell pipes, bitwise OR,
-    // markdown tables) must still match in the default BRE mode. This is why
-    // the tool does NOT silently switch to ERE/ripgrep.
-    it('literal | search still works in default BRE (no regression)', async () => {
-      writeFileSync(join(tempDir, 'types.ts'), 'type T = string | number;');
-
-      const result = await grepHandler(
-        { pattern: 'string | number', path: tempDir },
-        createSignal(),
-      );
-
-      expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('string | number');
-      // Matches were found, so the false-negative hint must NOT appear.
-      expect(result.content).not.toContain('extended: true');
-    });
-
-    it('does not append the hint when extended mode genuinely finds nothing', async () => {
-      writeFileSync(join(tempDir, 'test.txt'), 'gamma');
-
-      const result = await grepHandler(
-        { pattern: 'alpha|beta', path: tempDir, extended: true },
-        createSignal(),
-      );
-
-      expect(result.content).toContain('No matches found');
-      expect(result.content).not.toContain('extended: true');
-    });
-
-    it('does not append the hint when | is explicitly escaped (deliberate literal)', async () => {
-      writeFileSync(join(tempDir, 'test.txt'), 'gamma');
-
-      const result = await grepHandler(
-        // JS '\\|' → the literal pattern alpha\|beta — an escaped pipe.
-        { pattern: 'alpha\\|beta', path: tempDir },
-        createSignal(),
-      );
-
-      expect(result.content).toContain('No matches found');
-      expect(result.content).not.toContain('extended: true');
-    });
-
-    it('extended mode supports the + quantifier (ERE)', async () => {
+    it('+ is a quantifier', async () => {
       writeFileSync(join(tempDir, 'test.txt'), 'aaa\nb');
 
       const result = await grepHandler(
-        { pattern: 'a+', path: tempDir, extended: true },
+        { pattern: 'a+', path: tempDir },
         createSignal(),
       );
 
@@ -219,13 +151,47 @@ describe('grepHandler', () => {
       expect(result.content).toContain('aaa');
     });
 
-    it('throws on non-boolean extended', async () => {
-      await expect(
-        grepHandler(
-          { pattern: 'test', path: tempDir, extended: 'yes' },
-          createSignal(),
-        ),
-      ).rejects.toThrow(/extended.*boolean/i);
+    it('( ) grouping works', async () => {
+      writeFileSync(join(tempDir, 'test.txt'), 'foobar\nfoobaz\nqux');
+
+      const result = await grepHandler(
+        { pattern: 'foo(bar|baz)', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('foobar');
+      expect(result.content).toContain('foobaz');
+      expect(result.content).not.toContain('qux');
+    });
+
+    it('an escaped \\| matches a literal pipe (not alternation)', async () => {
+      writeFileSync(join(tempDir, 'types.ts'), 'type T = string|number;');
+      writeFileSync(join(tempDir, 'other.txt'), 'string');
+
+      const result = await grepHandler(
+        // JS '\\|' → pattern string\|number → matches the LITERAL "string|number",
+        // not "string" OR "number". other.txt ("string") must therefore NOT match.
+        { pattern: 'string\\|number', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('types.ts');
+      expect(result.content).not.toContain('other.txt');
+    });
+
+    it('a no-match returns a plain message with no BRE/extended hint', async () => {
+      writeFileSync(join(tempDir, 'test.txt'), 'gamma');
+
+      const result = await grepHandler(
+        { pattern: 'alpha|beta', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.content).toContain('No matches found');
+      expect(result.content).not.toContain('extended');
+      expect(result.content).not.toContain('BRE');
     });
   });
 
@@ -422,20 +388,21 @@ describe('grepHandler', () => {
     });
 
     it('uses process.cwd() when path not provided', async () => {
-      // Test that the handler accepts missing path (defaults to process.cwd())
-      // Don't actually test the search since it would be slow
-      writeFileSync(join(tempDir, 'test.txt'), 'hello world');
-
-      // Create a unique pattern that we can quickly abort if needed
+      // The handler must accept input with no `path` (defaults to process.cwd())
+      // and return a result without throwing. We don't assert on matches:
+      // process.cwd() at test time is the repo, so the search may find incidental
+      // hits, find nothing, or be aborted first — all valid. A no-match result is
+      // `{ content }` with NO `isError` key (only the abort/error paths set it),
+      // so assert only on `content`. Abort quickly so a broad cwd search (now fast
+      // under ripgrep's .gitignore-aware defaults) can't hang the suite.
       const signal = createAbortableSignal(100);
       const result = await grepHandler(
         { pattern: 'nonexistent_unique_marker_9999_xyz' },
         signal,
       );
 
-      // Either it completes or gets aborted - both are valid
       expect(result).toHaveProperty('content');
-      expect(result).toHaveProperty('isError');
+      expect(typeof result.content).toBe('string');
     }, 3000);
   });
 

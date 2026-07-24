@@ -78,9 +78,21 @@ jobs:
         run: pnpm build
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Cross-platform matrix (Windows-compat effort, see .afk/plans/windows-compat-roadmap
+    # or the tracking issue). ubuntu-latest is the REQUIRED gate; windows-latest and
+    # macos-latest run for SIGNAL but do not block merges yet — `continue-on-error`
+    # keeps them advisory while the compat grind is in progress. `fail-fast: false`
+    # so one OS failing never cancels the others. Public repos get unlimited free
+    # GitHub-hosted minutes on all three runners. Flip windows/macos to required
+    # (delete the continue-on-error line) once the suite is green there.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,7 +119,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          # Per-OS name — a matrix can't upload three artifacts under one name (v4 immutable).
+          name: coverage-report-${{ matrix.os }}
           path: coverage/
           retention-days: 14
 
