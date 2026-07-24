@@ -178,6 +178,31 @@ describe('formatTrace — subagent timeout markers', () => {
   });
 });
 
+describe('formatTrace — started-line agent role', () => {
+  // PR (resolved agent type): the started line surfaces WHICH agent ran. A
+  // resolved registered type renders with a leading `@`; when only the render
+  // label is present, it renders bare.
+  it('renders @<type> for a resolved registered agent type', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sub1', parentId: 'root', model: 'haiku', agentType: 'Explore', resolvedAgentType: 'Explore' } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('@Explore');
+    expect(out).toContain('[sub1]');
+  });
+
+  it('renders the bare render label when no registered type resolved', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sub2', parentId: 'root', model: 'sonnet', agentType: 'correctness [1/6]' } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('correctness [1/6]');
+    expect(out).not.toContain('@correctness');
+  });
+});
+
 describe('formatTrace — subagentId attribution on tool_call (issue #612)', () => {
   // A forked child resumes the parent's sessionId and writes into the shared
   // parent trace, so `afk trace show` must render `[subagentId]` on the child's

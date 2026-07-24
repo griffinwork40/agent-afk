@@ -327,8 +327,16 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
     case 'subagent_lifecycle': {
       const p = event.payload;
       switch (p.transition) {
-        case 'started':
-          return line('subagent', `started  ${p.model}  [${p.subagentId}]`);
+        case 'started': {
+          // Prefer the clean registered type; fall back to the render label.
+          // A leading `@` marks a resolved registered agent type (vs a label).
+          const role = p.resolvedAgentType
+            ? `  @${p.resolvedAgentType}`
+            : p.agentType
+              ? `  ${p.agentType}`
+              : '';
+          return line('subagent', `started  ${p.model}${role}  [${p.subagentId}]`);
+        }
         case 'succeeded': {
           const cost = p.totalCostUsd !== undefined ? `  ${fmtUsd(p.totalCostUsd)}` : '';
           return line(

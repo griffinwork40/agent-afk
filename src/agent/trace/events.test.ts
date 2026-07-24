@@ -273,6 +273,18 @@ describe('subagent_lifecycle payload', () => {
     });
   });
 
+  it('accepts started variant with resolvedAgentType (clean registered type)', () => {
+    const parsed = SubagentLifecyclePayloadSchema.parse({
+      transition: 'started',
+      subagentId: 'child-1',
+      parentId: 'root',
+      model: 'claude-haiku-4',
+      agentType: 'Explore',
+      resolvedAgentType: 'Explore',
+    });
+    expect(parsed).toMatchObject({ resolvedAgentType: 'Explore' });
+  });
+
   it("accepts failed variant with failureClass 'timeout'", () => {
     const parsed = SubagentLifecyclePayloadSchema.parse({
       transition: 'failed',

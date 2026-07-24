@@ -108,6 +108,7 @@ export const SubagentStartedPayloadSchema = z.object({
   systemPromptHash: z.string().optional(),
   promptHead: z.string().optional(),
   agentType: z.string().optional(),
+  resolvedAgentType: z.string().optional(),
 });
 
 export const SubagentSucceededPayloadSchema = z.object({

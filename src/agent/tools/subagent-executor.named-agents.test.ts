@@ -190,6 +190,9 @@ describe('SubagentExecutor named-agent dispatch', () => {
     const forkArgs = forkSubagent.mock.calls[0]?.[0];
     expect(forkArgs.config.systemPrompt).toBe('You are the research agent system prompt.');
     expect(forkArgs.agentType).toBe('research-agent');
+    // A resolved registered type is threaded separately from the render label,
+    // for clean telemetry grouping.
+    expect(forkArgs.resolvedAgentType).toBe('research-agent');
 
     // Allowlist reaches the child provider factory in AFK runtime names.
     expect(factoryCalls).toHaveLength(1);
@@ -301,6 +304,10 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkArgs.config.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
     expect(factoryCalls[0]?.['allowedTools']).toBeUndefined();
     expect(forkArgs.agentType).toBe('plain dispatch');
+    // No registered agent resolved → resolvedAgentType stays absent, so
+    // telemetry can tell a bare dispatch from a named one (which agentType,
+    // being a render-label fallback, cannot).
+    expect(forkArgs.resolvedAgentType).toBeUndefined();
   });
 
   describe('nested-dispatch scope gate', () => {

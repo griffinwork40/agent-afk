@@ -608,6 +608,12 @@ export class SubagentExecutor implements SubagentControl {
           : (parsed.id_prefix && parsed.id_prefix !== 'agent-tool')
             ? stripEscapeSequences(parsed.id_prefix).replace(/[\r\n]+/g, ' ').trim() || 'agent'
             : stripEscapeSequences(parsed.prompt).replace(/[\r\n]+/g, ' ').slice(0, 40).trim() || 'agent',
+        // resolvedAgentType: the clean, enumerable counterpart to the agentType
+        // render label above — set ONLY when the dispatch named an agent_type
+        // that resolved to a registry entry. Absent for bare/id_prefix/prompt
+        // dispatches, so telemetry can distinguish a real named-agent dispatch
+        // from a render-label fallback (which agentType alone cannot).
+        ...(namedAgent !== undefined ? { resolvedAgentType: namedAgent.name } : {}),
         // Forensic prompt slice for the `subagent_lifecycle.started` event: sanitized
         // like agentType but kept at 80 chars (the emit in subagent.ts re-clamps to
         // 80 and drops it when blank), so real CLI/daemon dispatches carry WHAT the

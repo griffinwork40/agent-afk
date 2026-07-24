@@ -243,6 +243,16 @@ export interface ForkSubagentOptions<T = unknown> {
    */
   agentType: string;
   /**
+   * The resolved *registered* agent type for this fork — the clean, enumerable
+   * counterpart to the {@link agentType} render label. Callers set this ONLY
+   * when the dispatch named an `agent_type` that resolved to a registry entry
+   * (see SubagentExecutor). Absent for bare/unnamed dispatches, compose node
+   * labels, and skill id_prefix forks. Flows verbatim into the
+   * `subagent_lifecycle.started` trace event and the routing-decision row so
+   * cross-session telemetry can group by real type without the label noise.
+   */
+  resolvedAgentType?: string;
+  /**
    * Optional parent identifier for the renderer's nesting machinery. When
    * provided, overrides the default of `parent.sessionId`. Used by the
    * `compose` tool to pass its own `tool_use_id` so spawned subagents render
@@ -944,6 +954,7 @@ export class SubagentManager {
     // otherwise produce an empty Agent() label / empty agentContext anchor
     // rather than the intended fallback (idPrefix / parent.sessionId).
     const effectiveAgentType = options.agentType?.trim() || undefined;
+    const effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
     const effectiveParentId = options.parentId?.trim() || undefined;
     const handle = new SubagentHandleImpl<T>(
       id,
@@ -1026,6 +1037,10 @@ export class SubagentManager {
         ? { promptHead: options.promptHead.slice(0, 80) }
         : {}),
       ...(effectiveAgentType ? { agentType: effectiveAgentType } : {}),
+      // resolvedAgentType: the clean registered type (set only for named
+      // dispatches). Carried separately from the agentType render label so a
+      // trace reader can group by real type without the label-fallback noise.
+      ...(effectiveResolvedAgentType ? { resolvedAgentType: effectiveResolvedAgentType } : {}),
     });
 
     await appendRoutingDecision({
@@ -1034,6 +1049,10 @@ export class SubagentManager {
       id_prefix: options.idPrefix,
       model: modelString,
       parent_session_id: options.parent.sessionId,
+      // Persist the resolved registered type into routing-decisions.jsonl so
+      // "which agent types get dispatched, how often" is a one-line query on
+      // the durable telemetry stream (undefined is dropped at write time).
+      resolved_agent_type: effectiveResolvedAgentType,
     });
 
     return handle;
