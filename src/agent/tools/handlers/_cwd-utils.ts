@@ -139,7 +139,20 @@ function computeContainment(
   for (const root of roots) {
     const realRoot = realpathRoot(root);
     const rel = path.relative(realRoot, realAbs);
-    if (!rel.startsWith('..')) {
+    // Invariant: `!rel.startsWith('..')` alone is NOT a sufficient containment
+    // test on Windows. When realRoot and realAbs sit on different drives — e.g.
+    // root on `C:`, and a drive-relative input like `/etc` resolving to `D:\etc`
+    // (or a drive-less `\etc`) — `path.win32.relative` returns a DRIVE-QUALIFIED
+    // ABSOLUTE string (`D:\etc`, `\etc`) instead of a `..\`-prefixed relative
+    // one. The bare startsWith('..') check then reads that as "inside the root"
+    // and wrongly admits every escaping absolute path (grep/read/write/glob/
+    // list-directory all failed their "rejects absolute path outside cwd" test
+    // on the Windows CI matrix for exactly this reason). Guard with
+    // `!path.isAbsolute(rel)`: path.relative only returns an absolute path when
+    // the two inputs share no common root — precisely the escape case. On POSIX,
+    // relative() between two absolute paths is never absolute, so this is a
+    // no-op there and cannot regress the green Linux/macOS matrices.
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
       return { restricted: false, resolved: abs, roots };
     }
   }
