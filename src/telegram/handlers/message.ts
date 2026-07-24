@@ -519,6 +519,15 @@ export class MessageHandler {
       return;
     }
 
+    // Prepend a system-trusted sender marker in group/supergroup chats so the
+    // model can tell participants apart (the whole group shares one per-chat
+    // session). Byte-identical no-op in private chats. Computed AFTER the
+    // slash-command check above (commands need the raw leading slash) and used
+    // for pending elicitation, enqueue, and processOne paths. The tag-only gate
+    // below still uses raw text + entity offsets for addressed-to-bot checks.
+    // See sender-attribution.ts.
+    const attributedMessageText = senderPrefix((ctx.message as Message.TextMessage).from, ctx.chat?.type) + messageText;
+
     // Answer consumed by active ask_question elicitation — never reaches
     // session message queue. Intercept BEFORE the session.state check so
     // that elicitation replies are never swallowed by the busy-queue branch.
@@ -546,14 +555,14 @@ export class MessageHandler {
       if (this.ledgerOriginatedPendingChats.has(chatId)) {
         this.pendingElicitations.delete(chatId);
         this.ledgerOriginatedPendingChats.delete(chatId);
-        elicitResolver(messageText);
+        elicitResolver(attributedMessageText);
         return;
       }
       // Case 2: session-local — fire only when the session is genuinely busy.
       const existingSession = this.sessionManager.getSessionIfExists(chatId);
       if (existingSession && existingSession.state !== 'idle') {
         this.pendingElicitations.delete(chatId);
-        elicitResolver(messageText);
+        elicitResolver(attributedMessageText);
         return;
       }
       // Stale entry — session was reset while elicitation was in flight.
@@ -611,13 +620,7 @@ export class MessageHandler {
         this.log('Failed to register chat commands:', err)
       );
 
-      // Prepend a system-trusted sender marker in group/supergroup chats so the
-      // model can tell participants apart (the whole group shares one per-chat
-      // session). Byte-identical no-op in private chats. Computed AFTER the
-      // addressing / elicitation checks above (those need the raw text + entity
-      // offsets) and threaded to BOTH the enqueue and processOne paths so a
-      // queued turn carries the same attribution. See sender-attribution.ts.
-      const content = senderPrefix((ctx.message as Message.TextMessage).from, ctx.chat?.type) + messageText;
+      const content = attributedMessageText;
 
       if (session.state !== 'idle' || alreadyClaimed) {
         const depth = this.enqueueMessage(chatId, ctx, content);

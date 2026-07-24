@@ -31,10 +31,15 @@ import { MessageHandler } from './message.js';
 type ChatType = 'private' | 'group' | 'supergroup';
 interface Sender { id?: number; first_name?: string; last_name?: string; username?: string }
 
-function makeHandler(sessionState: 'idle' | 'streaming' = 'idle'): MessageHandler {
+function makeHandler(
+  sessionState: 'idle' | 'streaming' = 'idle',
+  existingSessionState: 'idle' | 'streaming' | undefined = undefined,
+): MessageHandler {
   const sessionManager = {
     getSession: vi.fn().mockResolvedValue({ state: sessionState }),
-    getSessionIfExists: vi.fn().mockReturnValue(undefined),
+    getSessionIfExists: vi.fn().mockReturnValue(
+      existingSessionState ? { state: existingSessionState } : undefined,
+    ),
     resetSession: vi.fn(),
   };
   const bot = { telegram: { sendMessage: vi.fn() }, command: vi.fn(), on: vi.fn() };
@@ -130,6 +135,36 @@ describe('sender attribution — text (handle)', () => {
       messageQueues: Map<number, Array<{ type: string; text?: string }>>;
     }).messageQueues;
     expect(queues.get(-100)?.[0]?.text).toBe('[from Alice (id 7)]: hi');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  it('attributes a pending elicitation reply before resolving', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(-100, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'blue', type: 'group', from: { id: 7, first_name: 'Alice' },
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('[from Alice (id 7)]: blue');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  it('leaves a private pending elicitation reply byte-identical', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(500, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: 500, text: 'blue', type: 'private', from: { id: 7, first_name: 'Alice' },
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('blue');
     expect(mockStreamResponse).not.toHaveBeenCalled();
   });
 });
