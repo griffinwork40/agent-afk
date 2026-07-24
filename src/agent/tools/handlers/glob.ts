@@ -2,8 +2,8 @@
  * Handler for the `glob` tool.
  *
  * Recursively matches files against a glob pattern within a directory.
- * Supports basic glob patterns: * (any filename chars), ** (any path segment),
- * and ? (single char). Returns up to 500 results.
+ * Supports basic glob patterns: * (any chars within a segment), ** (zero or
+ * more path segments — including zero), and ? (single char). Up to 500 results.
  *
  * By default, recursion skips node_modules/.git/.hg/.svn; naming such a
  * directory as a literal pattern segment opts back into searching it.
@@ -40,62 +40,64 @@ function literalPatternSegments(pattern: string): Set<string> {
 }
 
 /**
- * Check if a relative path matches a glob pattern.
- * Supports:
- *   - * matches any characters except /
- *   - ** matches zero or more path segments (any directories)
- *   - ? matches a single character except /
+ * Compile a glob pattern to an anchored RegExp.
+ *
+ * Metacharacters: `*` matches a run of non-`/` chars (one path segment); `?` a
+ * single non-`/` char; `**` a globstar of ZERO or more whole path segments. A
+ * globstar-plus-separator (`**\/`) compiles to an OPTIONAL prefix `(?:.*\/)?`,
+ * so it collapses to zero segments: `**\/*.ts` matches a root-level `foo.ts`
+ * and `src/**\/*.ts` matches `src/foo.ts`. (The old split-on-`**` matcher made
+ * the adjacent separator a required literal, so it silently dropped every match
+ * at the search root.) Other regex-significant chars are escaped; a non-segment
+ * `**` (e.g. `a**b`) degrades to `*`. Backslashes are normalized to `/`.
  */
-function matchesGlobPattern(relPath: string, pattern: string): boolean {
-  // Normalize paths to use forward slashes
-  const normalizedPath = relPath.replace(/\\/g, '/');
-  const normalizedPattern = pattern.replace(/\\/g, '/');
+function globToRegExp(pattern: string): RegExp {
+  const p = pattern.replace(/\\/g, '/');
+  const specials = new Set(['.', '+', '^', '$', '{', '}', '(', ')', '|', '[', ']']);
+  let re = '';
+  let i = 0;
+  const n = p.length;
 
-  // Handle ** pattern which can match multiple directory levels
-  if (normalizedPattern.includes('**')) {
-    const patternParts = normalizedPattern.split('**');
-    let currentPos = 0;
+  while (i < n) {
+    const ch = p.charAt(i);
 
-    for (let i = 0; i < patternParts.length; i++) {
-      const part = patternParts[i] ?? '';
+    // A run of '*': globstar (crosses '/') when it stands as a whole path
+    // segment; otherwise a single-segment wildcard.
+    if (ch === '*') {
+      let j = i + 1;
+      while (j < n && p.charAt(j) === '*') j++;
+      const isGlobstar = j - i >= 2;
+      const boundaryBefore = i === 0 || p.charAt(i - 1) === '/';
+      const boundaryAfter = j === n || p.charAt(j) === '/';
 
-      // Convert the non-** part to a regex
-      const partRegex = convertGlobPartToRegex(part);
-
-      if (i === 0) {
-        // First part must match from the beginning
-        const match = normalizedPath.match(new RegExp(`^${partRegex}`));
-        if (!match) return false;
-        currentPos = match[0].length;
-      } else if (i === patternParts.length - 1) {
-        // Last part must match to the end
-        const regex = new RegExp(`${partRegex}$`);
-        if (!normalizedPath.slice(currentPos).match(regex)) return false;
+      if (isGlobstar && boundaryBefore && boundaryAfter) {
+        if (j === n) {
+          // Trailing '**': the rest of the path at any depth (including none).
+          re += '.*';
+        } else {
+          // '**/': make "segments + separator" optional so the globstar can
+          // collapse to zero segments (the root-level match fix).
+          re += '(?:.*/)?';
+          j++; // absorb the '/' that follows the globstar
+        }
       } else {
-        // Middle parts must match somewhere after the current position
-        const regex = new RegExp(partRegex);
-        const match = normalizedPath.slice(currentPos).match(regex);
-        if (!match) return false;
-        const matchIndex = match.index ?? 0;
-        currentPos += matchIndex + match[0].length;
+        re += '[^/]*';
       }
+      i = j;
+      continue;
     }
-    return true;
+
+    if (ch === '?') {
+      re += '[^/]';
+      i++;
+      continue;
+    }
+
+    re += specials.has(ch) ? `\\${ch}` : ch;
+    i++;
   }
 
-  // Simple pattern without **
-  const regex = new RegExp(`^${convertGlobPartToRegex(normalizedPattern)}$`);
-  return regex.test(normalizedPath);
-}
-
-/**
- * Convert a non-** glob pattern segment to regex.
- */
-function convertGlobPartToRegex(part: string): string {
-  return part
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]');
+  return new RegExp(`^${re}$`);
 }
 
 /**
@@ -107,6 +109,8 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
   // Directory names the caller explicitly named as literal pattern segments
   // are exempt from default pruning (opt back into node_modules/.git/etc.).
   const literalSegments = literalPatternSegments(pattern);
+  // Compile the pattern once; the walker tests every entry against it.
+  const matcher = globToRegExp(pattern);
 
   async function walk(currentPath: string, relPath: string): Promise<boolean> {
     if (matches.length >= maxResults) {
@@ -125,7 +129,7 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
         const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
         // Test if this entry matches the pattern
-        if (matchesGlobPattern(entryRel, pattern)) {
+        if (matcher.test(entryRel)) {
           matches.push(entryRel);
         }
 
