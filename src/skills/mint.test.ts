@@ -11,7 +11,10 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { loadSkillPrompts } from './_lib/prompt-loader.js';
 import { getSkill, registerSkill } from './index.js';
+import type { SkillExecutionContext } from './index.js';
+import { SubagentManager } from '../agent/subagent.js';
 import type { MintState } from './mint/index.js';
+import type { TraceWriter } from '../agent/trace/index.js';
 import type { IAgentSession, OutputEvent, SubagentProgressMeta } from '../agent/types.js';
 import { runWithSink } from '../agent/_lib/skill-sink-channel.js';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
@@ -994,6 +997,62 @@ describe('Mint Skill', () => {
       );
       for (const v of verifyOptions) {
         expect(v.phaseRole).not.toBe('read-only');
+      }
+    });
+  });
+
+  describe('Witness-trace coverage — traceWriter threading', () => {
+    // Regression for the gap where /mint phase forks emitted NO
+    // subagent_lifecycle events: their fork managers were constructed without
+    // the session's trace writer. Every phase must thread ctx.traceWriter into
+    // its SubagentManager so the phase subagent is visible in the witness trace.
+    it('threads ctx.traceWriter into every phase fork manager', async () => {
+      const skill = getSkill('mint');
+      const mockSession: IAgentSession = {
+        sessionId: 'test-session',
+        sendMessage: vi.fn(),
+        interrupt: vi.fn(),
+        close: vi.fn(),
+        getInputStreamRef: vi.fn(),
+        abortSignal: new AbortController().signal,
+      };
+      const traceWriter = { write: vi.fn() } as unknown as TraceWriter;
+
+      // autoApprove runs spec → research → plan → parallelize → build → verify →
+      // heal loop; every phase constructs a fork manager along the way.
+      await skill.handler(
+        { idea: 'Test feature', autoApprove: true },
+        mockSession,
+        { traceWriter } as unknown as SkillExecutionContext,
+      );
+
+      // The mocked SubagentManager is a vi.fn, so its constructor calls are
+      // recorded. Assert EVERY phase manager received the writer.
+      const ctorCalls = vi.mocked(SubagentManager).mock.calls;
+      expect(ctorCalls.length, 'at least one phase fork manager constructed').toBeGreaterThan(0);
+      for (const [opts] of ctorCalls) {
+        expect((opts as { traceWriter?: unknown } | undefined)?.traceWriter).toBe(traceWriter);
+      }
+    });
+
+    it('omits traceWriter when ctx has none (no writer available)', async () => {
+      const skill = getSkill('mint');
+      const mockSession: IAgentSession = {
+        sessionId: 'test-session',
+        sendMessage: vi.fn(),
+        interrupt: vi.fn(),
+        close: vi.fn(),
+        getInputStreamRef: vi.fn(),
+        abortSignal: new AbortController().signal,
+      };
+
+      // No ctx → ctx?.traceWriter is undefined → the spread drops the key.
+      await skill.handler({ idea: 'Test feature', autoApprove: true }, mockSession);
+
+      const ctorCalls = vi.mocked(SubagentManager).mock.calls;
+      expect(ctorCalls.length).toBeGreaterThan(0);
+      for (const [opts] of ctorCalls) {
+        expect((opts as { traceWriter?: unknown } | undefined)?.traceWriter).toBeUndefined();
       }
     });
   });

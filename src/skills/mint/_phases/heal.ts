@@ -5,6 +5,7 @@
  */
 
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
+import type { TraceWriter } from '../../../agent/trace/index.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
@@ -35,6 +36,9 @@ export async function runHealPhase(
   // forwarded to the re-run verify phase so both inherit reads ⊇ the parent
   // session's. Undefined leaves cwd-derivation intact.
   parentReadRoots?: string[],
+  // Witness layer: parent trace writer (ctx.traceWriter) so the heal fork AND
+  // the re-run verify subagents emit subagent_lifecycle events. Mirrors research.ts.
+  traceWriter?: TraceWriter,
 ): Promise<{
   healed: boolean;
   newHealIterations: number;
@@ -97,6 +101,7 @@ export async function runHealPhase(
     const manager = new SubagentManager({
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
       ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+      ...(traceWriter !== undefined ? { traceWriter } : {}),
     });
     const healHandle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId },
@@ -164,6 +169,7 @@ export async function runHealPhase(
       skillCallId,
       defaultSubagentModel,
       parentReadRoots,
+      traceWriter,
     );
 
     return {

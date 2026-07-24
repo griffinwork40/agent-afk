@@ -8,6 +8,7 @@ import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
+import type { TraceWriter } from '../../../agent/trace/index.js';
 
 export async function runResearchPhase(
   spec: string,
@@ -22,6 +23,11 @@ export async function runResearchPhase(
   // by the mint handler); seeds the fork manager's parentReadRoots so the phase
   // subagent's reads ⊇ the parent session's. Undefined leaves cwd-derivation.
   parentReadRoots?: string[],
+  // Witness layer: the parent session's trace writer (from ctx.traceWriter).
+  // Without it this phase's fork manager has no writer, so its subagent emits
+  // NO subagent_lifecycle events — mint phases were the last dispatch path
+  // still invisible in the trace. Mirrors the root/skill-fork managers.
+  traceWriter?: TraceWriter,
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const researchPrompt = prompts['research.md'];
@@ -34,6 +40,7 @@ export async function runResearchPhase(
   const manager = new SubagentManager({
     ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+    ...(traceWriter !== undefined ? { traceWriter } : {}),
   });
   const researchHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },

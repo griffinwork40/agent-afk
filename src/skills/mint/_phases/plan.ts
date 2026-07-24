@@ -8,6 +8,7 @@ import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
+import type { TraceWriter } from '../../../agent/trace/index.js';
 
 export async function runPlanPhase(
   spec: string,
@@ -22,6 +23,9 @@ export async function runPlanPhase(
   // by the mint handler); seeds the fork manager's parentReadRoots so the phase
   // subagent's reads ⊇ the parent session's. Undefined leaves cwd-derivation.
   parentReadRoots?: string[],
+  // Witness layer: parent trace writer (ctx.traceWriter) so this phase's fork
+  // emits subagent_lifecycle events. Mirrors research.ts.
+  traceWriter?: TraceWriter,
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const planPrompt = prompts['plan.md'];
@@ -34,6 +38,7 @@ export async function runPlanPhase(
   const manager = new SubagentManager({
     ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+    ...(traceWriter !== undefined ? { traceWriter } : {}),
   });
   const planHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
