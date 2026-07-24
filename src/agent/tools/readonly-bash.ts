@@ -337,6 +337,16 @@ function baseName(cmd: string): string {
   return (cmd.split('/').pop() ?? cmd).replace(/^\\+/, '');
 }
 
+// Wrapper options that consume a SEPARATE operand token (the `--opt=val` attached
+// form needs no extra skip). If the operand isn't consumed, it is mistaken for the
+// wrapped command and the real verb is missed (`env -u FOO git stash`,
+// `xargs --max-args 1 git tag -d`). Kept explicit per `env`/`xargs --help`.
+const ENV_OPERAND_OPTS = new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string']);
+const XARGS_OPERAND_OPTS = new Set([
+  '-a', '--arg-file', '-E', '--eof', '-I', '--replace', '-i', '-L', '--max-lines', '-l',
+  '-n', '--max-args', '-P', '--max-procs', '-s', '--max-chars', '-d', '--delimiter', '--process-slot-var',
+]);
+
 /**
  * Split a command into word-token segments, quote-aware. Single-quoted runs are
  * literal; double-quoted runs are literal EXCEPT `$(…)` / backtick substitutions
@@ -495,17 +505,25 @@ function resolveSegment(rawTokens: readonly string[], vars: Map<string, string>)
     // Consume the wrapper's own flags/assignments so the NEXT token is the command.
     if (base === 'env') {
       // `env` may set VAR=val before the command — record them so a later `$VAR`
-      // command token resolves (`env g=git $g push`), and skip env's own flags.
-      while (idx < tokens.length && (/^[A-Za-z_]\w*=/.test(tokens[idx]!) || tokens[idx]!.startsWith('-'))) {
-        const am = /^([A-Za-z_]\w*)=(.*)$/.exec(tokens[idx]!);
-        if (am !== null) vars.set(am[1]!, am[2]!);
+      // command token resolves (`env g=git $g push`) — and consume its flags,
+      // including operand-taking ones (`env -u FOO git …`, `env -C /dir git …`).
+      while (idx < tokens.length) {
+        const t = tokens[idx]!;
+        const am = /^([A-Za-z_]\w*)=(.*)$/.exec(t);
+        if (am !== null) {
+          vars.set(am[1]!, am[2]!);
+          idx++;
+          continue;
+        }
+        if (!t.startsWith('-')) break;
         idx++;
+        if (ENV_OPERAND_OPTS.has(t) && idx < tokens.length) idx++; // consume separate operand
       }
     } else if (base === 'xargs') {
       while (idx < tokens.length && tokens[idx]!.startsWith('-')) {
         const f = tokens[idx]!;
         idx++;
-        if (/^-[In]$/.test(f) && idx < tokens.length) idx++; // -I {} / -n N consume an arg
+        if (XARGS_OPERAND_OPTS.has(f) && idx < tokens.length) idx++; // -n N / --max-args N / -I {} …
       }
     } else if (base === 'timeout') {
       while (idx < tokens.length && tokens[idx]!.startsWith('-')) {
@@ -619,19 +637,23 @@ function curlSegmentMutating(seg: CmdSegment): boolean {
 // Backstop (#577): a git repository-mutating verb reached via a construct the
 // tokenizer could NOT resolve to command position — a compound command
 // (`{ git push; }`, `for … do git push`), an escaped name (`\git push`), or a
-// mis-parsed wrapper. `gitSegmentReason` handles git in command position (and
-// correctly ALLOWS a mutating verb that is merely a read subcommand's ARG, e.g.
-// `git log -S push`); this catches the residual where a bare `git` token is
-// IMMEDIATELY followed by an unambiguous mutating subcommand while git was not
-// the segment's command. A quoted `"git push"` recon mention is a SINGLE token
-// (never split into `git` + `push`), so this cannot re-introduce the over-block
-// #574 fixed. Only the always-mutating verbs are matched (not the conditional
-// tag/branch/remote/worktree/stash forms), keeping the change strictly additive.
-function hiddenGitMutation(tokens: readonly string[]): boolean {
+// wrapper whose operand parsing fell short (`env -u X git stash`,
+// `xargs --max-args 1 git tag -d`). For each bare `git` token that is NOT the
+// segment's command, re-run the SAME subcommand classifier on the following
+// tokens, so conditional mutations (stash / tag -d / branch -D / remote add /
+// worktree remove) are caught too — not just the always-mutating verbs.
+// `gitSegmentReason` correctly ALLOWS a mutating verb that is merely a read
+// subcommand's ARG (`git log -S push`), and a quoted `"git push"` recon mention
+// is a SINGLE token (never split into `git` + `push`), so this cannot
+// re-introduce the over-block #574 fixed. Returns the reason, or null.
+function hiddenGitMutation(tokens: readonly string[]): string | null {
   for (let i = 0; i < tokens.length - 1; i++) {
-    if (baseName(tokens[i]!) === 'git' && GIT_MUTATING_SUBCMDS.has(tokens[i + 1]!)) return true;
+    if (baseName(tokens[i]!) === 'git') {
+      const reason = gitSegmentReason(tokens.slice(i + 1));
+      if (reason !== null) return reason;
+    }
   }
-  return false;
+  return null;
 }
 
 /**
@@ -646,7 +668,8 @@ function tokenizedSegmentReason(command: string): string | null {
   for (const rawTokens of tokenizeSegments(command)) {
     const seg = resolveSegment(rawTokens, vars);
     if (seg === null) {
-      if (hiddenGitMutation(rawTokens)) return 'git repository mutation';
+      const hidden = hiddenGitMutation(rawTokens);
+      if (hidden !== null) return hidden;
       continue;
     }
     const base = baseName(seg.command);
@@ -656,7 +679,8 @@ function tokenizedSegmentReason(command: string): string | null {
       continue; // resolved git command judged READ — accounted for, skip backstop
     }
     if (base === 'curl' && curlSegmentMutating(seg)) return 'curl write method (POST/PUT/PATCH/DELETE)';
-    if (hiddenGitMutation(rawTokens)) return 'git repository mutation';
+    const hidden = hiddenGitMutation(rawTokens);
+    if (hidden !== null) return hidden;
   }
   return null;
 }

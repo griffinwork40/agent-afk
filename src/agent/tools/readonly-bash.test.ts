@@ -742,6 +742,43 @@ describe('classifyBashCommand', () => {
     });
   });
 
+  // ── #577 review (Codex P2): wrapper options that take a SEPARATE operand ───
+  // `env -u NAME`/`-C DIR` and `xargs --max-args N`/`-n N`/`-L N` consume an
+  // operand; if it isn't consumed the operand is mistaken for the wrapped command
+  // and the real git verb is missed. Compounded because the backstop covered only
+  // always-mutating verbs — so CONDITIONAL mutations (stash, tag -d, branch -D,
+  // remote add, worktree remove) reached via such a wrapper must also block.
+  describe('#577 wrapper operand consumption + conditional-mutation backstop', () => {
+    const blocked: Array<[string, string]> = [
+      ['env -u FOO git stash', 'env -u <name> then git stash'],
+      ['env --unset FOO git stash', 'env --unset <name> then git stash'],
+      ['env -C /dir git commit -m x', 'env -C <dir> then git commit'],
+      ['find . | xargs --max-args 1 git tag -d v1', 'xargs --max-args then git tag -d'],
+      ['find . | xargs -n 1 git tag -d v1', 'xargs -n <n> then git tag -d'],
+      ['find . | xargs -L 1 git branch -D old', 'xargs -L then git branch -D'],
+      ['find . | xargs --max-procs 4 git worktree remove x', 'xargs --max-procs then git worktree remove'],
+      ['eval git stash', 'eval then conditional git stash'],
+      ['{ git tag -d v1; }', 'brace group then git tag -d'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+    // The READ forms through the same wrappers stay allowed.
+    const allowed: string[] = [
+      'env -C /repo git log --oneline',
+      'env -u GIT_DIR git status',
+      'find . | xargs -n1 git log --oneline',
+      'find . | xargs -I {} git show {}',
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+  });
+
   it('treats empty command as non-mutating', () => {
     expect(classifyBashCommand('').mutating).toBe(false);
     expect(classifyBashCommand('   ').mutating).toBe(false);
