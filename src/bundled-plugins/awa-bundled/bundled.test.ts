@@ -44,13 +44,29 @@ const PINNED_HASHES = {
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
   // Wave 3.5 — prose-consistency fix only; no behavior change to the guard.
+  // Hash re-bumped: ported the private-plugin refinements — Wave 3.5 now names
+  // the verifier type explicitly (`subagent_type: "research-agent"`), adds the
+  // re-rank cap (escalate to the user if OVERRIDE recurs after 2 re-ranks),
+  // scopes the guard OFF when `dissent = true`, notes its CONFIRMED/OVERRIDE
+  // verdicts are internal to Wave 3.5 (distinct from shadow-verify's vocab),
+  // and states the 3-way terminal decision (original / ≠original+≥2-critic
+  // convergence / ≠original+1-critic) explicitly. No frontmatter change
+  // (context: load preserved). Bundled-only body; no upstream back-port row.
   'devils-advocate':
-    '8a729f40297e43f33aa84f80c66f21c9a46fd8b610727601f4e13dc597be633b',
+    'd301929f02180b742700060d0de094b84ffafab9e16c771b20ee0eba76cd1238',
   // diagnose is bundled-only (no upstream example-plugin counterpart). It ships
   // as the agent-driven /diagnose (context: fork) that replaced the retired
   // vendored TS orchestrator (src/skills/diagnose/). Hash bumps need no parallel
   // PR — document the change in the commit message instead.
-  diagnose: '999ba8306f264d06a04676ab477cbf939637370afeb982cbc41814345eec4159',
+  // Hash bumped: ported the private-plugin refinement — the per-hypothesis
+  // worktree step now dispatches with `isolation: "worktree"` instead of the
+  // manual `worktree` create/`cwd`/remove dance. The prior copy asserted "the
+  // `agent` tool has NO `isolation` parameter", which is FALSE for the current
+  // codebase (schemas.ts defines the isolation enum ["none","worktree"];
+  // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
+  // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
+  // correction; frontmatter (context: fork) unchanged.
+  diagnose: '9a54f97470dce8adec5f1456f881aebe1bb550ee6f201ab9d63cccfd8a316096',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -99,8 +115,18 @@ const PINNED_HASHES = {
   // Hash re-bumped during PR #187 review: the Merge section now enumerates the
   // new UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER verdict states — prose-
   // consistency fix only; no behavior change to the composition-axis guard.
+  // Hash re-bumped: ported the private-plugin refinements — the Merge section
+  // now frames UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER as produced by
+  // the Composition-axis guard (not individual verifiers) with the specific
+  // tags [needs-human-review: composition boundary unchecked] / [echo-chamber
+  // suspected]; the guard gains the REFUTED-exemption parenthetical (a refuted
+  // claim already halts action, so its boundary-blindness is safe) and the
+  // echo-chamber loop-cap escalation (UNVERIFIED-ECHO-CHAMBER [loop-cap-reached]
+  // when the 3-round cap is exhausted). Bundled frontmatter/description
+  // preserved verbatim (kept the literal-quote description, NOT the reference's
+  // escaped-quote form).
   'shadow-verify':
-    '1a0a6e75a09c9f366ddfa8c15f6a1150f6f3fcb6c30aebbf30f6df8d1463d30e',
+    '01bddcdd5446943f6fe4694a2cdbb669ab194dc0765d3630899755bc65530b9a',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The

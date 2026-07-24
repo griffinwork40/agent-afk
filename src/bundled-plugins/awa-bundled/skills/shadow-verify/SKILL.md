@@ -18,15 +18,18 @@ When a sub-agent (or wave) returns investigation findings, code-review conclusio
 - `CONFIRMED` → surface the claim as validated.
 - `REFUTED` → replace the claim with the verifier's corrected finding, annotated `[was: confident, now: refuted]`, and show it alongside the original with evidence. Do not act until the conflict is resolved.
 - `UNVERIFIABLE` → surface with a `[needs-human-review]` tag rather than passing it through silently.
-- `UNVERIFIED-COMPOSITION` / `UNVERIFIED-ECHO-CHAMBER` (from the composition-axis guard below) → surface with a `[needs-human-review]` tag naming the missed boundary; do not pass through as validated.
+
+*The two verdicts below are **not** emitted by individual verifiers — they are produced by the Composition-axis guard (defined below) and handled here:*
+- `UNVERIFIED-COMPOSITION` → surface with `[needs-human-review: composition boundary unchecked]`; do not act until a boundary read confirms or refutes the claim.
+- `UNVERIFIED-ECHO-CHAMBER` → surface with `[needs-human-review: echo-chamber suspected]`; require at least one verifier to re-derive from outside the cited artifact before acting.
 
 Bound the loop: at most 3 verification rounds per session. Claims still unresolved after 3 rounds are escalated to the user, never silently dropped.
 
 **Composition-axis guard (echo-chamber check):**
 A verifier that re-derives a claim by re-reading the *same* file/region the original sub-agent cited has confirmed the citation, not the claim — it can be blind to composition-boundary failures (temporal interleaving, state threading, render/event-pipeline ordering, scrollback/call-graph adjacency) that only manifest outside the artifact's boundary. Before accepting a `CONFIRMED`:
 1. Read each verifier's `evidence_base`.
-2. For any **artifact-internal `CONFIRMED`**, require one composition-boundary read (≥1 upstream caller + ≥1 downstream consumer, plus the pipeline that interleaves the artifact with siblings) before merging. If a missed boundary surfaces, downgrade to `UNVERIFIED-COMPOSITION` and tag `[needs-human-review]`.
-3. **Echo-chamber guard:** if ≥2 verifiers cite the *same* in-repo artifact as primary evidence with no external referent, flag `UNVERIFIED-ECHO-CHAMBER` regardless of verdict and require one verifier to read outside that artifact's boundary.
+2. For any **artifact-internal `CONFIRMED`**, require one composition-boundary read (≥1 upstream caller + ≥1 downstream consumer, plus the pipeline that interleaves the artifact with siblings) before merging. If a missed boundary surfaces, downgrade to `UNVERIFIED-COMPOSITION` and tag `[needs-human-review]`. (An artifact-internal `REFUTED` is intentionally exempt: a refutation already halts action under the Merge rule above, so its boundary-blindness cannot drive a wrong commit — the asymmetry is safe by construction.)
+3. **Echo-chamber guard:** if ≥2 verifiers cite the *same* in-repo artifact as primary evidence with no external referent, flag `UNVERIFIED-ECHO-CHAMBER` regardless of verdict and require one verifier to read outside that artifact's boundary. If the 3-round loop cap is already exhausted when this fires, escalate to the user as `UNVERIFIED-ECHO-CHAMBER [loop-cap-reached]` — do not dispatch a new round.
 
 **Scope guard:** skip the composition check when the claim cites an external referent (RFC, spec, threat model, upstream-API contract) that survives independently of the repo, or when the artifact is purely local with no composition surface. Runs once per artifact, not on every cite.
 
