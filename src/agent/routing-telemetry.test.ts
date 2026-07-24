@@ -59,3 +59,23 @@ describe('buildRoutingDecisionRow — session identity', () => {
     expect('actor' in row).toBe(false);
   });
 });
+
+describe('buildRoutingDecisionRow — resolved_agent_type', () => {
+  it('carries the resolved registered type on a named dispatch', () => {
+    const row = buildRoutingDecisionRow({
+      event: 'subagent.dispatched',
+      subagent_id: 'c1',
+      resolved_agent_type: 'research-agent',
+    });
+    expect(row['resolved_agent_type']).toBe('research-agent');
+  });
+
+  it('omits resolved_agent_type for a bare/unnamed dispatch (undefined dropped)', () => {
+    const row = buildRoutingDecisionRow({
+      event: 'subagent.dispatched',
+      subagent_id: 'c2',
+      resolved_agent_type: undefined,
+    });
+    expect('resolved_agent_type' in row).toBe(false);
+  });
+});

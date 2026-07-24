@@ -68,6 +68,16 @@ export interface RoutingDecisionEntry {
   /** Model name when relevant (dispatched events). */
   model?: string | undefined;
   /**
+   * Resolved *registered* agent type on `subagent.dispatched` rows — set only
+   * when the dispatch named an `agent_type` that resolved to a registry entry
+   * (research-agent, Explore, general-purpose, plugin/user agents). Absent for
+   * bare/unnamed dispatches, compose nodes, and skill id_prefix forks. Lets a
+   * usage query group dispatches by real agent type. Privacy: a
+   * framework-controlled type name validated at registration — not user
+   * content (mirrors `model` / `requested_name`).
+   */
+  resolved_agent_type?: string | undefined;
+  /**
    * Skill dispatch mode for `skill.*` events: "inline" | "fork" | "load".
    * Operational metadata only (no user content) — lets usage queries
    * distinguish in-context `load` dispatches from forked ones.

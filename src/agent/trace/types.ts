@@ -215,8 +215,23 @@ export interface SubagentStartedPayload {
    * `research-agent`, a compose node label, or a prompt-derived slice). Present
    * so a reader can attribute a lifecycle event to a role without cross-refing
    * the routing telemetry. Absent when no label was resolved.
+   *
+   * NOTE: this is a *display label*, not a clean type — it is a 3-leg fallback
+   * (registered name → id_prefix → prompt slice), so telemetry cannot tell a
+   * real `agent_type` dispatch from an id_prefix/prompt-derived one. For that,
+   * use {@link resolvedAgentType}.
    */
   agentType?: string;
+  /**
+   * The resolved *registered* agent type for this fork — set ONLY when the
+   * dispatch named an `agent_type` that resolved to an entry in the agent
+   * registry (builtin/plugin/user). Absent for bare/unnamed dispatches,
+   * compose nodes, and skill-internal id_prefix forks. Unlike {@link agentType}
+   * (a render label), this field carries clean, enumerable semantics: grouping
+   * lifecycle events by it answers "how often was each named agent type
+   * dispatched?" without the render-label noise.
+   */
+  resolvedAgentType?: string;
 }
 
 export interface SubagentSucceededPayload {
