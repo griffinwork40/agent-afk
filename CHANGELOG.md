@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.72.0] - 2026-07-24
+
+### Added
+- attribute inbound group messages with the sender (#685) (67fb8b5)
+
 ## [5.71.1] - 2026-07-23
 
 ### Fixed
