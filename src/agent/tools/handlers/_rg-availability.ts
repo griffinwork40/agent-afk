@@ -3,13 +3,13 @@
  *
  * `@vscode/ripgrep`'s `rgPath` resolves the platform-specific `rg` binary
  * through an optional-dependency package (e.g. `@vscode/ripgrep-linux-x64`).
- * When that optional dependency didn't install — a skipped
- * `pnpm.onlyBuiltDependencies` entry, an arch/platform mismatch, or a
- * corrupted `node_modules` — `rgPath` still resolves to a *string*, but the
- * file it points at is missing or not executable. Spawning it then surfaces
- * as a bare `spawn <rgPath> ENOENT` — an error shape indistinguishable, by
- * the error object alone, from the dead-cwd masquerade `describeSpawnCwdError`
- * already handles (#441).
+ * The grep handler imports that package LAZILY and catches a missing-package
+ * throw at the import site; this check covers the OTHER failure mode — the
+ * package resolved (so `rgPath` is a real string) but the file it points at
+ * is missing or not executable (an arch/platform mismatch, or a corrupted
+ * `node_modules`). Spawning it then surfaces as a bare `spawn <rgPath> ENOENT`
+ * — an error shape indistinguishable, by the error object alone, from the
+ * dead-cwd masquerade `describeSpawnCwdError` already handles (#441).
  *
  * This module translates that failure AFTER it happens: `accessSync` runs
  * only on the error path, so there is no TOCTOU window, no happy-path cost,
@@ -40,8 +40,10 @@ export function describeRgUnavailable(rgPath: string): string | undefined {
     const underlying = err instanceof Error ? err.message : String(err);
     return (
       `ripgrep binary is missing or not executable: ${rgPath} ` +
-      `(a platform optional-dependency for @vscode/ripgrep may not have ` +
-      `installed — check pnpm.onlyBuiltDependencies) — underlying: ${underlying}`
+      `(the @vscode/ripgrep platform optional-dependency for ` +
+      `${process.platform}-${process.arch} may not be installed — e.g. an ` +
+      `install with --no-optional, an unsupported platform/arch, or a ` +
+      `corrupted node_modules) — underlying: ${underlying}`
     );
   }
 }

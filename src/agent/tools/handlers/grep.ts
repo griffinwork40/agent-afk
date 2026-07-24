@@ -19,7 +19,6 @@
  */
 
 import { spawn } from 'child_process';
-import { rgPath } from '@vscode/ripgrep';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { resolveAndContain } from './_cwd-utils.js';
@@ -106,6 +105,28 @@ export function createGrepHandler(cwd?: string): ToolHandler {
 
   if (signal.aborted) {
     return { content: 'Search aborted', isError: true };
+  }
+
+  // Invariant: load `@vscode/ripgrep` LAZILY, not at module top-level. The
+  // package resolves its platform-specific optional-dependency binary AT
+  // MODULE IMPORT and THROWS if that package is absent (a `--no-optional`
+  // install, an unsupported os/cpu, or a corrupted node_modules). A top-level
+  // `import { rgPath }` would let that throw abort PROCESS STARTUP — the
+  // handlers index pulls this module in at tool-registration, so a missing
+  // optional-dep would take down EVERY tool and never reach the graceful
+  // diagnostics below. Importing here, behind a catch, confines the failure to
+  // the grep call and returns the same actionable "ripgrep unavailable" shape
+  // the spawn-error path (describeRgUnavailable) produces for a present-but-
+  // broken binary.
+  let rgPath: string;
+  try {
+    ({ rgPath } = await import('@vscode/ripgrep'));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      content: `Failed to execute grep: ripgrep is unavailable — ${detail}`,
+      isError: true,
+    };
   }
 
   return new Promise((resolve) => {
