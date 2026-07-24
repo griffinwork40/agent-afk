@@ -544,6 +544,241 @@ describe('classifyBashCommand', () => {
     }
   });
 
+  // ── #577 Tier 2: git verbs anchored to SUBCOMMAND position ────────────────
+  // A git verb appearing as a bare ARG (pickaxe value / --grep / help topic) or
+  // behind a `--help` flag must NOT be misread as an invocation — the
+  // over-restriction the tokenizer fixes. Real invocations (incl. the
+  // global-flag-before-verb forms) must still block.
+  describe('#577 Tier 2: git subcommand anchoring', () => {
+    const allowed: string[] = [
+      'git log -S push',
+      'git log -G merge',
+      'git log --grep revert',
+      'git log -S push --oneline',
+      'git log --grep=push',
+      'git help push',
+      'git help commit',
+      'git push --help', // --help ⇒ shows docs, does not push
+      'git commit --help',
+      'git branch --help',
+      // NOTE: `git rm --help` / `git mv --help` are (harmlessly) still blocked —
+      // the bare `rm`/`mv` token trips FS_MUTATING regardless of the git help
+      // flag. A recon agent never needs those; not worth suppressing.
+      'git shortlog -sn',
+      'git log --format="%h %s (push)"', // verb inside a quoted format arg
+      'git -C /dir log -S push',
+      'git show HEAD:file',
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+
+    const blocked: Array<[string, string]> = [
+      ['git push', 'bare git push'],
+      ['git -c x=y commit -m m', 'git -c x=y commit'],
+      ['git -C /p push', 'git -C /p push'],
+      ['git --no-pager reset --hard', 'git --no-pager reset'],
+      ['git log --oneline && git push', 'push after &&'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+        expect(classifyBashCommand(cmd).reason).toBeTruthy();
+      });
+    }
+  });
+
+  // ── #577 Tier 3: no-op wrappers + one-level variable indirection ──────────
+  describe('#577 Tier 3: wrapper + variable indirection resolution', () => {
+    const blocked: Array<[string, string]> = [
+      ['g=git; $g push', 'var-indirected git push'],
+      ['g=git; $g reset --hard', 'var-indirected git reset'],
+      ['g=git && ${g} commit -m x', 'braced var-indirected git commit'],
+      ['env git push', 'env-wrapped git push'],
+      ['sudo git reset --hard', 'sudo-wrapped git reset'],
+      ['command git push origin main', 'command-wrapped git push'],
+      ['/usr/bin/env git push', 'absolute-path env git push'],
+      ['find . | xargs rm', 'xargs rm'],
+      ['find . -print0 | xargs -0 rm -rf', 'xargs -0 rm -rf'],
+      ['env rm -rf x', 'env rm'],
+      ['env FOO=bar rm x', 'env with assignment then rm'],
+      ['command rm x', 'command rm'],
+      ['busybox rm x', 'busybox rm'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+
+    // A wrapper / indirection that resolves to a READ command stays allowed.
+    const allowed: string[] = [
+      'find . -name "*.ts" | xargs grep foo',
+      'env git status',
+      'command git log --oneline',
+      'g=git; $g status',
+      'sudo cat /etc/hosts',
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+  });
+
+  // ── #577: pipe-to-interpreter (RCE) — widened beyond sh/bash/zsh/dash ─────
+  describe('#577 pipe-to-interpreter is blocked', () => {
+    const blocked: string[] = [
+      'echo x | ksh',
+      'cat s | csh',
+      'echo x | python',
+      'echo x | python3',
+      'echo x | perl',
+      'echo x | ruby',
+      'cat payload | node',
+    ];
+    for (const cmd of blocked) {
+      it(`blocks: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+    // An interpreter name as a search term / later pipeline arg stays allowed.
+    const allowed: string[] = [
+      'ps aux | grep python',
+      'git log | grep node',
+      "grep -rn '| python' .",
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+  });
+
+  // ── #577: interpreter one-liner write APIs widened (os.system/subprocess/Deno) ─
+  describe('#577 interpreter one-liner write APIs (widened)', () => {
+    const blocked: string[] = [
+      `python -c "import os; os.system('rm x')"`,
+      `python3 -c "import subprocess; subprocess.run(['rm','x'])"`,
+      `python -c "import os; os.popen('rm x')"`,
+      `node -e "await Deno.writeTextFile('f','x')"`,
+    ];
+    for (const cmd of blocked) {
+      it(`blocks: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+    it('allows an interpreter payload that only reads (os.getcwd)', () => {
+      expect(classifyBashCommand(`python -c "import os; print(os.getcwd())"`).mutating).toBe(false);
+    });
+  });
+
+  // ── #577: curl write method via a QUOTED flag value ───────────────────────
+  // The mutation signal (the HTTP method) is quoted, so the quote-stripped view
+  // blanks it; the tokenizer parses `-X POST` as command+arg, so quoting is moot.
+  describe('#577 curl quoted write-method is caught', () => {
+    const blocked: string[] = [
+      'curl -X "POST" https://x',
+      `curl -X 'POST' https://x`,
+      'curl --request "DELETE" https://x',
+      'curl -XPOST https://x',
+    ];
+    for (const cmd of blocked) {
+      it(`blocks: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+    const allowed: string[] = [
+      'grep -rn "curl -X POST" .', // curl is a grep ARG, not the command
+      'rg "curl -X \\"POST\\"" src',
+      'curl -X GET https://x', // GET is not a write method
+      'curl https://x | jq .',
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+  });
+
+  // ── #577 backstop: git mutations hidden from command-position anchoring ────
+  // Subcommand anchoring is more PRECISE than the old anywhere-in-segment regex,
+  // but must not be LESS conservative for the security cage: a git repo mutation
+  // reached via a compound command, `eval`, an escaped name, or a mis-parsed
+  // wrapper must still block (the `hiddenGitMutation` backstop + wrapper/eval
+  // handling restore this). These were all blocked by the pre-#577 regex.
+  describe('#577 hidden/obfuscated git mutations stay blocked', () => {
+    const blocked: string[] = [
+      'eval git push',
+      'eval git commit -m x',
+      '{ git push; }',
+      'for x in a; do git push; done',
+      'while true; do git commit -m x; done',
+      'if true; then git push; fi',
+      'env g=git $g push', // env sets the var; $g resolves to git
+      'sudo env git reset --hard', // stacked wrappers
+      '\\git push', // leading backslash escapes the alias, still runs git
+      'timeout -k 5 10 git push', // -k takes a value before the duration
+      'echo "$(git push)"', // command substitution (also guarded elsewhere)
+    ];
+    for (const cmd of blocked) {
+      it(`blocks: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+
+    // DOCUMENTED RESIDUAL (asserted, not silent): a command SUBSTITUTION that
+    // PRODUCES the command name (`$(echo git) push`) is not statically
+    // resolvable without executing the substitution, so it is (like `sh -c
+    // "git push"`) out of scope per the module's threat model — best-effort
+    // recon cage, not a hostile-process sandbox. Layer 1 (write_file/edit_file
+    // strip) is the real boundary. If this ever needs closing, resolve a
+    // command-position substitution's inner command against the outer argv.
+    it('residual: $(…)-in-command-position obfuscation is NOT caught (by design)', () => {
+      expect(classifyBashCommand('$(echo git) push').mutating).toBe(false);
+      expect(classifyBashCommand('`echo git` push').mutating).toBe(false);
+    });
+  });
+
+  // ── #577 review (Codex P2): wrapper options that take a SEPARATE operand ───
+  // `env -u NAME`/`-C DIR` and `xargs --max-args N`/`-n N`/`-L N` consume an
+  // operand; if it isn't consumed the operand is mistaken for the wrapped command
+  // and the real git verb is missed. Compounded because the backstop covered only
+  // always-mutating verbs — so CONDITIONAL mutations (stash, tag -d, branch -D,
+  // remote add, worktree remove) reached via such a wrapper must also block.
+  describe('#577 wrapper operand consumption + conditional-mutation backstop', () => {
+    const blocked: Array<[string, string]> = [
+      ['env -u FOO git stash', 'env -u <name> then git stash'],
+      ['env --unset FOO git stash', 'env --unset <name> then git stash'],
+      ['env -C /dir git commit -m x', 'env -C <dir> then git commit'],
+      ['find . | xargs --max-args 1 git tag -d v1', 'xargs --max-args then git tag -d'],
+      ['find . | xargs -n 1 git tag -d v1', 'xargs -n <n> then git tag -d'],
+      ['find . | xargs -L 1 git branch -D old', 'xargs -L then git branch -D'],
+      ['find . | xargs --max-procs 4 git worktree remove x', 'xargs --max-procs then git worktree remove'],
+      ['eval git stash', 'eval then conditional git stash'],
+      ['{ git tag -d v1; }', 'brace group then git tag -d'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+    // The READ forms through the same wrappers stay allowed.
+    const allowed: string[] = [
+      'env -C /repo git log --oneline',
+      'env -u GIT_DIR git status',
+      'find . | xargs -n1 git log --oneline',
+      'find . | xargs -I {} git show {}',
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+  });
+
   it('treats empty command as non-mutating', () => {
     expect(classifyBashCommand('').mutating).toBe(false);
     expect(classifyBashCommand('   ').mutating).toBe(false);
