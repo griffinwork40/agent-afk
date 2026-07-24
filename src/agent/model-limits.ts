@@ -32,11 +32,12 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   sonnet_1m: 128_000,
   haiku: 64_000,
   fable: 128_000,
-  'claude-opus-4-8': 128_000,
-  // 'claude-opus-4-7' removed — retired model; MODEL_MAP.opus now points to
-  // claude-opus-4-8. Kept here as a comment so git blame reveals the removal.
-  // (Prior retirement: 'claude-opus-4-6' → 4-7 on 2026-04, then 4-7 → 4-8 on
-  // 2026-05-28.)
+  // Claude Opus 5 (GA 2026-07-24): 128k max output.
+  'claude-opus-5': 128_000,
+  // 'claude-opus-4-8' removed — retired model; MODEL_MAP.opus now points to
+  // claude-opus-5. Kept here as a comment so git blame reveals the removal.
+  // (Prior retirements: 'claude-opus-4-6' → 4-7 on 2026-04, 4-7 → 4-8 on
+  // 2026-05-28, then 4-8 → opus-5 on 2026-07-24.)
   // Claude Sonnet 5 (GA 2026-06): 128k max output (up from 64k on Sonnet 4.6).
   'claude-sonnet-5': 128_000,
   'claude-haiku-4-5-20251001': 64_000,
@@ -95,8 +96,11 @@ export function maxOutputTokensFor(model: ClaudeModel | string): number {
  * `routesToOpenAICompatible` below.
  */
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
-  // Claude aliases
-  opus: 200_000,
+  // Claude aliases. Opus 5 (like Sonnet 5 / Fable 5) ships a native 1M window
+  // with no beta header. Base `opus` reports the true 1M window but auto-compacts
+  // early for cost/latency (see MODEL_AUTOCOMPACT_BUDGET below); `opus_1m` opts
+  // into the full window.
+  opus: 1_000_000,
   opus_1m: 1_000_000,
   // Sonnet 5 ships a 1M-token context window natively (like Fable 5) — no beta
   // header required: per Anthropic's docs 1M is both the default and the maximum,
@@ -107,12 +111,15 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   sonnet: 1_000_000,
   sonnet_1m: 1_000_000,
   haiku: 200_000,
-  // Native 1M-context models (no `_1m` opt-in, unlike opus/haiku whose base
+  // Native 1M-context models (no `_1m` opt-in needed — unlike haiku, whose base
   // window is 200k). Keyed by both the short alias (where one exists) and the
   // wire id so lookups hit either side of the alias boundary.
   fable: 1_000_000,
   'claude-fable-5': 1_000_000,
   'claude-sonnet-5': 1_000_000,
+  // Claude Opus 5 (GA 2026-07-24): native 1M window. Base `opus` still
+  // auto-compacts early via MODEL_AUTOCOMPACT_BUDGET (cost/latency policy).
+  'claude-opus-5': 1_000_000,
   // OpenAI flagship + cost-tier models (windows per OpenAI platform docs
   // as of 2026-Q1). Listed here so the openai-compatible provider's
   // getContextUsage() returns an accurate percentage instead of the
@@ -216,6 +223,12 @@ export function contextLimitFor(model: ClaudeModel | string): number {
  */
 const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
   'claude-sonnet-5': 200_000,
+  // Opus 5 ships a native 1M window, but base `opus` keeps compacting around a
+  // 200k working budget — preserving pre-Opus-5 behavior (opus-4-8 effectively
+  // compacted at its 200k window) and avoiding a silent cost/latency jump on
+  // long base-`opus` sessions. `opus_1m` bypasses this via the `_1m`
+  // short-circuit in autoCompactLimitFor.
+  'claude-opus-5': 200_000,
 };
 
 /**

@@ -1,12 +1,15 @@
 /**
- * Regression tests: 1M-context aliases (`opus_1m`, `sonnet_1m`) must report
- * their true context window through `getContextUsage()`.
+ * Regression tests: 1M-context aliases (`opus_1m`, `sonnet_1m`) and the base
+ * `opus`/`sonnet` handles must report their true context window through
+ * `getContextUsage()`.
  *
- * Bug: `opus_1m` resolves to the same wire id as `opus` (`claude-opus-4-8`).
- * The provider stored only the wire id and looked the limit up against it, so
- * `contextLimitFor('claude-opus-4-8')` fell back to the 200k default — the
- * `/tokens` view showed "of 200k" and auto-compaction fired at ~180k instead
- * of ~900k. The fix threads the requested alias through `requestedModel`.
+ * History: `opus_1m` resolves to the same wire id as `opus`. Back when base
+ * `opus` was claude-opus-4-8 (200k), the provider stored only the wire id and
+ * looked the limit up against it, so the 1M variant fell back to the 200k
+ * default — the `/tokens` view showed "of 200k" and auto-compaction fired
+ * early. The fix threads the requested alias through `requestedModel`. Opus 5
+ * (GA 2026-07-24) is natively 1M, so base `opus` now also reports 1M; the
+ * early-compaction distinction moved to autoCompactLimitFor's working budget.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -38,7 +41,7 @@ function makeQuery(overrides: Partial<AnthropicDirectQueryOptions>): AnthropicDi
     authMode: 'api-key',
     promptStream: emptyStream(),
     toolDispatcher: noopDispatcher,
-    model: 'claude-opus-4-8',
+    model: 'claude-opus-5',
     maxTokens: 4096,
     tools: null,
     userSystem: null,
@@ -49,7 +52,7 @@ function makeQuery(overrides: Partial<AnthropicDirectQueryOptions>): AnthropicDi
 
 describe('getContextUsage — 1M-context aliases', () => {
   it('reports the 1M window for the opus_1m alias (wire id is ambiguous)', async () => {
-    const query = makeQuery({ model: 'claude-opus-4-8', requestedModel: 'opus_1m' });
+    const query = makeQuery({ model: 'claude-opus-5', requestedModel: 'opus_1m' });
     const usage = await query.getContextUsage();
     expect(usage.maxTokens).toBe(1_000_000);
   });
@@ -60,15 +63,19 @@ describe('getContextUsage — 1M-context aliases', () => {
     expect(usage.maxTokens).toBe(1_000_000);
   });
 
-  it('reports the 200k base window for opus (same wire id, no 1M alias)', async () => {
-    const query = makeQuery({ model: 'claude-opus-4-8', requestedModel: 'opus' });
+  it('reports the true 1M window for base opus (Opus 5 is natively 1M)', async () => {
+    // getContextUsage reports the model's real window. Base `opus` compacts
+    // early via a working budget (see autoCompactLimitFor), but the status-line
+    // window it reports here is the full 1M — same profile as base `sonnet`.
+    const query = makeQuery({ model: 'claude-opus-5', requestedModel: 'opus' });
     const usage = await query.getContextUsage();
-    expect(usage.maxTokens).toBe(200_000);
+    expect(usage.maxTokens).toBe(1_000_000);
   });
 
-  it('falls back to the wire-id window when no requestedModel is supplied', async () => {
-    // Bare full id is ambiguous between an alias and its 1M variant, so the
-    // conservative 200k base is the correct default.
+  it('falls back to the 200k Anthropic default for an unknown/retired wire id', async () => {
+    // A bare wire id that is in no limits table (e.g. the retired
+    // claude-opus-4-8) and carries no requestedModel hint falls back to the
+    // conservative 200k Anthropic default.
     const query = makeQuery({ model: 'claude-opus-4-8' });
     const usage = await query.getContextUsage();
     expect(usage.maxTokens).toBe(200_000);
@@ -83,21 +90,24 @@ describe('getContextUsage — 1M-context aliases', () => {
     expect(usage.maxTokens).toBe(1_000_000);
   });
 
-  it('setModel preserves the alias: switching to opus_1m widens the window', async () => {
-    const query = makeQuery({ model: 'claude-opus-4-8', requestedModel: 'opus' });
-    expect((await query.getContextUsage()).maxTokens).toBe(200_000);
+  it('setModel preserves the alias: opus and opus_1m both report 1M on Opus 5', async () => {
+    // Opus 5 is natively 1M, so both the base `opus` alias and `opus_1m` report
+    // the full 1M window here. (The early-compaction distinction now lives in
+    // autoCompactLimitFor's working budget, not the reported window.)
+    const query = makeQuery({ model: 'claude-opus-5', requestedModel: 'opus' });
+    expect((await query.getContextUsage()).maxTokens).toBe(1_000_000);
 
     await query.setModel('opus_1m');
     expect((await query.getContextUsage()).maxTokens).toBe(1_000_000);
   });
 
   it('setModel resolves the wire id internally for a 1M alias', async () => {
-    const query = makeQuery({ model: 'claude-opus-4-8', requestedModel: 'opus' });
+    const query = makeQuery({ model: 'claude-opus-5', requestedModel: 'opus' });
     await query.setModel('opus_1m');
     // The wire model surfaced to the Messages API must be the resolved id,
     // never the alias (which would 404).
     const info = await firstSessionInfo(query);
-    expect(info.model).toBe('claude-opus-4-8');
+    expect(info.model).toBe('claude-opus-5');
     expect((await query.getContextUsage()).maxTokens).toBe(1_000_000);
   });
 });

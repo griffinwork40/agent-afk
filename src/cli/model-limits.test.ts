@@ -7,7 +7,7 @@ import { MODEL_CONTEXT_LIMITS, contextLimitFor } from './model-limits.js';
 
 describe('model-limits', () => {
   it('declares limits for opus, opus_1m, sonnet, sonnet_1m, haiku', () => {
-    expect(MODEL_CONTEXT_LIMITS['opus']).toBe(200_000);
+    expect(MODEL_CONTEXT_LIMITS['opus']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['opus_1m']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['sonnet']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['sonnet_1m']).toBe(1_000_000);
@@ -15,7 +15,7 @@ describe('model-limits', () => {
   });
 
   it('contextLimitFor returns the declared limit for known models', () => {
-    expect(contextLimitFor('opus')).toBe(200_000);
+    expect(contextLimitFor('opus')).toBe(1_000_000);
     expect(contextLimitFor('sonnet_1m')).toBe(1_000_000);
   });
 

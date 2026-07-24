@@ -93,7 +93,12 @@ export type ModelSlots = Record<SlotName, ModelSlotBinding>;
  */
 export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
 export const CLAUDE_SONNET_ID = 'claude-sonnet-5';
-export const CLAUDE_OPUS_ID = 'claude-opus-4-8';
+// Claude Opus 5 (GA 2026-07-24) — dateless wire id, itself a pinned snapshot
+// (post-4.6 naming convention). Bumped from claude-opus-4-8; the `opus`/`opus_1m`
+// aliases and the `large` tier default follow this constant. To roll back to 4.8,
+// revert this one line (and the matching model-limits.ts / resolve-params.ts /
+// pricing entries).
+export const CLAUDE_OPUS_ID = 'claude-opus-5';
 /** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
 

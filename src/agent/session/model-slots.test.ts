@@ -334,7 +334,7 @@ describe('model-limits resolves through slot bindings', () => {
   it('reflects a rebound tier limit', () => {
     setSlotBindings(makeSlots({ small: 'gpt-4o-mini' }));
     expect(contextLimitFor('small')).toBe(128_000);
-    setSlotBindings(makeSlots({ small: 'claude-opus-4-8' }));
+    setSlotBindings(makeSlots({ small: 'claude-opus-5' }));
     expect(maxOutputTokensFor('small')).toBe(128_000);
   });
 });
