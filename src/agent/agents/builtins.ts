@@ -19,6 +19,7 @@
 
 import { researchAgent } from '../../skills/_agents/research-agent.js';
 import { gitInvestigator } from '../../skills/_agents/git-investigator.js';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 import { parseAgentMarkdown } from './parser.js';
 import type { RegisteredAgent } from './types.js';
 
@@ -41,7 +42,7 @@ Work autonomously from the task prompt you were dispatched with: investigate, ac
 
 Watch for non-convergence: if repeated attempts at the same sub-goal — the same fix, the same search, the same command — stop making progress after a few tries, STOP and do not keep retrying. Activity is not progress. Return your best PARTIAL result with a clear note on what you could not resolve and why.
 
-Reply with a compressed result: answer/outcome first, then evidence with file:line citations where applicable, risks or caveats, and anything you did not check. Your final message is the only thing the dispatching session sees.`;
+${SUBAGENT_HANDOFF_CONTRACT}`;
 
 const EXPLORE_PROMPT = `You are Explore, a fast read-only sub-agent optimized for searching and analyzing codebases.
 

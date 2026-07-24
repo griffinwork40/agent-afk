@@ -4,7 +4,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam } from '@anthropic-ai/sdk/resources';
-import { runTurn, isTransientServerError, isOverloadedErrorEvent, OVERLOAD_MAX_RETRIES } from './loop.js';
+import {
+  runTurn,
+  isTransientServerError,
+  isOverloadedErrorEvent,
+  OVERLOAD_MAX_RETRIES,
+  STREAM_INCOMPLETE_MAX_RETRIES,
+} from './loop.js';
 import type { AnthropicClientLike } from './types.js';
 import {
   fromArray,
@@ -403,6 +409,120 @@ describe('runTurn mid-stream overload retry', () => {
     );
 
     await vi.advanceTimersByTimeAsync(100); // first attempt overloads, enters backoff
+    abortController.abort('interrupted');
+    await vi.advanceTimersByTimeAsync(10_000);
+    const events = await resultPromise;
+
+    expect(callCount).toBe(1); // aborted before the retry attempt
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+  });
+});
+
+// ─── Mid-stream clean-close retry (StreamIncompleteError, via runTurn) ────────
+//
+// A stream that emits content and then ENDS CLEANLY with neither a
+// message_delta (stop_reason) nor a message_stop — an intermediary
+// proxy/gateway/LB dropped the connection mid-generation. translate.ts converts
+// this "no terminal signal" case into an in-band StreamIncompleteError error
+// event (it is yielded, never thrown, so createWithRetry and the loop's catch
+// never see it). This is DISTINCT from a TTFB stall (a first byte was seen) and
+// from an overload (not an overloaded_error). These tests pin the bounded
+// re-drive that keeps a single transient connection cut from failing the turn.
+describe('runTurn mid-stream clean-close (StreamIncompleteError) retry', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Emits real content (so a first byte IS seen and the TTFB stall timer is
+  // cleared) then ends without the trailing message_delta + message_stop.
+  // makeTextStream's first four events are message_start, content_block_start,
+  // text_delta, content_block_stop; slicing off the last two is exactly the
+  // missing-terminal-signal cut translate.ts guards against.
+  function midStreamCleanCloseStream(): AsyncIterable<RawMessageStreamEvent> {
+    return fromArray(makeTextStream('partial output').slice(0, 4));
+  }
+
+  it('retries a mid-stream clean-close and succeeds on the next attempt', async () => {
+    let callCount = 0;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => {
+          callCount++;
+          return callCount === 1
+            ? midStreamCleanCloseStream()
+            : fromArray(makeTextStream('recovered'));
+        }),
+      },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {}, signal: new AbortController().signal, ctx,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(3_000); // past the first 1s settle delay
+    const events = await resultPromise;
+
+    expect(callCount).toBe(2);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+    // Exactly one stream.retry marker so surfaces discard the cut attempt's
+    // partial text before the recovered re-stream.
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
+  });
+
+  it('exhausts the retry budget on a persistent clean-close and yields the error', async () => {
+    const client: AnthropicClientLike = {
+      messages: { create: vi.fn(() => midStreamCleanCloseStream()) },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {}, signal: new AbortController().signal, ctx,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000); // past all settle delays (1s + 2s)
+    const events = await resultPromise;
+
+    expect(client.messages.create).toHaveBeenCalledTimes(STREAM_INCOMPLETE_MAX_RETRIES + 1);
+    // One stream.retry per re-drive; the final exhausted attempt yields the
+    // error rather than another retry marker.
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(STREAM_INCOMPLETE_MAX_RETRIES);
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    if (errorEvent?.type === 'error') {
+      expect(errorEvent.error.name).toBe('StreamIncompleteError');
+      expect(errorEvent.error.message).toContain('cut off mid-stream');
+    }
+  });
+
+  it('aborts during the clean-close retry backoff and yields turn.completed', async () => {
+    let callCount = 0;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => {
+          callCount++;
+          return midStreamCleanCloseStream();
+        }),
+      },
+    };
+    const abortController = new AbortController();
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {}, signal: abortController.signal, ctx,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100); // first attempt cuts, enters the settle delay
     abortController.abort('interrupted');
     await vi.advanceTimersByTimeAsync(10_000);
     const events = await resultPromise;

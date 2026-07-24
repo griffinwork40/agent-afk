@@ -333,7 +333,10 @@ export const agentTool: AnthropicToolDef = {
     'Subagents return their final assistant message verbatim — instruct them ' +
     'explicitly to compress their findings into: answer, evidence with file:line ' +
     'citations, confidence, risks, recommended next action, unresolved questions, ' +
-    'and what was not checked. Specify expected response length.\n\n' +
+    'and what was not checked. Specify expected response length. For large outputs ' +
+    '(long analysis, generated content, verbatim excerpts), tell the subagent to ' +
+    'write the bulk to a file and return the path plus a short summary — a very ' +
+    'long final message can be truncated in transit.\n\n' +
     'Foreground vs. background: by default (mode="foreground") this tool waits ' +
     'for the subagent to finish and returns its final message. Pass mode="background" ' +
     'to fire-and-forget — the tool returns a jobId immediately so you can keep ' +
