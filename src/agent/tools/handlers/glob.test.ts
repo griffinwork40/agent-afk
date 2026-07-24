@@ -451,3 +451,77 @@ describe('glob handler — multi-** matcher correctness (#436)', () => {
     expect(result.content).not.toContain('a/x/y/z/c.txt');
   });
 });
+
+describe('glob handler — globstar collapses to zero segments (root-level match)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-globstar-zero-'));
+    // Root-level files + nested files. The root-level ones are the regression:
+    // the previous matcher required a '/' adjacent to '**', so `**` never
+    // collapsed to zero segments and silently dropped every match at the root.
+    await fs.mkdir(path.join(tempDir, 'pkg', 'inner'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'top.ts'), '');
+    await fs.writeFile(path.join(tempDir, 'data.json'), '');
+    await fs.writeFile(path.join(tempDir, 'pkg', 'mid.ts'), '');
+    await fs.writeFile(path.join(tempDir, 'pkg', 'inner', 'leaf.ts'), '');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('**/*.ts matches a ROOT-LEVEL file (zero leading segments) as well as nested', async () => {
+    const result = await globHandler(
+      { pattern: '**/*.ts', path: tempDir },
+      new AbortController().signal,
+    );
+    expect(result.isError).toBeUndefined();
+    const lines = result.content.split('\n');
+    expect(lines).toContain('top.ts'); // regression: previously dropped
+    expect(lines).toContain('pkg/mid.ts');
+    expect(lines).toContain('pkg/inner/leaf.ts');
+  });
+
+  it('**/*.json returns the sole root-level match (was "No files matched")', async () => {
+    const result = await globHandler(
+      { pattern: '**/*.json', path: tempDir },
+      new AbortController().signal,
+    );
+    expect(result.isError).toBeUndefined();
+    const lines = result.content.split('\n');
+    expect(lines).toContain('data.json');
+    expect(result.content).not.toContain('No files matched');
+  });
+
+  it('dir/**/*.ts matches a file directly in dir (zero intermediate segments)', async () => {
+    const result = await globHandler(
+      { pattern: 'pkg/**/*.ts', path: tempDir },
+      new AbortController().signal,
+    );
+    expect(result.isError).toBeUndefined();
+    const lines = result.content.split('\n');
+    expect(lines).toContain('pkg/mid.ts'); // regression: zero intermediate dirs
+    expect(lines).toContain('pkg/inner/leaf.ts');
+    expect(lines).not.toContain('top.ts'); // outside pkg/, must not match
+  });
+
+  it('**/name matches a root-level file by name', async () => {
+    const result = await globHandler(
+      { pattern: '**/top.ts', path: tempDir },
+      new AbortController().signal,
+    );
+    expect(result.isError).toBeUndefined();
+    const lines = result.content.split('\n');
+    expect(lines).toContain('top.ts');
+  });
+
+  it('does not over-match: a non-matching extension still yields no results', async () => {
+    const result = await globHandler(
+      { pattern: '**/*.md', path: tempDir },
+      new AbortController().signal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('No files matched');
+  });
+});
