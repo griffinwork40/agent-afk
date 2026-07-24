@@ -13,6 +13,7 @@ import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { senderPrefix } from '../sender-attribution.js';
+import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 type QueueItem =
@@ -454,12 +455,22 @@ export class MessageHandler {
       // model knows who sent the image (byte-identical no-op in private chats).
       // See sender-attribution.ts for the sanitization / anti-spoofing rationale.
       const prefix = senderPrefix(msg?.from, ctx.chat?.type);
+      // Prepend reply/quote context (if the photo replies to or quotes a message)
+      // before the sender marker, so `attribution` is the combined system-trusted
+      // preamble. Empty in the common case (no reply + private chat), keeping the
+      // no-caption path byte-identical. See reply-context.ts.
+      const replyCtx = replyContextPrefix({
+        replyToMessage: msg?.reply_to_message as RepliedMessage | undefined,
+        quote: (msg as (Message.PhotoMessage & { quote?: { text?: string } }) | undefined)?.quote,
+        botId: ctx.botInfo?.id,
+      });
+      const attribution = replyCtx + prefix;
       const contentBlocks: ContentBlockParam[] = [];
       if (caption != null) {
-        contentBlocks.push({ type: 'text', text: `${prefix}[User caption]: ${[...caption].slice(0, 1024).join('')}` });
-      } else if (prefix) {
-        // No caption, but still attribute the sender of the image in a group.
-        contentBlocks.push({ type: 'text', text: `${prefix}(image, no caption)` });
+        contentBlocks.push({ type: 'text', text: `${attribution}[User caption]: ${[...caption].slice(0, 1024).join('')}` });
+      } else if (attribution) {
+        // No caption, but still attribute the sender and/or reply target of the image.
+        contentBlocks.push({ type: 'text', text: `${attribution}(image, no caption)` });
       }
       contentBlocks.push({
         type: 'image',
@@ -526,7 +537,13 @@ export class MessageHandler {
     // for pending elicitation, enqueue, and processOne paths. The tag-only gate
     // below still uses raw text + entity offsets for addressed-to-bot checks.
     // See sender-attribution.ts.
-    const attributedMessageText = senderPrefix((ctx.message as Message.TextMessage).from, ctx.chat?.type) + messageText;
+    const tgMsg = ctx.message as Message.TextMessage & { quote?: { text?: string } };
+    const replyCtx = replyContextPrefix({
+      replyToMessage: tgMsg.reply_to_message as RepliedMessage | undefined,
+      quote: tgMsg.quote,
+      botId: ctx.botInfo?.id,
+    });
+    const attributedMessageText = replyCtx + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
 
     // Answer consumed by active ask_question elicitation — never reaches
     // session message queue. Intercept BEFORE the session.state check so

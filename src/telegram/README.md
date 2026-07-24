@@ -207,6 +207,31 @@ human-tier config key (like the allowlist and `telegram.notify.*`): the
 `afk config` CLI can manage it, but the agent's own `config_set` tool cannot.
 The env twin `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` is likewise protected.
 
+## Reply & quote context
+
+A Telegram chat maps to one `AgentSession`, and each inbound message reaches the
+model as a plain user turn carrying only the sender's own text. When a user
+**replies** to (or manually **quotes**) an earlier message, Telegram delivers the
+referenced message in `reply_to_message` / `quote`, but that content would
+otherwise be dropped — so the model receives the reply with no idea what it refers
+to. This breaks two cases: replying to an old / scrolled-back / post-`/clear`
+message ("expand point 3"), and — most sharply — in a **tag-only** group, replying
+to an ambient message the bot never ingested and @mentioning it ("what do you
+think of this?").
+
+`reply-context.ts` fixes this by prepending a compact, system-trusted marker to
+the model input, e.g. `[in reply to Alice: "…the quoted text…"]` (or
+`[in reply to the assistant: "…"]` when replying to the bot's own message). The
+manual quote span wins over the full replied-to text, which wins over its caption;
+a reply to a photo/sticker with no text degrades to `[in reply to Alice's message]`.
+It fires in **all** chat types (including private DMs) but **only** when the message
+is a reply/quote — a non-reply message stays byte-identical.
+
+Trust note: the quoted body and sender name are user-controlled, so the marker
+delimiters (`[` `]`) are stripped from both (and newlines neutralized) — a quoted
+body cannot forge or break out of the marker. Same anti-injection posture as
+`sender-attribution.ts`.
+
 ## Testing
 
 ```bash
