@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.75.1] - 2026-07-24
+
+### Changed
+- drop dead setOnBackground setter + fix stale doc (#682) (#689) (b69f4ec)
+
 ## [5.75.0] - 2026-07-24
 
 ### Added
