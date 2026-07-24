@@ -48,6 +48,7 @@ import {
   SubagentHandleImpl,
   type SubagentHandle,
 } from './subagent/handle.js';
+import { coerceCrossProviderChildModel } from './subagent/child-model-fallback.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 
 // Re-export types for public API
@@ -414,6 +415,11 @@ export class SubagentManager {
   // the both-direction cross-provider credential gate in forkSubagent —
   // avoids guessing the parent's provider from the key's shape at fork time.
   private readonly parentProvider: BundledProviderName | undefined;
+  // Parent session model string, retained for the #652 cross-provider child
+  // model coercion in forkSubagent: coerceCrossProviderChildModel needs the
+  // concrete parent model as the OpenAI/gpt substitute target, not just the
+  // derived parentProvider above.
+  private readonly parentModel: string | undefined;
   // Mutable so AgentSession.setCwd can re-anchor forks after a born-named
   // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
   // so updating it makes every subsequent fork inherit the new worktree cwd.
@@ -446,6 +452,7 @@ export class SubagentManager {
     this.parentBaseUrl = options.baseUrl;
     this.parentProvider =
       options.parentModel !== undefined ? providerForModel(options.parentModel) : undefined;
+    this.parentModel = options.parentModel;
     this.parentCwd = options.cwd;
     this.parentReadRoots = options.parentReadRoots;
     this.parentTraceWriter = options.traceWriter;
@@ -746,8 +753,39 @@ export class SubagentManager {
       composedWriteRoots = [...new Set([...base, ...options.config.writeRoots])];
     }
 
+    // #652: a Claude-family child model that this session's routing sends to the
+    // openai-compatible provider (a global AFK_PROVIDER=openai-compatible force
+    // or a chatgpt-oauth/openai slot) cannot run — the OpenAI/ChatGPT backend
+    // serves no Claude model and hard-errors. Substitute the parent's own model
+    // (the OpenAI/gpt target the session already uses) so the child runs instead
+    // of dying. Applied HERE because forkSubagent is the single choke point
+    // through which the agent-tool, skill, and compose paths all create their
+    // child session (see the subagentToolOutputCapBytes note below), and it must
+    // be threaded into EVERY model-derived field of childConfig — most critically
+    // the read-only phase provider (buildPhaseRestrictedProvider re-derives the
+    // provider from the model), or a read-only fork would re-trigger the bug.
+    const childModelCoercion = coerceCrossProviderChildModel(
+      options.config.model,
+      this.parentModel,
+    );
+    // `?? options.config.model` keeps the type as the required AgentModelInput:
+    // the helper only returns undefined when given an undefined model, and
+    // options.config.model is always defined here.
+    const effectiveChildModel = childModelCoercion.model ?? options.config.model;
+    if (childModelCoercion.coercedFrom !== undefined) {
+      process.stderr.write(
+        `[afk] subagent: child model "${childModelCoercion.coercedFrom}" cannot run on this ` +
+          `session's OpenAI/ChatGPT backend — running it as "${effectiveChildModel ?? ''}" instead ` +
+          `(set AFK_DEFAULT_SUBAGENT_MODEL to choose a different one).\n`,
+      );
+    }
+
     const childConfig: AgentConfig = {
       ...options.config,
+      // Effective model after the cross-provider coercion above (#652). Placed
+      // AFTER the spread so it overrides options.config.model; a no-op on the
+      // common path where nothing was coerced.
+      model: effectiveChildModel,
       resume,
       forkSession: resume ? true : options.config.forkSession,
       // Witness attribution: stamp THIS fork's own id onto its config so the
@@ -792,7 +830,7 @@ export class SubagentManager {
       // keys and same-provider inheritance are preserved; only cross-provider
       // combinations resolve to undefined.
       apiKey: applyManagerApiKeyFallback({
-        childModel: options.config.model,
+        childModel: effectiveChildModel,
         configApiKey: options.config.apiKey,
         parentApiKey: this.parentApiKey,
         parentProvider: this.parentProvider,
@@ -802,7 +840,7 @@ export class SubagentManager {
       // parent's Anthropic base URL. Explicit caller values still win.
       baseUrl:
         options.config.baseUrl ??
-        (providerForModel(options.config.model) === 'openai-compatible'
+        (providerForModel(effectiveChildModel) === 'openai-compatible'
           ? undefined
           : this.parentBaseUrl),
       // External constraint: a forked sub-agent has no human relationship of its
@@ -909,7 +947,7 @@ export class SubagentManager {
       // mutual-exclusion check above ensures we don't clobber a caller's
       // explicit provider here.
       ...(options.phaseRole === 'read-only'
-        ? { provider: buildPhaseRestrictedProvider('read-only', options.config.model) }
+        ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
         : {}),
     };
 
@@ -1006,9 +1044,9 @@ export class SubagentManager {
     // honest answer when present; for a top-level fork from a session
     // that hasn't initialized yet, we fall back to the manager's rootId
     // so the schema's `parentId: string` requirement stays satisfied.
-    const modelString = typeof options.config.model === 'string'
-      ? options.config.model
-      : JSON.stringify(options.config.model);
+    const modelString = typeof effectiveChildModel === 'string'
+      ? effectiveChildModel
+      : JSON.stringify(effectiveChildModel);
     void emitSubagentLifecycle(effectiveTraceWriter, {
       transition: 'started',
       subagentId: id,

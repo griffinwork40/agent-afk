@@ -485,6 +485,79 @@ describe('SubagentManager', () => {
     });
   });
 
+  describe('cross-provider child model coercion (#652)', () => {
+    // providerForModel reads AFK_PROVIDER transitively; scrub to a known
+    // baseline per-test and restore the ambient value after.
+    const savedProvider = process.env['AFK_PROVIDER'];
+    beforeEach(() => {
+      delete process.env['AFK_PROVIDER'];
+    });
+    afterEach(() => {
+      if (savedProvider === undefined) delete process.env['AFK_PROVIDER'];
+      else process.env['AFK_PROVIDER'] = savedProvider;
+    });
+
+    it('coerces a Claude-family child onto the parent gpt model under AFK_PROVIDER=openai-compatible', async () => {
+      shared.lastConfig = null;
+      process.env['AFK_PROVIDER'] = 'openai-compatible';
+      const warn = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+      let warned = '';
+      try {
+        const mgr = new SubagentManager({ parentModel: 'gpt-5.5' });
+        await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet' },
+          idPrefix: 'coerce-check',
+        });
+        // Capture BEFORE mockRestore (restore resets mock.calls).
+        warned = warn.mock.calls.map((c) => String(c[0])).join('');
+      } finally {
+        warn.mockRestore();
+      }
+      // The child that would have hard-errored on the ChatGPT backend now runs
+      // the parent's gpt model instead.
+      expect((shared.lastConfig as Record<string, unknown>)['model']).toBe('gpt-5.5');
+      // The override is observable (not silent).
+      expect(warned).toContain('sonnet');
+      expect(warned).toContain('gpt-5.5');
+    });
+
+    it('does not coerce in a normal Anthropic session (no force)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({ parentModel: 'gpt-5.5' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'no-coerce-check',
+      });
+      expect((shared.lastConfig as Record<string, unknown>)['model']).toBe('sonnet');
+    });
+
+    it('leaves a gpt child unchanged under force', async () => {
+      shared.lastConfig = null;
+      process.env['AFK_PROVIDER'] = 'openai-compatible';
+      const mgr = new SubagentManager({ parentModel: 'gpt-5.5' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'gpt-child',
+      });
+      expect((shared.lastConfig as Record<string, unknown>)['model']).toBe('gpt-5.5');
+    });
+
+    it('does not coerce when the manager has no parentModel (no substitute)', async () => {
+      shared.lastConfig = null;
+      process.env['AFK_PROVIDER'] = 'openai-compatible';
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'no-parent-model',
+      });
+      expect((shared.lastConfig as Record<string, unknown>)['model']).toBe('sonnet');
+    });
+  });
+
   it('lets explicit child baseUrl override the manager default', async () => {
     shared.lastConfig = null;
     const mgr = new SubagentManager({ baseUrl: 'http://127.0.0.1:8080' });
