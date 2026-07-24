@@ -656,15 +656,6 @@ export class TerminalCompositor {
   }
 
   /**
-   * Install or clear the background handler — see
-   * {@link TerminalCompositorOptions.onBackground}. Typically cleared
-   * in idle mode (Ctrl+B has no meaningful between-turn semantics).
-   */
-  setOnBackground(handler: (() => void) | null): void {
-    this.onBackground = handler ?? undefined;
-  }
-
-  /**
    * Install or clear the double-Esc rewind handler (the "edit a previous
    * message" trigger). Wired once by the persistent InputSurface at REPL arm
    * time; fired from `handleEscape` on a double-Esc at an empty idle prompt.
