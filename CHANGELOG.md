@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.73.0] - 2026-07-24
+
+### Added
+- inject reply & quote context into inbound messages (#688) (50606c0)
+
 ## [5.72.0] - 2026-07-24
 
 ### Added
