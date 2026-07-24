@@ -27,6 +27,10 @@ vi.mock('../config.js', () => ({
     temperature: 1.0,
     updatePolicy: 'notify',
   })),
+  // Consumed transitively by notify-routing's loadChatAliases() (pulled in via
+  // daemon.ts → resolveNotifyChatTarget). Mock it so alias resolution is
+  // hermetic; overridable per-test with mockLoadTelegramConfig.
+  loadTelegramConfig: vi.fn(() => ({})),
 }));
 
 vi.mock('../../agent/daemon.js', () => ({
@@ -72,8 +76,8 @@ vi.mock('../errors/index.js', () => ({
 
 import { startDaemon } from '../../agent/daemon.js';
 import { pushIfConfigured } from '../../telegram/push.js';
-import { loadConfig } from '../config.js';
-import { formatTaskCompletion, registerDaemonCommand } from './daemon.js';
+import { loadConfig, loadTelegramConfig } from '../config.js';
+import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget } from './daemon.js';
 import {
   resolveTriggerMode,
   resolveDefaultTask,
@@ -85,6 +89,7 @@ import {
 const mockStartDaemon = vi.mocked(startDaemon);
 const mockLoadConfig = vi.mocked(loadConfig);
 const mockPushIfConfigured = vi.mocked(pushIfConfigured);
+const mockLoadTelegramConfig = vi.mocked(loadTelegramConfig);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -317,6 +322,59 @@ describe('afk daemon (CLI integration)', () => {
       { markdown: true },
     );
   });
+
+  it('routes the completion push to an allowlisted notifyChat via target override', async () => {
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,-100200';
+    try {
+      await runDaemon();
+      const opts = mockStartDaemon.mock.calls[0]?.[0];
+      opts?.onTaskComplete?.(
+        {
+          taskId: 'grp',
+          command: 'run',
+          trigger: 'cron',
+          triggeredAt: new Date(0).toISOString(),
+          durationMs: 10,
+          status: 'success',
+          responseExcerpt: 'done',
+        },
+        { responseText: 'done', notifyChat: -100200 },
+      );
+      expect(mockPushIfConfigured).toHaveBeenCalledWith(
+        expect.stringContaining('done'),
+        { markdown: true, target: -100200 },
+      );
+    } finally {
+      delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+    }
+  });
+
+  it('falls back to default routing (no target) when notifyChat is not allowlisted', async () => {
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111';
+    try {
+      await runDaemon();
+      const opts = mockStartDaemon.mock.calls[0]?.[0];
+      opts?.onTaskComplete?.(
+        {
+          taskId: 'grp',
+          command: 'run',
+          trigger: 'cron',
+          triggeredAt: new Date(0).toISOString(),
+          durationMs: 10,
+          status: 'success',
+          responseExcerpt: 'done',
+        },
+        { responseText: 'done', notifyChat: -100999 },
+      );
+      // Not allowlisted → no target key → default routing, byte-identical to legacy.
+      expect(mockPushIfConfigured).toHaveBeenCalledWith(
+        expect.stringContaining('done'),
+        { markdown: true },
+      );
+    } finally {
+      delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+    }
+  });
 });
 
 describe('formatTaskCompletion — "Done" verification downgrade', () => {
@@ -371,5 +429,65 @@ describe('formatTaskCompletion — "Done" verification downgrade', () => {
       true,
     );
     expect(explicitFalse).not.toContain('unverified');
+  });
+});
+
+describe('resolveNotifyChatTarget', () => {
+  const ENV_KEY = 'AFK_TELEGRAM_ALLOWED_CHAT_IDS';
+  let savedAllowed: string | undefined;
+
+  beforeEach(() => {
+    savedAllowed = process.env[ENV_KEY];
+    delete process.env[ENV_KEY];
+    mockLoadTelegramConfig.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    if (savedAllowed === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = savedAllowed;
+    vi.clearAllMocks();
+  });
+
+  it('returns undefined when notifyChat is undefined (default routing)', () => {
+    process.env[ENV_KEY] = '111';
+    expect(resolveNotifyChatTarget(undefined, 't')).toBeUndefined();
+  });
+
+  it('resolves a numeric notifyChat that is allowlisted', () => {
+    process.env[ENV_KEY] = '111,-100200';
+    expect(resolveNotifyChatTarget(-100200, 't')).toBe(-100200);
+  });
+
+  it('resolves a numeric-string notifyChat that is allowlisted', () => {
+    process.env[ENV_KEY] = '111,222';
+    expect(resolveNotifyChatTarget('222', 't')).toBe(222);
+  });
+
+  it('resolves an alias notifyChat that is allowlisted', () => {
+    process.env[ENV_KEY] = '111,-100500';
+    mockLoadTelegramConfig.mockReturnValue({ chatAliases: { ops: -100500 } });
+    expect(resolveNotifyChatTarget('ops', 't')).toBe(-100500);
+  });
+
+  it('FAILS CLOSED: returns undefined for a numeric chat NOT in the allowlist', () => {
+    process.env[ENV_KEY] = '111,222';
+    expect(resolveNotifyChatTarget(999, 't')).toBeUndefined();
+  });
+
+  it('FAILS CLOSED: returns undefined for an alias resolving to a non-allowlisted chat', () => {
+    process.env[ENV_KEY] = '111';
+    mockLoadTelegramConfig.mockReturnValue({ chatAliases: { rogue: -100999 } });
+    expect(resolveNotifyChatTarget('rogue', 't')).toBeUndefined();
+  });
+
+  it('returns undefined for an unresolvable alias (falls back to default)', () => {
+    process.env[ENV_KEY] = '111';
+    mockLoadTelegramConfig.mockReturnValue({ chatAliases: { ops: 111 } });
+    expect(resolveNotifyChatTarget('nope', 't')).toBeUndefined();
+  });
+
+  it('returns undefined when the allowlist is empty (fail-closed)', () => {
+    // no AFK_TELEGRAM_ALLOWED_CHAT_IDS set
+    expect(resolveNotifyChatTarget(123, 't')).toBeUndefined();
   });
 });

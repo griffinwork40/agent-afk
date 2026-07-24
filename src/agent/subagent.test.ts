@@ -6,13 +6,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import type { Message } from './types.js';
+import type { OutputEvent } from './types/session-types.js';
 
 type CapturedConfig = Record<string, unknown> | null;
+
+/**
+ * Optional custom stream generator for the mock session. When set, it fully
+ * replaces the default `sendMessage`-then-emit stream, so tests can drive
+ * multi-event streams with controlled gaps (for the idle-watchdog integration
+ * tests). Receives the session abort signal so it can wind down promptly when
+ * the watchdog (or wall-clock) aborts.
+ */
+type StreamFactory = (signal: AbortSignal) => AsyncGenerator<OutputEvent>;
 
 interface SessionState {
   config: Record<string, unknown>;
   replyContent: string | ((prompt: string) => string);
   replyDelayMs: number;
+  /** When set, overrides the default stream (idle-watchdog tests). */
+  streamEvents?: StreamFactory;
 }
 
 const shared = vi.hoisted(() => ({
@@ -61,8 +73,14 @@ vi.mock('./session.js', () => {
         }
         return { role: 'assistant', content: reply, timestamp: new Date() };
       });
-      // Streaming version: call sendMessage to match mocking behavior, then emit
-      this.sendMessageStream = vi.fn(async function* (content: string) {
+      // Streaming version: when a custom `streamEvents` factory is set it fully
+      // drives the stream (idle-watchdog tests); otherwise fall back to the
+      // default call-sendMessage-then-emit behavior.
+      this.sendMessageStream = vi.fn(async function* (this: MockAgentSession, content: string) {
+        if (this.state.streamEvents) {
+          yield* this.state.streamEvents(this.abortSignal);
+          return;
+        }
         const result = await this.sendMessage(content);
         yield { type: 'message', message: result };
         yield { type: 'done' };
@@ -81,9 +99,61 @@ import {
   SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
   SUBAGENT_DEFAULT_TIMEOUT_MS,
   SUBAGENT_BACKGROUND_TIMEOUT_MS,
+  SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
   resolveSubagentTimeoutMs,
+  resolveSubagentIdleTimeoutMs,
 } from './subagent.js';
 import { ENV_REGISTRY } from '../config/env.js';
+import { IdleWatchdogError } from '../utils/errors.js';
+
+/**
+ * Abort-aware sleep for the mock stream helpers. Rejects with the signal reason
+ * the instant the child controller is aborted (by the idle watchdog or the
+ * wall-clock), so a silent stream winds down promptly instead of hanging.
+ */
+function sleepOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new Error('aborted'));
+      return;
+    }
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t);
+        reject(signal.reason ?? new Error('aborted'));
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * Build a `StreamFactory` from a sequence of `{ afterMs, event }` steps: each
+ * step waits `afterMs` (abort-aware) before yielding its event. Lets a test
+ * drive a stream with controlled inter-event gaps so the idle watchdog either
+ * resets (short gaps) or fires (a long trailing gap with no step). If the signal
+ * aborts mid-gap the generator throws (mirroring a real aborted provider stream).
+ */
+function streamWithGaps(
+  steps: Array<{ afterMs: number; event: OutputEvent }>,
+): (signal: AbortSignal) => AsyncGenerator<OutputEvent> {
+  return async function* (signal: AbortSignal): AsyncGenerator<OutputEvent> {
+    for (const step of steps) {
+      await sleepOrAbort(step.afterMs, signal);
+      yield step.event;
+    }
+  };
+}
+
+function contentChunk(text: string): OutputEvent {
+  return { type: 'chunk', chunk: { type: 'content', content: text } };
+}
+
+function assistantMessage(content: string): OutputEvent {
+  return { type: 'message', message: { role: 'assistant', content, timestamp: new Date() } };
+}
 
 function lastSessionState(): SessionState {
   return shared.sessions[shared.sessions.length - 1].state;
@@ -761,7 +831,12 @@ describe('SubagentManager', () => {
         const mgr = new SubagentManager();
         const h = await mgr.forkSubagent({
           parent: { sessionId: 'p' },
-          config: { model: 'sonnet' }, // no timeoutMs → fork default applies
+          // no timeoutMs → wall-clock fork default applies. idleTimeoutMs: 0
+          // disables the progress-aware idle watchdog for this test so it
+          // isolates the WALL-CLOCK bound — otherwise the 8-min idle default
+          // would fire first on this silent child (idle-watchdog behavior has
+          // its own tests in the "idle watchdog" describe block below).
+          config: { model: 'sonnet', idleTimeoutMs: 0 },
         });
         // Child never replies within the budget.
         lastSessionState().replyDelayMs = SUBAGENT_DEFAULT_TIMEOUT_MS + 60_000;
@@ -787,7 +862,11 @@ describe('SubagentManager', () => {
         const mgr = new SubagentManager();
         const h = await mgr.forkSubagent({
           parent: { sessionId: 'p' },
-          config: { model: 'sonnet', timeoutMs: 0 },
+          // timeoutMs: 0 opts the WALL-CLOCK back into unbounded. idleTimeoutMs:
+          // 0 likewise disables the idle watchdog so this "runs unbounded and
+          // still completes" assertion isn't cut short by the 8-min idle default
+          // firing on the silent child.
+          config: { model: 'sonnet', timeoutMs: 0, idleTimeoutMs: 0 },
         });
         // Reply lands AFTER the would-be default budget — must still succeed.
         lastSessionState().replyDelayMs = SUBAGENT_DEFAULT_TIMEOUT_MS + 60_000;
@@ -966,6 +1045,318 @@ describe('SubagentManager', () => {
         } finally {
           vi.useRealTimers();
         }
+      });
+    });
+  });
+
+  // Progress-aware idle watchdog: fires when a forked child produces no
+  // observable OutputEvent for the idle window (default 8 min), DISTINCT from
+  // the 45-min blunt wall-clock. On fire it aborts the child controller with an
+  // IdleWatchdogError (extends TimeoutError) so the run classifies 'failed'
+  // (own-budget) with partial output preserved, reusing the wall-clock path.
+  describe('idle watchdog', () => {
+    it('pins SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS to 8 minutes', () => {
+      // Locked default (spec Decisions §2): 8 min clears the ~363s transient-429
+      // blind spot with ~2 min margin while staying 5.6× tighter than the
+      // 45-min wall-clock. Guards against drift back toward the floated 5 min
+      // before the transient-429 follow-up lands.
+      expect(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS).toBe(8 * 60_000);
+    });
+
+    it('aborts a no-progress child with IdleWatchdogError (failed) BEFORE the wall-clock', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          // Small explicit idle window; leave the wall-clock at the 45-min
+          // default so the idle bound is provably first-to-fire.
+          config: { model: 'sonnet', idleTimeoutMs: 5_000 },
+        });
+        // Child would eventually reply — but far past both bounds and it emits
+        // NOTHING in the meantime, so the idle watchdog fires first.
+        lastSessionState().replyDelayMs = SUBAGENT_DEFAULT_TIMEOUT_MS + 60_000;
+        const signal = lastSessionAbortSignal();
+
+        const run = h.run('silent');
+        const rejection = expect(run).rejects.toBeInstanceOf(IdleWatchdogError);
+        // Cross the 5s idle window — well before the 45-min wall-clock.
+        await vi.advanceTimersByTimeAsync(5_000);
+        await rejection;
+
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toBeInstanceOf(IdleWatchdogError);
+        // Own-budget expiry (idle watchdog is a TimeoutError) → 'failed', not
+        // 'cancelled': the classification check in run()'s catch reads the
+        // IdleWatchdogError on the signal as this handle's own budget.
+        expect(h.status).toBe('failed');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('never cuts off a child that keeps streaming within the idle window', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', idleTimeoutMs: 5_000 },
+        });
+        // Emit a content chunk every 4s (< the 5s idle window) for 10 rounds —
+        // a total of 40s, far beyond the idle window had it not been reset each
+        // time — then a terminal message + done.
+        const steps: Array<{ afterMs: number; event: OutputEvent }> = [];
+        for (let i = 0; i < 10; i++) steps.push({ afterMs: 4_000, event: contentChunk(`d${i}`) });
+        steps.push({ afterMs: 4_000, event: assistantMessage('final answer') });
+        steps.push({ afterMs: 0, event: { type: 'done' } });
+        lastSessionState().streamEvents = streamWithGaps(steps);
+
+        const run = h.run('busy');
+        await vi.advanceTimersByTimeAsync(60_000);
+        const msg = await run;
+
+        expect(msg.content).toBe('final answer');
+        expect(h.status).toBe('succeeded');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('never cuts off a child running a long silent tool (in-flight tool is a bounded wait)', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', idleTimeoutMs: 5_000 },
+        });
+        // The child streams a bit, STARTS a tool, then the provider stream goes
+        // silent for 30s while the tool runs (6× the 5s idle window — e.g. a
+        // long `bash`/test command or a nested `agent` turn), then the result
+        // arrives and the child answers. The watchdog must treat the in-flight
+        // tool as a bounded wait and NOT idle-fire. Regression guard for the
+        // codex P2: without the suspend this 30s silent tool trips the idle bound.
+        lastSessionState().streamEvents = streamWithGaps([
+          { afterMs: 1_000, event: contentChunk('starting') },
+          {
+            afterMs: 1_000,
+            event: {
+              type: 'chunk',
+              chunk: { type: 'tool_use_detail', toolUseId: 't1', toolName: 'bash', toolInput: 'pnpm test' },
+            },
+          },
+          // 30s of legitimate tool-execution silence — well past the idle window.
+          {
+            afterMs: 30_000,
+            event: { type: 'chunk', chunk: { type: 'tool_result', toolUseId: 't1', content: 'ok' } },
+          },
+          { afterMs: 1_000, event: assistantMessage('tool answer') },
+          { afterMs: 0, event: { type: 'done' } },
+        ]);
+
+        const run = h.run('long tool');
+        await vi.advanceTimersByTimeAsync(40_000);
+        const msg = await run;
+
+        expect(msg.content).toBe('tool answer');
+        expect(h.status).toBe('succeeded');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not fire during an OAuth paused→resumed park, then completes', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', idleTimeoutMs: 5_000 },
+        });
+        // paused parks for 30s (>> the 5s idle window). While parked the
+        // watchdog must NOT fire; resumed collapses back; then a quick answer.
+        const resetsAt = new Date(Date.now() + 30_000);
+        lastSessionState().streamEvents = streamWithGaps([
+          { afterMs: 1_000, event: { type: 'paused', reason: 'usage-limit', resetsAt } },
+          // 30s of legitimate park silence — well past the 5s idle window.
+          { afterMs: 30_000, event: { type: 'resumed', hotSwapped: false } },
+          { afterMs: 1_000, event: assistantMessage('resumed answer') },
+          { afterMs: 0, event: { type: 'done' } },
+        ]);
+
+        const run = h.run('parked');
+        await vi.advanceTimersByTimeAsync(40_000);
+        const msg = await run;
+
+        expect(msg.content).toBe('resumed answer');
+        expect(h.status).toBe('succeeded');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('populates partialOutput when it fires after streaming some content', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', idleTimeoutMs: 5_000 },
+        });
+        // Stream two content chunks, then go silent forever — the watchdog fires
+        // and the accumulated text must survive as partialOutput.
+        lastSessionState().streamEvents = streamWithGaps([
+          { afterMs: 1_000, event: contentChunk('partial ') },
+          { afterMs: 1_000, event: contentChunk('findings') },
+          // Never yields again; a long trailing gap lets the idle window elapse.
+          { afterMs: 60_000, event: { type: 'done' } },
+        ]);
+
+        const result = h.runToResult('half');
+        await vi.advanceTimersByTimeAsync(10_000);
+        const res = await result;
+
+        expect(res.status).toBe('failed');
+        expect(res.error).toBeInstanceOf(IdleWatchdogError);
+        expect(res.partialOutput).toBe('partial findings');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('preserves an explicit idleTimeoutMs of 0 (watchdog disabled; wall-clock still applies)', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          // Watchdog off; give a small wall-clock so the test terminates.
+          config: { model: 'sonnet', idleTimeoutMs: 0, timeoutMs: 30_000 },
+        });
+        // Child stays silent for 20s (> any idle window) then replies — must
+        // NOT be idle-fired; it completes because 20s < the 30s wall-clock.
+        lastSessionState().replyDelayMs = 20_000;
+
+        const run = h.run('silent-but-allowed');
+        await vi.advanceTimersByTimeAsync(21_000);
+        const msg = await run;
+
+        expect(msg.content).toBe('ok:silent-but-allowed');
+        expect(h.status).toBe('succeeded');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('applies the env override (AFK_SUBAGENT_IDLE_TIMEOUT_MS) as the fork default', async () => {
+      const KEY = 'AFK_SUBAGENT_IDLE_TIMEOUT_MS';
+      const original = process.env[KEY];
+      vi.useFakeTimers();
+      try {
+        process.env[KEY] = '3000'; // 3s — far below the 8-min default
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet' }, // no idleTimeoutMs → env override applies
+        });
+        lastSessionState().replyDelayMs = SUBAGENT_DEFAULT_TIMEOUT_MS + 60_000;
+        const signal = lastSessionAbortSignal();
+
+        const run = h.run('silent');
+        const rejection = expect(run).rejects.toBeInstanceOf(IdleWatchdogError);
+        await vi.advanceTimersByTimeAsync(3_000);
+        await rejection;
+        expect(signal.aborted).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      }
+    });
+
+    it('lets an explicit config.idleTimeoutMs win over the env override', async () => {
+      const KEY = 'AFK_SUBAGENT_IDLE_TIMEOUT_MS';
+      const original = process.env[KEY];
+      vi.useFakeTimers();
+      try {
+        process.env[KEY] = '3000'; // env says 3s…
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', idleTimeoutMs: 10_000 }, // …explicit 10s wins
+        });
+        // Child streams a chunk at 5s (past the 3s env window, inside the 10s
+        // explicit one) then finishes — proving the explicit value governs.
+        lastSessionState().streamEvents = streamWithGaps([
+          { afterMs: 5_000, event: assistantMessage('explicit wins') },
+          { afterMs: 0, event: { type: 'done' } },
+        ]);
+
+        const run = h.run('slow-first-event');
+        await vi.advanceTimersByTimeAsync(6_000);
+        const msg = await run;
+        expect(msg.content).toBe('explicit wins');
+        expect(h.status).toBe('succeeded');
+      } finally {
+        vi.useRealTimers();
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      }
+    });
+
+    // resolveSubagentIdleTimeoutMs is the DEFAULT resolver consulted by the fork
+    // site (`config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs()`). Pure
+    // function, mirroring resolveSubagentTimeoutMs byte-for-byte: unset/empty/
+    // invalid → default, valid finite int >= 0 → that value, 0 → 0 (disabled).
+    describe('resolveSubagentIdleTimeoutMs (AFK_SUBAGENT_IDLE_TIMEOUT_MS)', () => {
+      const KEY = 'AFK_SUBAGENT_IDLE_TIMEOUT_MS';
+      let original: string | undefined;
+      beforeEach(() => {
+        original = process.env[KEY];
+        delete process.env[KEY];
+      });
+      afterEach(() => {
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      });
+
+      it('returns SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS when unset', () => {
+        expect(resolveSubagentIdleTimeoutMs()).toBe(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS);
+      });
+
+      it('returns SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS when empty / whitespace', () => {
+        process.env[KEY] = '';
+        expect(resolveSubagentIdleTimeoutMs()).toBe(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS);
+        process.env[KEY] = '   ';
+        expect(resolveSubagentIdleTimeoutMs()).toBe(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS);
+      });
+
+      it('parses a valid integer', () => {
+        process.env[KEY] = '300000';
+        expect(resolveSubagentIdleTimeoutMs()).toBe(300_000);
+      });
+
+      it('treats 0 as the explicit disable escape hatch', () => {
+        process.env[KEY] = '0';
+        expect(resolveSubagentIdleTimeoutMs()).toBe(0);
+      });
+
+      it('falls back to the default on a negative value', () => {
+        process.env[KEY] = '-1';
+        expect(resolveSubagentIdleTimeoutMs()).toBe(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS);
+      });
+
+      it('falls back to the default on unparseable garbage', () => {
+        process.env[KEY] = 'not-a-number';
+        expect(resolveSubagentIdleTimeoutMs()).toBe(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS);
+      });
+
+      it('keeps the ENV_REGISTRY documented default in lockstep with the constant', () => {
+        // Guards against SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS drifting from the
+        // registry `default` string that feeds docs/env-registry.{json,md}.
+        const entry = ENV_REGISTRY.find((e) => e.name === 'AFK_SUBAGENT_IDLE_TIMEOUT_MS');
+        expect(entry?.default).toBe(String(SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS));
       });
     });
   });

@@ -40,7 +40,7 @@ import { seedPersistedGrants } from './agent/permissions-store.js';
 import { MemoryStore } from './agent/memory/index.js';
 import { providerForModel, AnthropicDirectProvider, OpenAICompatibleProvider } from './agent/providers/index.js';
 import { detectAuthMode } from './agent/providers/anthropic-direct/auth.js';
-import { loadConfig, loadCredential } from './cli/config.js';
+import { loadConfig, loadCredential, loadTelegramConfig } from './cli/config.js';
 import { getEnvConfigPath } from './paths.js';
 import { assembleSystemPrompt } from './agent/routing-directive.js';
 import { resolveModelId } from './agent/session/model-resolution.js';
@@ -180,6 +180,21 @@ async function main() {
   console.log(`📡 Model: ${config.model} · Provider: ${providerName}`);
   console.log(`🔒 Allowlist: ${allowedChatIds.size} chat ID(s)`);
 
+  // Opt-in "tag-only" response policy: chats where the bot answers only when
+  // addressed (reply to the bot, @mention, or text_mention resolving to the
+  // bot). afk.config.json `telegram.tagOnlyChats` wins; the
+  // AFK_TELEGRAM_TAG_ONLY_CHAT_IDS env var is the fallback. Mirrors the inbound
+  // allowlist resolution path.
+  const configTagOnly = loadTelegramConfig().tagOnlyChats;
+  const tagOnlyChats =
+    configTagOnly && configTagOnly.length > 0
+      ? new Set<number>(configTagOnly)
+      : parseAllowedChatIds(env.AFK_TELEGRAM_TAG_ONLY_CHAT_IDS, console.warn);
+  if (tagOnlyChats.size > 0) {
+    console.log(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`);
+    console.log('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.');
+  }
+
   const sharedMemoryStore = new MemoryStore();
 
   // Optional working-directory override for every bot-spawned session.
@@ -196,6 +211,7 @@ async function main() {
     defaultModel: config.model as AgentModelInput,
     verbose: env.TELEGRAM_VERBOSE === 'true',
     allowedChatIds,
+    tagOnlyChats,
     // Only meaningful for the Anthropic provider — the Codex adapter
     // ignores settingSources at construction time.
     settingSources: ['user', 'project'],

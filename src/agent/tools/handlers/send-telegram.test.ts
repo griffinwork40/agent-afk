@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSendTelegramHandler } from './send-telegram.js';
 import type { PushOptions, PushResult } from '../../../telegram/push.js';
+import { loadTelegramConfig } from '../../../cli/config.js';
 
 // loadTelegramConfig reads afk.config.json; mock it so target resolution is
 // driven purely by the env vars the harness sets (hermetic). The pure resolver
-// is exhaustively covered in src/telegram/notify-routing.test.ts.
+// is exhaustively covered in src/telegram/notify-routing.test.ts. The mock is
+// per-test-overridable so we can inject telegram.chatAliases for alias tests.
 vi.mock('../../../cli/config.js', () => ({ loadTelegramConfig: vi.fn(() => ({})) }));
+
+const mockLoadTelegramConfig = vi.mocked(loadTelegramConfig);
 
 type PushFn = (options: PushOptions) => Promise<PushResult>;
 
@@ -21,11 +25,17 @@ function makeHarness(opts: {
   allowed?: string;
   /** Sets AFK_TELEGRAM_NOTIFY_MODE — `broadcast` restores the legacy fan-out. */
   mode?: string;
+  /** Injected telegram.chatAliases (name → chat id) for alias-resolution tests. */
+  aliases?: Record<string, number>;
   pushFn?: PushFn;
 } = {}) {
   setOrDelete('TELEGRAM_BOT_TOKEN', opts.token);
   setOrDelete('AFK_TELEGRAM_ALLOWED_CHAT_IDS', opts.allowed);
   setOrDelete('AFK_TELEGRAM_NOTIFY_MODE', opts.mode);
+
+  mockLoadTelegramConfig.mockReturnValue(
+    opts.aliases !== undefined ? { chatAliases: opts.aliases } : {},
+  );
 
   const pushFn = vi.fn<PushFn>(opts.pushFn ?? (async () => OK_RESULT));
   const handler = createSendTelegramHandler(pushFn);
@@ -46,10 +56,12 @@ describe('send_telegram handler', () => {
       orig[k] = process.env[k];
       delete process.env[k];
     }
+    mockLoadTelegramConfig.mockReturnValue({});
   });
 
   afterEach(() => {
     for (const k of ENV_KEYS) setOrDelete(k, orig[k]);
+    vi.clearAllMocks();
   });
 
   const signal = new AbortController().signal;
@@ -161,6 +173,96 @@ describe('send_telegram handler', () => {
       expect(r.isError).toBeUndefined();
       expect(pushFn).toHaveBeenCalledOnce();
       expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: -100123, text: 'group ping' });
+    });
+  });
+
+  describe('per-call chat targeting', () => {
+    it('rejects a chat that is neither number nor string', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111' });
+      const r = await handler({ message: 'hi', chat: { id: 1 } }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/chat must be a number/);
+      expect(pushFn).not.toHaveBeenCalled();
+    });
+
+    it('sends to an explicit numeric chat id when allowlisted', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111,222,333' });
+      const r = await handler({ message: 'to 222', chat: 222 }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledOnce();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: 222, text: 'to 222' });
+      expect(r.content).toMatch(/Sent Telegram message to chat 222/);
+    });
+
+    it('accepts a numeric STRING chat id', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111,-100999' });
+      const r = await handler({ message: 'to group', chat: '-100999' }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: -100999, text: 'to group' });
+    });
+
+    it('resolves a chat ALIAS from telegram.chatAliases', async () => {
+      const { handler, pushFn } = makeHarness({
+        token: 't',
+        allowed: '111,-1001234567890',
+        aliases: { ops: -1001234567890 },
+      });
+      const r = await handler({ message: 'alert ops', chat: 'ops' }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledOnce();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: -1001234567890, text: 'alert ops' });
+    });
+
+    it('errors on an unresolvable alias and lists the available names', async () => {
+      const { handler, pushFn } = makeHarness({
+        token: 't',
+        allowed: '111',
+        aliases: { ops: -100200, family: 999 },
+      });
+      const r = await handler({ message: 'x', chat: 'nope' }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/Unknown chat alias "nope"/);
+      expect(r.content).toMatch(/ops/);
+      expect(r.content).toMatch(/family/);
+      expect(pushFn).not.toHaveBeenCalled();
+    });
+
+    it('FAILS CLOSED: rejects a numeric chat NOT in the allowlist', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111,222' });
+      const r = await handler({ message: 'x', chat: 999 }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/chat 999 is not in the allowlist/);
+      expect(r.content).toMatch(/111, 222/);
+      expect(pushFn).not.toHaveBeenCalled();
+    });
+
+    it('FAILS CLOSED: rejects an alias that resolves to a non-allowlisted chat', async () => {
+      const { handler, pushFn } = makeHarness({
+        token: 't',
+        allowed: '111',
+        aliases: { rogue: -100500 },
+      });
+      const r = await handler({ message: 'x', chat: 'rogue' }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/chat -100500 is not in the allowlist/);
+      expect(pushFn).not.toHaveBeenCalled();
+    });
+
+    it('does NOT re-gate default routing: omitted chat behaves identically to legacy', async () => {
+      // Broadcast (custom-style fan-out) is allowlist-independent by design; the
+      // fail-closed gate only applies to an EXPLICIT chat target.
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111,222,333', mode: 'broadcast' });
+      const r = await handler({ message: 'ping' }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledTimes(3);
+    });
+
+    it('explicit chat overrides broadcast mode (single send, not fan-out)', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111,222,333', mode: 'broadcast' });
+      const r = await handler({ message: 'just 222', chat: 222 }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledOnce();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: 222, text: 'just 222' });
     });
   });
 

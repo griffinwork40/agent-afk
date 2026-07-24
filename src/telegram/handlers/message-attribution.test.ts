@@ -1,0 +1,283 @@
+/**
+ * Wire-through tests: per-message sender attribution in MessageHandler.
+ *
+ * The pure `[from …]:` marker logic is unit-tested in sender-attribution.test.ts.
+ * Here we assert it is actually threaded into the content handed to
+ * streamResponse by handle() (text) and handlePhoto() (photo), applied on the
+ * queued/busy path too, and a byte-identical no-op in private chats.
+ *
+ * Harness mirrors message-tag-only.test.ts / message-photo.test.ts: streamResponse
+ * and registerChatCommands are mocked; the content argument is read off
+ * mockStreamResponse.mock.calls.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Context } from 'telegraf';
+import type { Message, PhotoSize } from 'telegraf/types';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+
+const { mockStreamResponse } = vi.hoisted(() => ({
+  mockStreamResponse: vi.fn<
+    [Context, unknown, string | ContentBlockParam[], ...unknown[]],
+    Promise<void>
+  >(async () => { /* no-op */ }),
+}));
+
+vi.mock('../streaming.js', () => ({ streamResponse: mockStreamResponse }));
+vi.mock('./registration.js', () => ({ registerChatCommands: vi.fn(async () => { /* no-op */ }) }));
+
+import { MessageHandler } from './message.js';
+
+type ChatType = 'private' | 'group' | 'supergroup';
+interface Sender { id?: number; first_name?: string; last_name?: string; username?: string }
+
+function makeHandler(
+  sessionState: 'idle' | 'streaming' = 'idle',
+  existingSessionState: 'idle' | 'streaming' | undefined = undefined,
+): MessageHandler {
+  const sessionManager = {
+    getSession: vi.fn().mockResolvedValue({ state: sessionState }),
+    getSessionIfExists: vi.fn().mockReturnValue(
+      existingSessionState ? { state: existingSessionState } : undefined,
+    ),
+    resetSession: vi.fn(),
+  };
+  const bot = { telegram: { sendMessage: vi.fn() }, command: vi.fn(), on: vi.fn() };
+  return new MessageHandler(
+    bot as unknown as import('telegraf').Telegraf,
+    sessionManager as unknown as import('../session-manager.js').SessionManager,
+    new Set<number>(),
+    vi.fn(),
+    new Set<number>(), // no tag-only chats — every message proceeds
+  );
+}
+
+function makeTextCtx(opts: {
+  chatId: number;
+  text: string;
+  type: ChatType;
+  from?: Sender;
+  replyToMessage?: Partial<Message.TextMessage>;
+}): Context {
+  const message = {
+    text: opts.text,
+    ...(opts.from ? { from: opts.from } : {}),
+    ...(opts.replyToMessage ? { reply_to_message: opts.replyToMessage } : {}),
+  } as Partial<Message.TextMessage>;
+  return {
+    chat: { id: opts.chatId, type: opts.type },
+    message,
+    botInfo: { id: 42, username: 'Bot' },
+    react: vi.fn(async () => {}),
+    reply: vi.fn(async () => {}),
+    sendChatAction: vi.fn(async () => {}),
+  } as unknown as Context;
+}
+
+function makePhotoCtx(opts: { chatId: number; caption?: string; type: ChatType; from?: Sender }): Context {
+  const photo: PhotoSize[] = [
+    { file_id: 'small', file_unique_id: 'u1', width: 90, height: 67, file_size: 100 },
+    { file_id: 'large', file_unique_id: 'u3', width: 1280, height: 960, file_size: 9999 },
+  ];
+  // Mirror message-photo.test.ts: stub fetch to return a small JPEG (recognized
+  // content-type → no magic-byte sniffing needed).
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(Buffer.from([0xff, 0xd8, 0xff, 0x00]), {
+    status: 200,
+    headers: { 'content-type': 'image/jpeg' },
+  })));
+  const message = {
+    photo,
+    caption: opts.caption,
+    ...(opts.from ? { from: opts.from } : {}),
+  } as Partial<Message.PhotoMessage>;
+  return {
+    chat: { id: opts.chatId, type: opts.type },
+    message,
+    botInfo: { id: 42, username: 'Bot' },
+    react: vi.fn(async () => {}),
+    reply: vi.fn(async () => ({ message_id: 1 })),
+    sendChatAction: vi.fn(async () => true),
+    telegram: {
+      getFileLink: vi.fn(async () => new URL('https://api.telegram.org/file/bot-token/photos/p.jpg')),
+      editMessageText: vi.fn(async () => true),
+    },
+  } as unknown as Context;
+}
+
+describe('sender attribution — text (handle)', () => {
+  beforeEach(() => { mockStreamResponse.mockClear(); });
+
+  it('prefixes a group message with the sanitized sender marker', async () => {
+    const handler = makeHandler('idle');
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'when is standup?', type: 'group',
+      from: { id: 7, first_name: 'Alice', username: 'alice' },
+    }));
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    expect(content).toBe('[from Alice @alice (id 7)]: when is standup?');
+  });
+
+  it('attributes in a supergroup too', async () => {
+    const handler = makeHandler('idle');
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'hi', type: 'supergroup', from: { id: 9, first_name: 'Bob' },
+    }));
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    expect(content).toBe('[from Bob (id 9)]: hi');
+  });
+
+  it('leaves a private (1:1) message byte-identical (no attribution)', async () => {
+    const handler = makeHandler('idle');
+    await handler.handle(makeTextCtx({
+      chatId: 500, text: 'hi', type: 'private', from: { id: 7, first_name: 'Alice' },
+    }));
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    expect(content).toBe('hi');
+  });
+
+  it('applies attribution on the queued (busy) path too', async () => {
+    const handler = makeHandler('streaming'); // non-idle → enqueue instead of stream
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'hi', type: 'group', from: { id: 7, first_name: 'Alice' },
+    }));
+    const queues = (handler as unknown as {
+      messageQueues: Map<number, Array<{ type: string; text?: string }>>;
+    }).messageQueues;
+    expect(queues.get(-100)?.[0]?.text).toBe('[from Alice (id 7)]: hi');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  it('attributes a pending elicitation reply before resolving', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(-100, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'blue', type: 'group', from: { id: 7, first_name: 'Alice' },
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('[from Alice (id 7)]: blue');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  it('leaves a private pending elicitation reply byte-identical', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(500, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: 500, text: 'blue', type: 'private', from: { id: 7, first_name: 'Alice' },
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('blue');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  // PR #688 review Item 1 (Codex bot inline P2): replying to the bot's own
+  // pending-question message is the natural way to answer an ask_question
+  // elicitation. The resolver must receive the literal answer — a
+  // `[in reply to the assistant: "…"] ` marker prepended ahead of it would
+  // break number/multi-choice validation and pollute text answers. This is
+  // the primary DM elicitation surface (senderPrefix is '' in private chats,
+  // so before #688 the resolver always saw the clean answer).
+  it('resolves a pending elicitation to the CLEAN answer when the reply targets the bot\'s own question (private chat)', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(500, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: 500, text: '5', type: 'private', from: { id: 7, first_name: 'Alice' },
+      // reply_to_message.from.id === botInfo.id (42) — this is what would make
+      // replyContextPrefix emit a non-empty `[in reply to the assistant: …]`
+      // marker if the elicitation path still used attributedMessageText.
+      replyToMessage: { text: 'What number?', from: { id: 42, first_name: 'Bot' } } as Partial<Message.TextMessage>,
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('5');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  // Same scenario in a group: senderPrefix (non-empty in groups) must still be
+  // retained on the elicitation answer — only the reply-context marker is
+  // excluded. Guards against a fix that overcorrects by stripping senderPrefix
+  // too (see the hard constraint: item 1 restores senderPrefix + text, not text
+  // alone).
+  it('resolves a pending elicitation to sender-prefixed (but reply-context-free) text in a group', async () => {
+    const handler = makeHandler('streaming', 'streaming');
+    const resolver = vi.fn();
+    (handler as unknown as {
+      pendingElicitations: Map<number, (value: string) => void>;
+    }).pendingElicitations.set(-100, resolver);
+
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: '5', type: 'group', from: { id: 7, first_name: 'Alice' },
+      replyToMessage: { text: 'What number?', from: { id: 42, first_name: 'Bot' } } as Partial<Message.TextMessage>,
+    }));
+
+    expect(resolver).toHaveBeenCalledWith('[from Alice (id 7)]: 5');
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  // PR #688 review Item 5 (positive wiring, review findings 4-6): a NORMAL
+  // reply (reply_to_message present, NO pending elicitation) must still carry
+  // the `[in reply to …]` prefix through to the model — pinning the wiring in
+  // both directions (elicitation path excludes it; enqueue/processOne path
+  // includes it).
+  it('a normal reply (no pending elicitation) includes the [in reply to …] prefix in the processed content', async () => {
+    const handler = makeHandler('idle');
+    await handler.handle(makeTextCtx({
+      chatId: -100, text: 'sounds good', type: 'group', from: { id: 7, first_name: 'Alice' },
+      replyToMessage: { text: 'shall we ship it?', from: { id: 9, first_name: 'Bob' } } as Partial<Message.TextMessage>,
+    }));
+
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    expect(content).toBe('[in reply to Bob: "shall we ship it?"] [from Alice (id 7)]: sounds good');
+  });
+});
+
+describe('sender attribution — photo (handlePhoto)', () => {
+  beforeEach(() => { mockStreamResponse.mockClear(); vi.unstubAllGlobals(); });
+
+  it('prefixes the caption block with the sender marker in a group', async () => {
+    const handler = makeHandler('idle');
+    await handler.handlePhoto(makePhotoCtx({
+      chatId: -100, caption: 'look at this', type: 'group',
+      from: { id: 7, first_name: 'Bob', username: 'bob' },
+    }));
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    const blocks = content as ContentBlockParam[];
+    expect(blocks[0]).toMatchObject({ type: 'text', text: '[from Bob @bob (id 7)]: [User caption]: look at this' });
+    expect(blocks[1]).toMatchObject({ type: 'image' });
+  });
+
+  it('adds a sender-only text block for a captionless group photo', async () => {
+    const handler = makeHandler('idle');
+    await handler.handlePhoto(makePhotoCtx({
+      chatId: -100, caption: undefined, type: 'group', from: { id: 7, first_name: 'Bob' },
+    }));
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    const blocks = content as ContentBlockParam[];
+    expect(blocks[0]).toMatchObject({ type: 'text', text: '[from Bob (id 7)]: (image, no caption)' });
+    expect(blocks[1]).toMatchObject({ type: 'image' });
+  });
+
+  it('leaves a private captionless photo as image-only (no attribution block)', async () => {
+    const handler = makeHandler('idle');
+    await handler.handlePhoto(makePhotoCtx({
+      chatId: 500, caption: undefined, type: 'private', from: { id: 7, first_name: 'Bob' },
+    }));
+    const [, , content] = mockStreamResponse.mock.calls[0]!;
+    const blocks = content as ContentBlockParam[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: 'image' });
+  });
+});

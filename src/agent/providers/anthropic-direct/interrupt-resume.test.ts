@@ -238,6 +238,74 @@ describe('AnthropicDirectQuery — interrupt mid-turn then resume', () => {
     await it.return?.();
   });
 
+  it('emits exactly ONE terminal event on interrupt so the next turn is not wasted (the "poke to start" bug)', async () => {
+    // Distinct from the test above: that one drains PAST the abort error to the
+    // turn.completed, hiding the leftover-terminal bug. AgentSession's real
+    // consumer (sendMessageStreamInternal) breaks on the FIRST terminal event
+    // (`done` OR `error`, agent-session.ts). If the abort path yields BOTH an
+    // `error` and a `turn.completed`, the consumer stops on the error and the
+    // trailing turn.completed is stranded — the NEXT turn's first pull consumes
+    // it as a no-op `done`, so the user's next message runs a full turn late.
+    // That is exactly "I type a message after ESC, nothing happens, so I poke
+    // '.' to make the turn start."
+    const prompts = createPushStream<{ content: string }>();
+    let queryRef: { interrupt(): Promise<void> } | null = null;
+    let turnIdx = 0;
+
+    messagesCreateMock.mockImplementation(() => {
+      turnIdx += 1;
+      if (turnIdx === 1) {
+        return (async function* (): AsyncGenerator<RawMessageStreamEvent> {
+          await queryRef!.interrupt();
+          throw makeAbortError();
+        })();
+      }
+      return fromArray(makeTextStream('resumed reply'));
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: prompts.iterable,
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
+    });
+    queryRef = query;
+    const it = (query as AsyncIterable<ProviderEvent>)[Symbol.asyncIterator]();
+
+    // session.init handshake.
+    await it.next();
+
+    // Turn 1 — drive until the FIRST terminal event, exactly as AgentSession does.
+    prompts.push({ content: 'first' });
+    const isTerminal = (t: string): boolean => t === 'turn.completed' || t === 'error';
+    let r = await it.next();
+    while (!r.done && !isTerminal((r.value as ProviderEvent).type)) {
+      r = await it.next();
+    }
+    expect(r.done).toBe(false);
+    // The aborted turn's FIRST (and only) terminal must be turn.completed — never
+    // an `error` that strands a trailing turn.completed for the next turn to eat.
+    expect((r.value as ProviderEvent).type).toBe('turn.completed');
+
+    // Turn 2 — the real message must run THIS turn, not a turn late.
+    prompts.push({ content: 'second' });
+    let assistantText = '';
+    r = await it.next();
+    while (!r.done) {
+      const ev = r.value as ProviderEvent;
+      if (ev.type === 'delta.text') assistantText += ev.text;
+      if (ev.type === 'turn.completed') break;
+      r = await it.next();
+    }
+    // No wasted turn: the model was actually called again (turnIdx===2) and the
+    // reply streamed. Pre-fix this failed — Turn 2 consumed the stranded
+    // turn.completed as a no-op and turnIdx stayed 1.
+    expect(assistantText).toContain('resumed reply');
+    expect(turnIdx).toBe(2);
+
+    prompts.close();
+    await it.return?.();
+  });
+
   it('a real (non-abort) error still terminates the generator with an error event', async () => {
     // Guards against over-correction: only interrupts keep the session alive.
     // A genuine error (no abort signal) must still surface as an `error` event

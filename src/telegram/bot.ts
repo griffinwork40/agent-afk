@@ -45,6 +45,17 @@ export interface BotOptions extends SessionManagerOptions {
    * in the bootstrap.
    */
   allowedChatIds: Set<number>;
+
+  /**
+   * Chat IDs with the opt-in "tag-only" response policy: in these chats the bot
+   * answers a non-command text/photo message only when addressed (a reply to
+   * the bot, an @mention, or a text_mention resolving to the bot). Slash-
+   * commands are unaffected; chats not in this set behave exactly as before.
+   * An empty/omitted set (the default) applies the policy to no chat. Sourced
+   * from afk.config.json `telegram.tagOnlyChats` (or the
+   * AFK_TELEGRAM_TAG_ONLY_CHAT_IDS env fallback) in the bootstrap.
+   */
+  tagOnlyChats?: Set<number>;
 }
 
 /**
@@ -79,7 +90,8 @@ export class TelegramBot {
       this.bot,
       this.sessionManager,
       this.registeredCommandChats,
-      this.log.bind(this)
+      this.log.bind(this),
+      options.tagOnlyChats ?? new Set()
     );
     // Invariant: pass the SOLE Telegraf instance and the MessageHandler so
     // _run can render elicitation records interactively. No second bot

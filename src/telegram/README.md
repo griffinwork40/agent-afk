@@ -103,6 +103,7 @@ Aligned with the Agent SDK's slash command surface:
 | --------------------------------- | -------- | --------------------------------------- |
 | `TELEGRAM_BOT_TOKEN`              | Yes      | From [@BotFather](https://t.me/BotFather) |
 | `AFK_TELEGRAM_ALLOWED_CHAT_IDS`   | Yes      | Comma-separated numeric chat IDs — the **inbound gate** (who can message the bot) |
+| `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS`  | No       | Comma-separated chat IDs where the bot answers **only when addressed** (reply/@mention/text_mention). Fallback for `telegram.tagOnlyChats`. See [Tag-only response policy](#tag-only-response-policy) |
 | `AFK_TELEGRAM_NOTIFY_MODE`        | No       | Outbound fan-out: `primary` (default — one chat), `broadcast` (every allowed chat), `custom` |
 | `AFK_TELEGRAM_PRIMARY_CHAT_ID`    | No       | Default chat for outbound notifications. Defaults to the first private/DM chat in the allowlist |
 | `ANTHROPIC_API_KEY` *or* `CLAUDE_CODE_OAUTH_TOKEN` | One of (or keychain) | See Auth section |
@@ -148,6 +149,92 @@ Resolution (`src/telegram/notify-routing.ts`), highest precedence first:
   chats. Single-chat setups are unaffected; multi-chat setups now default to the
   primary chat — set `mode: "broadcast"` (or `AFK_TELEGRAM_NOTIFY_MODE=broadcast`)
   to restore the old behavior.
+
+## Tag-only response policy
+
+By default the bot answers **every** non-command text/photo message in every
+allowlisted chat. That's fine for a DM, but noisy in a shared group where the
+bot is one participant among many. The **tag-only** policy makes the bot respond
+in a configured chat **only when it is addressed** — otherwise the message is
+dropped silently (no reply, no `👀` reaction, just a log line). Slash-commands
+(`/help`, `/clear`, …) are always honored regardless of this policy, and any
+chat **not** listed behaves exactly as before.
+
+A message counts as *addressed to the bot* when any of these hold:
+
+1. It **replies** to one of the bot's own messages.
+2. It **@mentions** the bot's username (a Telegram `mention` entity equal to
+   `@<botUsername>`, matched case-insensitively).
+3. It carries a **`text_mention`** entity (used for accounts without a public
+   username) whose user id is the bot's id.
+
+For a photo, the caption and its `caption_entities` are inspected the same way,
+plus the reply target.
+
+> [!IMPORTANT]
+> **You must turn Telegram privacy mode OFF for the bot**, or this policy is
+> moot in groups. With privacy mode **ON** (the BotFather default), Telegram
+> only delivers to the bot the messages that already address it (commands,
+> replies, @mentions) — so the bot never even *sees* the ambient chatter the
+> policy is meant to ignore, and adding a chat to `tagOnlyChats` changes
+> nothing. Disable it once per bot:
+> **@BotFather → `/mybots` → your bot → Bot Settings → Group Privacy → Turn off**
+> (equivalently `/setprivacy` → select the bot → **Disable**). agent-afk does
+> **not** enforce or change this setting for you — it only reminds you at
+> startup when `tagOnlyChats` is non-empty.
+
+Configure it via `afk.config.json` (authoritative) or the
+`AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` env var (fallback — the config value wins when
+both are set):
+
+```jsonc
+// afk.config.json
+{
+  "telegram": {
+    // Chats where the bot only answers when addressed. Others are unaffected.
+    "tagOnlyChats": [-1001234567890, -1009876543210]
+  }
+}
+```
+
+```bash
+# Env fallback (comma-separated; negative = group/channel id). Config wins.
+AFK_TELEGRAM_TAG_ONLY_CHAT_IDS=-1001234567890,-1009876543210
+```
+
+Because this controls **which chats the bot will respond in**, it is a
+human-tier config key (like the allowlist and `telegram.notify.*`): the
+`afk config` CLI can manage it, but the agent's own `config_set` tool cannot.
+The env twin `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` is likewise protected.
+
+## Reply & quote context
+
+A Telegram chat maps to one `AgentSession`, and each inbound message reaches the
+model as a plain user turn carrying only the sender's own text. When a user
+**replies** to (or manually **quotes**) an earlier message, Telegram delivers the
+referenced message in `reply_to_message` / `quote`, but that content would
+otherwise be dropped — so the model receives the reply with no idea what it refers
+to. This breaks two cases: replying to an old / scrolled-back / post-`/clear`
+message ("expand point 3"), and — most sharply — in a **tag-only** group, replying
+to an ambient message the bot never ingested and @mentioning it ("what do you
+think of this?").
+
+`reply-context.ts` fixes this by prepending a compact, system-trusted marker to
+the model input, e.g. `[in reply to Alice: "…the quoted text…"]` (or
+`[in reply to the assistant: "…"]` when replying to the bot's own message). The
+manual quote span wins over the full replied-to text, which wins over its caption;
+a reply to a photo/sticker with no text degrades to `[in reply to Alice's message]`.
+It fires in **all** chat types (including private DMs) but **only** when the message
+is a reply/quote — a non-reply message stays byte-identical.
+
+Trust note: the quoted body and sender name are user-controlled, so the marker
+delimiters (`[` `]`) are stripped from both (and newlines neutralized) — a quoted
+body cannot forge or break out of the marker. Same anti-injection posture as
+`sender-attribution.ts`.
+
+The marker is deliberately excluded from the value handed to a pending
+`ask_question` elicitation resolver: replying to the bot's own question is the
+natural way to answer it, and the resolver needs the user's literal answer.
 
 ## Testing
 

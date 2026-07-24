@@ -42,6 +42,14 @@ export interface ScheduledTaskConfig {
    * Omitting preserves legacy behavior (callback always fires).
    */
   notifyOn?: 'failure' | 'always' | 'never';
+  /**
+   * Optional explicit chat target for this task's completion notification.
+   * A number is a raw Telegram chat id; a string is either a numeric id or a
+   * name resolved via afk.config.json `telegram.chatAliases`. Threaded through
+   * to `ScheduledTask.notifyChat`; the daemon resolves + allowlist-gates it at
+   * completion-push time. Omitting it preserves default routing.
+   */
+  notifyChat?: number | string;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
   /** ISO 8601 last-update timestamp. */
@@ -178,5 +186,6 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     trigger: config.trigger ?? 'cron',
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
+    ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
   };
 }

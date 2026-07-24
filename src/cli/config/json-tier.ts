@@ -188,6 +188,29 @@ export function loadJsonConfig(): {
           if (typeof json.telegram.verifyDone === 'boolean') {
             telegram.verifyDone = json.telegram.verifyDone;
           }
+          if (Array.isArray(json.telegram.tagOnlyChats)) {
+            const tagOnly = json.telegram.tagOnlyChats.filter(
+              (t): t is number => typeof t === 'number' && Number.isFinite(t),
+            );
+            if (tagOnly.length > 0) telegram.tagOnlyChats = tagOnly;
+          }
+          // chatAliases: name → chat-id map. Drop non-numeric, non-finite, and
+          // zero values (0 is the sentinel for "no chat" throughout routing).
+          if (
+            json.telegram.chatAliases &&
+            typeof json.telegram.chatAliases === 'object' &&
+            !Array.isArray(json.telegram.chatAliases)
+          ) {
+            const aliases: Record<string, number> = {};
+            for (const [name, id] of Object.entries(
+              json.telegram.chatAliases as Record<string, unknown>,
+            )) {
+              if (typeof id === 'number' && Number.isFinite(id) && id !== 0) {
+                aliases[name] = id;
+              }
+            }
+            if (Object.keys(aliases).length > 0) telegram.chatAliases = aliases;
+          }
           config.telegram = telegram;
         }
 

@@ -39,6 +39,19 @@ export interface ScheduledTask {
    * Omitting this field preserves existing behavior (callback always fires).
    */
   notifyOn?: 'failure' | 'always' | 'never';
+  /**
+   * Optional explicit chat target for this task's completion notification.
+   * A number is a raw Telegram chat id; a string is either a numeric id or a
+   * name looked up in afk.config.json `telegram.chatAliases`. When set (and
+   * allowlisted), the daemon delivers this task's completion push to THIS chat
+   * instead of the configured default notify target. When omitted, routing is
+   * unchanged (resolveConfiguredNotifyTargets). The resolved chat must be in the
+   * inbound allowlist or the override is refused and delivery falls back to the
+   * default — see the daemon `onTaskComplete` wiring in
+   * `src/cli/commands/daemon.ts`. Independent of `notifyOn` (which only decides
+   * WHETHER to notify; this decides WHERE).
+   */
+  notifyChat?: number | string;
 }
 
 /**

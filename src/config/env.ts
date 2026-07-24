@@ -320,6 +320,29 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_SUBAGENT_IDLE_TIMEOUT_MS',
+    description:
+      'Forked-subagent progress-aware idle-watchdog window in ms; 0 disables the watchdog; an ' +
+      'explicit per-fork config.idleTimeoutMs still wins. Fires when a forked child produces no ' +
+      'observable output event for this window, aborting the same controller the wall-clock ' +
+      'timeout targets so partial output is preserved and the run classifies as a failure. This ' +
+      'is distinct from AFK_SUBAGENT_TIMEOUT_MS, the blunt wall-clock that bounds total turn ' +
+      'time: the idle watchdog is the tighter first-to-fire bound and never fires while the ' +
+      'stream is legitimately parked on a provider-communicated backoff (OAuth pause, or a ' +
+      'rate-limit event carrying a retry-after), extending the deadline for the pause window ' +
+      'instead. Default 480000 (8 min) clears the worst-case transient-429 backoff the watchdog ' +
+      'is currently blind to (about 363s) with roughly 2 min of margin, while staying ' +
+      'materially tighter than the 45-min wall-clock. Unset, empty, or unparseable input falls ' +
+      'back to the default; a negative value is treated as invalid and also falls back. Set to 0 ' +
+      'to disable the idle watchdog for a whole session (the wall-clock still applies). v1 ' +
+      'applies to forked sub-agent turns only, not top-level or daemon sessions.',
+    type: 'number',
+    required: false,
+    default: '480000',
+    example: '300000',
+    category: 'model',
+  },
+  {
     name: 'AFK_VISION_MODELS',
     description: 'Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. "qwen2.5-vl" matches a local VL id); prefix a token with "!" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families.',
     type: 'string',
@@ -647,6 +670,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'telegram',
   },
   {
+    name: 'AFK_TELEGRAM_TAG_ONLY_CHAT_IDS',
+    description: 'Comma-separated list of Telegram chat IDs where the bot answers only when addressed (a reply to the bot, an @mention of the bot, or a text_mention resolving to the bot). Slash-commands are unaffected; chats not listed behave as usual. The afk.config.json telegram.tagOnlyChats block takes precedence. Requires Telegram privacy mode OFF (BotFather /setprivacy Disable) for non-addressed group messages to reach the bot.',
+    type: 'string',
+    required: false,
+    example: '-100987654321,123456789',
+    category: 'telegram',
+  },
+  {
     name: 'AFK_TELEGRAM_PRIMARY_CHAT_ID',
     description: 'Default chat ID for outbound notifications (primary-mode routing). When unset, notifications go to the first private/DM chat in AFK_TELEGRAM_ALLOWED_CHAT_IDS. The afk.config.json telegram.notify block takes precedence.',
     type: 'string',
@@ -671,10 +702,10 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'TELEGRAM_VERBOSE',
-    description: 'Set to 1 to log per-message details from the Telegram bot — chat IDs, message text, latency.',
+    description: "Set to 'true' to log per-message details from the Telegram bot — chat IDs, message text, latency. (The code checks the literal string 'true'.)",
     type: 'boolean',
     required: false,
-    example: '1',
+    example: 'true',
     category: 'telegram',
   },
   {
@@ -1373,6 +1404,7 @@ export const env = {
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
   get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
   get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
+  get AFK_SUBAGENT_IDLE_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_IDLE_TIMEOUT_MS']; },
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
@@ -1401,6 +1433,7 @@ export const env = {
   get TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['TELEGRAM_BOT_TOKEN']; },
   get AFK_TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['AFK_TELEGRAM_BOT_TOKEN']; },
   get AFK_TELEGRAM_ALLOWED_CHAT_IDS(): string | undefined { return process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS']; },
+  get AFK_TELEGRAM_TAG_ONLY_CHAT_IDS(): string | undefined { return process.env['AFK_TELEGRAM_TAG_ONLY_CHAT_IDS']; },
   get AFK_TELEGRAM_PRIMARY_CHAT_ID(): string | undefined { return process.env['AFK_TELEGRAM_PRIMARY_CHAT_ID']; },
   get AFK_TELEGRAM_NOTIFY_MODE(): string | undefined { return process.env['AFK_TELEGRAM_NOTIFY_MODE']; },
   get TELEGRAM_DATA_DIR(): string | undefined { return process.env['TELEGRAM_DATA_DIR']; },

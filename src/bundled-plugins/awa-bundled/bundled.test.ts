@@ -40,7 +40,7 @@ const PINNED_HASHES = {
   // vendored byte-equal, so no INTENTIONAL_DIFFS entry is needed. Drift row is
   // wired in UPSTREAM_PATHS below (skips until example-plugin is co-located).
   automate: '93380f58316e607f6b95b27a9c2375f0a5403f3a42eb695d0490b50225d8838c',
-  contract: '748eaf01deda592913f463b23c81a6be3a89ae3b316f31f531a8488dc5bc1a7c',
+  contract: '0ea822d8124f5fc55103a3e5e6d0fcb43889bf3f089bc722350da02ecf4f960f',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
   // Wave 3.5 — prose-consistency fix only; no behavior change to the guard.

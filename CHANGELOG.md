@@ -11,6 +11,54 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.73.0] - 2026-07-24
+
+### Added
+- inject reply & quote context into inbound messages (#688) (50606c0)
+
+## [5.72.0] - 2026-07-24
+
+### Added
+- attribute inbound group messages with the sender (#685) (67fb8b5)
+
+## [5.71.1] - 2026-07-23
+
+### Fixed
+- ESC interrupt halts promptly and never strands the next turn (#676) (e108475)
+
+### Changed
+- /simplify wins for the terminal-compositor pair (#682) (#684) (afd3eda)
+
+## [5.71.0] - 2026-07-23
+
+### Added
+- per-target chat selection for send_telegram + scheduled tasks (#681) (0d0a50e)
+
+## [5.70.0] - 2026-07-23
+
+### Added
+- per-chat tag-only response policy (#680) (f0f52d9)
+
+## [5.69.0] - 2026-07-23
+
+### Added
+- non-convergence stop criterion in sub-agent contract (#679) (2daf898)
+
+## [5.68.0] - 2026-07-23
+
+### Added
+- progress-aware idle watchdog for forked turns (#672) (74543b6)
+
+## [5.67.0] - 2026-07-23
+
+### Added
+- self-reported convergence/stop criterion for general-purpose (#675) (cc68e72)
+
+## [5.66.0] - 2026-07-23
+
+### Added
+- bound general-purpose subagent with a generous tool-use ceiling (#673) (5e2974e)
+
 ## [5.65.0] - 2026-07-22
 
 ### Added
