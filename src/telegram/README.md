@@ -232,6 +232,10 @@ delimiters (`[` `]`) are stripped from both (and newlines neutralized) — a quo
 body cannot forge or break out of the marker. Same anti-injection posture as
 `sender-attribution.ts`.
 
+The marker is deliberately excluded from the value handed to a pending
+`ask_question` elicitation resolver: replying to the bot's own question is the
+natural way to answer it, and the resolver needs the user's literal answer.
+
 ## Testing
 
 ```bash

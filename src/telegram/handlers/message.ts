@@ -461,7 +461,7 @@ export class MessageHandler {
       // no-caption path byte-identical. See reply-context.ts.
       const replyCtx = replyContextPrefix({
         replyToMessage: msg?.reply_to_message as RepliedMessage | undefined,
-        quote: (msg as (Message.PhotoMessage & { quote?: { text?: string } }) | undefined)?.quote,
+        quote: msg?.quote,
         botId: ctx.botInfo?.id,
       });
       const attribution = replyCtx + prefix;
@@ -537,13 +537,18 @@ export class MessageHandler {
     // for pending elicitation, enqueue, and processOne paths. The tag-only gate
     // below still uses raw text + entity offsets for addressed-to-bot checks.
     // See sender-attribution.ts.
-    const tgMsg = ctx.message as Message.TextMessage & { quote?: { text?: string } };
+    const tgMsg = ctx.message as Message.TextMessage;
     const replyCtx = replyContextPrefix({
       replyToMessage: tgMsg.reply_to_message as RepliedMessage | undefined,
       quote: tgMsg.quote,
       botId: ctx.botInfo?.id,
     });
     const attributedMessageText = replyCtx + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
+    // Elicitation answers must NOT carry the reply-context marker: answering an
+    // ask_question by replying to the bot's own question is the natural gesture, and
+    // the resolver needs the literal answer (a "[in reply to …] 5" breaks number/
+    // choice validation). Restores the pre-#688 elicitation value (senderPrefix + text).
+    const elicitationAnswer = senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
 
     // Answer consumed by active ask_question elicitation — never reaches
     // session message queue. Intercept BEFORE the session.state check so
@@ -572,14 +577,14 @@ export class MessageHandler {
       if (this.ledgerOriginatedPendingChats.has(chatId)) {
         this.pendingElicitations.delete(chatId);
         this.ledgerOriginatedPendingChats.delete(chatId);
-        elicitResolver(attributedMessageText);
+        elicitResolver(elicitationAnswer);
         return;
       }
       // Case 2: session-local — fire only when the session is genuinely busy.
       const existingSession = this.sessionManager.getSessionIfExists(chatId);
       if (existingSession && existingSession.state !== 'idle') {
         this.pendingElicitations.delete(chatId);
-        elicitResolver(attributedMessageText);
+        elicitResolver(elicitationAnswer);
         return;
       }
       // Stale entry — session was reset while elicitation was in flight.

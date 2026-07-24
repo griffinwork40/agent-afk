@@ -69,7 +69,8 @@ const MAX_QUOTE_CODE_POINTS = 300;
  *
  * Unlike {@link sanitizeField} (applied to identity fields), this does NOT drop
  * `@`, `(`, or `)` — those are legitimate inside a quoted message body. It only
- * strips the marker delimiters `[` and `]`, maps C0 control chars + DEL (which
+ * strips the marker delimiters `[` `]` and the `"` snippet delimiter (which
+ * wraps the snippet inside the marker), maps C0 control chars + DEL (which
  * covers `\n` `\r` `\t`) to a space so the marker stays single-line, collapses
  * whitespace, trims, then code-point-aware slices to a cap (spread → array so a
  * non-BMP character is never cut at a surrogate-pair boundary), appending `…`
@@ -78,7 +79,7 @@ const MAX_QUOTE_CODE_POINTS = 300;
 export function sanitizeQuote(raw: string): string {
   const mapped = [...raw]
     .map((ch) => {
-      if (ch === '[' || ch === ']') return ''; // drop marker delimiters (anti-forgery)
+      if (ch === '[' || ch === ']' || ch === '"') return ''; // drop marker/snippet delimiters (anti-forgery)
       const cp = ch.codePointAt(0) ?? 0;
       if (cp < 0x20 || cp === 0x7f) return ' '; // control chars → space (keep it single-line)
       return ch;
@@ -91,9 +92,20 @@ export function sanitizeQuote(raw: string): string {
 }
 
 /**
+ * Reserved trust-anchor label for the bot's own messages (see the `from.id ===
+ * botId` branch below). A participant whose sanitized display name collides
+ * with this literal (case-insensitively) must NOT be allowed to impersonate
+ * it — {@link authorLabel} falls through to the `@username`/`''` fallback
+ * instead of returning the colliding name verbatim.
+ */
+const RESERVED_ASSISTANT_LABEL = 'the assistant';
+
+/**
  * Build the author label for a replied-to message: `the assistant` when the
  * replied-to sender is the bot itself, else the sanitized display name (falling
- * back to `@username`), else `''` when nothing identifying survives.
+ * back to `@username`), else `''` when nothing identifying survives. A
+ * participant name that collides with the reserved `the assistant` label
+ * (case-insensitively) is rejected — see {@link RESERVED_ASSISTANT_LABEL}.
  */
 function authorLabel(from: ReplySender | undefined, botId: number | undefined): string {
   if (
@@ -103,11 +115,11 @@ function authorLabel(from: ReplySender | undefined, botId: number | undefined): 
     botId !== undefined &&
     from.id === botId
   ) {
-    return 'the assistant';
+    return RESERVED_ASSISTANT_LABEL;
   }
   if (!from) return '';
   const name = sanitizeField([from.first_name ?? '', from.last_name ?? ''].join(' '));
-  if (name) return name;
+  if (name && name.toLowerCase() !== RESERVED_ASSISTANT_LABEL) return name;
   const handle = from.username ? sanitizeField(from.username) : '';
   return handle ? `@${handle}` : '';
 }
@@ -133,10 +145,15 @@ export function replyContextPrefix(params: ReplyContextParams): string {
 
   const author = authorLabel(replyToMessage?.from, botId);
 
-  // Precedence: manual quote span > replied text > replied caption.
-  const rawContent =
-    quoteText.length > 0 ? quoteText : replyToMessage?.text ?? replyToMessage?.caption ?? '';
-  const snippet = sanitizeQuote(rawContent);
+  // Precedence: manual quote span > replied text > replied caption — keyed on
+  // the SANITIZED result (with fallthrough), not raw length. A manual quote
+  // that is non-empty but sanitizes to empty (e.g. "   ", "[]") must not win
+  // over real replied-to text; keying on raw length would wrongly suppress it
+  // and degrade to the media-hint fallback below.
+  const snippet =
+    sanitizeQuote(quoteText) ||
+    sanitizeQuote(replyToMessage?.text ?? '') ||
+    sanitizeQuote(replyToMessage?.caption ?? '');
 
   if (snippet) {
     return author ? `[in reply to ${author}: "${snippet}"] ` : `[in reply to: "${snippet}"] `;

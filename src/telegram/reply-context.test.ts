@@ -51,6 +51,10 @@ describe('sanitizeQuote', () => {
     expect(sanitizeQuote('[]\n\t')).toBe('');
     expect(sanitizeQuote('')).toBe('');
   });
+
+  it('strips the " snippet delimiter', () => {
+    expect(sanitizeQuote('he said "hi"')).toBe('he said hi');
+  });
 });
 
 describe('replyContextPrefix — no-op passthrough', () => {
@@ -91,6 +95,17 @@ describe('replyContextPrefix — content precedence', () => {
       "[in reply to Bob's message] ",
     );
   });
+
+  it('falls through to the replied-to text when the manual quote sanitizes to empty', () => {
+    // Raw quoteText.length > 0 but sanitizes to '' (whitespace-only) — must NOT
+    // suppress the real replied-to text and degrade to the media-hint fallback.
+    expect(
+      replyContextPrefix({
+        replyToMessage: { text: 'real text', from: { id: 2, first_name: 'Bob' } },
+        quote: { text: '   ' },
+      }),
+    ).toBe('[in reply to Bob: "real text"] ');
+  });
 });
 
 describe('replyContextPrefix — author labeling', () => {
@@ -126,6 +141,38 @@ describe('replyContextPrefix — author labeling', () => {
     expect(
       replyContextPrefix({ replyToMessage: { text: 'x', from: { id: 99, first_name: 'MyBot' } } }),
     ).toBe('[in reply to MyBot: "x"] ');
+  });
+
+  it('rejects a participant display name that collides with the reserved "the assistant" label', () => {
+    // Sanitized name is literally "the assistant" but from.id !== botId — must
+    // NOT be allowed to impersonate the bot's trust-anchor label.
+    expect(
+      replyContextPrefix({
+        replyToMessage: { text: 'hi', from: { id: 2, first_name: 'the', last_name: 'assistant' } },
+        botId: 99,
+      }),
+    ).toBe('[in reply to: "hi"] ');
+  });
+
+  it('falls back to @username when the display name collides with the reserved label', () => {
+    expect(
+      replyContextPrefix({
+        replyToMessage: {
+          text: 'hi',
+          from: { id: 2, first_name: 'the', last_name: 'assistant', username: 'alice' },
+        },
+        botId: 99,
+      }),
+    ).toBe('[in reply to @alice: "hi"] ');
+  });
+
+  it('still labels the genuine bot reply as "the assistant" (from.id === botId)', () => {
+    expect(
+      replyContextPrefix({
+        replyToMessage: { text: 'hi', from: { id: 99, first_name: 'the', last_name: 'assistant' } },
+        botId: 99,
+      }),
+    ).toBe('[in reply to the assistant: "hi"] ');
   });
 });
 
