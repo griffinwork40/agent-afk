@@ -46,6 +46,27 @@ const TOOL_INFLIGHT_RECHECK_MS = 15_000;
 /** Max sub-agent progress lines retained in the bounded live-preview footer. */
 const MAX_SUBAGENT_PREVIEW_LINES = 4;
 
+/**
+ * Tool-progress (`◦`) lines stay HIDDEN until the turn has been working this
+ * long. Most turns finish faster than this and now render no progress noise at
+ * all — the live preview goes straight from `Thinking…` to the answer.
+ *
+ * Withheld lines are still recorded (see `progressLines`); when the gate opens
+ * the rolling region renders the most recent ones, so nothing is lost — it is a
+ * render delay, not a drop. Overridable per call via `options.progressDelayMs`
+ * (tests pass 0 to assert rendering deterministically).
+ */
+const PROGRESS_START_DELAY_MS = 5_000;
+
+/**
+ * Max `◦` tool-progress lines kept in the rolling live-preview region. Older
+ * lines are trimmed rather than accumulated, so a long tool-heavy turn no longer
+ * grows the preview without bound (which also meant one Telegram edit per round
+ * against an ever-longer message). Same bounded-region treatment
+ * `renderSubagentFooter` already applies to sub-agent steps.
+ */
+const MAX_PROGRESS_LINES = 6;
+
 // StreamTimeoutError lives in its own module so the message handler's
 // `instanceof` check survives `vi.mock('./streaming.js')` in tests (see
 // stream-timeout-error.ts). Imported above for local use (the watchdog throws
@@ -134,6 +155,38 @@ export function renderSubagentFooter(steps: number, recent: readonly string[]): 
   return shown.length > 0 ? `\n${head}\n  ${shown.join('\n  ')}` : `\n${head}`;
 }
 
+/**
+ * Render the BOUNDED `◦` tool-progress region for the live preview. Returns ''
+ * for no lines. Only the last MAX_PROGRESS_LINES are shown regardless of how
+ * many are passed, so a tool-heavy turn keeps a fixed-height status region
+ * instead of an ever-growing log. Pure + exported for unit tests.
+ */
+export function renderProgressRegion(lines: readonly string[]): string {
+  const shown = lines.slice(-MAX_PROGRESS_LINES);
+  return shown.length > 0 ? shown.map((l) => `\n${l}`).join('') : '';
+}
+
+/**
+ * One-line activity receipt appended to the CLEAN final message, replacing the
+ * `◦` progress log that cleanFinal deletes: the turn's cost stays visible
+ * without the per-round noise. Empty when no tool work happened, so plain
+ * question/answer turns are unchanged.
+ *
+ * Plain text on purpose — `markdownToTelegramHtml` escapes `<`/`>` before
+ * injecting its own fixed tag set (formatter.ts), so any HTML written here
+ * would reach the user as literal visible markup.
+ *
+ * Invariant: must NOT use the `◦` prefix. In this module `◦` marks live
+ * progress/status noise that cleanFinal exists to strip, and tests assert the
+ * delivered answer contains no `◦` at all. The receipt is a distinct concept
+ * (a kept summary, not stripped noise) and carries its own marker.
+ */
+export function renderActivityReceipt(toolRounds: number, elapsedMs: number): string {
+  if (toolRounds <= 0) return '';
+  const secs = Math.max(1, Math.round(elapsedMs / 1_000));
+  return `\n\n⏱️ ${toolRounds} ${toolRounds === 1 ? 'step' : 'steps'} · ${secs}s`;
+}
+
 /** Countdown update granularity during a usage-limit pause: every 5 minutes. */
 const PAUSE_COUNTDOWN_INTERVAL_MS = 5 * 60 * 1_000;
 /** Extra slack (ms) added to the timeout deadline while paused. */
@@ -165,6 +218,12 @@ export async function streamResponse(
      * the callback are caught and logged — they never disrupt delivery.
      */
     onComplete?: (assistantText: string, metadata?: ResponseMetadata) => void | Promise<void>;
+    /**
+     * How long the turn must run before `◦` tool-progress lines start rendering.
+     * Defaults to PROGRESS_START_DELAY_MS. Pass 0 to render immediately (tests
+     * assert progress output without depending on wall-clock timing).
+     */
+    progressDelayMs?: number;
   } = {}
 ): Promise<void> {
   if (!ctx.chat?.id) {
@@ -227,6 +286,25 @@ export async function streamResponse(
   // counter + the last few lines, instead of an unbounded per-tool-call append.
   let subagentSteps = 0;
   const recentSubagentSteps: string[] = [];
+
+  // Invariant: the `◦` tool-progress region is a BOUNDED, REWRITABLE tail of
+  // `accumulated`, not an append-only log. `progressRunStart` is the offset in
+  // `accumulated` where the current consecutive progress run begins; each new
+  // progress event rewrites `accumulated` from that offset with the last
+  // MAX_PROGRESS_LINES entries. That offset is only valid while nothing else
+  // appends to `accumulated`, so EVERY other writer (content chunk, assistant
+  // message, suggestion, stream_retry rollback) must call `endProgressRun()`
+  // first — otherwise the rewrite would truncate their text.
+  const progressDelayMs = options.progressDelayMs ?? PROGRESS_START_DELAY_MS;
+  const turnStartedAt = Date.now();
+  let progressLines: string[] = [];
+  let progressRunStart = -1;
+  // Total tool rounds seen this turn (never trimmed) — drives the activity receipt.
+  let progressRounds = 0;
+  const endProgressRun = (): void => {
+    progressRunStart = -1;
+    progressLines = [];
+  };
 
   const sendOrEdit = async (text: string, force = false): Promise<void> => {
     // markdownToTelegramHtml runs 8 serial regex passes over the full accumulated
@@ -486,6 +564,9 @@ export async function streamResponse(
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'content') {
+          // Answer text follows the progress region, so the region is now frozen
+          // history — stop rewriting it (see the progressRunStart invariant).
+          endProgressRun();
           if (!inContentRun) {
             contentRunStartAccumulated = accumulated.length;
             contentRunStartAnswer = answerText.length;
@@ -503,6 +584,9 @@ export async function streamResponse(
           accumulated = accumulated.slice(0, contentRunStartAccumulated);
           answerText = answerText.slice(0, contentRunStartAnswer);
           inContentRun = false;
+          // The rollback moved the end of `accumulated`, invalidating any live
+          // progress-region offset into it.
+          endProgressRun();
           await sendOrEdit(livePreview(), true);
         }
         if (event.type === 'chunk' && event.chunk.type === 'tool_diff') {
@@ -512,6 +596,9 @@ export async function streamResponse(
           accumulated = event.message.content;
           answerText = event.message.content;
           inContentRun = false;
+          // `accumulated` was replaced wholesale — any progress-region offset
+          // into the old buffer is stale.
+          endProgressRun();
           await sendOrEdit(livePreview());
         }
         // Lane D — progress summaries appear in the response as dim lines
@@ -519,9 +606,16 @@ export async function streamResponse(
         // above since they go through sendOrEdit on the same accumulated
         // buffer, so rapid progress bursts won't spam the Telegram API.
         if (event.type === 'progress') {
-          // Round boundary: a new content run after this starts a fresh
-          // snapshot, so a later stream_retry rolls back only the new round.
+          // Invariant: this assignment is NOT cosmetic and must stay
+          // unconditional — it is the stream_retry round boundary. A new content
+          // run after this point re-snapshots contentRunStart*, so a later
+          // retry rolls back only the new round. Skipping it (e.g. by early
+          // -returning when progress rendering is gated off below) leaves the
+          // snapshot at an older offset and a later stream_retry truncates MORE
+          // of `answerText` than the retry produced — silently deleting
+          // already-delivered answer text. Gate the RENDER, never this line.
           inContentRun = false;
+          progressRounds++;
           const { description, summary, lastToolName } = event.progress;
           // These fields are model-controlled (path/command/URL text from
           // summarizeToolInput) and markdownToTelegramHtml does not strip
@@ -531,11 +625,22 @@ export async function streamResponse(
           const safeToolName = lastToolName ? sanitizeLabel(lastToolName) : lastToolName;
           const safeSummary = summary ? sanitizeLabel(summary) : summary;
           const line = safeToolName
-            ? `\n◦ ${safeDescription} (${safeToolName})`
-            : `\n◦ ${safeDescription}`;
-          accumulated += line;
-          if (safeSummary) accumulated += `\n  ${safeSummary}`;
-          await sendOrEdit(livePreview());
+            ? `◦ ${safeDescription} (${safeToolName})`
+            : `◦ ${safeDescription}`;
+          // Record first, render second: a line withheld by the latency gate is
+          // still retained, so when the gate opens the bounded region shows the
+          // most recent rounds rather than starting from empty.
+          if (progressRunStart < 0) progressRunStart = accumulated.length;
+          progressLines.push(safeSummary ? `${line}\n  ${safeSummary}` : line);
+          if (progressLines.length > MAX_PROGRESS_LINES) {
+            progressLines = progressLines.slice(-MAX_PROGRESS_LINES);
+          }
+          if (Date.now() - turnStartedAt >= progressDelayMs) {
+            // Rewrite the region in place (bounded) instead of appending, so the
+            // preview keeps a fixed height across a long tool-heavy turn.
+            accumulated = accumulated.slice(0, progressRunStart) + renderProgressRegion(progressLines);
+            await sendOrEdit(livePreview());
+          }
         }
         // Lane D — post-turn prompt suggestion appended to the message.
         // Skip when the suggestion duplicates the already-rendered response:
@@ -545,7 +650,13 @@ export async function streamResponse(
         // text via chunk/message events, so appending `\n\n💡 <same text>`
         // would produce a visible duplicate prefixed with 💡. Only append
         // true follow-up hints whose payload differs from the response.
-        if (event.type === 'suggestion' && event.suggestion.trim() !== accumulated.trim()) {
+        // Compare against `answerText`, not `accumulated`: the gate's purpose is
+        // "don't echo text already rendered as the ANSWER", and `accumulated`
+        // also carries the `◦` progress region — whose presence would make the
+        // comparison spuriously unequal and append a duplicate 💡 line to the
+        // answer on exactly the tool-heavy turns that produce progress.
+        if (event.type === 'suggestion' && event.suggestion.trim() !== answerText.trim()) {
+          endProgressRun();
           accumulated += `\n\n💡 ${event.suggestion}`;
           answerText += `\n\n💡 ${event.suggestion}`;
           await sendOrEdit(livePreview());
@@ -620,7 +731,13 @@ export async function streamResponse(
             // delete the preview if something actually landed — if the very first
             // chunk failed, `delivered` is false and the frozen preview must
             // survive so the user is never left with zero visible content.
-            const delivered = await deliverClean(answerText);
+            // The receipt is appended at DELIVERY only, never to `answerText`
+            // itself: `answerText` is what onComplete records into the resumable
+            // session store below, and a UI receipt there would corrupt the
+            // stored transcript (and be replayed by `afk --resume`).
+            const delivered = await deliverClean(
+              answerText + renderActivityReceipt(progressRounds, Date.now() - turnStartedAt),
+            );
             if (delivered && sentMessage) {
               await ctx.telegram.deleteMessage?.(chatId, sentMessage.message_id).catch(() => {});
               // Null the preview ref so the post-loop overflow block (which would
@@ -628,6 +745,17 @@ export async function streamResponse(
               sentMessage = null;
             }
           } else if (accumulated.trim()) {
+            await sendOrEdit(accumulated, true);
+          } else if (progressLines.length > 0) {
+            // Invariant: a turn must never end on the bare `Thinking…` placeholder.
+            // Reachable when the latency gate withheld EVERY progress line and no
+            // answer text arrived — e.g. an abort mid tool-loop, which yields
+            // turn.completed with no assistant text (a progress-only turn). Before
+            // the gate existed `accumulated` always held the progress lines, so the
+            // branch above covered this; now the withheld region must be flushed
+            // explicitly. Assigning `accumulated` (not just editing) also keeps the
+            // post-loop overflow branch able to send chunks[1..] of a long region.
+            accumulated = renderProgressRegion(progressLines).trimStart();
             await sendOrEdit(accumulated, true);
           }
           // Record the completed turn into the shared session store (Telegram

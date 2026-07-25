@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse, StreamTimeoutError, renderSubagentFooter, replyWithFloodRetry } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderActivityReceipt, replyWithFloodRetry } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
@@ -105,7 +105,10 @@ describe('streamResponse', () => {
       );
     });
 
-    await streamResponse(ctx, session, 'go');
+    // progressDelayMs: 0 opts out of the latency gate (PROGRESS_START_DELAY_MS)
+    // so this test asserts the RENDERING contract deterministically. The gate
+    // itself is covered by the 'latency gate' tests below.
+    await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
     const joined = [...replies, ...edits].join('\n');
     expect(joined).toContain('◦ Researching codebase');
     expect(joined).toContain('(Grep)');
@@ -375,7 +378,9 @@ describe('streamResponse', () => {
   it('default (no cleanFinal): force-flushes the in-place preview (noise included) and never deletes', async () => {
     const { ctx, edits, deletes } = makeCtx();
 
-    await streamResponse(ctx, answerWithProgress(), 'go');
+    // progressDelayMs: 0 opts out of the latency gate so the ◦ line is rendered
+    // into `accumulated` and this test still exercises the legacy flush path.
+    await streamResponse(ctx, answerWithProgress(), 'go', undefined, { progressDelayMs: 0 });
 
     // Legacy force-flushes `accumulated` on done, which mixes the ◦ progress
     // noise into the final in-place edit — the behavior cleanFinal improves on.
@@ -931,5 +936,175 @@ describe('replyWithFloodRetry (flood-control 429 backoff)', () => {
       replyWithFloodRetry(reply, 'hi', { parse_mode: 'HTML' }, { sleep: async () => {} }),
     ).rejects.toBe(err);
     expect(reply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('bounded ◦ progress region', () => {
+  function progressEvent(description: string): OutputEvent {
+    return {
+      type: 'progress',
+      progress: { taskId: 't', description, totalTokens: 0, toolUses: 1, durationMs: 1 },
+    } as OutputEvent;
+  }
+
+  it('latency gate: a fast turn renders NO ◦ progress lines at all', async () => {
+    // The user-visible point of the gate: most turns finish well under
+    // PROGRESS_START_DELAY_MS, and those turns should go straight from the
+    // `Thinking…` placeholder to the answer with zero `◦` churn. No
+    // progressDelayMs override here — this asserts the production default.
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldEvents(
+        progressEvent('Running tool'),
+        progressEvent('Running another tool'),
+        { type: 'chunk', chunk: { type: 'content', content: 'Done thinking.' } },
+        { type: 'done', metadata: undefined },
+      );
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true });
+
+    expect([...replies, ...edits].some((t) => t.includes('◦'))).toBe(false);
+    expect(replies.some((r) => r.includes('Done thinking.'))).toBe(true);
+  });
+
+  it('rolling window: only the most recent MAX_PROGRESS_LINES survive', async () => {
+    // Regression: progress lines used to append to `accumulated` without bound,
+    // so a tool-heavy turn grew the preview one line per round forever.
+    const { ctx, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      for (let i = 1; i <= 9; i++) yield progressEvent(`round-${i}`);
+      yield { type: 'done', metadata: undefined };
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
+
+    // `done` force-flushes the full accumulated buffer into the preview.
+    const final = edits[edits.length - 1] ?? '';
+    expect(final).toContain('round-9');
+    expect(final).toContain('round-4'); // 9 rounds, window of 6 → 4..9 kept
+    expect(final).not.toContain('round-3');
+    expect(final).not.toContain('round-1');
+  });
+
+  it('REGRESSION: a gated-off progress round still sets the stream_retry boundary, so a retry does not eat earlier answer text', async () => {
+    // This is the trap a shadow-verify wave caught. The `progress` handler's
+    // `inContentRun = false` is NOT cosmetic — it is the stream_retry round
+    // boundary. Suppressing progress RENDERING must not skip it: if it were
+    // skipped, contentRunStartAnswer would still point at offset 0 when the
+    // second content run began, and the stream_retry below would slice
+    // answerText back to '' — silently destroying 'AAA', text the model had
+    // already streamed. Runs with the DEFAULT latency gate (progress renders
+    // nothing here) precisely to prove render-suppression keeps the boundary.
+    const { ctx, replies } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: 'AAA' } };
+      yield progressEvent('tool round between two content runs');
+      yield { type: 'chunk', chunk: { type: 'content', content: 'BBB' } };
+      yield { type: 'stream_retry' } as OutputEvent;
+      yield { type: 'chunk', chunk: { type: 'content', content: 'CCC' } };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    let recorded: string | undefined;
+    await streamResponse(ctx, session, 'go', undefined, {
+      cleanFinal: true,
+      onComplete: (text) => { recorded = text; },
+    });
+
+    // 'AAA' survived the retry; only the retried round ('BBB') was discarded.
+    expect(recorded).toBe('AAACCC');
+    expect(replies.some((r) => r.includes('AAACCC'))).toBe(true);
+  });
+
+  it('dead-turn guard: a fast progress-only turn still delivers, never stranding the user on `Thinking…`', async () => {
+    // With the latency gate active and no answer text (e.g. an abort mid
+    // tool-loop yields turn.completed with no assistant message), `accumulated`
+    // is empty — so without an explicit flush the user's entire reply would be
+    // the bare `Thinking…` placeholder: a silent dead turn.
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldEvents(
+        progressEvent('searched the codebase'),
+        { type: 'done', metadata: undefined },
+      );
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true });
+
+    const all = [...replies, ...edits];
+    expect(all.some((t) => t.includes('searched the codebase'))).toBe(true);
+    // The placeholder is not the last thing the user sees.
+    expect(all[all.length - 1]).not.toBe('Thinking…');
+  });
+
+  it('activity receipt: summarizes tool rounds on the clean final but never enters recorded history', async () => {
+    const { ctx, replies } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldEvents(
+        progressEvent('step one'),
+        progressEvent('step two'),
+        { type: 'chunk', chunk: { type: 'content', content: 'The answer.' } },
+        { type: 'done', metadata: undefined },
+      );
+    });
+
+    let recorded: string | undefined;
+    await streamResponse(ctx, session, 'go', undefined, {
+      cleanFinal: true,
+      onComplete: (text) => { recorded = text; },
+    });
+
+    const finalReply = replies[replies.length - 1] ?? '';
+    expect(finalReply).toContain('The answer.');
+    expect(finalReply).toContain('2 steps');
+    // The receipt is presentation only: recorded turn history stays clean so a
+    // CLI `--resume` does not replay UI chrome as assistant text.
+    expect(recorded).toBe('The answer.');
+    expect(recorded).not.toContain('⏱️');
+  });
+
+  it('activity receipt: absent on a turn with no tool rounds', async () => {
+    const { ctx, replies } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldChunks('Just an answer.');
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true });
+
+    expect(replies[replies.length - 1]).toBe('Just an answer.');
+  });
+
+  it('suggestion dedupe compares against the ANSWER, not the progress-polluted buffer', async () => {
+    // Regression: the gate used to compare the suggestion against `accumulated`,
+    // which also carries the `◦` region. On a tool-heavy turn that made the
+    // comparison spuriously unequal, so a suggestion identical to the answer was
+    // appended anyway — a duplicate 💡 echo on exactly the turns with progress.
+    const { ctx, replies } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldEvents(
+        progressEvent('did some work'),
+        { type: 'chunk', chunk: { type: 'content', content: 'Hi! What can I help with?' } },
+        { type: 'suggestion', suggestion: 'Hi! What can I help with?' },
+        { type: 'done', metadata: undefined },
+      );
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true, progressDelayMs: 0 });
+
+    expect(replies.some((r) => r.includes('💡'))).toBe(false);
+  });
+
+  it('renderProgressRegion/renderActivityReceipt are pure and bounded', () => {
+    expect(renderProgressRegion([])).toBe('');
+    expect(renderProgressRegion(['a', 'b'])).toBe('\na\nb');
+    // Window of 6: a 9-entry input keeps the tail only.
+    const nine = Array.from({ length: 9 }, (_, i) => `l${i + 1}`);
+    expect(renderProgressRegion(nine)).toBe('\nl4\nl5\nl6\nl7\nl8\nl9');
+    expect(renderActivityReceipt(0, 5_000)).toBe('');
+    expect(renderActivityReceipt(1, 4_000)).toBe('\n\n⏱️ 1 step · 4s');
+    expect(renderActivityReceipt(3, 12_400)).toBe('\n\n⏱️ 3 steps · 12s');
+    // Sub-second turns floor to 1s rather than showing '0s'.
+    expect(renderActivityReceipt(2, 200)).toBe('\n\n⏱️ 2 steps · 1s');
   });
 });
