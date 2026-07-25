@@ -781,8 +781,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           error: new Error(
             `Model "${this.currentModel}" can't run on a ChatGPT subscription — the ChatGPT/Codex ` +
               `backend only supports OpenAI gpt-5.x models. This usually means a subagent or skill ` +
-              `requested a Claude model. Pass a gpt-5.x model to it (e.g. model: "gpt-5.5"), or run ` +
-              `it on a provider configured with the matching API key.`,
+              `requested a Claude model. Pass a gpt-5.x model to it (e.g. model: "gpt-5.5"); for an ` +
+              `auto-dispatched agent you can't pass a model to (e.g. git-investigator), set ` +
+              `AFK_DEFAULT_SUBAGENT_MODEL to a gpt-5.x id. Or run it on a provider configured with ` +
+              `the matching API key.`,
           ),
         };
         return null;
