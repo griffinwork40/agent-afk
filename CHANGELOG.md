@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.2] - 2026-07-25
+
+### Fixed
+- coerce Claude-family child models onto the parent model under openai-compatible routing (#652) (#693) (62df42c)
+
+### Changed
+- pin Opus 5 effort/thinking/pricing behavior and correct stale opus comments (#699) (e71fbce)
+
 ## [5.76.1] - 2026-07-24
 
 ### Fixed
