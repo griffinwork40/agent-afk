@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { compactHistory } from './compact-handler.js';
 import { createSessionState, type SessionState } from './session-state.js';
-import { AbortCoordinator } from './abort-coordinator.js';
+import { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { RetryLayer } from './retry-layer.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import { findCompactionBoundary } from '../compact.js';

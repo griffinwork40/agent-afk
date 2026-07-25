@@ -11,8 +11,10 @@
  * Lifecycle:
  *   - constructor is synchronous; emits `session.init` on first iterator pull
  *   - main loop awaits user turns from `promptStream`, races against
- *     `closedPromise` so `close()` unblocks a "waiting for next turn" state
- *   - each user turn opens a new AbortController; `interrupt()` aborts it
+ *     `abort.closedPromise` so `close()` unblocks a "waiting for next turn"
+ *     state
+ *   - each user turn opens a new abort scope via `abort.begin()`;
+ *     `interrupt()` aborts it — see shared/abort-coordinator.ts
  *   - `runTurn` iterates model→tools→model until the model stops calling tools
  *     (or the tool-round cap fires — see shared/tool-loop-cap.ts — after which
  *     one tools-stripped wind-down round runs, matching anthropic-direct/loop.ts)
@@ -88,6 +90,7 @@ import {
   shouldAutoCompact,
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
+import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
 import { HookBlockedError, DenialCircuitBreakerError } from '../../../utils/errors.js';
 import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
 import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
@@ -193,11 +196,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private currentModel: string;
   private currentPermissionMode: string;
 
-  private abortController: AbortController | null = null;
-  private pendingAbortReason: 'interrupted' | 'closed' | null = null;
+  /**
+   * Per-session abort coordination — see {@link AbortCoordinator}. Owns the
+   * in-flight controller slot, the pending-abort drain (an `interrupt()` /
+   * `close()` that lands between turns), and the close promise the outer
+   * loop races against `promptStream.next()`.
+   *
+   * Shared with anthropic-direct so the two providers cannot drift apart on
+   * the compare-and-clear invariant this encapsulates.
+   */
+  private readonly abort = new AbortCoordinator();
+
+  /**
+   * Stays here rather than in the coordinator: sub-generators read it on
+   * every loop iteration, and `close()` updates the flag and the promise
+   * together. See the coordinator's "what this module does NOT own" note.
+   */
   private closed = false;
-  private closeResolve: (() => void) | null = null;
-  private readonly closedPromise: Promise<'__closed__'>;
 
   /**
    * Last completed turn's accumulated usage — drives `getContextUsage()`.
@@ -260,10 +275,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
       this.client = ctor(clientOpts);
     }
-
-    this.closedPromise = new Promise<'__closed__'>((resolve) => {
-      this.closeResolve = () => resolve('__closed__');
-    });
   }
 
   /**
@@ -311,17 +322,17 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     const promptIterator = this.opts.promptStream[Symbol.asyncIterator]();
     try {
       while (!this.closed) {
-        const nextOrClose = await Promise.race([promptIterator.next(), this.closedPromise]);
-        if (nextOrClose === '__closed__') break;
+        const nextOrClose = await Promise.race([promptIterator.next(), this.abort.closedPromise]);
+        if (nextOrClose === CLOSED_SENTINEL) break;
         const turnResult = nextOrClose as IteratorResult<ProviderUserTurn>;
         if (turnResult.done) break;
 
         yield* this.runTurn(turnResult.value.content);
 
         // Auto-compaction fires at the natural turn boundary — runTurn has
-        // returned and its `finally` nulled `abortController`, so the handler's
-        // idle guard passes and compaction never runs mid-tool-call. Mirrors
-        // anthropic-direct/query.ts. `compactHistory` itself never throws (every
+        // returned and every exit path called `abort.clear(controller)`, so
+        // `abort.isIdle()` is true and compaction never runs mid-tool-call.
+        // Mirrors anthropic-direct/query.ts. `compactHistory` never throws (every
         // summarize failure is a typed no-op leaving history byte-for-byte
         // unchanged); only a PreCompact `block` decision throws HookBlockedError,
         // caught here to skip this turn's compaction without surfacing an error.
@@ -373,12 +384,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * across the tool-call loop into one final event).
    */
   private async *runTurn(content: ProviderUserTurn['content']): AsyncGenerator<ProviderEvent> {
-    const controller = new AbortController();
-    this.abortController = controller;
-    if (this.pendingAbortReason !== null && !controller.signal.aborted) {
-      controller.abort(this.pendingAbortReason);
-      this.pendingAbortReason = null;
-    }
+    // begin() mints the controller, installs it as the current slot, and
+    // drains any abort that arrived between turns onto it — so a pre-aborted
+    // turn is caught by the guard below before any work starts.
+    const controller = this.abort.begin();
     if (controller.signal.aborted) return;
 
     // Wall-clock anchor for the REPL footer's `◦ Xs · $cost · N tok` line.
@@ -493,7 +502,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
     for (;;) {
       if (controller.signal.aborted) {
-        if (this.abortController === controller) this.abortController = null;
+        this.abort.clear(controller);
         yield* this.finishTurn(accumulatedUsage, turnStartTime);
         return;
       }
@@ -507,7 +516,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         // (agent-session.ts:sendMessageStreamInternal) unblocks its turn loop;
         // on a real stream error the already-yielded `error` event is itself
         // terminal, so skip turn.completed to avoid double-advancing turn state.
-        if (this.abortController === controller) this.abortController = null;
+        this.abort.clear(controller);
         if (controller.signal.aborted || this.closed) {
           yield* this.finishTurn(accumulatedUsage, turnStartTime);
         }
@@ -553,7 +562,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // finishTurn: the error event is itself terminal (mirrors the stream-error
       // path above at `result === null`).
       if (denialTrip) {
-        if (this.abortController === controller) this.abortController = null;
+        this.abort.clear(controller);
         yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
         return;
       }
@@ -603,7 +612,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
 
       if (controller.signal.aborted) {
-        if (this.abortController === controller) this.abortController = null;
+        this.abort.clear(controller);
         yield* this.finishTurn(accumulatedUsage, turnStartTime);
         return;
       }
@@ -618,7 +627,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
     }
 
-    if (this.abortController === controller) this.abortController = null;
+    this.abort.clear(controller);
 
     if (finalAssistantText.length > 0) {
       const assistantTurn: OpenAIMessage = {
@@ -863,12 +872,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   // ---- ProviderQuery surface ------------------------------------------------
 
   async interrupt(): Promise<void> {
-    const c = this.abortController;
-    if (c && !c.signal.aborted) {
-      c.abort('interrupted');
-      return;
-    }
-    this.pendingAbortReason = 'interrupted';
+    // Aborts the in-flight turn, or parks the reason for the next begin()
+    // when the interrupt lands between turns.
+    this.abort.requestAbort('interrupted');
   }
 
   /**
@@ -943,15 +949,17 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           signal,
         }),
       isClosed: this.closed,
-      isIdle: this.abortController === null,
-      beginAbort: () => {
-        const controller = new AbortController();
-        this.abortController = controller;
-        return controller;
-      },
-      clearAbort: (controller) => {
-        if (this.abortController === controller) this.abortController = null;
-      },
+      isIdle: this.abort.isIdle(),
+      // Invariant: compaction opens a real abort scope through the same
+      // coordinator the turn loop uses, so `interrupt()` cancels an
+      // in-flight summarize. Note `begin()` also DRAINS a reason parked
+      // between turns — an ESC that lands at the turn boundary now
+      // pre-aborts the auto-compaction that fires there (and consumes the
+      // reason) instead of letting it run. This matches
+      // anthropic-direct/query/compact-handler.ts:148; the previous
+      // openai-only behaviour installed a controller without draining.
+      beginAbort: () => this.abort.begin(),
+      clearAbort: (controller) => this.abort.clear(controller),
       trigger,
       traceWriter: this.traceWriter,
     });
@@ -1076,14 +1084,13 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 
   close(): void {
+    // Invariant: the `closed` flag and the close promise must be updated
+    // together — sub-generators poll the flag each loop iteration while the
+    // outer loop is parked on the promise, so resolving one without the
+    // other leaves a reader stuck.
     this.closed = true;
-    const c = this.abortController;
-    if (c && !c.signal.aborted) {
-      c.abort('closed');
-    } else {
-      this.pendingAbortReason = 'closed';
-    }
-    this.closeResolve?.();
+    this.abort.requestAbort('closed');
+    this.abort.markClosed();
     debugLog(`🟢 ${PROVIDER_NAME}: closed`);
   }
 }
