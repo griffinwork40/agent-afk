@@ -585,6 +585,12 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // Map SubagentStatus → BackgroundAgentPayload transition + emit.
     if (job.status === 'completed') {
       const rawContent = result.message?.content;
+      // Invariant: `content` here is the RAW message content, measured BEFORE
+      // any `annotateIfIncomplete` / provenance-header pass runs. This method
+      // is an observation site only (see class-level note on markTerminal) —
+      // it never mutates `result` — so `content_chars` always reflects the
+      // subagent's actual output size, never the parent-visible banner text
+      // a delivery consumer (bg-result-notifier.ts, bgsub.ts) may prepend.
       const content = typeof rawContent === 'string'
         ? rawContent
         : rawContent !== undefined
@@ -604,6 +610,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         status: result.status,
         duration_ms: durationMs,
         content_chars: content.length,
+        stop_reason: result.stopReason,
       });
       this.emit('settled', this.snapshot(job));
     } else if (job.status === 'failed') {
@@ -623,6 +630,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         status: result.status,
         duration_ms: durationMs,
         error_message: err?.message,
+        stop_reason: result.stopReason,
       });
       this.emit('settled', this.snapshot(job));
     } else {
@@ -641,6 +649,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         parent_session_id: job.parentSessionId,
         status: result.status,
         duration_ms: durationMs,
+        stop_reason: result.stopReason,
       });
       this.emit('settled', this.snapshot(job));
     }

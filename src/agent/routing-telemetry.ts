@@ -53,6 +53,13 @@ export interface RoutingDecisionEntry {
   duration_ms?: number | undefined;
   /** Size of the returned assistant content, in characters. */
   content_chars?: number | undefined;
+  /**
+   * The subagent result's `stopReason` when present (e.g.
+   * `tool_use_loop_capped`, `stream_incomplete`) — the signal distinguishing
+   * a genuinely clean completion from a capped/truncated partial. Omitted
+   * (not `null`/`''`) when the result carried no stopReason.
+   */
+  stop_reason?: string | undefined;
   /** Short error message — no stack traces, no user content. */
   error_message?: string | undefined;
   /** Short schema-validation error message when present. */

@@ -29,6 +29,7 @@ import type { BackgroundAgentRegistry, BackgroundJob } from '../../../agent/back
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { BgJobLogReader } from '../../../agent/bg-job-log.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
+import { annotateIfIncomplete } from '../../../agent/subagent/result.js';
 
 let registryRef: BackgroundAgentRegistry | undefined;
 let summarizerRef: BackgroundSummarizer | undefined;
@@ -121,9 +122,15 @@ function printJobDetail(ctx: Parameters<SlashCommand['handler']>[0], job: Backgr
   const result = job.result;
   if (result?.message?.content) {
     ctx.out.line('');
-    const text = typeof result.message.content === 'string'
+    const rawText = typeof result.message.content === 'string'
       ? result.message.content
       : JSON.stringify(result.message.content);
+    // A `completed` background job can still be a capped/stream-truncated
+    // partial (see `isIncompleteStopReason`); annotate so this replay path —
+    // the one delivery consumer that lacked the marker — matches the
+    // model-injection path (bg-result-notifier.ts) and foreground/skill/DAG
+    // delivery paths. No-op for a clean completion.
+    const text = annotateIfIncomplete(rawText, result.stopReason);
     const lines = text.split('\n').slice(0, 40);
     for (const line of lines) ctx.out.line(`  ${line}`);
     if (text.split('\n').length > 40) {

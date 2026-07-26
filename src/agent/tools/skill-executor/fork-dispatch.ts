@@ -14,7 +14,7 @@
 
 import { SubagentManager } from '../../subagent.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
-import { annotateIfIncomplete } from '../../subagent/result.js';
+import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { appendInjectContext } from '../subagent/inject-context.js';
 import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
@@ -353,8 +353,11 @@ export async function runForkedSkillToResult(
       // A `succeeded` result can still be an incomplete partial (capped or
       // stream-truncated). annotateIfIncomplete prepends a parent-visible
       // marker in that case and is a no-op for clean completions.
+      // incompleteToolResultFields adds the structured counterpart to that
+      // banner, alongside it, for non-model consumers.
       toolResult = {
         content: annotateIfIncomplete(result.message.content, result.stopReason),
+        ...incompleteToolResultFields(result.stopReason),
       };
       return toolResult;
     }

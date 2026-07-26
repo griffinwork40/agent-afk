@@ -906,5 +906,140 @@ describe('BackgroundAgentRegistry', () => {
       const entry = completedCalls[0]![0] as Record<string, unknown>;
       expect(entry['parent_session_id']).toBeUndefined();
     });
+
+    // -----------------------------------------------------------------------
+    // stop_reason coverage (subagent partial-result observability).
+    //
+    // Telemetry proved `stop_reason` appeared on 0 of 14,152 `subagent.completed`
+    // rows — this predicate closes that blind spot for the background-registry
+    // emit path. `content_chars` must stay computed on the raw, un-annotated
+    // content regardless of stopReason (markTerminal never annotates; see the
+    // class-level note on markTerminal).
+    // -----------------------------------------------------------------------
+    it('completed: stop_reason is present and equals the result stopReason when set', () => {
+      const handle = createStubHandle('rt-stopreason-1');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal({
+        ...successResult('rt-stopreason-1', 'partial output'),
+        stopReason: 'tool_use_loop_capped',
+      });
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['stop_reason']).toBe('tool_use_loop_capped');
+    });
+
+    it('completed: stop_reason is ABSENT (not null/empty) when the result carries none', () => {
+      const handle = createStubHandle('rt-stopreason-2');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      // successResult() never sets stopReason.
+      handle.__fireTerminal(successResult('rt-stopreason-2', 'clean answer'));
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      // Key-absence in the PERSISTED row is asserted against the real
+      // buildRoutingDecisionRow in routing-telemetry.test.ts. Here
+      // appendRoutingDecision is mocked, so the pre-strip entry still carries
+      // the key with an undefined value — matching the parent_session_id
+      // precedent above ("not present or undefined is fine").
+      expect(entry['stop_reason']).toBeUndefined();
+    });
+
+    it('completed: content_chars measures raw content, unaffected by a partial stopReason', () => {
+      const handle = createStubHandle('rt-stopreason-3');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      const rawContent = 'short partial body';
+      handle.__fireTerminal({
+        ...successResult('rt-stopreason-3', rawContent),
+        stopReason: 'stream_incomplete',
+      });
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      // No `[⚠ PARTIAL RESULT…]` banner counted — markTerminal never annotates.
+      expect(entry['content_chars']).toBe(rawContent.length);
+      expect(entry['stop_reason']).toBe('stream_incomplete');
+    });
+
+    it('failure: stop_reason is present when the failed result carries one', () => {
+      const handle = createStubHandle('rt-stopreason-4');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal({
+        ...failureResult('rt-stopreason-4', 'stream died'),
+        stopReason: 'stream_incomplete',
+      });
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['stop_reason']).toBe('stream_incomplete');
+    });
+
+    it('failure: stop_reason is absent when the failed result carries none', () => {
+      const handle = createStubHandle('rt-stopreason-5');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal(failureResult('rt-stopreason-5', 'plain failure'));
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      // Key-absence in the PERSISTED row is asserted against the real
+      // buildRoutingDecisionRow in routing-telemetry.test.ts. Here
+      // appendRoutingDecision is mocked, so the pre-strip entry still carries
+      // the key with an undefined value — matching the parent_session_id
+      // precedent above ("not present or undefined is fine").
+      expect(entry['stop_reason']).toBeUndefined();
+    });
+
+    it('cancellation: stop_reason is omitted for a bare cancelled result (stub sets none)', async () => {
+      const handle = createStubHandle('rt-stopreason-6');
+      const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+      await registry.cancelJob(job.jobId);
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      // Key-absence in the PERSISTED row is asserted against the real
+      // buildRoutingDecisionRow in routing-telemetry.test.ts. Here
+      // appendRoutingDecision is mocked, so the pre-strip entry still carries
+      // the key with an undefined value — matching the parent_session_id
+      // precedent above ("not present or undefined is fine").
+      expect(entry['stop_reason']).toBeUndefined();
+    });
+
+    it('cancellation: stop_reason is present when the terminal result carries one', () => {
+      // Drives the 'cancelled' branch directly (rather than via cancelJob())
+      // so a stopReason can ride the terminal result, mirroring how a
+      // cascade-abort might still preserve a stream-incomplete stopReason.
+      const handle = createStubHandle('rt-stopreason-7');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal({
+        id: 'rt-stopreason-7',
+        status: 'cancelled' as SubagentStatus,
+        stopReason: 'stream_incomplete',
+      });
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['stop_reason']).toBe('stream_incomplete');
+    });
   });
 });
