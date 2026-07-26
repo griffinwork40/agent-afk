@@ -209,18 +209,35 @@ describe('readPresenceFiles edge cases', () => {
 // ---------------------------------------------------------------------------
 
 /**
- * A pid that is guaranteed not to be running: spawn a process that exits
- * immediately and wait for Node to reap it. Preferred over a large magic number
- * because `pid_max` differs per platform (~99999 on macOS, up to 4194304 on
- * Linux), so no literal is portably unusable.
+ * A pid that is definitively not running, found WITHOUT creating a process.
+ *
+ * Probes downward from implausibly-high values and returns the first one the
+ * kernel reports as `ESRCH` (no such process). `pid_max` differs per platform
+ * (~99999 on macOS, up to 4194304 on Linux), so no single literal is portably
+ * unusable — but probing finds a usable one on any platform.
+ *
+ * Deliberately does NOT spawn-and-reap a real process to obtain a dead pid, for
+ * two reasons:
+ *   1. Churning pids raises the odds of pid REUSE elsewhere in the suite. The
+ *      process-group-kill test in `tools/handlers/bash.test.ts` probes a
+ *      grandchild pid with `kill -0` after a 100ms reap window and fails if
+ *      anything has recycled it — observed failing exactly this way in CI.
+ *   2. A reaped pid can itself be recycled before the assertion runs, which
+ *      would make THIS test flake in the opposite direction.
+ *
+ * Only `ESRCH` is accepted. `EPERM` means the process exists but belongs to
+ * another user, which `isProcessAlive` correctly treats as alive.
  */
-async function deadPid(): Promise<number> {
-  const { spawn } = await import('child_process');
-  const child = spawn(process.execPath, ['-e', '']);
-  const pid = child.pid;
-  if (pid === undefined) throw new Error('failed to spawn helper process');
-  await new Promise<void>((resolve) => { child.on('exit', () => resolve()); });
-  return pid;
+function unusedPid(): number {
+  for (const candidate of [4_194_305, 4_194_304, 999_999, 99_999]) {
+    try {
+      process.kill(candidate, 0);
+      // No throw ⇒ it exists ⇒ not usable as a dead pid. Try the next.
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return candidate;
+    }
+  }
+  throw new Error('could not find an unused pid to test against');
 }
 
 /** Write a presence file directly, bypassing writePresenceFile's stamping. */
@@ -323,9 +340,9 @@ describe('presence liveness annotation', () => {
     expect(record?.liveness).toBe('alive');
   });
 
-  it("classifies a reaped process as 'dead'", async () => {
+  it("classifies a nonexistent pid as 'dead'", async () => {
     const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
-    await writePresenceFile(mkInfo({ pid: await deadPid() }));
+    await writePresenceFile(mkInfo({ pid: unusedPid() }));
 
     const [record] = await readPresenceFiles();
     expect(record?.liveness).toBe('dead');
@@ -357,7 +374,7 @@ describe('presence liveness annotation', () => {
     // delete a live session's worktree. Liveness is an annotation, not a filter.
     const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
     await writePresenceFile(mkInfo({ sessionId: 'alive-1', pid: process.pid }));
-    await writePresenceFile(mkInfo({ sessionId: 'dead-1', pid: await deadPid() }));
+    await writePresenceFile(mkInfo({ sessionId: 'dead-1', pid: unusedPid() }));
 
     const records = await readPresenceFiles();
     expect(records).toHaveLength(2);
@@ -369,7 +386,7 @@ describe('readLivePresenceFiles', () => {
   it("drops records proven 'dead' and keeps 'alive' ones", async () => {
     const { writePresenceFile, readLivePresenceFiles } = await getPresenceMod();
     await writePresenceFile(mkInfo({ sessionId: 'alive-1', pid: process.pid }));
-    await writePresenceFile(mkInfo({ sessionId: 'dead-1', pid: await deadPid() }));
+    await writePresenceFile(mkInfo({ sessionId: 'dead-1', pid: unusedPid() }));
 
     const live = await readLivePresenceFiles();
     expect(live.map((r) => r.sessionId)).toEqual(['alive-1']);
