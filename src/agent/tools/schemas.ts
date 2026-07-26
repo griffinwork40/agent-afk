@@ -695,7 +695,18 @@ export const worktreeTool: AnthropicToolDef = {
     'in days. Verdicts empty/dead-owner/orphaned-* are removal candidates on the next sweep.\n' +
     '- `remove` — remove a worktree checkout you no longer need (branch ref is always preserved). ' +
     'Refuses dirty trees, locked trees, and trees with commits ahead of base unless `force: true`. ' +
-    'Never removes the main worktree or paths outside `.afk-worktrees/`.',
+    'Never removes the main worktree or paths outside `.afk-worktrees/`.\n\n' +
+    'Finishing with a worktree: a worktree is scaffolding, not an artifact — once its work has landed ' +
+    'somewhere durable (pushed branch, open PR, merged commit), remove it in the same turn instead of ' +
+    'leaving it for the sweep. Two cases differ:\n' +
+    '- A worktree you created for a subagent, or one an `isolation: "worktree"` child left behind: ' +
+    'after its commits are pushed, the branch ref holds the work, so the checkout is dead weight. If ' +
+    'it was preserved with commits-ahead it is LOCKED, and a locked worktree is never reaped — call ' +
+    '`release` first, then `remove` (remove refuses a locked tree, so the order is mandatory).\n' +
+    '- The worktree you are RUNNING IN (your own cwd): never remove it mid-session. Deleting your own ' +
+    'working directory strands every later tool call on a path that no longer exists. Session-end ' +
+    'cleanup already removes it when the tree is clean — just tell the operator it will be reclaimed ' +
+    'on exit, and name the branch holding the work.',
   input_schema: {
     type: 'object',
     properties: {
