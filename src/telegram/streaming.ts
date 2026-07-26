@@ -287,23 +287,33 @@ export async function streamResponse(
   let subagentSteps = 0;
   const recentSubagentSteps: string[] = [];
 
-  // Invariant: the `◦` tool-progress region is a BOUNDED, REWRITABLE tail of
-  // `accumulated`, not an append-only log. `progressRunStart` is the offset in
-  // `accumulated` where the current consecutive progress run begins; each new
-  // progress event rewrites `accumulated` from that offset with the last
-  // MAX_PROGRESS_LINES entries. That offset is only valid while nothing else
-  // appends to `accumulated`, so EVERY other writer (content chunk, assistant
-  // message, suggestion, stream_retry rollback) must call `endProgressRun()`
-  // first — otherwise the rewrite would truncate their text.
+  // Invariant: the `◦` tool-progress region is ONE bounded footer of the live
+  // preview, never spliced into `accumulated`. Keeping it out of the content
+  // buffer is what makes the MAX_PROGRESS_LINES bound hold GLOBALLY: an earlier
+  // design rewrote a region inside `accumulated` at an offset, which bounded
+  // only a run of CONSECUTIVE progress events — a stream that alternates content
+  // with tool rounds (what the anthropic-direct and openai-compatible loops
+  // actually emit) froze each run in place and grew without limit anyway. As a
+  // footer the region is inherently single and replaceable, so no writer of
+  // `accumulated` has to coordinate with it. Same treatment the sub-agent lane
+  // already uses (renderSubagentFooter).
   const progressDelayMs = options.progressDelayMs ?? PROGRESS_START_DELAY_MS;
   const turnStartedAt = Date.now();
   let progressLines: string[] = [];
-  let progressRunStart = -1;
   // Total tool rounds seen this turn (never trimmed) — drives the activity receipt.
   let progressRounds = 0;
-  const endProgressRun = (): void => {
-    progressRunStart = -1;
-    progressLines = [];
+  // Latency gate: closed until the turn has run progressDelayMs, so short turns
+  // render no `◦` churn at all. Withheld lines stay in `progressLines`.
+  let progressGateOpen = progressDelayMs <= 0;
+  let progressTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set once a terminal event or the finally-block runs, so a timer callback
+  // that loses the race can't edit a finished turn's message.
+  let turnEnded = false;
+  const clearProgressTimer = (): void => {
+    if (progressTimer !== null) {
+      clearTimeout(progressTimer);
+      progressTimer = null;
+    }
   };
 
   const sendOrEdit = async (text: string, force = false): Promise<void> => {
@@ -407,11 +417,22 @@ export async function streamResponse(
     return delivered;
   };
 
-  // Live preview = answer/content buffer + bounded sub-agent footer. Used for
-  // every in-turn edit so sub-agent progress stays visible without the buffer
-  // growing one line per child tool call.
+  // Content + the bounded `◦` progress region, as it should appear in a FINAL
+  // delivery. Invariant: the latency gate throttles LIVE churn only — once the
+  // turn is over there is nothing left to churn, so a finished turn always
+  // surfaces the progress it recorded instead of silently dropping lines the
+  // gate happened to withhold. Every terminal/fallback delivery path uses this;
+  // `accumulated` alone would be empty on a gated progress-only turn and would
+  // strand the user on the bare `Thinking…` placeholder.
+  const finalBody = (): string => accumulated + renderProgressRegion(progressLines);
+
+  // Live preview = content + GATED progress region + bounded sub-agent footer.
+  // Used for every in-turn edit so progress and sub-agent activity stay visible
+  // without either region growing one line per tool call.
   const livePreview = (): string =>
-    accumulated + renderSubagentFooter(subagentSteps, recentSubagentSteps);
+    accumulated
+    + (progressGateOpen ? renderProgressRegion(progressLines) : '')
+    + renderSubagentFooter(subagentSteps, recentSubagentSteps);
 
   try {
     const stream =
@@ -564,9 +585,6 @@ export async function streamResponse(
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'content') {
-          // Answer text follows the progress region, so the region is now frozen
-          // history — stop rewriting it (see the progressRunStart invariant).
-          endProgressRun();
           if (!inContentRun) {
             contentRunStartAccumulated = accumulated.length;
             contentRunStartAnswer = answerText.length;
@@ -584,9 +602,8 @@ export async function streamResponse(
           accumulated = accumulated.slice(0, contentRunStartAccumulated);
           answerText = answerText.slice(0, contentRunStartAnswer);
           inContentRun = false;
-          // The rollback moved the end of `accumulated`, invalidating any live
-          // progress-region offset into it.
-          endProgressRun();
+          // The `◦` region is a separate footer, so a content rollback leaves it
+          // untouched: those tool rounds really did happen and stay on screen.
           await sendOrEdit(livePreview(), true);
         }
         if (event.type === 'chunk' && event.chunk.type === 'tool_diff') {
@@ -596,9 +613,6 @@ export async function streamResponse(
           accumulated = event.message.content;
           answerText = event.message.content;
           inContentRun = false;
-          // `accumulated` was replaced wholesale — any progress-region offset
-          // into the old buffer is stale.
-          endProgressRun();
           await sendOrEdit(livePreview());
         }
         // Lane D — progress summaries appear in the response as dim lines
@@ -628,18 +642,37 @@ export async function streamResponse(
             ? `◦ ${safeDescription} (${safeToolName})`
             : `◦ ${safeDescription}`;
           // Record first, render second: a line withheld by the latency gate is
-          // still retained, so when the gate opens the bounded region shows the
-          // most recent rounds rather than starting from empty.
-          if (progressRunStart < 0) progressRunStart = accumulated.length;
+          // still retained, so when the gate opens — by a later event OR by the
+          // timer armed below — the bounded region shows the most recent rounds.
+          // The list is global and capped, so the bound holds across a stream
+          // that interleaves content with tool rounds, not just within one run.
           progressLines.push(safeSummary ? `${line}\n  ${safeSummary}` : line);
           if (progressLines.length > MAX_PROGRESS_LINES) {
             progressLines = progressLines.slice(-MAX_PROGRESS_LINES);
           }
-          if (Date.now() - turnStartedAt >= progressDelayMs) {
-            // Rewrite the region in place (bounded) instead of appending, so the
-            // preview keeps a fixed height across a long tool-heavy turn.
-            accumulated = accumulated.slice(0, progressRunStart) + renderProgressRegion(progressLines);
+          if (!progressGateOpen && Date.now() - turnStartedAt >= progressDelayMs) {
+            progressGateOpen = true;
+          }
+          if (progressGateOpen) {
+            clearProgressTimer();
             await sendOrEdit(livePreview());
+          } else if (progressTimer === null) {
+            // Invariant: the gate must be able to open with NO further stream
+            // event. Checking it only on the next `progress` event means one tool
+            // that runs silently past the delay leaves the user on `Thinking…`
+            // for its entire duration. Arm a one-shot timer for the remaining
+            // wait; it is cleared on every terminal path and in the finally.
+            progressTimer = setTimeout(() => {
+              progressTimer = null;
+              if (turnEnded) return;
+              progressGateOpen = true;
+              // A render already in flight computed its text before the gate
+              // opened; skip rather than racing it — the next event or the final
+              // delivery (finalBody, ungated) still surfaces the region.
+              if (editInFlight) return;
+              editInFlight = true;
+              void sendOrEdit(livePreview(), true).finally(() => { editInFlight = false; });
+            }, Math.max(0, progressDelayMs - (Date.now() - turnStartedAt)));
           }
         }
         // Lane D — post-turn prompt suggestion appended to the message.
@@ -656,7 +689,6 @@ export async function streamResponse(
         // comparison spuriously unequal and append a duplicate 💡 line to the
         // answer on exactly the tool-heavy turns that produce progress.
         if (event.type === 'suggestion' && event.suggestion.trim() !== answerText.trim()) {
-          endProgressRun();
           accumulated += `\n\n💡 ${event.suggestion}`;
           answerText += `\n\n💡 ${event.suggestion}`;
           await sendOrEdit(livePreview());
@@ -721,6 +753,8 @@ export async function streamResponse(
 
         if (event.type === 'done') {
           sawTerminalEvent = true;
+          turnEnded = true;
+          clearProgressTimer();
           if (countdownInterval !== null) {
             clearInterval(countdownInterval);
             countdownInterval = null;
@@ -744,19 +778,13 @@ export async function streamResponse(
               // otherwise re-send the noisy `accumulated` buffer) is skipped.
               sentMessage = null;
             }
-          } else if (accumulated.trim()) {
-            await sendOrEdit(accumulated, true);
-          } else if (progressLines.length > 0) {
+          } else if (finalBody().trim()) {
             // Invariant: a turn must never end on the bare `Thinking…` placeholder.
-            // Reachable when the latency gate withheld EVERY progress line and no
-            // answer text arrived — e.g. an abort mid tool-loop, which yields
-            // turn.completed with no assistant text (a progress-only turn). Before
-            // the gate existed `accumulated` always held the progress lines, so the
-            // branch above covered this; now the withheld region must be flushed
-            // explicitly. Assigning `accumulated` (not just editing) also keeps the
-            // post-loop overflow branch able to send chunks[1..] of a long region.
-            accumulated = renderProgressRegion(progressLines).trimStart();
-            await sendOrEdit(accumulated, true);
+            // finalBody() is `accumulated` PLUS the ungated progress region, so a
+            // progress-only turn whose lines the gate withheld still delivers them
+            // (`accumulated` alone is empty there). Covers the plain non-cleanFinal
+            // path and the cleanFinal-with-no-answer path in one branch.
+            await sendOrEdit(finalBody(), true);
           }
           // Record the completed turn into the shared session store (Telegram
           // → CLI resume). answerText is the noise-free assistant answer.
@@ -773,6 +801,8 @@ export async function streamResponse(
           // The provider already emitted a terminal error and parked itself, so
           // no interrupt() is needed (and would wrongly abort the NEXT turn).
           sawTerminalEvent = true;
+          turnEnded = true;
+          clearProgressTimer();
           if (countdownInterval !== null) {
             clearInterval(countdownInterval);
             countdownInterval = null;
@@ -806,7 +836,10 @@ export async function streamResponse(
       // `const` keeps the narrowing across the awaits below.
       const preview = sentMessage as Message.TextMessage | null;
       if (preview && !sawTerminalEvent) {
-        const full = cleanFinal && answerText.trim() ? answerText : accumulated;
+        // finalBody() (not bare `accumulated`) so a gated progress-only turn that
+        // ends by graceful iterator close — no done/error event — still delivers
+        // its recorded `◦` region instead of stranding the user on `Thinking…`.
+        const full = cleanFinal && answerText.trim() ? answerText : finalBody();
         if (full.trim()) {
           // Only delete the preview if delivery actually produced content — a
           // failed first chunk must leave the frozen preview in place rather
@@ -817,7 +850,7 @@ export async function streamResponse(
             sentMessage = null;
           }
         }
-      } else if (!(cleanFinal && answerText.trim()) && accumulated && preview) {
+      } else if (!(cleanFinal && answerText.trim()) && finalBody() && preview) {
         // Overflow send: `done` fired (`sawTerminalEvent` true, so the branch above is
         // skipped) and the `done` handler used `sendOrEdit`, which only ever renders
         // chunk[0] into the preview — send the remaining chunks[1..] here.
@@ -835,7 +868,10 @@ export async function streamResponse(
         // regardless of delivery outcome, so `!(...)` is false and this branch is skipped —
         // preserving the original #623 fix (no contradictory resend after the truncation
         // notice `deliverClean` already posted).
-        const chunks = splitLongMessage(markdownToTelegramHtml(accumulated));
+        // Must split the SAME text the `done` handler flushed (finalBody, which
+        // includes the progress region) or chunks[1..] would not line up with the
+        // chunk[0] already rendered into the preview.
+        const chunks = splitLongMessage(markdownToTelegramHtml(finalBody()));
         if (chunks.length > 1) {
           const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
           try {
@@ -882,6 +918,10 @@ export async function streamResponse(
         clearInterval(countdownInterval);
         countdownInterval = null;
       }
+      // Ordering: set turnEnded BEFORE clearing, so a timer callback already
+      // queued on the event loop sees the flag and declines to edit a dead turn.
+      turnEnded = true;
+      clearProgressTimer();
       editInFlight = false;
       // Always close the async generator — on both the happy path and the error
       // path — so the session's currentState resets to 'idle' only after all
