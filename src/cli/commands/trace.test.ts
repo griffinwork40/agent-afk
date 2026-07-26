@@ -312,6 +312,26 @@ describe('formatTrace — usage-limit pause/resume is high-signal (shown by defa
   });
 });
 
+describe('formatTrace — compaction_disabled is high-signal (shown by default)', () => {
+  // A per-session compaction disable explains an otherwise-invisible FUTURE
+  // failure: the session can no longer shed context, so it will eventually
+  // overflow the window. The auto-compaction caller discards its result, so this
+  // event is the only place the disable and its cause are recorded.
+  const events: EventObj[] = [
+    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'session_phase', payload: { phase: 'compaction_disabled', metadata: { wire: 'responses', reason: 'responses-compaction-unavailable', error: 'unsupported request for this backend', status: 400 } } },
+    { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+  ];
+  const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+
+  it('renders the disable in the DEFAULT view with wire, status, and cause', () => {
+    expect(out).toContain('compact');
+    expect(out).toContain('DISABLED for session');
+    expect(out).toContain('responses wire');
+    expect(out).toContain('400');
+    expect(out).toContain('unsupported request for this backend');
+  });
+});
+
 describe('formatTrace — closure stop_reason rendering', () => {
   const seal: EventObj = {
     ts: '2026-06-05T12:35:00.500Z',

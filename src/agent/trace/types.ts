@@ -688,7 +688,16 @@ export type SessionPhaseName =
   // measure whether real busy-loops occur before deciding if an enforcing
   // detector is ever warranted. Distinct from `idle_watchdog_fired` (a stall
   // with NO output) — this marks the opposite: a fork actively repeating work.
-  | 'suspected_loop';
+  | 'suspected_loop'
+  // History compaction was DISABLED for the remainder of the session because the
+  // backend proved it cannot serve the summarize request (e.g. the ChatGPT/Codex
+  // Responses backend refusing the throwaway summarize turn — issue #653). A
+  // single event (no paired start), emitted AT MOST ONCE per session, carrying
+  // `wire`, `reason`, `error`, and (when present) `status` in `metadata`. High
+  // signal: the auto-compaction caller discards its result, so without this the
+  // disable is invisible until a human runs /compact — and an undisclosed
+  // disable ends in a context-window overflow the operator cannot explain.
+  | 'compaction_disabled';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

@@ -92,9 +92,22 @@ import {
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
 import { HookBlockedError, DenialCircuitBreakerError } from '../../../utils/errors.js';
-import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
-import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
-import { oneShotChatCompletion, oneShotResponses } from './oneshot.js';
+import {
+  COMPACT_SYSTEM_PROMPT,
+  wrapTranscriptForSummary,
+  resolveMicrocompactOptions,
+} from '../shared/compaction.js';
+import { compactOpenAIHistory, readShrinkFraction, microcompactToolResults } from './compact.js';
+import {
+  oneShotChatCompletion,
+  oneShotResponses,
+  ResponsesSummaryIncompleteError,
+} from './oneshot.js';
+import {
+  getErrorStatus,
+  isRetryableConnectionError,
+  isRetryableStreamError,
+} from './query/retry.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -176,6 +189,36 @@ export interface OpenAICompatibleQueryOptions {
   traceWriter?: TraceWriter;
 }
 
+/**
+ * Statuses that prove the endpoint refused the REQUEST ITSELF (its shape, route,
+ * or media type) rather than transiently failing to serve it. 429 and 5xx are
+ * deliberately absent (transient — see `isRetryableConnectionError`), as are
+ * 401/403 (a credential can be hot-swapped mid-session, so an auth lapse must
+ * not permanently disable compaction).
+ */
+const UNSUPPORTED_REQUEST_STATUSES = new Set([400, 404, 405, 415, 422, 501]);
+
+/**
+ * Contract: does `err` PROVE this endpoint cannot serve a Responses-wire
+ * summarize at all — as opposed to having transiently failed one?
+ *
+ * Only an explicit, deterministic client-side refusal counts. The distinction
+ * matters because the latch it guards is PERMANENT for the session, so a false
+ * positive disables compaction until the session ends — re-creating the very
+ * context-window exhaustion issue #653 fixed. Deliberately NOT proof:
+ *   - 429 / 5xx and friends — transient, already classified by the retry preds;
+ *   - status-less throws (network drop, DNS, bad baseURL) — a blip or a
+ *     misconfiguration, neither of which is the backend refusing this shape;
+ *   - {@link ResponsesSummaryIncompleteError} — the backend DID accept and serve
+ *     the request, then streamed a failed/partial response. The wire works.
+ */
+function provesResponsesCompactionUnsupported(err: unknown): boolean {
+  if (err instanceof ResponsesSummaryIncompleteError) return false;
+  if (isRetryableConnectionError(err) || isRetryableStreamError(err)) return false;
+  const status = getErrorStatus(err);
+  return status !== undefined && UNSUPPORTED_REQUEST_STATUSES.has(status);
+}
+
 /** Internal record used to drive the per-turn iteration loop. */
 export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly client: OpenAI;
@@ -197,12 +240,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private currentPermissionMode: string;
 
   /**
-   * Latched `true` when a Responses-wire summarize (history compaction) fails
-   * for a non-abort reason — e.g. the ChatGPT/Codex backend rejects the
-   * throwaway summarize turn. Once set, further compaction attempts no-op
-   * immediately (see `compactHistory`) instead of re-issuing a doomed request
-   * every turn boundary. Per-session; never reset. Aborts/timeouts do NOT set
-   * it (those are transient, not a backend incompatibility). Issue #653.
+   * Latched `true` when a Responses-wire summarize (history compaction) fails in
+   * a way that PROVES the backend refuses the request — e.g. the ChatGPT/Codex
+   * backend rejecting the throwaway summarize turn with a 400. Once set, further
+   * compaction skips the summarize transport (see `compactHistory`, which still
+   * runs deterministic microcompaction) instead of re-issuing a doomed request
+   * every turn boundary. Per-session; never reset — which is exactly why the
+   * latch predicate is narrow: only {@link provesResponsesCompactionUnsupported}
+   * errors set it. Aborts, timeouts, 429/5xx, network blips, and partial/failed
+   * responses are all transient and do NOT latch. Issue #653.
    */
   private responsesCompactionUnavailable = false;
 
@@ -908,10 +954,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * `AFK_OPENAI_USE_RESPONSES` opt-in) summarize through `oneShotResponses`,
    * which streams over the Responses wire the backend actually accepts —
    * issue #653. The splice machinery is wire-agnostic; only the summarize
-   * transport differs. If a responses-wire summarize fails for a non-abort
-   * reason (e.g. the backend rejects the throwaway summarize turn), the session
-   * latches `responsesCompactionUnavailable` so subsequent boundaries no-op
-   * cheaply instead of re-issuing a doomed request.
+   * transport differs. If a responses-wire summarize fails in a way that proves
+   * the backend refuses the request (see
+   * {@link provesResponsesCompactionUnsupported}), the session latches
+   * `responsesCompactionUnavailable` so subsequent boundaries skip the doomed
+   * request — falling back to deterministic microcompaction, which needs no
+   * model call. Transient failures never latch.
    */
   async compact(): Promise<ProviderCompactResult> {
     // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
@@ -931,10 +979,30 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       return { compacted: false, reason: 'no-usable-auth', messagesBefore, messagesAfter: messagesBefore };
     }
     if (this.wireMode === 'responses' && this.responsesCompactionUnavailable) {
-      // A prior responses-wire summarize failed for a non-abort reason (e.g. the
-      // ChatGPT/Codex backend rejected the throwaway summarize turn). Don't
-      // re-issue a doomed request every turn boundary — no-op with an actionable
-      // reason. Latched by `summarizeViaResponses` below; never reset this session.
+      // Invariant: the latch disables the SUMMARIZE TRANSPORT only — never the
+      // deterministic fallback. A prior responses-wire summarize proved the
+      // backend refuses the throwaway summarize turn, so re-issuing a doomed
+      // request every turn boundary is pure waste. But microcompaction is
+      // no-LLM and no-network: it clears large/old tool_result CONTENT in place,
+      // so it still works when the backend refuses everything. Skipping it here
+      // would leave the session unable to reclaim context by ANY mechanism,
+      // which overshoots "no-op cheaply" into "guarantee an eventual overflow".
+      // Mirrors the fallback `compactOpenAIHistory` runs on its own no-op
+      // reasons (compact.ts) — same options source, same result shape.
+      const microOpts = resolveMicrocompactOptions(
+        env.AFK_MICROCOMPACT_TOOL_RESULT_BYTES,
+        env.AFK_MICROCOMPACT_KEEP_LAST,
+      );
+      const { blocksCleared, bytesReclaimed } = microcompactToolResults(this.priorTurns, microOpts);
+      if (blocksCleared > 0) {
+        return {
+          compacted: false,
+          reason: 'microcompacted',
+          messagesBefore,
+          messagesAfter: this.priorTurns.length,
+          microcompaction: { blocksCleared, bytesReclaimed },
+        };
+      }
       return {
         compacted: false,
         reason: 'responses-compaction-unavailable',
@@ -989,11 +1057,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * accepts), reusing THIS session's `client` so the call inherits the same
    * endpoint, credentials, and ChatGPT-OAuth headers as the conversation.
    *
-   * On a NON-abort failure it latches `responsesCompactionUnavailable` so the
-   * next boundary no-ops cheaply instead of re-issuing a doomed request, then
-   * re-throws so the compaction core records a safe no-op (history untouched).
-   * Aborts/timeouts (`signal.aborted`) are transient — they do NOT latch, so a
-   * user interrupt never permanently disables compaction for the session.
+   * On a failure that PROVES the backend refuses this request shape (see
+   * {@link provesResponsesCompactionUnsupported}) it latches
+   * `responsesCompactionUnavailable` — and emits a `compaction_disabled` trace
+   * event, since the auto path discards the result and would otherwise hide the
+   * disable — then re-throws so the compaction core records a safe no-op
+   * (history untouched). Aborts/timeouts (`signal.aborted`), 429/5xx, network
+   * blips, and partial/failed responses are all transient: they do NOT latch, so
+   * neither a user interrupt nor a passing outage permanently disables
+   * compaction for the session.
    */
   private async summarizeViaResponses(
     transcript: string,
@@ -1011,7 +1083,22 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         signal,
       });
     } catch (err) {
-      if (!signal.aborted) this.responsesCompactionUnavailable = true;
+      if (!signal.aborted && provesResponsesCompactionUnsupported(err)) {
+        this.responsesCompactionUnavailable = true;
+        // Fire-and-forget: a permanent per-session disable is otherwise
+        // invisible — the auto path discards compactHistory()'s result, so
+        // without this the reason surfaces only if a human runs /compact.
+        const status = getErrorStatus(err);
+        void emitSessionPhase(this.traceWriter, {
+          phase: 'compaction_disabled',
+          metadata: {
+            wire: 'responses',
+            reason: 'responses-compaction-unavailable',
+            error: err instanceof Error ? err.message : String(err),
+            ...(status !== undefined ? { status } : {}),
+          },
+        });
+      }
       throw err;
     }
   }

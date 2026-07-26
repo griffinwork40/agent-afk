@@ -23,6 +23,25 @@ import type { OpenAIMessage } from './messages.js';
 import { buildResponsesRequestBody } from './query/request-body.js';
 import { createStreamState } from './translate.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
+import { abortableStream } from '../shared/abortable-stream.js';
+
+/**
+ * Thrown by {@link oneShotResponses} when the summarize stream ends WITHOUT a
+ * `response.completed` — i.e. `response.failed`, `response.incomplete`, or no
+ * terminal event at all. Distinct error type on purpose: a non-completed
+ * response means "this summary is partial", NOT "this backend rejects the
+ * request shape", so the caller must not latch the Responses wire as
+ * unsupported on it (see `query.ts` `summarizeViaResponses`). `finishReason`
+ * carries whatever terminal status the translator recorded, or `null`.
+ */
+export class ResponsesSummaryIncompleteError extends Error {
+  constructor(public readonly finishReason: string | null) {
+    super(
+      `responses summarize did not complete (terminal status: ${finishReason ?? 'none'})`,
+    );
+    this.name = 'ResponsesSummaryIncompleteError';
+  }
+}
 
 /** Test injection hook — supplants the real `OpenAI` constructor. */
 export type OneShotOpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
@@ -190,7 +209,12 @@ export interface OpenAIResponsesOneShotInput {
  *     error, and the compaction core treats that as a safe no-op (history
  *     untouched).
  *
- * Returns the accumulated assistant text, trimmed.
+ * Returns the accumulated assistant text, trimmed — but ONLY for a response the
+ * backend marked complete. Throws an AbortError if `signal` fires mid-stream
+ * (the wrapper defeats openai@6's abort-swallowing iterator) and
+ * {@link ResponsesSummaryIncompleteError} when the stream ends on
+ * `response.failed` / `response.incomplete` / no terminal event. Both keep the
+ * compaction core on its safe no-op path instead of splicing a partial summary.
  */
 export async function oneShotResponses(input: OpenAIResponsesOneShotInput): Promise<string> {
   const { client, model, system, user, isChatGptBackend, maxTokens = 1024, signal } = input;
@@ -218,16 +242,37 @@ export async function oneShotResponses(input: OpenAIResponsesOneShotInput): Prom
     signal ? { signal } : undefined,
   )) as unknown as AsyncIterable<ResponsesStreamEvent>;
 
-  // Drain into a private StreamState. `translateResponsesEvent` mutates only the
-  // state we pass (accumulating `response.output_text.delta` into
-  // `assistantText`); the ProviderEvents it yields have no consumer here, so we
-  // exhaust the generator purely for its state mutation.
+  // Invariant: this function may return text ONLY when the backend marked the
+  // response COMPLETE and no abort landed mid-drain. Anything else must throw,
+  // because the compaction core splices a returned summary over real history and
+  // reports success — so a truncated summary is silent, irreversible data loss.
+  // Two distinct ways a naive drain leaks a partial summary:
+  //   1. openai@6 SWALLOWS a mid-stream abort: `core/streaming.js` RETURNS from
+  //      its iterator on an AbortError, and a `return` in an async generator
+  //      yields `done:true` — so a bare `for await` ends CLEANLY and we would
+  //      resolve with truncated text. `abortableStream` races each pull against
+  //      the signal and THROWS instead, so the core's existing catch/isAborted()
+  //      path maps it to the `aborted` no-op. Same wrapper the turn path uses
+  //      (`query/stream-drive.ts`); see `shared/abortable-stream.ts`.
+  //   2. `response.failed` / `response.incomplete` can arrive AFTER text deltas,
+  //      so accumulated text exists but is not a whole summary. Only
+  //      `response.completed` licenses the return; every other terminal state —
+  //      and a stream that ends carrying none — throws.
+  //
+  // `translateResponsesEvent` mutates only the state we pass (accumulating
+  // `response.output_text.delta` into `assistantText`); the ProviderEvents it
+  // yields have no consumer here, so we exhaust the generator purely for its
+  // state mutation.
+  const source = signal ? abortableStream(stream, signal) : stream;
   const state = createStreamState();
-  for await (const event of stream) {
+  let completed = false;
+  for await (const event of source) {
+    if (event.type === 'response.completed') completed = true;
     const events = translateResponsesEvent(event, state, 'compact-oneshot');
     while (!events.next().done) {
       // Discard — assistant text is accumulated into `state`, not emitted.
     }
   }
+  if (!completed) throw new ResponsesSummaryIncompleteError(state.finishReason);
   return state.assistantText.trim();
 }

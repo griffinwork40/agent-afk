@@ -618,6 +618,15 @@ describe('formatCompactNoop — new reasons', () => {
     expect(result).toContain('⚠️');
     expect(result.toLowerCase()).toContain('failed');
   });
+
+  test('"responses-compaction-unavailable" → prose naming the recovery path, not the raw token', () => {
+    const result = formatCompactNoop('responses-compaction-unavailable');
+    // The raw kebab-case reason must not leak into the user-facing message.
+    expect(result).not.toContain('responses-compaction-unavailable');
+    expect(result.toLowerCase()).toContain('unavailable');
+    // Actionable: names at least one way out of the latched state.
+    expect(result).toMatch(/new session|AFK_COMPACT_MODEL/);
+  });
 });
 
 describe('markdownToTelegramHtml — mis-nested emphasis safety net', () => {

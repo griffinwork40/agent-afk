@@ -103,7 +103,7 @@ export function retryAfterDelayMs(err: unknown): number | undefined {
  * network errors and generic throws have no status and are treated as
  * retryable (transient network blip) only when they carry no explicit code.
  */
-function getErrorStatus(err: unknown): number | undefined {
+export function getErrorStatus(err: unknown): number | undefined {
   if (err === null || typeof err !== 'object') return undefined;
   const e = err as { status?: unknown };
   return typeof e.status === 'number' ? e.status : undefined;
