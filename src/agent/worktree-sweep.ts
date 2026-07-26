@@ -57,6 +57,17 @@ interface WorktreeCandidate {
   isDirty: boolean;
   commitsAhead: number;
   /**
+   * Commits on this worktree's HEAD that exist NOWHERE but this checkout —
+   * i.e. `@{upstream}..HEAD`. Zero means every local commit has been pushed,
+   * so the remote holds the work and the checkout is disposable.
+   *
+   * Invariant: this is the only field that may relax a `commitsAhead > 0`
+   * preservation gate, and it fails SAFE — no upstream configured, an
+   * unreadable ref, or any git error yields `commitsUnpushed === commitsAhead`
+   * (treat as unreplaceable). It is never derived from `commitsAhead === 0`.
+   */
+  commitsUnpushed: number;
+  /**
    * Tri-state liveness of the owning process recorded in `meta.pid`:
    *   - `'alive'`      — `meta.pid` resolves to a live process.
    *   - `'dead'`       — `meta.pid` is present, the meta is within the
@@ -265,6 +276,20 @@ function parseWorktreeList(stdout: string): ParsedWorktree[] {
 // Section 3 — Verdict classifier
 // ---------------------------------------------------------------------------
 
+/**
+ * True when this checkout is the ONLY place its committed work exists.
+ *
+ * Invariant: `git worktree remove` never deletes the branch ref, so committed
+ * work is destroyed only if it is unreachable from anywhere else. A branch
+ * whose commits are all pushed (`commitsUnpushed === 0`) has them on the
+ * remote, so reaping the checkout costs a directory, not history — which is
+ * why a PR-shipped worktree stops being sacred the moment the push lands.
+ * Unpushed commits stay protected exactly as before.
+ */
+function holdsUnreplaceableCommits(candidate: WorktreeCandidate): boolean {
+  return candidate.commitsAhead > 0 && candidate.commitsUnpushed > 0;
+}
+
 function classifyCandidate(
   candidate: WorktreeCandidate,
   maxAgeDaysClean: number,
@@ -284,7 +309,7 @@ function classifyCandidate(
   if (
     candidate.ownerLiveness === 'dead' &&
     !candidate.isDirty &&
-    candidate.commitsAhead === 0
+    !holdsUnreplaceableCommits(candidate)
   ) {
     return 'dead-owner';
   }
@@ -300,7 +325,7 @@ function classifyCandidate(
   // ahead worktree older than MIN_EMPTY_AGE_MS still got reaped mid-session.
   if (
     candidate.ownerLiveness !== 'alive' &&
-    candidate.commitsAhead === 0 &&
+    !holdsUnreplaceableCommits(candidate) &&
     !candidate.isDirty &&
     candidate.ageMs >= MIN_EMPTY_AGE_MS
   ) {
@@ -610,6 +635,26 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         } catch { commitsAhead = 0; }
       }
 
+      // Invariant: commitsUnpushed starts EQUAL to commitsAhead (fully
+      // unpushed) and is only ever lowered by a successful upstream read.
+      // Every failure path — no upstream configured, detached HEAD, unreadable
+      // remote-tracking ref, git error — leaves it at commitsAhead, so the
+      // classifier preserves the tree exactly as it did before this field
+      // existed. Never initialise this to 0.
+      let commitsUnpushed = commitsAhead;
+      if (commitsAhead > 0) {
+        try {
+          // @{upstream} resolves the branch's configured remote-tracking ref.
+          // rev-list @{upstream}..HEAD counts commits present here but not on
+          // the remote; 0 means the push landed and the remote holds the work.
+          const unpushedResult = await execFile('git', [
+            '-C', entry.path, 'rev-list', '@{upstream}..HEAD', '--count',
+          ]);
+          const parsed = parseInt(unpushedResult.stdout.trim(), 10);
+          if (Number.isInteger(parsed) && parsed >= 0) commitsUnpushed = parsed;
+        } catch { /* no upstream / unreadable → stay at commitsAhead */ }
+      }
+
       // Constraint: ownerLiveness must only be 'dead'/'alive' when the meta
       // is fresh enough that PID reuse is implausible. Outside the trust
       // window we fall through to 'unknown' and the classifier ignores PID,
@@ -643,6 +688,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         ageMs,
         isDirty,
         commitsAhead,
+        commitsUnpushed,
         ownerLiveness,
       };
 
@@ -651,11 +697,31 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
 
       if (effectiveDryRun) continue;
 
+      // Invariant: the branch ref is the last copy of committed work once the
+      // checkout is gone, so it may be deleted ONLY when the tree held nothing
+      // ahead of base. `git branch -d` deletes a branch that is merged to its
+      // UPSTREAM (git prints "merged to refs/remotes/origin/X, but not yet
+      // merged to HEAD" and exits 0) — precisely the state a pushed worktree is
+      // in. Gating on commitsAhead keeps a reaped-but-pushed tree recoverable
+      // from the local branch even if its remote branch was later deleted and
+      // the tracking ref pruned, which is otherwise unrecoverable-by-gc.
+      const branchSafeToDelete = candidate.commitsAhead === 0;
+      const deleteBranchIfSafe = async (): Promise<void> => {
+        if (!entry.branch || !branchSafeToDelete) return;
+        await execFile('git', [
+          '-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch),
+        ]).catch(() => {});
+      };
+
       try {
         if (verdict === 'empty') {
           await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
-          if (entry.branch) {
-            await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
+          await deleteBranchIfSafe();
+          if (!branchSafeToDelete && entry.branch) {
+            result.warnings.push(
+              `[INFO] reaped worktree with pushed commits; branch preserved ` +
+                `(${shortBranchName(entry.branch)}): ${entry.path}`,
+            );
           }
           result.removed.push(entry.path);
         } else if (verdict === 'dead-owner') {
@@ -663,10 +729,16 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           // safe to drop wholesale. Also attempt branch deletion since the
           // owning REPL never got to merge or land it. Branch delete is
           // best-effort (it may already be deleted, or be checked out
-          // elsewhere — git refuses, we move on).
+          // elsewhere — git refuses, we move on) AND gated on commitsAhead ===
+          // 0 by deleteBranchIfSafe: a pushed tree loses its checkout but keeps
+          // its branch.
           await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
-          if (entry.branch) {
-            await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
+          await deleteBranchIfSafe();
+          if (!branchSafeToDelete && entry.branch) {
+            result.warnings.push(
+              `[INFO] reaped worktree with pushed commits; branch preserved ` +
+                `(${shortBranchName(entry.branch)}): ${entry.path}`,
+            );
           }
           result.removed.push(entry.path);
         } else if (verdict === 'stale-clean') {

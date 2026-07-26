@@ -123,7 +123,19 @@ gh pr create \
 
 PR bodies are markdown: they routinely carry backticks (inline code), `$(...)`, and quotes. **Never** inline the body as `--body "$(cat <<'EOF' … EOF)"` — the shell parses backticks/`$(` inside the command substitution before `gh` ever runs, so the call fails (or worse, opens the PR with a truncated/garbled body and you don't notice). `--body-file` reads the file verbatim: no shell quoting, no escaping. Only `--title` stays inline — keep it a single plain line with no backticks.
 
-Return the PR URL to the user. Done.
+**Phase 9 — Reclaim the worktree.**
+Skip entirely unless the work you just shipped lives under `.afk-worktrees/` (check the invocation cwd from Phase 1 — if the path has no `.afk-worktrees/` segment, there is nothing to reclaim; go straight to the PR URL).
+
+A worktree is scaffolding, not an artifact. Once Phase 8 succeeds the branch is pushed and the PR holds the work, so the checkout has no remaining job. Do not leave it for the background sweep — the sweep never reaps a *locked* tree, and a preserved commits-ahead tree is exactly the kind that gets locked, so "the sweep will get it" is false for the common case.
+
+Two cases, and they behave differently:
+
+- **A worktree you (or a sub-agent) created for this work, that you are NOT currently inside** — reclaim it now, using the `worktree` tool rather than `git worktree` in bash. Two refusals to expect, in this order: a **locked** tree must be `release`d first (`remove` refuses a locked tree, so the order is mandatory, not stylistic), and a tree with **commits ahead of base** is refused unless you pass `force: true`. After a successful push that `force` is safe and correct: the tool never deletes the branch ref, so the commits remain on the branch *and* on the remote — you are discarding a directory, not history. Do not pass `force` before the push has landed.
+- **The worktree you are running in (your own cwd)** — **do not remove it.** Deleting your own working directory strands every subsequent tool call on a path that no longer exists, and `/ship` still has output to produce. Session-end cleanup already removes a clean worktree on exit. Say so instead, in one line: which branch carries the work, and that the checkout is reclaimed when the session ends.
+
+Never delete the branch as part of this phase — the open PR depends on that ref.
+
+Return the PR URL to the user, plus a one-line worktree disposition (`reclaimed <path>` / `preserved <path> — reclaimed at session end` / omit if not in a worktree). Done.
 
 ---
 
@@ -131,3 +143,4 @@ Return the PR URL to the user. Done.
 - `/ground-state` unavailable → skip Phase 1 with a loud warning; do not proceed silently.
 - `gh` CLI not authenticated → abort Phase 8 with the exact `gh auth login` command.
 - Detached HEAD or shallow clone → abort at Phase 1; these are edge cases `/ship` should not try to auto-recover.
+- Worktree reclaim fails in Phase 9 → the PR is already open and that is the deliverable; report the failure and the path, never retry-loop or walk back the PR.
