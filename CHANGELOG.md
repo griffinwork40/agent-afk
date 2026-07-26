@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.6] - 2026-07-26
+
+### Fixed
+- humanize live activity (#708) (916a369)
+
 ## [5.76.5] - 2026-07-26
 
 ### Changed
