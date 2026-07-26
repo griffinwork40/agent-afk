@@ -248,6 +248,22 @@ export interface PostToolUseContext {
    * PreToolUse containment check consulted.
    */
   grantManager?: GrantManager;
+  /**
+   * True when `output` is a subagent's capped/stream-cut partial answer
+   * rather than a clean completion. Mirrors `ToolResult.incomplete` (see
+   * `agent/providers/anthropic-direct/types.ts`) — additive channel so a
+   * hook can branch on the same structured fact the trace layer records,
+   * without substring-matching the `[⚠ PARTIAL RESULT…]` banner already
+   * present in `output`. Absent for a clean completion or any non-subagent
+   * tool.
+   */
+  incomplete?: boolean;
+  /**
+   * The subagent's `stopReason` that produced `incomplete: true` (e.g.
+   * `tool_use_loop_capped`, `stream_incomplete`). Present only alongside
+   * `incomplete: true`; absent otherwise.
+   */
+  incompleteReason?: string;
 }
 
 export interface PreCompactContext {

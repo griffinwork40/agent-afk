@@ -167,6 +167,23 @@ export type ProviderEvent =
        */
       batchIndex?: number;
       batchSize?: number;
+      /**
+       * Plumbed from `ToolResult.incomplete` — `true` when this result carries
+       * a subagent's capped/stream-cut partial answer rather than a clean
+       * completion. Distinct from `truncated` (tool-OUTPUT byte-cap slicing):
+       * a subagent result can be `incomplete` with no truncation involved at
+       * all. Lets non-model consumers (subagent traces, hooks) branch on the
+       * same fact `annotateIfIncomplete` banners into `content` without
+       * substring-matching that banner text. Both providers expose this
+       * symmetrically. Absent for a clean completion or any non-subagent tool.
+       */
+      incomplete?: boolean;
+      /**
+       * The subagent's `stopReason` that produced `incomplete: true` (e.g.
+       * `tool_use_loop_capped`, `stream_incomplete`). Present only alongside
+       * `incomplete: true`; absent otherwise.
+       */
+      incompleteReason?: string;
     }
   | {
       /**

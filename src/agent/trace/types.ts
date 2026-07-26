@@ -112,6 +112,19 @@ export interface ToolCallCompletedPayload {
   truncated: boolean;
   /** Wall-clock duration from `started` → `completed`, in milliseconds. */
   durationMs: number;
+  /**
+   * True when this result carries a subagent's partial/incomplete answer —
+   * the child hit its tool-use iteration cap or its stream was cut off
+   * mid-flight. Mirrors `ToolResult.incomplete` (see `providers/anthropic-direct/
+   * types.ts`); absent for a clean completion or any non-subagent tool.
+   */
+  incomplete?: boolean;
+  /**
+   * The subagent's `stopReason` that produced `incomplete: true` (e.g.
+   * `tool_use_loop_capped`, `stream_incomplete`). Present only alongside
+   * `incomplete: true`; absent otherwise.
+   */
+  incompleteReason?: string;
   /** True when this completed event was produced by the repeat-loop circuit breaker,
    *  not by a real tool dispatch — lets detectors exclude it from failure stats. */
   circuitBreaker?: boolean;

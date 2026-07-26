@@ -436,6 +436,55 @@ describe('SessionToolDispatcher', () => {
       });
     });
 
+    it('forwards incomplete/incompleteReason to PostToolUse for a partial agent result', async () => {
+      const registry = createHookRegistryImpl();
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUse', postSpy);
+      // A capped/stream-cut subagent partial: the structured flags ride the
+      // ToolResult alongside the `[⚠ PARTIAL RESULT…]` banner in `content`,
+      // so a hook can branch without substring-matching that banner.
+      const executor = {
+        execute: vi.fn().mockResolvedValue({
+          content: 'partial output',
+          incomplete: true,
+          incompleteReason: 'stream_incomplete',
+        }),
+      } as any;
+      const dispatcher = makeDispatcher({
+        subagentExecutor: executor,
+        hookRegistry: registry,
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      await dispatcher.execute(makeCall({ name: 'agent', input: { prompt: 'test' } }));
+      expect(postSpy).toHaveBeenCalledOnce();
+      const callArgs = postSpy.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toMatchObject({
+        event: 'PostToolUse',
+        toolName: 'agent',
+        incomplete: true,
+        incompleteReason: 'stream_incomplete',
+      });
+    });
+
+    it('omits incomplete/incompleteReason from PostToolUse for a clean agent result', async () => {
+      const registry = createHookRegistryImpl();
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUse', postSpy);
+      const executor = mockExecutor();
+      const dispatcher = makeDispatcher({
+        subagentExecutor: executor,
+        hookRegistry: registry,
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      await dispatcher.execute(makeCall({ name: 'agent', input: { prompt: 'test' } }));
+      expect(postSpy).toHaveBeenCalledOnce();
+      const ctx = (postSpy.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      // Absent, not `false`/`undefined` — mirrors how the dispatcher spreads
+      // the fields only when the ToolResult actually carries them.
+      expect('incomplete' in ctx).toBe(false);
+      expect('incompleteReason' in ctx).toBe(false);
+    });
+
     it('catches executor throws and returns isError', async () => {
       const executor = { execute: vi.fn().mockRejectedValue(new Error('executor boom')) } as any;
       const dispatcher = makeDispatcher({

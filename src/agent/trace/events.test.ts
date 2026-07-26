@@ -113,6 +113,43 @@ describe('tool_call payload', () => {
     }
   });
 
+  it('accepts and PRESERVES incomplete/incompleteReason on the completed phase (round-trip)', () => {
+    // Proves the schema was updated alongside the TS type: a field the type
+    // carries but the schema omits would be silently STRIPPED by zod's
+    // default non-strict `.object()` behavior (0 `.strict()` calls in this
+    // module) rather than rejected — this assertion would go RED if that
+    // regressed.
+    const parsed = ToolCallPayloadSchema.parse({
+      phase: 'completed',
+      toolUseId: 't1',
+      name: 'agent',
+      resultBytes: 64,
+      isError: false,
+      truncated: false,
+      durationMs: 5,
+      incomplete: true,
+      incompleteReason: 'tool_use_loop_capped',
+    });
+    expect(parsed).toMatchObject({
+      incomplete: true,
+      incompleteReason: 'tool_use_loop_capped',
+    });
+  });
+
+  it('omits incomplete/incompleteReason when absent (no default injected)', () => {
+    const parsed = ToolCallPayloadSchema.parse({
+      phase: 'completed',
+      toolUseId: 't1',
+      name: 'bash',
+      resultBytes: 2,
+      isError: false,
+      truncated: false,
+      durationMs: 1,
+    });
+    expect('incomplete' in parsed).toBe(false);
+    expect('incompleteReason' in parsed).toBe(false);
+  });
+
   it('rejects unknown phase', () => {
     expect(() =>
       ToolCallPayloadSchema.parse({
