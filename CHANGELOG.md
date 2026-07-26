@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.3] - 2026-07-26
+
+### Fixed
+- colorize aliased slash commands (e.g. /quit) as brand, not dim (#698) (ca5cd51)
+
+### Changed
+- bump react-dom from 19.2.7 to 19.2.8 in /website (#706) (bdd50f6)
+- bump the fumadocs group across 1 directory with 2 updates (#704) (e29ee44)
+- bump react from 19.2.7 to 19.2.8 in /website (#705) (d953088)
+- bump next from 16.2.10 to 16.2.12 in /website (#707) (70d128b)
+
 ## [5.76.2] - 2026-07-25
 
 ### Fixed
