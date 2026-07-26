@@ -14,7 +14,14 @@ vi.mock('../../../agent/auth/model-availability.js', () => ({
   isModelAvailable: (model: string | undefined) => model !== 'large' && model !== 'opus',
 }));
 
+// /usage delegates entirely to fetchSubscriptionUsage() — mocked so tests
+// never hit the network; each /usage test sets its own resolved value.
+vi.mock('../../../agent/subscription-usage.js', () => ({
+  fetchSubscriptionUsage: vi.fn(),
+}));
+
 import { infoCommands } from './info.js';
+import { fetchSubscriptionUsage } from '../../../agent/subscription-usage.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { PickerController, TerminalCompositor } from '../../terminal-compositor.js';
 
@@ -157,5 +164,63 @@ describe('/model', () => {
     for (const alias of ['local', 'small', 'medium', 'large', 'opus', 'sonnet', 'haiku', 'fable']) {
       expect(aliasLine).toContain(alias);
     }
+  });
+});
+
+const usageCmd = infoCommands.find((c) => c.name === '/usage')!;
+const mockFetchUsage = vi.mocked(fetchSubscriptionUsage);
+
+describe('/usage', () => {
+  it('kind:"ok" with all windows renders each as a percentage plus reset time', async () => {
+    const { ctx, lines } = makeCtx(false);
+    mockFetchUsage.mockResolvedValueOnce({
+      kind: 'ok',
+      fiveHour: { utilization: 0.42, resetsAt: new Date('2026-01-01T00:00:00Z') },
+      sevenDay: { utilization: 0.10 },
+      sevenDaySonnet: { utilization: 0.05 },
+      sevenDayOpus: { utilization: 0.01 },
+    });
+
+    await usageCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/5-hour/);
+    expect(text).toMatch(/42%/);
+    expect(text).toMatch(/resets/);
+    expect(text).toMatch(/7-day/);
+    expect(text).toMatch(/10%/);
+    expect(text).toMatch(/7-day \(Sonnet\)/);
+    expect(text).toMatch(/5%/);
+    expect(text).toMatch(/7-day \(Opus\)/);
+    expect(text).toMatch(/1%/);
+  });
+
+  it('kind:"ok" with only fiveHour renders just that window', async () => {
+    const { ctx, lines } = makeCtx(false);
+    mockFetchUsage.mockResolvedValueOnce({
+      kind: 'ok',
+      fiveHour: { utilization: 0.75 },
+    });
+
+    await usageCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/5-hour/);
+    expect(text).toMatch(/75%/);
+    expect(text).not.toMatch(/7-day/);
+  });
+
+  it('kind:"unavailable" with reason "no-token" tells the user to run claude login', async () => {
+    const { ctx, lines } = makeCtx(false);
+    mockFetchUsage.mockResolvedValueOnce({
+      kind: 'unavailable',
+      reason: 'no-token',
+      detail: 'no credentials found',
+    });
+
+    await usageCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/claude login/);
   });
 });

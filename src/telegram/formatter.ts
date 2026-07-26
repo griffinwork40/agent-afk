@@ -3,6 +3,8 @@
  * @module telegram/formatter
  */
 
+import type { UsageResult, UsageWindow } from '../agent/subscription-usage.js';
+
 /**
  * Maximum message length for Telegram (4096 chars)
  */
@@ -216,6 +218,46 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * Format a `UsageResult` (src/agent/subscription-usage.ts) for a plain-text
+ * Telegram reply. One line per available window on `kind: 'ok'`; a single
+ * clear line on `kind: 'unavailable'` (with a `claude login` hint for the
+ * no-token case, since that's operator-actionable from the phone).
+ *
+ * Plain text by design — no parse_mode, so no HTML-escaping concerns even
+ * though the underlying `detail` string comes from an external API response.
+ *
+ * @param result - UsageResult from fetchSubscriptionUsage()
+ * @returns Plain-text status message
+ */
+export function formatUsage(result: UsageResult): string {
+  if (result.kind === 'unavailable') {
+    if (result.reason === 'no-token') {
+      return '⚠️ No Claude subscription token found. Run `claude login` on the host machine, then try /usage again.';
+    }
+    return `⚠️ Usage unavailable (${result.reason}): ${result.detail}`;
+  }
+
+  const windows: Array<[string, UsageWindow | undefined]> = [
+    ['5-hour', result.fiveHour],
+    ['7-day', result.sevenDay],
+    ['7-day (Sonnet)', result.sevenDaySonnet],
+    ['7-day (Opus)', result.sevenDayOpus],
+  ];
+  const lines = windows
+    .filter((entry): entry is [string, UsageWindow] => entry[1] !== undefined)
+    .map(([label, w]) => {
+      const pct = Math.round(w.utilization * 100);
+      const resets = w.resetsAt ? ` (resets ${w.resetsAt.toLocaleString()})` : '';
+      return `  ${label}: ${pct}%${resets}`;
+    });
+
+  if (lines.length === 0) {
+    return '📊 Usage: no windows reported.';
+  }
+  return ['📊 Claude subscription usage:', ...lines].join('\n');
+}
+
+/**
  * Format a filesystem error (ENOENT/EACCES) for display to the user.
  *
  * @param code - NodeJS errno code (e.g. 'ENOENT', 'EACCES')
@@ -297,6 +339,7 @@ export function formatHelp(sdkCommands?: string[]): string {
     '  /model      — Switch Claude model',
     '  /cd         — Change working directory',
     '  /name       — Show or set the session name',
+    '  /usage      — Show Claude subscription usage',
     '  /sessions   — List and switch between sessions',
     '  /new        — Start a new session (keeps the current one)',
     '  /watch      — Live-tail a CLI session from this chat',

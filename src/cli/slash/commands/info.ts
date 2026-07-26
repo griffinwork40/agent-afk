@@ -1,9 +1,14 @@
 /**
  * Information / introspection commands:
- *   /cost /tokens /history /model /tools /mcp /debug
+ *   /cost /tokens /history /model /tools /mcp /debug /usage
  *
  * These all read from SessionStats or session metadata and format for
  * display. `/model` mutates state by calling `session.setModel()`.
+ *
+ * `/cost` vs `/usage`: /cost is session-local spend (this conversation's
+ * turn-by-turn API cost); /usage is the operator's account-wide Claude
+ * subscription quota (5h/7d rolling windows). Different axes — cross-
+ * referenced in each other's output.
  */
 
 import { palette } from '../../palette.js';
@@ -13,6 +18,7 @@ import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { isModelAvailable } from '../../../agent/auth/model-availability.js';
+import { fetchSubscriptionUsage, type UsageWindow } from '../../../agent/subscription-usage.js';
 import {
   MODEL_ALIASES_HINT,
   resolveBinding,
@@ -41,6 +47,57 @@ const costCmd: SlashCommand = {
     if (stats.turnCosts.length > 0) {
       const last5 = stats.turnCosts.slice(-5).map(formatCost).join(palette.dim(' · '));
       out.line(`  last 5      ${last5}`);
+    }
+    out.line();
+    out.line(palette.dim('  This is session-local spend. For account-wide subscription quota, see /usage.'));
+    out.line();
+    return 'continue';
+  },
+};
+
+/** Render a single usage window as a percentage plus reset time when present. */
+function formatUsageWindowLine(label: string, w: UsageWindow): string {
+  const pct = `${Math.round(w.utilization * 100)}%`;
+  const resets = w.resetsAt ? palette.dim(`  (resets ${w.resetsAt.toLocaleString()})`) : '';
+  return `  ${label.padEnd(16)}${palette.meta(pct)}${resets}`;
+}
+
+const usageCmd: SlashCommand = {
+  name: '/usage',
+  summary: 'Show Claude subscription usage (5h / 7d windows)',
+  hint: 'When you want to know how close you are to hitting your Claude subscription\'s rolling usage limits — distinct from /cost, which is session-local spend.',
+  async handler(ctx) {
+    const { out } = ctx;
+    const result = await fetchSubscriptionUsage();
+    out.line();
+    if (result.kind === 'unavailable') {
+      out.line(palette.bold('Subscription usage'));
+      out.line(divider());
+      if (result.reason === 'no-token') {
+        out.warn('No Claude subscription token found — run `claude login`, then try /usage again.');
+      } else {
+        out.warn(`Usage unavailable (${result.reason}): ${result.detail}`);
+      }
+      out.line();
+      return 'continue';
+    }
+
+    const windows: Array<[string, UsageWindow | undefined]> = [
+      ['5-hour', result.fiveHour],
+      ['7-day', result.sevenDay],
+      ['7-day (Sonnet)', result.sevenDaySonnet],
+      ['7-day (Opus)', result.sevenDayOpus],
+    ];
+    const available = windows.filter((entry): entry is [string, UsageWindow] => entry[1] !== undefined);
+
+    out.line(palette.bold('Subscription usage'));
+    out.line(divider());
+    if (available.length === 0) {
+      out.line(palette.dim('  No usage windows reported.'));
+    } else {
+      for (const [label, w] of available) {
+        out.line(formatUsageWindowLine(label, w));
+      }
     }
     out.line();
     return 'continue';
@@ -474,5 +531,5 @@ const debugCmd: SlashCommand = {
 };
 
 export const infoCommands: SlashCommand[] = [
-  costCmd, tokensCmd, historyCmd, modelCmd, toolsCmd, mcpCmd, limitsCmd, debugCmd,
+  costCmd, tokensCmd, historyCmd, modelCmd, toolsCmd, mcpCmd, limitsCmd, debugCmd, usageCmd,
 ];
