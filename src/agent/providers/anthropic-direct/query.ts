@@ -69,7 +69,7 @@ import type {
 } from './types.js';
 import { repairOrphanToolUses } from './query/repair-orphan-tool-uses.js';
 import { type SessionState, createSessionState } from './query/session-state.js';
-import { AbortCoordinator } from './query/abort-coordinator.js';
+import { AbortCoordinator } from '../shared/abort-coordinator.js';
 import { RetryLayer } from './query/retry-layer.js';
 import { compactHistory } from './query/compact-handler.js';
 import { listUserTurns, rewindConversationHistory } from './query/rewind-conversation.js';

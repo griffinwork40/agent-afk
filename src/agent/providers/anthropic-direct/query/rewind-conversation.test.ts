@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 import { listUserTurns, rewindConversationHistory } from './rewind-conversation.js';
 import type { SessionState } from './session-state.js';
-import type { AbortCoordinator } from './abort-coordinator.js';
+import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 
 function makeState(messages: MessageParam[], closed = false): SessionState {
   // The handler only reads `messages` + `closed`; the rest of SessionState is
