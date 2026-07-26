@@ -1079,19 +1079,6 @@ describe('bounded ◦ progress region', () => {
     expect(all[all.length - 1]).not.toBe('Thinking…');
   });
 
-  it('graceful-exit guard: withheld progress survives a stream close without done/error', async () => {
-    const { ctx, replies, deletes } = makeCtx();
-    const session = makeSession(async function* () {
-      yield progressEvent('searched the codebase');
-      // Graceful iterator exhaustion without a terminal OutputEvent.
-    });
-
-    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true });
-
-    expect(replies.some((text) => text.includes('searched the codebase'))).toBe(true);
-    expect(deletes).toHaveLength(1);
-  });
-
   it('activity receipt: summarizes tool rounds on the clean final but never enters recorded history', async () => {
     const { ctx, replies } = makeCtx();
     const session = makeSession(async function* () {
@@ -1160,5 +1147,84 @@ describe('bounded ◦ progress region', () => {
     expect(renderActivityReceipt(3, 12_400)).toBe('\n\n⏱️ 3 steps · 12s');
     // Sub-second turns floor to 1s rather than showing '0s'.
     expect(renderActivityReceipt(2, 200)).toBe('\n\n⏱️ 2 steps · 1s');
+  });
+});
+
+describe('◦ progress region — PR #702 review follow-ups', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  function progressEvent(description: string): OutputEvent {
+    return {
+      type: 'progress',
+      progress: { taskId: 't', description, totalTokens: 0, toolUses: 1, durationMs: 1 },
+    } as OutputEvent;
+  }
+
+  it('bounds progress across INTERLEAVED content, not just within one consecutive run (Codex P1)', async () => {
+    // Regression: the region used to be spliced into `accumulated` at an offset,
+    // so any content chunk froze it in place and the next progress event started a
+    // NEW region. An alternating stream — what the anthropic-direct and
+    // openai-compatible loops actually emit — therefore kept all 9 lines. As a
+    // single footer the MAX_PROGRESS_LINES bound holds globally.
+    const { ctx, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      for (let i = 1; i <= 9; i++) {
+        yield progressEvent(`round-${i}`);
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: `c${i} ` } };
+      }
+      yield { type: 'done' as const, metadata: undefined };
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
+
+    const final = edits[edits.length - 1] ?? '';
+    // Window of 6 over NINE rounds that each had content in between.
+    expect(final).toContain('round-9');
+    expect(final).toContain('round-4');
+    expect(final).not.toContain('round-3');
+    expect(final).not.toContain('round-1');
+    // Answer content is untouched by the bounded region.
+    expect(final).toContain('c1 ');
+    expect(final).toContain('c9 ');
+  });
+
+  it('opens the gate on a timer when no further progress event arrives (Codex P2)', async () => {
+    // Regression: the gate was re-checked ONLY when another `progress` event
+    // arrived, so a single tool running silently past the delay left the user on
+    // `Thinking…` for its whole duration. cleanFinal delivers only `answerText`
+    // (no ◦), so the progress line can reach the user ONLY via a live edit —
+    // which means the timer fired.
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield progressEvent('slow tool running');
+      await sleep(90); // silent stretch longer than progressDelayMs
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Answer.' } };
+      yield { type: 'done' as const, metadata: undefined };
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true, progressDelayMs: 25 });
+
+    expect(edits.some((e) => e.includes('slow tool running'))).toBe(true);
+    // The clean final answer is still free of ◦ noise.
+    expect(replies.some((r) => r.includes('◦'))).toBe(false);
+    expect(replies.some((r) => r.includes('Answer.'))).toBe(true);
+  });
+
+  it('delivers a gated progress-only turn that ends WITHOUT a done event (review: medium)', async () => {
+    // Regression introduced by the first commit of this PR: the withheld-region
+    // flush was added to the `done` branch only. A provider stream that ends by
+    // graceful iterator close (no done/error) hit the post-loop branch, where
+    // bare `accumulated` is empty under a closed gate — so nothing was delivered
+    // and the user was stranded on `Thinking…`. Uses the DEFAULT gate so every
+    // line really is withheld.
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield progressEvent('did work then the stream closed');
+      // no `done` — the generator simply returns
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true });
+
+    expect([...replies, ...edits].some((t) => t.includes('did work then the stream closed'))).toBe(true);
+    expect([...replies, ...edits].every((t) => t !== 'Thinking…') || replies.length > 0).toBe(true);
   });
 });

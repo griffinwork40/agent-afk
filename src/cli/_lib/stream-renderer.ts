@@ -35,7 +35,7 @@ import { isPlainOutputRequested } from '../../config/env.js';
 import type { IHistoryRing } from '../input/types.js';
 import type { AutocompleteState } from '../input/autocomplete-state.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
-import { list as listSlashCommands, registryVersion } from '../slash/registry.js';
+import { createSlashRegistryView } from '../slash/registry.js';
 import { ToolLane } from '../commands/interactive/tool-lane.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
@@ -400,19 +400,13 @@ export class StreamRenderer {
         compositor.setOnCancel(this.onCancel);
       }
     } else {
-      // Live-registry adapter — queried fresh on every render so plugins that
-      // register slash commands mid-session colorize correctly without a
-      // restart. Mirrors the closure used by `readWithAutocompleteTty` at
-      // src/cli/input/reader.ts:103-105. `listSlashCommands()` returns names
-      // prefixed with `/`; the highlighter passes the bare name, so we
-      // re-add the prefix in the predicate.
-      const slashRegistryView: SlashRegistryView = {
-        has: (name) => listSlashCommands().some((c) => c.name === `/${name}`),
-        // Enables the `colorizeInputBuffer` single-entry memo across repaints;
-        // the version bumps on any mid-session command registration so the
-        // cache never serves a stale-colored buffer.
-        version: registryVersion,
-      };
+      // Live-registry adapter for the slash colorizer, built via
+      // `createSlashRegistryView()`. Membership delegates to the registry's
+      // alias-aware `has()` (queried fresh per render) so plugins that register
+      // slash commands mid-session — and aliased commands like `/quit` —
+      // colorize correctly without a restart. Mirrors the surface used by
+      // `InputSurface` and `readWithAutocompleteTty`.
+      const slashRegistryView: SlashRegistryView = createSlashRegistryView();
       compositor = new TerminalCompositor({
         stdout: process.stdout,
         stdin: process.stdin,

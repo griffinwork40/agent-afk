@@ -50,7 +50,7 @@ import {
 } from '../terminal-compositor.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
 import { detectCaptureMode, detectCaretBlink, detectReducedMotion, detectGoblinSpinner } from '../_lib/capture-mode.js';
-import { list as listSlashCommands, registryVersion } from '../slash/registry.js';
+import { createSlashRegistryView } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
 import { commitBlockAbove } from '../_lib/commit-block.js';
@@ -272,21 +272,17 @@ export class InputSurface {
   private pendingReadResolve: ((value: ReadWithAutocompleteResult) => void) | null = null;
 
   /**
-   * Live-registry adapter — queried fresh via `listSlashCommands()` on
-   * every call so plugins that register slash commands mid-session
-   * colorize correctly. Held as a class field (not an `armCompositor`
-   * local) because two call sites need it: the compositor's
-   * `formatInputBuffer` live-typing hook AND the `readLine` submit-echo
-   * which must colorize `payload.text` before committing to scrollback
-   * — without that second call, the submitted slash command appears as
-   * plain text in history (parity bug vs. `reader.ts:329-330`).
+   * Live-registry adapter for the slash colorizer, built via
+   * `createSlashRegistryView()`. Membership delegates to the registry's
+   * alias-aware `has()` (queried fresh per call) so plugins that register
+   * slash commands mid-session — and aliased commands like `/quit` — colorize
+   * correctly. Held as a class field (not an `armCompositor` local) because
+   * two call sites need it: the compositor's `formatInputBuffer` live-typing
+   * hook AND the `readLine` submit-echo which must colorize `payload.text`
+   * before committing to scrollback — without that second call, the submitted
+   * slash command appears as plain text in history (parity bug vs. `reader.ts`).
    */
-  private readonly slashRegistryView: SlashRegistryView = {
-    has: (name) => listSlashCommands().some((c) => c.name === `/${name}`),
-    // Enables the `colorizeInputBuffer` memo (per-keystroke repaints share a
-    // buffer) while still invalidating on any mid-session command hot-swap.
-    version: registryVersion,
-  };
+  private readonly slashRegistryView: SlashRegistryView = createSlashRegistryView();
 
   constructor(opts: InputSurfaceOptions) {
     this.rl = opts.rl;
