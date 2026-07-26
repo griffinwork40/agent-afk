@@ -80,6 +80,30 @@ export function annotateIfIncomplete(content: string, stopReason: string | undef
   );
 }
 
+/**
+ * Structured counterpart to {@link annotateIfIncomplete}'s prose banner —
+ * fields to spread onto a `ToolResult` (see `agent/providers/anthropic-direct/
+ * types.js`) so non-model consumers (trace readers, hooks, calling code) can
+ * branch on the same fact without substring-matching the banner text.
+ * Deliberately named `incomplete`, not `truncated` — `ToolResult.truncated`
+ * already means tool-OUTPUT truncation (bash/grep/web-scrape byte caps) and
+ * is orthogonal to a subagent returning a capped/stream-cut partial.
+ *
+ * Derived from {@link isIncompleteStopReason} — the single source of truth
+ * for the partial-vs-clean classification; this helper does not duplicate
+ * that predicate. Returns `{}` (both fields omitted) for a clean completion,
+ * so `{ content, ...incompleteToolResultFields(stopReason) }` never writes an
+ * explicit `false`/`undefined`.
+ */
+export function incompleteToolResultFields(
+  stopReason: string | undefined,
+): { incomplete?: true; incompleteReason?: string } {
+  if (!isIncompleteStopReason(stopReason)) return {};
+  // Safe: isIncompleteStopReason(stopReason) === true implies stopReason is
+  // one of the two string sentinels above, never undefined.
+  return { incomplete: true, incompleteReason: stopReason as string };
+}
+
 export interface SubagentToolCall {
   id: string;
   name: string;

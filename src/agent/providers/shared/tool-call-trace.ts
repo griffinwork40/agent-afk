@@ -84,6 +84,8 @@ export function buildToolCallCompletedPayload(args: {
     isError: result.isError === true,
     truncated,
     durationMs,
+    ...(result.incomplete === true ? { incomplete: true } : {}),
+    ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
     ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
     ...(result.failureClass ? { failureClass: result.failureClass } : {}),
     ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'

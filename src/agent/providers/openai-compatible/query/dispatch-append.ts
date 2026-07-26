@@ -209,6 +209,8 @@ export async function* dispatchAndAppendToolCalls({
         content: result.content,
         ...(result.isError === true ? { isError: true } : {}),
         ...(result.truncated === true ? { truncated: true } : {}),
+        ...(result.incomplete === true ? { incomplete: true } : {}),
+        ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
         // Plumb concurrency-batch membership onto the render-facing event, not
         // just the trace event above, so the TUI `∥i/N` badge works here too.
         // Parity with anthropic-direct/loop.ts's tool.output yield — omitting it

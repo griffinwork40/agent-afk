@@ -14,6 +14,7 @@ import {
   buildResultFromMessage,
   isIncompleteStopReason,
   annotateIfIncomplete,
+  incompleteToolResultFields,
   STREAM_INCOMPLETE,
 } from './result.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
@@ -207,5 +208,29 @@ describe('annotateIfIncomplete — parent-visible partial marker', () => {
     expect(out).toContain('PARTIAL RESULT');
     expect(out).toContain('cut off');
     expect(out.endsWith(BODY)).toBe(true);
+  });
+});
+
+describe('incompleteToolResultFields — structured ToolResult counterpart', () => {
+  it('returns {incomplete:true, incompleteReason} for the tool-use loop cap', () => {
+    expect(incompleteToolResultFields(TOOL_USE_LOOP_CAPPED)).toEqual({
+      incomplete: true,
+      incompleteReason: TOOL_USE_LOOP_CAPPED,
+    });
+  });
+
+  it('returns {incomplete:true, incompleteReason} for a stream-truncated run', () => {
+    expect(incompleteToolResultFields(STREAM_INCOMPLETE)).toEqual({
+      incomplete: true,
+      incompleteReason: STREAM_INCOMPLETE,
+    });
+  });
+
+  it('returns {} for a clean terminal stop reason', () => {
+    expect(incompleteToolResultFields('end_turn')).toEqual({});
+  });
+
+  it('returns {} when the stop reason is undefined', () => {
+    expect(incompleteToolResultFields(undefined)).toEqual({});
   });
 });

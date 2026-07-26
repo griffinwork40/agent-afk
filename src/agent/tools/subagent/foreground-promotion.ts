@@ -19,7 +19,7 @@
 
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SubagentManager } from '../../subagent.js';
-import { annotateIfIncomplete } from '../../subagent/result.js';
+import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
 import type { ToolResult } from '../types.js';
@@ -249,6 +249,10 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // Guard against non-string content (e.g. SDK may return a ContentBlock[])
       const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
       const trace = result.trace;
+      // Invariant: `content`/`content_chars` are measured on the RAW message
+      // content, before `annotateIfIncomplete`/`withProvenanceHeader` run
+      // below. Telemetry must reflect the subagent's actual output size, not
+      // the parent-visible banner/provenance text prepended at delivery time.
       void emitTelemetry({
         ...identity,
         event: 'subagent.completed',
@@ -257,6 +261,12 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         status: result.status,
         duration_ms: Date.now() - startedAt,
         content_chars: content.length,
+        // Capped like the sibling free-form telemetry fields (error_message,
+        // schema_error below): on the OpenAI-compatible path stopReason is
+        // provider-controlled free text (translate.ts / responses-translate.ts),
+        // not a bounded enum, so it must not ride into telemetry uncapped.
+        // Omit-when-absent preserved: `undefined` stays `undefined`, never ''.
+        stop_reason: result.stopReason !== undefined ? truncate(result.stopReason, 64) : undefined,
         depth,
         tool_call_count: trace?.toolCalls.length,
         // Preserve `false` ("confirmed absent") distinctly from `undefined`
@@ -271,13 +281,16 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // annotateIfIncomplete marks capped/stream-truncated partials so the
       // parent model doesn't treat them as a final answer (no-op if clean);
       // withProvenanceHeader stamps the producing model on a mixed-model
-      // dispatch (no-op when child == parent).
+      // dispatch (no-op when child == parent). incompleteToolResultFields adds
+      // the structured counterpart to that same banner, alongside it, for
+      // non-model consumers.
       toolResult = {
         content: withProvenanceHeader(
           annotateIfIncomplete(content, result.stopReason),
           model,
           parentModel,
         ),
+        ...incompleteToolResultFields(result.stopReason),
       };
       return toolResult;
     }
@@ -298,6 +311,9 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         ? truncate(result.schemaError.message)
         : undefined,
       partial_output_chars: measurePartial(result.partialOutput),
+      // Capped — see the completed-path comment above for why (provider
+      // free text on the OpenAI-compatible path, not a bounded enum).
+      stop_reason: result.stopReason !== undefined ? truncate(result.stopReason, 64) : undefined,
       depth,
       // Mirror trace fields on the failure path — failed subagents are the
       // highest-value debugging target and benefit most from this signal.
@@ -320,9 +336,16 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     });
     // Assign (don't return) so the finally can append the in-turn
     // SubagentStop injectContext after teardown. See `toolResult` above.
+    // incompleteToolResultFields flags the ZERO-OUTPUT stream_incomplete case
+    // (see `subagent/result.ts` — a pure cut-off-mid-flight run with nothing
+    // to salvage resolves `status:'failed'` and routes through this exact
+    // literal): without it that case's `stopReason` never reaches the
+    // non-model consumers that key off `ToolResult.incomplete`. No-op
+    // (adds nothing) for a clean failure or an absent stopReason.
     toolResult = {
       content: JSON.stringify(payload),
       isError: true,
+      ...incompleteToolResultFields(result.stopReason),
     };
     return toolResult;
   } catch (err) {

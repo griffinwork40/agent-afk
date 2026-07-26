@@ -93,6 +93,28 @@ export interface ToolResult {
    * caller code).
    */
   truncated?: boolean;
+  /**
+   * Set to `true` when this result carries a SUBAGENT's partial/incomplete
+   * answer — the child hit its tool-use iteration cap or its stream was cut
+   * off mid-flight (see `isIncompleteStopReason` in `agent/subagent/result.js`).
+   * Deliberately NOT named `truncated`: that field means tool-OUTPUT truncation
+   * (bash/grep/web-scrape byte-cap slicing) and is orthogonal — a subagent
+   * result can be `incomplete` while its content is nowhere near any byte cap,
+   * and a tool's output can be `truncated` with no subagent involved at all.
+   * `incomplete` is the structured counterpart to the `[⚠ PARTIAL RESULT…]`
+   * prose banner `annotateIfIncomplete` prepends to `content`: the banner
+   * stays (existing consumers depend on it as the in-band model-visible
+   * signal); this flag lets non-model consumers (trace readers, hooks,
+   * calling code) branch on the same fact without substring-matching the
+   * banner text. Absent for a clean completion or any non-subagent tool.
+   */
+  incomplete?: boolean;
+  /**
+   * The subagent's `stopReason` that produced `incomplete: true` (e.g.
+   * `tool_use_loop_capped`, `stream_incomplete`). Present only alongside
+   * `incomplete: true`; absent otherwise.
+   */
+  incompleteReason?: string;
   /** True when this result is a synthetic repeat-loop circuit-breaker block,
    *  not a real tool outcome — lets trace consumers exclude it from failure stats. */
   circuitBreaker?: boolean;

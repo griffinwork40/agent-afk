@@ -1014,6 +1014,8 @@ export async function* runTurn(
         content: result.content,
         ...(result.isError === true ? { isError: true } : {}),
         ...(truncated ? { truncated: true } : {}),
+        ...(result.incomplete === true ? { incomplete: true } : {}),
+        ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
         ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
           ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
           : {}),

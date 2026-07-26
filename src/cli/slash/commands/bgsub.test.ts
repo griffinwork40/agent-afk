@@ -379,5 +379,120 @@ describe('/bgsub slash commands', () => {
       expect(result).toBe('continue');
       expect(lines.some((l) => l.startsWith('ERROR:No background job'))).toBe(true);
     });
+
+    // -----------------------------------------------------------------------
+    // A1: stopReason persistence + disk-replay annotation. Reviewer (Codex
+    // P2, bgsub.ts:133): the in-memory replay (printJobDetail) annotates a
+    // capped/stream-truncated partial via annotateIfIncomplete, but the disk
+    // fallback did not — so joining the same incomplete job before vs. after
+    // TTL eviction produced different safety labeling. These three cases pin
+    // the fix: banner present for an incomplete job, absent for a clean one,
+    // and absent (no crash) for legacy meta lacking `stopReason` entirely.
+    // -----------------------------------------------------------------------
+    it('disk replay: surfaces the PARTIAL RESULT banner for an incomplete job (stopReason set)', async () => {
+      const { BgJobLogWriter } = await import('../../../agent/bg-job-log.js');
+      const jobId = `evicted-partial-${Date.now()}`;
+      const w = new BgJobLogWriter(jobId);
+      await w.writeMeta({
+        jobId,
+        subagentId: 'sub-evicted-partial',
+        label: 'evicted partial job',
+        promptHash: 'deadbeef',
+        model: 'sonnet',
+        startedAt: Date.now() - 5000,
+        status: 'completed',
+        endedAt: Date.now() - 1000,
+        stopReason: 'tool_use_loop_capped',
+        schemaVersion: 1,
+      });
+      w.write({
+        type: 'chunk',
+        chunk: { type: 'content', content: 'partial output text' } as any,
+      });
+      await w.close();
+
+      const registry = new BackgroundAgentRegistry({});
+      setBgsubRegistry(registry);
+      expect(registry.get(jobId)).toBeUndefined();
+
+      const { ctx, lines } = makeCtx();
+      const result = await bgsubJoinCmd.handler(ctx, jobId);
+      expect(result).toBe('continue');
+
+      const flat = lines.join('\n');
+      expect(flat).toContain('PARTIAL RESULT');
+      expect(flat).toContain('tool-use iteration cap');
+      expect(flat).toContain('partial output text');
+    });
+
+    it('disk replay: no banner for a clean completed job (stopReason set to end_turn)', async () => {
+      const { BgJobLogWriter } = await import('../../../agent/bg-job-log.js');
+      const jobId = `evicted-clean-${Date.now()}`;
+      const w = new BgJobLogWriter(jobId);
+      await w.writeMeta({
+        jobId,
+        subagentId: 'sub-evicted-clean',
+        label: 'evicted clean job',
+        promptHash: 'deadbeef',
+        model: 'sonnet',
+        startedAt: Date.now() - 5000,
+        status: 'completed',
+        endedAt: Date.now() - 1000,
+        stopReason: 'end_turn',
+        schemaVersion: 1,
+      });
+      w.write({
+        type: 'chunk',
+        chunk: { type: 'content', content: 'clean output text' } as any,
+      });
+      await w.close();
+
+      const registry = new BackgroundAgentRegistry({});
+      setBgsubRegistry(registry);
+
+      const { ctx, lines } = makeCtx();
+      const result = await bgsubJoinCmd.handler(ctx, jobId);
+      expect(result).toBe('continue');
+
+      const flat = lines.join('\n');
+      expect(flat).not.toContain('PARTIAL RESULT');
+      expect(flat).toContain('clean output text');
+    });
+
+    it('disk replay: no banner and no crash for legacy meta with no stopReason field at all', async () => {
+      const { BgJobLogWriter } = await import('../../../agent/bg-job-log.js');
+      const jobId = `evicted-legacy-${Date.now()}`;
+      const w = new BgJobLogWriter(jobId);
+      // Deliberately omit `stopReason` — mirrors meta.json written before
+      // this field existed. `schemaVersion` stays 1 (additive, backward
+      // compatible field — see BgJobMeta.stopReason doc comment).
+      await w.writeMeta({
+        jobId,
+        subagentId: 'sub-evicted-legacy',
+        label: 'evicted legacy job',
+        promptHash: 'deadbeef',
+        model: 'sonnet',
+        startedAt: Date.now() - 5000,
+        status: 'completed',
+        endedAt: Date.now() - 1000,
+        schemaVersion: 1,
+      });
+      w.write({
+        type: 'chunk',
+        chunk: { type: 'content', content: 'legacy output text' } as any,
+      });
+      await w.close();
+
+      const registry = new BackgroundAgentRegistry({});
+      setBgsubRegistry(registry);
+
+      const { ctx, lines } = makeCtx();
+      const result = await bgsubJoinCmd.handler(ctx, jobId);
+      expect(result).toBe('continue');
+
+      const flat = lines.join('\n');
+      expect(flat).not.toContain('PARTIAL RESULT');
+      expect(flat).toContain('legacy output text');
+    });
   });
 });

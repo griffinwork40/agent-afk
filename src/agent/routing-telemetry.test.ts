@@ -79,3 +79,23 @@ describe('buildRoutingDecisionRow — resolved_agent_type', () => {
     expect('resolved_agent_type' in row).toBe(false);
   });
 });
+
+describe('buildRoutingDecisionRow — stop_reason', () => {
+  it('carries stop_reason on a terminal row that has one', () => {
+    const row = buildRoutingDecisionRow({
+      event: 'subagent.completed',
+      subagent_id: 'c1',
+      stop_reason: 'stream_incomplete',
+    });
+    expect(row['stop_reason']).toBe('stream_incomplete');
+  });
+
+  it('omits stop_reason when the result carries none (undefined dropped, no null leakage)', () => {
+    const row = buildRoutingDecisionRow({
+      event: 'subagent.completed',
+      subagent_id: 'c2',
+      stop_reason: undefined,
+    });
+    expect('stop_reason' in row).toBe(false);
+  });
+});

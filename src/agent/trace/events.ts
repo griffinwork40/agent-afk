@@ -44,6 +44,12 @@ export const ToolCallCompletedPayloadSchema = z.object({
   isError: z.boolean(),
   truncated: z.boolean(),
   durationMs: z.number().nonnegative(),
+  /** True when this result carries a subagent's capped/stream-cut partial
+   *  answer. Mirrors `ToolResult.incomplete`. Absent otherwise. */
+  incomplete: z.boolean().optional(),
+  /** The subagent stopReason that produced `incomplete: true`. Present only
+   *  alongside `incomplete: true`; absent otherwise. */
+  incompleteReason: z.string().optional(),
   /** Set when the event was produced by the repeat-loop circuit breaker. */
   circuitBreaker: z.boolean().optional(),
   /** Coarse failure classification when `isError` is true. Absent otherwise. */

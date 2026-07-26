@@ -125,6 +125,39 @@ describe('buildToolCallCompletedPayload', () => {
     expect(payload.durationMs).toBe(987);
   });
 
+  it('spreads incomplete/incompleteReason only when result carries them', () => {
+    const withIncomplete = buildToolCallCompletedPayload({
+      toolUseId: 'tu_inc',
+      name: 'agent',
+      result: { content: 'partial', incomplete: true, incompleteReason: 'tool_use_loop_capped' },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect(withIncomplete.incomplete).toBe(true);
+    expect(withIncomplete.incompleteReason).toBe('tool_use_loop_capped');
+
+    // Clean ToolResult: both keys ABSENT (not present-with-falsy), matching
+    // the omit-when-absent idiom used by circuitBreaker/failureClass below.
+    const clean = buildToolCallCompletedPayload({
+      toolUseId: 'tu_clean',
+      name: 'agent',
+      result: baseResult,
+      truncated: false,
+      durationMs: 1,
+    });
+    expect('incomplete' in clean).toBe(false);
+    expect('incompleteReason' in clean).toBe(false);
+
+    const falseIncomplete = buildToolCallCompletedPayload({
+      toolUseId: 'tu_false_inc',
+      name: 'agent',
+      result: { content: 'x', incomplete: false },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect('incomplete' in falseIncomplete).toBe(false);
+  });
+
   it('spreads circuitBreaker only when result.circuitBreaker === true', () => {
     const withBreaker = buildToolCallCompletedPayload({
       toolUseId: 'tu_cb',

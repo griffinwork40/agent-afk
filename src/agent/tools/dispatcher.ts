@@ -1156,7 +1156,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       if (agentThrew) {
         this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
       } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input);
+        this.firePostToolUse(call.name, result.content, call.signal, call.input, result);
       }
       return result;
     }
@@ -1182,7 +1182,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       if (skillThrew) {
         this.firePostToolUseFailure(call.name, skillErrMsg, call.signal, call.input);
       } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input);
+        this.firePostToolUse(call.name, result.content, call.signal, call.input, result);
       }
       return result;
     }
@@ -1190,7 +1190,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Compose tool — DAG-based parallel subagent dispatch
     if (call.name === 'compose') {
       const result = await this.executeCompose(call);
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input, result);
       return result;
     }
 
@@ -1218,7 +1218,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     if (handlerThrew) {
       this.firePostToolUseFailure(call.name, handlerErrMsg, call.signal, call.input);
     } else {
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input, result);
     }
     return result;
   }
@@ -1243,12 +1243,22 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * compose path where the caller does not need to await the hook's
    * completion. Routes through `dispatchPostToolUse` so the
    * witness-layer `hook_decision` event lands automatically.
+   *
+   * `resultFlags` is an OPTIONAL trailing parameter (additive, back-compat):
+   * callers that omit it get byte-identical behavior to before this field
+   * existed — no new keys land on `postCtx`. Callers that have the full
+   * `ToolResult` in scope (the agent/skill/compose/handler success paths in
+   * `executeCoreInner`) pass it so a PostToolUse hook can read
+   * `incomplete`/`incompleteReason` — the structured counterpart to the
+   * `[⚠ PARTIAL RESULT…]` banner already in `output` — without substring-
+   * matching that banner text.
    */
   private firePostToolUse(
     toolName: string,
     output: string,
     signal: AbortSignal,
     input?: unknown,
+    resultFlags?: Pick<ToolResult, 'incomplete' | 'incompleteReason'>,
   ): void {
     if (!this.hookRegistry) return;
     const postCtx: PostToolUseContext = {
@@ -1262,6 +1272,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.sessionGrantManager !== undefined
         ? { grantManager: this.sessionGrantManager }
         : {}),
+      ...(resultFlags?.incomplete === true ? { incomplete: true } : {}),
+      ...(resultFlags?.incompleteReason ? { incompleteReason: resultFlags.incompleteReason } : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,

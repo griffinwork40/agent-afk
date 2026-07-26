@@ -198,6 +198,41 @@ describe('BgJobLogReader', () => {
     expect(read!.status).toBe('completed');
   });
 
+  // ---------------------------------------------------------------------
+  // BgJobMeta.stopReason round-trip (A1: persisted for the /bgsub:join
+  // disk-fallback path — see background-registry.ts markTerminal and
+  // bgsub.ts's disk-fallback branch).
+  // ---------------------------------------------------------------------
+  it('readMeta() round-trips a written stopReason', async () => {
+    const jobId = `readmeta-stopreason-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    const meta = makeMeta(jobId, {
+      status: 'completed',
+      endedAt: Date.now(),
+      stopReason: 'tool_use_loop_capped',
+    });
+    await w.writeMeta(meta);
+    await w.close();
+
+    const read = await BgJobLogReader.readMeta(jobId);
+    expect(read).not.toBeNull();
+    expect(read!.stopReason).toBe('tool_use_loop_capped');
+  });
+
+  it('readMeta() leaves stopReason undefined for legacy meta that never set it', async () => {
+    const jobId = `readmeta-legacy-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    // No `stopReason` override — mirrors meta.json written before this field
+    // existed.
+    const meta = makeMeta(jobId, { status: 'completed', endedAt: Date.now() });
+    await w.writeMeta(meta);
+    await w.close();
+
+    const read = await BgJobLogReader.readMeta(jobId);
+    expect(read).not.toBeNull();
+    expect(read!.stopReason).toBeUndefined();
+  });
+
   it('readEvents() round-trips a written log', async () => {
     const jobId = `readevents-${Date.now()}`;
     const w = new BgJobLogWriter(jobId);
