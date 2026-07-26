@@ -197,3 +197,252 @@ describe('readPresenceFiles edge cases', () => {
     expect(records).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Session-status contract: schema version, heartbeat, pid liveness.
+//
+// The bug these guard: presence cleanup runs only from
+// `process.once('exit'|'SIGINT'|'SIGTERM')`, none of which fire on SIGKILL or an
+// OOM kill, and nothing reaps the presence directory. A crashed session
+// therefore appeared live forever to every consumer (`/watch` auto-subscribe,
+// the Telegram bot, any status UI).
+// ---------------------------------------------------------------------------
+
+/**
+ * A pid that is definitively not running, found WITHOUT creating a process.
+ *
+ * Probes downward from implausibly-high values and returns the first one the
+ * kernel reports as `ESRCH` (no such process). `pid_max` differs per platform
+ * (~99999 on macOS, up to 4194304 on Linux), so no single literal is portably
+ * unusable — but probing finds a usable one on any platform.
+ *
+ * Deliberately does NOT spawn-and-reap a real process to obtain a dead pid, for
+ * two reasons:
+ *   1. Churning pids raises the odds of pid REUSE elsewhere in the suite. The
+ *      process-group-kill test in `tools/handlers/bash.test.ts` probes a
+ *      grandchild pid with `kill -0` after a 100ms reap window and fails if
+ *      anything has recycled it — observed failing exactly this way in CI.
+ *   2. A reaped pid can itself be recycled before the assertion runs, which
+ *      would make THIS test flake in the opposite direction.
+ *
+ * Only `ESRCH` is accepted. `EPERM` means the process exists but belongs to
+ * another user, which `isProcessAlive` correctly treats as alive.
+ */
+function unusedPid(): number {
+  for (const candidate of [4_194_305, 4_194_304, 999_999, 99_999]) {
+    try {
+      process.kill(candidate, 0);
+      // No throw ⇒ it exists ⇒ not usable as a dead pid. Try the next.
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return candidate;
+    }
+  }
+  throw new Error('could not find an unused pid to test against');
+}
+
+/** Write a presence file directly, bypassing writePresenceFile's stamping. */
+function writeRawPresence(sessionId: string, obj: Record<string, unknown>): void {
+  const presenceDir = path.join(tmpDir, 'state', 'presence');
+  fs.mkdirSync(presenceDir, { recursive: true });
+  fs.writeFileSync(path.join(presenceDir, `${sessionId}.json`), JSON.stringify(obj), 'utf8');
+}
+
+describe('presence schema version', () => {
+  it('writePresenceFile stamps the current schema version', async () => {
+    const { writePresenceFile, readPresenceFiles, PRESENCE_SCHEMA_VERSION } = await getPresenceMod();
+    await writePresenceFile(mkInfo());
+
+    const [record] = await readPresenceFiles();
+    expect(record?.schemaVersion).toBe(PRESENCE_SCHEMA_VERSION);
+  });
+
+  it('lets a caller-supplied schemaVersion win over the default', async () => {
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ schemaVersion: 99 }));
+
+    const [record] = await readPresenceFiles();
+    expect(record?.schemaVersion).toBe(99);
+  });
+
+  it('reads a legacy record with no schemaVersion or heartbeatAt (fails soft)', async () => {
+    const { readPresenceFiles } = await getPresenceMod();
+    // Exactly the shape written before versioning existed.
+    writeRawPresence('legacy-1', {
+      sessionId: 'legacy-1',
+      surface: 'cli',
+      cwd: '/tmp/x',
+      startedAt: new Date().toISOString(),
+      model: { provider: 'p', name: 'm' },
+      workspace: NULL_WS,
+      pid: process.pid,
+    });
+
+    const [record] = await readPresenceFiles();
+    expect(record?.sessionId).toBe('legacy-1');
+    expect(record?.schemaVersion).toBeUndefined();
+    expect(record?.heartbeatAgeMs).toBeNull();
+    // Still classifiable — a missing version must not cost us liveness.
+    expect(record?.liveness).toBe('alive');
+  });
+});
+
+describe('presence heartbeat', () => {
+  it('writePresenceFile stamps an initial heartbeatAt', async () => {
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo());
+
+    const [record] = await readPresenceFiles();
+    expect(typeof record?.heartbeatAt).toBe('string');
+    expect(record?.heartbeatAgeMs).not.toBeNull();
+    expect(record!.heartbeatAgeMs!).toBeLessThan(60_000);
+  });
+
+  it('touchPresenceHeartbeat refreshes the timestamp, preserving every other field', async () => {
+    const { writePresenceFile, touchPresenceHeartbeat, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'hb-1', afk: true, surface: 'telegram' }));
+    const before = (await readPresenceFiles())[0]!;
+
+    // Force a measurable gap, then backdate so the refresh is observable
+    // regardless of clock granularity.
+    writeRawPresence('hb-1', {
+      ...before,
+      path: undefined,
+      liveness: undefined,
+      heartbeatAgeMs: undefined,
+      heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+    const stale = (await readPresenceFiles())[0]!;
+    expect(stale.heartbeatAgeMs!).toBeGreaterThan(60_000);
+
+    await touchPresenceHeartbeat('hb-1');
+
+    const after = (await readPresenceFiles())[0]!;
+    expect(after.heartbeatAgeMs!).toBeLessThan(60_000);
+    // Other fields survive the read-modify-write.
+    expect(after.afk).toBe(true);
+    expect(after.surface).toBe('telegram');
+    expect(after.sessionId).toBe('hb-1');
+  });
+
+  it('touchPresenceHeartbeat is a no-op when no presence file exists', async () => {
+    const { touchPresenceHeartbeat, readPresenceFiles } = await getPresenceMod();
+    await expect(touchPresenceHeartbeat('nope')).resolves.toBeUndefined();
+    expect(await readPresenceFiles()).toHaveLength(0);
+  });
+});
+
+describe('presence liveness annotation', () => {
+  it("classifies the current process as 'alive'", async () => {
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ pid: process.pid }));
+
+    const [record] = await readPresenceFiles();
+    expect(record?.liveness).toBe('alive');
+  });
+
+  it("classifies a nonexistent pid as 'dead'", async () => {
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ pid: unusedPid() }));
+
+    const [record] = await readPresenceFiles();
+    expect(record?.liveness).toBe('dead');
+  });
+
+  it("classifies an absent or nonsense pid as 'unknown', never 'dead'", async () => {
+    const { readPresenceFiles } = await getPresenceMod();
+    const base = {
+      surface: 'cli',
+      cwd: '/tmp/x',
+      startedAt: new Date().toISOString(),
+      model: { provider: 'p', name: 'm' },
+      workspace: NULL_WS,
+    };
+    writeRawPresence('no-pid', { ...base, sessionId: 'no-pid' });
+    writeRawPresence('bad-pid', { ...base, sessionId: 'bad-pid', pid: 'not-a-number' });
+    writeRawPresence('zero-pid', { ...base, sessionId: 'zero-pid', pid: 0 });
+
+    const records = await readPresenceFiles();
+    expect(records).toHaveLength(3);
+    for (const r of records) {
+      expect(r.liveness).toBe('unknown');
+    }
+  });
+
+  it('DOES NOT filter dead records out of readPresenceFiles', async () => {
+    // Safety invariant. The worktree sweep decides whether a worktree is in use
+    // from these records; a false 'dead' that removed one would let the sweep
+    // delete a live session's worktree. Liveness is an annotation, not a filter.
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'alive-1', pid: process.pid }));
+    await writePresenceFile(mkInfo({ sessionId: 'dead-1', pid: unusedPid() }));
+
+    const records = await readPresenceFiles();
+    expect(records).toHaveLength(2);
+    expect(records.map((r) => r.sessionId).sort()).toEqual(['alive-1', 'dead-1']);
+  });
+});
+
+describe('readLivePresenceFiles', () => {
+  it("drops records proven 'dead' and keeps 'alive' ones", async () => {
+    const { writePresenceFile, readLivePresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'alive-1', pid: process.pid }));
+    await writePresenceFile(mkInfo({ sessionId: 'dead-1', pid: unusedPid() }));
+
+    const live = await readLivePresenceFiles();
+    expect(live.map((r) => r.sessionId)).toEqual(['alive-1']);
+  });
+
+  it("RETAINS 'unknown' records — hiding a running session is the worse failure", async () => {
+    const { readLivePresenceFiles } = await getPresenceMod();
+    writeRawPresence('no-pid', {
+      sessionId: 'no-pid',
+      surface: 'cli',
+      cwd: '/tmp/x',
+      startedAt: new Date().toISOString(),
+      model: { provider: 'p', name: 'm' },
+      workspace: NULL_WS,
+    });
+
+    const live = await readLivePresenceFiles();
+    expect(live.map((r) => r.sessionId)).toEqual(['no-pid']);
+  });
+
+  it('drops stale heartbeats when maxHeartbeatAgeMs is set', async () => {
+    const { readLivePresenceFiles } = await getPresenceMod();
+    const base = {
+      surface: 'cli',
+      cwd: '/tmp/x',
+      startedAt: new Date().toISOString(),
+      model: { provider: 'p', name: 'm' },
+      workspace: NULL_WS,
+      pid: process.pid,
+    };
+    writeRawPresence('fresh', {
+      ...base, sessionId: 'fresh', heartbeatAt: new Date().toISOString(),
+    });
+    writeRawPresence('stale', {
+      ...base, sessionId: 'stale', heartbeatAt: new Date(Date.now() - 600_000).toISOString(),
+    });
+
+    const live = await readLivePresenceFiles({ maxHeartbeatAgeMs: 60_000 });
+    expect(live.map((r) => r.sessionId)).toEqual(['fresh']);
+  });
+
+  it('keeps records with no heartbeat even when maxHeartbeatAgeMs is set', async () => {
+    // Absence of a heartbeat is not evidence of death — pre-heartbeat records
+    // must stay visible or upgrading afk would blank the session list.
+    const { readLivePresenceFiles } = await getPresenceMod();
+    writeRawPresence('no-hb', {
+      sessionId: 'no-hb',
+      surface: 'cli',
+      cwd: '/tmp/x',
+      startedAt: new Date().toISOString(),
+      model: { provider: 'p', name: 'm' },
+      workspace: NULL_WS,
+      pid: process.pid,
+    });
+
+    const live = await readLivePresenceFiles({ maxHeartbeatAgeMs: 1 });
+    expect(live.map((r) => r.sessionId)).toEqual(['no-hb']);
+  });
+});
