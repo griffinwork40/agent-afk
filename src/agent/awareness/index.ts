@@ -49,6 +49,17 @@ export {
   removePresenceFile,
   removePresenceFileSync,
   readPresenceFiles,
+  readLivePresenceFiles,
+  touchPresenceHeartbeat,
+  PRESENCE_SCHEMA_VERSION,
   type PresenceFileInfo,
   type PresenceRecord,
+  type PresenceLiveness,
+  type ReadLivePresenceOptions,
 } from './presence.js';
+
+export {
+  isProcessAlive,
+  classifyPidLiveness,
+  type ProcessLiveness,
+} from '../process-liveness.js';
