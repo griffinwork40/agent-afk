@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Manual runs from the Actions tab. Primary use: firing the advisory
+  # `test-windows` leg on demand while grinding Windows compat (issue #703).
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -80,17 +83,18 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Cross-platform matrix (Windows-compat effort, see .afk/plans/windows-compat-roadmap
-    # or the tracking issue). ubuntu-latest is the REQUIRED gate; windows-latest and
-    # macos-latest run for SIGNAL but do not block merges yet — `continue-on-error`
-    # keeps them advisory while the compat grind is in progress. `fail-fast: false`
-    # so one OS failing never cancels the others. Public repos get unlimited free
-    # GitHub-hosted minutes on all three runners. Flip windows/macos to required
-    # (delete the continue-on-error line) once the suite is green there.
+    # Cross-platform matrix (see issue #703 for the Windows-compat effort).
+    # ubuntu-latest is the REQUIRED gate; macos-latest runs for SIGNAL but does not
+    # block merges yet — `continue-on-error` keeps it advisory. It has been green
+    # since the matrix landed, so promoting it to required is a live follow-up.
+    # `fail-fast: false` so one OS failing never cancels the other. Public repos get
+    # unlimited free GitHub-hosted minutes on both runners.
+    # windows-latest is NOT in this matrix — it runs in `test-windows` below, which
+    # is trigger-scoped because it is uniformly red today. See that job's comment.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
@@ -119,10 +123,65 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # Per-OS name — a matrix can't upload three artifacts under one name (v4 immutable).
+          # Per-OS name — a matrix can't upload multiple artifacts under one name (v4 immutable).
           name: coverage-report-${{ matrix.os }}
           path: coverage/
           retention-days: 14
+
+  # Windows compat leg (issue #703). Trigger-scoped, NOT part of the `test` matrix.
+  #
+  # Why: Windows is not a supported platform yet — 85 of 699 test files fail, ~90% of
+  # them because tests hardcode POSIX `/tmp` rather than because product code is broken.
+  # A uniformly-red advisory check on every PR carries zero marginal information: you
+  # cannot distinguish a newly-introduced POSIX-ism from the known-red baseline, so the
+  # red X on unrelated PRs (dependabot bumps, feature work) trains reviewers to ignore
+  # CI. Scoping the trigger keeps the signal where it is actionable and drops it where
+  # it is noise:
+  #   - push to main      → the authoritative post-merge scoreboard #703 tracks
+  #   - `windows-compat`  → opt in per-PR while grinding a compat fix, to get the
+  #     PR label            per-PR falsifier back on exactly the PR that needs it
+  #   - workflow_dispatch → on-demand run from the Actions tab (see `on:` above)
+  # On every other PR the job is SKIPPED (grey), not failed (red).
+  #
+  # Runs `pnpm test` rather than `pnpm test:coverage`: the coverage floors
+  # (stmts 74 / branch 79) can red this leg on coverage alone once win32-skipped
+  # branches go uncovered, which would mask the assertion signal this job exists to
+  # collect. The required ubuntu leg still enforces the coverage gate.
+  #
+  # Closing condition (issue #703): once the suite is green here, DELETE this job and
+  # add `windows-latest` back to the `test` matrix above — that restores both the
+  # coverage gate and required-gate status in one move.
+  test-windows:
+    name: Test (windows-latest)
+    if: >-
+      github.event_name == 'push'
+      || github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'windows-compat')
+    runs-on: windows-latest
+    # Advisory until the compat grind lands — never blocks a merge.
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (no coverage gate — see job comment)
+        run: pnpm test
 
   # Real-PTY scrollback harness (issue #541). Isolated from the main `test` job
   # because it depends on the native `node-pty` module (compiled from source on
