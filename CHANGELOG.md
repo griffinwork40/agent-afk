@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.80.2] - 2026-07-26
+
+### Fixed
+- thread traceWriter into phase forks so they emit lifecycle events (#696) (bb1e3e5)
+
 ## [5.80.1] - 2026-07-26
 
 ### Fixed
