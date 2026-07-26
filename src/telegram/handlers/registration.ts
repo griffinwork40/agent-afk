@@ -39,6 +39,7 @@ export async function registerChatCommands(
       { command: 'model', description: 'Switch Claude model (opus/sonnet/haiku)' },
       { command: 'cd', description: 'Show or change session working directory' },
       { command: 'name', description: 'Show or set the session name' },
+      { command: 'usage', description: 'Show Claude subscription usage' },
       { command: 'sessions', description: 'List and switch between sessions' },
       { command: 'new', description: 'Start a new session (keeps the current one)' },
     ];

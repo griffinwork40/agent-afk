@@ -22,7 +22,9 @@ import {
   escapeHtml,
   formatSystemError,
   formatQueued,
+  formatUsage,
 } from './formatter';
+import type { UsageResult } from '../agent/subscription-usage.js';
 
 describe('splitLongMessage', () => {
   test('should not split short messages', () => {
@@ -675,5 +677,56 @@ describe('markdownToTelegramHtml — mis-nested emphasis safety net', () => {
     expect(out).toContain('<i>(empty bash block)</i>'); // label keeps its italic
     expect(out).not.toContain('<b>'); // mis-nested emphasis still dropped
     expect(out).toContain('a b c'); // emphasis text preserved as plain
+  });
+});
+
+describe('formatUsage', () => {
+  test('kind: ok with all windows renders one line per window with percentage and reset time', () => {
+    const resetsAt = new Date('2026-01-01T00:00:00Z');
+    const result: UsageResult = {
+      kind: 'ok',
+      fiveHour: { utilization: 0.42, resetsAt },
+      sevenDay: { utilization: 0.7 },
+      sevenDaySonnet: { utilization: 0.1, resetsAt },
+      sevenDayOpus: { utilization: 0.99 },
+    };
+    const out = formatUsage(result);
+    expect(out).toContain('42%');
+    expect(out).toContain('70%');
+    expect(out).toContain('10%');
+    expect(out).toContain('99%');
+    expect(out).toMatch(/5-hour/);
+    expect(out).toMatch(/7-day \(Sonnet\)/);
+    expect(out).toMatch(/7-day \(Opus\)/);
+    expect(out).toContain(resetsAt.toLocaleString());
+  });
+
+  test('kind: ok with only fiveHour renders exactly one line, no other windows', () => {
+    const result: UsageResult = { kind: 'ok', fiveHour: { utilization: 0.5 } };
+    const out = formatUsage(result);
+    expect(out).toContain('5-hour');
+    expect(out).toContain('50%');
+    expect(out).not.toMatch(/7-day/);
+  });
+
+  test('kind: unavailable / no-token tells the operator to run claude login', () => {
+    const result: UsageResult = {
+      kind: 'unavailable',
+      reason: 'no-token',
+      detail: 'no credentials found',
+    };
+    const out = formatUsage(result);
+    expect(out).toMatch(/claude login/);
+  });
+
+  test('kind: unavailable / other reasons surface the reason and detail', () => {
+    const result: UsageResult = {
+      kind: 'unavailable',
+      reason: 'http-error',
+      detail: '503 Service Unavailable',
+    };
+    const out = formatUsage(result);
+    expect(out).toMatch(/http-error/);
+    expect(out).toContain('503 Service Unavailable');
   });
 });
