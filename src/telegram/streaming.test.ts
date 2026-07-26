@@ -3,11 +3,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderActivityReceipt, replyWithFloodRetry } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderActivityReceipt, formatTelegramActivity, formatTelegramAgentLabel, replyWithFloodRetry } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { getCurrentSink } from '../agent/_lib/skill-sink-channel.js';
 
 async function* yieldChunks(...chunks: string[]) {
   for (const c of chunks) {
@@ -111,8 +112,8 @@ describe('streamResponse', () => {
     await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
     const joined = [...replies, ...edits].join('\n');
     expect(joined).toContain('◦ Researching codebase');
-    expect(joined).toContain('(Grep)');
-    expect(joined).toContain('12 matches in 4 files');
+    expect(joined).not.toContain('(Grep)');
+    expect(joined).not.toContain('12 matches in 4 files');
   });
 
   it('sanitizes control/ANSI sequences in model-controlled progress fields before sending to Telegram', async () => {
@@ -150,6 +151,33 @@ describe('streamResponse', () => {
     // Raw escape/control bytes must not reach the Telegram message.
     expect(joined).not.toContain('\x1b');
     expect(joined).not.toContain('\x9b');
+  });
+
+  it('shows friendly sub-agent activity without exposing tool arguments or paths', async () => {
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      getCurrentSink()?.(
+        {
+          type: 'chunk',
+          chunk: {
+            type: 'tool_use_detail',
+            toolUseId: 'tool-1',
+            toolName: 'Grep',
+            toolInput: '/Users/example/private-project --hidden secret-pattern',
+          },
+        },
+        { subagentId: 'sub-1', agentType: 'research-agent' },
+      );
+      await Promise.resolve();
+      yield { type: 'done', metadata: undefined };
+    });
+
+    await streamResponse(ctx, session, 'go');
+
+    const joined = [...replies, ...edits].join('\n');
+    expect(joined).toContain('Research agent — Searching');
+    expect(joined).not.toContain('/Users/example/private-project');
+    expect(joined).not.toContain('secret-pattern');
   });
 
   it('appends prompt_suggestion as a final 💡 line', async () => {
@@ -757,6 +785,36 @@ describe('renderSubagentFooter (bounded sub-agent progress)', () => {
     expect(footer).not.toContain('file0 ');
     // The counter still reflects the true total even though lines are capped.
     expect(footer).toContain('50 steps');
+  });
+});
+
+describe('Telegram-friendly activity formatting', () => {
+  it('humanizes generic tool activity and keeps meaningful descriptions', () => {
+    expect(formatTelegramActivity('Working', 'memory_search')).toBe('Searching');
+    expect(formatTelegramActivity('Processing', 'Bash')).toBe('Running a command');
+    expect(formatTelegramActivity('Researching release notes', 'WebSearch')).toBe('Researching release notes');
+  });
+
+  it('categorizes by whole token, so a domain outranks a colliding verb', () => {
+    // `browser_open` is browser navigation, not a file read: the `browser`
+    // domain token wins over the `open` verb token.
+    expect(formatTelegramActivity('Working', 'browser_open')).toBe('Researching');
+    expect(formatTelegramActivity('Working', 'web_scrape')).toBe('Researching');
+    expect(formatTelegramActivity('Working', 'read_file')).toBe('Reading files');
+    expect(formatTelegramActivity('Working', 'write_file')).toBe('Editing files');
+    expect(formatTelegramActivity('Working', 'Grep')).toBe('Searching');
+  });
+
+  it('falls back to a readable label rather than a confidently wrong category', () => {
+    // `memory` alone is not a search, and a `terminal_font_size` setting is not
+    // a shell command — a substring match previously claimed both.
+    expect(formatTelegramActivity('Working', 'memory_update')).toBe('Using memory update');
+    expect(formatTelegramActivity('Working', 'terminal_font_size')).toBe('Using terminal font size');
+  });
+
+  it('humanizes agent labels and hides opaque UUIDs', () => {
+    expect(formatTelegramAgentLabel('research-agent')).toBe('Research agent');
+    expect(formatTelegramAgentLabel('c204d56f-bd57-4380-8a5f-123456789abc')).toBe('Sub-agent');
   });
 });
 

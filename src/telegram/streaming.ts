@@ -138,6 +138,79 @@ export async function replyWithFloodRetry(
   }
 }
 
+// Invariant: categorize a tool name by WHOLE TOKEN, and test DOMAIN tokens
+// (what the tool acts on) before VERB tokens (what it does to it). Both halves
+// are load-bearing, because the category vocabulary is not partitioned: `open`
+// belongs to file reads AND to browser navigation, `memory` to a search AND to
+// a write. Flattening the name into one string made every keyword a substring
+// match across segment boundaries, and first-match-wins let a generic verb
+// preempt the specific domain — so real registered tools were labeled with
+// confident, wrong copy: `browser_open` → "Reading files" (verb `open` beat
+// domain `browser`), `memory_update` → "Searching" (domain `memory` matched
+// without its `search` verb), `terminal_font_size` → "Running a command"
+// (an editor setting matched the shell keyword `terminal`).
+// A name whose tokens carry no known keyword deliberately falls through to the
+// readable `Using …` form: a generic label is honest, a wrong category is not.
+const ACTIVITY_DOMAIN_TOKENS: readonly (readonly [readonly string[], string])[] = [
+  [['browser', 'web', 'fetch', 'scrape'], 'Researching'],
+  [['test', 'vitest', 'jest'], 'Running tests'],
+  [['bash', 'shell', 'exec', 'command'], 'Running a command'],
+];
+
+const ACTIVITY_VERB_TOKENS: readonly (readonly [readonly string[], string])[] = [
+  [['search', 'grep', 'glob', 'find'], 'Searching'],
+  [['read', 'open', 'view', 'inspect'], 'Reading files'],
+  [['edit', 'write', 'patch', 'replace'], 'Editing files'],
+];
+
+function humanizeToolActivity(toolName: string): string {
+  const safeName = sanitizeLabel(toolName);
+  // Split on separators AND camelCase boundaries so `WebSearch`, `web_search`,
+  // and `mcp__chrome-devtools__take_screenshot` all yield comparable tokens.
+  const tokens = new Set(
+    safeName
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  );
+  for (const [keywords, label] of [...ACTIVITY_DOMAIN_TOKENS, ...ACTIVITY_VERB_TOKENS]) {
+    if (keywords.some((keyword) => tokens.has(keyword))) return label;
+  }
+
+  const readable = safeName
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return readable ? `Using ${readable}` : 'Working';
+}
+
+/**
+ * Convert model/provider progress into short Telegram-facing activity copy.
+ * Generic descriptions use the tool category; meaningful descriptions remain
+ * available when no better structured signal exists. Tool summaries and input
+ * are deliberately excluded because they commonly contain commands and paths.
+ */
+export function formatTelegramActivity(description?: string, toolName?: string): string {
+  const safeDescription = sanitizeLabel(description ?? '').replace(/\s+/g, ' ').trim();
+  const genericDescription =
+    /^(working|processing|in progress|running)(?:\s*\([^)]*\))?$/i.test(safeDescription);
+  if (toolName && (!safeDescription || genericDescription)) {
+    return humanizeToolActivity(toolName);
+  }
+  return safeDescription || (toolName ? humanizeToolActivity(toolName) : 'Working');
+}
+
+/** Make internal sub-agent identifiers readable without exposing opaque UUIDs. */
+export function formatTelegramAgentLabel(label: string): string {
+  if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(label)) return 'Sub-agent';
+  const readable = sanitizeLabel(label).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return readable
+    ? readable.charAt(0).toUpperCase() + readable.slice(1)
+    : 'Sub-agent';
+}
+
 /**
  * Render a compact, BOUNDED footer summarizing sub-agent tool activity for the
  * live preview. Returns '' when there is no activity. Pure + exported for unit
@@ -151,7 +224,7 @@ export async function replyWithFloodRetry(
 export function renderSubagentFooter(steps: number, recent: readonly string[]): string {
   if (steps <= 0) return '';
   const shown = recent.slice(-MAX_SUBAGENT_PREVIEW_LINES);
-  const head = `◦ sub-agents working — ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+  const head = `🤖 Sub-agents · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
   return shown.length > 0 ? `\n${head}\n  ${shown.join('\n  ')}` : `\n${head}`;
 }
 
@@ -531,20 +604,17 @@ export async function streamResponse(
     // visible annotations on the accumulated message. Without this,
     // subagent events are silently dropped because no ambient sink is set.
     const subagentSink = (event: OutputEvent, meta: SubagentProgressMeta): void => {
-      const label = meta.agentType ?? meta.subagentId;
+      const label = formatTelegramAgentLabel(meta.agentType ?? meta.subagentId);
       // Sub-agent activity keeps the turn alive: bump the watchdog so deep
       // fan-out (silent on the parent stream) does not trip a false timeout.
       lastActivityAt = Date.now();
       if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
-        // toolInput is redacted at its source (summarizeToolInput) before it
-        // reaches this network-egress sink, so no secret-scrub is needed here.
-        const toolArgs = event.chunk.toolInput.length > 60
-          ? event.chunk.toolInput.slice(0, 57) + '...'
-          : event.chunk.toolInput;
         // Bounded: count every step but retain only the most recent few lines,
         // rendered as a compact footer rather than one appended line per call.
+        // Never include toolInput: even summarized input commonly contains raw
+        // commands and private filesystem paths that are poor mobile UI.
         subagentSteps++;
-        recentSubagentSteps.push(`${label}: ${event.chunk.toolName} ${toolArgs}`);
+        recentSubagentSteps.push(`${label} — ${humanizeToolActivity(event.chunk.toolName)}`);
         if (recentSubagentSteps.length > MAX_SUBAGENT_PREVIEW_LINES) recentSubagentSteps.shift();
         void sendOrEdit(livePreview());
       } else if (event.type === 'done') {
@@ -630,23 +700,24 @@ export async function streamResponse(
           // already-delivered answer text. Gate the RENDER, never this line.
           inContentRun = false;
           progressRounds++;
-          const { description, summary, lastToolName } = event.progress;
-          // These fields are model-controlled (path/command/URL text from
-          // summarizeToolInput) and markdownToTelegramHtml does not strip
-          // ANSI/C1/control bytes, so scrub them here to match the CLI
-          // banner's field-scoped hardening (tool-lane-format-sanitize.ts).
-          const safeDescription = sanitizeLabel(description);
-          const safeToolName = lastToolName ? sanitizeLabel(lastToolName) : lastToolName;
-          const safeSummary = summary ? sanitizeLabel(summary) : summary;
-          const line = safeToolName
-            ? `◦ ${safeDescription} (${safeToolName})`
-            : `◦ ${safeDescription}`;
+          const { description, lastToolName } = event.progress;
+          // Telegram is a compact chat surface, not a terminal. Prefer a short
+          // activity category for generic progress and intentionally omit the
+          // summary, which routinely contains commands, URLs, and local paths.
+          // formatTelegramActivity keeps the field-scoped hardening these
+          // model-controlled fields require (sanitizeLabel on both description
+          // and tool name) because markdownToTelegramHtml does not strip
+          // ANSI/C1/control bytes — same contract as the CLI banner
+          // (tool-lane-format-sanitize.ts).
+          const line = `◦ ${formatTelegramActivity(description, lastToolName)}`;
           // Record first, render second: a line withheld by the latency gate is
           // still retained, so when the gate opens — by a later event OR by the
           // timer armed below — the bounded region shows the most recent rounds.
           // The list is global and capped, so the bound holds across a stream
           // that interleaves content with tool rounds, not just within one run.
-          progressLines.push(safeSummary ? `${line}\n  ${safeSummary}` : line);
+          // Repeated tool categories add no information to a rolling mobile
+          // preview: count every round for the receipt, but render duplicates once.
+          if (progressLines[progressLines.length - 1] !== line) progressLines.push(line);
           if (progressLines.length > MAX_PROGRESS_LINES) {
             progressLines = progressLines.slice(-MAX_PROGRESS_LINES);
           }
