@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.77.0] - 2026-07-26
+
+### Added
+- add /usage command for Claude subscription quota (#711) (588d437)
+
 ## [5.76.6] - 2026-07-26
 
 ### Fixed
