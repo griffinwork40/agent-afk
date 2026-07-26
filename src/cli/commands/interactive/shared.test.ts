@@ -11,11 +11,12 @@
  *   - Picks the LAST turn from a multi-turn array
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { printResumeBanner, resolveResumeCwd } from './shared.js';
+import { printResumeBanner, resolveResumeCwd, formatStatusFields } from './shared.js';
+import { recordQuotaSnapshot, resetQuotaCacheForTests } from '../../../agent/quota-cache.js';
 import type { SessionStats, TurnRecord } from '../../slash/types.js';
 import type { CompletionWriter } from './shared.js';
 
@@ -375,5 +376,54 @@ describe('resolveResumeCwd — resume cwd precedence', () => {
 
   it('returns the explicit override even when there is no stored cwd', () => {
     expect(resolveResumeCwd('/explicit/worktree', undefined)).toBe('/explicit/worktree');
+  });
+});
+
+describe('formatStatusFields — subscription-quota segment', () => {
+  beforeEach(() => {
+    resetQuotaCacheForTests();
+  });
+  afterEach(() => {
+    resetQuotaCacheForTests();
+  });
+
+  it('omits the quota field entirely when no headers have been observed', () => {
+    // Permanent state under API-key auth — must be absent, not a placeholder.
+    const fields = formatStatusFields(makeStats([]));
+    expect('quota' in fields).toBe(false);
+  });
+
+  it('renders both windows as rounded percentages', () => {
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.62,
+      sevenDayUtilization: 0.31,
+      observedAt: new Date(),
+    });
+    expect(formatStatusFields(makeStats([])).quota).toBe('5h 62% · 7d 31%');
+  });
+
+  it('renders only the 5h window when the 7d window is absent', () => {
+    recordQuotaSnapshot({ fiveHourUtilization: 0.05, observedAt: new Date() });
+    expect(formatStatusFields(makeStats([])).quota).toBe('5h 5%');
+  });
+
+  it('renders only the 7d window when the 5h window is absent', () => {
+    recordQuotaSnapshot({ sevenDayUtilization: 0.5, observedAt: new Date() });
+    expect(formatStatusFields(makeStats([])).quota).toBe('7d 50%');
+  });
+
+  it('treats utilization as a 0..1 fraction, never as an already-scaled percent', () => {
+    // Units regression guard: the same class of bug as rendering a fraction as
+    // if it were a percentage. 0.62 must be 62% — not 0% and not 6200%.
+    recordQuotaSnapshot({ fiveHourUtilization: 0.62, observedAt: new Date() });
+    const quota = formatStatusFields(makeStats([])).quota;
+    expect(quota).toContain('62%');
+    expect(quota).not.toContain('6200');
+    expect(quota).not.toContain('0%');
+  });
+
+  it('rounds to the nearest whole percent', () => {
+    recordQuotaSnapshot({ fiveHourUtilization: 0.626, observedAt: new Date() });
+    expect(formatStatusFields(makeStats([])).quota).toBe('5h 63%');
   });
 });

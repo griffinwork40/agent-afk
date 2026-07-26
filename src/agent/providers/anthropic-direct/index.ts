@@ -36,6 +36,7 @@ import {
 import { oneShotCompletion, type OneShotInput } from './oneshot.js';
 import { makeTracingFetch } from './tracing-fetch.js';
 import { ThrottleQueue } from './throttle-queue.js';
+import { parseQuotaHeaders, recordQuotaSnapshot } from '../../quota-cache.js';
 import { refreshClaudeCodeOauthToken } from '../../auth/keychain.js';
 import { AnthropicDirectQuery } from './query.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -636,6 +637,18 @@ export class AnthropicDirectProvider implements ModelProvider {
     // query below so the fetch producer and the loop consumer meet.
     const throttleQueue =
       !localMode && config.traceWriter ? new ThrottleQueue() : undefined;
+    // Invariant: quota capture is gated on `!localMode` ALONE — deliberately not
+    // on `config.traceWriter`. The `anthropic-ratelimit-unified-*` headers ride
+    // on every response and feed the CLI status line, which must stay live even
+    // when tracing is off (`AFK_TRACE_DISABLED=1`); tying it to the trace writer
+    // would silently blank the indicator in that configuration. localMode is
+    // still excluded: a local shim is not Anthropic and emits no quota headers.
+    const quotaObserver = localMode
+      ? undefined
+      : (headers: Headers): void => {
+          const snapshot = parseQuotaHeaders(headers);
+          if (snapshot !== undefined) recordQuotaSnapshot(snapshot);
+        };
     const clientOpts = buildClientOptions(
       token,
       authMode,
@@ -643,14 +656,18 @@ export class AnthropicDirectProvider implements ModelProvider {
       // Observability: route SDK HTTP through a wrapper that (1) records
       // 429/503/529 throttling into the witness trace so the SDK's
       // otherwise-silent retry-after backoff is legible in `afk trace show`,
-      // and (2) pushes a live signal onto `throttleQueue` so the progress
-      // banner can show the backoff as it happens. Skipped in local-shim mode
-      // (not Anthropic's billing surface) and when no trace writer is attached.
-      !localMode && config.traceWriter
+      // (2) pushes a live signal onto `throttleQueue` so the progress banner can
+      // show the backoff as it happens, and (3) captures subscription-quota
+      // headers into the quota cache for the status line. Skipped entirely in
+      // local-shim mode (not Anthropic's billing surface). Note the wrapper is
+      // installed whenever ANY of the three observers is live — a trace writer
+      // is no longer required, since (3) must work with tracing disabled.
+      !localMode
         ? makeTracingFetch(
             config.traceWriter,
             undefined,
             throttleQueue ? (info) => throttleQueue.push(info) : undefined,
+            quotaObserver,
           )
         : undefined,
     );
@@ -877,17 +894,19 @@ export class AnthropicDirectProvider implements ModelProvider {
           freshToken,
           'oauth',
           config.baseUrl,
-          // Preserve throttle observability AND the live-banner signal across an
-          // OAuth account swap — the rebuilt client must keep the same
-          // tracing-fetch wrapper wired to the same `throttleQueue`. localMode
-          // is false in this branch (see the guard above).
-          config.traceWriter
-            ? makeTracingFetch(
-                config.traceWriter,
-                undefined,
-                throttleQueue ? (info) => throttleQueue.push(info) : undefined,
-              )
-            : undefined,
+          // Preserve throttle observability, the live-banner signal AND quota
+          // capture across an OAuth account swap — the rebuilt client must keep
+          // the same tracing-fetch wrapper wired to the same `throttleQueue` and
+          // the same quota observer. localMode is false in this branch (see the
+          // guard above), so `quotaObserver` is always defined here and the
+          // wrapper installs unconditionally — no trace-writer gate, matching
+          // the primary install site above.
+          makeTracingFetch(
+            config.traceWriter,
+            undefined,
+            throttleQueue ? (info) => throttleQueue.push(info) : undefined,
+            quotaObserver,
+          ),
         );
         return factory ? factory(opts) : new Anthropic(opts);
       };

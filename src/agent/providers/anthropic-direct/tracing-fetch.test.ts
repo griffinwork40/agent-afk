@@ -30,6 +30,38 @@ describe('makeTracingFetch', () => {
     expect(makeTracingFetch(undefined, base)).toBe(base);
   });
 
+  it('still WRAPS when only onQuota is supplied (no trace writer)', () => {
+    // The quota indicator has to work with tracing disabled, so an onQuota
+    // observer alone must be enough to install the wrapper. If this regresses to
+    // returning `base`, the status-line quota segment silently blanks whenever
+    // AFK_TRACE_DISABLED=1 or no writer is attached.
+    const base = vi.fn() as unknown as typeof fetch;
+    expect(makeTracingFetch(undefined, base, undefined, () => {})).not.toBe(base);
+  });
+
+  it('invokes onQuota with response headers on a successful 200', async () => {
+    const seen: Array<string | null> = [];
+    const base = vi.fn(async () =>
+      res(200, { 'anthropic-ratelimit-unified-5h-utilization': '0.62' }),
+    ) as unknown as typeof fetch;
+    const wrapped = makeTracingFetch(undefined, base, undefined, (h) => {
+      seen.push(h.get('anthropic-ratelimit-unified-5h-utilization'));
+    });
+    const r = await wrapped('https://api.anthropic.com/v1/messages');
+    expect(r.status).toBe(200);
+    expect(seen).toEqual(['0.62']);
+  });
+
+  it('a throwing onQuota never disturbs the request path', async () => {
+    const base = vi.fn(async () => res(200)) as unknown as typeof fetch;
+    const wrapped = makeTracingFetch(undefined, base, undefined, () => {
+      throw new Error('observer exploded');
+    });
+    await expect(wrapped('https://api.anthropic.com/v1/messages')).resolves.toMatchObject({
+      status: 200,
+    });
+  });
+
   it('emits a rate_limit trace event on a 429 with retry-after', async () => {
     const { writer, events } = mockWriter();
     const base = vi.fn(async () => res(429, { 'retry-after': '30' })) as unknown as typeof fetch;

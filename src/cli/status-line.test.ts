@@ -723,6 +723,49 @@ describe('StatusLine with git branch + PR field', () => {
     status.stop();
   });
 
+  it('renders the subscription-quota segment when supplied', () => {
+    stream.columns = 200;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', quota: '5h 62% · 7d 31%' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('5h 62%');
+    expect(out).toContain('7d 31%');
+    status.stop();
+  });
+
+  it('draws no quota text at all when the field is absent (API-key auth)', () => {
+    // Under API-key auth the unified quota headers never arrive, so the cache
+    // stays empty forever. That must render as "no segment", not a placeholder.
+    stream.columns = 200;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.05, tokens: 1200 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('5h');
+    expect(out).not.toContain('7d');
+    expect(out).not.toContain('%');
+    status.stop();
+  });
+
+  it('drops quota BEFORE the token count, and dropping quota does not also drop tokens', () => {
+    // Regression guard for the droppablePriority allocation. The shed loop
+    // removes EVERY part sharing the current maximum priority in one pass, so if
+    // quota were given tokens' priority 4 instead of its own 5, both would vanish
+    // together. Width here is chosen to force exactly one shed step.
+    stream.columns = 40;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.05, tokens: 1200, quota: '5h 62% · 7d 31%' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('5h 62%'); // quota (priority 5) shed first
+    expect(out).toContain('tok'); // tokens (priority 4) survived that step
+    status.stop();
+  });
+
   it('drops the branch before the model on a very narrow terminal', () => {
     stream.columns = 12;
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });

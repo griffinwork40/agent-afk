@@ -57,6 +57,15 @@ export interface StatusLineFields {
    * Only meaningful alongside `branch`.
    */
   pr?: number;
+  /**
+   * Pre-formatted Claude subscription quota summary (e.g. `5h 62% · 7d 31%`),
+   * or undefined when no quota headers have been observed in this process —
+   * which is the PERMANENT state under API-key auth, since only subscription
+   * OAuth responses carry `anthropic-ratelimit-unified-*`. Undefined must draw
+   * no segment at all rather than a placeholder. Rendered rightmost and dropped
+   * first on a narrow terminal: the most peripheral field on the line.
+   */
+  quota?: string;
 }
 
 interface StatusLineOpts {
@@ -494,7 +503,16 @@ export class StatusLine {
     }
 
     if (f.tokens !== undefined) {
-      parts.push({ text: palette.chrome(`${formatTokens(f.tokens)} tok`), droppablePriority: 4 }); // drop 1st
+      parts.push({ text: palette.chrome(`${formatTokens(f.tokens)} tok`), droppablePriority: 4 }); // drop 2nd
+    }
+
+    // Invariant: every droppablePriority on this line must be UNIQUE. The shed
+    // loop below drops EVERY part sharing the current maximum priority in one
+    // pass, so reusing the token count's 4 here would make the quota segment and
+    // the token count vanish together instead of shedding one at a time. 5 =
+    // drop 1st, ahead of tokens — quota is the most peripheral field here.
+    if (f.quota !== undefined) {
+      parts.push({ text: palette.chrome(f.quota), droppablePriority: 5 }); // drop 1st
     }
 
     // Join with separator and measure the result.
