@@ -702,7 +702,10 @@ export const worktreeTool: AnthropicToolDef = {
     '- A worktree you created for a subagent, or one an `isolation: "worktree"` child left behind: ' +
     'after its commits are pushed, the branch ref holds the work, so the checkout is dead weight. If ' +
     'it was preserved with commits-ahead it is LOCKED, and a locked worktree is never reaped — call ' +
-    '`release` first, then `remove` (remove refuses a locked tree, so the order is mandatory).\n' +
+    '`release` first, then `remove` (remove refuses a locked tree, so the order is mandatory). ' +
+    '`remove` also refuses a tree with commits ahead of base unless `force: true`; once the branch is ' +
+    'pushed that force is safe, because remove never deletes the branch ref — the commits stay on the ' +
+    'branch and on the remote, and only the directory goes away.\n' +
     '- The worktree you are RUNNING IN (your own cwd): never remove it mid-session. Deleting your own ' +
     'working directory strands every later tool call on a path that no longer exists. Session-end ' +
     'cleanup already removes it when the tree is clean — just tell the operator it will be reclaimed ' +

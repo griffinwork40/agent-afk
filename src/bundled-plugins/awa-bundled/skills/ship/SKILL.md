@@ -130,7 +130,7 @@ A worktree is scaffolding, not an artifact. Once Phase 8 succeeds the branch is 
 
 Two cases, and they behave differently:
 
-- **A worktree you (or a sub-agent) created for this work, that you are NOT currently inside** — reclaim it now. If it is locked, `release` before `remove`: `remove` refuses a locked tree, so that order is mandatory, not stylistic. Use the `worktree` tool, not `git worktree` in bash. The branch ref survives removal, so the PR is unaffected.
+- **A worktree you (or a sub-agent) created for this work, that you are NOT currently inside** — reclaim it now, using the `worktree` tool rather than `git worktree` in bash. Two refusals to expect, in this order: a **locked** tree must be `release`d first (`remove` refuses a locked tree, so the order is mandatory, not stylistic), and a tree with **commits ahead of base** is refused unless you pass `force: true`. After a successful push that `force` is safe and correct: the tool never deletes the branch ref, so the commits remain on the branch *and* on the remote — you are discarding a directory, not history. Do not pass `force` before the push has landed.
 - **The worktree you are running in (your own cwd)** — **do not remove it.** Deleting your own working directory strands every subsequent tool call on a path that no longer exists, and `/ship` still has output to produce. Session-end cleanup already removes a clean worktree on exit. Say so instead, in one line: which branch carries the work, and that the checkout is reclaimed when the session ends.
 
 Never delete the branch as part of this phase — the open PR depends on that ref.

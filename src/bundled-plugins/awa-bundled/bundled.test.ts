@@ -136,7 +136,7 @@ const PINNED_HASHES = {
   // file-based form matches the safe convention already used in src/agent/gh.ts.
   // BACK-PORT GAP: the same fix should land in the upstream example-plugin /ship
   // skill (drift test is skipped here — example-plugin not co-located).
-  ship: '712d3796fc4e14d06f897986b2bb9b79d9b9989f6b149ea70c046165d86190f1',
+  ship: '4b082cdcbfe51453a20edd03231b473812775a7cc452b661bb786ff9735f0066',
   // simplify is bundled-only (no upstream example-plugin counterpart).
   simplify:
     'ce720df16e81eff5e6022db38067d376f2177e08a9783fc377e04cf520c7bf3c',

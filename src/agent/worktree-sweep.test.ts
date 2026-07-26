@@ -643,6 +643,14 @@ describe('base-sha-fallback', () => {
       if (args.includes('status') && args.includes('--porcelain')) {
         return { stdout: '', stderr: '' }; // clean
       }
+      if (args.includes('rev-list') && args.some((a) => a.includes('@{upstream}'))) {
+        // Model real git: this branch has no configured upstream, so
+        // `rev-list @{upstream}..HEAD` exits non-zero. The sweep must fail
+        // safe here and keep commitsUnpushed === commitsAhead, preserving the
+        // tree. Matched BEFORE the generic rev-list branch below, which would
+        // otherwise answer this query with the base-comparison count.
+        throw new Error("fatal: no upstream configured for branch 'afk/nobase-ahead'");
+      }
       if (args.includes('rev-list') && args.includes('--count')) {
         // The fix counts commits reachable from the worktree HEAD but NOT from
         // main (`--not`). The old self-comparing fallback (base === head) would
@@ -1781,5 +1789,260 @@ describe('stale-clean liveness guard (Codex review, PR #432)', () => {
     expect(
       result.warnings.some((w) => w.includes('stale-clean') && w.includes(worktreePath)),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushed-commits reaping — a shipped worktree stops being sacred
+// ---------------------------------------------------------------------------
+
+describe('pushed-commits reaping', () => {
+  /** A PID the kernel agrees does not exist, so ownerLiveness resolves 'dead'. */
+  function findDeadPid(): number {
+    for (let pid = 999_999; pid > 90_000; pid -= 1_117) {
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+      }
+    }
+    throw new Error('Could not find a dead PID for test setup');
+  }
+
+  /**
+   * Build a sweep fixture for a clean worktree holding `commitsAhead` commits
+   * past its recorded base, of which `unpushed` are not on the remote.
+   * `unpushed: 'no-upstream'` models a branch with no tracking ref, where real
+   * git exits non-zero on `rev-list @{upstream}..HEAD`.
+   */
+  async function fixture(opts: {
+    name: string;
+    ageMs: number;
+    pid?: number;
+    commitsAhead: number;
+    unpushed: number | 'no-upstream';
+  }) {
+    const worktreePath = join(afkWorktreesDir, opts.name);
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        ...(opts.pid !== undefined ? { pid: opts.pid } : {}),
+        createdAt: new Date(Date.now() - opts.ageMs).toISOString(),
+        baseSha: 'basesha000',
+      }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot, head: 'mainsha111' })}\n\n` +
+      `${worktreeBlock({
+        path: worktreePath,
+        head: 'wtsha222',
+        branch: `refs/heads/afk/${opts.name}`,
+      })}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.some((a) => a.includes('@{upstream}'))) {
+        if (opts.unpushed === 'no-upstream') {
+          throw new Error('fatal: no upstream configured for branch');
+        }
+        return { stdout: `${opts.unpushed}\n`, stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: `${opts.commitsAhead}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    return { worktreePath, mock };
+  }
+
+  it('reaps a clean worktree whose commits are all pushed (dead owner)', async () => {
+    // The /ship case: work committed, branch pushed, PR opened, session died.
+    // The commits live on the remote and `git worktree remove` preserves the
+    // branch ref, so the checkout is disposable.
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-shipped',
+      ageMs: 5 * 60_000,
+      pid: findDeadPid(),
+      commitsAhead: 3,
+      unpushed: 0,
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).toBe('dead-owner');
+    expect(result.removed).toContain(worktreePath);
+  });
+
+  it('reaps a clean fully-pushed worktree past the empty age gate (no pid)', async () => {
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-shipped-old',
+      ageMs: 3 * 3_600_000, // 3h — past MIN_EMPTY_AGE_MS
+      commitsAhead: 2,
+      unpushed: 0,
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).toBe('empty');
+    expect(result.removed).toContain(worktreePath);
+  });
+
+  it('NEVER runs `git branch -d` when reaping a pushed worktree', async () => {
+    // Regression guard for the hole found in review: `git branch -d` deletes a
+    // branch that is merged to its UPSTREAM, which is exactly the state a
+    // pushed worktree is in. Verified against real git: it exits 0 with
+    // "merged to refs/remotes/origin/X, but not yet merged to HEAD". If the
+    // remote branch is later deleted and the tracking ref pruned, those commits
+    // become reachable from nothing. The branch ref is the last copy — keep it.
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-shipped-keepbranch',
+      ageMs: 5 * 60_000,
+      pid: findDeadPid(),
+      commitsAhead: 3,
+      unpushed: 0,
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).toContain(worktreePath);
+    const branchDeletes = mock.calls.filter(
+      (c) => c.args.includes('branch') && c.args.includes('-d'),
+    );
+    expect(branchDeletes).toHaveLength(0);
+    // ...and the operator is told the branch survived, so the reap is legible.
+    expect(
+      result.warnings.some(
+        (w) => w.includes('branch preserved') && w.includes(worktreePath),
+      ),
+    ).toBe(true);
+  });
+
+  it('still deletes the branch when the reaped tree had no commits at all', async () => {
+    // The pre-existing behavior must not regress: a genuinely empty tree's
+    // throwaway branch is still cleaned up.
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-truly-empty',
+      ageMs: 5 * 60_000,
+      pid: findDeadPid(),
+      commitsAhead: 0,
+      unpushed: 0,
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).toContain(worktreePath);
+    const branchDeletes = mock.calls.filter(
+      (c) => c.args.includes('branch') && c.args.includes('-d'),
+    );
+    expect(branchDeletes.length).toBeGreaterThan(0);
+  });
+
+  it('PRESERVES a worktree with unpushed commits (dead owner)', async () => {
+    // The guard that must not regress: one unpushed commit means this checkout
+    // is the only place that work exists.
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-unpushed',
+      ageMs: 5 * 60_000,
+      pid: findDeadPid(),
+      commitsAhead: 3,
+      unpushed: 1,
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).not.toBe('dead-owner');
+    expect(verdict).not.toBe('empty');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('PRESERVES a worktree with no upstream configured (fail-safe)', async () => {
+    // Any failure reading the upstream must leave commitsUnpushed at
+    // commitsAhead, reproducing pre-change behavior exactly.
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-no-upstream',
+      ageMs: 3 * 3_600_000,
+      pid: findDeadPid(),
+      commitsAhead: 4,
+      unpushed: 'no-upstream',
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).not.toBe('dead-owner');
+    expect(verdict).not.toBe('empty');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('never reaps a fully-pushed worktree that a live session is using', async () => {
+    // Liveness beats disposability: a pushed tree in active use stays.
+    const { worktreePath, mock } = await fixture({
+      name: 'afk-shipped-live',
+      ageMs: 3 * 3_600_000,
+      pid: process.pid, // alive
+      commitsAhead: 2,
+      unpushed: 0,
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).not.toBe('dead-owner');
+    expect(verdict).not.toBe('empty');
+    expect(result.removed).not.toContain(worktreePath);
   });
 });
