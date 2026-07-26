@@ -15,6 +15,14 @@ import {
   type UsageSnapshot,
 } from './subscription-usage.js';
 
+// Mocked so tests exercising the CLAUDE_CODE_OAUTH_TOKEN env-var fallback are
+// deterministic regardless of the real machine's keychain/credentials state.
+// Tests that pass an explicit `token` never reach this (see hermeticity note
+// below), so this has no effect on them.
+vi.mock('./auth/keychain.js', () => ({
+  loadClaudeCodeOauthToken: vi.fn(() => undefined),
+}));
+
 const SECRET_TOKEN = 'sk-ant-oat01-super-secret-token-value';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -32,7 +40,13 @@ function fetchThrowing(err: unknown): typeof fetch {
 }
 
 describe('fetchSubscriptionUsage', () => {
+  // Hermeticity: the global clean-config-env.ts setup file already deletes
+  // CLAUDE_CODE_OAUTH_TOKEN from process.env before every test (it's an
+  // ENV_REGISTRY 'auth'-category var), but tests asserting the no-token path
+  // stub it explicitly too so the assertion holds regardless of that global
+  // behavior. vi.unstubAllEnvs() runs in that same global afterEach.
   it('returns unavailable/no-token when no token is available', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const result = await fetchSubscriptionUsage({ fetchImpl, token: '' });
     expect(result).toEqual({
@@ -177,18 +191,25 @@ describe('fetchSubscriptionUsage', () => {
     expect(ok.sevenDay?.resetsAt).toBeUndefined();
   });
 
-  it('clamps utilization into 0..1', async () => {
-    const fetchImpl = fetchReturning(
-      jsonResponse(200, {
-        five_hour: { utilization: 1.5 },
-        seven_day: { utilization: -0.3 },
-      }),
-    );
-    const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
-    const ok = result as UsageSnapshot;
-    expect(ok.fiveHour?.utilization).toBe(1);
-    expect(ok.sevenDay?.utilization).toBe(0);
-  });
+  it.each([
+    [42, 0.42],
+    [100, 1],
+    [150, 1],
+    [0.62, 0.62],
+    [-0.3, 0],
+    [1, 1],
+    [0, 0],
+  ])(
+    'normalizes utilization=%s (>1 treated as a percentage) to %s',
+    async (utilizationRaw, expected) => {
+      const fetchImpl = fetchReturning(
+        jsonResponse(200, { five_hour: { utilization: utilizationRaw } }),
+      );
+      const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
+      const ok = result as UsageSnapshot;
+      expect(ok.fiveHour?.utilization).toBe(expected);
+    },
+  );
 
   it('skips a window whose utilization is non-numeric or non-finite', async () => {
     const fetchImpl = fetchReturning(
@@ -239,12 +260,39 @@ describe('fetchSubscriptionUsage', () => {
     // only asserts the options default wiring: omitting fetchImpl still
     // type-checks and defaults to global fetch, which we don't invoke here
     // because we supply a token of '' to short-circuit before any request.
+    // `??` treats '' as present, so this never reads CLAUDE_CODE_OAUTH_TOKEN —
+    // stubbed anyway for an explicit, self-evident hermeticity guarantee.
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
     const result = await fetchSubscriptionUsage({ token: '' });
     expect(result).toEqual({
       kind: 'unavailable',
       reason: 'no-token',
       detail: expect.any(String),
     });
+  });
+
+  it('uses CLAUDE_CODE_OAUTH_TOKEN from the environment when the keychain has no token', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-supplied-oauth-token');
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    await fetchSubscriptionUsage({ fetchImpl });
+    const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe('Bearer env-supplied-oauth-token');
+  });
+
+  it('prefers an explicit options.token over CLAUDE_CODE_OAUTH_TOKEN from the environment', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-supplied-oauth-token');
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
+    const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Authorization']).toBe(`Bearer ${SECRET_TOKEN}`);
   });
 });
 
