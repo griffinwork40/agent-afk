@@ -795,6 +795,23 @@ describe('Telegram-friendly activity formatting', () => {
     expect(formatTelegramActivity('Researching release notes', 'WebSearch')).toBe('Researching release notes');
   });
 
+  it('categorizes by whole token, so a domain outranks a colliding verb', () => {
+    // `browser_open` is browser navigation, not a file read: the `browser`
+    // domain token wins over the `open` verb token.
+    expect(formatTelegramActivity('Working', 'browser_open')).toBe('Researching');
+    expect(formatTelegramActivity('Working', 'web_scrape')).toBe('Researching');
+    expect(formatTelegramActivity('Working', 'read_file')).toBe('Reading files');
+    expect(formatTelegramActivity('Working', 'write_file')).toBe('Editing files');
+    expect(formatTelegramActivity('Working', 'Grep')).toBe('Searching');
+  });
+
+  it('falls back to a readable label rather than a confidently wrong category', () => {
+    // `memory` alone is not a search, and a `terminal_font_size` setting is not
+    // a shell command — a substring match previously claimed both.
+    expect(formatTelegramActivity('Working', 'memory_update')).toBe('Using memory update');
+    expect(formatTelegramActivity('Working', 'terminal_font_size')).toBe('Using terminal font size');
+  });
+
   it('humanizes agent labels and hides opaque UUIDs', () => {
     expect(formatTelegramAgentLabel('research-agent')).toBe('Research agent');
     expect(formatTelegramAgentLabel('c204d56f-bd57-4380-8a5f-123456789abc')).toBe('Sub-agent');

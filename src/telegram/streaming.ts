@@ -138,15 +138,45 @@ export async function replyWithFloodRetry(
   }
 }
 
+// Invariant: categorize a tool name by WHOLE TOKEN, and test DOMAIN tokens
+// (what the tool acts on) before VERB tokens (what it does to it). Both halves
+// are load-bearing, because the category vocabulary is not partitioned: `open`
+// belongs to file reads AND to browser navigation, `memory` to a search AND to
+// a write. Flattening the name into one string made every keyword a substring
+// match across segment boundaries, and first-match-wins let a generic verb
+// preempt the specific domain — so real registered tools were labeled with
+// confident, wrong copy: `browser_open` → "Reading files" (verb `open` beat
+// domain `browser`), `memory_update` → "Searching" (domain `memory` matched
+// without its `search` verb), `terminal_font_size` → "Running a command"
+// (an editor setting matched the shell keyword `terminal`).
+// A name whose tokens carry no known keyword deliberately falls through to the
+// readable `Using …` form: a generic label is honest, a wrong category is not.
+const ACTIVITY_DOMAIN_TOKENS: readonly (readonly [readonly string[], string])[] = [
+  [['browser', 'web', 'fetch', 'scrape'], 'Researching'],
+  [['test', 'vitest', 'jest'], 'Running tests'],
+  [['bash', 'shell', 'exec', 'command'], 'Running a command'],
+];
+
+const ACTIVITY_VERB_TOKENS: readonly (readonly [readonly string[], string])[] = [
+  [['search', 'grep', 'glob', 'find'], 'Searching'],
+  [['read', 'open', 'view', 'inspect'], 'Reading files'],
+  [['edit', 'write', 'patch', 'replace'], 'Editing files'],
+];
+
 function humanizeToolActivity(toolName: string): string {
   const safeName = sanitizeLabel(toolName);
-  const normalized = safeName.toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (/memory|search|grep|glob|find/.test(normalized)) return 'Searching';
-  if (/read|open|view|inspect/.test(normalized)) return 'Reading files';
-  if (/edit|write|patch|replace/.test(normalized)) return 'Editing files';
-  if (/test|vitest|jest/.test(normalized)) return 'Running tests';
-  if (/browser|web|fetch/.test(normalized)) return 'Researching';
-  if (/bash|shell|exec|command|terminal/.test(normalized)) return 'Running a command';
+  // Split on separators AND camelCase boundaries so `WebSearch`, `web_search`,
+  // and `mcp__chrome-devtools__take_screenshot` all yield comparable tokens.
+  const tokens = new Set(
+    safeName
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  );
+  for (const [keywords, label] of [...ACTIVITY_DOMAIN_TOKENS, ...ACTIVITY_VERB_TOKENS]) {
+    if (keywords.some((keyword) => tokens.has(keyword))) return label;
+  }
 
   const readable = safeName
     .replace(/[_-]+/g, ' ')
