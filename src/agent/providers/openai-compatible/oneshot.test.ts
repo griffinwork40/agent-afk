@@ -20,8 +20,14 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type OpenAI from 'openai';
-import { oneShotChatCompletion, __setOpenAIOneShotClientFactory } from './oneshot.js';
+import {
+  oneShotChatCompletion,
+  oneShotResponses,
+  ResponsesSummaryIncompleteError,
+  __setOpenAIOneShotClientFactory,
+} from './oneshot.js';
 import type { OpenAIAuthResolution } from './auth.js';
+import type { ResponsesStreamEvent } from './responses-translate.js';
 
 // ── Auth mock ───────────────────────────────────────────────────────────────
 // `oneShotChatCompletion` calls `resolveOpenAIAuth(apiKey)` without deps, so we
@@ -326,5 +332,245 @@ describe('oneShotChatCompletion', () => {
       user: 'msg',
     });
     expect(result).toBe('from-hook');
+  });
+});
+
+// ── oneShotResponses (Responses wire — issue #653) ────────────────────────────
+
+interface ResponsesCreateParams {
+  model: string;
+  input: unknown;
+  stream?: boolean;
+  instructions?: string;
+  store?: boolean;
+  max_output_tokens?: number;
+  tools?: unknown[];
+}
+type ResponsesCreateFn = (
+  params: ResponsesCreateParams,
+  options?: { signal?: AbortSignal },
+) => Promise<AsyncIterable<ResponsesStreamEvent>> | AsyncIterable<ResponsesStreamEvent>;
+
+/** A client exposing only `responses.create` — oneShotResponses uses it verbatim. */
+function makeResponsesClient(createFn: ResponsesCreateFn): OpenAI {
+  return { responses: { create: createFn } } as unknown as OpenAI;
+}
+
+/** Async generator over a fixed list of Responses stream events. */
+function streamOf(...events: ResponsesStreamEvent[]): AsyncIterable<ResponsesStreamEvent> {
+  return (async function* () {
+    for (const e of events) yield e;
+  })();
+}
+
+/** The terminal event that licenses `oneShotResponses` to return its text. */
+const COMPLETED_EVENT: ResponsesStreamEvent = {
+  type: 'response.completed',
+  response: { usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } },
+};
+
+/**
+ * Text deltas followed by `response.completed` — the only shape that yields a
+ * summary. Fixtures that stop short of a terminal event now reject by design
+ * (a never-completed stream is a truncated summary), so request-shape tests
+ * must still complete their stream.
+ */
+function completedStreamOf(...deltas: string[]): ResponsesStreamEvent[] {
+  return [
+    ...deltas.map((delta): ResponsesStreamEvent => ({ type: 'response.output_text.delta', delta })),
+    COMPLETED_EVENT,
+  ];
+}
+
+describe('oneShotResponses', () => {
+  it('accumulates output_text.delta events and returns the trimmed text', async () => {
+    const result = await oneShotResponses({
+      client: makeResponsesClient(() =>
+        streamOf(
+          { type: 'response.output_text.delta', delta: '  first ' },
+          { type: 'response.output_text.delta', delta: 'second  ' },
+          { type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } } },
+        ),
+      ),
+      model: 'gpt-5.5',
+      system: 'sys',
+      user: 'transcript',
+      isChatGptBackend: false,
+    });
+    // Deltas concatenated verbatim, then trimmed at the ends only.
+    expect(result).toBe('first second');
+  });
+
+  it('awaits a promise-returning create (SDK APIPromise) and drains it', async () => {
+    const result = await oneShotResponses({
+      client: makeResponsesClient(async () => streamOf(...completedStreamOf('ok'))),
+      model: 'gpt-5.5',
+      system: 'sys',
+      user: 'transcript',
+      isChatGptBackend: false,
+    });
+    expect(result).toBe('ok');
+  });
+
+  it('sends stream:true, the model, no tools, and the system prompt as instructions', async () => {
+    let captured: ResponsesCreateParams | undefined;
+    await oneShotResponses({
+      client: makeResponsesClient((params) => {
+        captured = params;
+        return streamOf(...completedStreamOf('x'));
+      }),
+      model: 'gpt-4o',
+      system: 'COMPACT-SYS',
+      user: 'the transcript',
+      isChatGptBackend: false,
+    });
+    expect(captured?.model).toBe('gpt-4o');
+    expect(captured?.stream).toBe(true);
+    expect(captured?.instructions).toBe('COMPACT-SYS');
+    // A summarize advertises no tools.
+    expect(captured?.tools).toBeUndefined();
+    // Public API-key path carries the output cap.
+    expect(captured?.max_output_tokens).toBeDefined();
+    expect(captured?.store).toBeUndefined();
+  });
+
+  it('on the ChatGPT backend: omits max_output_tokens and sets store:false', async () => {
+    let captured: ResponsesCreateParams | undefined;
+    await oneShotResponses({
+      client: makeResponsesClient((params) => {
+        captured = params;
+        return streamOf(...completedStreamOf('x'));
+      }),
+      model: 'gpt-5.5',
+      system: 'COMPACT-SYS',
+      user: 'the transcript',
+      isChatGptBackend: true,
+    });
+    // The ChatGPT/Codex backend 400s on any output-cap param, and needs store:false.
+    expect(captured && 'max_output_tokens' in captured).toBe(false);
+    expect(captured?.store).toBe(false);
+    expect(captured?.instructions).toBe('COMPACT-SYS');
+  });
+
+  it('forwards the abort signal to responses.create', async () => {
+    const controller = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
+    await oneShotResponses({
+      client: makeResponsesClient((_params, options) => {
+        capturedSignal = options?.signal;
+        return streamOf(...completedStreamOf('x'));
+      }),
+      model: 'gpt-5.5',
+      system: 'sys',
+      user: 'msg',
+      isChatGptBackend: true,
+      signal: controller.signal,
+    });
+    expect(capturedSignal).toBe(controller.signal);
+  });
+
+  it('returns empty string when the stream carries no text', async () => {
+    const result = await oneShotResponses({
+      client: makeResponsesClient(() =>
+        streamOf({ type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } } }),
+      ),
+      model: 'gpt-5.5',
+      system: 'sys',
+      user: 'msg',
+      isChatGptBackend: true,
+    });
+    expect(result).toBe('');
+  });
+
+  it('propagates a create() error (caller/compaction core treats it as a safe no-op)', async () => {
+    await expect(
+      oneShotResponses({
+        client: makeResponsesClient(() => {
+          throw new Error('backend rejected');
+        }),
+        model: 'gpt-5.5',
+        system: 'sys',
+        user: 'msg',
+        isChatGptBackend: true,
+      }),
+    ).rejects.toThrow(/backend rejected/);
+  });
+
+  // ── truncation guards (review findings on PR #700) ───────────────────────────
+  //
+  // Both assert the same invariant from opposite directions: this function must
+  // never RESOLVE with a partial summary, because the compaction core splices a
+  // resolved summary over real history and reports success.
+
+  it('REJECTS when an abort lands mid-stream instead of resolving with partial text', async () => {
+    const controller = new AbortController();
+    // Emits one delta, aborts, then keeps yielding — mimicking openai@6, whose
+    // SSE iterator SWALLOWS an abort and ends cleanly. Without abortableStream
+    // the drain would exit normally and resolve with just 'partial'.
+    const stream = (async function* (): AsyncIterable<ResponsesStreamEvent> {
+      yield { type: 'response.output_text.delta', delta: 'partial' };
+      controller.abort();
+      yield { type: 'response.output_text.delta', delta: ' more' };
+      yield COMPLETED_EVENT;
+    })();
+
+    await expect(
+      oneShotResponses({
+        client: makeResponsesClient(() => stream),
+        model: 'gpt-5.5',
+        system: 'sys',
+        user: 'msg',
+        isChatGptBackend: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('REJECTS on response.failed after text deltas (partial summary, not a success)', async () => {
+    await expect(
+      oneShotResponses({
+        client: makeResponsesClient(() =>
+          streamOf(
+            { type: 'response.output_text.delta', delta: 'half a summ' },
+            { type: 'response.failed', response: {} },
+          ),
+        ),
+        model: 'gpt-5.5',
+        system: 'sys',
+        user: 'msg',
+        isChatGptBackend: true,
+      }),
+    ).rejects.toThrow(ResponsesSummaryIncompleteError);
+  });
+
+  it('REJECTS on response.incomplete, naming the terminal status', async () => {
+    await expect(
+      oneShotResponses({
+        client: makeResponsesClient(() =>
+          streamOf(
+            { type: 'response.output_text.delta', delta: 'cut short' },
+            { type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } },
+          ),
+        ),
+        model: 'gpt-5.5',
+        system: 'sys',
+        user: 'msg',
+        isChatGptBackend: true,
+      }),
+    ).rejects.toThrow(/max_output_tokens/);
+  });
+
+  it('REJECTS when the stream ends with no terminal event at all', async () => {
+    await expect(
+      oneShotResponses({
+        client: makeResponsesClient(() =>
+          streamOf({ type: 'response.output_text.delta', delta: 'truncated' }),
+        ),
+        model: 'gpt-5.5',
+        system: 'sys',
+        user: 'msg',
+        isChatGptBackend: true,
+      }),
+    ).rejects.toThrow(ResponsesSummaryIncompleteError);
   });
 });

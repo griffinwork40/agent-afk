@@ -472,6 +472,20 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const hotSwap = md['hotSwapped'] === true ? '  (hot-swap)' : '';
         return line('resumed', `usage-limit${parked}${hotSwap}`);
       }
+      // A per-session compaction disable is high-signal for the same reason as
+      // the stalls above: it explains an otherwise-invisible future failure (the
+      // session can no longer shed context, so it will eventually overflow the
+      // window). Rendered in the DEFAULT view, before the showAll gate.
+      if (p.phase === 'compaction_disabled') {
+        const md = p.metadata ?? {};
+        const wire = md['wire'];
+        const status = md['status'];
+        const errMsg = md['error'];
+        const wireBit = wire !== undefined ? ` (${wire} wire)` : '';
+        const statusBit = status !== undefined ? `  ${status}` : '';
+        const causeBit = errMsg !== undefined ? `  ${errMsg}` : '';
+        return line('compact', `DISABLED for session${wireBit}${statusBit}${causeBit}`);
+      }
       if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';
       // Prefer the operator alias (session_init_start); fall back to the

@@ -95,6 +95,13 @@ const compactCmd: SlashCommand = {
           ctx.out.info('Nothing to compact — all history is within the keep window.');
         } else if (reason === 'not-supported') {
           ctx.out.warn('Compaction is not supported for this model or provider — use a Claude model to enable /compact.');
+        } else if (reason === 'responses-compaction-unavailable') {
+          // This backend refused the summarize request earlier in the session, so
+          // the transport stays disabled until restart. Name the recovery path —
+          // the raw token alone tells an operator nothing actionable.
+          ctx.out.warn(
+            'Summarization is unavailable on this backend — it refused the compaction request earlier this session. Start a new session, or set AFK_COMPACT_MODEL to a model this endpoint can serve.',
+          );
         } else {
           ctx.out.info(`Nothing to compact (${reason}).`);
         }

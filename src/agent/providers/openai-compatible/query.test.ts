@@ -22,6 +22,7 @@ import {
 } from './query.js';
 import { OpenAICompatibleProvider } from './index.js';
 import type { OpenAIChunk } from './translate.js';
+import { COMPACT_SYSTEM_PROMPT } from '../shared/compaction.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
 import { createPlanModeGate } from '../../plan-mode-gate.js';
@@ -1336,7 +1337,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('compact bails `unsupported-wire-mode` on a responses-mode (ChatGPT-OAuth) session', async () => {
+  it('compact now ATTEMPTS on a responses-mode session (no-ops history-too-short when empty) (#653)', async () => {
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'k', source: 'chatgpt-oauth', last4: 'kkkk' },
       model: 'gpt-4o-mini',
@@ -1344,13 +1345,320 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       promptStream: singleInput('x'),
       config: baseConfig(),
     });
-    // A ChatGPT-OAuth session is forced to the responses wire, whose backend
-    // would reject the Chat Completions summarize call — so compact() must bail
-    // early with an actionable reason rather than issue a doomed request.
+    // Responses-mode compaction is now wired (#653): the old 'unsupported-wire-mode'
+    // early bail is gone. With no turns run there is nothing older than the keep
+    // window, so the shared core no-ops 'history-too-short' BEFORE any summarize
+    // is issued — identical to the Chat-Completions empty-session case above, and
+    // proving compaction is no longer structurally refused on the responses wire.
     const result = await q.compact();
     expect(result.compacted).toBe(false);
-    expect(result.reason).toBe('unsupported-wire-mode');
+    expect(result.reason).toBe('history-too-short');
     q.close();
+  });
+
+  it('auto-compacts on the responses wire via responses.create, never chat.completions (#653)', async () => {
+    // The responses-mode compaction fix: the summarize must ride the Responses
+    // wire (the ChatGPT/Codex backend rejects chat.completions). Both the
+    // streaming turns AND the throwaway summarize go through responses.create;
+    // the summarize is the call whose `instructions` is COMPACT_SYSTEM_PROMPT.
+    const summarizeCalls: Array<Record<string, unknown>> = [];
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error('chat.completions.create must not run on the responses wire');
+              },
+            },
+          },
+          responses: {
+            create: async (args: Record<string, unknown>) => {
+              if (args['instructions'] === COMPACT_SYSTEM_PROMPT) summarizeCalls.push(args);
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'AUTO-SUMMARY' };
+                yield {
+                  type: 'response.completed',
+                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    // Each turn reports ~200k tokens — far over gpt-4o-mini's 128k window — so the
+    // turn-boundary trigger fires compaction, and the summarize rode responses.create
+    // (a chat.completions.create would have thrown above and failed the run).
+    expect(summarizeCalls.length).toBeGreaterThanOrEqual(1);
+    // Public API-key path (source 'config', not chatgpt-oauth) DOES carry the cap.
+    expect(summarizeCalls[0]?.['max_output_tokens']).toBeDefined();
+    installMockClient();
+  });
+
+  /**
+   * Responses-wire client whose summarize call (the one carrying
+   * COMPACT_SYSTEM_PROMPT as `instructions`) fails with `summarizeError`, while
+   * ordinary turns stream a ~200k-token reply so every turn boundary trips the
+   * auto-compaction threshold. `attempts` counts summarize calls reaching the
+   * backend — the observable that proves whether the latch engaged.
+   */
+  function installResponsesClientFailingSummarize(summarizeError: unknown): { attempts: () => number } {
+    let attempts = 0;
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error('chat.completions.create must not run on the responses wire');
+              },
+            },
+          },
+          responses: {
+            create: async (args: Record<string, unknown>) => {
+              if (args['instructions'] === COMPACT_SYSTEM_PROMPT) {
+                attempts++;
+                throw summarizeError;
+              }
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'ok' };
+                yield {
+                  type: 'response.completed',
+                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    return { attempts: () => attempts };
+  }
+
+  /** An error carrying an explicit HTTP status, as the OpenAI SDK's APIError does. */
+  function statusError(status: number, message: string): Error {
+    return Object.assign(new Error(message), { status });
+  }
+
+  it('latches after the backend REFUSES the summarize (400) and stops re-issuing it (#653)', async () => {
+    // A 400 proves the backend rejects this request shape (e.g. the ChatGPT/Codex
+    // backend refusing the throwaway summarize turn), so the session stops
+    // hammering it every turn boundary.
+    const client = installResponsesClientFailingSummarize(
+      statusError(400, 'unsupported request for this backend'),
+    );
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    // The first attempt is refused and latches the flag; every later boundary
+    // short-circuits, so the backend is asked to summarize exactly once.
+    expect(client.attempts()).toBe(1);
+    // A subsequent manual compact() confirms the latch: no-op without re-calling.
+    const manual = await q.compact();
+    expect(manual.compacted).toBe(false);
+    expect(manual.reason).toBe('responses-compaction-unavailable');
+    expect(client.attempts()).toBe(1);
+    q.close();
+    installMockClient();
+  });
+
+  it('does NOT latch on a transient summarize failure (429) — later boundaries retry (#700 review)', async () => {
+    // Regression guard for the review finding: latching on ANY non-abort error
+    // meant one 429/5xx/network blip permanently disabled compaction for the
+    // session, letting context grow until normal calls overflow the window —
+    // re-creating the exact bug #653 fixed. A transient status must stay
+    // retryable, so the backend is asked again on later boundaries.
+    const client = installResponsesClientFailingSummarize(statusError(429, 'rate limited'));
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    expect(client.attempts()).toBeGreaterThan(1);
+    // And a manual compact() still ATTEMPTS rather than reporting the latch.
+    const before = client.attempts();
+    const manual = await q.compact();
+    expect(manual.reason).not.toBe('responses-compaction-unavailable');
+    expect(client.attempts()).toBeGreaterThan(before);
+    q.close();
+    installMockClient();
+  });
+
+  it('does NOT latch when a status-less error (network blip) fails the summarize (#700 review)', async () => {
+    // A throw with no HTTP status is a network drop / DNS failure / bad baseURL —
+    // never proof that the backend refuses this request shape.
+    const client = installResponsesClientFailingSummarize(new Error('socket hang up'));
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    expect(client.attempts()).toBeGreaterThan(1);
+    const manual = await q.compact();
+    expect(manual.reason).not.toBe('responses-compaction-unavailable');
+    q.close();
+    installMockClient();
+  });
+
+  it('an abort mid-summarize leaves history UNCHANGED and does not latch (#700 review)', async () => {
+    // The high-severity review finding: openai@6 swallows a mid-stream abort, so
+    // before the abortableStream wrapper the drain resolved with TRUNCATED text
+    // and the core spliced that partial summary over real history, reporting
+    // success. Now the abort throws: history is untouched, and because an
+    // interrupt is transient it must NOT disable compaction for the session.
+    let summarizeAttempts = 0;
+    let queryRef: OpenAICompatibleQuery | undefined;
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error('chat.completions.create must not run on the responses wire');
+              },
+            },
+          },
+          responses: {
+            create: async (args: Record<string, unknown>) => {
+              const isSummarize = args['instructions'] === COMPACT_SYSTEM_PROMPT;
+              if (isSummarize) summarizeAttempts++;
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: isSummarize ? 'PARTIAL' : 'ok' };
+                // Interrupt lands mid-summarize, exactly as an ESC keypress would
+                // (interrupt() aborts the same coordinator slot compaction uses).
+                if (isSummarize) await queryRef?.interrupt();
+                yield { type: 'response.output_text.delta', delta: ' MORE' };
+                yield {
+                  type: 'response.completed',
+                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      multiInput('u1', 'u2', 'u3'),
+      { useResponsesApi: true },
+    );
+    queryRef = q;
+    await collect(q);
+    expect(summarizeAttempts).toBeGreaterThanOrEqual(1);
+    // The aborted summarize never latched, so compaction is still available: a
+    // manual compact() reports any reason EXCEPT the permanent-disable one.
+    const manual = await q.compact();
+    expect(manual.reason).not.toBe('responses-compaction-unavailable');
+    // And no partial summary was spliced in: the summary preamble the core writes
+    // on success (COMPACT_SUMMARY_HEADER) is absent, so history is unchanged.
+    expect(manual.compacted === true && manual.messagesAfter > manual.messagesBefore).toBe(false);
+    q.close();
+    installMockClient();
+  });
+
+  it('on the latched path, deterministic microcompaction still reclaims tool results (#700 review)', async () => {
+    // Review finding 3: the latch returned BEFORE compactOpenAIHistory, which
+    // also skipped microcompaction — a no-LLM, no-network pass that works even
+    // when the backend refuses everything. Skipping it left the session unable to
+    // reclaim context by ANY mechanism. A big tool_result must still be cleared.
+    // Microcompaction protects the newest `keepLast` (4) tool results, so the
+    // session needs MORE than four before any are eligible — hence six turns,
+    // each producing one oversized tool result.
+    const bigResult = 'x'.repeat(50_000);
+    const hookRegistry = createHookRegistry();
+    const dispatcher = new SessionToolDispatcher({
+      handlers: new Map<string, ToolHandler>([['fetch_big', async () => ({ content: bigResult })]]),
+      schemas: [{ name: 'fetch_big', description: 'Big', input_schema: { type: 'object' } }],
+      hookRegistry,
+    });
+    let turnCalls = 0;
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error('chat.completions.create must not run on the responses wire');
+              },
+            },
+          },
+          responses: {
+            create: async (args: Record<string, unknown>) => {
+              // Summarize is REFUSED (400) so the latch engages.
+              if (args['instructions'] === COMPACT_SYSTEM_PROMPT) {
+                throw statusError(400, 'unsupported request for this backend');
+              }
+              // Each turn is exactly two calls: the odd one requests the tool, the
+              // even one answers with text. Counting calls (rather than sniffing
+              // the input for the tool name) keeps turns 2..N from mistaking an
+              // EARLIER turn's tool call in history for their own.
+              turnCalls++;
+              if (turnCalls % 2 === 1) {
+                return (async function* () {
+                  yield {
+                    type: 'response.output_item.added',
+                    output_index: 0,
+                    item: { type: 'function_call', call_id: `call_${turnCalls}`, name: 'fetch_big' },
+                  };
+                  yield { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{}' };
+                  yield {
+                    type: 'response.completed',
+                    response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                  };
+                })();
+              }
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'done' };
+                yield {
+                  type: 'response.completed',
+                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    // autoCompact OFF so the boundaries are driven explicitly below — an auto pass
+    // would microcompact mid-run and make the assertions order-dependent.
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', autoCompact: false }),
+      multiInput('u1', 'u2', 'u3', 'u4', 'u5', 'u6'),
+      { useResponsesApi: true, toolDispatcher: dispatcher },
+    );
+    await collect(q);
+
+    // 1st compact: not yet latched, so it attempts the summarize and is refused.
+    // The core reports a safe no-op and the latch engages. (The core's own
+    // microcompaction fallback does NOT run on a summarization failure, so every
+    // oversized tool result is still present for the next call.)
+    const first = await q.compact();
+    expect(first.compacted).toBe(false);
+    expect(first.reason).not.toBe('microcompacted');
+
+    // 2nd compact: takes the latched path — which must still microcompact rather
+    // than short-circuiting on the latch alone.
+    const second = await q.compact();
+    expect(second.compacted).toBe(false);
+    expect(second.reason).toBe('microcompacted');
+    expect(second.microcompaction?.blocksCleared).toBeGreaterThan(0);
+    expect(second.microcompaction?.bytesReclaimed).toBeGreaterThan(0);
+
+    // 3rd compact: every remaining result is inside the protected window, so
+    // there is nothing left to reclaim and the latch reason surfaces.
+    const third = await q.compact();
+    expect(third.reason).toBe('responses-compaction-unavailable');
+    q.close();
+    installMockClient();
   });
 
   it("compact bails 'no-usable-auth' when no client was constructed (null auth)", async () => {

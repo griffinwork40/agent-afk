@@ -404,6 +404,9 @@ export const SessionPhaseNameSchema = z.enum([
   'usage_limit_resume',
   'idle_watchdog_fired',
   'suspected_loop',
+  // Per-session compaction disable (single event, at most once). See
+  // SessionPhaseName JSDoc in types.ts — metadata names the wire and cause.
+  'compaction_disabled',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
