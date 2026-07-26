@@ -14,7 +14,7 @@
  * fallback after delegation failure is forbidden").
  */
 
-import { getSkill } from '../../index.js';
+import { getSkill, type SkillExecutionContext } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { isIncompleteStopReason } from '../../../agent/subagent/result.js';
@@ -82,7 +82,17 @@ export async function runParallelizeDispatch(
   try {
     const parallelize = getSkill('parallelize');
     registryHit = true;
-    const waveOrchestration = await parallelize.handler({ plan });
+    const handlerContext: SkillExecutionContext = {
+      defaultModel: defaultSubagentModel,
+      defaultSubagentModel,
+      ...(skillCallId !== undefined ? { callId: skillCallId } : {}),
+      ...(traceWriter !== undefined ? { traceWriter } : {}),
+    };
+    const waveOrchestration = await parallelize.handler(
+      { plan },
+      parentSession,
+      handlerContext,
+    );
     return { kind: 'plan', plan: waveOrchestration };
   } catch (err) {
     if (registryHit) {
