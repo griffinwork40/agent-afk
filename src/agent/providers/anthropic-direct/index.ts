@@ -345,6 +345,13 @@ export class AnthropicDirectProvider implements ModelProvider {
       sessionId?: string;
       parentSessionId?: string;
       /**
+       * This fork's own subagent id. Stamped onto every `hook_decision` the
+       * dispatcher emits so a policy block is attributable to the child that
+       * provoked it (parity with what `tool_call` already records). Undefined on
+       * a top-level session.
+       */
+      subagentId?: string;
+      /**
        * Explicit "this session is a forked subagent" signal carrying the
        * per-result output-cap budget (#661). Set to MODEL_CAP_BYTES by
        * `SubagentManager.forkSubagent` for EVERY fork; undefined on a top-level
@@ -493,6 +500,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(opts?.env !== undefined ? { env: opts.env } : {}),
       sessionId: opts?.sessionId,
       parentSessionId: opts?.parentSessionId,
+      ...(opts?.subagentId !== undefined ? { subagentId: opts.subagentId } : {}),
       // Central output-cap backstop (#661), FORK-SCOPED. Armed from the
       // explicit `subagentToolOutputCapBytes` signal that
       // `SubagentManager.forkSubagent` stamps (as MODEL_CAP_BYTES = 100KB) on
@@ -765,6 +773,7 @@ export class AnthropicDirectProvider implements ModelProvider {
           ...(config.env !== undefined ? { env: config.env } : {}),
           sessionId: config.sessionId,
           parentSessionId: config.parentSessionId,
+          ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
           // Fork-scoped central output cap (#661): forwarded from the child
           // config that forkSubagent stamped, arming maxOutputBytes for forks
           // only (top-level leaves it unset).
