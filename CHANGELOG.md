@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.80.0] - 2026-07-26
+
+### Added
+- pid liveness + heartbeat + schema version on presence records (#716) (062079b)
+
 ## [5.79.0] - 2026-07-26
 
 ### Added
