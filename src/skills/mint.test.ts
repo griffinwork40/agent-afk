@@ -11,7 +11,10 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { loadSkillPrompts } from './_lib/prompt-loader.js';
 import { getSkill, registerSkill } from './index.js';
+import type { SkillExecutionContext } from './index.js';
+import { SubagentManager } from '../agent/subagent.js';
 import type { MintState } from './mint/index.js';
+import type { TraceWriter } from '../agent/trace/index.js';
 import type { IAgentSession, OutputEvent, SubagentProgressMeta } from '../agent/types.js';
 import { runWithSink } from '../agent/_lib/skill-sink-channel.js';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
@@ -26,6 +29,7 @@ useUnsetAfkHome();
 
 const sharedMintMock = vi.hoisted(() => ({
   forkOptions: [] as Array<Record<string, unknown>>,
+  completeAllPhases: false,
 }));
 
 let tmpHome: string;
@@ -61,8 +65,8 @@ vi.mock('../agent/subagent.js', () => {
           };
         } else if (idPrefix.startsWith('mint-verify-')) {
           output = {
-            status: 'FAIL',
-            issues: ['mocked verify failure'],
+            status: sharedMintMock.completeAllPhases ? 'PASS' : 'FAIL',
+            issues: sharedMintMock.completeAllPhases ? [] : ['mocked verify failure'],
             summary: 'Mocked',
           };
         }
@@ -70,6 +74,8 @@ vi.mock('../agent/subagent.js', () => {
         const messageContent =
           idPrefix === 'mint-heal'
             ? 'FIX_APPLIED: true\n\nMocked heal narrative'
+            : idPrefix === 'mint-plan' && sharedMintMock.completeAllPhases
+              ? 'Update src/a.ts, src/b.ts, and src/c.ts.'
             : `Mocked ${idPrefix} output`;
 
         return {
@@ -88,6 +94,7 @@ vi.mock('../agent/subagent.js', () => {
           teardown: vi.fn(async () => undefined),
         };
       }),
+      teardownAll: vi.fn(async () => undefined),
     })),
   };
 });
@@ -95,6 +102,7 @@ vi.mock('../agent/subagent.js', () => {
 describe('Mint Skill', () => {
   beforeEach(() => {
     sharedMintMock.forkOptions.length = 0;
+    sharedMintMock.completeAllPhases = false;
     vi.clearAllMocks();
     originalHome = process.env['HOME'];
     tmpHome = join(tmpdir(), `afk-mint-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -994,6 +1002,76 @@ describe('Mint Skill', () => {
       );
       for (const v of verifyOptions) {
         expect(v.phaseRole).not.toBe('read-only');
+      }
+    });
+  });
+
+  describe('Witness-trace coverage — traceWriter threading', () => {
+    // Regression for the gap where /mint phase forks emitted NO
+    // subagent_lifecycle events: their fork managers were constructed without
+    // the session's trace writer. Every phase must thread ctx.traceWriter into
+    // its SubagentManager so the phase subagent is visible in the witness trace.
+    it('threads ctx.traceWriter into every phase fork manager', async () => {
+      sharedMintMock.completeAllPhases = true;
+      const skill = getSkill('mint');
+      const mockSession: IAgentSession = {
+        sessionId: 'test-session',
+        sendMessage: vi.fn(),
+        interrupt: vi.fn(),
+        close: vi.fn(),
+        getInputStreamRef: vi.fn(),
+        abortSignal: new AbortController().signal,
+      };
+      const traceWriter = { write: vi.fn() } as unknown as TraceWriter;
+
+      // Supply a three-file plan and passing verification so autoApprove runs
+      // spec → research → plan → parallelize → build → verify → ship.
+      await skill.handler(
+        { idea: 'Test feature', autoApprove: true },
+        mockSession,
+        { traceWriter } as unknown as SkillExecutionContext,
+      );
+
+      // The mocked SubagentManager is a vi.fn, so its constructor calls are
+      // recorded. Assert EVERY phase manager received the writer.
+      const ctorCalls = vi.mocked(SubagentManager).mock.calls;
+      // Verify creates one manager per verification mode, so the eight phase
+      // construction sites produce nine manager instances in this full run.
+      expect(ctorCalls).toHaveLength(9);
+      for (const [opts] of ctorCalls) {
+        expect((opts as { traceWriter?: unknown } | undefined)?.traceWriter).toBe(traceWriter);
+      }
+      expect(sharedMintMock.forkOptions.map((opts) => opts['idPrefix'])).toEqual([
+        'mint-spec',
+        'mint-research',
+        'mint-plan',
+        'mint-parallelize',
+        'mint-build',
+        'mint-verify-test',
+        'mint-verify-lint',
+        'mint-verify-design-review',
+        'mint-ship',
+      ]);
+    });
+
+    it('omits traceWriter when ctx has none (no writer available)', async () => {
+      const skill = getSkill('mint');
+      const mockSession: IAgentSession = {
+        sessionId: 'test-session',
+        sendMessage: vi.fn(),
+        interrupt: vi.fn(),
+        close: vi.fn(),
+        getInputStreamRef: vi.fn(),
+        abortSignal: new AbortController().signal,
+      };
+
+      // No ctx → ctx?.traceWriter is undefined → the spread drops the key.
+      await skill.handler({ idea: 'Test feature', autoApprove: true }, mockSession);
+
+      const ctorCalls = vi.mocked(SubagentManager).mock.calls;
+      expect(ctorCalls.length).toBeGreaterThan(0);
+      for (const [opts] of ctorCalls) {
+        expect((opts as { traceWriter?: unknown } | undefined)?.traceWriter).toBeUndefined();
       }
     });
   });

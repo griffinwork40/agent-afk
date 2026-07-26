@@ -11,6 +11,7 @@ import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import { emitCard } from '../../_lib/emit-card.js';
 import type { BuildResult } from './build.js';
 import type { AgentModelInput } from '../../../agent/types.js';
+import type { TraceWriter } from '../../../agent/trace/index.js';
 
 const VerifyModeOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -41,12 +42,16 @@ async function forkVerifyMode(
   // by the mint handler); seeds the fork manager's parentReadRoots so the phase
   // subagent's reads ⊇ the parent session's. Undefined leaves cwd-derivation.
   parentReadRoots?: string[],
+  // Witness layer: parent trace writer, forwarded to the fork manager so this
+  // verify-mode subagent emits subagent_lifecycle events. Mirrors research.ts.
+  traceWriter?: TraceWriter,
 ): Promise<{ passed: boolean; issues?: string[] }> {
   // Propagate parent worktree — verify subagents run tests/lint/grep in
   // the right working tree.
   const manager = new SubagentManager({
     ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+    ...(traceWriter !== undefined ? { traceWriter } : {}),
   });
   const verifyHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
@@ -106,6 +111,9 @@ export async function runVerifyPhase(
   // every verify subagent's reads ⊇ the parent session's. Undefined leaves
   // cwd-derivation intact.
   parentReadRoots?: string[],
+  // Witness layer: forwarded to each parallel forkVerifyMode so every verify
+  // subagent's fork emits subagent_lifecycle events. Mirrors research.ts.
+  traceWriter?: TraceWriter,
 ): Promise<VerifyResult> {
   const prompts = loadSkillPrompts('mint');
   const verifyPrompt = prompts['verify.md'];
@@ -116,9 +124,9 @@ export async function runVerifyPhase(
 
   // Run test, lint, and design-review in parallel
   const [testResult, lintResult, designResult] = await Promise.all([
-    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots),
-    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots),
-    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots),
+    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter),
+    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter),
+    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter),
   ]);
 
   const allIssues: string[] = [];

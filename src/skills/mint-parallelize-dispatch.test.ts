@@ -148,14 +148,34 @@ describe('runParallelizeDispatch — discriminated union', () => {
   });
 
   it('returns plan from the registry handler when it succeeds', async () => {
+    const handler = vi.fn(async () => ({ wave: ['agent-a', 'agent-b'] }));
     registryParallelize = {
-      handler: async () => ({ wave: ['agent-a', 'agent-b'] }),
+      handler,
     };
-    const result = await runParallelizeDispatch(MANY_FILES_PLAN, mockSession());
+    const parentSession = mockSession();
+    const traceWriter = { write: vi.fn() };
+    const result = await runParallelizeDispatch(
+      MANY_FILES_PLAN,
+      parentSession,
+      'mint-call-id',
+      'haiku',
+      undefined,
+      traceWriter,
+    );
     expect(result.kind).toBe('plan');
     if (result.kind === 'plan') {
       expect(result.plan).toEqual({ wave: ['agent-a', 'agent-b'] });
     }
+    expect(handler).toHaveBeenCalledWith(
+      { plan: MANY_FILES_PLAN },
+      parentSession,
+      {
+        defaultModel: 'haiku',
+        defaultSubagentModel: 'haiku',
+        callId: 'mint-call-id',
+        traceWriter,
+      },
+    );
   });
 
   it('falls through to plugin body when registry throws "not found", and returns plan on success', async () => {

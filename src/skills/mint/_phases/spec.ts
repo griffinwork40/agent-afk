@@ -8,6 +8,7 @@ import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
+import type { TraceWriter } from '../../../agent/trace/index.js';
 
 export async function runSpecPhase(
   idea: string,
@@ -24,6 +25,9 @@ export async function runSpecPhase(
   // (#544). Undefined (the common case, where the mint worktree IS the session
   // cwd) leaves the manager's cwd-derivation intact.
   parentReadRoots?: string[],
+  // Witness layer: parent trace writer (ctx.traceWriter) so this phase's fork
+  // emits subagent_lifecycle events. Mirrors research.ts.
+  traceWriter?: TraceWriter,
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const specPrompt = prompts['spec.md'];
@@ -41,6 +45,7 @@ export async function runSpecPhase(
   const manager = new SubagentManager({
     ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+    ...(traceWriter !== undefined ? { traceWriter } : {}),
   });
   const specHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
