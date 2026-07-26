@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.78.2] - 2026-07-26
+
+### Fixed
+- emit hook_decision for silently-denied tool calls, attribute blocks to forks (#714) (2ec5df1)
+
 ## [5.78.1] - 2026-07-26
 
 ### Fixed
