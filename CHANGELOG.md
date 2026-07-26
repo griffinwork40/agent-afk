@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.5] - 2026-07-26
+
+### Changed
+- share AbortCoordinator across both provider query loops (#701) (ad8709d)
+
 ## [5.76.4] - 2026-07-26
 
 ### Fixed
