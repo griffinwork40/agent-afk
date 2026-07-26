@@ -59,6 +59,7 @@ import { BgJobLogWriter } from './bg-job-log.js';
 import type { BgJobMeta } from './bg-job-log.js';
 import { getBgJobsRoot, getBgJobDir } from '../paths.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
+import { truncate } from './tools/subagent/failure-payload.js';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -119,6 +120,18 @@ export const MAX_TRANSCRIPT_TAIL_BYTES = 4096;
  */
 function emitRoutingTelemetry(entry: Parameters<typeof appendRoutingDecision>[0]): void {
   void appendRoutingDecision(entry).catch(() => {});
+}
+
+/**
+ * Cap `stopReason` before it rides into a telemetry row. On the
+ * OpenAI-compatible path `stopReason` is provider-controlled free text
+ * (`providers/openai-compatible/translate.ts`, `responses-translate.ts`),
+ * not a bounded enum, so — like the sibling free-form telemetry fields — it
+ * must not be emitted uncapped. Preserves omit-when-absent: `undefined` stays
+ * `undefined`, never `''`.
+ */
+function boundedStopReason(stopReason: string | undefined): string | undefined {
+  return stopReason !== undefined ? truncate(stopReason, 64) : undefined;
 }
 
 /**
@@ -610,7 +623,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         status: result.status,
         duration_ms: durationMs,
         content_chars: content.length,
-        stop_reason: result.stopReason,
+        stop_reason: boundedStopReason(result.stopReason),
       });
       this.emit('settled', this.snapshot(job));
     } else if (job.status === 'failed') {
@@ -630,7 +643,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         status: result.status,
         duration_ms: durationMs,
         error_message: err?.message,
-        stop_reason: result.stopReason,
+        stop_reason: boundedStopReason(result.stopReason),
       });
       this.emit('settled', this.snapshot(job));
     } else {
@@ -649,7 +662,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         parent_session_id: job.parentSessionId,
         status: result.status,
         duration_ms: durationMs,
-        stop_reason: result.stopReason,
+        stop_reason: boundedStopReason(result.stopReason),
       });
       this.emit('settled', this.snapshot(job));
     }
@@ -665,6 +678,11 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         ...openMeta,
         status: finalStatus,
         ...(endedAt !== undefined ? { endedAt } : {}),
+        // Persist stopReason so the /bgsub:join disk-fallback path (reached
+        // after this job's in-memory entry is TTL-evicted) can reconstruct
+        // the same partial-result labeling the in-memory replay applies —
+        // see BgJobMeta.stopReason. Omitted (not undefined/null) when absent.
+        ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
       }).then(() => writer.close());
     }
 

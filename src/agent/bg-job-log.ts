@@ -45,6 +45,15 @@ export interface BgJobMeta {
   endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   parentSessionId?: string;
+  /**
+   * The terminal `SubagentResult.stopReason` (see `agent/subagent/result.ts`),
+   * persisted so the `/bgsub:join` disk-fallback replay path — reached once a
+   * job's in-memory entry is evicted after its TTL — can reconstruct the same
+   * `isIncompleteStopReason` / `annotateIfIncomplete` partial-result labeling
+   * the in-memory replay applies. Optional and additive: old logs written
+   * before this field existed simply lack it (schemaVersion stays 1).
+   */
+  stopReason?: string;
   schemaVersion: 1;
 }
 

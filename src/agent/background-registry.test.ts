@@ -801,6 +801,42 @@ describe('BackgroundAgentRegistry', () => {
       expect(meta!.endedAt).toBeDefined();
       expect(meta!.endedAt).toBeGreaterThan(0);
     });
+
+    // PR#713 Wave-A A1(b): markTerminal persists `result.stopReason` into the
+    // closing meta record so the /bgsub:join disk-fallback path (bgsub.ts) can
+    // reconstruct the same partial-result labeling the in-memory replay
+    // applies, even after the job's in-memory entry is TTL-evicted.
+    it('terminal callback persists stopReason into meta.json when the result carries one', async () => {
+      const handle = createStubHandle('sub-disk-5');
+      const job = registry.register({ handle, prompt: 'capped job', model: 'sonnet' });
+
+      handle.__fireTerminal({
+        ...successResult('sub-disk-5', 'partial output'),
+        stopReason: 'tool_use_loop_capped',
+      });
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const { BgJobLogReader } = await import('./bg-job-log.js');
+      const meta = await BgJobLogReader.readMeta(job.jobId);
+      expect(meta).not.toBeNull();
+      expect(meta!.stopReason).toBe('tool_use_loop_capped');
+    });
+
+    it('terminal callback leaves meta.stopReason ABSENT when the result carries none', async () => {
+      const handle = createStubHandle('sub-disk-6');
+      const job = registry.register({ handle, prompt: 'clean job', model: 'sonnet' });
+
+      // successResult() never sets stopReason.
+      handle.__fireTerminal(successResult('sub-disk-6', 'clean output'));
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const { BgJobLogReader } = await import('./bg-job-log.js');
+      const meta = await BgJobLogReader.readMeta(job.jobId);
+      expect(meta).not.toBeNull();
+      expect(meta!.stopReason).toBeUndefined();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1040,6 +1076,78 @@ describe('BackgroundAgentRegistry', () => {
       expect(failedCalls).toHaveLength(1);
       const entry = failedCalls[0]![0] as Record<string, unknown>;
       expect(entry['stop_reason']).toBe('stream_incomplete');
+    });
+
+    // -------------------------------------------------------------------
+    // A3: stop_reason is bounded before it rides into telemetry. On the
+    // OpenAI-compatible path `stopReason` is provider-controlled free text
+    // (translate.ts / responses-translate.ts), not a bounded enum, so — like
+    // the sibling free-form fields — it must be capped, not emitted uncapped.
+    // -------------------------------------------------------------------
+    it('completed: a >64-char stop_reason is truncated to 64 chars + ellipsis in the emitted row', () => {
+      const longReason = 'x'.repeat(100);
+      const handle = createStubHandle('rt-stopreason-trunc-1');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal({
+        ...successResult('rt-stopreason-trunc-1', 'done'),
+        stopReason: longReason,
+      });
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      // truncate(s, 64): first 64 chars + a single '…' — never the raw
+      // 100-char string, and never silently dropped.
+      expect(entry['stop_reason']).toBe('x'.repeat(64) + '…');
+      expect((entry['stop_reason'] as string).length).toBe(65);
+    });
+
+    it('failure: a >64-char stop_reason is truncated to 64 chars + ellipsis in the emitted row', () => {
+      const longReason = 'y'.repeat(90);
+      const handle = createStubHandle('rt-stopreason-trunc-2');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal({
+        ...failureResult('rt-stopreason-trunc-2', 'boom'),
+        stopReason: longReason,
+      });
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['stop_reason']).toBe('y'.repeat(64) + '…');
+    });
+
+    it('completed: a stop_reason at or under 64 chars is passed through unchanged (no ellipsis)', () => {
+      const shortReason = 'tool_use_loop_capped'; // well under 64 chars
+      const handle = createStubHandle('rt-stopreason-trunc-3');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal({
+        ...successResult('rt-stopreason-trunc-3', 'done'),
+        stopReason: shortReason,
+      });
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['stop_reason']).toBe(shortReason);
+    });
+
+    it('completed: an absent stop_reason stays ABSENT (never truncated to a defined value)', () => {
+      const handle = createStubHandle('rt-stopreason-trunc-4');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      // successResult() never sets stopReason.
+      handle.__fireTerminal(successResult('rt-stopreason-trunc-4', 'done'));
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['stop_reason']).toBeUndefined();
     });
   });
 });

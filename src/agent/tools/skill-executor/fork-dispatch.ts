@@ -363,19 +363,32 @@ export async function runForkedSkillToResult(
     }
 
     // Cancelled mid-flight but produced text: surface the partial output with
-    // a clear marker rather than discarding it.
+    // a clear marker rather than discarding it. incompleteToolResultFields
+    // adds the structured incomplete/incompleteReason counterpart for
+    // non-model consumers (no-op when stopReason is absent or clean).
     if (
       result.status === 'cancelled' &&
       typeof result.partialOutput === 'string' &&
       result.partialOutput.length > 0
     ) {
       const marker = '[skill cancelled mid-flight — partial output preserved below]';
-      toolResult = { content: `${marker}\n\n${result.partialOutput}` };
+      toolResult = {
+        content: `${marker}\n\n${result.partialOutput}`,
+        ...incompleteToolResultFields(result.stopReason),
+      };
       return toolResult;
     }
 
+    // incompleteToolResultFields flags the ZERO-OUTPUT stream_incomplete case
+    // (see `subagent/result.ts`) that resolves `status:'failed'` and routes
+    // through this literal — no-op for any other failure or an absent
+    // stopReason.
     const errorMessage = result.error?.message ?? noOutputError;
-    toolResult = { content: errorMessage, isError: true };
+    toolResult = {
+      content: errorMessage,
+      isError: true,
+      ...incompleteToolResultFields(result.stopReason),
+    };
     return toolResult;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
