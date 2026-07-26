@@ -14,6 +14,7 @@
  */
 
 import { loadClaudeCodeOauthToken } from './auth/keychain.js';
+import { env } from '../config/env.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const OAUTH_BETA_HEADER = 'oauth-2025-04-20';
@@ -76,13 +77,14 @@ export async function fetchSubscriptionUsage(
 ): Promise<UsageResult> {
   const fetchImpl = options?.fetchImpl ?? fetch;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const token = options?.token ?? loadClaudeCodeOauthToken();
+  const token = options?.token ?? (env.CLAUDE_CODE_OAUTH_TOKEN || loadClaudeCodeOauthToken());
 
   if (!token) {
     return {
       kind: 'unavailable',
       reason: 'no-token',
-      detail: 'No Claude Code OAuth token found. Run `claude login` and try again.',
+      detail:
+        'No Claude Code OAuth token found. Set CLAUDE_CODE_OAUTH_TOKEN or run `claude login` and try again.',
     };
   }
 
@@ -193,7 +195,13 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   const record = value as Record<string, unknown>;
   const utilizationRaw = record['utilization'];
   if (typeof utilizationRaw !== 'number' || !Number.isFinite(utilizationRaw)) return undefined;
-  const utilization = Math.min(1, Math.max(0, utilizationRaw));
+  // Contract: the endpoint's utilization unit is unverified — it may be a
+  // 0..1 fraction or a 0..100 percentage. Values >1 are interpreted as a
+  // percentage and divided by 100: a fraction can only exceed 1 by a small
+  // overage (upstream jitter), whereas a percentage routinely does, so this
+  // is the safer reading of the ambiguity. Result is then clamped to [0, 1].
+  const normalized = utilizationRaw > 1 ? utilizationRaw / 100 : utilizationRaw;
+  const utilization = Math.min(1, Math.max(0, normalized));
   const resetsAt = parseResetsAt(record['resets_at']);
   return {
     utilization,
