@@ -436,7 +436,14 @@ describe('AnthropicDirectProvider', () => {
 
     expect(anthropicCtorMock).toHaveBeenCalledTimes(1);
     const ctorArg = anthropicCtorMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(ctorArg).toEqual({ authToken: 'sk-ant-oat01-test' });
+    // `fetch` is expected: the tracing/quota wrapper is installed for EVERY
+    // non-local-shim client, no longer only when a trace writer is attached,
+    // because subscription-quota capture must keep working with tracing off
+    // (see the install site in providers/anthropic-direct/index.ts). Asserting
+    // the exact key set keeps this strict — an unintended third key still fails.
+    expect(Object.keys(ctorArg).sort()).toEqual(['authToken', 'fetch']);
+    expect(ctorArg['authToken']).toBe('sk-ant-oat01-test');
+    expect(typeof ctorArg['fetch']).toBe('function');
     expect('apiKey' in ctorArg).toBe(false);
 
     expect(messagesCreateMock).toHaveBeenCalledTimes(1);
@@ -465,7 +472,14 @@ describe('AnthropicDirectProvider', () => {
     await collect(query);
 
     expect(anthropicCtorMock).toHaveBeenCalledTimes(1);
-    expect(anthropicCtorMock.mock.calls[0]?.[0]).toEqual({ apiKey: 'sk-ant-api03-test' });
+    // `fetch` is expected here too — the wrapper is installed for every
+    // non-local-shim client so quota capture survives tracing being disabled.
+    // Under API-key auth the quota headers never arrive, so the cache simply
+    // stays empty and the status line draws no quota segment.
+    const apiKeyCtorArg = anthropicCtorMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.keys(apiKeyCtorArg).sort()).toEqual(['apiKey', 'fetch']);
+    expect(apiKeyCtorArg['apiKey']).toBe('sk-ant-api03-test');
+    expect(typeof apiKeyCtorArg['fetch']).toBe('function');
 
     const [params, opts] = messagesCreateMock.mock.calls[0] as CreateArgs;
     expect(opts?.headers?.['anthropic-beta']).toBeUndefined();

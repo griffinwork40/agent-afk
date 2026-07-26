@@ -10,6 +10,7 @@ import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import { openEditorForBuffer } from '../../slash/commands/editor-open.js';
 import { palette } from '../../palette.js';
 import type { InteractiveCtx } from './shared.js';
+import { onQuotaUpdate } from '../../../agent/quota-cache.js';
 import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { LoopStageBar } from './loop-stage.js';
@@ -385,6 +386,19 @@ export async function setupSurface(
     ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
   });
   void ctx.gitStatusSampler.refresh();
+
+  // Subscription-quota indicator: repaint when the cached quota actually moves.
+  // No debounce here on purpose — the cache only notifies when a ROUNDED
+  // percentage changes, and `repaint` throttles at 100ms with no trailing flush,
+  // so notifying per API response would churn (and sometimes drop) the bottom row.
+  // Invariant: this subscription is process-lifetime, exactly like the git
+  // sampler's onUpdate above — the quota listener set, the status line and the
+  // REPL all die together, so there is no inverse to orphan and no teardown to
+  // sequence. Tests that invoke setupSurface more than once must call
+  // resetQuotaCacheForTests() to clear the module-scope listener set.
+  onQuotaUpdate(() => {
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
+  });
 
   return { installSoftStop };
 }

@@ -43,24 +43,38 @@ export interface ThrottleInfo {
 /**
  * Wrap a `fetch` implementation so throttled responses (429/503/529) emit a
  * `rate_limit` trace event AND (when provided) invoke `onThrottle` for a live
- * surface. Returns the wrapped fetch; when BOTH `writer` and `onThrottle` are
- * undefined the base fetch is returned unchanged (no overhead).
+ * surface. Returns the wrapped fetch; when `writer`, `onThrottle`, AND
+ * `onQuota` are all undefined the base fetch is returned unchanged (no
+ * overhead).
  *
- * `onThrottle` is fire-and-forget from the caller's perspective — this wrapper
- * guards it with try/catch so a throwing callback can never disturb the request
- * path or the SDK's retry loop.
+ * `onThrottle` and `onQuota` are fire-and-forget from the caller's
+ * perspective — this wrapper guards both with try/catch so a throwing
+ * callback can never disturb the request path or the SDK's retry loop.
  */
 export function makeTracingFetch(
   writer: TraceWriter | undefined,
   baseFetch: typeof fetch = fetch,
   onThrottle?: (info: ThrottleInfo) => void,
+  onQuota?: (headers: Headers) => void,
 ): typeof fetch {
-  if (!writer && !onThrottle) return baseFetch;
+  if (!writer && !onThrottle && !onQuota) return baseFetch;
   return async (
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
   ): Promise<Response> => {
     const res = await baseFetch(input, init);
+    // Passive quota capture: Anthropic returns `anthropic-ratelimit-unified-*`
+    // headers on EVERY response under OAuth auth, not just throttled ones, so
+    // this runs unconditionally (before the throttle-status gate below) and
+    // is guarded exactly like `onThrottle` — a throwing observer must never
+    // disturb the request path or the SDK's retry loop.
+    if (onQuota) {
+      try {
+        onQuota(res.headers);
+      } catch {
+        // A broken live observer must never disturb the SDK retry loop.
+      }
+    }
     if (THROTTLE_STATUSES.has(res.status)) {
       const retryAfterMs = parseRetryAfterMs({ headers: res.headers });
       // Live signal FIRST so the banner updates with minimal latency; the
