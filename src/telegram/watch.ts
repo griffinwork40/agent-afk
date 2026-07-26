@@ -22,7 +22,7 @@
 
 import { tailLedger, ledgerExists, SessionLedgerWriter, type LedgerRecord } from '../agent/session-ledger.js';
 import { findSession, listSessions } from '../cli/session-store.js';
-import { readPresenceFiles } from '../agent/awareness/presence.js';
+import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signElicitationResponse } from '../agent/afk-channel.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
 import { createTelegramElicitationHandler, composeTelegramElicitation } from './elicitation-telegram.js';
@@ -117,7 +117,7 @@ export async function resolveWatchTarget(input: string): Promise<string | null> 
 export async function listWatchableSessions(): Promise<string> {
   const lines: string[] = [];
 
-  const presence = await readPresenceFiles();
+  const presence = await readLivePresenceFiles();
   const live = presence.filter((p) => p.surface !== 'telegram');
   if (live.length > 0) {
     lines.push('🟢 Live sessions:');

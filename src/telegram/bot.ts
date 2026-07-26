@@ -25,7 +25,7 @@ import {
 import { elicitationRouter } from '../agent/elicitation-router.js';
 import { ensurePluginEntrypointsLoaded } from '../agent/tools/skill-bridge.js';
 import { SessionWatchManager, resolveWatchTarget, listWatchableSessions } from './watch.js';
-import { readPresenceFiles } from '../agent/awareness/presence.js';
+import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
 import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
@@ -530,7 +530,7 @@ export class TelegramBot {
   /**
    * Start the presence auto-subscribe loop.
    *
-   * Polls `readPresenceFiles()` every AUTO_SUBSCRIBE_INTERVAL_MS and calls
+   * Polls `readLivePresenceFiles()` every AUTO_SUBSCRIBE_INTERVAL_MS and calls
    * `watchManager.start()` for any `surface === 'cli' && afk === true` session
    * not already watched. Stops auto-watches whose `afk` flag cleared or whose
    * presence file disappeared.
@@ -575,9 +575,9 @@ export class TelegramBot {
     const chatIds = [...this.options.allowedChatIds];
     if (chatIds.length === 0) return;
 
-    let presence: Awaited<ReturnType<typeof readPresenceFiles>>;
+    let presence: Awaited<ReturnType<typeof readLivePresenceFiles>>;
     try {
-      presence = await readPresenceFiles();
+      presence = await readLivePresenceFiles();
     } catch {
       return; // presence dir unreadable — ignore silently
     }
