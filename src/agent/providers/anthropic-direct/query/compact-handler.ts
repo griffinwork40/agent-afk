@@ -56,7 +56,7 @@ import { emitCompaction } from '../../../trace/emit.js';
 import { resolveModelId } from '../../../session/model-resolution.js';
 import type { AnthropicClientLike } from '../types.js';
 import type { SessionState } from './session-state.js';
-import type { AbortCoordinator } from './abort-coordinator.js';
+import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { RetryLayer } from './retry-layer.js';
 import { env } from '../../../../config/env.js';
 

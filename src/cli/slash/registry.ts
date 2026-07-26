@@ -9,6 +9,7 @@
 
 import type { SlashCommand, SlashContext, SlashResult } from './types.js';
 import type { ImageAttachment } from '../input/attachments.js';
+import type { SlashRegistryView } from '../input-highlight.js';
 
 const commands: Map<string, SlashCommand> = new Map();
 const aliases: Map<string, string> = new Map();
@@ -74,6 +75,33 @@ export function registerIfAbsent(cmd: SlashCommand): void {
 /** Whether a name is registered (canonical or alias). */
 export function has(nameOrAlias: string): boolean {
   return commands.has(nameOrAlias) || aliases.has(nameOrAlias);
+}
+
+/**
+ * Build the {@link SlashRegistryView} consumed by the input-buffer colorizer
+ * (`colorizeInputBuffer`). Membership delegates to this module's alias-aware
+ * `has()`, so an aliased command (e.g. `/quit` → `/exit`, `/t` → `/transcript`)
+ * colorizes as a known command (brand orange) instead of falling through to the
+ * unknown-token tone (dim). The colorizer passes the bare token name (leading
+ * `/` already stripped), while commands AND aliases are keyed WITH the `/`, so
+ * we re-add it before the lookup.
+ *
+ * Wiring membership through here — rather than each input surface re-deriving
+ * it from `list()` — is deliberate: `list()` returns canonical commands only,
+ * so any adapter built on it silently mis-colors every alias. Three surfaces
+ * (reader, input-surface, stream-renderer) shared that bug; this factory is the
+ * single source of truth that keeps them correct together.
+ *
+ * `version` is wired to `registryVersion` so the colorizer's per-keystroke memo
+ * invalidates the instant registry membership changes (plugin/skill hot-swap).
+ * Call ONCE per input surface and reuse the returned object — the colorizer's
+ * memo also keys on view identity.
+ */
+export function createSlashRegistryView(): SlashRegistryView {
+  return {
+    has: (name) => has(`/${name}`),
+    version: registryVersion,
+  };
 }
 
 /** Clear the registry — exposed for tests. */

@@ -1,5 +1,6 @@
 /**
- * Per-session abort coordination for {@link AnthropicDirectQuery}.
+ * Per-session abort coordination, shared by every provider's query
+ * orchestrator (`anthropic-direct/query.ts`, `openai-compatible/query.ts`).
  *
  * Owns the single `AbortController | null` slot that represents "is a turn
  * (or compact) currently in flight?" and the deferred abort reason for the
@@ -7,21 +8,28 @@
  * to fire yet). Also owns the `closedPromise` that the outer loop races
  * against `promptStream.next()` so `close()` unblocks a pending pull.
  *
+ * Lives in `providers/shared/` for the same reason `tool-loop-cap.ts` does:
+ * the abort contract is provider-neutral (pure `AbortController` plumbing,
+ * no SDK types), and keeping one copy is what stops the two providers from
+ * drifting apart on a safety-critical invariant.
+ *
  * # Highest-risk invariant
  *
  * **The current-controller slot must be `null` between turns** so that
  * `compact()`'s `isIdle()` guard does not misclassify a leaked stale
- * controller as `turn-in-flight`. Five sites in the old `query.ts` enforced
- * this with the compare-and-clear pattern:
+ * controller as `turn-in-flight`. Before this was extracted, each provider
+ * hand-rolled the compare-and-clear pattern at every end-of-scope site
+ * (five in anthropic-direct, six in openai-compatible):
  *
  *     if (this.abortController === controller) this.abortController = null;
  *
- * After this extraction, **{@link AbortCoordinator.clear} is the only write
- * path to null** — every "end of scope" site calls `clear(controller)` with
- * the controller it received from {@link begin}. The compare-and-clear
- * semantics are preserved: if a parallel scope already replaced the slot,
- * we leave that newer controller in place. The canary test for this
- * invariant is `concurrent-session-isolation.test.ts`.
+ * Now **{@link AbortCoordinator.clear} is the only write path to null** —
+ * every "end of scope" site calls `clear(controller)` with the controller
+ * it received from {@link begin}. The compare-and-clear semantics are
+ * preserved: if a parallel scope already replaced the slot, we leave that
+ * newer controller in place. The canary tests for this invariant are
+ * `anthropic-direct/concurrent-session-isolation.test.ts` and
+ * `shared/abort-coordinator.test.ts`.
  *
  * # Pending abort drain
  *
@@ -34,14 +42,15 @@
  *
  * # What this module does NOT own
  *
- * - `state.closed` (the boolean) lives in `SessionState` because sub-
- *   generators read it on every loop iteration. The coordinator only
- *   owns the **promise side** of close — the field and the promise are
- *   updated together by the orchestrator's `close()` method.
- * - Whether to *check* `state.closed` after `await coordinator.<thing>()`
- *   is the caller's job. The coordinator only coordinates abort.
+ * - The `closed` **boolean** stays on the caller (anthropic-direct keeps it
+ *   in `SessionState`, openai-compatible on the query object) because sub-
+ *   generators read it on every loop iteration. The coordinator only owns
+ *   the **promise side** of close — the field and the promise are updated
+ *   together by the orchestrator's `close()` method.
+ * - Whether to *check* `closed` after `await coordinator.<thing>()` is the
+ *   caller's job. The coordinator only coordinates abort.
  *
- * @module agent/providers/anthropic-direct/query/abort-coordinator
+ * @module agent/providers/shared/abort-coordinator
  */
 
 export type AbortReason = 'interrupted' | 'closed';

@@ -35,7 +35,7 @@ import type {
 } from '../../../provider.js';
 import { repairOrphanToolUses } from './repair-orphan-tool-uses.js';
 import type { SessionState } from './session-state.js';
-import type { AbortCoordinator } from './abort-coordinator.js';
+import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 
 const PREVIEW_MAX_CHARS = 72;
 
