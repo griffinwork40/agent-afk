@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.78.0] - 2026-07-26
+
+### Added
+- show subscription quota in the REPL status line (#712) (eb9a79a)
+
 ## [5.77.0] - 2026-07-26
 
 ### Added
