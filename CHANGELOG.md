@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.80.1] - 2026-07-26
+
+### Fixed
+- reap shipped worktrees and stop deleting branches that hold commits (#715) (5ac71b0)
+
 ## [5.80.0] - 2026-07-26
 
 ### Added
