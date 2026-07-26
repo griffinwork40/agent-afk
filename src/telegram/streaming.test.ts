@@ -3,11 +3,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderActivityReceipt, replyWithFloodRetry } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderActivityReceipt, formatTelegramActivity, formatTelegramAgentLabel, replyWithFloodRetry } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { getCurrentSink } from '../agent/_lib/skill-sink-channel.js';
 
 async function* yieldChunks(...chunks: string[]) {
   for (const c of chunks) {
@@ -111,8 +112,8 @@ describe('streamResponse', () => {
     await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
     const joined = [...replies, ...edits].join('\n');
     expect(joined).toContain('◦ Researching codebase');
-    expect(joined).toContain('(Grep)');
-    expect(joined).toContain('12 matches in 4 files');
+    expect(joined).not.toContain('(Grep)');
+    expect(joined).not.toContain('12 matches in 4 files');
   });
 
   it('sanitizes control/ANSI sequences in model-controlled progress fields before sending to Telegram', async () => {
@@ -150,6 +151,33 @@ describe('streamResponse', () => {
     // Raw escape/control bytes must not reach the Telegram message.
     expect(joined).not.toContain('\x1b');
     expect(joined).not.toContain('\x9b');
+  });
+
+  it('shows friendly sub-agent activity without exposing tool arguments or paths', async () => {
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      getCurrentSink()?.(
+        {
+          type: 'chunk',
+          chunk: {
+            type: 'tool_use_detail',
+            toolUseId: 'tool-1',
+            toolName: 'Grep',
+            toolInput: '/Users/example/private-project --hidden secret-pattern',
+          },
+        },
+        { subagentId: 'sub-1', agentType: 'research-agent' },
+      );
+      await Promise.resolve();
+      yield { type: 'done', metadata: undefined };
+    });
+
+    await streamResponse(ctx, session, 'go');
+
+    const joined = [...replies, ...edits].join('\n');
+    expect(joined).toContain('Research agent — Searching');
+    expect(joined).not.toContain('/Users/example/private-project');
+    expect(joined).not.toContain('secret-pattern');
   });
 
   it('appends prompt_suggestion as a final 💡 line', async () => {
@@ -760,6 +788,19 @@ describe('renderSubagentFooter (bounded sub-agent progress)', () => {
   });
 });
 
+describe('Telegram-friendly activity formatting', () => {
+  it('humanizes generic tool activity and keeps meaningful descriptions', () => {
+    expect(formatTelegramActivity('Working', 'memory_search')).toBe('Searching');
+    expect(formatTelegramActivity('Processing', 'Bash')).toBe('Running a command');
+    expect(formatTelegramActivity('Researching release notes', 'WebSearch')).toBe('Researching release notes');
+  });
+
+  it('humanizes agent labels and hides opaque UUIDs', () => {
+    expect(formatTelegramAgentLabel('research-agent')).toBe('Research agent');
+    expect(formatTelegramAgentLabel('c204d56f-bd57-4380-8a5f-123456789abc')).toBe('Sub-agent');
+  });
+});
+
 describe('provider-turn interrupt on incomplete exit (stale-buffer guard)', () => {
   it('throws StreamTimeoutError and interrupts the still-running turn on total silence', async () => {
     vi.useFakeTimers();
@@ -1036,6 +1077,19 @@ describe('bounded ◦ progress region', () => {
     expect(all.some((t) => t.includes('searched the codebase'))).toBe(true);
     // The placeholder is not the last thing the user sees.
     expect(all[all.length - 1]).not.toBe('Thinking…');
+  });
+
+  it('graceful-exit guard: withheld progress survives a stream close without done/error', async () => {
+    const { ctx, replies, deletes } = makeCtx();
+    const session = makeSession(async function* () {
+      yield progressEvent('searched the codebase');
+      // Graceful iterator exhaustion without a terminal OutputEvent.
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { cleanFinal: true });
+
+    expect(replies.some((text) => text.includes('searched the codebase'))).toBe(true);
+    expect(deletes).toHaveLength(1);
   });
 
   it('activity receipt: summarizes tool rounds on the clean final but never enters recorded history', async () => {

@@ -138,6 +138,49 @@ export async function replyWithFloodRetry(
   }
 }
 
+function humanizeToolActivity(toolName: string): string {
+  const safeName = sanitizeLabel(toolName);
+  const normalized = safeName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (/memory|search|grep|glob|find/.test(normalized)) return 'Searching';
+  if (/read|open|view|inspect/.test(normalized)) return 'Reading files';
+  if (/edit|write|patch|replace/.test(normalized)) return 'Editing files';
+  if (/test|vitest|jest/.test(normalized)) return 'Running tests';
+  if (/browser|web|fetch/.test(normalized)) return 'Researching';
+  if (/bash|shell|exec|command|terminal/.test(normalized)) return 'Running a command';
+
+  const readable = safeName
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return readable ? `Using ${readable}` : 'Working';
+}
+
+/**
+ * Convert model/provider progress into short Telegram-facing activity copy.
+ * Generic descriptions use the tool category; meaningful descriptions remain
+ * available when no better structured signal exists. Tool summaries and input
+ * are deliberately excluded because they commonly contain commands and paths.
+ */
+export function formatTelegramActivity(description?: string, toolName?: string): string {
+  const safeDescription = sanitizeLabel(description ?? '').replace(/\s+/g, ' ').trim();
+  const genericDescription =
+    /^(working|processing|in progress|running)(?:\s*\([^)]*\))?$/i.test(safeDescription);
+  if (toolName && (!safeDescription || genericDescription)) {
+    return humanizeToolActivity(toolName);
+  }
+  return safeDescription || (toolName ? humanizeToolActivity(toolName) : 'Working');
+}
+
+/** Make internal sub-agent identifiers readable without exposing opaque UUIDs. */
+export function formatTelegramAgentLabel(label: string): string {
+  if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(label)) return 'Sub-agent';
+  const readable = sanitizeLabel(label).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return readable
+    ? readable.charAt(0).toUpperCase() + readable.slice(1)
+    : 'Sub-agent';
+}
+
 /**
  * Render a compact, BOUNDED footer summarizing sub-agent tool activity for the
  * live preview. Returns '' when there is no activity. Pure + exported for unit
@@ -151,7 +194,7 @@ export async function replyWithFloodRetry(
 export function renderSubagentFooter(steps: number, recent: readonly string[]): string {
   if (steps <= 0) return '';
   const shown = recent.slice(-MAX_SUBAGENT_PREVIEW_LINES);
-  const head = `◦ sub-agents working — ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+  const head = `🤖 Sub-agents · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
   return shown.length > 0 ? `\n${head}\n  ${shown.join('\n  ')}` : `\n${head}`;
 }
 
@@ -510,20 +553,17 @@ export async function streamResponse(
     // visible annotations on the accumulated message. Without this,
     // subagent events are silently dropped because no ambient sink is set.
     const subagentSink = (event: OutputEvent, meta: SubagentProgressMeta): void => {
-      const label = meta.agentType ?? meta.subagentId;
+      const label = formatTelegramAgentLabel(meta.agentType ?? meta.subagentId);
       // Sub-agent activity keeps the turn alive: bump the watchdog so deep
       // fan-out (silent on the parent stream) does not trip a false timeout.
       lastActivityAt = Date.now();
       if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
-        // toolInput is redacted at its source (summarizeToolInput) before it
-        // reaches this network-egress sink, so no secret-scrub is needed here.
-        const toolArgs = event.chunk.toolInput.length > 60
-          ? event.chunk.toolInput.slice(0, 57) + '...'
-          : event.chunk.toolInput;
         // Bounded: count every step but retain only the most recent few lines,
         // rendered as a compact footer rather than one appended line per call.
+        // Never include toolInput: even summarized input commonly contains raw
+        // commands and private filesystem paths that are poor mobile UI.
         subagentSteps++;
-        recentSubagentSteps.push(`${label}: ${event.chunk.toolName} ${toolArgs}`);
+        recentSubagentSteps.push(`${label} — ${humanizeToolActivity(event.chunk.toolName)}`);
         if (recentSubagentSteps.length > MAX_SUBAGENT_PREVIEW_LINES) recentSubagentSteps.shift();
         void sendOrEdit(livePreview());
       } else if (event.type === 'done') {
@@ -581,24 +621,20 @@ export async function streamResponse(
           // text (re-streamed from scratch after the backoff). The final
           // `message` event overwrites `accumulated` anyway — this just stops
           // the live preview from showing the text twice during the retry.
+          endProgressRun();
           accumulated = accumulated.slice(0, contentRunStartAccumulated);
           answerText = answerText.slice(0, contentRunStartAnswer);
           inContentRun = false;
-          // The rollback moved the end of `accumulated`, invalidating any live
-          // progress-region offset into it.
-          endProgressRun();
           await sendOrEdit(livePreview(), true);
         }
         if (event.type === 'chunk' && event.chunk.type === 'tool_diff') {
           // intentional no-op: diff is CLI-only; Telegram has no terminal palette
         }
         if (event.type === 'message' && event.message.role === 'assistant') {
+          endProgressRun();
           accumulated = event.message.content;
           answerText = event.message.content;
           inContentRun = false;
-          // `accumulated` was replaced wholesale — any progress-region offset
-          // into the old buffer is stale.
-          endProgressRun();
           await sendOrEdit(livePreview());
         }
         // Lane D — progress summaries appear in the response as dim lines
@@ -616,22 +652,18 @@ export async function streamResponse(
           // already-delivered answer text. Gate the RENDER, never this line.
           inContentRun = false;
           progressRounds++;
-          const { description, summary, lastToolName } = event.progress;
-          // These fields are model-controlled (path/command/URL text from
-          // summarizeToolInput) and markdownToTelegramHtml does not strip
-          // ANSI/C1/control bytes, so scrub them here to match the CLI
-          // banner's field-scoped hardening (tool-lane-format-sanitize.ts).
-          const safeDescription = sanitizeLabel(description);
-          const safeToolName = lastToolName ? sanitizeLabel(lastToolName) : lastToolName;
-          const safeSummary = summary ? sanitizeLabel(summary) : summary;
-          const line = safeToolName
-            ? `◦ ${safeDescription} (${safeToolName})`
-            : `◦ ${safeDescription}`;
+          const { description, lastToolName } = event.progress;
+          // Telegram is a compact chat surface, not a terminal. Prefer a short
+          // activity category for generic progress and intentionally omit the
+          // summary, which routinely contains commands, URLs, and local paths.
+          const line = `◦ ${formatTelegramActivity(description, lastToolName)}`;
           // Record first, render second: a line withheld by the latency gate is
           // still retained, so when the gate opens the bounded region shows the
           // most recent rounds rather than starting from empty.
           if (progressRunStart < 0) progressRunStart = accumulated.length;
-          progressLines.push(safeSummary ? `${line}\n  ${safeSummary}` : line);
+          // Repeated tool categories add no information to a rolling mobile
+          // preview. Count every round for the receipt, but render duplicates once.
+          if (progressLines[progressLines.length - 1] !== line) progressLines.push(line);
           if (progressLines.length > MAX_PROGRESS_LINES) {
             progressLines = progressLines.slice(-MAX_PROGRESS_LINES);
           }
@@ -806,7 +838,14 @@ export async function streamResponse(
       // `const` keeps the narrowing across the awaits below.
       const preview = sentMessage as Message.TextMessage | null;
       if (preview && !sawTerminalEvent) {
-        const full = cleanFinal && answerText.trim() ? answerText : accumulated;
+        // A gracefully exhausted provider can omit done/error. If the latency
+        // gate withheld a progress-only turn, accumulated is still empty; flush
+        // the retained activity instead of leaving the user on `Thinking…`.
+        const full = cleanFinal && answerText.trim()
+          ? answerText
+          : accumulated.trim()
+            ? accumulated
+            : renderProgressRegion(progressLines).trimStart();
         if (full.trim()) {
           // Only delete the preview if delivery actually produced content — a
           // failed first chunk must leave the frozen preview in place rather
