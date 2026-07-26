@@ -162,6 +162,13 @@ export interface SessionToolDispatcherOptions {
    */
   parentSessionId?: string;
   /**
+   * This fork's own subagent id, when the dispatcher belongs to a forked child.
+   * Stamped onto every `hook_decision` this dispatcher emits so a block can be
+   * ATTRIBUTED to the child that provoked it, mirroring what `tool_call`
+   * already records. Undefined for top-level sessions.
+   */
+  subagentId?: string;
+  /**
    * The PROVIDER that owns this dispatcher (it implements {@link GrantManager}).
    * The provider's `buildDispatcher` passes `this`; the dispatcher injects it
    * onto every PreToolUse/PostToolUse context as `context.grantManager` so
@@ -244,6 +251,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
   private readonly parentSessionId: string | undefined;
+  private readonly subagentId: string | undefined;
   /**
    * Provider that owns this dispatcher (implements GrantManager). Injected onto
    * PreToolUse/PostToolUse contexts so path-scoped hooks read THIS session's
@@ -323,6 +331,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this._env = opts.env;
     this.sessionId = opts.sessionId;
     this.parentSessionId = opts.parentSessionId;
+    this.subagentId = opts.subagentId;
     this.sessionGrantManager = opts.sessionGrantManager;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
@@ -537,7 +546,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * as a no-op pass-through (the handler will surface its own validation
    * error), so we never throw here.
    */
-  private checkReadOnlyBash(call: ToolCall): ToolResult | null {
+  private async checkReadOnlyBash(call: ToolCall): Promise<ToolResult | null> {
     if (!this.readOnlyBash || call.name !== 'bash') return null;
     const input = call.input;
     const command =
@@ -547,14 +556,39 @@ export class SessionToolDispatcher implements ToolDispatcher {
     if (typeof command !== 'string') return null;
     const verdict = classifyBashCommand(command);
     if (!verdict.mutating) return null;
-    return {
-      content:
-        `Bash command blocked: read-only skill may not run mutating commands ` +
-        `(${verdict.reason ?? 'mutation detected'}). Allowed: read-only recon ` +
-        `(git status/log/diff, ls, cat, find, grep).`,
-      isError: true,
-      failureClass: 'permission-denied',
-    };
+    // Reason text is shared by the model-visible result and the trace event so
+    // the two can never drift; the command string itself is deliberately NOT
+    // recorded (ADR 0001 §G.4 keeps raw commands out of telemetry).
+    const reason =
+      `Bash command blocked: read-only skill may not run mutating commands ` +
+      `(${verdict.reason ?? 'mutation detected'}). Allowed: read-only recon ` +
+      `(git status/log/diff, ls, cat, find, grep).`;
+    await this.emitPreToolUseBlock(call.name, reason);
+    return { content: reason, isError: true, failureClass: 'permission-denied' };
+  }
+
+  /**
+   * Emit a PreToolUse `hook_decision` block, stamped with this dispatcher's
+   * `subagentId` when it belongs to a fork.
+   *
+   * Invariant: EVERY path that returns an isError {@link ToolResult} to the
+   * model for a POLICY reason must call this. A denial the model can see but the
+   * trace cannot is unattributable after the fact — child tool arguments and
+   * error text are persisted nowhere, so this event is the only durable record
+   * that the denial happened and which child provoked it. Three sites
+   * (read-only bash gate, and the static allowlist check on both the single and
+   * batch paths) previously returned silently; an audit of 12,108 traces
+   * (2026-07-26) consequently misattributed 268 child `bash` denials to path
+   * containment when they came from the read-only gate.
+   */
+  private async emitPreToolUseBlock(blockedTool: string, reason: string): Promise<void> {
+    await emitHookDecision(this.traceWriter, {
+      hookEvent: 'PreToolUse',
+      decision: 'block',
+      blockedTool,
+      reason,
+      ...(this.subagentId !== undefined ? { subagentId: this.subagentId } : {}),
+    });
   }
 
   /**
@@ -713,34 +747,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
     } catch (err) {
       // Fail closed: a throwing policy denies the call rather than crashing the
       // turn. The message names the cause so the denial is never silent.
-      await emitHookDecision(this.traceWriter, {
-        hookEvent: 'PreToolUse',
-        decision: 'block',
-        blockedTool: call.name,
-        reason: `Tool "${call.name}" denied by canUseTool (threw): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      });
-      return {
-        content: `Tool "${call.name}" denied by canUseTool (threw): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        isError: true,
-        failureClass: 'permission-denied',
-      };
+      const reason = `Tool "${call.name}" denied by canUseTool (threw): ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      await this.emitPreToolUseBlock(call.name, reason);
+      return { content: reason, isError: true, failureClass: 'permission-denied' };
     }
     if (result.behavior === 'deny') {
-      await emitHookDecision(this.traceWriter, {
-        hookEvent: 'PreToolUse',
-        decision: 'block',
-        blockedTool: call.name,
-        reason: result.message || `Tool "${call.name}" denied by permission policy`,
-      });
-      return {
-        content: result.message || `Tool "${call.name}" denied by permission policy`,
-        isError: true,
-        failureClass: 'permission-denied',
-      };
+      const reason = result.message || `Tool "${call.name}" denied by permission policy`;
+      await this.emitPreToolUseBlock(call.name, reason);
+      return { content: reason, isError: true, failureClass: 'permission-denied' };
     }
     // allow — apply an optional input rewrite in place.
     if (result.updatedInput !== undefined) {
@@ -791,11 +807,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // 2. Permission check
     const permResult = checkToolPermission(call.name, this.permissions);
     if (!permResult.allowed) {
-      return {
-        content: permResult.reason ?? `Tool "${call.name}" is not permitted`,
-        isError: true,
-        failureClass: 'permission-denied',
-      };
+      const reason = permResult.reason ?? `Tool "${call.name}" is not permitted`;
+      await this.emitPreToolUseBlock(call.name, reason);
+      return { content: reason, isError: true, failureClass: 'permission-denied' };
     }
 
     // 2a. In-process permission callback (canUseTool). Consulted AFTER the
@@ -807,7 +821,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // 2b. Read-only-skill bash gate. Runs after the permission check so the
     // allowlist denial (if any) takes precedence; blocks mutating bash while
     // letting read-only recon through.
-    const bashBlock = this.checkReadOnlyBash(call);
+    const bashBlock = await this.checkReadOnlyBash(call);
     if (bashBlock) return bashBlock;
 
     // 2c. Repeat-loop circuit breaker. Short-circuits no-progress loops where
@@ -897,11 +911,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
       const permResult = checkToolPermission(call.name, this.permissions);
       if (!permResult.allowed) {
-        results[i] = {
-          content: permResult.reason ?? `Tool "${call.name}" is not permitted`,
-          isError: true,
-          failureClass: 'permission-denied',
-        };
+        const reason = permResult.reason ?? `Tool "${call.name}" is not permitted`;
+        await this.emitPreToolUseBlock(call.name, reason);
+        results[i] = { content: reason, isError: true, failureClass: 'permission-denied' };
         blocked.add(i);
         continue;
       }
@@ -919,7 +931,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // Read-only-skill bash gate — mirror the permission-denied branch:
       // set the result and add to `blocked` so this call is excluded from
       // execution in phase 2.
-      const bashBlock = this.checkReadOnlyBash(call);
+      const bashBlock = await this.checkReadOnlyBash(call);
       if (bashBlock) {
         results[i] = bashBlock;
         blocked.add(i);

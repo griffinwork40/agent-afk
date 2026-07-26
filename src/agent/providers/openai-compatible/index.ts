@@ -240,6 +240,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
           ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
           ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
+          ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
           // Fork-scoped central output cap (#661): forwarded from the child
           // config that forkSubagent stamped, arming maxOutputBytes for forks
           // only (top-level leaves it unset). Parity with anthropic-direct.
@@ -359,6 +360,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       writeRoots?: string[];
       sessionId?: string;
       parentSessionId?: string;
+      /**
+       * This fork's own subagent id — parity with
+       * `anthropic-direct/index.ts:buildDispatcher`. Stamped onto every
+       * `hook_decision` the dispatcher emits so a policy block is attributable
+       * to the child that provoked it. Undefined on a top-level session.
+       */
+      subagentId?: string;
       /**
        * Explicit "this session is a forked subagent" signal carrying the
        * per-result output-cap budget (#661) — parity with
@@ -507,6 +515,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (opts.writeRoots !== undefined) dispatcherOpts.writeRoots = opts.writeRoots;
     if (opts.sessionId !== undefined) dispatcherOpts.sessionId = opts.sessionId;
     if (opts.parentSessionId !== undefined) dispatcherOpts.parentSessionId = opts.parentSessionId;
+    if (opts.subagentId !== undefined) dispatcherOpts.subagentId = opts.subagentId;
     // Central output-cap backstop (#661), FORK-SCOPED — parity with
     // AnthropicDirectProvider.buildDispatcher. Armed from the explicit
     // `subagentToolOutputCapBytes` signal that `SubagentManager.forkSubagent`

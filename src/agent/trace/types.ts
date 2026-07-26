@@ -182,6 +182,18 @@ export interface HookDecisionPayload {
   reason?: string;
   /** Set only when `hookEvent === 'PreToolUse'` and `decision === 'block'`. */
   blockedTool?: string;
+  /**
+   * Present when the decision was made inside a fork — mirrors
+   * {@link ToolCallStartedPayload.subagentId} so a block can be attributed to
+   * the child that provoked it. Absent on top-level decisions.
+   *
+   * History: without this, a denial could only be counted, never attributed. An
+   * audit of 12,108 traces (2026-07-26) misattributed 268 child `bash` denials
+   * to path containment because the dominant source — the read-only bash gate —
+   * emitted no event at all and nothing tied blocks to a child. See
+   * docs/decisions/0001-bash-tool-path-containment.md for the containment model.
+   */
+  subagentId?: string;
   /** Set only when the hook returned `injectContext`. */
   injectedContextBytes?: number;
   /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */

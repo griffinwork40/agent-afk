@@ -30,6 +30,9 @@ import { buildChildConfig, type BuildChildConfigArgs } from './child-config.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 import type { AgentInput } from './input-parse.js';
+import { buildInitialState } from '../../session/session-setup.js';
+import { pathContainmentBypassed } from '../../permission-policy.js';
+import { DEFAULT_CLI_PERMISSION_MODE } from '../../../cli/config/types.js';
 import type { RegisteredAgent } from '../../agents/index.js';
 import type { ModelProvider } from '../../provider.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
@@ -569,5 +572,36 @@ describe('buildChildConfig', () => {
       expect(childManager).toBeUndefined();
       expect(childConfig.provider).toBeDefined();
     });
+  });
+});
+
+describe('permission-mode inheritance (ADR-0001 premise — previously pinned by ZERO tests)', () => {
+  // Invariant: a forked child must NOT inherit a bypassed parent's permission
+  // mode. docs/decisions/0001-bash-tool-path-containment.md states the premise
+  // outright ("Forked sub-agents run permissionMode = 'default' — they do not
+  // inherit bypass"), and both that ADR's warn-only reasoning and the
+  // path-approval hook's fork auto-deny depend on it. An audit on 2026-07-26
+  // found the premise relied on by three documents and asserted by no test, so
+  // an accidental flip in EITHER direction — a child silently gaining bypass, or
+  // a top-level surface silently losing it — would have shipped green.
+  it('never sets permissionMode on the child config', () => {
+    const { childConfig } = buildChildConfig(baseArgs());
+    expect(childConfig.permissionMode).toBeUndefined();
+  });
+
+  it('resolves an unset child permissionMode to "default" (containment ON)', () => {
+    const { childConfig } = buildChildConfig(baseArgs());
+    const { metadata } = buildInitialState(childConfig, 'sonnet');
+    expect(metadata.permissionMode).toBe('default');
+  });
+
+  it('leaves the child contained even though every top-level surface defaults to bypass', () => {
+    // Parent side: the CLI default really is a containment-disabling mode.
+    expect(DEFAULT_CLI_PERMISSION_MODE).toBe('bypassPermissions');
+    expect(pathContainmentBypassed(DEFAULT_CLI_PERMISSION_MODE)).toBe(true);
+    // Child side: resolves to 'default', which does NOT disable containment.
+    const { childConfig } = buildChildConfig(baseArgs());
+    const { metadata } = buildInitialState(childConfig, 'sonnet');
+    expect(pathContainmentBypassed(metadata.permissionMode)).toBe(false);
   });
 });

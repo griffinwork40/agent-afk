@@ -86,6 +86,8 @@ export const HookDecisionPayloadSchema = z.object({
   decision: z.union([z.literal('block'), z.literal('approve')]).optional(),
   reason: z.string().optional(),
   blockedTool: z.string().optional(),
+  /** Present when the decision was made inside a fork; absent at top level. */
+  subagentId: z.string().optional(),
   injectedContextBytes: z.number().int().nonnegative().optional(),
   /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
   durationMs: z.number().nonnegative().optional(),
