@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.79.0] - 2026-07-26
+
+### Added
+- record stop_reason on subagent terminal rows and flag partial results (#713) (12691e4)
+
 ## [5.78.2] - 2026-07-26
 
 ### Fixed
