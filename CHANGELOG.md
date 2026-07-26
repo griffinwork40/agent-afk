@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.76.4] - 2026-07-26
+
+### Fixed
+- bound and latency-gate ◦ tool-progress lines (#702) (c30066f)
+
+### Changed
+- scope the advisory windows leg to push/label/dispatch instead of every PR (#709) (9bc7ee4)
+
 ## [5.76.3] - 2026-07-26
 
 ### Fixed
