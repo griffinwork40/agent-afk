@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderActivityReceipt, formatTelegramActivity, formatTelegramAgentLabel, replyWithFloodRetry } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter, renderProgressRegion, renderInterleavedPreview, renderActivityReceipt, formatTelegramActivity, formatTelegramAgentLabel, replyWithFloodRetry } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
@@ -1243,5 +1243,137 @@ describe('◦ progress region — PR #702 review follow-ups', () => {
 
     expect([...replies, ...edits].some((t) => t.includes('did work then the stream closed'))).toBe(true);
     expect([...replies, ...edits].every((t) => t !== 'Thinking…') || replies.length > 0).toBe(true);
+  });
+});
+
+describe('chronological interleave of the ◦ progress region (live preview)', () => {
+  function progressEvent(description: string): OutputEvent {
+    return {
+      type: 'progress',
+      progress: { taskId: 't', description, totalTokens: 0, toolUses: 1, durationMs: 1 },
+    } as OutputEvent;
+  }
+  const content = (c: string): OutputEvent =>
+    ({ type: 'chunk', chunk: { type: 'content', content: c } }) as OutputEvent;
+
+  // Sentences are >100 chars combined with a label so no live edit is dropped by
+  // EDIT_THROTTLE_MS (which only throttles payloads under 100 chars).
+  const A = 'First I check the schedule and confirm that the cron expression is actually right. ';
+  const B = 'Now I run the rehearsal to see whether the 9am fire really works end to end. ';
+
+  it('WIRING: a live-preview edit places the ◦ line BETWEEN the two narration runs', async () => {
+    // The reported bug: every round's preamble was concatenated into one wall
+    // ("…your session.Diagnosis is clear.") with all ◦ lines collected at the
+    // bottom, so no line sat next to the tool round it described.
+    const { ctx, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield content(A);
+      yield progressEvent('Using list schedules');
+      yield content(B);
+      yield { type: 'done', metadata: undefined } as OutputEvent;
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
+
+    // The label sits between the runs — this is the whole point of the change.
+    expect(edits).toContain(`${A}\n◦ Using list schedules${B}`);
+    // No LIVE preview glues the two runs into the reported wall of text. The final
+    // edit is excluded deliberately: that one is finalBody(), whose trailing-footer
+    // shape (and therefore its concatenation) is held byte-stable because it is a
+    // DELIVERED payload on progress-only / non-terminal-exit turns.
+    const previews = edits.slice(0, -1);
+    expect(previews.some((e) => e.includes('right. Now I run'))).toBe(false);
+  });
+
+  it('DELIVERY: the final body still uses the legacy trailing footer, byte-stable', async () => {
+    // finalBody() is delivered (not merely previewed) when answerText is empty or
+    // the stream ends without a terminal event, so interleaving must not reach it.
+    const { ctx, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield content(A);
+      yield progressEvent('Using list schedules');
+      yield content(B);
+      yield { type: 'done', metadata: undefined } as OutputEvent;
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
+
+    expect(edits[edits.length - 1]).toBe(`${A}${B}\n◦ Using list schedules`);
+  });
+
+  it('SEMANTICS: bounded to 6 labels, chronological, and breaks trimmed rounds apart', () => {
+    // Nine rounds, each recorded after its own content chunk — the alternating
+    // shape both provider loops actually emit.
+    const text = 'c1 c2 c3 c4 c5 c6 c7 c8 c9 ';
+    const entries = Array.from({ length: 9 }, (_, i) => ({
+      label: `round-${i + 1}`,
+      at: 3 * (i + 1),
+    }));
+
+    const out = renderInterleavedPreview(text, entries);
+
+    // Exact shape: a 6-label window (rounds 4..9) placed after their own text,
+    // and a bare line break standing in for each trimmed round (1..3).
+    expect(out).toBe(
+      'c1 \nc2 \nc3 \nc4 \nround-4c5 \nround-5c6 \nround-6c7 \nround-7c8 \nround-8c9 \nround-9',
+    );
+    // Global cap preserved — the property PR #702 established.
+    expect(out).toContain('round-9');
+    expect(out).toContain('round-4');
+    expect(out).not.toContain('round-3');
+    expect(out).not.toContain('round-1');
+    // Narration is never trimmed.
+    expect(out).toContain('c1 ');
+    expect(out).toContain('c9 ');
+    // Chronology: each label follows its own round's text and precedes the next.
+    expect(out.indexOf('c4 ')).toBeLessThan(out.indexOf('round-4'));
+    expect(out.indexOf('round-4')).toBeLessThan(out.indexOf('c5 '));
+    expect(out.indexOf('round-8')).toBeLessThan(out.indexOf('round-9'));
+    // A trimmed round still separates the narration either side of it.
+    expect(out).not.toContain('c1 c2 ');
+  });
+
+  it('renderInterleavedPreview is pure and degenerate-safe', () => {
+    expect(renderInterleavedPreview('abc', [])).toBe('abc');
+    expect(renderInterleavedPreview('', [{ label: '◦ a', at: 0 }])).toBe('\n◦ a');
+    expect(renderInterleavedPreview('onetwo', [{ label: '◦ a', at: 3 }])).toBe('one\n◦ atwo');
+    // Consecutive rounds at the SAME offset emit no stray breaks: this is the
+    // progress-only turn, and it must stay byte-identical to the footer output.
+    const nine = Array.from({ length: 9 }, (_, i) => ({ label: `l${i + 1}`, at: 0 }));
+    expect(renderInterleavedPreview('', nine)).toBe('\nl4\nl5\nl6\nl7\nl8\nl9');
+    expect(renderInterleavedPreview('', nine)).toBe(renderProgressRegion(nine.map((e) => e.label)));
+  });
+
+  it('never splices inside a code fence or an inline-code span (formatter safety)', () => {
+    // markdownToTelegramHtml extracts fenced blocks and inline spans positionally,
+    // so a label landing inside one is swallowed into <pre>/<code> and can break
+    // backtick parity for the rest of the message. An unsafe offset degrades to
+    // the end of the text — exactly where the legacy footer put it.
+    const openFence = 'intro\n```bash\nnpm run build';
+    expect(renderInterleavedPreview(openFence, [{ label: '◦ x', at: 20 }]))
+      .toBe(`${openFence}\n◦ x`);
+    const openSpan = 'see `pnpm test for more';
+    expect(renderInterleavedPreview(openSpan, [{ label: '◦ x', at: 12 }]))
+      .toBe(`${openSpan}\n◦ x`);
+    // A CLOSED fence is safe to splice after.
+    const closed = 'a\n```sh\nls\n```\nb';
+    expect(renderInterleavedPreview(closed, [{ label: '◦ x', at: closed.length - 2 }]))
+      .toBe('a\n```sh\nls\n```\n◦ x\nb');
+  });
+
+  it('clamps a stale offset to the end instead of splicing mid-sentence', () => {
+    // stream_retry rewinds `accumulated` mid-turn and the authoritative assistant
+    // message replaces it wholesale at turn end, so a recorded offset can outrun
+    // the buffer. It must collapse to the end (footer placement), never throw.
+    expect(renderInterleavedPreview('short', [{ label: '◦ x', at: 999 }]))
+      .toBe('short\n◦ x');
+    // Offsets are forced monotonic: a later entry can never render before an
+    // earlier one even if its recorded offset went backwards.
+    expect(
+      renderInterleavedPreview('abcdef', [
+        { label: '◦ first', at: 4 },
+        { label: '◦ second', at: 1 },
+      ]),
+    ).toBe('abcd\n◦ first\n◦ secondef');
   });
 });
