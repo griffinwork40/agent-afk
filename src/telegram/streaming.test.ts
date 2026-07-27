@@ -1276,7 +1276,9 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
     await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
 
     // The label sits between the runs — this is the whole point of the change.
-    expect(edits).toContain(`${A}\n◦ Using list schedules${B}`);
+    // The trailing break after the label is load-bearing: without it the next
+    // round's narration absorbs into the label (`◦ Using list schedulesNow I…`).
+    expect(edits).toContain(`${A}\n◦ Using list schedules\n${B}`);
     // No LIVE preview glues the two runs into the reported wall of text. The final
     // edit is excluded deliberately: that one is finalBody(), whose trailing-footer
     // shape (and therefore its concatenation) is held byte-stable because it is a
@@ -1313,9 +1315,12 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
     const out = renderInterleavedPreview(text, entries);
 
     // Exact shape: a 6-label window (rounds 4..9) placed after their own text,
-    // and a bare line break standing in for each trimmed round (1..3).
+    // and a bare line break standing in for each trimmed round (1..3). Each
+    // label is TERMINATED by a break when narration follows it, so the next
+    // round's text never absorbs into the label; the last label (round-9) sits
+    // at end-of-text and stays bare.
     expect(out).toBe(
-      'c1 \nc2 \nc3 \nc4 \nround-4c5 \nround-5c6 \nround-6c7 \nround-7c8 \nround-8c9 \nround-9',
+      'c1 \nc2 \nc3 \nc4 \nround-4\nc5 \nround-5\nc6 \nround-6\nc7 \nround-7\nc8 \nround-8\nc9 \nround-9',
     );
     // Global cap preserved — the property PR #702 established.
     expect(out).toContain('round-9');
@@ -1336,7 +1341,12 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
   it('renderInterleavedPreview is pure and degenerate-safe', () => {
     expect(renderInterleavedPreview('abc', [])).toBe('abc');
     expect(renderInterleavedPreview('', [{ label: '◦ a', at: 0 }])).toBe('\n◦ a');
-    expect(renderInterleavedPreview('onetwo', [{ label: '◦ a', at: 3 }])).toBe('one\n◦ atwo');
+    // Following narration is separated from the label by a break, never glued.
+    expect(renderInterleavedPreview('onetwo', [{ label: '◦ a', at: 3 }])).toBe('one\n◦ a\ntwo');
+    // ...but text that ALREADY starts with a newline gains no second break.
+    expect(renderInterleavedPreview('one\ntwo', [{ label: '◦ a', at: 3 }])).toBe('one\n◦ a\ntwo');
+    // A label at END of text stays bare — the footer/byte-equivalence contract.
+    expect(renderInterleavedPreview('one', [{ label: '◦ a', at: 3 }])).toBe('one\n◦ a');
     // Consecutive rounds at the SAME offset emit no stray breaks: this is the
     // progress-only turn, and it must stay byte-identical to the footer output.
     const nine = Array.from({ length: 9 }, (_, i) => ({ label: `l${i + 1}`, at: 0 }));
@@ -1374,6 +1384,116 @@ describe('chronological interleave of the ◦ progress region (live preview)', (
         { label: '◦ first', at: 4 },
         { label: '◦ second', at: 1 },
       ]),
-    ).toBe('abcd\n◦ first\n◦ secondef');
+    ).toBe('abcd\n◦ first\n◦ second\nef');
+  });
+
+  it('terminates a label so following narration never absorbs into it (review 1)', () => {
+    // The next iteration appends text.slice(pos, at) — the FOLLOWING round's
+    // narration. Without a delimiter it reads as part of the label.
+    const out = renderInterleavedPreview('firstNow I run the rehearsal', [
+      { label: '◦ Using list schedules', at: 5 },
+    ]);
+    expect(out).toBe('first\n◦ Using list schedules\nNow I run the rehearsal');
+    expect(out).not.toContain('◦ Using list schedulesNow');
+    // Superstring invariant: narration is never dropped or reordered.
+    expect(out.replace(/\n◦ Using list schedules\n/, '')).toBe('firstNow I run the rehearsal');
+  });
+
+  it('defers a splice inside an UNTERMINATED markdown link (review 2)', () => {
+    // A tool boundary splits a link across rounds. formatter.ts step 7 rewrites
+    // [text](url) positionally, so a label spliced into either half is swallowed
+    // into the href — hiding the status and corrupting the target.
+    const openUrl = 'see [docs](https://exa';
+    expect(renderInterleavedPreview(openUrl, [{ label: '◦ x', at: 22 }]))
+      .toBe(`${openUrl}\n◦ x`);
+    // Mid-URL (in range, not end-of-text) must also degrade to the end.
+    const openUrlMore = 'see [docs](https://exa and then more prose';
+    expect(renderInterleavedPreview(openUrlMore, [{ label: '◦ x', at: 22 }]))
+      .toBe(`${openUrlMore}\n◦ x`);
+    // Unclosed label: `[docs` with no `]` yet.
+    const openLabel = 'see [docs plus trailing prose';
+    expect(renderInterleavedPreview(openLabel, [{ label: '◦ x', at: 9 }]))
+      .toBe(`${openLabel}\n◦ x`);
+    // A COMPLETE link is safe to splice after — the guard is not a blanket ban.
+    const closedLink = 'see [docs](https://example.com) then more';
+    expect(renderInterleavedPreview(closedLink, [{ label: '◦ x', at: 31 }]))
+      .toBe('see [docs](https://example.com)\n◦ x\n then more');
+  });
+
+  it('emits no stray blank line when a trimmed round shares an offset (review 4)', () => {
+    // A trimmed entry (i < labelFrom) emits a bare `\n`; when the immediately
+    // following LABELED entry sits at the same offset it emits `\n<label>` too,
+    // which used to yield `\n\n` between narration and its label.
+    const out = renderInterleavedPreview('abcdef', [
+      { label: 'l1', at: 3 },
+      { label: 'l2', at: 3 },
+      { label: 'l3', at: 4 },
+      { label: 'l4', at: 4 },
+      { label: 'l5', at: 5 },
+      { label: 'l6', at: 5 },
+      { label: 'l7', at: 6 },
+    ]);
+    expect(out).not.toContain('\n\n');
+    expect(out).toBe('abc\nl2\nd\nl3\nl4\ne\nl5\nl6\nf\nl7');
+    // The trimmed round is still label-suppressed (global cap intact).
+    expect(out).not.toContain('l1');
+  });
+
+  it('mirrors the formatter fence pattern: a single-line ```word``` is NOT a fence (review 5)', () => {
+    // formatter.ts step 2 requires a newline after the opening fence and anchors
+    // at line start, so it sees NO complete fence here — meaning an offset after
+    // it lands in the inline-code pass. Both parse models must agree, so this
+    // offset is unsafe and degrades to end-of-text.
+    const inlineFence = 'run ```build``` now and more';
+    expect(renderInterleavedPreview(inlineFence, [{ label: '◦ x', at: 20 }]))
+      .toBe(`${inlineFence}\n◦ x`);
+    // Indented (≤3 spaces) real fence still parses as complete, per the
+    // formatter's ^ {0,3} prefix — so splicing right after it stays SAFE.
+    const indented = ' ```sh\nls\n```\ntail text';
+    expect(renderInterleavedPreview(indented, [{ label: '◦ x', at: indented.indexOf('\ntail') }]))
+      .toBe(' ```sh\nls\n```\n◦ x\ntail text');
+  });
+
+  it('WIRING: re-bases retained offsets when the assistant message replaces the buffer (review 3)', async () => {
+    // :782 replaces `accumulated` wholesale with the FINAL round's text only, so
+    // an offset sampled in an earlier round is frequently still IN RANGE of the
+    // replacement — the monotonic clamp never fires and the label splices
+    // mid-word. Replacement here is LONGER than the recorded offset (the case
+    // the clamp cannot cover).
+    const early = 'Short first round. ';
+    const replacement =
+      'A completely different and much longer authoritative final answer that outruns the early offset.';
+    expect(replacement.length).toBeGreaterThan(early.length);
+
+    const { ctx, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield content(early);
+      yield progressEvent('Using list schedules');
+      yield {
+        type: 'message',
+        message: { role: 'assistant', content: replacement },
+      } as OutputEvent;
+      yield { type: 'done', metadata: undefined } as OutputEvent;
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { progressDelayMs: 0 });
+
+    // Filter-independent on purpose: the BUGGY render splits `replacement`
+    // around the label ('A completely differ\n◦ …\nent and much longer…'), so any
+    // filter keyed on `includes(replacement)` would silently exclude the very
+    // edit under test and pass vacuously. Assert over ALL edits instead.
+    const label = '◦ Using list schedules';
+    const labelled = edits.filter((e) => e.includes(label));
+    expect(labelled.length).toBeGreaterThan(0);
+    for (const e of labelled) {
+      // Footer placement: the label terminates the message, never interrupts it.
+      expect(e.endsWith(`\n${label}`)).toBe(true);
+      // The specific reported corruption: a splice mid-word.
+      expect(e).not.toMatch(new RegExp(`\\n${label}\\n\\S`));
+    }
+    // The post-replace preview shows the authoritative text whole, label at end.
+    expect(edits).toContain(`${replacement}\n${label}`);
+    // And no edit renders the buffer torn apart by the stale offset.
+    expect(edits.some((e) => e.includes('differ\n'))).toBe(false);
   });
 });

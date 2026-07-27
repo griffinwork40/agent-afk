@@ -259,21 +259,47 @@ const MAX_PROGRESS_ENTRIES = 32;
  * Contract: return an offset at or after `pos` at which a `◦` line may be
  * inserted without corrupting markdown that `markdownToTelegramHtml` parses
  * POSITIONALLY. That formatter extracts fenced blocks and inline-code spans
- * before its emphasis passes (formatter.ts), so a label spliced inside an
- * unclosed fence, or between the backticks of a span, is swallowed into
- * `<pre>`/`<code>` — and broken backtick parity shifts which later spans
- * code-ify. When `pos` is unsafe this degrades to the END of the text, i.e.
- * exactly where the legacy footer put the line: never worse than before.
+ * before its emphasis passes and rewrites `[text](url)` links after them
+ * (formatter.ts), so a label spliced inside an unclosed fence, between the
+ * backticks of a span, or into a half-written link is swallowed into
+ * `<pre>`/`<code>`/an `href` — and broken backtick parity shifts which later
+ * spans code-ify. When `pos` is unsafe this degrades to the END of the text,
+ * i.e. exactly where the legacy footer put the line: never worse than before.
  */
 function safeSplicePoint(text: string, pos: number): number {
   if (pos <= 0) return 0;
   if (pos >= text.length) return text.length;
   // Drop COMPLETE fenced blocks first; a leftover ``` means the offset sits
   // inside a fence the model has not closed yet (routine mid-stream).
-  const prefix = text.slice(0, pos).replace(/```[\s\S]*?```/g, '');
+  //
+  // External constraint: the pattern MIRRORS the formatter's own fence regex
+  // (formatter.ts step 2 — line-anchored, newline required after the opening
+  // fence). An unanchored /```[\s\S]*?```/ would count a single-line ```word```
+  // as a complete block that the formatter does NOT see as one, report the
+  // offset safe, and let the label fall into the formatter's inline-code pass.
+  // Both parse models must agree or "safe" means nothing.
+  const prefix = text.slice(0, pos).replace(/^ {0,3}```[\w]*\n[\s\S]*?```/gm, '');
   if (prefix.includes('```')) return text.length;
   // Odd backtick count => the offset falls inside an inline-code span.
   if (((prefix.match(/`/g)?.length) ?? 0) % 2 !== 0) return text.length;
+  // A tool boundary routinely splits a link across rounds: `[docs](https://exa`
+  // now, `mple.com)` next round. formatter.ts step 7 rewrites `[text](url)`
+  // positionally, so a label spliced into either half is absorbed into the
+  // generated href — hiding the status AND corrupting the link target. Cheap
+  // prefix scan for the two open states, in the same spirit as the checks
+  // above; deliberately not a markdown parser.
+  const openBracket = prefix.lastIndexOf('[');
+  const closeBracket = prefix.lastIndexOf(']');
+  // `[label` with no `]` written yet.
+  if (openBracket > closeBracket) return text.length;
+  // `](url` with the closing paren still unwritten.
+  if (
+    closeBracket >= 0 &&
+    prefix[closeBracket + 1] === '(' &&
+    !prefix.includes(')', closeBracket + 1)
+  ) {
+    return text.length;
+  }
   return pos;
 }
 
@@ -291,11 +317,14 @@ function safeSplicePoint(text: string, pos: number): number {
  * bounding the region required deleting from the middle of the content buffer,
  * which a following content chunk then froze in place — cannot recur.
  *
- * Offsets are clamped MONOTONICALLY into `text`, so a mid-turn truncation
- * (`stream_retry` rewinding the buffer) or the end-of-turn wholesale replace by
- * the authoritative assistant message leaves stale offsets collapsing to the end
- * — degrading to footer placement rather than splicing at a position that no
- * longer means anything.
+ * Offsets are clamped MONOTONICALLY into `text`, which covers mid-turn
+ * TRUNCATION (`stream_retry` rewinding the buffer): an offset past the shortened
+ * text collapses to the end, i.e. footer placement. It does NOT cover the
+ * end-of-turn wholesale replace by the authoritative assistant message, whose
+ * replacement text is frequently LONGER than an early offset — so the clamp
+ * never fires and the offset is in range but meaningless. That case is handled
+ * at the call site, which re-bases retained offsets to the new buffer length
+ * before rendering (see the assistant-`message` handler in streamResponse).
  */
 export function renderInterleavedPreview(
   text: string,
@@ -313,10 +342,24 @@ export function renderInterleavedPreview(
     const at = safeSplicePoint(text, Math.min(Math.max(entry.at, pos), text.length));
     out += text.slice(pos, at);
     pos = at;
+    // Offsets are forced monotonic and safeSplicePoint is idempotent, so a NEXT
+    // raw offset at or before the current effective one renders at EXACTLY this
+    // position. That entry then supplies the `\n` separator itself, and emitting
+    // another one here would leave a stray blank line between the narration and
+    // its label.
+    const nextRendersHere = (entries[i + 1]?.at ?? Infinity) <= at;
     if (i >= labelFrom) {
       out += `\n${entry.label}`;
       lastEmitAt = at;
-    } else if (at > lastEmitAt) {
+      // Terminate the label: the next iteration appends `text.slice(pos, at)` —
+      // the following round's narration — which absorbs into the label when it
+      // does not start with a break (`◦ Using list schedulesNow I run…`).
+      // Invariant: only when narration actually follows HERE and does not
+      // already begin with `\n`. A label at END of text must stay bare, or a
+      // progress-only turn stops being byte-identical to renderProgressRegion()
+      // and finalBody()'s footer shape parity goes with it.
+      if (!nextRendersHere && at < text.length && text[at] !== '\n') out += '\n';
+    } else if (at > lastEmitAt && !nextRendersHere) {
       out += '\n';
       lastEmitAt = at;
     }
@@ -782,6 +825,20 @@ export async function streamResponse(
           accumulated = event.message.content;
           answerText = event.message.content;
           inContentRun = false;
+          // Ordering constraint: re-base BEFORE rendering. This assignment
+          // replaced the buffer wholesale, so every offset recorded against the
+          // OLD buffer now indexes unrelated text. Both providers emit this
+          // message once per turn carrying only the final round's text, so an
+          // early offset is usually still IN RANGE of the replacement — the
+          // monotonic clamp inside renderInterleavedPreview never fires and the
+          // label splices mid-word. Re-base to the new length so the preview
+          // degrades to footer placement, which is what the interleave contract
+          // promises for an offset that no longer means anything.
+          //
+          // Copy, never mutate: entries are readonly and `finalBody()` maps the
+          // same list for its byte-stable legacy footer, so `label` must survive
+          // untouched — only `at` moves.
+          progressEntries = progressEntries.map((e) => ({ ...e, at: accumulated.length }));
           await sendOrEdit(livePreview());
         }
         // Lane D — progress summaries appear in the response as dim lines
