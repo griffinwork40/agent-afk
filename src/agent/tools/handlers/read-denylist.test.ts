@@ -77,7 +77,12 @@ describe('isReadDenied — deliberate divergence from the write denylist', () =>
 
   it('DOES deny ~/.afk/config (afk.env credentials)', () => {
     expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
-    expect(isReadDenied(join(homedir(), '.afk', 'config', 'mcp.json')).denied).toBe(true);
+    // afk.config.json may carry a literal `apiKey` (cli/config/types.ts) — the
+    // whole-dir floor must keep covering it and every operator backup sibling.
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.config.json')).denied).toBe(true);
+    expect(
+      isReadDenied(join(homedir(), '.afk', 'config', 'afk.env.bak-20260617')).denied,
+    ).toBe(true);
   });
 
   it('does NOT blanket-deny /etc (ordinary system reads stay allowed)', () => {
@@ -93,6 +98,39 @@ describe('isReadDenied — deliberate divergence from the write denylist', () =>
   it('does NOT deny an ordinary project path', () => {
     expect(isReadDenied(join(tmpDir, 'src', 'index.ts')).denied).toBe(false);
     expect(isReadDenied('/tmp/some-repo/package.json').denied).toBe(false);
+  });
+});
+
+describe('isReadDenied — built-in exception for ~/.afk/config/mcp.json', () => {
+  const mcp = join(homedir(), '.afk', 'config', 'mcp.json');
+
+  it('allows the MCP registry itself (it holds ${VAR} placeholders, not secrets)', () => {
+    expect(isReadDenied(mcp).denied).toBe(false);
+  });
+
+  it('is an EXACT-file carve-out — siblings and pseudo-children stay denied', () => {
+    expect(isReadDenied(mcp + '.bak').denied).toBe(true);
+    expect(isReadDenied(join(mcp, 'child.json')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'mcp.json.old')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.afk', 'config')).denied).toBe(true);
+  });
+
+  it('stays re-deniable via AFK_READ_DENYLIST (extras outrank the exception)', () => {
+    process.env['AFK_READ_DENYLIST'] = mcp;
+    _resetReadDenylistCacheForTests();
+    const verdict = isReadDenied(mcp);
+    expect(verdict.denied).toBe(true);
+    expect(verdict.matched).toBe(mcp);
+  });
+
+  it('re-denies via a DIRECTORY extra that contains the exception', () => {
+    process.env['AFK_READ_DENYLIST'] = join(homedir(), '.afk', 'config');
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(mcp).denied).toBe(true);
+  });
+
+  it('assertNotReadDenied does not throw for the carve-out', () => {
+    expect(() => assertNotReadDenied(mcp)).not.toThrow();
   });
 });
 

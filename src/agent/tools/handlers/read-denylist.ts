@@ -10,7 +10,8 @@
  * sub-agent — can reach a denylisted path.
  *
  * Divergence from the WRITE denylist is deliberate:
- *   - `~/.afk/config` (afk.env API keys, mcp.json) IS denied — as for writes.
+ *   - `~/.afk/config` (afk.env API keys) IS denied — as for writes — with ONE
+ *     built-in exception: `mcp.json` (see `READ_ALLOWLIST_REL`).
  *   - `~/.afk/state` is NOT denied — sub-agents legitimately READ skill-preflight
  *     inputs, todos, transcripts, and session ledgers there (#544/#547/#554);
  *     denying it would re-introduce the very read failures those fixes closed.
@@ -48,7 +49,12 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   `${homedir()}/.aws`,
   `${homedir()}/.gnupg`,
   `${homedir()}/.config/gcloud`,
-  // AFK's own credential/config tree (afk.env API keys, mcp.json).
+  // AFK's own credential/config tree (afk.env API keys, afk.config.json —
+  // which may carry a literal `apiKey`, see cli/config/types.ts). Floored as a
+  // WHOLE DIR on purpose: the dir also accumulates operator backups
+  // (`afk.env.bak-*`), so a file-level deny list here would be fail-OPEN —
+  // every new or renamed sibling would default to readable. Non-secret members
+  // are opted OUT one at a time via `READ_ALLOWLIST_REL` instead.
   // Invariant: only `.../config` — NEVER `.../state`, which forked sub-agents
   // must be able to read (skill-preflight inputs, todos, transcripts). Adding
   // `.../state` here would re-break #544/#547/#554.
@@ -72,27 +78,75 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   '/private/etc/master.passwd',
 ];
 
-// Memoized resolved denylist, keyed by the AFK_READ_DENYLIST value so a test
+/**
+ * Home-relative files that sit INSIDE a denied directory but are deliberately
+ * readable. Matched as EXACT files (never as a prefix), so `mcp.json.bak` and
+ * `mcp.json/<child>` stay denied.
+ *
+ * `~/.afk/config/mcp.json` is the MCP server REGISTRY, not a credential store:
+ * its `env` / `headers` values are documented to hold `${VAR}` placeholders
+ * expanded from the environment at connect time, not inline literals
+ * (`agent/mcp/types.ts`). Agents legitimately need to read it to diagnose a
+ * server that will not connect, and the floor was never real anyway — `bash`
+ * (`cat ~/.afk/config/mcp.json`) is unaffected by this denylist, so the block
+ * only ever cost the typed read tools.
+ *
+ * Operators who DO store inline secrets there can re-deny it explicitly with
+ * `AFK_READ_DENYLIST=~/.afk/config/mcp.json` — see the ordering invariant in
+ * {@link isReadDenied}.
+ *
+ * Kept home-RELATIVE so the REPL `@`-file injector
+ * (`cli/commands/interactive/at-file-inject.ts`), which resolves against an
+ * injectable home, shares this one list instead of duplicating it.
+ */
+export const READ_ALLOWLIST_REL: readonly string[] = ['.afk/config/mcp.json'];
+
+/** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
+export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
+  (rel) => `${homedir()}/${rel}`,
+);
+
+// Memoized resolved lists, keyed by the AFK_READ_DENYLIST value so a test
 // that changes the env re-resolves. Reads are a hot path (every grep/glob/
 // read_file call routes through resolveAndContain), so resolving the built-in
-// entries' symlinks on every call is avoided. Threat-model note: a
-// denylist entry's symlink is assumed stable within a process (mirrors the
-// rootRealpathCache assumption in _cwd-utils.ts).
-let cached: { key: string; list: readonly string[] } | undefined;
+// entries' symlinks on every call is avoided. Built-ins and extras are kept
+// SEPARATE because they have different precedence (see `isReadDenied`).
+// Threat-model note: a denylist entry's symlink is assumed stable within a
+// process (mirrors the rootRealpathCache assumption in _cwd-utils.ts).
+let cached:
+  | { key: string; builtins: readonly string[]; extras: readonly string[]; allow: readonly string[] }
+  | undefined;
+
+function resolveLists(): {
+  builtins: readonly string[];
+  extras: readonly string[];
+  allow: readonly string[];
+} {
+  const key = env.AFK_READ_DENYLIST ?? '';
+  if (cached && cached.key === key) return cached;
+  const extras: string[] = key
+    ? key.split(':').map((p) => safeRealpath(resolve(p))).filter(Boolean)
+    : [];
+  cached = {
+    key,
+    builtins: BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
+    extras,
+    allow: BUILTIN_READ_ALLOWLIST.map((p) => safeRealpath(resolve(p))),
+  };
+  return cached;
+}
 
 /**
  * Return the effective read denylist (built-in + any `AFK_READ_DENYLIST`
  * extras), each as a real (symlink-resolved) absolute path.
+ *
+ * @note This is the raw prefix list — it does NOT reflect
+ * {@link BUILTIN_READ_ALLOWLIST} exceptions. Call {@link isReadDenied} for the
+ * effective verdict.
  */
 export function getReadDenylist(): readonly string[] {
-  const key = env.AFK_READ_DENYLIST ?? '';
-  if (cached && cached.key === key) return cached.list;
-  const extras: string[] = key
-    ? key.split(':').map((p) => safeRealpath(resolve(p))).filter(Boolean)
-    : [];
-  const list = [...BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))), ...extras];
-  cached = { key, list };
-  return list;
+  const { builtins, extras } = resolveLists();
+  return [...builtins, ...extras];
 }
 
 /**
@@ -109,7 +163,24 @@ export function _resetReadDenylistCacheForTests(): void {
  */
 export function isReadDenied(filePath: string): { denied: boolean; matched?: string } {
   const real = safeRealpath(resolve(filePath));
-  for (const blocked of getReadDenylist()) {
+  const { builtins, extras, allow } = resolveLists();
+
+  // Invariant: operator-supplied `AFK_READ_DENYLIST` extras are matched BEFORE
+  // the built-in exception list, and are never weakened by it. The documented
+  // contract for that env var is that it only ever ADDS denials
+  // (`config/env.ts`), so a built-in carve-out must remain re-deniable: setting
+  // AFK_READ_DENYLIST=~/.afk/config/mcp.json has to win. Checking the exception
+  // first (an early return at the top of this function) would silently invert
+  // that contract and make the carve-out unremovable.
+  for (const blocked of extras) {
+    if (real === blocked || real.startsWith(blocked + '/')) {
+      return { denied: true, matched: blocked };
+    }
+  }
+  // Exact-file exceptions only — a prefix match here would carve out a whole
+  // directory and re-open the fail-open hole the whole-dir floor exists to close.
+  if (allow.includes(real)) return { denied: false };
+  for (const blocked of builtins) {
     if (real === blocked || real.startsWith(blocked + '/')) {
       return { denied: true, matched: blocked };
     }

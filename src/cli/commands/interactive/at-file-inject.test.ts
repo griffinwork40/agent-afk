@@ -213,8 +213,36 @@ describe('expandAtFileTokens — hardened guards (review #688)', () => {
 
   it('blocks the AFK config tree (~/.afk/config) referenced via tilde', () => {
     mkdirSync(join(tmpRoot, '.afk', 'config'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.afk', 'config', 'afk.config.json'), '{"apiKey":"sk-live"}');
+    const r = expandAtFileTokens('@~/.afk/config/afk.config.json', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.fileBlocks).toEqual([]);
+    expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
+  });
+
+  // Parity with READ_ALLOWLIST_REL (read-denylist.ts): the MCP registry is the
+  // one exact-file carve-out inside ~/.afk/config, so `@`-injection must agree
+  // with the typed read tools instead of blocking it independently.
+  it('injects ~/.afk/config/mcp.json (shared exact-file carve-out)', () => {
+    mkdirSync(join(tmpRoot, '.afk', 'config'), { recursive: true });
     writeFileSync(join(tmpRoot, '.afk', 'config', 'mcp.json'), '{"mcpServers":{}}');
     const r = expandAtFileTokens('@~/.afk/config/mcp.json', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.warnings).toEqual([]);
+    expect(r.fileBlocks).toHaveLength(1);
+    expect(r.fileBlocks[0]!.text).toContain('mcpServers');
+  });
+
+  it('still blocks a mcp.json BACKUP sibling in the same dir', () => {
+    mkdirSync(join(tmpRoot, '.afk', 'config'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.afk', 'config', 'mcp.json.bak'), '{"mcpServers":{}}');
+    const r = expandAtFileTokens('@~/.afk/config/mcp.json.bak', {
       rootDir: '/nonexistent-cwd',
       homeDir: tmpRoot,
       ...ON,
