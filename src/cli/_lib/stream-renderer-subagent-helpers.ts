@@ -124,7 +124,7 @@ export function synthesizeAgentEntry(
   // Without this, the Agent prefix is stored unbounded and re-renders on every
   // overlay refresh — long labels (e.g. 80-char prompt prefixes) wrap on narrow
   // terminals. Compute once and apply on whichever Agent-creation path runs.
-  const cols = process.stdout.columns ?? 100;
+  const cols = getTerminalWidth();
   const maxWidth = Math.max(20, cols - 14); // 14 = indent + glyph/spinner budget
 
   // Merge path: when the parent entry is itself an original agent-dispatch

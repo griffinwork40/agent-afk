@@ -16,6 +16,7 @@ import type { CardSpec } from '../render.js';
 import { card } from '../render.js';
 import { commitBlockAbove } from './commit-block.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
+import { getTerminalWidth } from '../terminal-size.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { syntheticResult, formatDoneSummary } from './stream-renderer-source.js';
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
@@ -166,7 +167,7 @@ export function handleSubagentEvent(
         // progress signal than a stale clause of thought.
         ctx.toolLane.setThinkingTail(parentId, undefined);
 
-        const cols = process.stdout.columns ?? 100;
+        const cols = getTerminalWidth();
         const maxWidth = Math.max(20, cols - 14);  // 14 = indent + glyph/spinner budget
         ctx.toolLane.addStartWithAgentContext(
           chunk.toolUseId,
@@ -223,7 +224,7 @@ export function handleSubagentEvent(
           // which would resolve to `undefined` and clear a freshly-installed
           // thinking-tail before any substantive text has rendered.
           if (chunk.content.trim()) {
-            const cols = process.stdout.columns ?? 100;
+            const cols = getTerminalWidth();
             const maxTail = Math.max(20, cols - 14); // 14 = indent + glyph budget
             const tail = extractLatestThinkingClause(source.contentBuffer, maxTail);
             // Item #6: Throttle setThinkingTail to ≥1500ms per parentId OR a
@@ -287,7 +288,7 @@ export function handleSubagentEvent(
         if (!source.thinkingLane) source.thinkingLane = new ThinkingLane();
         source.thinkingLane.push(chunk.content);
         if (ctx.thinkingMode === 'live' && ctx.isTTY && ctx.orchestratorCtx) {
-          const cols = process.stdout.columns ?? 100;
+          const cols = getTerminalWidth();
           const maxTail = Math.max(20, cols - 14);
           const tail = extractLatestThinkingClause(source.thinkingLane.peek(), maxTail);
           if (tail) ctx.toolLane.setThinkingTail(parentId, tail);
