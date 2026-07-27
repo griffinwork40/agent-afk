@@ -30,7 +30,6 @@ import { BrowserLauncher } from './launcher.js';
 import { observePage } from './observe.js';
 import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
-import { redactSecrets } from '../sanitize.js';
 import { writeScreenshotSidecar } from '../witness.js';
 
 // ---------------------------------------------------------------------------
@@ -255,15 +254,17 @@ export class PlaywrightProvider implements BrowserProvider {
         case 'click':
           await locator.click({ timeout });
           break;
-        case 'fill': {
-          // Capture the redacted form for witness/logging; the raw value is
-          // passed to locator.fill() so the actual form field receives the
-          // intended content.
-          const _redactedValue = redactSecrets(input.value ?? '');
-          void _redactedValue; // suppress noUnusedLocals — ready for browser_event wiring
+        case 'fill':
+          // Invariant: the filled value never reaches the witness layer, so
+          // there is deliberately no redaction call here. `BrowserEventPayload`
+          // (src/agent/trace/types.ts) carries no value field, and the
+          // observation path redacts password-typed inputs at read time
+          // (observe.ts). A prior version computed `redactSecrets(value)` here
+          // and immediately discarded it, which advertised an egress control
+          // that did not exist. If browser_event ever carries typed values,
+          // redact at that write site — not here.
           await locator.fill(input.value ?? '');
           break;
-        }
         case 'press':
           await locator.press(input.value ?? '');
           break;

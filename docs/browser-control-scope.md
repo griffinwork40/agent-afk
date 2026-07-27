@@ -30,7 +30,7 @@
 
 - `ModelProvider` is a two-member interface: `{ readonly name: string; query(args: ProviderQueryArgs): ProviderQuery }` (`src/agent/provider.ts:341–345`). The whole contract for a new backend.
 - Each LLM provider is a closed subdirectory with `index.ts` (class), `auth.ts` (pure credential resolver returning a tagged resolution object), `query.ts` (`ProviderQuery` impl), `translate.ts` (wire ↔ `ProviderEvent`). Anthropic-direct has 15 files; openai-compatible has 8.
-- **No non-LLM provider-style abstractions exist in the codebase today.** Exhaustive grep for `interface.*Provider` / `class.*Provider` found nothing for search, storage, browsers, etc. `web_scrape` is hardcoded to Firecrawl. This means the `BrowserProvider` is *new* infrastructure — we are not parasitizing an existing pattern, we are establishing one. _(Update post-2026-05-28: Firecrawl was later removed — `web_scrape` now uses local Readability+Turndown extraction with a Playwright-`render()` escalation and a pluggable `SearchBackend` (Brave). See `src/web/` and `BrowserProvider.render()`.)_
+- **No non-LLM provider-style abstractions exist in the codebase today.** Exhaustive grep for `interface.*Provider` / `class.*Provider` found nothing for search, storage, browsers, etc. `web_scrape` is hardcoded to Firecrawl. This means the `BrowserProvider` is *new* infrastructure — we are not parasitizing an existing pattern, we are establishing one. _(Update post-2026-05-28: Firecrawl was later removed — `web_scrape` now uses local Readability+Turndown extraction with a Playwright-`render()` escalation and a pluggable `SearchBackend` (Exa). See `src/web/` and `BrowserProvider.render()`.)_
 
 ### Witness / trace (already real)
 
