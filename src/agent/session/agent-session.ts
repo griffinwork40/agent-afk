@@ -1216,19 +1216,22 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    // Invariant: only the TOP-LEVEL session (no fork marker) may seal the writer.
-    // A session tree shares ONE TraceWriter by reference (forkSubagent threads
-    // the parent's writer into every descendant), and seal() is one-shot /
-    // idempotent (NdjsonTraceWriter). If a subagent sealed on its own close(),
-    // the FIRST descendant torn down would seal the whole shared file while the
-    // top-level is still mid-run — stranding every later ancestor event as the
-    // "started without terminal" gap (a nested grandchild's end_turn sealing the
-    // root trace 30+ min before the real session ends). The seal owner gate uses
-    // forkSubagent's explicit fork marker, not parentSessionId: stub-parent skill
-    // forks can have no parent session id while still sharing the root writer.
-    // Subagents still emit their own `closure` record above; if the top-level
-    // never runs close(), the process-exit backstop still seals.
-    if (this.config.subagentToolOutputCapBytes === undefined) {
+    // Invariant: only the TOP-LEVEL session may seal the writer, and that is
+    // now asserted by `isSubagentFork` — a field whose sole meaning is "I am a
+    // fork" — rather than inferred from `subagentToolOutputCapBytes`, an
+    // unrelated tool-output cap that merely happened to be fork-only (a
+    // top-level session legitimately setting an output cap silently stopped
+    // sealing its own trace). A session tree shares ONE TraceWriter by
+    // reference (forkSubagent threads the parent's writer into every
+    // descendant) and seal() is a one-shot hard gate — once it flips, write()
+    // throws and emitSubagentLifecycle swallows the rejection. So if a subagent
+    // sealed on its own close(), the FIRST descendant torn down would silently
+    // truncate the shared file while the top-level is still mid-run, stranding
+    // every later sibling terminal as the "started without terminal" gap.
+    // Subagents still emit their own `closure` record above; only the seal is
+    // gated. If the top-level never runs close(), the process-exit backstop
+    // still seals.
+    if (this.config.isSubagentFork !== true) {
       await sealTraceWriter(this.config.traceWriter, {
         ...signals,
         finalTurnCount: this.turnCount,
