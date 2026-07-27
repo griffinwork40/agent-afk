@@ -51,6 +51,7 @@ export {
   readPresenceFiles,
   readLivePresenceFiles,
   touchPresenceHeartbeat,
+  setPresenceBlocked,
   PRESENCE_SCHEMA_VERSION,
   type PresenceFileInfo,
   type PresenceRecord,

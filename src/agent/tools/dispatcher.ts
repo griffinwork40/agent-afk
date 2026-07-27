@@ -382,6 +382,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
       writeRoots: this._writeRoots.slice(),
       ...(this._allowAll ? { allowAll: true } : {}),
       ...(this._env !== undefined ? { env: this._env } : {}),
+      // Lets human-blocking handlers tell the elicitation router WHICH session's
+      // presence file to mark as waiting-on-a-human.
+      ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
     };
   }
 
@@ -777,6 +780,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
         event: 'PreToolUse',
         toolName: call.name,
         input: call.input,
+        // Lets the path-approval prompt mark THIS session's presence file as
+        // blocked-on-human while the operator decides.
+        ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
         ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
         ...(this.parentSessionId !== undefined
           ? { parentSessionId: this.parentSessionId }
@@ -881,6 +887,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
           event: 'PreToolUse',
           toolName: call.name,
           input: call.input,
+          // See execute(): identifies the session for the blocked-on-human marker.
+          ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
           ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
           ...(this.parentSessionId !== undefined
             ? { parentSessionId: this.parentSessionId }

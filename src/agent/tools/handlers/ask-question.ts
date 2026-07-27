@@ -13,7 +13,7 @@ import type { ToolHandler } from '../types.js';
 import type { ElicitationRequest } from '../../types/sdk-types.js';
 import { elicitationRouter } from '../../elicitation-router.js';
 
-export const askQuestionHandler: ToolHandler = async (input, signal) => {
+export const askQuestionHandler: ToolHandler = async (input, signal, context) => {
   if (!input || typeof input !== 'object') {
     return { content: 'Invalid input: expected an object', isError: true };
   }
@@ -123,7 +123,12 @@ export const askQuestionHandler: ToolHandler = async (input, signal) => {
     ...(obj['allow_custom'] !== undefined && { allowCustom: Boolean(obj['allow_custom']) }),
   };
 
-  const result = await elicitationRouter.route(request, { signal });
+  const result = await elicitationRouter.route(request, {
+    signal,
+    // Marks this session's presence file as blocked-on-human for the duration of
+    // the prompt (no-op when the dispatcher supplied no id).
+    ...(context?.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
+  });
   // Contract: only `decline` (no handler installed) and `cancel` (user
   // interrupted) are surfaced to the agent as tool errors. `accept` and
   // `skip` are both successful outcomes — `skip` is the deliberate

@@ -91,6 +91,21 @@ export interface ToolHandlerContext {
    * invocations that construct a context without a live dispatch cycle.
    */
   toolUseId?: string;
+  /**
+   * Session id of the session executing this tool call. Forwarded by the
+   * dispatcher from its construction-bound id.
+   *
+   * Consumed by the human-blocking handlers (`ask_question`, `exit_plan_mode`),
+   * which pass it into `elicitationRouter.route()` so the router can stamp a
+   * `blockedSince` marker on THIS session's presence file while the operator is
+   * being prompted. The router is module-scope and a process can host several
+   * concurrent top-level sessions, so the id has to arrive per-call — there is no
+   * safe process-global "current session".
+   *
+   * Optional: absent for inline test invocations and for dispatchers constructed
+   * without a session id, in which case the blocked marker is simply not written.
+   */
+  sessionId?: string;
 }
 
 /**

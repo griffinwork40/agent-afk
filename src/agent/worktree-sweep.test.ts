@@ -1576,6 +1576,89 @@ describe('dead-owner — live-session protection', () => {
     expect(after.candidates.filter((c) => c.verdict === 'dead-owner')).toHaveLength(0);
     expect(after.removed).not.toContain(worktreePath);
   });
+
+  it('end-to-end: a REAL blockedSince write does not perturb the in-use guard', async () => {
+    // The sweep decides whether a worktree is in use by reading presence records
+    // (`readPresenceFiles` → `isPathWithin(presence.cwd, worktreePath)`), so it is
+    // the safety-critical consumer of this file format: a record it fails to parse
+    // is a worktree reaped out from under a live session. `blockedSince` is an
+    // additive optional field, but "additive is safe" is exactly the assumption
+    // that deserves a test rather than trust — presence-surface.test.ts exists
+    // because a format change silently broke /watch.
+    //
+    // Composes the REAL setPresenceBlocked writer with the REAL readPresenceFiles
+    // reader the daemon sweep uses, and asserts the spare verdict is invariant
+    // across set → clear. The creator pid is DEAD, so presence.cwd is the ONLY
+    // thing sparing this worktree: if a blocked write corrupted or dropped the
+    // record, the verdict would flip straight back to 'dead-owner'.
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await import('./awareness/presence.js');
+
+    const deadOwnerPid = findDeadPid();
+    const worktreePath = join(afkWorktreesDir, 'afk-e2e-blocked-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        pid: deadOwnerPid,
+        createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/e2e-blocked-wt',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) return { stdout: porcelainOut, stderr: '' };
+      if (args.includes('status') && args.includes('--porcelain')) return { stdout: '', stderr: '' };
+      if (args.includes('rev-list') && args.includes('--count')) return { stdout: '0\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const sweepOpts = {
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: true,
+      telemetryPath: telemetryFile,
+      readPresence: readPresenceFiles,
+    };
+
+    const sessionId = 'e2e-presence-blocked';
+    await writePresenceFile({
+      sessionId,
+      surface: 'cli',
+      cwd: worktreePath, // live session working INSIDE the worktree
+      startedAt: new Date().toISOString(),
+      model: { provider: 'anthropic-direct', name: 'test-model' },
+      workspace: { branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null },
+      pid: process.pid, // alive — this test process
+    });
+
+    // Baseline: live session inside the worktree → spared.
+    const baseline = await runSweep(sweepOpts);
+    expect(baseline.candidates.filter((c) => c.verdict === 'dead-owner')).toHaveLength(0);
+
+    // Session blocks on a human (e.g. a path-approval prompt) → still spared.
+    await setPresenceBlocked(sessionId, true);
+    const blockedRec = (await readPresenceFiles()).find((r) => r.sessionId === sessionId);
+    expect(blockedRec?.blockedSince).toBeDefined();
+    expect(blockedRec?.cwd).toBe(worktreePath); // the guard's input survived the write
+    const whileBlocked = await runSweep(sweepOpts);
+    expect(whileBlocked.candidates.filter((c) => c.verdict === 'dead-owner')).toHaveLength(0);
+    expect(whileBlocked.removed).not.toContain(worktreePath);
+
+    // Operator answers → marker cleared, verdict unchanged.
+    await setPresenceBlocked(sessionId, false);
+    const afterClear = await runSweep(sweepOpts);
+    expect(afterClear.candidates.filter((c) => c.verdict === 'dead-owner')).toHaveLength(0);
+    expect(afterClear.removed).not.toContain(worktreePath);
+  });
 });
 
 // ---------------------------------------------------------------------------

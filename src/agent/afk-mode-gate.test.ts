@@ -695,3 +695,74 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// blockedSince marker: session-id sourcing
+// ---------------------------------------------------------------------------
+
+describe('createAfkModeGate — blocked-marker session id', () => {
+  const HIGH_RISK = {
+    event: 'PreToolUse',
+    toolName: 'bash',
+    input: { command: 'rm -rf build' },
+  } as const;
+
+  type RouteOpts = { signal: AbortSignal; onActive?: () => void; sessionId?: string };
+  const approve = (seen: { opts?: RouteOpts }) =>
+    vi.fn(async (_req: unknown, opts: RouteOpts): Promise<ElicitationResult> => {
+      seen.opts = opts;
+      return { action: 'accept', content: { choice: 'approve' } };
+    });
+
+  // Contract: the REPL builds ONE swap-stable hook registry BEFORE the provider
+  // (and therefore the session id) exists, so a gate constructed with no
+  // sessionId option is the REPL's real shape. Without the per-call id the
+  // marker is silently never written on the primary interactive surface.
+  it('uses the per-call context sessionId when the gate was built without one', async () => {
+    const seen: { opts?: RouteOpts } = {};
+    const route = approve(seen);
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+
+    await gate({ ...HIGH_RISK, sessionId: 'per-call-session' });
+
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(seen.opts?.sessionId).toBe('per-call-session');
+  });
+
+  it('falls back to the construction-time sessionId when the context carries none', async () => {
+    const seen: { opts?: RouteOpts } = {};
+    const route = approve(seen);
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+      route,
+      sessionId: 'constructed-session',
+    });
+
+    await gate({ ...HIGH_RISK });
+
+    expect(seen.opts?.sessionId).toBe('constructed-session');
+  });
+
+  it('prefers the per-call sessionId over a stale construction-time one', async () => {
+    const seen: { opts?: RouteOpts } = {};
+    const route = approve(seen);
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+      route,
+      sessionId: 'stale-session',
+    });
+
+    await gate({ ...HIGH_RISK, sessionId: 'live-session' });
+
+    expect(seen.opts?.sessionId).toBe('live-session');
+  });
+
+  it('omits sessionId entirely when neither source supplies one (never a wrong-session marker)', async () => {
+    const seen: { opts?: RouteOpts } = {};
+    const route = approve(seen);
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+
+    await gate({ ...HIGH_RISK });
+
+    expect(seen.opts).toBeDefined();
+    expect('sessionId' in seen.opts!).toBe(false);
+  });
+});
