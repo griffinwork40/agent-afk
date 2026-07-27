@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.1] - 2026-07-27
+
+### Fixed
+- route sub-agent lane and /bgsub width through getTerminalWidth (#720) (c7e5996)
+
 ## [5.81.0] - 2026-07-27
 
 ### Added
