@@ -532,3 +532,96 @@ describe('setPresenceBlocked', () => {
     expect(fs.readFileSync(p, 'utf8')).toBe('{not json');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-session write serialization
+// ---------------------------------------------------------------------------
+
+describe('presence write serialization', () => {
+  // Invariant under test: every presence mutator is a read → modify → write
+  // cycle that awaits between the read and the write. Two overlapping calls for
+  // one session therefore both read the SAME pre-mutation record, and the later
+  // write drops the earlier mutation unless the writes are serialized per
+  // session. These assertions are deliberately cross-FIELD: whichever write
+  // happens to land last, an unserialized implementation can only ever preserve
+  // one of the two mutations, so the test fails 100% of the time rather than
+  // flaking on fs scheduling.
+  it('does not drop a concurrent mutation to a different field (lost update)', async () => {
+    const { writePresenceFile, setPresenceBlocked, setPresenceAfk, readPresenceFiles } =
+      await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'race-1' }));
+
+    // Fire both WITHOUT awaiting the first, so the two read-modify-write cycles
+    // overlap exactly as the elicitation router's unawaited set/clear pair does.
+    await Promise.all([setPresenceBlocked('race-1', true), setPresenceAfk('race-1', true)]);
+
+    const rec = (await readPresenceFiles())[0]!;
+    expect(rec.blockedSince).toBeDefined();
+    expect(rec.afk).toBe(true);
+  });
+
+  it('preserves every mutation across three overlapping writers', async () => {
+    const { writePresenceFile, setPresenceBlocked, setPresenceAfk, updatePresenceCwd, readPresenceFiles } =
+      await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'race-2', cwd: '/tmp/before' }));
+
+    await Promise.all([
+      setPresenceBlocked('race-2', true),
+      setPresenceAfk('race-2', true),
+      updatePresenceCwd('race-2', '/tmp/after'),
+    ]);
+
+    const rec = (await readPresenceFiles())[0]!;
+    expect(rec.blockedSince).toBeDefined();
+    expect(rec.afk).toBe(true);
+    expect(rec.cwd).toBe('/tmp/after');
+  });
+
+  it('applies an unawaited set then clear in call order, leaving no stale marker', async () => {
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'race-3' }));
+
+    // The router's exact shape: set fired and NOT awaited, clear fired while the
+    // set's write is still in flight. Serialized, the clear always lands last.
+    const set = setPresenceBlocked('race-3', true);
+    const clear = setPresenceBlocked('race-3', false);
+    await Promise.all([set, clear]);
+
+    expect((await readPresenceFiles())[0]!.blockedSince).toBeUndefined();
+  });
+
+  it('does not let a concurrent mutator resurrect a removed presence file', async () => {
+    const { writePresenceFile, removePresenceFile, setPresenceBlocked, readPresenceFiles } =
+      await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'race-4' }));
+
+    // A session exiting while a blocked-clear is still in flight: an unordered
+    // unlink lets the mutator's writeFile recreate the file for a dead session.
+    await Promise.all([setPresenceBlocked('race-4', true), removePresenceFile('race-4')]);
+
+    expect(await readPresenceFiles()).toHaveLength(0);
+  });
+
+  it('serializes per session, so one session does not swallow another\'s write', async () => {
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'race-5a' }));
+    await writePresenceFile(mkInfo({ sessionId: 'race-5b' }));
+
+    await Promise.all([setPresenceBlocked('race-5a', true), setPresenceBlocked('race-5b', true)]);
+
+    const byId = new Map((await readPresenceFiles()).map((r) => [r.sessionId, r]));
+    expect(byId.get('race-5a')!.blockedSince).toBeDefined();
+    expect(byId.get('race-5b')!.blockedSince).toBeDefined();
+  });
+
+  it('keeps working after a tail drains (queue entry is evicted, not leaked)', async () => {
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'race-6' }));
+
+    await setPresenceBlocked('race-6', true);
+    await setPresenceBlocked('race-6', false);
+    await setPresenceBlocked('race-6', true);
+
+    expect((await readPresenceFiles())[0]!.blockedSince).toBeDefined();
+  });
+});

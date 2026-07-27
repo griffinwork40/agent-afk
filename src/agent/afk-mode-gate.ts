@@ -116,8 +116,15 @@ export interface AfkModeGateOptions {
    * Session id of the session this gate guards. Forwarded into
    * `elicitationRouter.route()` so a pending high-risk-op approval stamps a
    * `blockedSince` marker on THIS session's presence file, making "your agent is
-   * waiting on you" visible to an out-of-process observer. Optional — absent
-   * means no marker is written (never a marker on the wrong session).
+   * waiting on you" visible to an out-of-process observer.
+   *
+   * FALLBACK ONLY: the per-call `PreToolUseContext.sessionId` takes precedence
+   * (see `requestApproval`). A registry built before its session exists — the
+   * REPL's swap-stable one — cannot supply this, so it is the per-call id that
+   * carries the marker on every dispatcher-backed surface. Set it for surfaces
+   * that know their id up front and do not route through a populated context
+   * (the daemon scheduler). Absent from both means no marker is written (never a
+   * marker on the wrong session).
    */
   sessionId?: string;
   /**
@@ -149,6 +156,7 @@ export function createAfkModeGate(
     toolName: string,
     input: unknown,
     signal?: AbortSignal,
+    callSessionId?: string,
   ): Promise<HookDecision> {
     const start = Date.now();
     const request = buildApprovalRequest(toolName, input);
@@ -212,11 +220,23 @@ export function createAfkModeGate(
       // than relying on the handler to observe the abort) guarantees progress
       // even for a handler that ignores its signal. The timer is armed via
       // onActive so it starts only when the prompt is actually shown.
+      // Contract: the per-call id from the hook context wins over the one
+      // captured at construction. The REPL builds ONE hook registry that is
+      // deliberately stable across session swaps and is constructed before the
+      // provider exists (interactive/bootstrap.ts), so there is no session id to
+      // pass at construction time and the captured value is permanently
+      // undefined there — a high-risk approval would prompt with no marker at
+      // all. The dispatcher populates `PreToolUseContext.sessionId` per call,
+      // which is the same source the path-approval hook already uses
+      // (tools/hooks/path-approval-hook.ts). The construction-time value stays
+      // as the fallback for surfaces that supply it and do not route through a
+      // dispatcher-populated context (the daemon scheduler).
+      const markSessionId = callSessionId ?? sessionId;
       outcome = await Promise.race([
         route(request, {
           signal: ac.signal,
           onActive: armTimer,
-          ...(sessionId !== undefined ? { sessionId } : {}),
+          ...(markSessionId !== undefined ? { sessionId: markSessionId } : {}),
         }),
         timeoutP,
       ]);
@@ -338,7 +358,7 @@ export function createAfkModeGate(
 
     // Main session: ask the operator to approve/deny (deny-on-timeout). Returns
     // a Promise<HookDecision>; the gate is registered `longRunning: true`.
-    return requestApproval(toolName, context.input, signal);
+    return requestApproval(toolName, context.input, signal, context.sessionId);
   };
 }
 

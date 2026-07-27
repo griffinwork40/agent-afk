@@ -172,6 +172,47 @@ async function ensurePresenceDir(): Promise<boolean> {
   }
 }
 
+// Invariant: presence writes for ONE session must land on disk in call order.
+// Every mutator below is a read → modify → write cycle that awaits between the
+// read and the write, so two overlapping calls for the same session both read
+// the pre-mutation record and the later write silently drops the earlier
+// mutation. This is not hypothetical for `blockedSince`: the elicitation router
+// fires its set and its paired clear WITHOUT awaiting either
+// (elicitation-router.ts:199,206) so telemetry can never delay an operator
+// prompt. A prompt that settles before the set's I/O completes therefore raced
+// its own clear — landing the set last strands a permanent "waiting on you"
+// marker, and landing a previous prompt's clear last erases the marker of the
+// next queued prompt. Both are the exact failure the set/clear pairing exists
+// to prevent, and neither is reachable once the writes are ordered.
+//
+// Serializing per session rather than globally keeps unrelated sessions
+// independent: one wedged filesystem write cannot stall another session's
+// heartbeat. Every writer routes through here, so the fix also closes the
+// pre-existing lost-update race between `touchPresenceHeartbeat` and the other
+// mutators. `removePresenceFileSync` is deliberately NOT enrolled — it runs in
+// a process-exit handler where a promise queue cannot be drained.
+const presenceWriteTails = new Map<string, Promise<void>>();
+
+/**
+ * Chain `mutate` onto this session's serialized write tail and resolve once it
+ * has run. Rejection of a predecessor never blocks a successor (`mutate` runs on
+ * both settle paths); every caller's own body swallows its errors, so the tail
+ * itself is not expected to reject.
+ */
+function enqueuePresenceWrite(sessionId: string, mutate: () => Promise<void>): Promise<void> {
+  const previous = presenceWriteTails.get(sessionId) ?? Promise.resolve();
+  const tail = previous.then(mutate, mutate);
+  presenceWriteTails.set(sessionId, tail);
+  // Drop the entry once this call is the last one queued, so a long-lived
+  // process hosting many short sessions does not retain a promise per session
+  // forever. The identity check is what makes eviction safe: a later enqueue has
+  // already replaced the entry, and that newer tail must survive.
+  void tail.catch(() => undefined).then(() => {
+    if (presenceWriteTails.get(sessionId) === tail) presenceWriteTails.delete(sessionId);
+  });
+  return tail;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -184,24 +225,26 @@ async function ensurePresenceDir(): Promise<boolean> {
  * best-effort. The session starts normally regardless.
  */
 export async function writePresenceFile(info: PresenceFileInfo): Promise<void> {
-  try {
-    const ok = await ensurePresenceDir();
-    if (!ok) return;
-    const filePath = presenceFilePath(info.sessionId);
-    // Stamp the schema version and an initial heartbeat HERE rather than at the
-    // call sites: more than one provider writes presence (anthropic-direct and
-    // openai-compatible), so a per-caller stamp would silently miss a writer the
-    // moment a third surface is added. Caller-supplied values win, which keeps
-    // tests able to pin a specific version or heartbeat.
-    const record: PresenceFileInfo = {
-      schemaVersion: PRESENCE_SCHEMA_VERSION,
-      heartbeatAt: new Date().toISOString(),
-      ...info,
-    };
-    await writeFile(filePath, JSON.stringify(record, null, 2), 'utf8');
-  } catch {
-    // Best-effort — swallow silently.
-  }
+  return enqueuePresenceWrite(info.sessionId, async () => {
+    try {
+      const ok = await ensurePresenceDir();
+      if (!ok) return;
+      const filePath = presenceFilePath(info.sessionId);
+      // Stamp the schema version and an initial heartbeat HERE rather than at the
+      // call sites: more than one provider writes presence (anthropic-direct and
+      // openai-compatible), so a per-caller stamp would silently miss a writer the
+      // moment a third surface is added. Caller-supplied values win, which keeps
+      // tests able to pin a specific version or heartbeat.
+      const record: PresenceFileInfo = {
+        schemaVersion: PRESENCE_SCHEMA_VERSION,
+        heartbeatAt: new Date().toISOString(),
+        ...info,
+      };
+      await writeFile(filePath, JSON.stringify(record, null, 2), 'utf8');
+    } catch {
+      // Best-effort — swallow silently.
+    }
+  });
 }
 
 /**
@@ -216,15 +259,17 @@ export async function writePresenceFile(info: PresenceFileInfo): Promise<void> {
  * throws: presence is non-critical and the session must proceed regardless.
  */
 export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
-  try {
-    const filePath = presenceFilePath(sessionId);
-    const raw = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as PresenceFileInfo;
-    parsed.heartbeatAt = new Date().toISOString();
-    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
-  } catch {
-    // Best-effort — presence is non-critical.
-  }
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      const filePath = presenceFilePath(sessionId);
+      const raw = await readFile(filePath, 'utf8');
+      const parsed = JSON.parse(raw) as PresenceFileInfo;
+      parsed.heartbeatAt = new Date().toISOString();
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+    } catch {
+      // Best-effort — presence is non-critical.
+    }
+  });
 }
 
 /**
@@ -235,15 +280,17 @@ export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
  * keyboard elicitation path works regardless). Preserves every other field.
  */
 export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<void> {
-  try {
-    const filePath = presenceFilePath(sessionId);
-    const raw = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as PresenceFileInfo;
-    parsed.afk = afk;
-    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
-  } catch {
-    // Best-effort — presence is non-critical.
-  }
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      const filePath = presenceFilePath(sessionId);
+      const raw = await readFile(filePath, 'utf8');
+      const parsed = JSON.parse(raw) as PresenceFileInfo;
+      parsed.afk = afk;
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+    } catch {
+      // Best-effort — presence is non-critical.
+    }
+  });
 }
 
 /**
@@ -266,19 +313,21 @@ export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<v
  * and by presence-file removal at process exit.
  */
 export async function setPresenceBlocked(sessionId: string, blocked: boolean): Promise<void> {
-  try {
-    const filePath = presenceFilePath(sessionId);
-    const raw = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as PresenceFileInfo;
-    if (blocked) {
-      parsed.blockedSince = new Date().toISOString();
-    } else {
-      delete parsed.blockedSince;
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      const filePath = presenceFilePath(sessionId);
+      const raw = await readFile(filePath, 'utf8');
+      const parsed = JSON.parse(raw) as PresenceFileInfo;
+      if (blocked) {
+        parsed.blockedSince = new Date().toISOString();
+      } else {
+        delete parsed.blockedSince;
+      }
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+    } catch {
+      // Best-effort — presence is non-critical.
     }
-    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
-  } catch {
-    // Best-effort — presence is non-critical.
-  }
+  });
 }
 
 /**
@@ -293,15 +342,17 @@ export async function setPresenceBlocked(sessionId: string, blocked: boolean): P
  * every other field.
  */
 export async function updatePresenceCwd(sessionId: string, cwd: string): Promise<void> {
-  try {
-    const filePath = presenceFilePath(sessionId);
-    const raw = await readFile(filePath, 'utf8');
-    const parsed = JSON.parse(raw) as PresenceFileInfo;
-    parsed.cwd = cwd;
-    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
-  } catch {
-    // Best-effort — presence is non-critical.
-  }
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      const filePath = presenceFilePath(sessionId);
+      const raw = await readFile(filePath, 'utf8');
+      const parsed = JSON.parse(raw) as PresenceFileInfo;
+      parsed.cwd = cwd;
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+    } catch {
+      // Best-effort — presence is non-critical.
+    }
+  });
 }
 
 /**
@@ -309,13 +360,20 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
  *
  * Safe to call even if the file does not exist (ENOENT is swallowed).
  * All other errors are also swallowed — presence cleanup is best-effort.
+ *
+ * Enrolled in the same per-session write tail as the mutators: an unordered
+ * delete racing an in-flight read-modify-write lets the mutator's `writeFile`
+ * resurrect the file after the unlink, leaving a presence record for an exited
+ * session that `readPresenceFiles()` then reports with a dead pid.
  */
 export async function removePresenceFile(sessionId: string): Promise<void> {
-  try {
-    await unlink(presenceFilePath(sessionId));
-  } catch {
-    // ENOENT or any other error — swallow.
-  }
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      await unlink(presenceFilePath(sessionId));
+    } catch {
+      // ENOENT or any other error — swallow.
+    }
+  });
 }
 
 /**
