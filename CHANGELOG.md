@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.0] - 2026-07-27
+
+### Added
+- emit a blocked-on-human marker while an elicitation waits (#718) (ad596c8)
+
 ## [5.80.2] - 2026-07-26
 
 ### Fixed
