@@ -51,7 +51,7 @@ const MAX_SUBAGENT_PREVIEW_LINES = 4;
  * long. Most turns finish faster than this and now render no progress noise at
  * all — the live preview goes straight from `Thinking…` to the answer.
  *
- * Withheld lines are still recorded (see `progressLines`); when the gate opens
+ * Withheld lines are still recorded (see `progressEntries`); when the gate opens
  * the rolling region renders the most recent ones, so nothing is lost — it is a
  * render delay, not a drop. Overridable per call via `options.progressDelayMs`
  * (tests pass 0 to assert rendering deterministically).
@@ -240,6 +240,134 @@ export function renderProgressRegion(lines: readonly string[]): string {
 }
 
 /**
+ * One recorded `◦` tool-progress round: the rendered label plus the offset into
+ * the content buffer at which it occurred, so the LIVE PREVIEW can place it
+ * chronologically instead of piling every label into a trailing footer.
+ */
+export type ProgressEntry = { readonly label: string; readonly at: number };
+
+/**
+ * Max progress entries retained. Only the last MAX_PROGRESS_LINES render a
+ * LABEL (the same global cap the footer enforces); older retained entries render
+ * a bare line break so narration either side of a trimmed round stays separated
+ * instead of running together. Past this the oldest are dropped outright, so the
+ * list cannot grow with turn length.
+ */
+const MAX_PROGRESS_ENTRIES = 32;
+
+/**
+ * Contract: return an offset at or after `pos` at which a `◦` line may be
+ * inserted without corrupting markdown that `markdownToTelegramHtml` parses
+ * POSITIONALLY. That formatter extracts fenced blocks and inline-code spans
+ * before its emphasis passes and rewrites `[text](url)` links after them
+ * (formatter.ts), so a label spliced inside an unclosed fence, between the
+ * backticks of a span, or into a half-written link is swallowed into
+ * `<pre>`/`<code>`/an `href` — and broken backtick parity shifts which later
+ * spans code-ify. When `pos` is unsafe this degrades to the END of the text,
+ * i.e. exactly where the legacy footer put the line: never worse than before.
+ */
+function safeSplicePoint(text: string, pos: number): number {
+  if (pos <= 0) return 0;
+  if (pos >= text.length) return text.length;
+  // Drop COMPLETE fenced blocks first; a leftover ``` means the offset sits
+  // inside a fence the model has not closed yet (routine mid-stream).
+  //
+  // External constraint: the pattern MIRRORS the formatter's own fence regex
+  // (formatter.ts step 2 — line-anchored, newline required after the opening
+  // fence). An unanchored /```[\s\S]*?```/ would count a single-line ```word```
+  // as a complete block that the formatter does NOT see as one, report the
+  // offset safe, and let the label fall into the formatter's inline-code pass.
+  // Both parse models must agree or "safe" means nothing.
+  const prefix = text.slice(0, pos).replace(/^ {0,3}```[\w]*\n[\s\S]*?```/gm, '');
+  if (prefix.includes('```')) return text.length;
+  // Odd backtick count => the offset falls inside an inline-code span.
+  if (((prefix.match(/`/g)?.length) ?? 0) % 2 !== 0) return text.length;
+  // A tool boundary routinely splits a link across rounds: `[docs](https://exa`
+  // now, `mple.com)` next round. formatter.ts step 7 rewrites `[text](url)`
+  // positionally, so a label spliced into either half is absorbed into the
+  // generated href — hiding the status AND corrupting the link target. Cheap
+  // prefix scan for the two open states, in the same spirit as the checks
+  // above; deliberately not a markdown parser.
+  const openBracket = prefix.lastIndexOf('[');
+  const closeBracket = prefix.lastIndexOf(']');
+  // `[label` with no `]` written yet.
+  if (openBracket > closeBracket) return text.length;
+  // `](url` with the closing paren still unwritten.
+  if (
+    closeBracket >= 0 &&
+    prefix[closeBracket + 1] === '(' &&
+    !prefix.includes(')', closeBracket + 1)
+  ) {
+    return text.length;
+  }
+  return pos;
+}
+
+/**
+ * Render the live preview with `◦` progress lines interleaved chronologically
+ * into `text` at the offsets where they occurred, instead of collected in a
+ * trailing footer. Pure + exported for unit tests.
+ *
+ * Invariant: the GLOBAL cap on rendered labels is preserved — only the last
+ * MAX_PROGRESS_LINES entries emit a `◦` label no matter how many are passed, so a
+ * tool-heavy turn keeps a fixed-height status budget. That is the bound PR #702
+ * established when it replaced an in-buffer splice, and it holds here for a
+ * structural reason: trimming happens over the ENTRY LIST before rendering and
+ * `text` is never mutated, so the failure mode of the reverted design — where
+ * bounding the region required deleting from the middle of the content buffer,
+ * which a following content chunk then froze in place — cannot recur.
+ *
+ * Offsets are clamped MONOTONICALLY into `text`, which covers mid-turn
+ * TRUNCATION (`stream_retry` rewinding the buffer): an offset past the shortened
+ * text collapses to the end, i.e. footer placement. It does NOT cover the
+ * end-of-turn wholesale replace by the authoritative assistant message, whose
+ * replacement text is frequently LONGER than an early offset — so the clamp
+ * never fires and the offset is in range but meaningless. That case is handled
+ * at the call site, which re-bases retained offsets to the new buffer length
+ * before rendering (see the assistant-`message` handler in streamResponse).
+ */
+export function renderInterleavedPreview(
+  text: string,
+  entries: readonly ProgressEntry[],
+): string {
+  if (entries.length === 0) return text;
+  const labelFrom = Math.max(0, entries.length - MAX_PROGRESS_LINES);
+  let out = '';
+  let pos = 0;
+  // Suppresses a leading/duplicate break when consecutive rounds sit at the SAME
+  // offset (a progress-only turn records every entry at offset 0): a bare break
+  // is only meaningful when real narration separated the two rounds.
+  let lastEmitAt = 0;
+  entries.forEach((entry, i) => {
+    const at = safeSplicePoint(text, Math.min(Math.max(entry.at, pos), text.length));
+    out += text.slice(pos, at);
+    pos = at;
+    // Offsets are forced monotonic and safeSplicePoint is idempotent, so a NEXT
+    // raw offset at or before the current effective one renders at EXACTLY this
+    // position. That entry then supplies the `\n` separator itself, and emitting
+    // another one here would leave a stray blank line between the narration and
+    // its label.
+    const nextRendersHere = (entries[i + 1]?.at ?? Infinity) <= at;
+    if (i >= labelFrom) {
+      out += `\n${entry.label}`;
+      lastEmitAt = at;
+      // Terminate the label: the next iteration appends `text.slice(pos, at)` —
+      // the following round's narration — which absorbs into the label when it
+      // does not start with a break (`◦ Using list schedulesNow I run…`).
+      // Invariant: only when narration actually follows HERE and does not
+      // already begin with `\n`. A label at END of text must stay bare, or a
+      // progress-only turn stops being byte-identical to renderProgressRegion()
+      // and finalBody()'s footer shape parity goes with it.
+      if (!nextRendersHere && at < text.length && text[at] !== '\n') out += '\n';
+    } else if (at > lastEmitAt && !nextRendersHere) {
+      out += '\n';
+      lastEmitAt = at;
+    }
+  });
+  return out + text.slice(pos);
+}
+
+/**
  * One-line activity receipt appended to the CLEAN final message, replacing the
  * `◦` progress log that cleanFinal deletes: the turn's cost stays visible
  * without the per-round noise. Empty when no tool work happened, so plain
@@ -360,23 +488,29 @@ export async function streamResponse(
   let subagentSteps = 0;
   const recentSubagentSteps: string[] = [];
 
-  // Invariant: the `◦` tool-progress region is ONE bounded footer of the live
-  // preview, never spliced into `accumulated`. Keeping it out of the content
-  // buffer is what makes the MAX_PROGRESS_LINES bound hold GLOBALLY: an earlier
-  // design rewrote a region inside `accumulated` at an offset, which bounded
-  // only a run of CONSECUTIVE progress events — a stream that alternates content
-  // with tool rounds (what the anthropic-direct and openai-compatible loops
-  // actually emit) froze each run in place and grew without limit anyway. As a
-  // footer the region is inherently single and replaceable, so no writer of
-  // `accumulated` has to coordinate with it. Same treatment the sub-agent lane
-  // already uses (renderSubagentFooter).
+  // Invariant: `accumulated` is NEVER mutated to carry `◦` progress lines — they
+  // live only in `progressEntries` and are composed in at render time. This is
+  // load-bearing, not stylistic. An earlier design rewrote a region INSIDE
+  // `accumulated` at an offset; because a following content chunk froze that
+  // region in place, every later progress event started a new one, so the
+  // MAX_PROGRESS_LINES bound held only within a run of CONSECUTIVE progress
+  // events and a stream alternating content with tool rounds (what the
+  // anthropic-direct and openai-compatible loops actually emit) grew without
+  // limit anyway. Trimming over the ENTRY LIST keeps the bound global.
+  //
+  // The live preview interleaves those entries chronologically
+  // (renderInterleavedPreview); `finalBody()` deliberately keeps the legacy
+  // trailing footer, because finalBody IS delivered to the user on a
+  // progress-only or non-terminal-exit turn (see the `done` handler and the
+  // post-loop overflow block) and that delivered output is held byte-stable.
+  // Interleaving is therefore a PREVIEW-only concern by construction.
   const progressDelayMs = options.progressDelayMs ?? PROGRESS_START_DELAY_MS;
   const turnStartedAt = Date.now();
-  let progressLines: string[] = [];
+  let progressEntries: ProgressEntry[] = [];
   // Total tool rounds seen this turn (never trimmed) — drives the activity receipt.
   let progressRounds = 0;
   // Latency gate: closed until the turn has run progressDelayMs, so short turns
-  // render no `◦` churn at all. Withheld lines stay in `progressLines`.
+  // render no `◦` churn at all. Withheld lines stay in `progressEntries`.
   let progressGateOpen = progressDelayMs <= 0;
   let progressTimer: ReturnType<typeof setTimeout> | null = null;
   // Set once a terminal event or the finally-block runs, so a timer callback
@@ -497,14 +631,22 @@ export async function streamResponse(
   // gate happened to withhold. Every terminal/fallback delivery path uses this;
   // `accumulated` alone would be empty on a gated progress-only turn and would
   // strand the user on the bare `Thinking…` placeholder.
-  const finalBody = (): string => accumulated + renderProgressRegion(progressLines);
+  // Invariant: keeps the LEGACY trailing-footer shape. finalBody is not
+  // preview-only — it is the text actually delivered when `answerText` is empty
+  // (progress-only turn) or when the stream ends without a terminal event, so its
+  // bytes are held stable and the interleave is confined to `livePreview()`.
+  const finalBody = (): string =>
+    accumulated + renderProgressRegion(progressEntries.map((e) => e.label));
 
-  // Live preview = content + GATED progress region + bounded sub-agent footer.
-  // Used for every in-turn edit so progress and sub-agent activity stay visible
-  // without either region growing one line per tool call.
+  // Live preview = content with the GATED progress lines interleaved at the
+  // offsets where they occurred, plus the bounded sub-agent footer. Used for every
+  // in-turn edit so progress and sub-agent activity stay visible without either
+  // region growing one line per tool call. Interleaving (rather than a trailing
+  // footer) is what keeps each round's narration next to the tool round it
+  // describes, and supplies the line break between consecutive rounds that
+  // `accumulated += content` does not.
   const livePreview = (): string =>
-    accumulated
-    + (progressGateOpen ? renderProgressRegion(progressLines) : '')
+    (progressGateOpen ? renderInterleavedPreview(accumulated, progressEntries) : accumulated)
     + renderSubagentFooter(subagentSteps, recentSubagentSteps);
 
   try {
@@ -683,6 +825,20 @@ export async function streamResponse(
           accumulated = event.message.content;
           answerText = event.message.content;
           inContentRun = false;
+          // Ordering constraint: re-base BEFORE rendering. This assignment
+          // replaced the buffer wholesale, so every offset recorded against the
+          // OLD buffer now indexes unrelated text. Both providers emit this
+          // message once per turn carrying only the final round's text, so an
+          // early offset is usually still IN RANGE of the replacement — the
+          // monotonic clamp inside renderInterleavedPreview never fires and the
+          // label splices mid-word. Re-base to the new length so the preview
+          // degrades to footer placement, which is what the interleave contract
+          // promises for an offset that no longer means anything.
+          //
+          // Copy, never mutate: entries are readonly and `finalBody()` maps the
+          // same list for its byte-stable legacy footer, so `label` must survive
+          // untouched — only `at` moves.
+          progressEntries = progressEntries.map((e) => ({ ...e, at: accumulated.length }));
           await sendOrEdit(livePreview());
         }
         // Lane D — progress summaries appear in the response as dim lines
@@ -717,9 +873,21 @@ export async function streamResponse(
           // that interleaves content with tool rounds, not just within one run.
           // Repeated tool categories add no information to a rolling mobile
           // preview: count every round for the receipt, but render duplicates once.
-          if (progressLines[progressLines.length - 1] !== line) progressLines.push(line);
-          if (progressLines.length > MAX_PROGRESS_LINES) {
-            progressLines = progressLines.slice(-MAX_PROGRESS_LINES);
+          //
+          // Ordering constraint (externally governed by the provider's event
+          // order): `at` must be sampled from `accumulated` BEFORE any later
+          // content chunk of the NEXT round is appended. A `progress` event is
+          // emitted only after a round's text deltas are complete — the
+          // anthropic-direct loop yields it after `turnResult` is resolved, the
+          // openai-compatible loop after `runIteration` returns — so sampling
+          // here lands exactly on the boundary between two rounds of narration.
+          // Deferring the sample would place the line inside the following round's
+          // prose.
+          if (progressEntries[progressEntries.length - 1]?.label !== line) {
+            progressEntries.push({ label: line, at: accumulated.length });
+          }
+          if (progressEntries.length > MAX_PROGRESS_ENTRIES) {
+            progressEntries = progressEntries.slice(-MAX_PROGRESS_ENTRIES);
           }
           if (!progressGateOpen && Date.now() - turnStartedAt >= progressDelayMs) {
             progressGateOpen = true;
