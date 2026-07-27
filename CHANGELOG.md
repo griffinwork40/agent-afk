@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.2] - 2026-07-27
+
+### Fixed
+- interleave ◦ progress lines into the live preview chronologically (#719) (4490337)
+
 ## [5.81.1] - 2026-07-27
 
 ### Fixed
