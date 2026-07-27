@@ -34,6 +34,7 @@
 
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import { pushIfConfigured } from '../telegram/push.js';
+import { setPresenceBlocked } from './awareness/presence.js';
 
 export type ElicitationHandler = (
   request: ElicitationRequest,
@@ -79,6 +80,32 @@ function notifyUnattendedElicitation(request: ElicitationRequest): void {
   }
 }
 
+/**
+ * Set/clear the presence-file blocked marker for the session that owns this
+ * prompt, so an out-of-process observer can see "this agent is waiting on you".
+ *
+ * Fire-and-forget by construction: presence is best-effort telemetry and an
+ * elicitation must never be delayed — let alone failed — by a file write.
+ * `setPresenceBlocked` already swallows its own errors; the extra `.catch` and
+ * try/catch here guarantee that even a synchronous throw cannot escape into the
+ * router's must-always-resolve path.
+ *
+ * No-op without a session id. The id is optional because `route()` is
+ * module-scope with several callers, and a process can host multiple concurrent
+ * top-level sessions (the Telegram bot keeps one session per chat and runs turns
+ * detached) — so there is no safe process-global "current session" to fall back
+ * on. A caller that cannot supply an id simply gets no marker, never a marker
+ * written onto some other session's file.
+ */
+function markBlocked(sessionId: string | undefined, blocked: boolean): void {
+  if (sessionId === undefined || sessionId === '') return;
+  try {
+    void setPresenceBlocked(sessionId, blocked).catch(() => undefined);
+  } catch {
+    // Never let presence telemetry affect the elicitation path.
+  }
+}
+
 class ElicitationRouter {
   private handler: ElicitationHandler | null = null;
   private queue: Promise<void> = Promise.resolve();
@@ -110,7 +137,7 @@ class ElicitationRouter {
 
   route(
     request: ElicitationRequest,
-    options: { signal: AbortSignal; onActive?: () => void },
+    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
   ): Promise<ElicitationResult> {
     // Fast-path: already aborted before entering the queue
     if (options.signal.aborted) return Promise.resolve(DECLINE);
@@ -163,12 +190,20 @@ class ElicitationRouter {
           // DECLINE paths). It is observational only: a throwing callback must
           // never break the queue or the "must always resolve" invariant.
           try { options.onActive?.(); } catch { /* observational only */ }
+          // Same edge as onActive, and deliberately inside the same try/finally:
+          // the on-disk blocked marker is SET only where a human is really about
+          // to be prompted, and the paired CLEAR below runs on every settle path
+          // (answer, skip, decline, handler throw, turn abort). An unpaired set
+          // would strand a stale "waiting on you" marker for the rest of the
+          // session's life, so the two must never be separated.
+          markBlocked(options.sessionId, true);
           const result = await Promise.race([
             capturedHandler(request, options).catch(() => DECLINE),
             abortPromise,
           ]);
           resolveResult(result);
         } finally {
+          markBlocked(options.sessionId, false);
           options.signal.removeEventListener('abort', onAbort);
         }
       } finally {
@@ -197,7 +232,7 @@ export const elicitationRouter = new ElicitationRouter();
  */
 export async function routeElicitation(
   request: ElicitationRequest,
-  options: { signal: AbortSignal; onActive?: () => void },
+  options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
 ): Promise<ElicitationResult> {
   return elicitationRouter.route(request, options);
 }

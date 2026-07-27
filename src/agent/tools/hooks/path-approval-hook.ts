@@ -330,6 +330,7 @@ async function preToolUseImpl(
     state,
     surface: opts.surface,
     ...(signal !== undefined ? { signal } : {}),
+    ...(context.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
   });
   state.inFlight.set(key, promptPromise);
   try {
@@ -488,8 +489,15 @@ async function promptForApproval(args: {
   surface: PathApprovalSurface;
   /** Turn/dispatch abort signal — cancels the pending prompt on teardown. */
   signal?: AbortSignal;
+  /**
+   * Session id of the session whose tool call triggered this prompt. Forwarded
+   * into the router so the pending approval marks THIS session's presence file
+   * as blocked-on-human. Optional — absent means no marker is written.
+   */
+  sessionId?: string;
 }): Promise<HookDecision> {
-  const { toolName, resolvedPath, capturedCwd, mode, grantManager, state, surface, signal } = args;
+  const { toolName, resolvedPath, capturedCwd, mode, grantManager, state, surface, signal, sessionId } =
+    args;
 
   // Show the symlink-resolved target when it differs from the displayed path so
   // the consent decision reflects the REAL destination — a workspace symlink
@@ -536,7 +544,10 @@ async function promptForApproval(args: {
     // signal forwarded here. Falling back to a never-aborting signal (no
     // forwarded signal) preserves prior behavior for surfaces/tests that
     // dispatch without one.
-    { signal: signal ?? new AbortController().signal },
+    {
+      signal: signal ?? new AbortController().signal,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    },
   );
 
   if (result.action !== 'accept') {

@@ -110,8 +110,16 @@ export interface AfkModeGateOptions {
    */
   route?: (
     request: ElicitationRequest,
-    options: { signal: AbortSignal; onActive?: () => void },
+    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
   ) => Promise<ElicitationResult>;
+  /**
+   * Session id of the session this gate guards. Forwarded into
+   * `elicitationRouter.route()` so a pending high-risk-op approval stamps a
+   * `blockedSince` marker on THIS session's presence file, making "your agent is
+   * waiting on you" visible to an out-of-process observer. Optional — absent
+   * means no marker is written (never a marker on the wrong session).
+   */
+  sessionId?: string;
   /**
    * Trace writer for structured audit events. When provided, the gate emits a
    * `hook_decision` event on every approval decision (approve, deny, timeout,
@@ -129,10 +137,13 @@ export function createAfkModeGate(
   const approvalTimeoutMs = opts?.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const promptForApproval = opts?.promptForApproval ?? true;
   const traceWriter = opts?.traceWriter;
+  const sessionId = opts?.sessionId;
   const route =
     opts?.route ??
-    ((request: ElicitationRequest, options: { signal: AbortSignal; onActive?: () => void }) =>
-      elicitationRouter.route(request, options));
+    ((
+      request: ElicitationRequest,
+      options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
+    ) => elicitationRouter.route(request, options));
 
   async function requestApproval(
     toolName: string,
@@ -201,7 +212,14 @@ export function createAfkModeGate(
       // than relying on the handler to observe the abort) guarantees progress
       // even for a handler that ignores its signal. The timer is armed via
       // onActive so it starts only when the prompt is actually shown.
-      outcome = await Promise.race([route(request, { signal: ac.signal, onActive: armTimer }), timeoutP]);
+      outcome = await Promise.race([
+        route(request, {
+          signal: ac.signal,
+          onActive: armTimer,
+          ...(sessionId !== undefined ? { sessionId } : {}),
+        }),
+        timeoutP,
+      ]);
     } finally {
       if (timer) clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onParentAbort);

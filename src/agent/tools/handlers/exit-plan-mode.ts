@@ -143,7 +143,12 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       choices,
     };
 
-    const result = await elicitationRouter.route(request, { signal });
+    const result = await elicitationRouter.route(request, {
+      signal,
+      // Marks this session's presence file as blocked-on-human while the operator
+      // decides (no-op when the dispatcher supplied no id).
+      ...(context?.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
+    });
 
     // No human reachable (no handler) or the user interrupted → stay in plan
     // mode and let the model keep refining. Not an error: declining to exit is

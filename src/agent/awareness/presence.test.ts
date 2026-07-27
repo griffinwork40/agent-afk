@@ -446,3 +446,89 @@ describe('readLivePresenceFiles', () => {
     expect(live.map((r) => r.sessionId)).toEqual(['no-hb']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// setPresenceBlocked — the blocked-on-human marker
+// ---------------------------------------------------------------------------
+
+describe('setPresenceBlocked', () => {
+  it('stamps an ISO timestamp on set and removes the key on clear', async () => {
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'blocked-1' }));
+
+    const before = Date.now();
+    await setPresenceBlocked('blocked-1', true);
+    const after = Date.now();
+
+    const set = (await readPresenceFiles())[0]!;
+    expect(typeof set.blockedSince).toBe('string');
+    const stamped = Date.parse(set.blockedSince!);
+    expect(Number.isNaN(stamped)).toBe(false);
+    // Within the call window (1s slack for clock granularity).
+    expect(stamped).toBeGreaterThanOrEqual(before - 1000);
+    expect(stamped).toBeLessThanOrEqual(after + 1000);
+
+    await setPresenceBlocked('blocked-1', false);
+    const cleared = (await readPresenceFiles())[0]!;
+    // Absence, not a sentinel — a reader tests presence of the key.
+    expect(cleared.blockedSince).toBeUndefined();
+    expect(Object.hasOwn(cleared, 'blockedSince')).toBe(false);
+  });
+
+  it('preserves every other field, including afk (they are independent)', async () => {
+    const { writePresenceFile, setPresenceAfk, setPresenceBlocked, readPresenceFiles } =
+      await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'blocked-2', cwd: '/tmp/keepme' }));
+    await setPresenceAfk('blocked-2', true);
+
+    await setPresenceBlocked('blocked-2', true);
+    const rec = (await readPresenceFiles())[0]!;
+
+    expect(rec.afk).toBe(true);                 // afk survives a blocked write
+    expect(rec.blockedSince).toBeDefined();     // both can be true at once
+    expect(rec.cwd).toBe('/tmp/keepme');
+    expect(rec.pid).toBe(process.pid);
+    expect(rec.surface).toBe('cli');
+    expect(rec.schemaVersion).toBe(1);          // additive field: no version bump
+
+    // Clearing blocked must not disturb the afk posture.
+    await setPresenceBlocked('blocked-2', false);
+    expect((await readPresenceFiles())[0]!.afk).toBe(true);
+  });
+
+  it('is a silent no-op for a session with no presence file (subagents)', async () => {
+    const { setPresenceBlocked, readPresenceFiles } = await getPresenceMod();
+    // Must not throw and must not conjure a file — an elicitation from a
+    // subagent (which never has presence) still routes normally.
+    await expect(setPresenceBlocked('no-such-session', true)).resolves.toBeUndefined();
+    expect(await readPresenceFiles()).toHaveLength(0);
+  });
+
+  it('is idempotent and last-write-wins on a repeated set', async () => {
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'blocked-3' }));
+
+    await setPresenceBlocked('blocked-3', true);
+    const first = (await readPresenceFiles())[0]!.blockedSince!;
+    await new Promise((r) => setTimeout(r, 5));
+    await setPresenceBlocked('blocked-3', true);
+    const second = (await readPresenceFiles())[0]!.blockedSince!;
+
+    expect(Date.parse(second)).toBeGreaterThanOrEqual(Date.parse(first));
+    // Two clears in a row must also be safe.
+    await setPresenceBlocked('blocked-3', false);
+    await setPresenceBlocked('blocked-3', false);
+    expect((await readPresenceFiles())[0]!.blockedSince).toBeUndefined();
+  });
+
+  it('leaves a corrupt presence file untouched instead of throwing', async () => {
+    const { setPresenceBlocked } = await getPresenceMod();
+    const presenceDir = path.join(tmpDir, 'state', 'presence');
+    fs.mkdirSync(presenceDir, { recursive: true });
+    const p = path.join(presenceDir, 'corrupt.json');
+    fs.writeFileSync(p, '{not json', 'utf8');
+
+    await expect(setPresenceBlocked('corrupt', true)).resolves.toBeUndefined();
+    expect(fs.readFileSync(p, 'utf8')).toBe('{not json');
+  });
+});

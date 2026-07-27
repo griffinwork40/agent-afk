@@ -24,8 +24,31 @@ vi.mock('../telegram/push.js', () => ({
   pushIfConfigured: vi.fn().mockResolvedValue(null),
 }));
 
+// Mock the presence writer so the blocked-marker lifecycle can be asserted as
+// an ordered call log without touching the filesystem. Hoisted above the
+// router import below.
+vi.mock('./awareness/presence.js', () => ({
+  setPresenceBlocked: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { elicitationRouter } from './elicitation-router.js';
 import { pushIfConfigured } from '../telegram/push.js';
+import { setPresenceBlocked } from './awareness/presence.js';
+
+/** Ordered [sessionId, blocked] pairs the router asked presence to write. */
+function blockedCalls(): Array<[string, boolean]> {
+  return vi.mocked(setPresenceBlocked).mock.calls.map((c) => [c[0], c[1]] as [string, boolean]);
+}
+
+/**
+ * The marker writes are fire-and-forget (`void ... .catch()`), so a settle can
+ * be observed by the caller before the clear's microtask has run. Flush the
+ * microtask queue before asserting on the call log.
+ */
+async function flush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 const NO_SIGNAL = new AbortController().signal;
 
@@ -41,6 +64,7 @@ describe('elicitationRouter', () => {
   beforeEach(() => {
     elicitationRouter.uninstall();
     vi.mocked(pushIfConfigured).mockClear();
+    vi.mocked(setPresenceBlocked).mockClear();
   });
 
   afterEach(() => {
@@ -341,5 +365,197 @@ describe('hasHandler', () => {
 
     elicitationRouter.uninstall();
     expect(elicitationRouter.hasHandler()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// blocked-on-human presence marker
+//
+// The marker is a SET/CLEAR pair, not a fire-and-forget event: an unpaired set
+// strands a permanent "your agent is waiting on you" marker on a session that
+// is no longer waiting. These tests pin the pairing on every settle path, and
+// pin that the set happens ONLY where a human is really about to be prompted.
+// ---------------------------------------------------------------------------
+
+describe('blockedSince presence marker', () => {
+  beforeEach(() => {
+    elicitationRouter.uninstall();
+    vi.mocked(setPresenceBlocked).mockClear();
+  });
+
+  afterEach(() => {
+    elicitationRouter.uninstall();
+  });
+
+  it('sets before the handler runs and clears after it answers', async () => {
+    const order: string[] = [];
+    vi.mocked(setPresenceBlocked).mockImplementation(async (_id, blocked) => {
+      order.push(blocked ? 'set' : 'clear');
+    });
+    elicitationRouter.install(async (): Promise<ElicitationResult> => {
+      order.push('handler');
+      return { action: 'accept' };
+    });
+
+    const result = await elicitationRouter.route(URL_REQUEST, {
+      signal: NO_SIGNAL,
+      sessionId: 'sess-A',
+    });
+    await flush();
+
+    expect(result.action).toBe('accept');
+    // Ordering is the contract: a marker written after the handler returns, or
+    // cleared before it runs, would be visible to a poller as the wrong state.
+    expect(order).toEqual(['set', 'handler', 'clear']);
+    expect(blockedCalls()).toEqual([
+      ['sess-A', true],
+      ['sess-A', false],
+    ]);
+  });
+
+  it('clears when the handler REJECTS (decline path)', async () => {
+    elicitationRouter.install(async () => {
+      throw new Error('handler exploded');
+    });
+
+    const result = await elicitationRouter.route(URL_REQUEST, {
+      signal: NO_SIGNAL,
+      sessionId: 'sess-B',
+    });
+    await flush();
+
+    expect(result.action).toBe('decline');
+    expect(blockedCalls()).toEqual([
+      ['sess-B', true],
+      ['sess-B', false],
+    ]);
+  });
+
+  it('clears when the handler throws SYNCHRONOUSLY', async () => {
+    // A non-async handler that throws bubbles past the inner catch; the safety-net
+    // resolve covers the result, and the finally must still clear the marker.
+    elicitationRouter.install((() => {
+      throw new Error('sync boom');
+    }) as unknown as Parameters<typeof elicitationRouter.install>[0]);
+
+    const result = await elicitationRouter.route(URL_REQUEST, {
+      signal: NO_SIGNAL,
+      sessionId: 'sess-C',
+    });
+    await flush();
+
+    expect(result.action).toBe('decline');
+    expect(blockedCalls()).toEqual([
+      ['sess-C', true],
+      ['sess-C', false],
+    ]);
+  });
+
+  it('clears when the turn is ABORTED mid-prompt (handler never settles)', async () => {
+    // The worst stranding case: operator walks away, turn is torn down, and the
+    // handler never resolves. The abort race unblocks the caller — the clear
+    // must ride the same finally.
+    const ac = new AbortController();
+    elicitationRouter.install(() => new Promise<ElicitationResult>(() => { /* never settles */ }));
+
+    const p = elicitationRouter.route(URL_REQUEST, { signal: ac.signal, sessionId: 'sess-D' });
+    await flush();
+    expect(blockedCalls()).toEqual([['sess-D', true]]); // set, still waiting
+
+    ac.abort();
+    const result = await p;
+    await flush();
+
+    expect(result.action).toBe('decline');
+    expect(blockedCalls()).toEqual([
+      ['sess-D', true],
+      ['sess-D', false],
+    ]);
+  });
+
+  it('does NOT set when no handler is installed (nobody is being prompted)', async () => {
+    // Park-and-notify declines immediately: no human is waiting, so an on-disk
+    // "blocked" marker would be a lie. Telegram push is the signal here.
+    const result = await elicitationRouter.route(URL_REQUEST, {
+      signal: NO_SIGNAL,
+      sessionId: 'sess-E',
+    });
+    await flush();
+
+    expect(result.action).toBe('decline');
+    expect(blockedCalls()).toEqual([]);
+  });
+
+  it('does NOT set when the signal is already aborted', async () => {
+    elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult));
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await elicitationRouter.route(URL_REQUEST, {
+      signal: ac.signal,
+      sessionId: 'sess-F',
+    });
+    await flush();
+
+    expect(result.action).toBe('decline');
+    expect(blockedCalls()).toEqual([]);
+  });
+
+  it('writes no marker at all when no sessionId is supplied', async () => {
+    // Legacy callers and subagent-originated prompts: better to write nothing
+    // than to guess a session id and mark the wrong file.
+    elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult));
+
+    await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
+    await flush();
+
+    expect(setPresenceBlocked).not.toHaveBeenCalled();
+  });
+
+  it('marks each session independently when two sessions queue concurrently', async () => {
+    // A process can host several concurrent top-level sessions (the Telegram bot
+    // keeps one per chat), so the id must ride the call, never a global.
+    const gates: Array<() => void> = [];
+    elicitationRouter.install(
+      () =>
+        new Promise<ElicitationResult>((resolve) => {
+          gates.push(() => resolve({ action: 'accept' }));
+        }),
+    );
+
+    const p1 = elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL, sessionId: 'chat-1' });
+    const p2 = elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL, sessionId: 'chat-2' });
+    await flush();
+
+    // Serial queue: only the first is active, so only it is marked.
+    expect(blockedCalls()).toEqual([['chat-1', true]]);
+
+    gates[0]!();
+    await p1;
+    await flush();
+    gates[0 + 1]!();
+    await p2;
+    await flush();
+
+    expect(blockedCalls()).toEqual([
+      ['chat-1', true],
+      ['chat-1', false],
+      ['chat-2', true],
+      ['chat-2', false],
+    ]);
+  });
+
+  it('a presence-write failure never affects the elicitation result', async () => {
+    // Presence is best-effort telemetry; an elicitation must not fail with it.
+    vi.mocked(setPresenceBlocked).mockRejectedValue(new Error('disk full'));
+    elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult));
+
+    const result = await elicitationRouter.route(URL_REQUEST, {
+      signal: NO_SIGNAL,
+      sessionId: 'sess-G',
+    });
+    await flush();
+
+    expect(result.action).toBe('accept');
   });
 });

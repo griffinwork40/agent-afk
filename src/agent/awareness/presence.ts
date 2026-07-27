@@ -92,6 +92,32 @@ export interface PresenceFileInfo {
    * written before this field existed, and on any session that never refreshed.
    */
   heartbeatAt?: string;
+  /**
+   * ISO 8601 timestamp of the moment this session began waiting on a human. Set
+   * by {@link setPresenceBlocked} when an elicitation is about to prompt the
+   * operator, and cleared the instant it settles (answer, skip, decline, cancel,
+   * or turn abort).
+   *
+   * Present ⇒ the session is blocked on a human RIGHT NOW; absent ⇒ it is not.
+   * This is the on-disk trace of an event that previously had none: the
+   * elicitation router's only outward signal was a best-effort Telegram push, so
+   * an out-of-process observer (a native app polling {@link readPresenceFiles})
+   * could not see that an agent was stuck waiting.
+   *
+   * A timestamp rather than a boolean deliberately: it lets a reader render
+   * "waiting 4m" and age out a marker that a hard-killed session never cleared.
+   * Treat it as advisory and cross-check `liveness` — a `blockedSince` on a dead
+   * pid is a leftover, not a live prompt.
+   *
+   * Distinct from {@link afk}: `afk` is a remote-control posture the operator
+   * sets and unsets, while `blockedSince` is runtime-set and true only for the
+   * duration of one pending prompt. Both may be present at once.
+   *
+   * Optional/additive (no {@link PRESENCE_SCHEMA_VERSION} bump): absent on
+   * records written before this field existed and on any session not currently
+   * waiting.
+   */
+  blockedSince?: string;
 }
 
 /**
@@ -214,6 +240,41 @@ export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<v
     const raw = await readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw) as PresenceFileInfo;
     parsed.afk = afk;
+    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+  } catch {
+    // Best-effort — presence is non-critical.
+  }
+}
+
+/**
+ * Set or clear the {@link PresenceFileInfo.blockedSince} marker on an existing
+ * presence file (best-effort, read-modify-write).
+ *
+ * Called from the elicitation router around a prompt the operator is actually
+ * about to see: `blocked: true` immediately before the handler runs, `false` the
+ * instant it settles. `true` stamps `new Date().toISOString()`; `false` deletes
+ * the key entirely, so "not waiting" is represented by absence rather than by a
+ * sentinel a reader would have to interpret.
+ *
+ * Idempotent, and safe to call for a session that has no presence file —
+ * subagents never have one, and every non-top-level surface routes elicitations
+ * through the same code path. No-op when the file is absent or unreadable.
+ * Preserves every other field.
+ *
+ * Never throws: an elicitation must not fail because presence telemetry could
+ * not be written. A dropped clear is bounded by the caller's `liveness` check
+ * and by presence-file removal at process exit.
+ */
+export async function setPresenceBlocked(sessionId: string, blocked: boolean): Promise<void> {
+  try {
+    const filePath = presenceFilePath(sessionId);
+    const raw = await readFile(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as PresenceFileInfo;
+    if (blocked) {
+      parsed.blockedSince = new Date().toISOString();
+    } else {
+      delete parsed.blockedSince;
+    }
     await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
   } catch {
     // Best-effort — presence is non-critical.

@@ -162,6 +162,9 @@ export function createDefaultHookRegistry(
         ...(agentOptions?.afkPromptForApproval !== undefined
           ? { promptForApproval: agentOptions.afkPromptForApproval }
           : {}),
+        // Lets a pending approval mark this session's presence file as
+        // blocked-on-human, so an out-of-process observer can see the wait.
+        ...(agentOptions?.sessionId !== undefined ? { sessionId: agentOptions.sessionId } : {}),
       }),
       // Longrunning: on a high-risk op the gate awaits an operator approve/deny
       // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-
