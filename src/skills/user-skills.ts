@@ -146,12 +146,14 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
   ) => {
     const subagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
 
-    // Invariant: name the skill explicitly — a bare "Run the skill." is
-    // ambiguous and lets the sub-agent ask the operator "which skill?" instead
-    // of executing its own SKILL.md body. Mirrors skill-executor.ts.
-    const userMessage = typeof input === 'string' && input.length > 0
-      ? input
-      : `Run the ${parsed.name} skill now, following the instructions in your system prompt.`;
+    // Invariant: the anchor is ALWAYS sent, args or not — mirrors
+    // fork-dispatch.ts's runForkedSkillToResult. Naming the skill removes the
+    // "which skill?" ambiguity; sending it unconditionally stops args from
+    // REPLACING it, which left the fork with only a task brief it could satisfy
+    // by re-dispatching the skill it already was.
+    const anchor = `Run the ${parsed.name} skill now, following the instructions in your system prompt.`;
+    const userMessage =
+      typeof input === 'string' && input.length > 0 ? `${anchor}\n\nSkill arguments:\n${input}` : anchor;
 
     const manager = new SubagentManager({
       parentAbortSignal: parentSession?.abortSignal,
@@ -198,6 +200,9 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
         // the sub-agent engages its SKILL.md body instead of asking the
         // operator "which skill?".
         isSkillDispatch: true,
+        // Suppresses this skill's own entry in the fork's manifest — without it
+        // the fork can read its own catalogue entry and re-dispatch itself.
+        skillDispatchName: parsed.name,
       },
       idPrefix: `user-skill-${parsed.name}`,
       agentType: `user-skill-${parsed.name}`,

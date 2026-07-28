@@ -939,7 +939,18 @@ describe('SkillExecutor', () => {
 
       await executor.execute(makeCall({ name: 'fork-with-args', arguments: 'my custom args' }));
 
-      expect(mockRunToResult).toHaveBeenCalledWith('my custom args');
+      // Regression guard: args must NOT displace the anchor. When they did, the
+      // fork's only instruction was a task brief, which it could satisfy by
+      // re-dispatching the skill it already was. Both parts must be present, and
+      // the args must survive verbatim for SKILL.md bodies that grep them.
+      const sent = mockRunToResult.mock.calls[0]?.[0] as string;
+      expect(sent).toContain(
+        'Run the fork-with-args skill now, following the instructions in your system prompt.',
+      );
+      expect(sent).toContain('my custom args');
+      expect(sent.indexOf('Run the fork-with-args skill')).toBeLessThan(
+        sent.indexOf('my custom args'),
+      );
     });
 
     // Worktree-cwd propagation through the `skill` tool dispatch path.

@@ -824,8 +824,18 @@ export class AnthropicDirectProvider implements ModelProvider {
     // Pass the session cwd so project skills (<cwd>/.afk/skills/) resolve
     // against the session's working directory, not the host process's —
     // they diverge on long-lived hosts (daemon, Telegram bot).
+    // `excludeName` omits the executing skill's own entry for a skill-dispatch
+    // fork (see AgentConfig.skillDispatchName). Must stay in lockstep with the
+    // openai-compatible call site — a per-provider divergence here is how a
+    // fork on one provider silently keeps the self-entry.
     const manifest = this.skillExecutor
-      ? buildSkillManifest(undefined, { cwd })
+      ? buildSkillManifest(undefined, {
+          cwd,
+          ...(typeof config.skillDispatchName === 'string' &&
+          config.skillDispatchName.length > 0
+            ? { excludeName: config.skillDispatchName }
+            : {}),
+        })
       : '';
     // Invariant: SLASH_COMMAND_ROUTING_PROMPT is omitted for skill-dispatch
     // sub-agents. Those sessions receive a "Run the <name> skill" directive
