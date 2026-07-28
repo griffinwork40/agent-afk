@@ -1256,11 +1256,22 @@ export function buildQueryFromConfig(
      * (e.g. `~/.codex/auth.json`) from the developer's machine.
      */
     authDeps?: AuthResolverDeps;
+    /**
+     * Session id resolved by the calling provider (see
+     * `shared/presence-lifecycle.ts#resolveTopLevelSessionId`). Highest
+     * precedence so the presence file, `session.init`, and the ledger directory
+     * all carry one id — the Telegram watcher resolves a session's ledger path
+     * from its presence file, so an id mismatch silently tails a nonexistent
+     * ledger. Omitted for forks, which keep the local mint below.
+     */
+    sessionIdOverride?: string;
   } = {},
 ): OpenAICompatibleQuery {
   const auth = resolveOpenAIAuth(config.apiKey, options.authDeps, config.forceChatgptOAuth ?? false);
   const synthesizedSessionId =
-    config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    options.sessionIdOverride ??
+    config.resume ??
+    `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // Resolve model-slot aliases (small/medium/large, custom names, and the
   // legacy haiku/sonnet/opus aliases) to their bound concrete id BEFORE the id
   // reaches the request body — mirroring anthropic-direct, which already calls

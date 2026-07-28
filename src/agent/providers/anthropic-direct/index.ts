@@ -82,7 +82,7 @@ import {
   buildRuntimeStateSource,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
-import { registerPresenceLifecycle } from './query/presence-lifecycle.js';
+import { registerPresenceLifecycle, resolveTopLevelSessionId } from './query/presence-lifecycle.js';
 import { createCwdDependentsFactory } from './query/cwd-dependents.js';
 import { assembleSystemPrompt, buildStableSystemPrefix } from './query/system-prompt.js';
 
@@ -254,6 +254,16 @@ export class AnthropicDirectProvider implements ModelProvider {
    * `string` = the sessionId whose presence file was written
    */
   private _presenceSessionId: string | null = null;
+
+  /**
+   * Session id minted for a top-level session that supplied none (no --resume).
+   * Memoized so it stays stable across turns — `query()` runs once per turn, and
+   * a fresh mint each turn would move the ledger directory out from under the
+   * presence file the Telegram watcher is already following.
+   *
+   * `null` = nothing minted yet (either not top-level, or an explicit id won).
+   */
+  private _mintedSessionId: string | null = null;
 
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     const schemas = [...builtinToolSchemas];
@@ -752,10 +762,26 @@ export class AnthropicDirectProvider implements ModelProvider {
           : { active: [], backgroundJobs: [] },
     });
 
+    // Invariant: presence and query construction MUST use the same session id,
+    // because the Telegram watcher resolves a session's ledger path from the id
+    // in its presence file. Resolve once here — BEFORE the presence write — and
+    // reuse the result for `new AnthropicDirectQuery` below, so the presence
+    // file, the `session.init` event, and the ledger directory cannot diverge.
+    // Reading `config.sessionId` alone is what broke this: it is set only under
+    // --resume, so fresh sessions advertised nothing at all.
+    const resolvedSession = resolveTopLevelSessionId({
+      sessionId: config.sessionId,
+      resume: config.resume,
+      depth: config.depth,
+      parentSessionId: config.parentSessionId,
+      memoized: this._mintedSessionId,
+    });
+    this._mintedSessionId = resolvedSession.memoized;
+
     this._presenceSessionId = registerPresenceLifecycle({
       depth: config.depth,
       parentSessionId: config.parentSessionId,
-      sessionId: config.sessionId,
+      sessionId: resolvedSession.id,
       currentPresenceSessionId: this._presenceSessionId,
       runtimeStateSource,
       surface: this.surface,
@@ -921,7 +947,14 @@ export class AnthropicDirectProvider implements ModelProvider {
       };
     }
 
-    const resumedSessionId = config.sessionId ?? config.resume;
+    // Invariant: this MUST be the same id the presence file advertises, so the
+    // Telegram watcher tails the ledger this session actually writes. Sourced
+    // from the single resolution performed above (explicit --resume id wins;
+    // top-level sessions get a memoized mint; forks stay undefined so the query
+    // keeps minting its own id per call). `opts.sessionId` feeds only
+    // `initSessionId` in query.ts — it gates no resume behavior — so supplying
+    // a minted id here is inert apart from making the id known earlier.
+    const resumedSessionId = resolvedSession.id;
     const initialMessages = resumeHistoryToMessages(config.resumeHistory);
 
     const cwdDependentsFactory = this.externalTools
