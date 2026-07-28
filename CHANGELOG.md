@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.8] - 2026-07-28
+
+### Fixed
+- stop a skill fork from re-dispatching itself (#737) (963b85f)
+
 ## [5.81.7] - 2026-07-28
 
 ### Fixed
