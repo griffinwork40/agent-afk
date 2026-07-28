@@ -268,9 +268,10 @@ export const webScrapeTool: AnthropicToolDef = {
     'and re-extracts. Use this for articles, docs, blog posts, and most "I want ' +
     'to read this page" cases. No API key required (the render fallback needs ' +
     'the Playwright chromium binary — `pnpm exec playwright install chromium`).\n' +
-    '- `raw`: GETs the URL directly with no transformation. Use for JSON APIs, ' +
-    'robots.txt, RSS, plain-text endpoints, or when you need the literal bytes. ' +
-    'No API key required.\n' +
+    '- `raw`: GETs the URL directly and returns the response body as decoded ' +
+    'text, with no markdown transformation. Use for JSON APIs, robots.txt, RSS, ' +
+    'or plain-text endpoints. Not byte-preserving — binary payloads are decoded ' +
+    'as text, so do not rely on this for exact bytes. No API key required.\n' +
     '- `search`: runs a web search and returns ranked markdown results. Use when ' +
     'you need to FIND a URL, not read one. Provide `query` instead of `url`. ' +
     'Requires `EXA_API_KEY` (free tier at https://exa.ai); ' +

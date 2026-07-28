@@ -255,14 +255,20 @@ export class PlaywrightProvider implements BrowserProvider {
           await locator.click({ timeout });
           break;
         case 'fill':
-          // Invariant: the filled value never reaches the witness layer, so
-          // there is deliberately no redaction call here. `BrowserEventPayload`
-          // (src/agent/trace/types.ts) carries no value field, and the
-          // observation path redacts password-typed inputs at read time
-          // (observe.ts). A prior version computed `redactSecrets(value)` here
-          // and immediately discarded it, which advertised an egress control
-          // that did not exist. If browser_event ever carries typed values,
-          // redact at that write site — not here.
+          // Invariant: the filled value never reaches the JSON `browser_event`
+          // payload, so there is deliberately no redaction call here.
+          // `BrowserEventPayload` (src/agent/trace/types.ts) carries no value
+          // field, and the observation path redacts password-typed inputs at
+          // read time (observe.ts). A prior version computed
+          // `redactSecrets(value)` here and immediately discarded it, which
+          // advertised an egress control that did not exist.
+          //   Scope limit — this covers the JSON event ONLY. A screenshot
+          // sidecar can still capture a filled value that renders visibly on
+          // the page: act() captures one when `screenshot: true` is requested
+          // *or* whenever the action throws (see the capture below). Those
+          // images are not redacted, so treat them as value-bearing. If
+          // browser_event ever carries typed values, redact at that write
+          // site — not here.
           await locator.fill(input.value ?? '');
           break;
         case 'press':

@@ -46,7 +46,7 @@ afk i --provider openai-compatible
 Each session has a fixed set of built-in tools available to the model:
 
 - **`bash`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_directory`** — standard agentic tools
-- **`web_scrape`** — one tool, three modes: fetch a page as markdown, fetch raw bytes, or run a web search. There is no separate `WebFetch`/`WebSearch` — those names are aliases that normalize to `web_scrape`.
+- **`web_scrape`** — one tool, three modes: fetch a page as markdown, fetch the untransformed response text, or run a web search. There is no separate `WebFetch`/`WebSearch` — those names are aliases that normalize to `web_scrape`.
 - **`browser_open`, `browser_observe`, `browser_act`, `browser_screenshot`, `browser_close`** — Playwright-backed browser control (navigate, observe, click/fill, screenshot)
 - **`agent`** — forks a child session that inherits permissions and stops when the parent stops
 - **`skill`** — dispatches a named skill (built-in or plugin-discovered)
