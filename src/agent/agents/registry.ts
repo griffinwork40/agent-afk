@@ -23,7 +23,10 @@
  * duplicate name within one directory keeps the first file found and warns; a
  * name defined in both project directories (.claude/agents and .afk/agents)
  * warns on override (.afk wins); a duplicate across different scopes
- * (user/project/config) shadows silently by design (higher scope wins).
+ * (user/project/config) shadows the lower scope by design (higher scope wins)
+ * — precedence is silent between file scopes, but displacing a BUILT-IN warns
+ * (see {@link warnIfShadowsBuiltin}), because the tool-restricted builtins are
+ * a safety surface that ten bundled skills dispatch by bare name.
  *
  * Loading is synchronous and session-static — called once at bootstrap
  * (mirrors the plugins scan), then threaded by reference through executor
@@ -101,9 +104,41 @@ export function collectMarkdownFiles(dir: string, depth = 0): string[] {
 }
 
 /**
+ * Invariant: builtins are seeded at the BOTTOM of the precedence order (see
+ * {@link loadAgentRegistry}), so any plugin-, file-, or config-scope agent of
+ * the same name replaces one. Overriding a builtin is intended operator power
+ * and precedence is deliberately UNCHANGED here — this only makes the swap
+ * visible, and never blocks it.
+ *
+ * It is worth a warning because the tool-restricted builtins (`research-agent`,
+ * `git-investigator`, `Explore`) are a safety surface, not just a default: the
+ * bundled orchestration skills dispatch them by bare name, so a single file at
+ * `~/.afk/agents/research-agent.md` declaring broader `tools:` converts every
+ * "mechanically locked read-only verifier" in those skills into a
+ * write-capable agent, for every project on the machine, with no other signal.
+ */
+function warnIfShadowsBuiltin(
+  registry: Map<string, RegisteredAgent>,
+  name: string,
+  origin: string,
+  warn: (message: string) => void,
+): void {
+  const prior = registry.get(name);
+  if (prior?.source !== 'builtin') return;
+  const restriction =
+    prior.bashReadOnly === true
+      ? ' — the built-in restricts its tools and gates bash to read-only commands; the override replaces both'
+      : prior.definition.tools !== undefined
+        ? ' — the built-in restricts which tools it may use; the override replaces that restriction'
+        : '';
+  warn(`[afk] agents: ${origin} overrides built-in agent ${JSON.stringify(name)}${restriction}`);
+}
+
+/**
  * Scan one directory scope and merge its agents into `registry`.
  * Same-directory duplicates keep the first file (sorted order) and warn;
- * cross-scope duplicates shadow the lower scope silently (by design).
+ * cross-scope duplicates shadow the lower scope silently (by design), except
+ * that displacing a builtin warns via {@link warnIfShadowsBuiltin}.
  *
  * `crossDirSeen`, when supplied, is shared across the directories of a single
  * scope tier (the project tier spans .claude/agents + .afk/agents). It only
@@ -154,6 +189,8 @@ function scanScope(
       crossDirSeen.set(parsed.name, filePath);
     }
 
+    warnIfShadowsBuiltin(registry, parsed.name, filePath, warn);
+
     registry.set(parsed.name, {
       name: parsed.name,
       definition: parsed.definition,
@@ -190,6 +227,7 @@ export function loadAgentRegistry(options: LoadAgentRegistryOptions = {}): Agent
   // straight merge: later user/project/config scopes still shadow by name.
   if (options.pluginAgents !== undefined) {
     for (const agent of options.pluginAgents) {
+      warnIfShadowsBuiltin(registry, agent.name, `plugin agent (${agent.source})`, warn);
       registry.set(agent.name, agent);
     }
   }
@@ -208,6 +246,7 @@ export function loadAgentRegistry(options: LoadAgentRegistryOptions = {}): Agent
   if (options.configAgents !== undefined) {
     for (const [name, definition] of Object.entries(options.configAgents)) {
       if (name.trim().length === 0) continue;
+      warnIfShadowsBuiltin(registry, name, 'AgentSessionConfig.agents', warn);
       registry.set(name, { name, definition, source: 'config' });
     }
   }
