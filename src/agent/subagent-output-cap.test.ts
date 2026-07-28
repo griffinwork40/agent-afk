@@ -138,3 +138,52 @@ describe('forkSubagent — fork-scoped central output-cap signal (#661)', () => 
     expect(childConfig?.subagentToolOutputCapBytes).toBe(MODEL_CAP_BYTES);
   });
 });
+
+/**
+ * Trace seal ownership shares this file's harness (it captures the child config
+ * forkSubagent builds) but is a SEPARATE concern from the output cap — it used
+ * to be inferred from `subagentToolOutputCapBytes` precisely because both are
+ * fork-only, and that accidental coupling is the bug these cases lock out. The
+ * behavioural half (who appends `session_sealed`) lives in
+ * session/subagent-seal-ownership.test.ts.
+ */
+describe('forkSubagent — trace seal ownership marker', () => {
+  it('stamps isSubagentFork on a fork with a STUB parent (no sessionId)', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: undefined },
+      config: { model: 'sonnet', apiKey: 'k' },
+    });
+
+    // Stub-parent skill forks carry no parentSessionId, so seal gating cannot
+    // key off it — the explicit marker must be present regardless.
+    expect(shared.lastConfig?.isSubagentFork).toBe(true);
+    expect(shared.lastConfig?.parentSessionId).toBeUndefined();
+  });
+
+  it('stamps isSubagentFork on a fork with a REAL parent too (unconditional)', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'parent-session-abc' },
+      config: { model: 'sonnet', apiKey: 'k' },
+    });
+
+    expect(shared.lastConfig?.isSubagentFork).toBe(true);
+  });
+
+  it('is independent of the output cap — a fork is marked even when the caller passes a cap', async () => {
+    // Locks the decoupling: the two fork-only signals must no longer stand in
+    // for one another in either direction.
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: undefined },
+      config: { model: 'sonnet', apiKey: 'k', subagentToolOutputCapBytes: 0 },
+    });
+
+    expect(shared.lastConfig?.isSubagentFork).toBe(true);
+    expect(shared.lastConfig?.subagentToolOutputCapBytes).toBe(MODEL_CAP_BYTES);
+  });
+});

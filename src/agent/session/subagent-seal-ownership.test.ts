@@ -10,10 +10,16 @@
  * thus reported a clean success for a session that hung and was cancelled, and
  * every subsequent ancestor event hit the sealed writer and was swallowed.
  *
- * Fix: `dispatchSessionEndOnce` gates `sealTraceWriter(...)` on the explicit
- * fork marker (`subagentToolOutputCapBytes` absent ⇒ top-level). Subagents still
- * emit their own `closure` record; the process-exit backstop still seals an
- * orphaned top-level trace if close() never runs.
+ * Fix: `dispatchSessionEndOnce` gates `sealTraceWriter(...)` on `isSubagentFork`
+ * — a field whose sole meaning is "I am a fork", stamped unconditionally by
+ * `SubagentManager.forkSubagent`. Subagents still emit their own `closure`
+ * record; the process-exit backstop still seals an orphaned top-level trace if
+ * close() never runs.
+ *
+ * The gate previously probed `subagentToolOutputCapBytes` — a tool-output cap
+ * that merely happened to be fork-only. That coupling was invisible and
+ * load-bearing: a top-level session legitimately setting an output cap would
+ * silently stop sealing its own trace. The last case below pins that fix.
  *
  * Invariant locked here: a subagent's close() emits `closure` but does NOT
  * append `session_sealed`; a top-level's close() appends both.
@@ -75,7 +81,7 @@ describe('witness seal ownership', () => {
         provider,
         depth: 1,
         parentSessionId: 'parent-abc',
-        subagentToolOutputCapBytes: 100_000,
+        isSubagentFork: true,
         traceWriter: writer,
       });
 
@@ -102,9 +108,9 @@ describe('witness seal ownership', () => {
         provider,
         depth: 1,
         // Stub-parent skill forks may not have a real parent session id, but
-        // forkSubagent still stamps the explicit fork marker below. That marker,
-        // not parentSessionId, owns trace-seal gating.
-        subagentToolOutputCapBytes: 100_000,
+        // forkSubagent still stamps `isSubagentFork`. That marker, not
+        // parentSessionId, owns trace-seal gating.
+        isSubagentFork: true,
         traceWriter: writer,
       });
 
@@ -114,6 +120,64 @@ describe('witness seal ownership', () => {
       const kinds = readTrace(dir).map((e) => e.kind);
       expect(kinds).toContain('closure');
       expect(kinds).not.toContain('session_sealed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('directly constructed legacy fork does NOT seal its parent writer', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-legacy-sub-'));
+    try {
+      const writer = new NdjsonTraceWriter({ traceDir: dir });
+      const parent = new AgentSession({
+        model: 'sonnet',
+        provider: createMockProvider({ sessionId: `seal-legacy-parent-${Date.now()}` }),
+        traceWriter: writer,
+      });
+      // Public SDK consumers historically constructed children directly with
+      // this output-cap fork signal, before isSubagentFork existed.
+      const child = new AgentSession({
+        model: 'sonnet',
+        provider: createMockProvider({ sessionId: `seal-legacy-child-${Date.now()}` }),
+        subagentToolOutputCapBytes: 100_000,
+        traceWriter: writer,
+      });
+
+      await drainTurn(child, 'legacy child work');
+      await child.close();
+      expect(readTrace(dir).map((e) => e.kind)).not.toContain('session_sealed');
+
+      await drainTurn(parent, 'parent work after child close');
+      await parent.close();
+      expect(readTrace(dir).map((e) => e.kind)).toContain('session_sealed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('top-level session that sets an output cap STILL seals (marker decoupled)', async () => {
+    // Regression for the latent bug the old gate carried: seal ownership used
+    // to be inferred from `subagentToolOutputCapBytes`, so a top-level session
+    // that legitimately capped tool output silently stopped sealing its own
+    // trace — the trace would read `sealed-crashed` forever. Ownership now
+    // keys off `isSubagentFork`, which this session does not set.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-cap-'));
+    try {
+      const writer = new NdjsonTraceWriter({ traceDir: dir });
+      const provider = createMockProvider({ sessionId: `seal-cap-${Date.now()}` });
+      const session = new AgentSession({
+        model: 'sonnet',
+        provider,
+        subagentToolOutputCapBytes: 100_000,
+        traceWriter: writer,
+      });
+
+      await drainTurn(session, 'top-level with a cap');
+      await session.close();
+
+      const kinds = readTrace(dir).map((e) => e.kind);
+      expect(kinds).toContain('closure');
+      expect(kinds).toContain('session_sealed');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

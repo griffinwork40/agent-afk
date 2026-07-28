@@ -15,11 +15,12 @@ import type { SpinnerController } from './input/spinner.js';
 import type { CaretBlinkController } from './input/caret-blink.js';
 import type { SuggestEngine } from './terminal-compositor.types.js';
 import type {
+  BandRowMeta,
   CompositorScrollRegionGuard,
   KeyInfo,
   LogUpdateFn,
 } from './terminal-compositor.types.js';
-import { eraseAndPaintRow } from './terminal-compositor.types.js';
+import { scrollbackFlushLines, buildScrollbackArchiveEscape } from './terminal-compositor.types.js';
 import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import type { KeyDispatchHost } from './terminal-compositor.input-dispatch.js';
 
@@ -69,6 +70,10 @@ export interface LifecycleHost {
   lastKnownRows: number;
   pendingResizeErase: { top: number; bottom: number } | null;
   readonly committedBand: string[];
+  // #540: per-physical-row logical provenance, index-aligned 1:1 with
+  // committedBand. Read by flushPendingCommittedBand to archive the pending
+  // prefix as soft-wrappable logical lines instead of pre-wrapped physical rows.
+  readonly committedBandMeta: BandRowMeta[];
   readonly committedBandTopRow: number;
   // Read by disarm() to flush genuinely-unpainted committed-band rows to
   // scrollback before teardown. See committedBandPaintedRows on the class.
@@ -437,12 +442,19 @@ export function disarm(self: LifecycleHost): void {
  * this is a no-op and the on-screen rows are left exactly as they are — never
  * re-emitted (HARD CONSTRAINT #1: no duplicate in scrollback).
  *
- * Mechanism: the proven top-write-then-scroll the band-hold Phase-1 archive
- * uses (committed-band-commit.ts) — CUP+EL each pending row at the anchor floor,
- * then a CUP to the physical bottom + `\n`×count to scroll them into history.
- * Chunked by screen height so a pending run taller than the terminal still
- * archives every row. Wrapped in `withFullScrollRegion` (no-op when no status
- * line is started) so the `\n` produces a FULL-screen scroll that enters
+ * Mechanism (#540 axis-2 logical-line flush): the pending prefix is archived as
+ * SOFT-WRAPPABLE logical lines, not pre-hard-wrapped physical rows, so a later
+ * width resize reflows this scrolled-off content cleanly. scrollbackFlushLines
+ * maps the `pendingCount` physical rows to logical lines — reading the FULL
+ * band + meta (not just the prefix) so a logical line STRADDLING the
+ * pending/painted boundary emits its pending rows verbatim rather than
+ * duplicating the on-screen (painted) tail. buildScrollbackArchiveEscape writes
+ * each line at the physical bottom margin with autowrap ON + a trailing `\n`,
+ * so the TERMINAL owns the wrap and the `\n` scrolls it into history; the
+ * terminal re-derives the same per-line physical-row count, so a pending run
+ * taller than the terminal still archives every row (each line scrolls at the
+ * bottom margin independently). Wrapped in `withFullScrollRegion` (no-op when no
+ * status line is started) so the `\n` produces a FULL-screen scroll that enters
  * scrollback rather than a DECSTBM sub-region scroll that silently drops the
  * displaced top line. Best-effort: a throwing stdout means the process is
  * exiting anyway and the next teardown step tears us down.
@@ -450,18 +462,14 @@ export function disarm(self: LifecycleHost): void {
 function flushPendingCommittedBand(self: LifecycleHost): void {
   const pendingCount = self.committedBand.length - self.committedBandPaintedRows;
   if (pendingCount <= 0) return;
-  const pending = self.committedBand.slice(0, pendingCount);
   const rows = Math.max(1, self.stdout.rows ?? 24);
+  const cols = Math.max(1, self.stdout.columns ?? 80);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
+  const archiveLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, pendingCount);
+  const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);
+  if (escape.length === 0) return;
   const write = (): void => {
-    const chunkMax = Math.max(1, rows - anchorFloor + 1);
-    for (let start = 0; start < pending.length; start += chunkMax) {
-      const chunk = pending.slice(start, Math.min(start + chunkMax, pending.length));
-      const topWrite = chunk
-        .map((l, i) => eraseAndPaintRow(anchorFloor + i, l))
-        .join('');
-      self.stdout.write(`${topWrite}\x1b[${rows};1H${'\n'.repeat(chunk.length)}`);
-    }
+    self.stdout.write(escape);
   };
   try {
     if (self.scrollRegion) {

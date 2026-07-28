@@ -103,7 +103,7 @@ function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
     if (minNonWrappedRows !== undefined) {
       expect(
         nonWrapped,
-        `logical line ["${from}".."${to}"] should have >=${minNonWrappedRows} non-wrapped (hard-break) rows — the axis-2 fragmentation RED guard (#540); found ${nonWrapped}. If this dropped to 1 the flush now emits logical lines: flip minNonWrappedRows -> maxNonWrappedRows: 1.\n${dump}`,
+        `logical line ["${from}".."${to}"] should have >=${minNonWrappedRows} non-wrapped (hard-break) rows; found ${nonWrapped}. This asserts content IS fragmented — a RED-guard shape for a not-yet-fixed reflow axis. The #540 axis-2 guards already completed that transition and now assert maxNonWrappedRows: 1.\n${dump}`,
       ).toBeGreaterThanOrEqual(minNonWrappedRows);
     }
     if (maxNonWrappedRows !== undefined) {
