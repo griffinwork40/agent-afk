@@ -467,7 +467,20 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       // the overflow path archives the whole block to scrollback and floors
       // Phase 3 at the unchanged anchorFloor to avoid clobbering the banner.
       scrolledRows = fitsAboveFrame ? bandOverflow : 0;
-      self.debugLog('commitAbove:phase1', { lineCount, fitsAboveFrame, bandOverflow });
+      // #665 review: record the snap inputs/outputs too. `archiveCount === 0`
+      // with `rawGenuineOverflow > 0` means the snap retained a straddling
+      // logical line and Phase 1 archived NOTHING this commit — a state that is
+      // only observable in a real terminal (the PTY harness cannot reproduce
+      // DECAWM deferred wrap), so without these fields it leaves no trace.
+      self.debugLog('commitAbove:phase1', {
+        lineCount,
+        fitsAboveFrame,
+        bandOverflow,
+        rawGenuineOverflow,
+        archiveCount,
+        maxBandModel,
+        overflowRunLen: overflowRun.length,
+      });
       if (useBandHold) {
         // Band-hold Phase 1: scroll NOTHING for the rows the model keeps (they
         // are "pending" — painted by repositionCommittedBand on collapse). Only

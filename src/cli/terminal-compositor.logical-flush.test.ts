@@ -288,3 +288,70 @@ describe('reflowBandSplit — meta propagation (#540)', () => {
     expect(flushed).toEqual([LONG]);
   });
 });
+
+/**
+ * #665 review — column-accounting inputs where `hardWrapToWidth`'s row count
+ * and a real terminal's DECAWM wrap can disagree. These are the cases the PTY
+ * harness cannot certify (it replays an emulator, not deferred wrap), so the
+ * piece-wise row count is locked here instead: every scroll count in the
+ * archive path is derived from `buildBandMeta`, so a row-count error at these
+ * boundaries desyncs the anchor floor from the screen.
+ */
+describe('#665 review: wrap-boundary and degenerate-width archive inputs', () => {
+  it('counts a line of exactly `width` columns as ONE physical row', () => {
+    const width = 80;
+    const line = 'x'.repeat(width);
+    expect(buildBandMeta([line], width)).toEqual([{ logicalText: line, isHead: true }]);
+  });
+
+  it('counts a line of exactly 2x width as head + one continuation', () => {
+    const width = 40;
+    const line = 'y'.repeat(width * 2);
+    const meta = buildBandMeta([line], width);
+    expect(meta.map((m) => m.isHead)).toEqual([true, false]);
+  });
+
+  it('flushes an exact-multiple line as ONE logical line (no split at the boundary)', () => {
+    const width = 40;
+    const line = 'z'.repeat(width * 2);
+    const rows = hardWrapToWidth(line, width).split('\n');
+    const meta = buildBandMeta([line], width);
+    expect(rows.length).toBe(meta.length);
+    expect(scrollbackFlushLines(rows, meta, rows.length)).toEqual([line]);
+  });
+
+  it('counts double-width CJK glyphs by DISPLAY COLUMN, not by character', () => {
+    const width = 80;
+    const line = '\u6f22'.repeat(50); // 50 glyphs = 100 display columns
+    const meta = buildBandMeta([line], width);
+    expect(meta.length).toBe(2);
+    expect(meta.map((m) => m.isHead)).toEqual([true, false]);
+  });
+
+  it('flushes a wide-glyph logical line whole, never split mid-glyph', () => {
+    const width = 80;
+    const line = '\u6f22'.repeat(50);
+    const rows = hardWrapToWidth(line, width).split('\n');
+    const meta = buildBandMeta([line], width);
+    expect(scrollbackFlushLines(rows, meta, rows.length)).toEqual([line]);
+  });
+
+  it('preserves an SGR run that spans a wrap boundary', () => {
+    const width = 40;
+    const styled = `\x1b[31m${'r'.repeat(90)}\x1b[39m`;
+    const rows = hardWrapToWidth(styled, width).split('\n');
+    const meta = buildBandMeta([styled], width);
+    expect(rows.length).toBe(meta.length);
+    expect(meta.length).toBeGreaterThan(1);
+    // The archive emits logicalText (the PRE-wrap source), so the style run
+    // reaches scrollback intact rather than re-emitted mid-sequence per row.
+    expect(scrollbackFlushLines(rows, meta, rows.length)).toEqual([styled]);
+  });
+
+  it('survives a 1-column width without throwing', () => {
+    const meta = buildBandMeta(['ab'], 1);
+    expect(meta.map((m) => m.isHead)).toEqual([true, false]);
+    const esc = buildScrollbackArchiveEscape(['ab'], 1, 3, 1);
+    expect(esc.length).toBeGreaterThan(0);
+  });
+});
