@@ -1,9 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import {
   PLAYWRIGHT_MISSING_HINTS,
   browserTimeoutFailureClass,
+  decoratePlaywrightLaunchError,
   isPlaywrightMissing,
+  playwrightInstallCommand,
   playwrightMissingHint,
+  resetPlaywrightInstallCommandCache,
 } from './playwright-hints.js';
 
 describe('isPlaywrightMissing', () => {
@@ -23,6 +28,22 @@ describe('isPlaywrightMissing', () => {
     expect(isPlaywrightMissing('net::ERR_NAME_NOT_RESOLVED')).toBe(false);
   });
 
+  it('follows the cause chain, so a wrapped launch failure still matches', () => {
+    // A launch failure is often re-thrown wrapped by an intermediate layer,
+    // putting the diagnostic substring on `cause` rather than `message`. The
+    // pre-#721 shared detector took a pre-stringified message and missed these.
+    const root = new Error("browserType.launch: Executable doesn't exist at /x/chrome");
+    const wrapped = new Error('failed to open page', { cause: root });
+    expect(isPlaywrightMissing(wrapped)).toBe(true);
+    expect(isPlaywrightMissing(new Error('unrelated', { cause: new Error('also unrelated') }))).toBe(
+      false,
+    );
+  });
+
+  it('accepts an Error as well as a bare string', () => {
+    expect(isPlaywrightMissing(new Error('Cannot find package playwright'))).toBe(true);
+  });
+
   it('exposes all three hint substrings', () => {
     expect(PLAYWRIGHT_MISSING_HINTS).toContain('Cannot find package');
     expect(PLAYWRIGHT_MISSING_HINTS).toContain('ERR_MODULE_NOT_FOUND');
@@ -38,9 +59,109 @@ describe('playwrightMissingHint', () => {
 
   it('tells the user to install chromium when only the binary is missing', () => {
     const hint = playwrightMissingHint("Executable doesn't exist at /ms-playwright/chromium/chrome");
-    expect(hint).toMatch(/pnpm exec playwright install chromium/);
+    expect(hint).toMatch(/install chromium/);
     // Must NOT mis-direct the user to reinstall a package that is already present.
     expect(hint).not.toMatch(/pnpm add playwright/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Install-command resolution (issue #721)
+// ---------------------------------------------------------------------------
+
+describe('playwrightInstallCommand', () => {
+  beforeEach(() => {
+    resetPlaywrightInstallCommandCache();
+  });
+
+  it('resolves the BUNDLED playwright CLI, not a package-manager-relative command', () => {
+    const cmd = playwrightInstallCommand();
+    expect(cmd).toMatch(/install chromium$/);
+
+    // `playwright` is a real dependency of this repo, so resolution must
+    // succeed here and yield an absolute path to the bundled CLI. A
+    // `pnpm exec`-style command would be wrong for a global install, and
+    // `npx --yes playwright` would fetch LATEST playwright — whose pinned
+    // chromium revision can differ from the one this build expects.
+    const m = /^node (?:"([^"]+)"|(\S+)) install chromium$/.exec(cmd);
+    expect(m, `expected a bundled-CLI command, got: ${cmd}`).not.toBeNull();
+    const cliPath = m?.[1] ?? m?.[2] ?? '';
+    expect(isAbsolute(cliPath)).toBe(true);
+    expect(existsSync(cliPath)).toBe(true);
+    expect(cliPath).toMatch(/cli\.js$/);
+  });
+
+  it('memoizes the resolved command', () => {
+    expect(playwrightInstallCommand()).toBe(playwrightInstallCommand());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Headed vs headless artifact naming (issue #721)
+// ---------------------------------------------------------------------------
+
+describe('playwrightMissingHint — missing-artifact naming', () => {
+  const BIN_MISSING =
+    "browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1234/chrome";
+
+  it('names the full chromium build when the failed launch was headed', () => {
+    const hint = playwrightMissingHint(BIN_MISSING, { headless: false });
+    expect(hint).toMatch(/headed/);
+    expect(hint).toMatch(/chromium-\*/);
+    expect(hint).not.toMatch(/chromium_headless_shell/);
+  });
+
+  it('names the headless shell when the failed launch was headless', () => {
+    const hint = playwrightMissingHint(BIN_MISSING, { headless: true });
+    expect(hint).toMatch(/chromium_headless_shell-\*/);
+  });
+
+  it('omits artifact detail when the launch mode is unknown', () => {
+    const hint = playwrightMissingHint(BIN_MISSING);
+    expect(hint).not.toMatch(/chromium_headless_shell/);
+    expect(hint).not.toMatch(/headed/);
+    expect(hint).toMatch(/install chromium/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Launch-error decoration (issue #721)
+// ---------------------------------------------------------------------------
+
+describe('decoratePlaywrightLaunchError', () => {
+  it('adds the hint and preserves the original error as cause', () => {
+    const original = new Error(
+      "browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1234/chrome",
+    );
+    const decorated = decoratePlaywrightLaunchError(original, false);
+
+    expect(decorated).toBeInstanceOf(Error);
+    expect(decorated).not.toBe(original);
+    const msg = (decorated as Error).message;
+    expect(msg).toContain("Executable doesn't exist");
+    expect(msg).toMatch(/install chromium/);
+    expect(msg).toMatch(/chromium-\*/);
+    expect((decorated as Error & { cause?: unknown }).cause).toBe(original);
+  });
+
+  it('returns a NON-playwright error by identity, message untouched', () => {
+    // Invariant under test: downstream code classifies on the raw message
+    // (timeout detection) and the witness trace records it verbatim, so
+    // anything that is not a Playwright-missing error must pass through
+    // completely unchanged — same object, same message.
+    const timeout = new Error('page.goto: Timeout 30000ms exceeded.');
+    timeout.name = 'TimeoutError';
+    expect(decoratePlaywrightLaunchError(timeout, true)).toBe(timeout);
+    expect(browserTimeoutFailureClass(decoratePlaywrightLaunchError(timeout, true))).toBe('timeout');
+
+    const generic = new Error('browser crashed');
+    expect(decoratePlaywrightLaunchError(generic, false)).toBe(generic);
+    expect((generic as Error).message).toBe('browser crashed');
+  });
+
+  it('handles a non-Error thrown value without throwing', () => {
+    expect(decoratePlaywrightLaunchError('a plain string', true)).toBe('a plain string');
+    expect(decoratePlaywrightLaunchError(undefined, true)).toBeUndefined();
   });
 });
 

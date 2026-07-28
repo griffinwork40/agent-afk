@@ -179,7 +179,12 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
 
     const r = await handler({ url: 'https://example.com/x' }, signal());
     expect(r.isError).toBe(true);
-    expect(r.content).toMatch(/playwright install chromium/);
+    // Since #721 the command is resolved from the BUNDLED playwright CLI
+    // rather than hardcoded as `pnpm exec …`, which was wrong for a global
+    // install. web_scrape now shares that single implementation instead of
+    // carrying its own drifted copy of the detector and the hint text.
+    expect(r.content).toMatch(/install chromium/);
+    expect(r.content).toMatch(/render fallback needs the optional Playwright browser/);
   });
 });
 
