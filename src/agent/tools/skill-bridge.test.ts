@@ -83,6 +83,71 @@ describe('buildSkillManifest', () => {
     expect(manifest).toContain('test-skill-2: Second test skill');
   });
 
+  describe('excludeName — self-entry suppression for skill-dispatch forks', () => {
+    beforeEach(() => {
+      registerSkill({
+        name: 'ground-state',
+        description: 'Pre-flight reconnaissance wave',
+        handler: vi.fn(),
+      });
+      registerSkill({
+        name: 'other-skill',
+        description: 'Something else',
+        handler: vi.fn(),
+      });
+    });
+
+    it('omits the excluded skill but keeps its siblings', () => {
+      const manifest = buildSkillManifest([], { excludeName: 'ground-state' });
+
+      expect(manifest).not.toContain('ground-state');
+      expect(manifest).toContain('other-skill: Something else');
+    });
+
+    it('lists every skill when excludeName is absent or empty', () => {
+      expect(buildSkillManifest([])).toContain('ground-state');
+      expect(buildSkillManifest([], { excludeName: '' })).toContain('ground-state');
+    });
+
+    it('omits a plugin-qualified entry matching the excluded bare name', () => {
+      registerSkill({
+        name: 'awa-dev:ground-state',
+        description: 'Qualified copy',
+        handler: vi.fn(),
+      });
+
+      const manifest = buildSkillManifest([], { excludeName: 'ground-state' });
+
+      expect(manifest).not.toContain('ground-state');
+      expect(manifest).toContain('other-skill');
+    });
+
+    it('returns an empty manifest when the excluded skill was the only entry', () => {
+      // Guard: `collected` is non-empty here (one registered skill) and the
+      // excludeName filter is what empties it — unlike "returns empty string
+      // when no skills registered", where nothing is collected in the first
+      // place. Either way the result must stay empty-string (providers skip
+      // the fragment entirely) rather than emitting a header with no entries.
+      _resetRegistry();
+      registerSkill({
+        name: 'solo-skill',
+        description: 'Only registered skill',
+        handler: vi.fn(),
+      });
+
+      expect(buildSkillManifest([], { excludeName: 'solo-skill' })).toBe('');
+    });
+
+    it('collectSkillEntries ignores excludeName — non-model consumers see everything', () => {
+      // The slash-command router and `skill list` must not inherit the
+      // manifest's suppression, so the option is honored in buildSkillManifest only.
+      const entries = collectSkillEntries([], {
+        excludeName: 'ground-state',
+      } as Parameters<typeof collectSkillEntries>[1]);
+      expect(entries.map((e) => e.name)).toContain('ground-state');
+    });
+  });
+
   it('includes argumentHint in skill entry when present', () => {
     registerSkill({
       name: 'plan-skill',

@@ -151,6 +151,9 @@ export async function executeForkedRegistrySkill(
       // instruction (which keys off that tag) would push them to ask
       // "which skill?" instead of engaging with their SKILL.md body.
       isSkillDispatch: true,
+      // Suppresses this skill's own entry in the child's manifest — without it
+      // the fork can read its own catalogue entry and re-dispatch itself.
+      skillDispatchName: skill.name,
       ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     } as AgentConfig,
     call.signal,
@@ -243,6 +246,9 @@ export async function executePluginSkill(
     // (which keys off that tag) would push them to ask "which skill?" instead
     // of engaging with their SKILL.md body.
     isSkillDispatch: true,
+    // Suppresses this skill's own entry in the child's manifest — without it
+    // the fork can read its own catalogue entry and re-dispatch itself.
+    skillDispatchName: skillName,
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
   } as AgentConfig;
 
@@ -338,13 +344,17 @@ export async function runForkedSkillToResult(
       agentType: label,
     });
 
-    // Invariant: name the skill explicitly. A bare "Run the skill." is
-    // ambiguous — the sub-agent could ask the operator "which skill?" instead
-    // of executing its own SKILL.md body. Naming it removes that ambiguity.
+    // Invariant: the anchor is ALWAYS sent, args or not. Naming the skill
+    // removes the "which skill?" ambiguity a bare "Run the skill." would leave;
+    // sending it unconditionally fixes the inverse failure — when args were
+    // present the anchor used to be REPLACED by them, so the fork's only
+    // instruction was a task brief, which it could satisfy by re-dispatching the
+    // very skill it already was (observed on `ground-state`). Args stay verbatim
+    // under a labelled delimiter so a SKILL.md body that greps its arguments
+    // (e.g. mint's "approved") still matches.
+    const anchor = `Run the ${label} skill now, following the instructions in your system prompt.`;
     const userMessage =
-      args && args.length > 0
-        ? args
-        : `Run the ${label} skill now, following the instructions in your system prompt.`;
+      args && args.length > 0 ? `${anchor}\n\nSkill arguments:\n${args}` : anchor;
     const result = await handle.runToResult(userMessage);
 
     // Assign (don't return) so the finally can append the in-turn

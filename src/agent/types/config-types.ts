@@ -644,6 +644,24 @@ export interface AgentConfig {
   isSkillDispatch?: boolean;
 
   /**
+   * Name of the skill this session was forked to execute — set alongside
+   * `isSkillDispatch` at every skill fork site.
+   *
+   * Contract: providers pass it to `buildSkillManifest` as `excludeName`, so the
+   * fork's own entry is omitted from the skills catalogue in its system prompt.
+   * Without it the fork reads a catalogue entry describing the very task it was
+   * given, under a "prefer a skill" preamble, and re-dispatches itself instead
+   * of executing its SKILL.md body. Scope: suppresses the affordance one level
+   * down only — a fork that dispatches a plain `agent` which then calls the same
+   * skill is NOT covered (the grandchild carries no skill identity). That gap is
+   * bounded by the nesting depth cap and left deliberately unfixed rather than
+   * threading skill identity through every child-config path.
+   *
+   * Default: `undefined` (main sessions see the complete manifest).
+   */
+  skillDispatchName?: string;
+
+  /**
    * When true, the session runs on a non-interactive surface where no human is
    * available to answer an `ask_question` elicitation — the daemon, a
    * scheduler/cron-launched task, or a one-shot `afk chat` invocation. On these

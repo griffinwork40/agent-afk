@@ -32,6 +32,7 @@ import {
 } from '../providers/anthropic-direct/index.js';
 import { buildMessages } from '../providers/openai-compatible/messages.js';
 import { SLASH_COMMAND_ROUTING_PROMPT, TOOL_SYSTEM_PROMPT_BASE } from './system-prompt.js';
+import { registerSkill } from '../../skills/index.js';
 
 // --------------------------------------------------------------------------
 // Anthropic mock plumbing (mirrors plan-mode-system-payload.test.ts)
@@ -132,6 +133,68 @@ async function drainQuery(query: AsyncIterable<unknown>): Promise<void> {
 // --------------------------------------------------------------------------
 // AnthropicDirectProvider tests
 // --------------------------------------------------------------------------
+
+describe('AnthropicDirectProvider — skill-dispatch self-entry suppression', () => {
+  // Wiring guard for the composition point: config.skillDispatchName must reach
+  // buildSkillManifest as excludeName. Without it a skill fork reads its OWN
+  // catalogue entry — under a "Prefer a skill" preamble — and re-dispatches
+  // itself instead of executing its SKILL.md body.
+  //
+  // Uses a uniquely-named registry skill so the assertion cannot be perturbed by
+  // whatever real skills/plugins exist on the host running the suite.
+  const probeName = 'self-suppress-probe';
+
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+    registerSkill({
+      name: probeName,
+      description: 'Probe skill for self-suppression',
+      handler: vi.fn(),
+    });
+  });
+
+  async function systemTextFor(config: Record<string, unknown>): Promise<string> {
+    const provider = new AnthropicDirectProvider({
+      // Any truthy executor turns manifest injection on; the manifest content
+      // itself comes from the registry, so a bare stub is sufficient.
+      skillExecutor: { execute: vi.fn() } as unknown as ConstructorParameters<
+        typeof AnthropicDirectProvider
+      >[0]['skillExecutor'],
+    });
+    await drainQuery(
+      provider.query({
+        prompt: singleInput('hello'),
+        config: { model: 'claude-haiku-4-5', apiKey: 'sk-ant-oat01-test', ...config },
+      } as Parameters<typeof provider.query>[0]),
+    );
+    const firstCall = messagesCreateMock.mock.calls[0]!;
+    return extractSystemText((firstCall[0] as { system?: unknown }).system);
+  }
+
+  it('main session: the manifest lists the skill', async () => {
+    const text = await systemTextFor({});
+    expect(text).toContain(probeName);
+  });
+
+  it('skill-dispatch fork: its OWN entry is absent from the manifest', async () => {
+    const text = await systemTextFor({
+      isSkillDispatch: true,
+      skillDispatchName: probeName,
+    });
+    expect(text).not.toContain(probeName);
+  });
+
+  it('skill-dispatch fork of a DIFFERENT skill: the entry remains', async () => {
+    const text = await systemTextFor({
+      isSkillDispatch: true,
+      skillDispatchName: 'some-other-skill',
+    });
+    expect(text).toContain(probeName);
+  });
+});
 
 describe('AnthropicDirectProvider — skill-dispatch routing prompt suppression', () => {
   beforeEach(() => {

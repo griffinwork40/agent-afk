@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // Mock the credential resolver so tests are not coupled to the live
 // keychain / environment. Default: returns 'resolved-test-credential' for
@@ -28,7 +30,7 @@ import {
 } from '../_lib/trusted-skill-events.js';
 import { registerTrustedSkillName, clearTrustedSkillNamesForTesting } from '../_lib/trusted-skill-registry.js';
 import type { TrustedSkillResult } from '../trusted-skill-result.js';
-import type { PluginSkillBody } from './skill-bridge.js';
+import { buildSkillManifest, type PluginSkillBody } from './skill-bridge.js';
 import { RECON_ALLOWED_TOOLS } from './nesting.js';
 
 const abortSignal = new AbortController().signal;
@@ -70,6 +72,39 @@ describe('SkillExecutor', () => {
     const result = await executor.execute(makeCall({ name: 'test-skill', arguments: 'hello' }));
     expect(result.isError).toBeUndefined();
     expect(result.content).toBe('skill output');
+  });
+
+  it('refreshes project skills for its cwd before lookup after another session evicts them', async () => {
+    const cwdA = mkdtempSync('/tmp/skill-executor-session-a-');
+    const cwdB = mkdtempSync('/tmp/skill-executor-session-b-');
+    const skillDir = join(cwdA, '.afk', 'skills', 'session-a-skill');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: session-a-skill\ndescription: Session A only\ncontext: load\n---\n# Session A body\n',
+    );
+
+    try {
+      const executorA = new SkillExecutor({
+        parentSession: {
+          sessionId: 'session-a',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        cwd: cwdA,
+      });
+
+      expect(buildSkillManifest([], { cwd: cwdA })).toContain('session-a-skill');
+      expect(buildSkillManifest([], { cwd: cwdB })).not.toContain('session-a-skill');
+
+      const result = await executorA.execute(makeCall({ name: 'session-a-skill' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain('# Session A body');
+    } finally {
+      rmSync(cwdA, { recursive: true });
+      rmSync(cwdB, { recursive: true });
+    }
   });
 
   it('should pass arguments to the skill handler', async () => {
@@ -939,7 +974,18 @@ describe('SkillExecutor', () => {
 
       await executor.execute(makeCall({ name: 'fork-with-args', arguments: 'my custom args' }));
 
-      expect(mockRunToResult).toHaveBeenCalledWith('my custom args');
+      // Regression guard: args must NOT displace the anchor. When they did, the
+      // fork's only instruction was a task brief, which it could satisfy by
+      // re-dispatching the skill it already was. Both parts must be present, and
+      // the args must survive verbatim for SKILL.md bodies that grep them.
+      const sent = mockRunToResult.mock.calls[0]?.[0] as string;
+      expect(sent).toContain(
+        'Run the fork-with-args skill now, following the instructions in your system prompt.',
+      );
+      expect(sent).toContain('my custom args');
+      expect(sent.indexOf('Run the fork-with-args skill')).toBeLessThan(
+        sent.indexOf('my custom args'),
+      );
     });
 
     // Worktree-cwd propagation through the `skill` tool dispatch path.

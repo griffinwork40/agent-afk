@@ -329,7 +329,23 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // ahead of the doctrine.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
     const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
-    const manifest = this.providerOpts.skillExecutor ? buildSkillManifest() : '';
+    // Invariant: kept in lockstep with anthropic-direct's call site. Two
+    // deltas vs. the previous bare call: (1) `excludeName` omits the executing
+    // skill's own entry for a skill-dispatch fork (AgentConfig.skillDispatchName),
+    // and (2) `cwd` is now forwarded — its omission here was a silent parity gap
+    // that resolved `<cwd>/.afk/skills/` against the HOST process dir instead of
+    // the session's, which diverge on long-lived hosts (daemon, Telegram bot).
+    const manifest = this.providerOpts.skillExecutor
+      ? buildSkillManifest(undefined, {
+          ...(typeof config.cwd === 'string' && config.cwd.length > 0
+            ? { cwd: config.cwd }
+            : {}),
+          ...(typeof config.skillDispatchName === 'string' &&
+          config.skillDispatchName.length > 0
+            ? { excludeName: config.skillDispatchName }
+            : {}),
+        })
+      : '';
     const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
     const existingSys =
       typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
