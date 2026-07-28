@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.5] - 2026-07-28
+
+### Fixed
+- gate witness seal on a purpose-built fork marker, not the output cap (#725) (e3d392d)
+
 ## [5.81.4] - 2026-07-28
 
 ### Fixed
