@@ -111,6 +111,33 @@ requirement to its parent. Pre-authorize the path in the parent (or run in bypas
 needs wider access. See [Subagents](/guides/subagents).
 </Callout>
 
+## Protected paths
+
+Below the grant system sits a credential floor that no mode lifts — not bypass, not an unconfined
+session, not a forked subagent. `read_file`, `grep`, `glob`, and `list_directory` refuse these paths
+outright:
+
+```
+~/.ssh          ~/.aws          ~/.gnupg        ~/.config/gcloud
+~/.afk/config   ~/.npmrc        ~/.docker/config.json
+~/.git-credentials              ~/.netrc        ~/.config/gh/hosts.yml
+~/.kube/config  /etc/shadow     /etc/sudoers    /private/etc/master.passwd
+```
+
+Symlinks are dereferenced before the comparison, so a link into a protected directory is refused
+too. Two deliberate exclusions: `~/.afk/state` stays readable (subagents read todos, transcripts,
+and skill inputs there), and `~/.afk/config/mcp.json` is carved out as an exact file — the MCP
+registry holds `${VAR}` placeholders, not literal secrets, and agents need it to diagnose a server
+that will not connect. The carve-out is exact: `mcp.json.bak` and anything else in that directory
+stays blocked.
+
+Add your own entries with `AFK_READ_DENYLIST` (colon-separated absolute paths). Operator entries are
+matched *before* the carve-out, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the
+registry if yours holds inline secrets. Built-in entries always apply and cannot be removed.
+
+The same list backs the bash restrictions below, so a credential path is protected whether the agent
+reaches for `read_file` or for `cat`.
+
 ## Bash restrictions
 
 Alongside path approval, a bash-restriction hook blocks two classes of command by default on
@@ -122,10 +149,10 @@ typed file tools:
   easy way to bypass path containment, so they are blocked; the model is told to use `read_file` /
   `write_file` / `edit_file` (which carry their own per-call approval) instead. Lift just this
   denylist with `AFK_DISABLE_BASH_INTERPRETER_GUARD=1`.
-- **Restricted roots** — commands referencing sensitive paths such as `~/.ssh`, `~/.gnupg`,
-  `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.password-store`, `~/Library/Application Support`,
-  `/etc/shadow`, and `/etc/sudoers`. A restricted path is allowed only when a granted root already
-  covers it.
+- **Restricted roots** — commands referencing sensitive paths. This is the same credential list the
+  typed read tools refuse (see [Protected paths](#protected-paths) below) plus a few shell-only
+  additions: `~/.password-store`, `~/Library/Application Support` (browser profiles), and the whole
+  `~/.config/gh` directory. A restricted path is allowed only when a granted root already covers it.
 
 On **headless** surfaces (`afk chat`, `afk daemon`) the interpreter denylist *fails open* by
 default — no grant manager is wired, so legitimate automation running `python -c` is not
@@ -196,6 +223,7 @@ Three things switch on together:
 | `AFK_DISABLE_BASH_INTERPRETER_GUARD` | `1` skips only the interpreter-eval denylist; the restricted-root check stays active. Wins over the force flag. | `0` (denylist on for interactive) |
 | `AFK_FORCE_BASH_INTERPRETER_GUARD` | `1` forces the interpreter denylist on even on headless surfaces, where it otherwise fails open. | `0` (headless fails open) |
 | `AFK_WRITE_DENYLIST` | Comma-separated path globs the `write_file` tool always refuses, regardless of mode (including bypass). | — |
+| `AFK_READ_DENYLIST` | Colon-separated absolute paths added to the credential floor above — refused by the read tools and by bash, on every surface. Adds only; built-ins cannot be removed. | — |
 
 ## See also
 
