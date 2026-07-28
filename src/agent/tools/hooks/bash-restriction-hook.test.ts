@@ -508,6 +508,27 @@ describe('createBashRestrictionHook — credential parity with the typed read de
       hook(ctx('python -c "open(os.path.expanduser(\'~/.afk/state/x.json\')).read()"')).decision,
     ).not.toBe('block');
   });
+
+  it('leaves ~/.afk/plugins readable — only ~/.afk/CONFIG is floored, not sibling AFK subdirs', () => {
+    // Pins the same CONFIG-only scoping as the state test above, for the
+    // plugins subdirectory: a future widening of the denied `config` root that
+    // spares only `state` (and not `plugins`) would otherwise go uncaught.
+    expect(hook(ctx(`cat ${home}/.afk/plugins/some-plugin/SKILL.md`)).decision).not.toBe('block');
+    expect(hook(ctx(`ls ${home}/.afk/plugins`)).decision).not.toBe('block');
+    expect(
+      hook(ctx('python -c "open(os.path.expanduser(\'~/.afk/plugins/some-plugin/SKILL.md\')).read()"'))
+        .decision,
+    ).not.toBe('block');
+  });
+
+  it('leaves ~/.afk/logs readable — only ~/.afk/CONFIG is floored, not sibling AFK subdirs', () => {
+    // Same scoping pin as above, for the logs subdirectory.
+    expect(hook(ctx(`cat ${home}/.afk/logs/telegram.log`)).decision).not.toBe('block');
+    expect(hook(ctx(`ls ${home}/.afk/logs`)).decision).not.toBe('block');
+    expect(
+      hook(ctx('python -c "open(os.path.expanduser(\'~/.afk/logs/telegram.log\')).read()"')).decision,
+    ).not.toBe('block');
+  });
 });
 
 describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () => {
@@ -525,6 +546,39 @@ describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () =>
     expect(hook(ctx(`cat ${mcp}.bak`)).decision).toBe('block');
     expect(hook(ctx(`cat ${mcp}/child.json`)).decision).toBe('block');
     expect(hook(ctx(`cat ${home}/.afk/config/mcp.json.old`)).decision).toBe('block');
+  });
+
+  // Regression (glob-suffix carve-out bypass): the exact-ref lookahead class
+  // used to omit shell glob/brace metacharacters (`*`, `?`, `[`, `]`, `{`,
+  // `}`), so e.g. `mcp.json*` satisfied the negative lookahead and the WHOLE
+  // `.../config/mcp.json` span got scrubbed to the placeholder — dropping the
+  // only text carrying the denied `.../config` root, even though the shell
+  // expands the glob to siblings (`mcp.json.bak`) the carve-out was never
+  // meant to cover. Each spelling gets its own `it()` so a regression in any
+  // one of them cannot hide behind the others (short-circuit-safe).
+  it('is EXACT-file: a `*`-glob-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}*`)).decision).toBe('block');
+  });
+
+  it('is EXACT-file: a `{,.bak}`-brace-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}{,.bak}`)).decision).toBe('block');
+  });
+
+  it('is EXACT-file: a `[.]bak`-bracket-glob-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}[.]bak`)).decision).toBe('block');
+  });
+
+  it('is EXACT-file: a `?`-glob-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}?`)).decision).toBe('block');
+  });
+
+  it('regression: the bare exact reference and its quoted form both stay allowed', () => {
+    // Counterpoint to the glob-suffix test above: a real exact reference (no
+    // trailing glob/brace metacharacter) must still hit the carve-out, quoted
+    // or not — the fix only narrows what counts as "exact", it must not
+    // un-allow the file the carve-out exists for.
+    expect(hook(ctx(`cat ${mcp}`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "${mcp}"`)).decision).not.toBe('block');
   });
 
   it('does not launder a credential sibling riding along in the same command', () => {

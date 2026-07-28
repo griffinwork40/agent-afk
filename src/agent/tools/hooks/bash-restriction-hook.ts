@@ -158,8 +158,12 @@ export interface BashRestrictionHookOptions {
 }
 
 /**
- * Factory. Returns a synchronous `HookHandler` — bash restriction is
- * regex-based with no I/O, so we do not need the longRunning escape.
+ * Factory. Returns a synchronous `HookHandler`. Bash restriction is mostly
+ * regex-based, but the carve-out filter (`allowlistedFileForms` →
+ * `isReadDenied` → `safeRealpath`) does a bounded `realpathSync` per call, one
+ * per allowlisted form — it stays synchronous deliberately (the I/O is a
+ * handful of stat-like syscalls, not worth an async escape), so we still do
+ * not need the longRunning flag.
  */
 export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
   return (context: HookContext): HookDecision => {
@@ -320,15 +324,20 @@ function allowlistedFileForms(home: string): string[] {
  * either check scans the command.
  *
  * Invariant: EXACT files only — the same rule `isReadDenied` applies to this
- * list. The trailing `(?![\w./\\-])` guard is what enforces it: a
+ * list. The trailing `(?![\w./\\*?\[\]{}-])` guard is what enforces it: a
  * prefix-extended lookalike (`mcp.json.bak`, `mcp.json/child`) is left in place
- * and therefore still matches its enclosing `~/.afk/config` root. Dropping that
- * guard would turn one readable file into a readable directory.
+ * and therefore still matches its enclosing `~/.afk/config` root. The class
+ * also excludes shell glob/brace metacharacters (`*`, `?`, `[`, `]`, `{`, `}`)
+ * on purpose: without them, `mcp.json*` satisfied the lookahead, so the whole
+ * exact-file span got scrubbed even though the shell expands that glob to
+ * siblings (`mcp.json.bak`) the carve-out was never meant to cover — dropping
+ * the only text carrying the denied enclosing root. Dropping this guard
+ * entirely would turn one readable file into a readable directory.
  */
 function scrubAllowlistedRefs(text: string, home: string): string {
   let out = text;
   for (const form of allowlistedFileForms(home)) {
-    const exactRef = new RegExp(`${escapeRegExp(form)}(?![\\w./\\\\-])`, 'g');
+    const exactRef = new RegExp(`${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])`, 'g');
     out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);
   }
   return out;
@@ -441,7 +450,13 @@ function withEtcAliases(roots: readonly string[]): string[] {
  * read denylist, whose floor is unconditional. Bash's gate exists to stop the
  * ACCIDENTAL `cat`, and an explicit `/allow-dir ~/.ssh` is the user saying they
  * want that path in this session; the typed tools stay floored regardless, so
- * the strict boundary is never the one being relaxed here.
+ * the strict boundary is never the one being relaxed here. This is not limited
+ * to explicit grants, though: `granted` below also seeds from
+ * `grants.resolveBase` (the session's cwd anchor, always implicitly readable —
+ * see `dispatcher.ts`), so a candidate whose ancestor IS the session's
+ * resolveBase drops out of restriction with no `/allow-dir` call at all — the
+ * containment check (`path.relative`) cannot distinguish an implicit
+ * resolveBase root from an explicit `readRoots`/`writeRoots` grant.
  */
 export function deriveRestrictedSubstrings(grants: {
   resolveBase: string | undefined;
