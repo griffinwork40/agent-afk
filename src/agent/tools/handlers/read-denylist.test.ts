@@ -11,21 +11,28 @@
  * - Symlink bypass is blocked: a symlink into a denylisted dir is dereferenced
  *   (via a tmpdir fixture that always runs, not gated on ~/.ssh existing).
  * - Custom AFK_READ_DENYLIST entries are applied (with cache reset).
+ * - The ~/.afk/config/mcp.json exception: allowed, exact-file only (backups and
+ *   pseudo-children stay denied), re-deniable via AFK_READ_DENYLIST, and
+ *   resolved leaf-un-dereferenced so a symlinked registry cannot launder a
+ *   protected target into the exception set (PR #728 review P1).
  *
  * @module agent/tools/handlers/read-denylist.test
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, symlinkSync, existsSync } from 'fs';
-import { join } from 'path';
+import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
+import { basename, dirname, join } from 'path';
 import { homedir, tmpdir } from 'os';
 import {
   isReadDenied,
   assertNotReadDenied,
   getReadDenylist,
   BUILTIN_READ_DENYLIST,
+  BUILTIN_READ_ALLOWLIST,
+  resolveExceptionEntry,
   _resetReadDenylistCacheForTests,
 } from './read-denylist.js';
+import { safeRealpath } from './write-denylist.js';
 
 let tmpDir: string;
 
@@ -131,6 +138,66 @@ describe('isReadDenied — built-in exception for ~/.afk/config/mcp.json', () =>
 
   it('assertNotReadDenied does not throw for the carve-out', () => {
     expect(() => assertNotReadDenied(mcp)).not.toThrow();
+  });
+});
+
+// Regression guard for PR #728 review P1: the exception list must never be
+// expressed as the symlink TARGET of its own leaf. `safeRealpath` on the whole
+// entry would let a `mcp.json` symlinked at a protected file put THAT file in
+// the exception set — and because exceptions are consulted before the built-in
+// prefixes, a DIRECT read of the protected file would return allowed.
+// The built-in lists are keyed to the real homedir(), so the invariant is
+// asserted against `resolveExceptionEntry` with tmpdir fixtures.
+describe('read-denylist — exception entries dereference the dir chain, never the leaf', () => {
+  it('resolves a symlinked config DIRECTORY (dotfiles relocation still works)', () => {
+    const realCfg = join(tmpDir, 'real-cfg');
+    mkdirSync(realCfg, { recursive: true });
+    const linkCfg = join(tmpDir, 'link-cfg');
+    symlinkSync(realCfg, linkCfg);
+
+    // safeRealpath on the expectation too: on macOS tmpdir() sits under /var,
+    // itself a symlink to /private/var, so the dir chain legitimately resolves.
+    expect(resolveExceptionEntry(join(linkCfg, 'mcp.json'))).toBe(
+      join(safeRealpath(realCfg), 'mcp.json'),
+    );
+  });
+
+  it('does NOT resolve a leaf symlink pointing at a protected file', () => {
+    const cfg = join(tmpDir, 'cfg');
+    const secretDir = join(tmpDir, 'fake-ssh');
+    mkdirSync(cfg, { recursive: true });
+    mkdirSync(secretDir, { recursive: true });
+    const secret = join(secretDir, 'id_rsa');
+    writeFileSync(secret, 'PRIVATE KEY', 'utf-8');
+    const entry = join(cfg, 'mcp.json');
+    symlinkSync(secret, entry);
+
+    const resolved = resolveExceptionEntry(entry);
+    // The protected target never becomes the exception…
+    expect(resolved).not.toBe(secret);
+    expect(resolved).not.toBe(safeRealpath(secret));
+    expect(resolved).not.toContain('id_rsa');
+    // …the entry stays its own nominal leaf inside the (resolved) config dir.
+    expect(resolved).toBe(join(safeRealpath(cfg), 'mcp.json'));
+    expect(basename(resolved)).toBe('mcp.json');
+  });
+
+  it('keeps every built-in exception inside the resolved ~/.afk/config dir', () => {
+    for (const entry of BUILTIN_READ_ALLOWLIST) {
+      const resolved = resolveExceptionEntry(entry);
+      expect(basename(resolved)).toBe(basename(entry));
+      expect(dirname(resolved)).toBe(safeRealpath(join(homedir(), '.afk', 'config')));
+    }
+  });
+
+  it('a protected path is still denied when reached directly (the P1 regression)', () => {
+    // Belt-and-braces on the real built-ins: whatever the exception list resolves
+    // to, a direct credential read must never be admitted by it.
+    for (const entry of BUILTIN_READ_ALLOWLIST) {
+      expect(resolveExceptionEntry(entry)).not.toMatch(/\/\.(ssh|aws|gnupg)\//);
+    }
+    expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
   });
 });
 

@@ -39,7 +39,7 @@ import { extname, join } from 'path';
 import { homedir } from 'os';
 import { resolveQuery } from '../../multi-line-reader.js';
 import { safeRealpath } from '../../../agent/tools/handlers/write-denylist.js';
-import { READ_ALLOWLIST_REL } from '../../../agent/tools/handlers/read-denylist.js';
+import { READ_ALLOWLIST_REL, isReadDenied } from '../../../agent/tools/handlers/read-denylist.js';
 
 /** Per-file injection ceiling. Files larger than this are skipped with a warning. */
 export const AT_FILE_MAX_SIZE_BYTES = 100 * 1024;
@@ -120,13 +120,24 @@ function fenceFor(body: string): string {
  * are deliberately injectable (`~/.afk/config/mcp.json`). The list is shared
  * with the typed read tools' `READ_ALLOWLIST_REL` so the two surfaces cannot
  * drift — a path the read denylist permits must not be `@`-blocked here.
+ *
+ * Invariant: a carve-out is honored only while the read denylist also permits
+ * the path. An operator who re-denies the registry (`AFK_READ_DENYLIST=
+ * ~/.afk/config/mcp.json`, the documented escape hatch for a registry holding
+ * inline secrets rather than `${VAR}` placeholders) blocks the typed read tools
+ * AND this surface — otherwise `@`-injection would forward to the model exactly
+ * the file the operator just protected. `isReadDenied` is consulted only for an
+ * allowlisted match, never for the whole function: `SENSITIVE_RE` legitimately
+ * covers files the read denylist does not (`.env`, `*.pem`, shell history), and
+ * this module resolves against an injectable home the denylist cannot know.
  */
 function isSensitiveRead(
   realPath: string,
   sensitiveDirs: readonly string[],
   allowedFiles: readonly string[],
 ): boolean {
-  if (allowedFiles.includes(realPath)) return false;
+  // An allowlisted file is sensitive iff the read denylist re-denies it.
+  if (allowedFiles.includes(realPath)) return isReadDenied(realPath).denied;
   if (SENSITIVE_RE.test(realPath)) return true;
   for (const dir of sensitiveDirs) {
     if (realPath === dir || realPath.startsWith(dir + '/')) return true;

@@ -31,7 +31,7 @@
  */
 
 import { env } from '../../../config/env.js';
-import { resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 
@@ -106,6 +106,36 @@ export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
   (rel) => `${homedir()}/${rel}`,
 );
 
+/**
+ * Resolve one exception entry to the path form compared in {@link isReadDenied}:
+ * the parent-directory chain IS dereferenced, the final leaf is NOT.
+ *
+ * Invariant: an exception must never be expressed as the symlink TARGET of its
+ * own leaf. `safeRealpath` on the whole entry would do exactly that — if
+ * `~/.afk/config/mcp.json` were a symlink to a protected file (an SSH private
+ * key, `afk.env`), the resolved target would become the exception, and since
+ * the exception is consulted before the built-in prefixes, a DIRECT read of
+ * that protected file would return allowed. Resolving only the directory chain
+ * keeps the carve-out working when `~/.afk` or `~/.afk/config` is itself a
+ * symlink (dotfiles setups relocate the config dir), while the un-dereferenced
+ * leaf means a symlinked `mcp.json` can never launder a protected target
+ * through the registry's name.
+ *
+ * Consequence, deliberate and fail-closed: if `mcp.json` is a symlink pointing
+ * OUT of the resolved config dir, the request dereferences to something that is
+ * not this entry, so the carve-out does not apply and the normal floor decides
+ * (denied when the target is protected). An operator who keeps the registry
+ * elsewhere reads it by its own path instead.
+ *
+ * Exported so the leaf-non-dereference invariant is directly testable: the
+ * built-in lists are keyed to the real `homedir()`, so a suite cannot fabricate
+ * a symlinked `~/.afk/config` to exercise it end-to-end.
+ */
+export function resolveExceptionEntry(entry: string): string {
+  const abs = resolve(entry);
+  return join(safeRealpath(dirname(abs)), basename(abs));
+}
+
 // Memoized resolved lists, keyed by the AFK_READ_DENYLIST value so a test
 // that changes the env re-resolves. Reads are a hot path (every grep/glob/
 // read_file call routes through resolveAndContain), so resolving the built-in
@@ -131,7 +161,7 @@ function resolveLists(): {
     key,
     builtins: BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
     extras,
-    allow: BUILTIN_READ_ALLOWLIST.map((p) => safeRealpath(resolve(p))),
+    allow: BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
   };
   return cached;
 }
@@ -178,7 +208,9 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
     }
   }
   // Exact-file exceptions only — a prefix match here would carve out a whole
-  // directory and re-open the fail-open hole the whole-dir floor exists to close.
+  // directory and re-open the fail-open hole the whole-dir floor exists to
+  // close. Entries are leaf-un-dereferenced (see `resolveExceptionEntry`), so a
+  // symlinked `mcp.json` cannot smuggle a protected target into this set.
   if (allow.includes(real)) return { denied: false };
   for (const blocked of builtins) {
     if (real === blocked || real.startsWith(blocked + '/')) {
