@@ -26,7 +26,7 @@ is scoped to `src/agent/`.
 | `providers/` | Model adapters. `providerForModel()` picks one by model family. |
 | `providers/anthropic-direct/` | Direct Messages API integration (default for Claude). |
 | `providers/openai-compatible/` | Direct Chat Completions API integration (default for GPT/o-series/codex models). Also supports any OpenAI-compatible endpoint via `baseURL`. |
-| `tools/` | Built-in tool schemas (Bash, Read, Edit, EditBatch, WebFetch, WebSearch, Skill, Compose) and the dispatcher. |
+| `tools/` | Built-in tool schemas (`bash`, `read_file`, `edit_file`, `web_scrape`, `browser_*`, `agent`, `skill`, `compose`, …) and the dispatcher. Names are snake_case; PascalCase tokens like `WebFetch`/`WebSearch` are aliases normalized to real tools, not dispatchable names. |
 | `subagent/` | `SubagentHandle` implementation, result and trace types. |
 | `types/` | Config, message, model, permission, session types. `sdk-types.ts` holds local copies of types previously imported from the agent SDK. |
 | `daemon/` | Cron scheduler, scheduled-task types, gates, telemetry. |
