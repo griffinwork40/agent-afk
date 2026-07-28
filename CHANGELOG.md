@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.3] - 2026-07-28
+
+### Fixed
+- reach the chromium-missing install hint (#721) (#729) (dd39451)
+
 ## [5.81.2] - 2026-07-27
 
 ### Fixed
