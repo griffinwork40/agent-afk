@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { chromium } from 'playwright';
 import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserConfig } from '../types.js';
+import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 
@@ -125,9 +126,18 @@ export class BrowserLauncher {
    * reconnected — callers must call `closeSession(sid)` before the next
    * `ensureContext(sid)` to get a fresh context on the new browser process.
    *
-   * Throws on launch failure (e.g. Playwright not installed, out of memory).
-   * The error propagates unchanged so callers can surface it as a
-   * `ToolResult { isError: true }`.
+   * Throws on launch failure (e.g. Playwright not installed, out of memory) so
+   * callers can surface it as a `ToolResult { isError: true }`.
+   *
+   * Invariant: a Playwright-missing failure (and ONLY that) is decorated here
+   * with an install hint before being rethrown; every other error propagates by
+   * identity, message untouched. This is the single choke point every browser
+   * consumer funnels through — the five `browser_*` tool handlers via
+   * `getBrowserProvider()`, and `web_scrape`'s render escalation via the same
+   * cached provider — so decorating here reaches all of them, including future
+   * ones. Do NOT move this check up into the handlers' catch blocks: provider
+   * construction never launches chromium, which is precisely why the hint was
+   * unreachable before issue #721.
    */
   async ensureBrowser(): Promise<Browser> {
     // Fast path: already connected.
@@ -158,7 +168,10 @@ export class BrowserLauncher {
       })
       .catch((err: unknown) => {
         this.launchPromise = undefined;
-        throw err;
+        // Headed and headless need DIFFERENT chromium downloads, and only this
+        // frame knows which one was requested — a handler catch sees just a
+        // string. Passing it through lets the hint name the missing artifact.
+        throw decoratePlaywrightLaunchError(err, this.config.headless);
       });
 
     return this.launchPromise;

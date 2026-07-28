@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.3] - 2026-07-28
+
+### Fixed
+- reach the chromium-missing install hint (#721) (#729) (dd39451)
+
+## [5.81.2] - 2026-07-27
+
+### Fixed
+- interleave ◦ progress lines into the live preview chronologically (#719) (4490337)
+
+## [5.81.1] - 2026-07-27
+
+### Fixed
+- route sub-agent lane and /bgsub width through getTerminalWidth (#720) (c7e5996)
+
 ## [5.81.0] - 2026-07-27
 
 ### Added

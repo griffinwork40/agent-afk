@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createWebScrapeHandler } from './web-scrape.js';
+import { decoratePlaywrightLaunchError } from './playwright-hints.js';
 import type { RenderFn } from '../../../web/types.js';
 
 type FetchFn = typeof fetch;
@@ -179,7 +180,35 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
 
     const r = await handler({ url: 'https://example.com/x' }, signal());
     expect(r.isError).toBe(true);
-    expect(r.content).toMatch(/playwright install chromium/);
+    // Since #721 the command is resolved from the BUNDLED playwright CLI
+    // rather than hardcoded as `pnpm exec …`, which was wrong for a global
+    // install. web_scrape now shares that single implementation instead of
+    // carrying its own drifted copy of the detector and the hint text.
+    expect(r.content).toMatch(/install chromium/);
+    expect(r.content).toMatch(/render fallback needs the optional Playwright browser/);
+  });
+
+  it('does not double-append the hint when the launcher already decorated the error', async () => {
+    // BrowserLauncher decorates a chromium-missing LAUNCH failure at its
+    // source, so the message reaching web_scrape already carries the install
+    // command. Appending a second copy would print the remediation twice.
+    const fetchFn = makeFetch(() => {
+      throw new Error('ENOTFOUND');
+    });
+    const decorated = decoratePlaywrightLaunchError(
+      new Error("browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1234/chrome"),
+      true,
+    );
+    const renderFn = vi.fn<RenderFn>(async () => {
+      throw decorated;
+    });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn });
+
+    const r = await handler({ url: 'https://example.com/x' }, signal());
+    expect(r.isError).toBe(true);
+    const occurrences = (String(r.content).match(/install chromium/g) ?? []).length;
+    expect(occurrences).toBe(1);
+    expect(r.content).not.toMatch(/render fallback needs the optional Playwright browser/);
   });
 });
 

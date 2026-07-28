@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createBrowserOpenHandler } from './browser-open.js';
+import { decoratePlaywrightLaunchError } from './playwright-hints.js';
 import type { BrowserProvider } from '../../../browser/provider.js';
 import type {
   BrowserObservation,
@@ -261,6 +262,34 @@ describe('browser_open handler — provider errors', () => {
     const r = await handler({ url: 'https://example.com' }, makeSignal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/pnpm add playwright/);
+  });
+
+  // Issue #721 acceptance: a missing chromium binary surfaces from the
+  // provider.open() path, NOT from provider construction — construction never
+  // launches chromium. The hint used to be wired only into the construction
+  // catch, so this path returned a bare "Executable doesn't exist" with no
+  // remedy and the model retried ~9 times. BrowserLauncher now decorates the
+  // launch failure at its source, so the remediation rides along in the
+  // message the handler passes through.
+  it('surfaces a runnable install command when chromium is missing on the open path', async () => {
+    const launchErr = decoratePlaywrightLaunchError(
+      new Error(
+        "browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1234/chrome",
+      ),
+      false,
+    );
+    const provider = makeProvider({ open: vi.fn().mockRejectedValue(launchErr) });
+    const getBrowserProvider = vi.fn().mockResolvedValue(provider);
+    const handler = createBrowserOpenHandler({ getBrowserProvider });
+
+    const r = await handler({ url: 'https://example.com' }, makeSignal());
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/Executable doesn't exist/);
+    expect(r.content).toMatch(/install chromium/);
+    // Names the artifact that was actually missing for a headed launch.
+    expect(r.content).toMatch(/chromium-\*/);
+    // An environment fault is not a timeout — must stay unclassified.
+    expect(r.failureClass).toBeUndefined();
   });
 });
 

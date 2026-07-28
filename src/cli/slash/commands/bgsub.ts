@@ -24,6 +24,7 @@
 
 import { palette } from '../../palette.js';
 import { formatDuration } from '../../format-utils.js';
+import { getTerminalWidth } from '../../terminal-size.js';
 import type { SlashCommand } from '../types.js';
 import type { BackgroundAgentRegistry, BackgroundJob } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
@@ -100,7 +101,7 @@ function formatJobLine(job: BackgroundJob): string {
   const summary = summarizerRef.getSummary(job.jobId);
   if (!summary) return mainLine;
 
-  const cols = process.stdout.columns ?? 120;
+  const cols = getTerminalWidth();
   const safeText = sanitizeSummaryText(summary.text, Math.max(40, cols - 10));
   const ageS = Math.round((Date.now() - summary.refreshedAt) / 1000);
   const staleSuffix = summary.stale ? ' [stale]' : '';

@@ -267,7 +267,8 @@ export const webScrapeTool: AnthropicToolDef = {
     'plain fetch yields thin content, it escalates to a headless-browser render ' +
     'and re-extracts. Use this for articles, docs, blog posts, and most "I want ' +
     'to read this page" cases. No API key required (the render fallback needs ' +
-    'the Playwright chromium binary — `pnpm exec playwright install chromium`).\n' +
+    'the Playwright chromium binary; if it is absent the error names the exact ' +
+    'install command for this installation).\n' +
     '- `raw`: GETs the URL directly and returns the response body as decoded ' +
     'text, with no markdown transformation. Use for JSON APIs, robots.txt, RSS, ' +
     'or plain-text endpoints. Not byte-preserving — binary payloads are decoded ' +

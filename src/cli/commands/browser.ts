@@ -36,6 +36,7 @@ import { randomBytes } from 'crypto';
 import { createInterface } from 'node:readline';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
+import { decoratePlaywrightLaunchError } from '../../browser/playwright-missing.js';
 import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/config-loader.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import {
@@ -271,7 +272,14 @@ export function registerBrowserCommand(program: Command): void {
         // Dynamic import: Playwright is heavy; only load it when login actually runs.
         const { chromium } = await import('playwright');
         console.log(palette.meta(`Launching a browser for profile "${profile}"…`));
-        const browserInstance = await chromium.launch({ headless: false });
+        // This launch bypasses BrowserLauncher (and therefore its hint
+        // decoration), so apply the same decorator here. `headless: false` is
+        // hardcoded above, making this the one path that ALWAYS needs the full
+        // `chromium-*` build — a cache holding only the headless shell fails
+        // here while satisfying every agent-facing browser tool.
+        const browserInstance = await chromium.launch({ headless: false }).catch((err: unknown) => {
+          throw decoratePlaywrightLaunchError(err, false);
+        });
         // Restore an existing session if present, so re-running login refreshes
         // the same profile rather than starting from a logged-out state.
         const context = await browserInstance.newContext(
