@@ -135,8 +135,10 @@ Add your own entries with `AFK_READ_DENYLIST` (colon-separated absolute paths). 
 matched *before* the carve-out, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the
 registry if yours holds inline secrets. Built-in entries always apply and cannot be removed.
 
-The same list backs the bash restrictions below, so a credential path is protected whether the agent
-reaches for `read_file` or for `cat`.
+The same list backs the bash restrictions below, so on **interactive** surfaces (REPL, Telegram) a
+credential path is protected whether the agent reaches for `read_file` or for `cat`. The typed-tool
+floor is unconditional on every surface; the bash half is not — see
+[Bash restrictions](#bash-restrictions) for the headless exception.
 
 ## Bash restrictions
 
@@ -154,10 +156,17 @@ typed file tools:
   additions: `~/.password-store`, `~/Library/Application Support` (browser profiles), and the whole
   `~/.config/gh` directory. A restricted path is allowed only when a granted root already covers it.
 
-On **headless** surfaces (`afk chat`, `afk daemon`) the interpreter denylist *fails open* by
-default — no grant manager is wired, so legitimate automation running `python -c` is not
-hard-blocked with no recourse. Opt headless flows back into the denylist with
-`AFK_FORCE_BASH_INTERPRETER_GUARD=1`.
+On **headless** surfaces (`afk chat`, `afk daemon`) **both** checks *fail open*. No grant manager is
+wired there, so the restricted-root list is empty and the interpreter denylist has no approval path
+to redirect the model to. Legitimate automation running `python -c` is not hard-blocked with no
+recourse — but neither is `cat ~/.ssh/id_rsa`. Treat bash as unrestricted on those surfaces; the
+typed file tools keep their unconditional credential floor either way.
+
+`AFK_FORCE_BASH_INTERPRETER_GUARD=1` opts headless flows back into the **interpreter** denylist only,
+matched against the built-in credential-fragment signal (there are no grants to derive a root list
+from). It does *not* restore the restricted-root check, so a plain `cat` of a credential path still
+passes. For strict containment in unattended runs, use an OS-level sandbox — `sandbox-exec`,
+Landlock/bubblewrap, or a container — rather than this hook.
 
 ## Bypass mode
 
@@ -221,9 +230,9 @@ Three things switch on together:
 |---|---|---|
 | `AFK_DISABLE_PATH_APPROVAL` | `1` skips **both** the path-approval and bash-restriction hooks entirely — wide-open file access for headless flows that need it. | `0` (hooks on) |
 | `AFK_DISABLE_BASH_INTERPRETER_GUARD` | `1` skips only the interpreter-eval denylist; the restricted-root check stays active. Wins over the force flag. | `0` (denylist on for interactive) |
-| `AFK_FORCE_BASH_INTERPRETER_GUARD` | `1` forces the interpreter denylist on even on headless surfaces, where it otherwise fails open. | `0` (headless fails open) |
+| `AFK_FORCE_BASH_INTERPRETER_GUARD` | `1` forces the interpreter denylist on even on headless surfaces, where it otherwise fails open. The restricted-root check stays open there regardless. | `0` (headless fails open) |
 | `AFK_WRITE_DENYLIST` | Comma-separated path globs the `write_file` tool always refuses, regardless of mode (including bypass). | — |
-| `AFK_READ_DENYLIST` | Colon-separated absolute paths added to the credential floor above — refused by the read tools and by bash, on every surface. Adds only; built-ins cannot be removed. | — |
+| `AFK_READ_DENYLIST` | Colon-separated absolute paths added to the credential floor above — refused by the typed read tools on **every** surface, and by bash on **interactive** surfaces only ([headless fails open](#bash-restrictions)). Adds only; built-ins cannot be removed. | — |
 
 ## See also
 
