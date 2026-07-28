@@ -123,12 +123,19 @@ describe('buildSkillManifest', () => {
     });
 
     it('returns an empty manifest when the excluded skill was the only entry', () => {
-      // Guard: an empty manifest must stay empty-string (providers skip the
-      // fragment entirely) rather than emitting a header with no entries.
-      const manifest = buildSkillManifest([], { excludeName: 'solo-skill' });
-      const soloOnly = buildSkillManifest([], { excludeName: 'ground-state' });
-      expect(manifest).toContain('ground-state');
-      expect(soloOnly).not.toContain('ground-state');
+      // Guard: `collected` is non-empty here (one registered skill) and the
+      // excludeName filter is what empties it — unlike "returns empty string
+      // when no skills registered", where nothing is collected in the first
+      // place. Either way the result must stay empty-string (providers skip
+      // the fragment entirely) rather than emitting a header with no entries.
+      _resetRegistry();
+      registerSkill({
+        name: 'solo-skill',
+        description: 'Only registered skill',
+        handler: vi.fn(),
+      });
+
+      expect(buildSkillManifest([], { excludeName: 'solo-skill' })).toBe('');
     });
 
     it('collectSkillEntries ignores excludeName — non-model consumers see everything', () => {
