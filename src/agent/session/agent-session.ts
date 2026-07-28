@@ -15,6 +15,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
 import { AbortError } from '../../utils/errors.js';
 import { emitSessionPhase } from '../trace/emit.js';
+import type { TraceWriter } from '../trace/writer.js';
 import type { HookRegistry } from '../hooks.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
@@ -82,6 +83,10 @@ import {
 
 
 export class AgentSession implements IAgentSession {
+  /** Writers are claimed by the first session constructed with them. Forks
+   * share that writer, so seal ownership does not depend on every SDK caller
+   * knowing about an internal fork marker. */
+  private static readonly claimedTraceWriters = new WeakSet<TraceWriter>();
   private config: AgentConfig;
   /**
    * Plan-mode-exit state machine: the pending implement-turn seed, the captured
@@ -108,6 +113,7 @@ export class AgentSession implements IAgentSession {
   private readonly abortController: AbortController;
   private readonly _hookRegistry: HookRegistry | undefined;
   private sessionEndDispatched = false;
+  private readonly ownsTraceSeal: boolean;
   private stateManager!: SessionStateManager;
   /** Cumulative USD cost across all turns this session. Mirrored from
    *  per-turn `metadata.totalCostUsd` so the trace writer's
@@ -175,6 +181,13 @@ export class AgentSession implements IAgentSession {
   private readonly ledger = new LedgerLifecycle();
 
   constructor(config: AgentConfig) {
+    this.ownsTraceSeal =
+      config.traceWriter !== undefined &&
+      config.isSubagentFork !== true &&
+      !AgentSession.claimedTraceWriters.has(config.traceWriter);
+    if (this.ownsTraceSeal) {
+      AgentSession.claimedTraceWriters.add(config.traceWriter!);
+    }
     // Wire the plan-exit control bridge for top-level sessions only (plan mode
     // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
     // The model-callable `exit_plan_mode` tool uses these callbacks to flip the
@@ -1216,19 +1229,18 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    // Invariant: only the TOP-LEVEL session (no fork marker) may seal the writer.
-    // A session tree shares ONE TraceWriter by reference (forkSubagent threads
-    // the parent's writer into every descendant), and seal() is one-shot /
-    // idempotent (NdjsonTraceWriter). If a subagent sealed on its own close(),
-    // the FIRST descendant torn down would seal the whole shared file while the
-    // top-level is still mid-run — stranding every later ancestor event as the
-    // "started without terminal" gap (a nested grandchild's end_turn sealing the
-    // root trace 30+ min before the real session ends). The seal owner gate uses
-    // forkSubagent's explicit fork marker, not parentSessionId: stub-parent skill
-    // forks can have no parent session id while still sharing the root writer.
-    // Subagents still emit their own `closure` record above; if the top-level
-    // never runs close(), the process-exit backstop still seals.
-    if (this.config.subagentToolOutputCapBytes === undefined) {
+    // Invariant: only the session that first claimed a shared TraceWriter may
+    // seal it. `isSubagentFork` prevents stub-parent forks from claiming an
+    // otherwise unseen writer; writer identity also protects SDK consumers
+    // that directly construct a child from the legacy fork config (which has
+    // `subagentToolOutputCapBytes` but not the newer marker). This avoids
+    // coupling ownership back to that unrelated output cap, so a top-level
+    // session may still set a cap and seal normally. seal() is a one-shot hard
+    // gate: a child sealing first would silently truncate all later records.
+    // Subagents still emit their own `closure` record above; only the seal is
+    // gated. If the top-level never runs close(), the process-exit backstop
+    // still seals.
+    if (this.ownsTraceSeal) {
       await sealTraceWriter(this.config.traceWriter, {
         ...signals,
         finalTurnCount: this.turnCount,

@@ -792,6 +792,19 @@ export class SubagentManager {
 
     const childConfig: AgentConfig = {
       ...options.config,
+      // Invariant (trace seal ownership): mark this session as a fork so it
+      // never seals the SHARED witness trace. The whole tree shares ONE
+      // TraceWriter by reference and seal() is a one-shot hard gate — after it
+      // flips, write() throws and emitSubagentLifecycle swallows the rejection,
+      // so the first descendant to seal silently truncates every later
+      // sibling's terminal row (the "started without terminal" orphan gap).
+      // Stamped here, unconditionally, for the same reason as
+      // subagentToolOutputCapBytes below: this is the single choke point every
+      // fork path converges through, so no fork path can forget it. A caller
+      // override is intentionally NOT honored — being a fork is not optional.
+      // Grandchildren re-stamp it (and would inherit it via the spread
+      // regardless), which is correct: they are forks too.
+      isSubagentFork: true,
       // Effective model after the cross-provider coercion above (#652). Placed
       // AFTER the spread so it overrides options.config.model; a no-op on the
       // common path where nothing was coerced.
