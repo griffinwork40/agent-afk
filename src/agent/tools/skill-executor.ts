@@ -151,6 +151,17 @@ export class SkillExecutor {
       };
     }
 
+    // Refresh the process-global registry for this executor's session cwd
+    // immediately before lookup. Another overlapping session may have built
+    // its manifest since this session advertised its project skills; that scan
+    // evicts project-origin entries before registering the other cwd. Without
+    // this refresh, a valid skill advertised to this session can disappear
+    // between prompt assembly and tool execution.
+    const entries = collectSkillEntries(
+      this.ctx.pluginConfigs,
+      this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
+    );
+
     // 1. Try the global skill registry (built-in + user-space skills).
     //    These already have handlers that dispatch subagents internally.
     //    Only the getSkill LOOKUP is guarded: it throws "Skill not found" when
@@ -226,10 +237,6 @@ export class SkillExecutor {
     // 3. Not found — return available skills list. Resolve project skills
     // against the session cwd (worktree / daemon-task / Telegram-chat dir),
     // not the host process cwd — mirrors the manifest build in the provider.
-    const entries = collectSkillEntries(
-      this.ctx.pluginConfigs,
-      this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
-    );
     const available = entries.map((e) => e.name).join(', ');
     return {
       content: `Skill "${parsed.name}" not found. Available skills: ${available || '(none)'}`,
