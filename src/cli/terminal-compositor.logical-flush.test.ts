@@ -185,8 +185,43 @@ describe('buildScrollbackArchiveEscape', () => {
     // splits into 2 chunks (24 + 6) each with its own bottom-CUP + scroll.
     const lines = Array.from({ length: 30 }, (_, i) => `row${i}`);
     const esc = buildScrollbackArchiveEscape(lines, 1, 24, 80);
-    const bottomCups = esc.split('\x1b[24;1H').length - 1;
-    expect(bottomCups).toBe(2); // one scroll per chunk
+    // Count SCROLL passes (bottom-CUP immediately followed by a line feed), not
+    // every CUP to the bottom row: the per-physical-row pre-erase pass (#665)
+    // also CUPs to row 24 when a chunk fills the region, and that is not a scroll.
+    const scrollPasses = esc.match(/\x1b\[24;1H\n/g)?.length ?? 0;
+    expect(scrollPasses).toBe(2); // one scroll per chunk
+  });
+
+  it('erases every RESIDENT physical row, not just each logical line head (#665)', () => {
+    // A 2-row logical line at width 120: the per-line `\x1b[2K` covers only its
+    // head row, so the continuation row must be erased by the pre-erase pass —
+    // otherwise stale glyphs to the right of the wrapped tail (the previous
+    // frame's content) scroll into native scrollback verbatim.
+    const h = hardWrapToWidth(LONG, 120).split('\n').length;
+    expect(h).toBe(2);
+    const esc = buildScrollbackArchiveEscape([LONG], 1, 24, 120);
+    expect(esc).toContain('\x1b[1;1H\x1b[2K'); // head row erased
+    expect(esc).toContain('\x1b[2;1H\x1b[2K'); // continuation row erased
+    // Rows below the painted block are NOT touched (matches the pre-#540 footprint).
+    expect(esc).not.toContain('\x1b[3;1H\x1b[2K');
+  });
+
+  it('scrolls only the RESIDENT height for a line taller than the paint region (#665)', () => {
+    // Codex P1 repro: a 7-physical-row line in a 5-row terminal (floor 1 →
+    // chunkMax 5). Painting it auto-scrolls the 2-row overflow past the bottom
+    // margin, so the explicit scroll must be 5 — emitting 7 would double-count
+    // the overflow and append 2 blank rows to history (9 archived rows, not 7).
+    const width = 10;
+    const line = 'y'.repeat(65); // 6 full rows + a 5-col remainder = 7 rows
+    const h = hardWrapToWidth(line, width).split('\n').length;
+    expect(h).toBe(7);
+    const chunkMax = 5;
+    const esc = buildScrollbackArchiveEscape([line], 1, 5, width);
+    const scrollTail = esc.slice(esc.lastIndexOf('\x1b[5;1H') + '\x1b[5;1H'.length);
+    expect(scrollTail).toBe('\n'.repeat(chunkMax));
+    // Autowrap overflow + explicit resident scroll === the line's true height,
+    // so exactly `h` rows enter scrollback and no blank rows are appended.
+    expect(h - chunkMax + scrollTail.length).toBe(h);
   });
 });
 

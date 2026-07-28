@@ -487,7 +487,8 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
         // continuation rows are soft-wrap continuations that rejoin on resize).
         // Autowrap is load-bearing here (opposite of the on-screen band paint's
         // withAutowrapDisabled). Phase 3's model keeps overflowRun[archiveCount:]
-        // (see capBandModel call) so archived + retained are disjoint + complete.
+        // (see the `overflowRun.slice(archiveCount)` assignments) so archived +
+        // retained are disjoint + complete.
         if (archiveCount > 0) {
           const archiveLines = scrollbackFlushLines(overflowRun, overflowRunMeta, archiveCount);
           const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);

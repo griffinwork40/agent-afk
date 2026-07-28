@@ -265,19 +265,22 @@ export function snapFlushCountToLogicalBoundary(
  * bottom margin and emit `\n` × (total physical rows) to scroll the whole
  * painted block up and OFF the top into native scrollback. Writing at the
  * bottom-margin-only (the naive approach) leaves the content in the VIEWPORT,
- * never scrollback; writing at the top then scrolling the exact painted height
- * is what carries it into history. A line that fits the width is one physical
+ * never scrollback; writing at the top then scrolling the resident painted
+ * height is what carries it into history. A line that fits the width is one physical
  * row and contributes one scroll — byte-equivalent outcome to the pre-#540
  * physical-row archive; a wide line contributes its wrapped height and rejoins
  * cleanly.
  *
  * Chunked by the paintable height (`rows - anchorFloor + 1`) so a block taller
  * than the terminal still archives every row: each chunk is painted top-aligned
- * and scrolled by its own physical height before the next chunk, so the paint
- * never itself overflows the bottom margin and auto-scrolls (which would
- * double-count). `width` is needed to compute each line's physical (wrapped)
- * height; it MUST equal the terminal's current column count so hardWrapToWidth's
- * split matches what the terminal's autowrap will do.
+ * and scrolled off before the next chunk. A chunk is scrolled by its RESIDENT
+ * height — `min(chunkRows, chunkMax)` — not its full physical height: a SINGLE
+ * line taller than the region cannot be split across chunks, so its paint does
+ * overflow the bottom margin and the terminal auto-scrolls the excess itself.
+ * Adding a full-height explicit scroll on top of that auto-scroll double-counts
+ * and appends blank rows to history. `width` is needed to compute each line's
+ * physical (wrapped) height; it MUST equal the terminal's current column count
+ * so hardWrapToWidth's split matches what the terminal's autowrap will do.
  *
  * MUST run with autowrap ENABLED (the default) and inside the caller's
  * full-screen scroll region — the opposite of the on-screen band paint, which
@@ -303,21 +306,37 @@ export function buildScrollbackArchiveEscape(
   let chunkRows = 0;
   const flushChunk = (): void => {
     if (chunk.length === 0) return;
+    // External constraint (DECAWM autowrap owns the wrap): a chunk taller than
+    // the paint region auto-scrolls `chunkRows - chunkMax` rows into history
+    // DURING the paint, so only the rows still RESIDENT in the region may be
+    // scrolled explicitly afterwards. `residentRows` is that count, and is the
+    // single source of truth for both the pre-erase span and the scroll count.
+    const residentRows = Math.min(chunkRows, chunkMax);
+    // Erase every PHYSICAL row the paint will occupy, before painting it. The
+    // per-line `\x1b[2K` below erases only each logical line's HEAD row; a line
+    // that autowraps leaves its continuation rows unerased, so stale glyphs to
+    // the right of the wrapped tail scroll into scrollback verbatim. Restores
+    // the pre-#540 per-physical-row `eraseAndPaintRow` erase footprint exactly
+    // (same span, no rows below the painted block touched).
+    for (let r = 0; r < residentRows; r++) out += `\x1b[${floor + r};1H\x1b[2K`;
     // Paint the chunk top-aligned at the floor, flowing with \r\n so each
     // logical line starts on a fresh row and autowrap owns intra-line wrapping.
     out += `\x1b[${floor};1H`;
     out += chunk.map((l) => `\x1b[2K${l}`).join('\r\n');
-    // Scroll the exact painted physical height off the top into scrollback.
-    out += `\x1b[${bottom};1H${'\n'.repeat(chunkRows)}`;
+    // Scroll the RESIDENT rows off the top into scrollback — not `chunkRows`:
+    // for an over-height line the autowrap overflow already scrolled the
+    // difference, and counting it twice appends `chunkRows - chunkMax` blank
+    // rows to history.
+    out += `\x1b[${bottom};1H${'\n'.repeat(residentRows)}`;
     chunk = [];
     chunkRows = 0;
   };
   for (const line of lines) {
     const h = physicalHeight(line);
-    // A single line taller than the whole paint region: give it its own chunk
-    // (it will scroll fully; the terminal handles the intra-paint autowrap
-    // scroll for the overflow beyond the region, and the explicit scroll count
-    // still equals its physical height).
+    // A single line taller than the whole paint region gets its own chunk: the
+    // terminal's autowrap scrolls the overflow beyond the region during the
+    // paint, and flushChunk explicitly scrolls only the resident remainder, so
+    // the two together carry exactly `h` rows into history.
     if (chunkRows > 0 && chunkRows + h > chunkMax) flushChunk();
     chunk.push(line);
     chunkRows += h;
