@@ -364,6 +364,34 @@ describe('parseAgentInput', () => {
       const result = parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/..foo/bar..baz' });
       expect(result.cwd).toBe('/tmp/wt/..foo/bar..baz');
     });
+
+    // --- Hardening: breadth rejection (#740) — mirrors the readRoots guard ---
+    it('throws when cwd is the home directory', () => {
+      expect(() => parseAgentInput({ prompt: 'p', cwd: os.homedir() })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('throws when cwd is an ancestor of the home directory', () => {
+      const parentOfHome = path.dirname(os.homedir());
+      expect(() => parseAgentInput({ prompt: 'p', cwd: parentOfHome })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('throws when cwd is a filesystem root', () => {
+      const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
+      expect(() => parseAgentInput({ prompt: 'p', cwd: FS_ROOT })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('still accepts a normal absolute project subdir (not broad)', () => {
+      // The breadth guard must not over-reject: a genuine project worktree path
+      // stays accepted, same as before this field grew the check.
+      const result = parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/feat-y' });
+      expect(result.cwd).toBe('/tmp/wt/feat-y');
+    });
   });
 
   describe('writeRoots', () => {
@@ -406,6 +434,20 @@ describe('parseAgentInput', () => {
       const result = parseAgentInput({ prompt: 'p', writeRoots: [] });
       expect(result.writeRoots).toBeUndefined();
       expect('writeRoots' in result).toBe(false);
+    });
+
+    // --- Hardening: breadth rejection (#740) — mirrors the readRoots guard ---
+    it('throws when a writeRoots entry is the home directory', () => {
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [os.homedir()] })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('still accepts a normal absolute subdir entry (not broad)', () => {
+      // The breadth guard must not over-reject: an ordinary write root stays
+      // accepted, same as before this field grew the check.
+      const result = parseAgentInput({ prompt: 'p', writeRoots: ['/sibling/repo'] });
+      expect(result.writeRoots).toEqual(['/sibling/repo']);
     });
 
     it('throws when writeRoots and isolation:worktree are both supplied (mutually exclusive)', () => {
