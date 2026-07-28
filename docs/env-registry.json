@@ -541,7 +541,7 @@
     },
     {
       "name": "AFK_READ_DENYLIST",
-      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed.",
+      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. One built-in exception exists: ~/.afk/config/mcp.json (the MCP registry) IS readable — paths listed here outrank that carve-out, so set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders.",
       "type": "string",
       "required": false,
       "example": "/Users/me/project/.env:/Users/me/secrets",

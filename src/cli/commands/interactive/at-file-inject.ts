@@ -23,7 +23,9 @@
  *     private keys, and `*.pem`/`*.key` — warn + skip. The check runs against
  *     the SYMLINK-RESOLVED real path (`safeRealpath`), so an innocently named
  *     symlink to a secret cannot bypass it. System config like `/etc/hosts`
- *     is intentionally NOT blocked — reading it is a supported use case.
+ *     is intentionally NOT blocked — reading it is a supported use case, and
+ *     neither is `~/.afk/config/mcp.json` (shared exact-file carve-out with the
+ *     typed read tools — see `READ_ALLOWLIST_REL`).
  *   - Non-regular files (devices/FIFOs) and directories warn + skip, so a
  *     `@/dev/random` reference cannot hang the read.
  *   - Missing / unreadable targets warn + skip; the `@` token is left in the
@@ -37,6 +39,7 @@ import { extname, join } from 'path';
 import { homedir } from 'os';
 import { resolveQuery } from '../../multi-line-reader.js';
 import { safeRealpath } from '../../../agent/tools/handlers/write-denylist.js';
+import { READ_ALLOWLIST_REL, isReadDenied } from '../../../agent/tools/handlers/read-denylist.js';
 
 /** Per-file injection ceiling. Files larger than this are skipped with a warning. */
 export const AT_FILE_MAX_SIZE_BYTES = 100 * 1024;
@@ -110,8 +113,31 @@ function fenceFor(body: string): string {
   return '`'.repeat(Math.max(3, longest + 1));
 }
 
-/** True if `realPath` (already symlink-resolved) points at a secret store. */
-function isSensitiveRead(realPath: string, sensitiveDirs: readonly string[]): boolean {
+/**
+ * True if `realPath` (already symlink-resolved) points at a secret store.
+ *
+ * `allowedFiles` are EXACT-path exceptions that sit inside a sensitive dir but
+ * are deliberately injectable (`~/.afk/config/mcp.json`). The list is shared
+ * with the typed read tools' `READ_ALLOWLIST_REL` so the two surfaces cannot
+ * drift — a path the read denylist permits must not be `@`-blocked here.
+ *
+ * Invariant: a carve-out is honored only while the read denylist also permits
+ * the path. An operator who re-denies the registry (`AFK_READ_DENYLIST=
+ * ~/.afk/config/mcp.json`, the documented escape hatch for a registry holding
+ * inline secrets rather than `${VAR}` placeholders) blocks the typed read tools
+ * AND this surface — otherwise `@`-injection would forward to the model exactly
+ * the file the operator just protected. `isReadDenied` is consulted only for an
+ * allowlisted match, never for the whole function: `SENSITIVE_RE` legitimately
+ * covers files the read denylist does not (`.env`, `*.pem`, shell history), and
+ * this module resolves against an injectable home the denylist cannot know.
+ */
+function isSensitiveRead(
+  realPath: string,
+  sensitiveDirs: readonly string[],
+  allowedFiles: readonly string[],
+): boolean {
+  // An allowlisted file is sensitive iff the read denylist re-denies it.
+  if (allowedFiles.includes(realPath)) return isReadDenied(realPath).denied;
   if (SENSITIVE_RE.test(realPath)) return true;
   for (const dir of sensitiveDirs) {
     if (realPath === dir || realPath.startsWith(dir + '/')) return true;
@@ -192,6 +218,9 @@ export function expandAtFileTokens(
   // Symlink-resolved secret dirs (computed once). `safeRealpath` dereferences
   // links the same way each target is resolved below, so prefix matches hold.
   const sensitiveDirs = SENSITIVE_DIRS_REL.map((d) => safeRealpath(join(home, d)));
+  // Exact-file carve-outs inside those dirs, resolved against the SAME
+  // effective home so an injected `homeDir` (tests) stays consistent.
+  const allowedFiles = READ_ALLOWLIST_REL.map((f) => safeRealpath(join(home, f)));
   const fileBlocks: AtFileBlock[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
@@ -207,7 +236,7 @@ export function expandAtFileTokens(
     if (seen.has(realPath)) continue;
     seen.add(realPath);
 
-    if (isSensitiveRead(realPath, sensitiveDirs)) {
+    if (isSensitiveRead(realPath, sensitiveDirs, allowedFiles)) {
       warnings.push(`@${rawPath}: sensitive path, not injected`);
       continue;
     }
