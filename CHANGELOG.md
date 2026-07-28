@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.4] - 2026-07-28
+
+### Fixed
+- allow reads of ~/.afk/config/mcp.json (exact-file denylist carve-out) (#728) (b2f50c7)
+
+### Changed
+- drop no-op fill redaction, correct stale web/browser docs (#727) (6e1ee85)
+
 ## [5.81.3] - 2026-07-28
 
 ### Fixed
