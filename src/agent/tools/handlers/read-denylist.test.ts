@@ -299,6 +299,37 @@ describe('read-denylist — AFK_HOME-relocated credential tree (#740)', () => {
     expect(isReadDenied(join(relocated, 'config', 'afk.env')).denied).toBe(true);
   });
 
+  // The mcp.json carve-out MUST follow AFK_HOME whenever the denied parent dir
+  // does. Extending only the deny side inverts the carve-out: the registry
+  // becomes unreadable under a relocated home while the default-home spelling
+  // stays readable — invisible to the typed tools AND the bash surface for
+  // exactly the operators who relocated it. Caught by an empirical probe after
+  // the deny-side change looked complete in review.
+  it('keeps the mcp.json carve-out readable under a relocated AFK_HOME', () => {
+    const relocated = join(tmpDir, 'relocated-home-allow');
+    mkdirSync(join(relocated, 'config'), { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    _resetReadDenylistCacheForTests();
+
+    // The parent dir stays denied …
+    expect(isReadDenied(join(relocated, 'config', 'afk.env')).denied).toBe(true);
+    // … while the registry itself remains readable, exactly as it does at the
+    // default home location.
+    expect(isReadDenied(join(relocated, 'config', 'mcp.json')).denied).toBe(false);
+  });
+
+  it('keeps a relocated mcp.json re-deniable via AFK_READ_DENYLIST (precedence holds)', () => {
+    const relocated = join(tmpDir, 'relocated-home-redeny');
+    mkdirSync(join(relocated, 'config'), { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    process.env['AFK_READ_DENYLIST'] = join(relocated, 'config', 'mcp.json');
+    _resetReadDenylistCacheForTests();
+
+    // An explicit extra outranks the derived carve-out, same as it outranks the
+    // hardcoded one.
+    expect(isReadDenied(join(relocated, 'config', 'mcp.json')).denied).toBe(true);
+  });
+
   it('still denies the real homedir() ~/.afk/config entry when AFK_HOME is relocated', () => {
     // ADDITIVE, not a replacement: relocating AFK_HOME must not stop covering
     // the default homedir()-based tree (an operator could have stale files

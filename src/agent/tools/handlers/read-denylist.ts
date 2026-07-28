@@ -199,6 +199,38 @@ function derivedAfkHomeReadEntry(): string[] {
   }
 }
 
+const AFK_HOME_REL_PREFIX = '.afk/';
+
+/**
+ * The `AFK_HOME`-relocated spelling of every {@link READ_ALLOWLIST_REL}
+ * carve-out, derived the same way {@link derivedAfkHomeReadEntry} derives the
+ * denied parent.
+ *
+ * Invariant: the allowlist MUST follow `AFK_HOME` whenever the denylist does.
+ * These two move together or the carve-out silently inverts: extending only the
+ * deny side makes `${getAfkHome()}/config/mcp.json` unreadable under a
+ * relocated home while the default-home spelling stays readable — the registry
+ * becomes invisible to both the typed tools and the bash surface for exactly
+ * the operators who relocated it. An empirical probe caught that asymmetry;
+ * a diff read did not.
+ *
+ * Entries are declared relative to the home dir (`.afk/config/mcp.json`), so
+ * the relocated form is the tail after `.afk/` rejoined under `getAfkHome()`.
+ * A non-`.afk/` entry has no relocated spelling and is skipped. `getAfkHome()`
+ * throws on a malformed `AFK_HOME`; caught and dropped, which fails CLOSED
+ * here (no extra carve-out) rather than open.
+ */
+function derivedAfkHomeAllowEntries(): string[] {
+  try {
+    const afkHome = getAfkHome();
+    return READ_ALLOWLIST_REL.filter((rel) => rel.startsWith(AFK_HOME_REL_PREFIX)).map((rel) =>
+      resolveExceptionEntry(join(afkHome, rel.slice(AFK_HOME_REL_PREFIX.length))),
+    );
+  } catch {
+    return [];
+  }
+}
+
 function resolveLists(): {
   builtins: readonly string[];
   extras: readonly string[];
@@ -225,7 +257,12 @@ function resolveLists(): {
     key,
     builtins,
     extras,
-    allow: BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
+    allow: [
+      ...new Set([
+        ...BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
+        ...derivedAfkHomeAllowEntries(),
+      ]),
+    ],
   };
   return cached;
 }
