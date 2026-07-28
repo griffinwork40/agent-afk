@@ -25,7 +25,12 @@ import { homedir } from 'os';
 import { tmpdir } from 'os';
 import { writeFileHandler } from './write-file.js';
 import { editFileHandler } from './edit-file.js';
-import { assertNotDenylisted, safeRealpath, BUILTIN_WRITE_DENYLIST } from './write-denylist.js';
+import {
+  assertNotDenylisted,
+  safeRealpath,
+  BUILTIN_WRITE_DENYLIST,
+  getWriteDenylist,
+} from './write-denylist.js';
 
 const SIG = AbortSignal.timeout(5000);
 
@@ -372,5 +377,71 @@ describe('AFK_WRITE_DENYLIST env override', () => {
     expect(() => assertNotDenylisted(sshPath, 'write_file')).toThrow(
       /refusing to write to protected path/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AFK_HOME-relocated credential tree (#740)
+// ---------------------------------------------------------------------------
+
+describe('write-denylist — AFK_HOME-relocated credential tree (#740)', () => {
+  it('covers both the relocated config dir AND the relocated state dir', () => {
+    const relocated = join(tmpDir, 'relocated-home');
+    mkdirSync(relocated, { recursive: true });
+    vi.stubEnv('AFK_HOME', relocated);
+
+    expect(() =>
+      assertNotDenylisted(join(relocated, 'config', 'afk.env'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+    expect(() =>
+      assertNotDenylisted(join(relocated, 'state', 'sessions', 's.json'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+  });
+
+  it('still covers the real homedir() ~/.afk/config and ~/.afk/state when AFK_HOME is relocated', () => {
+    // ADDITIVE, not a replacement.
+    const relocated = join(tmpDir, 'relocated-home-2');
+    mkdirSync(relocated, { recursive: true });
+    vi.stubEnv('AFK_HOME', relocated);
+
+    expect(() =>
+      assertNotDenylisted(join(homedir(), '.afk', 'config', 'afk.env'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+    expect(() =>
+      assertNotDenylisted(join(homedir(), '.afk', 'state', 'sessions', 's.json'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+  });
+
+  it('behavior is unchanged and the derived entries do not double up when AFK_HOME is unset', () => {
+    expect(() =>
+      assertNotDenylisted(join(homedir(), '.afk', 'config', 'afk.env'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+    const configEntryCount = getWriteDenylist().filter(
+      (p) => p === safeRealpath(join(homedir(), '.afk', 'config')),
+    ).length;
+    expect(configEntryCount).toBe(1);
+  });
+
+  // Fail-safe: getAfkHome() throws when AFK_HOME is set but not absolute. The
+  // write denylist must not let that throw propagate and empty the floor —
+  // it must skip only the derived entries and keep the homedir()-based ones.
+  it('stays fail-safe when AFK_HOME is a relative path (getAfkHome() throws)', () => {
+    vi.stubEnv('AFK_HOME', 'relative/not-absolute');
+
+    expect(() => getWriteDenylist()).not.toThrow();
+    expect(() =>
+      assertNotDenylisted(join(homedir(), '.afk', 'config', 'afk.env'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+    expect(() => assertNotDenylisted(sshPath, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
+  });
+
+  it('allows a normal write once AFK_HOME is relocated (no over-broad denial)', () => {
+    const relocated = join(tmpDir, 'relocated-home-3');
+    mkdirSync(relocated, { recursive: true });
+    vi.stubEnv('AFK_HOME', relocated);
+
+    expect(() => assertNotDenylisted(join(tmpDir, 'safe.txt'))).not.toThrow();
   });
 });
