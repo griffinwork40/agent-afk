@@ -363,12 +363,20 @@ function referencesSensitivePath(scanned: string, restrictedSubstrings: string[]
  * importing the list is what keeps a future denylist entry from covering only
  * one surface.
  *
- * The bash-only extras below are the reverse gap, kept local because the typed
- * tools do not need them: browser-profile and password-store dirs (bulk secret
- * stores nobody reads with `read_file`), the `/private` real path of
- * `/etc/sudoers`, and the WHOLE `~/.config/gh` dir — wider than the denylist's
- * `hosts.yml` floor, and deliberately not narrowed, since a shell can `cat`
- * every sibling token file the CLI writes there.
+ * The extras below stay local because each is deliberately WIDER than what the
+ * shared floor can afford to be. A built-in read-denylist entry is permanent —
+ * no operator, mode, or fork can lift it — while every root here is
+ * grant-filtered, so `/allow-dir <path>` reopens it for a session. That
+ * asymmetry is what lets these be blunt:
+ *   - `~/Library/Application Support` — whole dir. The shared floor covers only
+ *     the per-browser secret trees inside it (`Google/Chrome`, `Firefox`, …),
+ *     because flooring the whole vendor directory permanently would blind
+ *     `read_file` to every macOS app config living beside them.
+ *   - `~/.password-store` — also in the shared floor now; kept here so the
+ *     bash root survives independently of that list's scope.
+ *   - `~/.config/gh` — whole dir, wider than the denylist's `hosts.yml` file
+ *     floor, since a shell can `cat` every sibling token file the CLI writes.
+ *   - `/private/etc/sudoers` — the macOS real path of `/etc/sudoers`.
  */
 export function builtinBashSensitiveRoots(): readonly string[] {
   const home = homedir();
