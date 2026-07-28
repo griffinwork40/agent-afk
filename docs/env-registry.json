@@ -84,7 +84,7 @@
     },
     {
       "name": "AFK_BROWSER_HEADLESS",
-      "description": "Override the default headless mode for native browser-control tools. `1`/`true` forces headless; `0`/`false` forces headed. When unset the default is headless for daemon and subagent surfaces and headed for repl/interactive — so an operator can watch the agent work in REPL mode.",
+      "description": "Override the default headless mode for native browser-control tools. `1`/`true` forces headless; `0`/`false` forces headed. When unset the default is headless on every AFK surface — the CLI entrypoint reports surface `afk`, which is in the headless set — so watching the agent work in a visible window is opt-in via `AFK_BROWSER_HEADLESS=0`, not implied by running the REPL. Note headed and headless use different chromium downloads (`chromium-*` vs `chromium_headless_shell-*`).",
       "type": "boolean",
       "required": false,
       "example": "1",

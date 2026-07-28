@@ -867,3 +867,72 @@ describe('BrowserLauncher — session vault', () => {
     expect(fs.existsSync(getBrowserStorageStatePath('work'))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Playwright-missing launch decoration (issue #721)
+// ---------------------------------------------------------------------------
+
+describe('BrowserLauncher — chromium-missing launch decoration', () => {
+  const EXEC_MISSING =
+    "browserType.launch: Executable doesn't exist at " +
+    '/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/x';
+
+  beforeEach(() => {
+    currentStubBrowser = makeStubBrowser();
+    vi.mocked(chromium.launch).mockClear();
+    vi.mocked(chromium.launch).mockImplementation(async () => currentStubBrowser);
+  });
+
+  async function failedLaunch(config: BrowserConfig, err: unknown): Promise<unknown> {
+    vi.mocked(chromium.launch).mockRejectedValueOnce(err);
+    const launcher = new BrowserLauncher(config);
+    return launcher.ensureBrowser().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+  }
+
+  it('attaches a runnable install command, naming the headed build', async () => {
+    const err = await failedLaunch({ ...TEST_CONFIG, headless: false }, new Error(EXEC_MISSING));
+
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    // Original diagnostic is preserved …
+    expect(msg).toContain("Executable doesn't exist");
+    // … and the remediation the user could not previously see is appended.
+    expect(msg).toMatch(/install chromium/);
+    expect(msg).toMatch(/chromium-\*/);
+    expect((err as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
+  });
+
+  it('names the headless shell when the failed launch was headless', async () => {
+    const err = await failedLaunch({ ...TEST_CONFIG, headless: true }, new Error(EXEC_MISSING));
+    expect((err as Error).message).toMatch(/chromium_headless_shell-\*/);
+  });
+
+  it('decorates a wrapped (cause-chain) launch failure too', async () => {
+    const wrapped = new Error('launch failed', { cause: new Error(EXEC_MISSING) });
+    const err = await failedLaunch({ ...TEST_CONFIG, headless: false }, wrapped);
+    expect((err as Error).message).toMatch(/install chromium/);
+  });
+
+  it('rethrows a non-Playwright failure BY IDENTITY so timeout classification is unaffected', async () => {
+    const timeout = new Error('page.goto: Timeout 30000ms exceeded.');
+    timeout.name = 'TimeoutError';
+    const err = await failedLaunch(TEST_CONFIG, timeout);
+
+    // Same object, same message, same name — nothing downstream can observe a change.
+    expect(err).toBe(timeout);
+    expect((err as Error).message).toBe('page.goto: Timeout 30000ms exceeded.');
+    expect((err as Error).name).toBe('TimeoutError');
+  });
+
+  it('still clears the in-flight launch promise, so a later launch can succeed', async () => {
+    const launcher = new BrowserLauncher({ ...TEST_CONFIG, headless: false });
+    vi.mocked(chromium.launch).mockRejectedValueOnce(new Error(EXEC_MISSING));
+
+    await expect(launcher.ensureBrowser()).rejects.toThrow(/install chromium/);
+    // Decoration must not strand the latch — the retry uses the default mock.
+    await expect(launcher.ensureBrowser()).resolves.toBe(currentStubBrowser);
+  });
+});

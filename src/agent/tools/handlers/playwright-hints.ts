@@ -1,24 +1,34 @@
 /**
- * Shared Playwright-availability detection + install-hint messaging for the
- * `browser_*` tool handlers.
+ * Playwright-availability messaging for the `browser_*` tool handlers, plus
+ * browser timeout classification.
  *
- * Two distinct failure modes are surfaced with DIFFERENT remedies:
- *   - the `playwright` package is not installed → `pnpm add playwright`
- *   - the package is present but the chromium browser binary was never
- *     downloaded → `pnpm exec playwright install chromium`
+ * The Playwright-missing detection and install-hint text now live in
+ * `src/browser/playwright-missing.ts` and are re-exported here. That module is
+ * the single source of truth: the low-level launcher decorates a failed
+ * `chromium.launch()` with the same hint, and `src/browser/` cannot import
+ * upward into the tool layer.
  *
- * History: the chromium-missing hint ("Executable doesn't exist") lived in
- * web-scrape.ts but was absent from the five browser_* handlers, so a user who
- * had `playwright` installed but no chromium binary got an opaque
- * `... failed to get provider: Executable doesn't exist at ...` error with no
- * remedy. The hint list was also copy-pasted into all five handlers, so any fix
- * had to land in five places. Centralizing both the substrings and the message
- * here keeps them from drifting apart again.
+ * History: the chromium-missing hint ("Executable doesn't exist") was wired
+ * only into each handler's provider-CONSTRUCTION catch, which never sees a
+ * launch failure — provider construction does not launch chromium. Issue #721
+ * moved the check to the launch site itself. The re-exports below are kept so
+ * the five handler call sites (and their tests) continue to compile unchanged.
  *
  * @module agent/tools/handlers/playwright-hints
  */
 
 import type { ToolFailureClass } from '../../trace/types.js';
+
+export {
+  PLAYWRIGHT_MISSING_HINTS,
+  isPlaywrightMissing,
+  playwrightInstallCommand,
+  playwrightMissingHint,
+  decoratePlaywrightLaunchError,
+  hasPlaywrightInstallHint,
+  resetPlaywrightInstallCommandCache,
+} from '../../../browser/playwright-missing.js';
+export type { PlaywrightHintOptions } from '../../../browser/playwright-missing.js';
 
 /**
  * Classify a thrown browser error as a navigation/action timeout, for the
@@ -34,37 +44,4 @@ export function browserTimeoutFailureClass(err: unknown): ToolFailureClass | und
   if (err instanceof Error && err.name === 'TimeoutError') return 'timeout';
   const msg = err instanceof Error ? err.message : String(err);
   return /Timeout\s+\d+\s*ms exceeded/i.test(msg) ? 'timeout' : undefined;
-}
-
-// Substrings in a thrown error message that indicate the optional Playwright
-// peer dependency — or its chromium browser binary — is unavailable.
-export const PLAYWRIGHT_MISSING_HINTS = [
-  'Cannot find package',
-  'ERR_MODULE_NOT_FOUND',
-  "Executable doesn't exist",
-] as const;
-
-/** True when `msg` indicates Playwright (the package or its chromium binary) is missing. */
-export function isPlaywrightMissing(msg: string): boolean {
-  return PLAYWRIGHT_MISSING_HINTS.some((hint) => msg.includes(hint));
-}
-
-/**
- * Returns the install hint appropriate to which half of the dependency is
- * absent. Assumes `isPlaywrightMissing(msg)` already returned true.
- */
-export function playwrightMissingHint(msg: string): string {
-  if (msg.includes("Executable doesn't exist")) {
-    // Package is installed; the chromium browser binary was never downloaded.
-    return (
-      'browser tools require the Playwright chromium binary. ' +
-      'Install via: pnpm exec playwright install chromium.'
-    );
-  }
-  // The `playwright` package itself is not installed.
-  return (
-    'browser tools require the optional `playwright` peer dependency. ' +
-    'Install via: pnpm add playwright (then pnpm exec playwright install chromium). ' +
-    'Or pick a different tool.'
-  );
 }

@@ -35,6 +35,11 @@ import { resolveSearchBackend, formatSearchResults } from '../../../web/search.j
 import { retryFetch } from '../../../web/retryFetch.js';
 import type { RenderFn } from '../../../web/types.js';
 import { headAndTail } from './_output-cap.js';
+import {
+  hasPlaywrightInstallHint,
+  isPlaywrightMissing,
+  playwrightInstallCommand,
+} from './playwright-hints.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
 // would throw before reaching this handler because tsconfig targets >=20.
@@ -53,10 +58,6 @@ const DEFAULT_MAX_BYTES = 100_000; // 100 KB
 // even the smallest context window.
 const MAX_MAX_BYTES = 1_000_000; // 1 MB hard ceiling
 const DEFAULT_SEARCH_LIMIT = 10;
-
-// Hints in a thrown error message that mean the optional Playwright peer dep
-// (or its chromium binary) is missing — surfaced as a friendly install nudge.
-const PLAYWRIGHT_MISSING_HINTS = ['Cannot find package', 'ERR_MODULE_NOT_FOUND', "Executable doesn't exist"];
 
 interface WebScrapeOptions {
   /** Override for tests. Defaults to `globalThis.fetch`. */
@@ -154,18 +155,6 @@ function capBody(body: string, maxBytes: number): { content: string; truncated: 
     return { content: body, truncated: false };
   }
   return { content: headAndTail(body, maxBytes), truncated: true };
-}
-
-/** Did this error (or its cause chain) signal a missing Playwright install? */
-function isPlaywrightMissing(err: unknown): boolean {
-  const messages: string[] = [];
-  let cur: unknown = err;
-  for (let i = 0; i < 4 && cur instanceof Error; i++) {
-    messages.push(cur.message);
-    cur = (cur as Error & { cause?: unknown }).cause;
-  }
-  const joined = messages.join(' | ');
-  return PLAYWRIGHT_MISSING_HINTS.some((hint) => joined.includes(hint));
 }
 
 export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler {
@@ -274,9 +263,15 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           const base = err instanceof Error ? err.message : String(err);
-          const hint = isPlaywrightMissing(err)
-            ? ' (the render fallback needs the optional Playwright browser — run `pnpm exec playwright install chromium`)'
-            : '';
+          // A chromium-missing LAUNCH failure is already decorated by
+          // BrowserLauncher, so `base` may carry the remediation. Only add it
+          // here for the cases the launcher never sees — chiefly a missing
+          // `playwright` package, which fails at dynamic-import time before
+          // any launch. Appending unconditionally double-prints the command.
+          const hint =
+            isPlaywrightMissing(err) && !hasPlaywrightInstallHint(base)
+              ? ` (the render fallback needs the optional Playwright browser — run \`${playwrightInstallCommand()}\`)`
+              : '';
           return { content: `web_scrape markdown error: ${base}${hint}`, isError: true };
         }
       }
