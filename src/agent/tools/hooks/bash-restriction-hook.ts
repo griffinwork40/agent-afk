@@ -46,6 +46,14 @@
  *    inside the session's grant lists), block with redirect guidance pointing
  *    the model at typed file tools.
  *
+ * The restricted roots are the typed-tool read denylist (`read-denylist.ts`)
+ * plus a few bash-only extras — one shared list, so a credential path floored
+ * for `read_file` is floored for `cat` too, and its exact-file carve-outs
+ * (`~/.afk/config/mcp.json`) stay readable on both surfaces. See
+ * {@link builtinBashSensitiveRoots} for what each half contributes and
+ * {@link deriveRestrictedSubstrings} for the one deliberate divergence (bash
+ * filters by grants; the typed floor is unconditional).
+ *
  * # History (why check 1 is scoped, not blanket)
  *
  * Check 1 previously hard-blocked EVERY interpreter `-c`/`-e` one-liner
@@ -69,6 +77,14 @@ import { homedir } from 'os';
 import path from 'path';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { HookContext, HookDecision } from '../../hooks.js';
+import {
+  BUILTIN_READ_DENYLIST,
+  READ_ALLOWLIST_REL,
+  getReadDenylist,
+  isReadDenied,
+  parseReadDenylistEntries,
+} from '../handlers/read-denylist.js';
+import { env } from '../../../config/env.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -97,9 +113,16 @@ const INTERPRETER_DENYLIST =
  * `/etc/passwd` is deliberately ABSENT — it is world-readable and carries no
  * secret; the secret companion `/etc/shadow` IS covered. This is the calibration
  * that lets benign one-liners through while still catching credential access.
+ *
+ * The `.afk/config` fragment covers AFK's own credential tree (`afk.env` API
+ * keys, an `afk.config.json` that may carry a literal `apiKey`) and is anchored
+ * to `config` so the sibling `~/.afk/state` — which sub-agents legitimately read
+ * (skill-preflight inputs, todos, transcripts) — stays untouched. The registry
+ * carve-out `~/.afk/config/mcp.json` is handled upstream of this regex, by
+ * {@link scrubAllowlistedRefs}, so it needs no exception here.
  */
 export const SENSITIVE_PATH_SIGNAL =
-  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.netrc\b|\.password-store\b|Library\/Application Support\b|\/etc\/shadow\b|\/etc\/sudoers\b/i;
+  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.config\/gcloud\b|\.netrc\b|\.password-store\b|\.afk\/config\b|\.npmrc\b|\.docker\/config\.json\b|\.git-credentials\b|\.kube\/config\b|Library\/Application Support\b|\/etc\/shadow\b|\/etc\/sudoers\b|master\.passwd\b/i;
 
 export interface BashRestrictionHookOptions {
   /**
@@ -135,8 +158,12 @@ export interface BashRestrictionHookOptions {
 }
 
 /**
- * Factory. Returns a synchronous `HookHandler` — bash restriction is
- * regex-based with no I/O, so we do not need the longRunning escape.
+ * Factory. Returns a synchronous `HookHandler`. Bash restriction is mostly
+ * regex-based, but the carve-out filter (`allowlistedFileForms` →
+ * `isReadDenied` → `safeRealpath`) does a bounded `realpathSync` per call, one
+ * per allowlisted form — it stays synchronous deliberately (the I/O is a
+ * handful of stat-like syscalls, not worth an async escape), so we still do
+ * not need the longRunning flag.
  */
 export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
   return (context: HookContext): HookDecision => {
@@ -162,13 +189,17 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     const interactiveSurface = grantManager !== undefined;
 
     // Precompute the sensitive-path view ONCE — both checks below consume it.
-    // `normalized` resolves the obvious `~` / `$HOME` shell idioms to the real
-    // home dir (NOT a parser — variable-assembled paths are out of scope; see
-    // module header). `restrictedSubstrings` is the grant-filtered set of
-    // sensitive roots; it is empty when no grant manager is wired (headless),
-    // so check 2 fails open there and check 1 falls back to the lexical signal.
+    // `scanned` resolves the obvious `~` / `$HOME` shell idioms to the real home
+    // dir (NOT a parser — variable-assembled paths are out of scope; see module
+    // header), then blanks out the read denylist's exact-file carve-outs so a
+    // legitimate `cat ~/.afk/config/mcp.json` does not trip the enclosing
+    // `~/.afk/config` root. Both checks scan this same string, so the carve-out
+    // cannot apply to one and not the other. `restrictedSubstrings` is the
+    // grant-filtered set of sensitive roots; it is empty when no grant manager
+    // is wired (headless), so check 2 fails open there and check 1 falls back to
+    // the lexical signal.
     const home = homedir();
-    const normalized = normalizeHomeRefs(command, home);
+    const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home), home);
     const restrictedSubstrings = grantManager
       ? deriveRestrictedSubstrings(grantManager.getGrants())
       : [];
@@ -196,7 +227,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     if (
       interpreterGuardActive &&
       INTERPRETER_DENYLIST.test(command) &&
-      referencesSensitivePath(normalized, command, restrictedSubstrings)
+      referencesSensitivePath(scanned, restrictedSubstrings)
     ) {
       return {
         decision: 'block',
@@ -215,7 +246,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // 2. Restricted-root substring check.
     // Only fires when a grant manager is wired (during the bootstrap race and
     // on headless surfaces we fail open). The check is intentionally crude:
-    // literal `normalized.includes` against every "restricted directory" we can
+    // literal `scanned.includes` against every "restricted directory" we can
     // derive. False positives (echo "see ~/.ssh/config") block the bash call
     // and ask the model to explain what it was doing, which is acceptable for
     // the accidental threat model.
@@ -231,7 +262,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     if (restrictedSubstrings.length === 0) return {};
 
     for (const sub of restrictedSubstrings) {
-      if (normalized.includes(sub)) {
+      if (scanned.includes(sub)) {
         return {
           decision: 'block',
           reason:
@@ -260,6 +291,58 @@ function normalizeHomeRefs(command: string, home: string): string {
     .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
 }
 
+/** Placeholder left behind by {@link scrubAllowlistedRefs}. Deliberately free of
+ * any path characters so it can never itself satisfy a root or signal match. */
+const ALLOWLISTED_PLACEHOLDER = '<allowlisted-file>';
+
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The exact-file carve-outs (`READ_ALLOWLIST_REL`) in every spelling a bash
+ * command can plausibly use, filtered through {@link isReadDenied} so the
+ * precedence contract of `AFK_READ_DENYLIST` is reused rather than re-derived:
+ * an operator who re-denies `~/.afk/config/mcp.json` there keeps it blocked on
+ * the bash surface too.
+ *
+ * The absolute form covers a normalized `$HOME`/bare-`~` command; the `~/` form
+ * covers the quote-prefixed `~` that `normalizeHomeRefs` deliberately leaves
+ * alone (`expanduser('~/.afk/config/mcp.json')`). The `$HOME/` form is
+ * unreachable while normalization runs first, and is kept as the one spelling
+ * that would silently stop being carved out if that order ever changed.
+ */
+function allowlistedFileForms(home: string): string[] {
+  return READ_ALLOWLIST_REL.flatMap((rel) => {
+    if (isReadDenied(path.join(home, rel)).denied) return [];
+    return [path.join(home, rel), `~/${rel}`, `$HOME/${rel}`];
+  });
+}
+
+/**
+ * Blank out references to the read denylist's exact-file carve-outs before
+ * either check scans the command.
+ *
+ * Invariant: EXACT files only — the same rule `isReadDenied` applies to this
+ * list. The trailing `(?![\w./\\*?\[\]{}-])` guard is what enforces it: a
+ * prefix-extended lookalike (`mcp.json.bak`, `mcp.json/child`) is left in place
+ * and therefore still matches its enclosing `~/.afk/config` root. The class
+ * also excludes shell glob/brace metacharacters (`*`, `?`, `[`, `]`, `{`, `}`)
+ * on purpose: without them, `mcp.json*` satisfied the lookahead, so the whole
+ * exact-file span got scrubbed even though the shell expands that glob to
+ * siblings (`mcp.json.bak`) the carve-out was never meant to cover — dropping
+ * the only text carrying the denied enclosing root. Dropping this guard
+ * entirely would turn one readable file into a readable directory.
+ */
+function scrubAllowlistedRefs(text: string, home: string): string {
+  let out = text;
+  for (const form of allowlistedFileForms(home)) {
+    const exactRef = new RegExp(`${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])`, 'g');
+    out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);
+  }
+  return out;
+}
+
 /**
  * True when a command references a sensitive location the path-approval policy
  * protects — via either the grant-filtered restricted substrings (literal /
@@ -267,14 +350,87 @@ function normalizeHomeRefs(command: string, home: string): string {
  * signal (which catches interpreter-assembled paths the literal scan misses).
  * Used to scope the interpreter-eval guard (check 1) so it fires only on
  * credential-adjacent one-liners, not on every `-c`/`-e` invocation.
+ *
+ * `scanned` is the normalized + carve-out-scrubbed command (see the factory).
+ * The lexical signal reads that same string rather than the raw command so the
+ * exact-file carve-outs apply to both checks; normalization only ever expands
+ * `~`/`$HOME` into the home path, which no signal fragment spans.
  */
-function referencesSensitivePath(
-  normalized: string,
-  rawCommand: string,
-  restrictedSubstrings: string[],
-): boolean {
-  if (restrictedSubstrings.some((sub) => normalized.includes(sub))) return true;
-  return SENSITIVE_PATH_SIGNAL.test(rawCommand);
+function referencesSensitivePath(scanned: string, restrictedSubstrings: string[]): boolean {
+  if (restrictedSubstrings.some((sub) => scanned.includes(sub))) return true;
+  return SENSITIVE_PATH_SIGNAL.test(scanned);
+}
+
+/**
+ * The static sensitive-root set this hook scans for, before grant filtering.
+ *
+ * Invariant: the credential half of this list is the TYPED-TOOL read denylist
+ * (`BUILTIN_READ_DENYLIST`) by reference, never a hand-copied parallel list.
+ * The two lists drifted apart once already — `~/.afk/config` (holding `afk.env`
+ * API keys), `~/.config/gcloud`, `~/.npmrc`, `~/.docker/config.json`,
+ * `~/.git-credentials`, `~/.kube/config` and `/private/etc/master.passwd` were
+ * blocked for `read_file`/`grep`/`glob` while `cat` reached them freely — so
+ * importing the list is what keeps a future denylist entry from covering only
+ * one surface.
+ *
+ * The bash-only extras below are the reverse gap, kept local because the typed
+ * tools do not need them: browser-profile and password-store dirs (bulk secret
+ * stores nobody reads with `read_file`), and the WHOLE `~/.config/gh` dir —
+ * wider than the denylist's `hosts.yml` floor, and deliberately not narrowed,
+ * since a shell can `cat` every sibling token file the CLI writes there.
+ *
+ * Every entry is then passed through {@link withEtcAliases} so an `/etc` root
+ * and its `/private/etc` twin are always both present — the lexical scan cannot
+ * realpath its way between them the way the typed tools do.
+ */
+export function builtinBashSensitiveRoots(): readonly string[] {
+  const home = homedir();
+  return withEtcAliases([
+    path.join(home, 'Library', 'Application Support'),
+    path.join(home, '.password-store'),
+    path.join(home, '.config', 'gh'),
+    ...BUILTIN_READ_DENYLIST,
+  ]);
+}
+
+/**
+ * Operator `AFK_READ_DENYLIST` entries exactly as spelled, to sit alongside the
+ * symlink-RESOLVED forms `getReadDenylist()` returns. A shell command normally
+ * names the symlink (`~/.afk/config`), not its target, and this scanner is
+ * lexical — so both spellings have to be candidates.
+ *
+ * Invariant: the parse itself is `read-denylist.ts`'s
+ * {@link parseReadDenylistEntries}, NOT a local copy. This function used to
+ * re-implement it and the two drifted immediately: neither expanded a leading
+ * `~`, so the tilde-spelled form the docs recommend resolved to a literal
+ * `./~/…` and protected nothing on either surface (PR #734 review, MAJOR 1).
+ * Only the post-parse step differs — resolved there, as-spelled here.
+ */
+function readDenylistExtrasAsSpelled(): string[] {
+  return parseReadDenylistEntries(env.AFK_READ_DENYLIST);
+}
+
+/**
+ * Add the `/etc` ↔ `/private/etc` twin of every candidate that has one.
+ *
+ * Invariant: this scan is LEXICAL, so a root is only enforced in the spellings
+ * present in the candidate list — while the typed tools realpath first and so
+ * catch both for free. `/private/etc/master.passwd` was floored for `read_file`
+ * yet `cat /etc/master.passwd` (the same file, macOS symlinks `/etc`) sailed
+ * through, because the denylist happened to name only the `/private` form
+ * (PR #734 review, MAJOR 2). Deriving the twin mechanically closes the class:
+ * a future `/etc/...` or `/private/etc/...` entry cannot cover one spelling
+ * only. This is also why the hand-written `/private/etc/sudoers` bash-only
+ * extra is gone — it is now derived from the denylist's `/etc/sudoers`.
+ */
+function withEtcAliases(roots: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const root of roots) {
+    out.push(root);
+    if (root.startsWith('/etc/')) out.push(`/private${root}`);
+    else if (root.startsWith('/private/etc/')) out.push(root.slice('/private'.length));
+  }
+  return out;
 }
 
 /**
@@ -284,28 +440,35 @@ function referencesSensitivePath(
  * are likely to contain sensitive material. We do NOT want to block every
  * path outside the cwd — that would break `ls /etc`, `which git`, etc.
  *
- * The current allow-listed sensitive prefixes are common high-signal targets:
- * SSH keys, GPG, AWS, browser profiles, password stores, environment files.
- * Each is included only when the user's resolveBase is NOT already inside it
- * (so a user working in `~/.ssh` doesn't self-block).
+ * Candidates are {@link builtinBashSensitiveRoots} plus the operator's
+ * `AFK_READ_DENYLIST` extras (via `getReadDenylist()`, which also contributes
+ * the symlink-resolved spelling of each built-in). Each is included only when
+ * the user's resolveBase is NOT already inside it (so a user working in
+ * `~/.ssh` doesn't self-block).
+ *
+ * Invariant: this grant filter is the one deliberate divergence from the typed
+ * read denylist, whose floor is unconditional. Bash's gate exists to stop the
+ * ACCIDENTAL `cat`, and an explicit `/allow-dir ~/.ssh` is the user saying they
+ * want that path in this session; the typed tools stay floored regardless, so
+ * the strict boundary is never the one being relaxed here. This is not limited
+ * to explicit grants, though: `granted` below also seeds from
+ * `grants.resolveBase` (the session's cwd anchor, always implicitly readable —
+ * see `dispatcher.ts`), so a candidate whose ancestor IS the session's
+ * resolveBase drops out of restriction with no `/allow-dir` call at all — the
+ * containment check (`path.relative`) cannot distinguish an implicit
+ * resolveBase root from an explicit `readRoots`/`writeRoots` grant.
  */
 export function deriveRestrictedSubstrings(grants: {
   resolveBase: string | undefined;
   readRoots: string[];
   writeRoots: string[];
 }): string[] {
-  const home = homedir();
   const candidates = [
-    path.join(home, '.ssh'),
-    path.join(home, '.gnupg'),
-    path.join(home, '.aws'),
-    path.join(home, '.config', 'gh'),
-    path.join(home, '.netrc'),
-    path.join(home, 'Library', 'Application Support'),
-    path.join(home, '.password-store'),
-    '/etc/shadow',
-    '/etc/sudoers',
-    '/private/etc/sudoers',
+    ...new Set([
+      ...builtinBashSensitiveRoots(),
+      ...getReadDenylist(),
+      ...readDenylistExtrasAsSpelled(),
+    ]),
   ];
 
   const granted = new Set([

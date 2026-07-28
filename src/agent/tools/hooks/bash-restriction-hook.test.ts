@@ -16,15 +16,18 @@
  *     test pins that behavior.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  builtinBashSensitiveRoots,
   createBashRestrictionHook,
   deriveRestrictedSubstrings,
   SENSITIVE_PATH_SIGNAL,
 } from './bash-restriction-hook.js';
+import { _resetReadDenylistCacheForTests } from '../handlers/read-denylist.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
+import { join } from 'path';
 
 function mockGrants(): GrantManager {
   return {
@@ -401,23 +404,229 @@ describe('createBashRestrictionHook — wiring failsafes', () => {
   });
 });
 
-describe('SENSITIVE_PATH_SIGNAL stays in sync with deriveRestrictedSubstrings', () => {
+describe('SENSITIVE_PATH_SIGNAL stays in sync with the built-in sensitive roots', () => {
   // Invariant: every restricted root check 2 protects must ALSO be matchable by
   // check 1's lexical signal — otherwise an interpreter one-liner that assembles
   // that root at runtime (a quote-prefixed `~`, which normalizeHomeRefs leaves
-  // alone) slips past BOTH checks. This test fails if a candidate is added to
-  // deriveRestrictedSubstrings without a corresponding SENSITIVE_PATH_SIGNAL
-  // fragment — the exact drift that once left ~/Library/Application Support
-  // (Chrome saved passwords / cookies) reachable via `python -c`.
-  const allCandidates = deriveRestrictedSubstrings({
-    resolveBase: undefined,
-    readRoots: [],
-    writeRoots: [],
-  });
+  // alone) slips past BOTH checks. This test fails if a root is added to
+  // builtinBashSensitiveRoots — including via the shared BUILTIN_READ_DENYLIST —
+  // without a corresponding SENSITIVE_PATH_SIGNAL fragment: the exact drift that
+  // once left ~/Library/Application Support (Chrome saved passwords / cookies)
+  // reachable via `python -c`.
+  //
+  // Scoped to the BUILT-IN roots on purpose. The other two candidate sources are
+  // environment-dependent — operator AFK_READ_DENYLIST entries, and the
+  // symlink-resolved spelling of each built-in — so asserting lexical coverage
+  // over them would make this suite pass or fail on the host's config. Those
+  // still get check 2; only the interpreter guard's lexical half is built-in only.
+  const allCandidates = builtinBashSensitiveRoots();
 
-  it('covers every deriveRestrictedSubstrings candidate root', () => {
+  it('covers every built-in sensitive root', () => {
     expect(allCandidates.length).toBeGreaterThan(0);
     const uncovered = allCandidates.filter((c) => !SENSITIVE_PATH_SIGNAL.test(c));
     expect(uncovered).toEqual([]);
+  });
+});
+
+describe('deriveRestrictedSubstrings — no coverage regression from sharing the read denylist', () => {
+  // Invariant: swapping the hand-written candidate list for the shared read
+  // denylist must never DROP a root. This is the literal list as it stood on
+  // main @ 38ecc28 (bash-restriction-hook.ts:298-309 before the change); every
+  // entry has to survive, whichever source now contributes it. A future edit
+  // that narrows the shared list fails here instead of silently un-gating a
+  // path bash has refused since the hook was written.
+  const home = homedir();
+  const historical = [
+    join(home, '.ssh'),
+    join(home, '.gnupg'),
+    join(home, '.aws'),
+    join(home, '.config', 'gh'),
+    join(home, '.netrc'),
+    join(home, 'Library', 'Application Support'),
+    join(home, '.password-store'),
+    '/etc/shadow',
+    '/etc/sudoers',
+    '/private/etc/sudoers',
+  ];
+
+  it('still covers every root the pre-share list covered', () => {
+    const current = deriveRestrictedSubstrings({
+      resolveBase: undefined,
+      readRoots: [],
+      writeRoots: [],
+    });
+    expect(historical.filter((h) => !current.includes(h))).toEqual([]);
+  });
+});
+
+describe('createBashRestrictionHook — credential parity with the typed read denylist', () => {
+  // Invariant: a credential path floored for read_file / grep / glob is floored
+  // for bash too. Each path below was readable with `cat` while the typed tools
+  // refused it, because the two lists were maintained separately;
+  // builtinBashSensitiveRoots() now imports BUILTIN_READ_DENYLIST directly.
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const home = homedir();
+
+  const newlyCovered: Array<[string, string]> = [
+    ['AFK credential tree (afk.env API keys)', `${home}/.afk/config/afk.env`],
+    ['AFK config that may carry a literal apiKey', `${home}/.afk/config/afk.config.json`],
+    ['git credential store', `${home}/.git-credentials`],
+    ['npm publish token', `${home}/.npmrc`],
+    ['docker registry auth', `${home}/.docker/config.json`],
+    ['kube config', `${home}/.kube/config`],
+    ['gcloud credentials', `${home}/.config/gcloud/credentials.db`],
+    ['macOS master.passwd', '/private/etc/master.passwd'],
+    // Invariant: BOTH spellings of an /etc root, because this scan is lexical.
+    // The denylist names only the `/private` form, and macOS symlinks `/etc` —
+    // so `cat /etc/master.passwd` reached the same file the typed tools refuse
+    // until withEtcAliases() derived the twin (PR #734 review, MAJOR 2).
+    ['macOS master.passwd via the /etc symlink', '/etc/master.passwd'],
+    ['/etc/shadow via its /private real path', '/private/etc/shadow'],
+  ];
+
+  for (const [label, credentialPath] of newlyCovered) {
+    it(`blocks cat of the ${label}`, () => {
+      const decision = hook(ctx(`cat ${credentialPath}`));
+      expect(decision.decision).toBe('block');
+      expect(decision.reason).toMatch(/restricted path/);
+    });
+  }
+
+  it('blocks an interpreter one-liner assembling the AFK credential tree at runtime', () => {
+    expect(
+      hook(ctx('python -c "import os; open(os.path.expanduser(\'~/.afk/config/afk.env\')).read()"'))
+        .decision,
+    ).toBe('block');
+  });
+
+  it('leaves ~/.afk/state readable — forks read preflight inputs, todos, transcripts there', () => {
+    // The read denylist floors ~/.afk/CONFIG only, never ~/.afk/state
+    // (#544/#547/#554). Sharing the list must not smuggle state into the block.
+    expect(hook(ctx(`cat ${home}/.afk/state/todos/session.json`)).decision).not.toBe('block');
+    expect(hook(ctx(`ls ${home}/.afk/state`)).decision).not.toBe('block');
+    expect(
+      hook(ctx('python -c "open(os.path.expanduser(\'~/.afk/state/x.json\')).read()"')).decision,
+    ).not.toBe('block');
+  });
+
+  it('leaves ~/.afk/plugins readable — only ~/.afk/CONFIG is floored, not sibling AFK subdirs', () => {
+    // Pins the same CONFIG-only scoping as the state test above, for the
+    // plugins subdirectory: a future widening of the denied `config` root that
+    // spares only `state` (and not `plugins`) would otherwise go uncaught.
+    expect(hook(ctx(`cat ${home}/.afk/plugins/some-plugin/SKILL.md`)).decision).not.toBe('block');
+    expect(hook(ctx(`ls ${home}/.afk/plugins`)).decision).not.toBe('block');
+    expect(
+      hook(ctx('python -c "open(os.path.expanduser(\'~/.afk/plugins/some-plugin/SKILL.md\')).read()"'))
+        .decision,
+    ).not.toBe('block');
+  });
+
+  it('leaves ~/.afk/logs readable — only ~/.afk/CONFIG is floored, not sibling AFK subdirs', () => {
+    // Same scoping pin as above, for the logs subdirectory.
+    expect(hook(ctx(`cat ${home}/.afk/logs/telegram.log`)).decision).not.toBe('block');
+    expect(hook(ctx(`ls ${home}/.afk/logs`)).decision).not.toBe('block');
+    expect(
+      hook(ctx('python -c "open(os.path.expanduser(\'~/.afk/logs/telegram.log\')).read()"')).decision,
+    ).not.toBe('block');
+  });
+});
+
+describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () => {
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const home = homedir();
+  const mcp = `${home}/.afk/config/mcp.json`;
+
+  it('allows the MCP registry in every home spelling', () => {
+    expect(hook(ctx(`cat ${mcp}`)).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/.afk/config/mcp.json')).decision).not.toBe('block');
+    expect(hook(ctx('cat $HOME/.afk/config/mcp.json')).decision).not.toBe('block');
+  });
+
+  it('is EXACT-file: backups and pseudo-children stay blocked', () => {
+    expect(hook(ctx(`cat ${mcp}.bak`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${mcp}/child.json`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${home}/.afk/config/mcp.json.old`)).decision).toBe('block');
+  });
+
+  // Regression (glob-suffix carve-out bypass): the exact-ref lookahead class
+  // used to omit shell glob/brace metacharacters (`*`, `?`, `[`, `]`, `{`,
+  // `}`), so e.g. `mcp.json*` satisfied the negative lookahead and the WHOLE
+  // `.../config/mcp.json` span got scrubbed to the placeholder — dropping the
+  // only text carrying the denied `.../config` root, even though the shell
+  // expands the glob to siblings (`mcp.json.bak`) the carve-out was never
+  // meant to cover. Each spelling gets its own `it()` so a regression in any
+  // one of them cannot hide behind the others (short-circuit-safe).
+  it('is EXACT-file: a `*`-glob-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}*`)).decision).toBe('block');
+  });
+
+  it('is EXACT-file: a `{,.bak}`-brace-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}{,.bak}`)).decision).toBe('block');
+  });
+
+  it('is EXACT-file: a `[.]bak`-bracket-glob-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}[.]bak`)).decision).toBe('block');
+  });
+
+  it('is EXACT-file: a `?`-glob-extended reference stays blocked', () => {
+    expect(hook(ctx(`cat ${mcp}?`)).decision).toBe('block');
+  });
+
+  it('regression: the bare exact reference and its quoted form both stay allowed', () => {
+    // Counterpoint to the glob-suffix test above: a real exact reference (no
+    // trailing glob/brace metacharacter) must still hit the carve-out, quoted
+    // or not — the fix only narrows what counts as "exact", it must not
+    // un-allow the file the carve-out exists for.
+    expect(hook(ctx(`cat ${mcp}`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "${mcp}"`)).decision).not.toBe('block');
+  });
+
+  it('does not launder a credential sibling riding along in the same command', () => {
+    expect(hook(ctx(`cat ${mcp} ${home}/.afk/config/afk.env`)).decision).toBe('block');
+  });
+
+  it('extends the carve-out to the interpreter guard', () => {
+    expect(
+      hook(ctx('python -c "import json; json.load(open(\'~/.afk/config/mcp.json\'))"')).decision,
+    ).not.toBe('block');
+  });
+});
+
+describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash surface', () => {
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const home = homedir();
+
+  afterEach(() => {
+    delete process.env['AFK_READ_DENYLIST'];
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('blocks an operator-added path, in the spelling the operator used', () => {
+    // On macOS tmpdir() is /var/folders/… — a symlink to /private/var/folders/….
+    // getReadDenylist() hands back the RESOLVED form, which never appears in a
+    // command a model actually types, so this case passes only via
+    // readDenylistExtrasAsSpelled(). Do not "simplify" it to a non-symlinked
+    // path: that would stop exercising the as-spelled candidate entirely.
+    const extra = join(tmpdir(), 'afk-bash-restriction-secrets');
+    process.env['AFK_READ_DENYLIST'] = extra;
+    _resetReadDenylistCacheForTests();
+    expect(hook(ctx(`cat ${extra}/token`)).decision).toBe('block');
+  });
+
+  it('re-denying the mcp.json carve-out wins here too (extras outrank the exception)', () => {
+    const mcp = `${home}/.afk/config/mcp.json`;
+    process.env['AFK_READ_DENYLIST'] = mcp;
+    _resetReadDenylistCacheForTests();
+    expect(hook(ctx(`cat ${mcp}`)).decision).toBe('block');
+  });
+
+  // The bash surface parses this var through read-denylist.ts's shared parser,
+  // so tilde support has to hold HERE too — a local re-implementation drifting
+  // back is what made the documented spelling a no-op on both surfaces at once
+  // (PR #734 review, MAJOR 1).
+  it('honors a tilde-spelled entry, the spelling the docs recommend', () => {
+    process.env['AFK_READ_DENYLIST'] = '~/.afk/config/mcp.json';
+    _resetReadDenylistCacheForTests();
+    expect(hook(ctx(`cat ${home}/.afk/config/mcp.json`)).decision).toBe('block');
   });
 });
