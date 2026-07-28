@@ -131,14 +131,22 @@ registry holds `${VAR}` placeholders, not literal secrets, and agents need it to
 that will not connect. The carve-out is exact: `mcp.json.bak` and anything else in that directory
 stays blocked.
 
-Add your own entries with `AFK_READ_DENYLIST` (colon-separated absolute paths). Operator entries are
-matched *before* the carve-out, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the
-registry if yours holds inline secrets. Built-in entries always apply and cannot be removed.
+Add your own entries with `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading `~/` is
+expanded, but `~user/` is not — spell those out). Operator entries are matched *before* the
+carve-out, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds
+inline secrets. Built-in entries always apply and cannot be removed.
 
 The same list backs the bash restrictions below, so on **interactive** surfaces (REPL, Telegram) a
 credential path is protected whether the agent reaches for `read_file` or for `cat`. The typed-tool
 floor is unconditional on every surface; the bash half is not — see
 [Bash restrictions](#bash-restrictions) for the headless exception.
+
+The two halves match differently, and the difference is worth knowing. The typed tools resolve a
+path before comparing it, so a symlink pointing into a protected directory is refused. The bash hook
+scans the command *text* — it expands `~` and `$HOME`, but it cannot see through a symlink alias or a
+path assembled from shell variables. So `ln -s ~/.ssh /tmp/k && cat /tmp/k/id_rsa` is refused by
+`read_file` and not by the bash hook. That hook exists to stop the accidental `cat`, not a determined
+one; the typed-tool floor is the real boundary.
 
 ## Bash restrictions
 
@@ -151,10 +159,18 @@ typed file tools:
   easy way to bypass path containment, so they are blocked; the model is told to use `read_file` /
   `write_file` / `edit_file` (which carry their own per-call approval) instead. Lift just this
   denylist with `AFK_DISABLE_BASH_INTERPRETER_GUARD=1`.
+
+  This check matches a fixed set of credential *fragments* against the command text, and those
+  fragments are not anchored to your home directory — so an interpreter one-liner touching a
+  **project-local** file that happens to share a spelling (a repo's own `.npmrc`, `.afk/config/`)
+  is refused too. Unlike restricted roots, this one is not grant-filtered: `/allow-dir` will not
+  lift it. Read the file with `read_file`, or set `AFK_DISABLE_BASH_INTERPRETER_GUARD=1`.
 - **Restricted roots** — commands referencing sensitive paths. This is the same credential list the
-  typed read tools refuse (see [Protected paths](#protected-paths) below) plus a few shell-only
+  typed read tools refuse (see [Protected paths](#protected-paths) above) plus a few shell-only
   additions: `~/.password-store`, `~/Library/Application Support` (browser profiles), and the whole
-  `~/.config/gh` directory. A restricted path is allowed only when a granted root already covers it.
+  `~/.config/gh` directory. Each `/etc/…` entry is also matched as its `/private/etc/…` twin, and
+  vice versa, since macOS reaches the same file by both names. A restricted path is allowed only
+  when a granted root already covers it.
 
 On **headless** surfaces (`afk chat`, `afk daemon`) **both** checks *fail open*. No grant manager is
 wired there, so the restricted-root list is empty and the interpreter denylist has no approval path
@@ -232,7 +248,7 @@ Three things switch on together:
 | `AFK_DISABLE_BASH_INTERPRETER_GUARD` | `1` skips only the interpreter-eval denylist; the restricted-root check stays active. Wins over the force flag. | `0` (denylist on for interactive) |
 | `AFK_FORCE_BASH_INTERPRETER_GUARD` | `1` forces the interpreter denylist on even on headless surfaces, where it otherwise fails open. The restricted-root check stays open there regardless. | `0` (headless fails open) |
 | `AFK_WRITE_DENYLIST` | Comma-separated path globs the `write_file` tool always refuses, regardless of mode (including bypass). | — |
-| `AFK_READ_DENYLIST` | Colon-separated absolute paths added to the credential floor above — refused by the typed read tools on **every** surface, and by bash on **interactive** surfaces only ([headless fails open](#bash-restrictions)). Adds only; built-ins cannot be removed. | — |
+| `AFK_READ_DENYLIST` | Colon-separated absolute paths added to the credential floor above (a leading `~/` is expanded) — refused by the typed read tools on **every** surface, and by bash on **interactive** surfaces only ([headless fails open](#bash-restrictions)). Adds only; built-ins cannot be removed. | — |
 
 ## See also
 

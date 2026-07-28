@@ -476,6 +476,12 @@ describe('createBashRestrictionHook — credential parity with the typed read de
     ['kube config', `${home}/.kube/config`],
     ['gcloud credentials', `${home}/.config/gcloud/credentials.db`],
     ['macOS master.passwd', '/private/etc/master.passwd'],
+    // Invariant: BOTH spellings of an /etc root, because this scan is lexical.
+    // The denylist names only the `/private` form, and macOS symlinks `/etc` —
+    // so `cat /etc/master.passwd` reached the same file the typed tools refuse
+    // until withEtcAliases() derived the twin (PR #734 review, MAJOR 2).
+    ['macOS master.passwd via the /etc symlink', '/etc/master.passwd'],
+    ['/etc/shadow via its /private real path', '/private/etc/shadow'],
   ];
 
   for (const [label, credentialPath] of newlyCovered) {
@@ -558,5 +564,15 @@ describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash 
     process.env['AFK_READ_DENYLIST'] = mcp;
     _resetReadDenylistCacheForTests();
     expect(hook(ctx(`cat ${mcp}`)).decision).toBe('block');
+  });
+
+  // The bash surface parses this var through read-denylist.ts's shared parser,
+  // so tilde support has to hold HERE too — a local re-implementation drifting
+  // back is what made the documented spelling a no-op on both surfaces at once
+  // (PR #734 review, MAJOR 1).
+  it('honors a tilde-spelled entry, the spelling the docs recommend', () => {
+    process.env['AFK_READ_DENYLIST'] = '~/.afk/config/mcp.json';
+    _resetReadDenylistCacheForTests();
+    expect(hook(ctx(`cat ${home}/.afk/config/mcp.json`)).decision).toBe('block');
   });
 });

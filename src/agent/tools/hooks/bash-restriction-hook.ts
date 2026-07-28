@@ -82,6 +82,7 @@ import {
   READ_ALLOWLIST_REL,
   getReadDenylist,
   isReadDenied,
+  parseReadDenylistEntries,
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
 
@@ -365,37 +366,62 @@ function referencesSensitivePath(scanned: string, restrictedSubstrings: string[]
  *
  * The bash-only extras below are the reverse gap, kept local because the typed
  * tools do not need them: browser-profile and password-store dirs (bulk secret
- * stores nobody reads with `read_file`), the `/private` real path of
- * `/etc/sudoers`, and the WHOLE `~/.config/gh` dir — wider than the denylist's
- * `hosts.yml` floor, and deliberately not narrowed, since a shell can `cat`
- * every sibling token file the CLI writes there.
+ * stores nobody reads with `read_file`), and the WHOLE `~/.config/gh` dir —
+ * wider than the denylist's `hosts.yml` floor, and deliberately not narrowed,
+ * since a shell can `cat` every sibling token file the CLI writes there.
+ *
+ * Every entry is then passed through {@link withEtcAliases} so an `/etc` root
+ * and its `/private/etc` twin are always both present — the lexical scan cannot
+ * realpath its way between them the way the typed tools do.
  */
 export function builtinBashSensitiveRoots(): readonly string[] {
   const home = homedir();
-  return [
+  return withEtcAliases([
     path.join(home, 'Library', 'Application Support'),
     path.join(home, '.password-store'),
     path.join(home, '.config', 'gh'),
-    '/private/etc/sudoers',
     ...BUILTIN_READ_DENYLIST,
-  ];
+  ]);
 }
 
 /**
  * Operator `AFK_READ_DENYLIST` entries exactly as spelled, to sit alongside the
  * symlink-RESOLVED forms `getReadDenylist()` returns. A shell command normally
  * names the symlink (`~/.afk/config`), not its target, and this scanner is
- * lexical — so both spellings have to be candidates. Parsing mirrors
- * `read-denylist.ts` (colon-separated, `resolve()`d, no tilde expansion).
+ * lexical — so both spellings have to be candidates.
+ *
+ * Invariant: the parse itself is `read-denylist.ts`'s
+ * {@link parseReadDenylistEntries}, NOT a local copy. This function used to
+ * re-implement it and the two drifted immediately: neither expanded a leading
+ * `~`, so the tilde-spelled form the docs recommend resolved to a literal
+ * `./~/…` and protected nothing on either surface (PR #734 review, MAJOR 1).
+ * Only the post-parse step differs — resolved there, as-spelled here.
  */
 function readDenylistExtrasAsSpelled(): string[] {
-  const raw = env.AFK_READ_DENYLIST;
-  if (!raw) return [];
-  return raw
-    .split(':')
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => path.resolve(p));
+  return parseReadDenylistEntries(env.AFK_READ_DENYLIST);
+}
+
+/**
+ * Add the `/etc` ↔ `/private/etc` twin of every candidate that has one.
+ *
+ * Invariant: this scan is LEXICAL, so a root is only enforced in the spellings
+ * present in the candidate list — while the typed tools realpath first and so
+ * catch both for free. `/private/etc/master.passwd` was floored for `read_file`
+ * yet `cat /etc/master.passwd` (the same file, macOS symlinks `/etc`) sailed
+ * through, because the denylist happened to name only the `/private` form
+ * (PR #734 review, MAJOR 2). Deriving the twin mechanically closes the class:
+ * a future `/etc/...` or `/private/etc/...` entry cannot cover one spelling
+ * only. This is also why the hand-written `/private/etc/sudoers` bash-only
+ * extra is gone — it is now derived from the denylist's `/etc/sudoers`.
+ */
+function withEtcAliases(roots: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const root of roots) {
+    out.push(root);
+    if (root.startsWith('/etc/')) out.push(`/private${root}`);
+    else if (root.startsWith('/private/etc/')) out.push(root.slice('/private'.length));
+  }
+  return out;
 }
 
 /**

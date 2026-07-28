@@ -40,9 +40,10 @@ import { safeRealpath } from './write-denylist.js';
  * credential stores and secret files. Each entry is matched against the real
  * (symlink-resolved) target path as a prefix.
  *
- * Extend via `AFK_READ_DENYLIST` (colon-separated absolute paths). As with the
- * write denylist, the built-in entries always apply on top of any custom list;
- * there is intentionally no way to remove a built-in via env.
+ * Extend via `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading
+ * `~/` is expanded — see {@link parseReadDenylistEntries}). As with the write
+ * denylist, the built-in entries always apply on top of any custom list; there
+ * is intentionally no way to remove a built-in via env.
  */
 export const BUILTIN_READ_DENYLIST: readonly string[] = [
   `${homedir()}/.ssh`,
@@ -147,6 +148,32 @@ let cached:
   | { key: string; builtins: readonly string[]; extras: readonly string[]; allow: readonly string[] }
   | undefined;
 
+/**
+ * Parse an `AFK_READ_DENYLIST` value into absolute, un-realpath'd paths.
+ *
+ * Invariant: this is the SINGLE parser for that env var. The bash-restriction
+ * hook needs the entries as-SPELLED (its scan is lexical) while this module
+ * needs them symlink-RESOLVED, so the two consumers differ in what they do
+ * AFTER parsing — but they must never differ in the parse itself. A second
+ * hand-rolled copy in `bash-restriction-hook.ts` is exactly how `~/…` came to
+ * be honored on neither surface (PR #734 review, MAJOR 1).
+ *
+ * A leading `~` IS expanded, because the documented example for this var is
+ * itself tilde-spelled (`AFK_READ_DENYLIST=~/.afk/config/mcp.json`) and
+ * `resolve()` alone turns that into a literal `./~/…` directory that matches
+ * nothing — a security control silently protecting no path. `~user/…` is NOT
+ * expanded (no portable home lookup); spell those absolutely.
+ */
+export function parseReadDenylistEntries(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(':')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => (p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(1)) : p))
+    .map((p) => resolve(p));
+}
+
 function resolveLists(): {
   builtins: readonly string[];
   extras: readonly string[];
@@ -154,9 +181,9 @@ function resolveLists(): {
 } {
   const key = env.AFK_READ_DENYLIST ?? '';
   if (cached && cached.key === key) return cached;
-  const extras: string[] = key
-    ? key.split(':').map((p) => safeRealpath(resolve(p))).filter(Boolean)
-    : [];
+  const extras: string[] = parseReadDenylistEntries(key)
+    .map((p) => safeRealpath(p))
+    .filter(Boolean);
   cached = {
     key,
     builtins: BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
