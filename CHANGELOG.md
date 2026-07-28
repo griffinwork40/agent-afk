@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.6] - 2026-07-28
+
+### Fixed
+- flush logical lines to scrollback so resize reflow stops splitting words and dropping indent (#665) (71e5450)
+
 ## [5.81.5] - 2026-07-28
 
 ### Fixed
