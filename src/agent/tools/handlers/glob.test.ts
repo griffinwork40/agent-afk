@@ -10,6 +10,7 @@ import path from 'path';
 import os from 'os';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { globHandler, createGlobHandler } from './glob.js';
+import { _resetReadDenylistCacheForTests } from './read-denylist.js';
 
 describe('glob handler', () => {
   let tempDir: string;
@@ -36,6 +37,8 @@ describe('glob handler', () => {
   });
 
   afterEach(async () => {
+    delete process.env['AFK_READ_DENYLIST'];
+    _resetReadDenylistCacheForTests();
     // Clean up temporary directory
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -64,6 +67,24 @@ describe('glob handler', () => {
     expect(result.content).toContain('src/agent/session.ts');
     expect(result.content).toContain('src/agent/tools.ts');
     expect(result.content).toContain('tests/test.test.ts');
+  });
+
+  it('prunes protected descendants beneath a readable search root', async () => {
+    const protectedDir = path.join(tempDir, 'protected');
+    await fs.mkdir(protectedDir);
+    await fs.writeFile(path.join(protectedDir, 'secret.ts'), 'secret');
+    process.env['AFK_READ_DENYLIST'] = protectedDir;
+    _resetReadDenylistCacheForTests();
+
+    const result = await globHandler(
+      { pattern: '**/*.ts', path: tempDir },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('src/index.ts');
+    expect(result.content).not.toContain('protected');
+    expect(result.content).not.toContain('secret.ts');
   });
 
   it('should match files at root level', async () => {

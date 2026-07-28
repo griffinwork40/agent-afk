@@ -22,6 +22,8 @@ import { spawn } from 'child_process';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { getReadDenylist } from './read-denylist.js';
+import { relative, sep } from 'path';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { describeRgUnavailable } from './_rg-availability.js';
@@ -150,6 +152,20 @@ export function createGrepHandler(cwd?: string): ToolHandler {
 
     if (include) {
       args.push('-g', include);
+    }
+
+    // `resolveAndContain` protects the requested root, but a readable parent
+    // can contain unconditionally protected descendants. Prune each such
+    // subtree before ripgrep opens any files. Anchor the globs at the search
+    // root and escape glob metacharacters in literal path names.
+    for (const blocked of getReadDenylist()) {
+      const rel = relative(path, blocked);
+      if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) continue;
+      const literal = rel
+        .split(sep)
+        .map((segment) => segment.replace(/([*?\[\]{}\\])/g, '\\$1'))
+        .join('/');
+      args.push('-g', `!${literal}`, '-g', `!${literal}/**`);
     }
 
     // `--hidden` re-includes .git (a dot-dir not covered by .gitignore); exclude

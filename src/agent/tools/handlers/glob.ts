@@ -15,6 +15,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { isReadDenied } from './read-denylist.js';
 
 /**
  * Directory basenames pruned from recursion by default: VCS metadata and
@@ -127,6 +128,14 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
 
         const entryPath = path.join(currentPath, entry.name);
         const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+        // The requested root has already passed resolveAndContain, but a
+        // readable parent may contain protected descendants. Check every
+        // entry before matching or recursion so neither filenames nor file
+        // contents beneath a read-denylist floor are exposed.
+        if (isReadDenied(entryPath).denied) {
+          continue;
+        }
 
         // Test if this entry matches the pattern
         if (matcher.test(entryRel)) {
