@@ -430,8 +430,9 @@ export interface AgentConfig {
   /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the
-   * single choke point every fork path converges through — and never set by
-   * an entry point, so `undefined` authoritatively means "top-level".
+   * single choke point every built-in fork path converges through — and never
+   * set by an entry point. Direct SDK consumers that predate this marker are
+   * additionally protected by shared TraceWriter identity.
    *
    * Its one job today is witness-trace seal ownership. A session tree shares
    * ONE TraceWriter by reference and `NdjsonTraceWriter.seal()` is a hard,
@@ -440,7 +441,8 @@ export interface AgentConfig {
    * first silently truncates the record for every other session in the tree —
    * the "started without terminal" orphan gap.
    *
-   * This replaces probing `subagentToolOutputCapBytes` for the same signal.
+   * This replaces probing `subagentToolOutputCapBytes` for the same signal on
+   * built-in forks.
    * That field is a tool-output cap that merely *happened* to be fork-only, so
    * the coupling was invisible and load-bearing: any top-level session
    * legitimately setting an output cap would have silently stopped sealing its

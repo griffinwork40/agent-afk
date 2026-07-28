@@ -125,6 +125,36 @@ describe('witness seal ownership', () => {
     }
   });
 
+  it('directly constructed legacy fork does NOT seal its parent writer', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-legacy-sub-'));
+    try {
+      const writer = new NdjsonTraceWriter({ traceDir: dir });
+      const parent = new AgentSession({
+        model: 'sonnet',
+        provider: createMockProvider({ sessionId: `seal-legacy-parent-${Date.now()}` }),
+        traceWriter: writer,
+      });
+      // Public SDK consumers historically constructed children directly with
+      // this output-cap fork signal, before isSubagentFork existed.
+      const child = new AgentSession({
+        model: 'sonnet',
+        provider: createMockProvider({ sessionId: `seal-legacy-child-${Date.now()}` }),
+        subagentToolOutputCapBytes: 100_000,
+        traceWriter: writer,
+      });
+
+      await drainTurn(child, 'legacy child work');
+      await child.close();
+      expect(readTrace(dir).map((e) => e.kind)).not.toContain('session_sealed');
+
+      await drainTurn(parent, 'parent work after child close');
+      await parent.close();
+      expect(readTrace(dir).map((e) => e.kind)).toContain('session_sealed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('top-level session that sets an output cap STILL seals (marker decoupled)', async () => {
     // Regression for the latent bug the old gate carried: seal ownership used
     // to be inferred from `subagentToolOutputCapBytes`, so a top-level session
