@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.7] - 2026-07-28
+
+### Fixed
+- share the read denylist with the bash surface (#734) (1640f9b)
+
 ## [5.81.6] - 2026-07-28
 
 ### Fixed
