@@ -142,6 +142,18 @@ export function resetPlaywrightInstallCommandCache(): void {
   cachedInstallCommand = undefined;
 }
 
+/**
+ * True when `text` already carries an install remediation.
+ *
+ * Callers that append their own hint to an error message must check this first:
+ * `BrowserLauncher` decorates a chromium-missing launch failure at its source,
+ * so by the time an outer layer sees the message the remediation may already be
+ * present. Appending unconditionally double-prints it.
+ */
+export function hasPlaywrightInstallHint(text: string): boolean {
+  return text.includes('install chromium');
+}
+
 /** Which chromium artifact a launch needed. Headed and headless use different downloads. */
 export interface PlaywrightHintOptions {
   /**

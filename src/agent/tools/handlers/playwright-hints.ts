@@ -25,6 +25,7 @@ export {
   playwrightInstallCommand,
   playwrightMissingHint,
   decoratePlaywrightLaunchError,
+  hasPlaywrightInstallHint,
   resetPlaywrightInstallCommandCache,
 } from '../../../browser/playwright-missing.js';
 export type { PlaywrightHintOptions } from '../../../browser/playwright-missing.js';

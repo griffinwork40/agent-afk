@@ -35,7 +35,11 @@ import { resolveSearchBackend, formatSearchResults } from '../../../web/search.j
 import { retryFetch } from '../../../web/retryFetch.js';
 import type { RenderFn } from '../../../web/types.js';
 import { headAndTail } from './_output-cap.js';
-import { isPlaywrightMissing, playwrightInstallCommand } from './playwright-hints.js';
+import {
+  hasPlaywrightInstallHint,
+  isPlaywrightMissing,
+  playwrightInstallCommand,
+} from './playwright-hints.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
 // would throw before reaching this handler because tsconfig targets >=20.
@@ -259,9 +263,15 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           const base = err instanceof Error ? err.message : String(err);
-          const hint = isPlaywrightMissing(err)
-            ? ` (the render fallback needs the optional Playwright browser — run \`${playwrightInstallCommand()}\`)`
-            : '';
+          // A chromium-missing LAUNCH failure is already decorated by
+          // BrowserLauncher, so `base` may carry the remediation. Only add it
+          // here for the cases the launcher never sees — chiefly a missing
+          // `playwright` package, which fails at dynamic-import time before
+          // any launch. Appending unconditionally double-prints the command.
+          const hint =
+            isPlaywrightMissing(err) && !hasPlaywrightInstallHint(base)
+              ? ` (the render fallback needs the optional Playwright browser — run \`${playwrightInstallCommand()}\`)`
+              : '';
           return { content: `web_scrape markdown error: ${base}${hint}`, isError: true };
         }
       }
