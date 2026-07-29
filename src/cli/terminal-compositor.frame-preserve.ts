@@ -7,43 +7,31 @@
  * `import type` for FrameHost keeps this a TYPE-ONLY dependency on frame.ts
  * so there is no runtime circular import between the two siblings.
  *
- * #540 axis-2 scope note (logical-line scrollback flush): the two OTHER sites
- * that push committed content into native scrollback — the band-hold archive
- * (committed-band-commit.ts) and disarm's flushPendingCommittedBand
- * (lifecycle.ts) — now emit SOFT-WRAPPABLE logical lines (via committedBandMeta
- * + buildScrollbackArchiveEscape) so scrolled-off content reflows cleanly on a
- * width change. The eviction paths HERE deliberately still emit pre-wrapped
- * PHYSICAL rows: they are the load-bearing height/void-class machinery
- * (#539/#552/#573), and their paint-full-band-then-scroll mechanism is tightly
- * coupled to repositionCommittedBand's stateless re-pin and the exact
- * painted/pending accounting — converting them to the top-paint-logical-then-
- * scroll mechanism regressed the verdict-card overflow case (the card's closing
- * border was dropped on a growth eviction).
+ * #540 axis-2 (logical-line scrollback flush) — RESOLVED. All three sites that
+ * push committed content into native scrollback now emit SOFT-WRAPPABLE logical
+ * lines, so scrolled-off content reflows cleanly when the width changes: the
+ * band-hold archive (committed-band-commit.ts), disarm's
+ * flushPendingCommittedBand (lifecycle.ts), and the three eviction paths in
+ * `preserveRowsBeforeFrameRender` below — which delegate the archive to
+ * `archiveBandPrefixAndRepaintSurvivors`
+ * (terminal-compositor.frame-preserve-archive.ts, where the ordering constraint
+ * and geometry contract are documented).
  *
- * FALSIFIED 2026-07-29 — this note previously claimed "the band-hold archive is
- * the site that actually carries the width-resize content in practice (verified
- * by instrumenting the #540 PTY guards), so retaining physical emission here
- * does NOT reintroduce the fragmentation those guards check". That was an
- * empirical bet, and it lost: both #540 guards hold a tall overlay across every
- * commitAbove, so they only ever drive band-hold and could not observe THIS
- * site. The new PTY guard `width-resize-fragment-evict-growth` drives it
- * directly (commit under a short frame, then grow) and measures 4 non-wrapped
- * rows after a widen where a rejoined line shows 1 — i.e. the ordinary
- * end-of-turn → next-turn sequence DOES carry width-resize content through
- * here, and it fragments. Reported from a real session: see the analysis in
- * that guard's header. The physical emission below is therefore a KNOWN DEFECT
- * retained only because the naive conversion regresses the verdict-card case
- * above; it is not sound. The committedBandMeta
- * array IS still sliced in lockstep at every eviction below so the 1:1
- * band↔meta invariant (relied on by reflow and the two logical-flush sites)
- * holds. A full turnModel rewrite (docs/proposals/tui-compositor-rewrite.md §5
- * A2) would unify all three sites onto one logical archive; that is the
- * documented follow-up, out of scope for this targeted fix.
+ * History: these paths emitted pre-wrapped PHYSICAL rows until 2026-07-29, and
+ * one earlier attempt to convert them regressed the verdict-card border because
+ * the old mechanism's single paint did two jobs at once. Full account in the
+ * header of terminal-compositor.frame-preserve-archive.ts. Guards:
+ * `verdict-card-overflow.test.ts` and the PTY scenario
+ * `width-resize-fragment-evict-growth`.
+ *
+ * The legacy deficit-based eviction at the end of the function still calls
+ * `evictRowsToScrollback` directly and is deliberately unchanged: it scrolls
+ * whatever is already on screen (including pre-arm banner rows) rather than
+ * archiving band content, so it has no logical lines to emit.
  */
 
 import type { FrameHost } from './terminal-compositor.frame.js';
-import { eraseAndPaintRow } from './terminal-compositor.types.js';
-import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
+import { archiveBandPrefixAndRepaintSurvivors } from './terminal-compositor.frame-preserve-archive.js';
 
 /**
  * Preserve rows that the next compositor frame is about to cover.
@@ -129,48 +117,17 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       room > 0
     ) {
       const overflow = bandLen - room;
-      let out = '';
-      // Invariant (#540 — erase from the geometric floor, not the tracked band
-      // top): clear the above-frame content region from the anchor floor (row 1
-      // here, `!hasBanner` ⇒ anchorFloor === 1 per the branch invariant above)
-      // down through the band's tracked bottom, rather than reading
-      // `committedBandTopRow` for the loop start. This mirrors the Stage-2-core
-      // repin change (#552, committed-band-repin.ts): the FULL model is repainted
-      // top-aligned at [1, bandLen] on the very next lines of the SAME batched
-      // `out` write, so any rows in [1, committedBandTopRow) the widened erase
-      // touches are re-covered with real band content before stdout sees them —
-      // observable output is unchanged (byte-for-byte where committedBandTopRow
-      // was already ≤ 1; a repainted-over transient otherwise). This retires the
-      // `committedBandTopRow` adjacency-coupling READ; the tracked `bottom` stays
-      // (it is the vacated-tail boundary, not derivable from geometry pre-Stage-3).
-      for (let r = 1; r <= self.committedBandBottomRow; r++) {
-        out += eraseAndPaintRow(r);
-      }
-      // Paint the FULL model top-aligned at [1, bandLen] so the scroll evicts
-      // real rows — including previously-pending ones never on screen before.
-      for (let i = 0; i < bandLen; i++) {
-        out += eraseAndPaintRow(1 + i, self.committedBand[i]);
-      }
-      // Belt-and-braces DECAWM bracket (see withAutowrapDisabled doc): the band
-      // rows painted here were re-wrapped at the current width by repaint()'s
-      // reflowCommittedBandToWidth call before this function ran; disabling
-      // autowrap defends against a residual ±1-column displayWidth()
-      // measurement gap on ambiguous-width glyphs, which can otherwise
-      // fabricate an unaccounted phantom row.
-      withAutowrapDisabled(self.stdout, () => {
-        try {
-          self.stdout.write(out);
-        } catch {
-          /* terminal closed mid-render — next render's lifecycle tears us down */
-        }
-      });
-      evictRowsToScrollback(self, overflow);
-      // Survivors physically shifted to [1, room] by the scroll.
-      self.committedBand = self.committedBand.slice(overflow);
-      self.committedBandMeta = self.committedBandMeta.slice(overflow); // #540: keep 1:1
-      self.committedBandTopRow = 1;
-      self.committedBandBottomRow = room;
-      self.committedBandPaintedRows = self.committedBand.length;
+      // #540 axis-2: archive the pending-overflow prefix to scrollback as
+      // SOFT-WRAPPABLE logical lines, then re-place the survivors at [1, room].
+      // `!hasBanner` ⇒ anchorFloor === 1 per the branch invariant above. The
+      // helper erases from the geometric FLOOR (row 1) rather than reading the
+      // tracked `committedBandTopRow`, retiring that adjacency-coupling read per
+      // the Stage-2-core repin change (#552, committed-band-repin.ts); the
+      // tracked `bottom` stays, being the vacated-tail boundary and not
+      // derivable from geometry pre-Stage-3. The helper owns the
+      // erase → archive → repaint ordering constraint and all band bookkeeping;
+      // see terminal-compositor.frame-preserve-archive.ts.
+      archiveBandPrefixAndRepaintSurvivors(self, overflow, 1);
       return;
     }
 
@@ -179,42 +136,17 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     const growRoom = Math.max(0, desiredTopRow - 1);
     const growOverflow = bandLen - growRoom;
     if (growOverflow <= 0) return; // whole band fits above the new frame — no scroll
-    // Re-paint the full band top-aligned at [1, bandLen], erasing its old
-    // floating position, so the scroll carries the oldest `overflow` lines —
-    // real content, never blank rows — into scrollback. The frame render that
-    // follows repaints its own (lower) footprint; survivors sit above it.
-    let out = '';
-    // #540: erase from the geometric floor (row 1; `!hasBanner` ⇒ anchorFloor
-    // === 1), not the tracked `committedBandTopRow`. The [1, bandLen] repaint
-    // below re-covers the widened prefix on the same `out` write — see the full
-    // invariant on the pending-overflow eviction above.
-    for (let r = 1; r <= self.committedBandBottomRow; r++) {
-      out += eraseAndPaintRow(r);
-    }
-    for (let i = 0; i < bandLen; i++) {
-      out += eraseAndPaintRow(1 + i, self.committedBand[i]);
-    }
-    // Belt-and-braces DECAWM bracket — see the identical comment above.
-    withAutowrapDisabled(self.stdout, () => {
-      try {
-        self.stdout.write(out);
-      } catch {
-        /* terminal closed mid-render — next render's lifecycle tears us down */
-      }
-    });
-    evictRowsToScrollback(self, growOverflow);
-    // Survivors physically shifted to [1, growRoom] by the scroll — already
-    // hugging the new frame top (growRoom === desiredTopRow - 1). Record that so a
-    // later shrink re-pins from the right place.
-    self.committedBand = self.committedBand.slice(growOverflow);
-    self.committedBandMeta = self.committedBandMeta.slice(growOverflow); // #540: keep 1:1
-    self.committedBandTopRow = 1;
-    self.committedBandBottomRow = growRoom;
-    // The full band was re-painted top-aligned above before the scroll, so
-    // every surviving row is materialized on screen (and the evicted prefix is
-    // now in scrollback) — none are pending. Promote any previously-pending
-    // rows that this growth just materialized.
-    self.committedBandPaintedRows = self.committedBand.length;
+    // #540 axis-2: archive the oldest `growOverflow` rows to scrollback as
+    // SOFT-WRAPPABLE logical lines, then re-place the survivors at
+    // [1, growRoom] — already hugging the new frame top (growRoom ===
+    // desiredTopRow - 1), so a later shrink re-pins from the right place.
+    // `!hasBanner` ⇒ anchorFloor === 1. The helper owns the erase → archive →
+    // repaint ordering constraint and all band bookkeeping; see
+    // terminal-compositor.frame-preserve-archive.ts. This is the site the
+    // reported width-resize fragmentation came through (the ordinary
+    // end-of-turn → next-turn growth), pinned by the PTY guard
+    // `width-resize-fragment-evict-growth`.
+    archiveBandPrefixAndRepaintSurvivors(self, growOverflow, 1);
     return;
   }
 
@@ -261,40 +193,15 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     roomBanner > 0
   ) {
     const overflow = bandLenBanner - roomBanner;
-    let out = '';
-    // #540: erase from the geometric floor (`floorBanner` = max(anchorRow, 1)),
-    // not the tracked `committedBandTopRow`. The banner/anchor rows ABOVE
-    // `floorBanner` are still never touched (the loop starts AT floorBanner); the
-    // top-aligned [floorBanner, floorBanner+bandLen-1] repaint below re-covers the
-    // widened prefix on the same `out` write — see the full invariant on the
-    // !hasBanner pending-overflow eviction above. Retires the adjacency-coupling
-    // READ; the tracked `bottom` (vacated-tail boundary) stays.
-    for (let r = floorBanner; r <= self.committedBandBottomRow; r++) {
-      out += eraseAndPaintRow(r);
-    }
-    // Paint the FULL model top-aligned at [floor, floor+bandLen-1] so the
-    // scroll evicts real rows — including previously-pending ones never on
-    // screen before. External constraint (DECSTBM paint-before-scroll): CUP
-    // writes precede the \n scroll so the evicted rows hold real content.
-    for (let i = 0; i < bandLenBanner; i++) {
-      out += eraseAndPaintRow(floorBanner + i, self.committedBand[i]);
-    }
-    // Belt-and-braces DECAWM bracket — see the identical comment earlier in
-    // this file (the !hasBanner pending-overflow eviction).
-    withAutowrapDisabled(self.stdout, () => {
-      try {
-        self.stdout.write(out);
-      } catch {
-        /* terminal closed mid-render — next render's lifecycle tears us down */
-      }
-    });
-    evictRowsToScrollback(self, overflow);
-    // Survivors physically shifted to [floor, floor+room-1] by the scroll.
-    self.committedBand = self.committedBand.slice(overflow);
-    self.committedBandMeta = self.committedBandMeta.slice(overflow); // #540: keep 1:1
-    self.committedBandTopRow = floorBanner;
-    self.committedBandBottomRow = floorBanner + roomBanner - 1;
-    self.committedBandPaintedRows = self.committedBand.length;
+    // #540 axis-2: archive the pending-overflow prefix to scrollback as
+    // SOFT-WRAPPABLE logical lines, then re-place the survivors at
+    // [floorBanner, floorBanner + roomBanner - 1]. The banner/anchor rows ABOVE
+    // `floorBanner` are never touched — the helper's erase starts AT the floor.
+    // It owns the erase → archive → repaint ordering constraint (DECSTBM
+    // paint-before-scroll: CUP writes precede the \n scroll so evicted rows hold
+    // real content) and all band bookkeeping; see
+    // terminal-compositor.frame-preserve-archive.ts.
+    archiveBandPrefixAndRepaintSurvivors(self, overflow, floorBanner);
     return;
   }
 

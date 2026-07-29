@@ -550,26 +550,27 @@ export const SCENARIOS: Record<string, PtyScenario> = {
 
   // ─────────────────────────────────────────────────────────────────────────
   // width-resize-fragment-evict-growth (#540 axis-2 · the EVICTION site):
-  // frame-preserve.ts:10-30 justifies leaving the growth-eviction paths on
-  // pre-wrapped PHYSICAL rows by asserting "the band-hold archive is the site
-  // that actually carries the width-resize content in practice". The two guards
-  // above only ever drive band-hold (they hold a tall overlay across every
-  // commitAbove), so nothing tests that claim. This scenario drives the OTHER
-  // site: commit with a SHORT frame so the run lands in the band and is painted
-  // (no archive), THEN grow the overlay so preserveRowsBeforeFrameRender's
-  // grow-eviction scrolls those painted rows into scrollback as app hard
-  // newlines — the real end-of-turn → next-turn sequence from the 2026-07-29
-  // report. On a WIDEN the terminal cannot rejoin app hard-newlines, so the
-  // line stays fragmented: measured 4 non-wrapped rows at HEAD (22751af), where
-  // a rejoined line would show 1. RED-guard shape (minNonWrappedRows) — it
-  // asserts the defect so the blind spot cannot silently persist; flip it to
-  // `maxNonWrappedRows: 1` when the A2 unification retires physical eviction.
+  // drives the eviction site rather than band-hold. The two guards above hold a
+  // tall overlay across every commitAbove, so they only ever drive band-hold and
+  // structurally could not observe this path. This scenario commits with a SHORT
+  // frame so the run lands in the band and is painted (no archive), THEN grows
+  // the overlay so preserveRowsBeforeFrameRender's grow-eviction archives those
+  // rows — the ordinary end-of-turn → next-turn sequence from the 2026-07-29
+  // report.
+  //
+  // Was RED-first (minNonWrappedRows: 2): physical-row eviction measured 4
+  // non-wrapped rows after a widen at 22751af, and the defect was then confirmed
+  // in a real terminal (4 mid-word rows still ~60 cols wide inside a 120-col
+  // pane, continuations at column 0). Now asserts the FIXED rejoined property
+  // (maxNonWrappedRows: 1): the eviction paths archive logical lines via
+  // archiveBandPrefixAndRepaintSurvivors. A regression that reverts to
+  // physical-row eviction turns this red again.
   // ─────────────────────────────────────────────────────────────────────────
   'width-resize-fragment-evict-growth': {
-    description: 'logical line evicted by frame GROWTH stays FRAGMENTED in scrollback on a WIDER resize (RED guard, #540 axis-2)',
+    description: 'logical line evicted by frame GROWTH REJOINS in scrollback on a WIDER resize (#540 axis-2)',
     cols: 48,
     rows: 24,
-    ref: '#540 axis-2 · frame-preserve.ts grow-eviction (physical rows)',
+    ref: '#540 axis-2 · frame-preserve.ts grow-eviction (logical archive)',
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
@@ -589,7 +590,8 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       await settle();
       // Phase 2 — GROW the frame. desiredTopRow drops below prevTopRow, so
       // growOverflow = bandLen - growRoom > 0 and the top band rows (including
-      // all 4 rows of the long line) are evicted to scrollback physically.
+      // all 4 physical rows of the long line) are archived to scrollback — as
+      // ONE soft-wrappable logical line, which is what lets the widen rejoin it.
       c.setOverlay(Array.from({ length: 18 }, (_, i) => `thinking ${i} tall`).join('\n'));
       ix.repaint();
       await settle();
@@ -602,10 +604,14 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     },
     expect: {
       inScrollback: ['LOGSTART'], // precondition: the line was evicted off screen
-      // >=2 non-wrapped rows == still fragmented. Deliberately not pinned to the
-      // measured 4: the exact count depends on eviction row math, but ANY value
-      // >1 means the terminal could not rejoin it.
-      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', minNonWrappedRows: 2 },
+      // Exactly 1 non-wrapped row == the terminal rejoined the whole logical
+      // line and every other row in the span is a soft-wrap continuation.
+      // Asserted as an upper bound rather than `=== 1` because the span's row
+      // count depends on eviction row math; ANY value >1 means an interior app
+      // hard-newline survived and the content is still fragmented. Verified
+      // falsifiable: reverting step 2's emission to `committedBand.slice(0,
+      // overflow)` (physical rows) makes this measure 4 and fail.
+      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
     },
   },
 
