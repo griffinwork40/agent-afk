@@ -21,7 +21,7 @@
  */
 
 import { mkdir, writeFile, unlink, readdir, readFile } from 'fs/promises';
-import { unlinkSync, existsSync } from 'fs';
+import { unlinkSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getPresenceDir } from '../../paths.js';
 import type { RuntimeWorkspace } from './types.js';
@@ -162,10 +162,18 @@ function presenceFilePath(sessionId: string): string {
 /**
  * Ensure the presence directory exists. Returns `true` on success, `false` on
  * any fs error (caller treats write as best-effort).
+ *
+ * `mode: 0o700` — presence records include `cwd`, `pid`, and (for AFK
+ * sessions) an `afk` posture marker; a default umask would otherwise leave
+ * the directory (and, by extension, every file mkdir creates under it)
+ * world-readable. `recursive: true` no-ops the mode on an already-existing
+ * directory (Node does not chmod on the recursive/no-op path), so this only
+ * takes effect on first creation — existing installs are unaffected until
+ * the dir is recreated.
  */
 async function ensurePresenceDir(): Promise<boolean> {
   try {
-    await mkdir(getPresenceDir(), { recursive: true });
+    await mkdir(getPresenceDir(), { recursive: true, mode: 0o700 });
     return true;
   } catch {
     return false;
@@ -229,22 +237,70 @@ export async function writePresenceFile(info: PresenceFileInfo): Promise<void> {
     try {
       const ok = await ensurePresenceDir();
       if (!ok) return;
-      const filePath = presenceFilePath(info.sessionId);
-      // Stamp the schema version and an initial heartbeat HERE rather than at the
-      // call sites: more than one provider writes presence (anthropic-direct and
-      // openai-compatible), so a per-caller stamp would silently miss a writer the
-      // moment a third surface is added. Caller-supplied values win, which keeps
-      // tests able to pin a specific version or heartbeat.
-      const record: PresenceFileInfo = {
-        schemaVersion: PRESENCE_SCHEMA_VERSION,
-        heartbeatAt: new Date().toISOString(),
-        ...info,
-      };
-      await writeFile(filePath, JSON.stringify(record, null, 2), 'utf8');
+      // mode: 0o600 — presence records carry cwd/pid/afk-posture; a default
+      // umask would otherwise leave them world-readable (every mutator below
+      // matches this mode so a read-modify-write cannot loosen it back up).
+      await writeFile(presenceFilePath(info.sessionId), serializePresenceRecord(info), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
     } catch {
       // Best-effort — swallow silently.
     }
   });
+}
+
+/**
+ * Stamp the schema version and an initial heartbeat HERE rather than at the call
+ * sites: more than one provider writes presence (anthropic-direct and
+ * openai-compatible), so a per-caller stamp would silently miss a writer the
+ * moment a third surface is added. Caller-supplied values win, which keeps tests
+ * able to pin a specific version or heartbeat.
+ *
+ * Shared by the async and sync writers so the two cannot drift in record shape.
+ */
+function serializePresenceRecord(info: PresenceFileInfo): string {
+  const record: PresenceFileInfo = {
+    schemaVersion: PRESENCE_SCHEMA_VERSION,
+    heartbeatAt: new Date().toISOString(),
+    ...info,
+  };
+  return JSON.stringify(record, null, 2);
+}
+
+/**
+ * Synchronous variant of {@link writePresenceFile}, for the session's INITIAL
+ * advertisement.
+ *
+ * Invariant: this write must be complete before the call that triggered it
+ * returns. It is issued from `registerPresenceLifecycle` inside a provider's
+ * `query()`, and both providers expose a synchronous `close()`, so an async
+ * write has no handle anything can await — it outlives the turn that started it.
+ * Two concrete failures followed from that. (1) A host that points `AFK_HOME` at
+ * a scratch dir and removes it right after a turn races the in-flight write and
+ * gets `ENOTEMPTY` on teardown, because the write recreates `presence/` while
+ * the tree is being walked. (2) `setPresenceAfk` is a read-modify-write that
+ * swallows `ENOENT`, so an `/afk on` issued immediately after session start
+ * could land BEFORE the initial file existed and silently no-op, leaving the
+ * operator's posture unset. Writing synchronously removes both: the file exists
+ * before `query()` proceeds, and every queued mutator necessarily runs after it.
+ *
+ * Deliberately NOT enrolled in the `presenceWriteTails` queue — it is the first
+ * operation for this session id, and completing inline means later async
+ * mutators serialize behind an already-durable file rather than racing it.
+ *
+ * Best-effort and never throws, matching the async writer.
+ */
+export function writePresenceFileSync(info: PresenceFileInfo): void {
+  try {
+    mkdirSync(getPresenceDir(), { recursive: true, mode: 0o700 });
+    writeFileSync(presenceFilePath(info.sessionId), serializePresenceRecord(info), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+  } catch {
+    // Best-effort — swallow silently.
+  }
 }
 
 /**
@@ -265,7 +321,7 @@ export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.heartbeatAt = new Date().toISOString();
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -286,7 +342,7 @@ export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<v
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.afk = afk;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -323,7 +379,7 @@ export async function setPresenceBlocked(sessionId: string, blocked: boolean): P
       } else {
         delete parsed.blockedSince;
       }
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -348,7 +404,7 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.cwd = cwd;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }

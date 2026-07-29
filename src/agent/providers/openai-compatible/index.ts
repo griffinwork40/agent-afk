@@ -54,11 +54,12 @@ import {
   wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
   formatEnvironmentFragment,
-  writePresenceFile,
-  removePresenceFileSync,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
-import { actorFromDepth } from '../../session/session-identity.js';
+import {
+  registerPresenceLifecycle,
+  resolveTopLevelSessionId,
+} from '../shared/presence-lifecycle.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -147,6 +148,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * `AnthropicDirectProvider._presenceSessionId`. `null` = not yet registered.
    */
   private _presenceSessionId: string | null = null;
+
+  /**
+   * Session id minted for a top-level session that supplied none — same
+   * semantics as `AnthropicDirectProvider._mintedSessionId`. Memoized so the id
+   * stays stable across turns and the ledger directory cannot move out from
+   * under the presence file the Telegram watcher is following.
+   */
+  private _mintedSessionId: string | null = null;
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     this.providerOpts = opts;
@@ -255,12 +264,35 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
         });
 
+    // Invariant: resolve the session id BEFORE anything that consumes it —
+    // both `buildOpts.sessionIdOverride` (query construction) and the presence
+    // write below must receive the SAME id. The Telegram watcher resolves a
+    // session's ledger path from the id in its presence file, so a mismatch
+    // makes auto-subscribe tail a ledger that does not exist.
+    //
+    // This provider previously hand-duplicated the anthropic-direct gate,
+    // including its `config.sessionId` bug: that field is set only under
+    // --resume, so a fresh session wrote no presence file at all. Both providers
+    // now call the one shared helper so they cannot drift again.
+    const resolvedSession = resolveTopLevelSessionId({
+      sessionId: config.sessionId,
+      resume: config.resume,
+      depth: config.depth,
+      parentSessionId: config.parentSessionId,
+      surface: this.providerOpts.surface ?? 'cli',
+      memoized: this._mintedSessionId,
+    });
+    this._mintedSessionId = resolvedSession.memoized;
+
     const buildOpts: {
       baseURL?: string;
       toolDispatcher?: ToolDispatcher;
       onPermissionMode?: (mode: string) => void;
       mcpManager?: import('../../mcp/index.js').McpManager;
+      sessionIdOverride?: string;
     } = {};
+    // Undefined for forks — they keep the factory's own per-call mint.
+    if (resolvedSession.id !== undefined) buildOpts.sessionIdOverride = resolvedSession.id;
     // Per-slot / per-session baseURL (`config.openaiBaseUrl`, set by
     // applySlotCredentials) wins over the construction-time global
     // (`providerOpts.baseURL`, from AFK_OPENAI_BASE_URL) so a tier bound to its
@@ -276,30 +308,19 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
     if (this.providerOpts.mcpManager !== undefined) buildOpts.mcpManager = this.providerOpts.mcpManager;
 
-    // Phase 2 — Presence file lifecycle (top-level sessions only).
-    const isTopLevel =
-      (config.depth === undefined || config.depth === 0) &&
-      config.parentSessionId === undefined;
-    if (isTopLevel && config.sessionId !== undefined && this._presenceSessionId === null) {
-      this._presenceSessionId = config.sessionId;
-      const sessionId = config.sessionId;
-      const workspace = runtimeStateSource.getWorkspace();
-      void writePresenceFile({
-        sessionId,
-        surface: this.providerOpts.surface ?? 'cli',
-        // Top-level gate above ⇒ depth 0/undefined ⇒ 'main'. Derived (not
-        // hardcoded) to stay correct if that gate is ever changed.
-        actor: actorFromDepth(config.depth),
-        cwd: config.cwd ?? process.cwd(),
-        startedAt: new Date().toISOString(),
-        model: { provider: PROVIDER_NAME, name: modelName },
-        workspace,
-        pid: process.pid,
-      });
-      process.once('exit', () => { removePresenceFileSync(sessionId); });
-      process.once('SIGINT', () => { removePresenceFileSync(sessionId); process.exit(130); });
-      process.once('SIGTERM', () => { removePresenceFileSync(sessionId); process.exit(143); });
-    }
+    // Phase 2 — Presence file lifecycle (top-level sessions only), using the id
+    // resolved above so presence and query construction cannot diverge.
+    this._presenceSessionId = registerPresenceLifecycle({
+      depth: config.depth,
+      parentSessionId: config.parentSessionId,
+      sessionId: resolvedSession.id,
+      currentPresenceSessionId: this._presenceSessionId,
+      runtimeStateSource,
+      surface: this.providerOpts.surface ?? 'cli',
+      cwd: config.cwd,
+      providerName: PROVIDER_NAME,
+      model: modelName,
+    });
 
     // Phase 2 — add `# Environment` block to the system prompt.
     const envFragment = formatEnvironmentFragment({
