@@ -15,6 +15,13 @@
  *   pseudo-children stay denied), re-deniable via AFK_READ_DENYLIST, and
  *   resolved leaf-un-dereferenced so a symlinked registry cannot launder a
  *   protected target into the exception set (PR #728 review P1).
+ * - The reverse gap closed alongside PR #734 (bash/read-denylist parity):
+ *   ~/.password-store (whole dir) and per-browser secret trees under
+ *   ~/Library/Application Support (Chrome, Chromium, BraveSoftware, Microsoft
+ *   Edge, Arc, Firefox) are now read-denied too — but the browser floor is
+ *   scoped NARROWER than the bash hook's whole-dir root, so a non-secret
+ *   Application Support sibling (e.g. an editor's settings.json) stays
+ *   readable. That narrowness is pinned explicitly below.
  *
  * @module agent/tools/handlers/read-denylist.test
  */
@@ -106,6 +113,80 @@ describe('isReadDenied — deliberate divergence from the write denylist', () =>
   it('does NOT deny an ordinary project path', () => {
     expect(isReadDenied(join(tmpDir, 'src', 'index.ts')).denied).toBe(false);
     expect(isReadDenied('/tmp/some-repo/package.json').denied).toBe(false);
+  });
+});
+
+describe('isReadDenied — reverse-gap closure: password-store + browser secret trees', () => {
+  // These roots were bash-only (`builtinBashSensitiveRoots` in
+  // bash-restriction-hook.ts) before this change: blocked for `cat`, wide open
+  // for read_file/grep/glob/list_directory. See the module-header History note
+  // and the inline comment on these BUILTIN_READ_DENYLIST entries for why the
+  // browser floor is scoped to secret trees rather than the whole
+  // `~/Library/Application Support` directory the bash hook floors.
+
+  it('denies ~/.password-store wholesale — nothing under it is legitimately readable', () => {
+    expect(isReadDenied(join(homedir(), '.password-store')).denied).toBe(true);
+    expect(
+      isReadDenied(join(homedir(), '.password-store', 'personal', 'email.gpg')).denied,
+    ).toBe(true);
+  });
+
+  describe.each([
+    ['Google Chrome', join('Google', 'Chrome'), 'Login Data'],
+    ['Chromium', 'Chromium', 'Cookies'],
+    ['BraveSoftware', 'BraveSoftware', 'Web Data'],
+    ['Microsoft Edge', 'Microsoft Edge', 'Login Data'],
+    ['Arc', 'Arc', join('User Data', 'Default', 'Cookies')],
+    ['Firefox', 'Firefox', join('Profiles', 'abc123.default-release', 'logins.json')],
+  ])('%s profile tree', (_label, vendorRel, secretRel) => {
+    const root = join(homedir(), 'Library', 'Application Support', vendorRel);
+
+    it('denies the vendor root itself', () => {
+      expect(isReadDenied(root).denied).toBe(true);
+    });
+
+    it('denies its secret file', () => {
+      expect(isReadDenied(join(root, secretRel)).denied).toBe(true);
+    });
+  });
+
+  it('every browser root is present in BUILTIN_READ_DENYLIST verbatim', () => {
+    const appSupport = join(homedir(), 'Library', 'Application Support');
+    const expectedRoots = [
+      join(appSupport, 'Google', 'Chrome'),
+      join(appSupport, 'Chromium'),
+      join(appSupport, 'BraveSoftware'),
+      join(appSupport, 'Microsoft Edge'),
+      join(appSupport, 'Arc'),
+      join(appSupport, 'Firefox'),
+    ];
+    for (const root of expectedRoots) {
+      expect(BUILTIN_READ_DENYLIST).toContain(root);
+    }
+  });
+
+  it('does NOT floor the whole ~/Library/Application Support directory (narrow-scope pin)', () => {
+    // The point of scoping to secret trees instead of the bash hook's whole-dir
+    // root: a non-secret Application Support sibling must stay readable. This
+    // is the assertion the deliberate narrowing exists to satisfy — if a future
+    // edit widens BUILTIN_READ_DENYLIST to the whole directory (matching the
+    // bash extra), THIS test is what catches it.
+    expect(
+      isReadDenied(
+        join(homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'settings.json'),
+      ).denied,
+    ).toBe(false);
+    // Second, independent non-browser sibling — the terminal_font_size feature's
+    // other target — so the pin isn't resting on a single editor's config path.
+    expect(
+      isReadDenied(
+        join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'settings.json'),
+      ).denied,
+    ).toBe(false);
+    // And a plain top-level sibling with no relation to any browser.
+    expect(
+      isReadDenied(join(homedir(), 'Library', 'Application Support', 'SomeOtherApp')).denied,
+    ).toBe(false);
   });
 });
 

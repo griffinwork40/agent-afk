@@ -1,9 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { grepHandler, createGrepHandler } from './grep.js';
 import type { ToolHandlerContext } from '../types.js';
+import { _resetReadDenylistCacheForTests } from './read-denylist.js';
 
 describe('grepHandler', () => {
   let tempDir: string;
@@ -13,6 +14,8 @@ describe('grepHandler', () => {
   });
 
   afterEach(() => {
+    delete process.env['AFK_READ_DENYLIST'];
+    _resetReadDenylistCacheForTests();
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -38,6 +41,25 @@ describe('grepHandler', () => {
   });
 
   describe('basic pattern matching', () => {
+    it('prunes protected descendants when searching a readable parent', async () => {
+      const protectedDir = join(tempDir, 'protected');
+      mkdirSync(protectedDir);
+      writeFileSync(join(tempDir, 'public.txt'), 'shared needle');
+      writeFileSync(join(protectedDir, 'secret.txt'), 'shared needle secret-value');
+      process.env['AFK_READ_DENYLIST'] = protectedDir;
+      _resetReadDenylistCacheForTests();
+
+      const result = await grepHandler(
+        { pattern: 'shared needle', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('public.txt');
+      expect(result.content).not.toContain('secret.txt');
+      expect(result.content).not.toContain('secret-value');
+    });
+
     it('finds pattern in a single file', async () => {
       writeFileSync(join(tempDir, 'test.txt'), 'hello world\nfoo bar\nhello again');
 

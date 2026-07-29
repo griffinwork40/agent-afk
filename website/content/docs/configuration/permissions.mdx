@@ -122,6 +122,19 @@ outright:
 ~/.afk/config   ~/.npmrc        ~/.docker/config.json
 ~/.git-credentials              ~/.netrc        ~/.config/gh/hosts.yml
 ~/.kube/config  /etc/shadow     /etc/sudoers    /private/etc/master.passwd
+~/.password-store
+```
+
+Plus each browser's **secret tree** under `~/Library/Application Support` (never the whole
+directory — see below):
+
+```
+~/Library/Application Support/Google/Chrome
+~/Library/Application Support/Chromium
+~/Library/Application Support/BraveSoftware
+~/Library/Application Support/Microsoft Edge
+~/Library/Application Support/Arc
+~/Library/Application Support/Firefox
 ```
 
 Symlinks are dereferenced before the comparison, so a link into a protected directory is refused
@@ -131,15 +144,27 @@ registry holds `${VAR}` placeholders, not literal secrets, and agents need it to
 that will not connect. The carve-out is exact: `mcp.json.bak` and anything else in that directory
 stays blocked.
 
+The browser list is deliberately **narrower** than the bash hook's floor over the whole
+`~/Library/Application Support` directory (see [Bash restrictions](#bash-restrictions)). Bash's
+floor is grant-liftable — `/allow-dir <path>` drops it for a session — so flooring the whole
+directory there costs nothing permanent. This floor has no such escape hatch: it is unconditional
+and no operator, bypass mode, or forked subagent can ever lift a built-in entry, so it floors only
+the actual secret material — `Login Data` (saved passwords), `Cookies` (session tokens), and `Web
+Data` (autofill, including payment cards) for Chromium-family browsers; `logins.json` and `key4.db`
+for Firefox. A non-secret Application Support sibling, like an editor's `settings.json`, stays
+readable. Safari's secrets live outside Application Support entirely (`~/Library/Safari`,
+`~/Library/Cookies`) and are not covered by either surface today.
+
 Add your own entries with `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading `~/` is
 expanded, but `~user/` is not — spell those out). Operator entries are matched *before* the
 carve-out, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds
 inline secrets. Built-in entries always apply and cannot be removed.
 
 The same list backs the bash restrictions below, so on **interactive** surfaces (REPL, Telegram) a
-credential path is protected whether the agent reaches for `read_file` or for `cat`. The typed-tool
-floor is unconditional on every surface; the bash half is not — see
-[Bash restrictions](#bash-restrictions) for the headless exception.
+credential path is protected whether the agent reaches for `read_file` or for `cat` — and bash
+additionally floors a few wider, shell-only roots (see below). The typed-tool floor is unconditional
+on every surface; the bash half is not — see [Bash restrictions](#bash-restrictions) for the
+headless exception.
 
 The two halves match differently, and the difference is worth knowing. The typed tools resolve a
 path before comparing it, so a symlink pointing into a protected directory is refused. The bash hook
@@ -166,11 +191,15 @@ typed file tools:
   is refused too. Unlike restricted roots, this one is not grant-filtered: `/allow-dir` will not
   lift it. Read the file with `read_file`, or set `AFK_DISABLE_BASH_INTERPRETER_GUARD=1`.
 - **Restricted roots** — commands referencing sensitive paths. This is the same credential list the
-  typed read tools refuse (see [Protected paths](#protected-paths) above) plus a few shell-only
-  additions: `~/.password-store`, `~/Library/Application Support` (browser profiles), and the whole
-  `~/.config/gh` directory. Each `/etc/…` entry is also matched as its `/private/etc/…` twin, and
-  vice versa, since macOS reaches the same file by both names. A restricted path is allowed only
-  when a granted root already covers it.
+  typed read tools refuse (see [Protected paths](#protected-paths) above) plus shell-only
+  additions: the whole `~/.config/gh` directory (wider than the typed floor's single `hosts.yml`
+  file). `~/Library/Application Support` is *also* wider here than the typed floor — bash restricts
+  the whole directory, while `read_file`/`grep`/`glob` restrict only the per-browser secret trees
+  inside it (see [Protected paths](#protected-paths)) — because bash's floor is grant-liftable
+  (`/allow-dir <path>` drops it for a session) while the typed floor is unconditional and permanent.
+  Each `/etc/…` entry is also matched as its `/private/etc/…` twin, and vice versa, since macOS
+  reaches the same file by both names. A restricted path is allowed only when a granted root already
+  covers it.
 
 On **headless** surfaces (`afk chat`, `afk daemon`) **both** checks *fail open*. No grant manager is
 wired there, so the restricted-root list is empty and the interpreter denylist has no approval path

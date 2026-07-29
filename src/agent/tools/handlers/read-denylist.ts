@@ -24,6 +24,16 @@
  *     an agent that runs git/gh, so reads are floored first. Mirroring these
  *     into BUILTIN_WRITE_DENYLIST is a reasonable follow-up.
  *
+ * History: the REVERSE gap. `bash-restriction-hook.ts` floors
+ * `~/Library/Application Support` (whole dir) and `~/.password-store` for
+ * `cat`, but until now this list did not, so those credential stores were
+ * blocked for the shell and freely readable via `read_file`/`grep`/`glob`.
+ * `~/.password-store` closes here as a whole dir (nothing under it is
+ * legitimately readable). `~/Library/Application Support` closes NARROWER —
+ * per-browser secret trees only, never the whole dir — because this floor is
+ * permanent and the bash one is grant-liftable; see the inline comment on
+ * those entries below for the full reasoning.
+ *
  * Symlink safety is inherited from `safeRealpath` (write-denylist.ts): a
  * symlink `~/link → ~/.ssh` is dereferenced before the prefix comparison.
  *
@@ -31,7 +41,7 @@
  */
 
 import { env } from '../../../config/env.js';
-import { basename, dirname, join, resolve } from 'path';
+import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 
@@ -77,6 +87,59 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   '/etc/shadow',
   '/etc/sudoers',
   '/private/etc/master.passwd',
+  // Password-store (`pass`, passwordstore.org) — every entry underneath is a
+  // GPG-encrypted secret and there is no non-secret sibling to carve out, so
+  // the whole dir floors cleanly with no READ_ALLOWLIST_REL needed. This was
+  // previously a bash-only root (`builtinBashSensitiveRoots` in
+  // bash-restriction-hook.ts) — blocked for `cat`, wide open for `read_file` /
+  // `grep` / `glob`. Adding it here is what closes that reverse gap.
+  `${homedir()}/.password-store`,
+  // Invariant: browser SECRET TREES, deliberately NOT the whole `~/Library/
+  // Application Support` the bash hook floors (`builtinBashSensitiveRoots`).
+  // The two floors differ in liftability, and that difference is why their
+  // scope differs:
+  //   - The bash root is GRANT-FILTERED — `/allow-dir <path>` drops it for a
+  //     session (`deriveRestrictedSubstrings`) — so flooring the whole dir
+  //     there costs an operator nothing permanent; they can always opt back
+  //     in.
+  //   - This list has no such escape hatch. It is the UNCONDITIONAL floor
+  //     (module docstring): no operator, no bypass mode, no forked subagent
+  //     can ever un-deny a built-in entry. Mirroring the bash root verbatim
+  //     would PERMANENTLY blind read_file/grep/glob to every macOS app config
+  //     that happens to live under Application Support — including this
+  //     repo's own `terminal_font_size` targets (`~/Library/Application
+  //     Support/Cursor/User/settings.json`, `.../Code/User/settings.json`,
+  //     `permissions-store.ts`'s own grant-path example). A permanent floor
+  //     has to be scoped to the actual secret material, not the whole vendor
+  //     directory that contains it.
+  // So each browser's profile root is floored individually — the standard
+  // macOS install locations, listed even when absent on this machine, so the
+  // floor does not depend on which browsers an operator happens to have
+  // installed:
+  //   - Chromium-family (Chrome, Chromium, Brave, Edge) keep `Login Data`
+  //     (saved passwords), `Cookies` (session tokens), and `Web Data`
+  //     (autofill, incl. payment cards) as SQLite files directly inside the
+  //     profile directory.
+  //   - Firefox keeps `logins.json` (encrypted saved logins) and `key4.db`
+  //     (the key that decrypts them) inside its profile directory.
+  //   - Arc is Chromium-based (`User Data/<profile>/Login Data`, `Cookies`)
+  //     and floored the same way.
+  // `BraveSoftware` and `Microsoft Edge` are floored as their whole vendor
+  // dirs — unlike Google's, which also holds unrelated non-browser apps
+  // (Google-AdWords-Editor, GoogleUpdater, RLZ), both of those vendor dirs
+  // hold nothing but that browser's own channel variants, so there is no
+  // sibling app config to lose by flooring the whole thing.
+  //
+  // Out of scope (follow-up, not folded in here): Safari's secrets live
+  // OUTSIDE Application Support entirely (`~/Library/Safari`,
+  // `~/Library/Cookies`) — neither this list nor the bash hook covers them
+  // today.
+  `${homedir()}/Library/Application Support/Google/Chrome`,
+  `${homedir()}/Library/Application Support/Chromium`,
+  `${homedir()}/Library/Application Support/BraveSoftware`,
+  `${homedir()}/Library/Application Support/Microsoft Edge`,
+  `${homedir()}/Library/Application Support/Arc`,
+  `${homedir()}/Library/Application Support/Firefox`,
 ];
 
 /**
@@ -204,6 +267,25 @@ function resolveLists(): {
 export function getReadDenylist(): readonly string[] {
   const { builtins, extras } = resolveLists();
   return [...builtins, ...extras];
+}
+
+/**
+ * Denylist entries INSIDE `root`, as root-relative POSIX segments (glob-ready).
+ *
+ * Invariant: the normalization CHOKEPOINT for descendant-pruning callers
+ * (`grep.ts`). `getReadDenylist()` entries are always `safeRealpath`-resolved,
+ * but a caller's own root (e.g. `resolveAndContain`'s return value) typically
+ * is NOT. macOS symlinks `/tmp` -> `/private/tmp`, so an unresolved root vs. a
+ * resolved denylist via raw `path.relative` never lines up and pruning
+ * silently no-ops (grep.test.ts "prunes protected descendants"). Resolving
+ * `root` HERE with the same `safeRealpath` makes both sides symmetric.
+ */
+export function getReadDenylistDescendants(root: string): string[] {
+  const realRoot = safeRealpath(resolve(root));
+  const rels = getReadDenylist().map((blocked) => relative(realRoot, blocked));
+  return rels
+    .filter((rel) => rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`))
+    .map((rel) => rel.split(sep).join('/'));
 }
 
 /**
