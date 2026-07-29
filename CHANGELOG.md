@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.1] - 2026-07-29
+
+### Fixed
+- advertise presence for fresh sessions so Telegram AFK can discover them (#738) (575989a)
+- re-check domain policy on the URL open() lands on (#576) (#749) (57af639)
+- floor password-store and browser secret trees for reads (#735) (4c1b3d5)
+
 ## [5.82.0] - 2026-07-29
 
 ### Added
