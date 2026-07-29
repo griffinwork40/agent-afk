@@ -451,22 +451,25 @@ export const SCENARIOS: Record<string, PtyScenario> = {
   },
 
   // ─────────────────────────────────────────────────────────────────────────
-  // width-resize-fragment-narrow (#540 axis-2 · RED GUARD): a long LOGICAL line
-  // committed WIDE (100 cols) is hard-wrapped to physical rows at commit time
-  // (terminal-compositor.committed-band-commit.ts:165) and flushed to native
-  // scrollback as hard-newline rows. On a NARROWER resize the terminal reflows
-  // each hard row independently, so the one logical line shows ≥2 non-wrapped
-  // (isWrapped=false) rows in its span — it is NOT `tmux -J`-rejoinable. This is
-  // the user's screenshot. It is GREEN NOW (documents the bug); when PR 2 (#540
-  // Stage 3 logical flush) makes the flush emit logical lines, the count drops
-  // to 1 and THIS ASSERTION WILL FAIL — the signal to flip minNonWrappedRows →
-  // maxNonWrappedRows: 1 and retire this as the GREEN regression guard.
+  // width-resize-fragment-narrow (#540 axis-2 · GREEN regression guard): a long
+  // LOGICAL line committed WIDE (120 cols) is hard-wrapped to physical rows for
+  // the LIVE band's row math (terminal-compositor.committed-band-commit.ts:172),
+  // but PR 2 (#540 Stage 3 logical flush) archives it to native scrollback as a
+  // single SOFT-WRAPPABLE logical line (retained via committedBandMeta and
+  // emitted by buildScrollbackArchiveEscape at the band-hold archive site). On a
+  // NARROWER resize the terminal reflows that one logical line cleanly, so its
+  // span shows exactly ONE non-wrapped (isWrapped=false) head row — it IS
+  // `tmux -J`-rejoinable. This was RED-first (asserted minNonWrappedRows: 2, the
+  // fragmentation bug from the user's screenshot); the src change made scrollback
+  // hold logical lines, so it now asserts the FIXED rejoined property
+  // (maxNonWrappedRows: 1). A regression that reverts to physical-row flushing
+  // re-fragments the line and fails here.
   // ─────────────────────────────────────────────────────────────────────────
   'width-resize-fragment-narrow': {
-    description: 'wide-committed logical line in scrollback fragments on a NARROWER resize (RED guard, #540 axis-2)',
+    description: 'wide-committed logical line rejoins cleanly in scrollback on a NARROWER resize (GREEN guard, #540 axis-2)',
     cols: 120,
     rows: 24,
-    ref: '#540 axis-2 · terminal-compositor.committed-band-commit.ts:165',
+    ref: '#540 axis-2 · committed-band-commit.ts band-hold archive (logical flush)',
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
@@ -492,25 +495,28 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     expect: {
       inScrollback: ['LOGSTART'], // precondition: the long line scrolled off screen
       // minSpanRows:3 PROVES the narrow fired (the line is 2 rows at 120, 3 at
-      // 68) and is stable across PR 2; minNonWrappedRows:2 is the RED flip signal.
-      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', minNonWrappedRows: 2, minSpanRows: 3 },
+      // 68) and is stable across PR 2; maxNonWrappedRows:1 asserts the FIXED
+      // rejoined property (was minNonWrappedRows:2 pre-fix — the RED guard).
+      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1, minSpanRows: 3 },
     },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
-  // width-resize-fragment-widen (#540 axis-2 · RED GUARD): the widen twin. A
-  // long logical line committed NARROW (50 cols) hard-wraps to several physical
-  // rows and flushes to scrollback. On a WIDER resize the terminal cannot rejoin
-  // app hard-newlines, so the rows stay ragged/short — ≥2 non-wrapped rows in
-  // the span (each afk row is ≤50 ≤100 so none even soft-wraps). GREEN NOW; flips
-  // to FAIL when PR 2 emits one logical line (which the widen reflows to fewer
-  // rows with a single non-wrapped head). See the narrow twin's note.
+  // width-resize-fragment-widen (#540 axis-2 · GREEN regression guard): the
+  // widen twin. A long logical line committed NARROW (48 cols) hard-wraps to
+  // several physical rows for the live band, but PR 2 archives it to scrollback
+  // as a single SOFT-WRAPPABLE logical line. On a WIDER resize the terminal
+  // reflows that one logical line to fewer rows with a single non-wrapped head —
+  // rejoinable. This was RED-first (asserted minNonWrappedRows: 2: pre-fix the
+  // terminal could not rejoin app hard-newlines, leaving ≥2 ragged rows); the
+  // src change made scrollback hold logical lines, so it now asserts the FIXED
+  // rejoined property (maxNonWrappedRows: 1). See the narrow twin's note.
   // ─────────────────────────────────────────────────────────────────────────
   'width-resize-fragment-widen': {
-    description: 'narrow-committed logical line in scrollback stays ragged on a WIDER resize (RED guard, #540 axis-2)',
+    description: 'narrow-committed logical line rejoins cleanly in scrollback on a WIDER resize (GREEN guard, #540 axis-2)',
     cols: 48,
     rows: 24,
-    ref: '#540 axis-2 · terminal-compositor.committed-band-commit.ts:165',
+    ref: '#540 axis-2 · committed-band-commit.ts band-hold archive (logical flush)',
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
@@ -533,11 +539,12 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     },
     expect: {
       inScrollback: ['LOGSTART'],
-      // minNonWrappedRows:2 is the RED flip signal (4 ragged rows now → 1 after
-      // PR 2 rejoins the logical line). The resize MECHANISM is certified by the
-      // sanity scenario; a widen cannot prove itself via row count (it is
-      // unchanged pre-fix), so no minSpanRows here.
-      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', minNonWrappedRows: 2 },
+      // maxNonWrappedRows:1 asserts the FIXED rejoined property (was
+      // minNonWrappedRows:2 pre-fix — 4 ragged rows → 1 non-wrapped head after
+      // the logical-line flush). The resize MECHANISM is certified by the sanity
+      // scenario; a widen cannot prove itself via row count (a rejoined line
+      // occupies FEWER rows), so no minSpanRows here.
+      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
     },
   },
 };

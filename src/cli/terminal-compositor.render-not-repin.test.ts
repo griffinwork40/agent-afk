@@ -64,6 +64,7 @@ function makeHost(stdout: Out, over: Partial<CommittedBandHost>): CommittedBandH
     repaint: () => {},
     debugLog: () => {},
     committedBand: [],
+    committedBandMeta: [],
     committedBandTopRow: 0,
     committedBandBottomRow: 0,
     lastMeasuredFrameTop: 0,

@@ -72,9 +72,26 @@ export interface SkillManifestEntry {
  */
 export function buildSkillManifest(
   pluginConfigs?: SdkPluginConfig[],
-  opts?: CollectSkillEntriesOptions,
+  opts?: BuildSkillManifestOptions,
 ): string {
-  const entries = collectSkillEntries(pluginConfigs, opts);
+  const collected = collectSkillEntries(pluginConfigs, opts);
+  // Invariant: a skill-dispatch fork must never be handed its OWN catalogue
+  // entry. Its system prompt already IS that skill's SKILL.md body, and the
+  // manifest preamble tells the model to "Prefer a skill over inline
+  // investigation when the task shape matches" — so a self-entry describes the
+  // fork's own task back to it as a dispatchable skill, and the model routes to
+  // it instead of executing the body (observed: a `ground-state` fork
+  // re-dispatched `ground-state`, burning a nesting level and ~9min).
+  // Filtered here (model-facing manifest) rather than in collectSkillEntries so
+  // non-model consumers — the slash-command router, `afk skill list` — keep the
+  // complete set. Suffix match covers a plugin-qualified `<plugin>:<name>`
+  // listing so the exclusion cannot silently no-op if that naming is adopted
+  // for skills as it already is for agents.
+  const exclude = opts?.excludeName;
+  const entries =
+    exclude !== undefined && exclude.length > 0
+      ? collected.filter((e) => e.name !== exclude && !e.name.endsWith(`:${exclude}`))
+      : collected;
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -111,6 +128,23 @@ export interface CollectSkillEntriesOptions {
    * `process.cwd()` for standalone/REPL callers, where the two coincide.
    */
   cwd?: string;
+}
+
+/**
+ * Options for {@link buildSkillManifest} — the model-facing manifest only.
+ *
+ * Contract: extends {@link CollectSkillEntriesOptions} with `excludeName`,
+ * honored ONLY by `buildSkillManifest`. `collectSkillEntries` deliberately
+ * ignores it so non-model consumers (slash-command router, skill listings)
+ * always see the complete set.
+ */
+export interface BuildSkillManifestOptions extends CollectSkillEntriesOptions {
+  /**
+   * Skill name to omit from the manifest — set to the skill a skill-dispatch
+   * fork is currently executing (`AgentConfig.skillDispatchName`), so the fork
+   * cannot read its own entry and re-dispatch itself.
+   */
+  excludeName?: string;
 }
 
 /**

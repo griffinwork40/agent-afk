@@ -420,8 +420,35 @@ export interface AgentConfig {
    *
    * See `docs/philosophy/afk-contract.md` for the contract this
    * writer makes enforceable, and `src/agent/trace/` for shapes.
+   *
+   * Writing is the only capability a session needs here. Ending the shared
+   * file's life is a separate, non-inherited capability — see
+   * {@link AgentConfig.traceSealOwner}.
    */
   traceWriter?: TraceWriter;
+
+  /**
+   * True when this session is a forked subagent rather than the top-level
+   * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the
+   * single choke point every built-in fork path converges through — and never
+   * set by an entry point. Direct SDK consumers that predate this marker are
+   * additionally protected by shared TraceWriter identity.
+   *
+   * Its one job today is witness-trace seal ownership. A session tree shares
+   * ONE TraceWriter by reference and `NdjsonTraceWriter.seal()` is a hard,
+   * one-shot gate: after it flips, `write()` throws and
+   * `emitSubagentLifecycle` swallows the rejection, so whichever session seals
+   * first silently truncates the record for every other session in the tree —
+   * the "started without terminal" orphan gap.
+   *
+   * This replaces probing `subagentToolOutputCapBytes` for the same signal on
+   * built-in forks.
+   * That field is a tool-output cap that merely *happened* to be fork-only, so
+   * the coupling was invisible and load-bearing: any top-level session
+   * legitimately setting an output cap would have silently stopped sealing its
+   * own trace. Seal ownership now has a field that means what it says.
+   */
+  isSubagentFork?: true;
 
   /**
    * Model provider. Defaults to the Anthropic SDK adapter
@@ -615,6 +642,24 @@ export interface AgentConfig {
    * Default: `false` (main sessions keep the routing instruction and tool).
    */
   isSkillDispatch?: boolean;
+
+  /**
+   * Name of the skill this session was forked to execute — set alongside
+   * `isSkillDispatch` at every skill fork site.
+   *
+   * Contract: providers pass it to `buildSkillManifest` as `excludeName`, so the
+   * fork's own entry is omitted from the skills catalogue in its system prompt.
+   * Without it the fork reads a catalogue entry describing the very task it was
+   * given, under a "prefer a skill" preamble, and re-dispatches itself instead
+   * of executing its SKILL.md body. Scope: suppresses the affordance one level
+   * down only — a fork that dispatches a plain `agent` which then calls the same
+   * skill is NOT covered (the grandchild carries no skill identity). That gap is
+   * bounded by the nesting depth cap and left deliberately unfixed rather than
+   * threading skill identity through every child-config path.
+   *
+   * Default: `undefined` (main sessions see the complete manifest).
+   */
+  skillDispatchName?: string;
 
   /**
    * When true, the session runs on a non-interactive surface where no human is

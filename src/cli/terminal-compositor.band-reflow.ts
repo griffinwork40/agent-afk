@@ -27,6 +27,7 @@
  */
 
 import { hardWrapToWidth } from './wrap.js';
+import type { BandRowMeta } from './terminal-compositor.types.js';
 
 /**
  * Invariant (painted/pending boundary survives reflow): `committedBand`'s
@@ -49,6 +50,20 @@ import { hardWrapToWidth } from './wrap.js';
 export interface BandReflowResult {
   rows: string[];
   paintedRows: number;
+  /**
+   * Per-physical-row provenance for `rows`, index-aligned 1:1 (#540 axis-2).
+   * Re-wrapping a physical row into more (narrower) or the same (wider) rows
+   * PRESERVES each row's `logicalText` — the original pre-hard-wrap line the
+   * row is a fragment of, unchanged by any width — and recomputes `isHead` so
+   * only the first sub-row of a re-split row that was itself a logical-line
+   * head stays a head. This is what lets a widened resize rejoin a
+   * hard-wrapped line at the SCROLLBACK flush sites even though the on-screen
+   * physical rows keep their (now stale) narrow break points: the logical
+   * source rides through reflow intact. Absent-meta input degrades to
+   * reconstructing `logicalText` from the physical row itself (each row treated
+   * as its own logical line) — lossy for rejoin but never for content.
+   */
+  meta: BandRowMeta[];
 }
 
 /**
@@ -59,21 +74,49 @@ export interface BandReflowResult {
  * an already-`width`-fitting row at the SAME width returns it unchanged (so a
  * steady-width repeat call is a no-op even without the cache in
  * {@link reflowCommittedBandToWidth}).
+ *
+ * `meta` (index-aligned 1:1 with `band`) is re-split in lockstep: each source
+ * row's `logicalText` propagates to all its re-wrapped sub-rows so the retained
+ * logical form survives arbitrary reflows (#540 axis-2). When omitted, the
+ * physical row itself is used as the logical source (pre-#540 behavior — the
+ * band's re-wrapped rows are treated as their own logical lines).
  */
 export function reflowBandSplit(
   band: readonly string[],
   paintedRows: number,
   width: number,
+  meta?: readonly BandRowMeta[],
 ): BandReflowResult {
-  if (band.length === 0) return { rows: [], paintedRows: 0 };
+  if (band.length === 0) return { rows: [], paintedRows: 0, meta: [] };
   const clampedPainted = Math.max(0, Math.min(paintedRows, band.length));
-  const pendingPrefix = band.slice(0, band.length - clampedPainted);
-  const paintedSuffix = band.slice(band.length - clampedPainted);
-  const reflow = (lines: readonly string[]): string[] =>
-    lines.flatMap((line) => hardWrapToWidth(line, width).split('\n'));
-  const reflowedSuffix = reflow(paintedSuffix);
-  const rows = [...reflow(pendingPrefix), ...reflowedSuffix];
-  return { rows, paintedRows: reflowedSuffix.length };
+  const splitAt = band.length - clampedPainted;
+  // Re-wrap a [start, end) slice of the band, emitting the new physical rows
+  // and their meta together so the two arrays stay index-aligned. Each source
+  // row band[k] contributes its wrapped sub-rows, all carrying band[k]'s
+  // logicalText (from `meta`, or the row text itself as a fallback); only the
+  // first sub-row is a head, and only if the source row was a head.
+  const reflowSlice = (start: number, end: number): { rows: string[]; meta: BandRowMeta[] } => {
+    const outRows: string[] = [];
+    const outMeta: BandRowMeta[] = [];
+    for (let k = start; k < end; k++) {
+      const source = band[k] ?? '';
+      const logicalText = meta?.[k]?.logicalText ?? source;
+      const sourceIsHead = meta?.[k]?.isHead ?? true;
+      const subRows = hardWrapToWidth(source, width).split('\n');
+      subRows.forEach((sub, i) => {
+        outRows.push(sub);
+        outMeta.push({ logicalText, isHead: i === 0 && sourceIsHead });
+      });
+    }
+    return { rows: outRows, meta: outMeta };
+  };
+  const pending = reflowSlice(0, splitAt);
+  const painted = reflowSlice(splitAt, band.length);
+  return {
+    rows: [...pending.rows, ...painted.rows],
+    paintedRows: painted.rows.length,
+    meta: [...pending.meta, ...painted.meta],
+  };
 }
 
 /**
@@ -91,6 +134,8 @@ export interface BandReflowCache {
 /** Narrowest state slice {@link reflowCommittedBandToWidth} touches. */
 export interface BandReflowHost {
   committedBand: string[];
+  /** Per-physical-row logical provenance, index-aligned 1:1 with committedBand (#540). */
+  committedBandMeta: BandRowMeta[];
   committedBandPaintedRows: number;
   bandReflowCache: BandReflowCache | null;
 }
@@ -128,8 +173,14 @@ export function reflowCommittedBandToWidth(self: BandReflowHost, width: number):
   ) {
     return; // already reflowed to this width from this exact band+boundary
   }
-  const { rows, paintedRows } = reflowBandSplit(self.committedBand, self.committedBandPaintedRows, width);
+  const { rows, paintedRows, meta } = reflowBandSplit(
+    self.committedBand,
+    self.committedBandPaintedRows,
+    width,
+    self.committedBandMeta,
+  );
   self.committedBand = rows;
+  self.committedBandMeta = meta;
   self.committedBandPaintedRows = paintedRows;
   self.bandReflowCache = { band: rows, paintedRows, width };
 }

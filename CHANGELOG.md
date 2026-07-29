@@ -11,6 +11,26 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.81.8] - 2026-07-28
+
+### Fixed
+- stop a skill fork from re-dispatching itself (#737) (963b85f)
+
+## [5.81.7] - 2026-07-28
+
+### Fixed
+- share the read denylist with the bash surface (#734) (1640f9b)
+
+## [5.81.6] - 2026-07-28
+
+### Fixed
+- flush logical lines to scrollback so resize reflow stops splitting words and dropping indent (#665) (71e5450)
+
+## [5.81.5] - 2026-07-28
+
+### Fixed
+- gate witness seal on a purpose-built fork marker, not the output cap (#725) (e3d392d)
+
 ## [5.81.4] - 2026-07-28
 
 ### Fixed

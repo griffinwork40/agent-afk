@@ -37,6 +37,7 @@ import {
   BUILTIN_READ_DENYLIST,
   BUILTIN_READ_ALLOWLIST,
   resolveExceptionEntry,
+  parseReadDenylistEntries,
   _resetReadDenylistCacheForTests,
 } from './read-denylist.js';
 import { safeRealpath } from './write-denylist.js';
@@ -341,5 +342,45 @@ describe('read-denylist — AFK_READ_DENYLIST extras', () => {
     expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
     // The resolved list contains the custom entry.
     expect(getReadDenylist().some((p) => p.includes('secrets'))).toBe(true);
+  });
+
+  // Invariant: a leading `~` is expanded. The documented way to re-protect the
+  // MCP registry is itself tilde-spelled, and `resolve('~/x')` yields a literal
+  // `<cwd>/~/x` that matches nothing — so before PR #734's review fix this
+  // exact instruction silently protected no path on either surface. A plain
+  // `resolve()` regression fails here rather than in an operator's session.
+  it('expands a leading ~/ so the documented tilde-spelled entry actually denies', () => {
+    process.env['AFK_READ_DENYLIST'] = '~/.afk/config/mcp.json';
+    _resetReadDenylistCacheForTests();
+
+    // The carve-out is re-denied, exactly as the absolute spelling would.
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'mcp.json')).denied).toBe(true);
+    // And no literal `~` segment survives into the resolved list.
+    expect(getReadDenylist().some((p) => p.includes('~'))).toBe(false);
+  });
+
+  it('leaves ~user/ unexpanded (no portable home lookup) rather than guessing', () => {
+    process.env['AFK_READ_DENYLIST'] = '~someone/.ssh';
+    _resetReadDenylistCacheForTests();
+    // Resolved relative to cwd, not to another user's home — and crucially it
+    // does NOT widen into the real ~/.ssh floor, which stands on its own.
+    expect(getReadDenylist().some((p) => p.endsWith('~someone/.ssh'))).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+  });
+});
+
+describe('parseReadDenylistEntries — the single parser both surfaces share', () => {
+  // Invariant: bash-restriction-hook.ts imports THIS function instead of
+  // re-implementing the parse. The duplicate it used to keep is how the tilde
+  // bug reached both surfaces at once (PR #734 review, MAJOR 1).
+  it('splits on colons, trims, drops empties, and absolutizes', () => {
+    expect(parseReadDenylistEntries('  /a/b : :/c/d  ')).toEqual(['/a/b', '/c/d']);
+    expect(parseReadDenylistEntries(undefined)).toEqual([]);
+    expect(parseReadDenylistEntries('')).toEqual([]);
+  });
+
+  it('expands a bare ~ and a leading ~/', () => {
+    expect(parseReadDenylistEntries('~')).toEqual([homedir()]);
+    expect(parseReadDenylistEntries('~/.netrc')).toEqual([join(homedir(), '.netrc')]);
   });
 });
