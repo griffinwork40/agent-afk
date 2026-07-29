@@ -90,8 +90,13 @@ guard drove the one already-fixed write site. Verify, do not assume — composit
 phase traces go to **stderr**, so redirect it and leave stdout (the visual output)
 alone:
 
+All guard refusals print on **stdout**, so they stay visible under the `2>` redirect
+below. If the pane goes blank and you get an immediate prompt back, read what the
+script printed — it refused; it did not crash.
+
 Run these as **two separate commands** — the script holds for 45s, and pasting both
-at once can join them into one line:
+at once can join them into one line (which also silently creates a file named
+`grep` in the repo root; delete it if you see one):
 
 ```bash
 AFK_DEBUG_COMPOSITOR=1 pnpm exec tsx scripts/visual-void-repro.ts widen-evict 2>/tmp/comp.log

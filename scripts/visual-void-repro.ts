@@ -66,18 +66,29 @@ function reportTable(cols: number): string {
   return renderMarkdownToTerminal(TABLE_MD, { maxWidth: cols - 2 }).replace(/\n+$/, '');
 }
 
+/**
+ * Invariant (a refusal must survive the documented `2>` redirect): every guard in
+ * main() reports on STDOUT and never on stderr. docs/dev/real-terminal-matrix.md
+ * runs the instrumented form `… widen-evict 2>/tmp/comp.log` to capture
+ * AFK_DEBUG_COMPOSITOR traces, so a refusal written to stderr lands in the log
+ * file instead of the screen — the operator sees an empty pane and a silent
+ * exit-2 and cannot tell a refusal from a crash. That is exactly what happened
+ * on the first real run of widen-evict (refused at 111 cols, message invisible).
+ * stdout is already this script's visual channel, so it is the correct sink.
+ */
+function refuse(msg: string): never {
+  process.stdout.write(`${msg}\n`);
+  process.exit(2);
+}
+
 async function main(): Promise<void> {
   const stdout = process.stdout;
   if (!stdout.isTTY) {
-    // eslint-disable-next-line no-console
-    console.error('Not a TTY — run this directly in iTerm2 / Terminal / xterm, not through a pipe.');
-    process.exit(2);
+    refuse('Not a TTY — run this directly in iTerm2 / Terminal / xterm, not through a pipe.');
   }
   const arg = (process.argv[2] ?? 'long') as Scenario;
   if (!SCENARIOS.includes(arg)) {
-    // eslint-disable-next-line no-console
-    console.error(`Unknown scenario "${arg}". Pick one of: ${SCENARIOS.join(', ')}`);
-    process.exit(2);
+    refuse(`Unknown scenario "${arg}". Pick one of: ${SCENARIOS.join(', ')}`);
   }
   const cols = stdout.columns ?? 100;
 
@@ -88,13 +99,11 @@ async function main(): Promise<void> {
     // exact failure mode (a test that cannot observe its target) this scenario
     // exists to correct. There is no pause-and-hope here on purpose: the width
     // has to be right BEFORE the first commitAbove, not after a countdown.
-    // eslint-disable-next-line no-console
-    console.error(
+    refuse(
       `widen-evict needs a NARROW pane to commit at — this one is ${cols} cols.\n` +
         'Resize the window to 48-70 cols (or cmd-+ to grow the font) and re-run.\n' +
         'The whole point is to widen AFTERWARDS, so starting wide leaves no room to widen into.',
     );
-    process.exit(2);
   }
 
   if (arg === 'widen-evict') {
