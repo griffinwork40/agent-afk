@@ -46,6 +46,7 @@ export { gatherWorkspace } from './workspace-source.js';
 
 export {
   writePresenceFile,
+  writePresenceFileSync,
   removePresenceFile,
   removePresenceFileSync,
   readPresenceFiles,

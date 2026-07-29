@@ -7,17 +7,19 @@
  * shape of a fresh REPL session (see `cli/commands/interactive/bootstrap.ts`,
  * where `sessionId` arrives only via `...deps.resumeConfig`).
  *
- * Harness note: the presence write is fire-and-forget but scheduled
- * *synchronously* inside `provider.query()`, before any streaming — so these
- * tests call `query()` once, never iterate it, and assert on the real presence
- * file under a temp `AFK_HOME`. No SDK mock is needed because the client is
- * built lazily and never used. Same approach as `presence-surface.test.ts`.
+ * Harness note: the presence write happens *synchronously* inside
+ * `provider.query()`, before any streaming — so these tests call `query()` once,
+ * never iterate it, and assert on the real presence file under a temp
+ * `AFK_HOME`. No SDK mock is needed because the client is built lazily and never
+ * used. Same approach as `presence-surface.test.ts`. The polling helper below is
+ * retained only so these cases stay honest if the write ever becomes async
+ * again; `writes the presence file synchronously` pins the current contract.
  *
  * Resolver-level cases live in `presence-lifecycle.test.ts`.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -25,6 +27,7 @@ import {
   OpenAICompatibleProvider,
 } from '../index.js';
 import { readPresenceFiles, type PresenceFileInfo } from '../../awareness/presence.js';
+import { getPresenceDir } from '../../../paths.js';
 import type { ModelProvider, ProviderQuery, ProviderUserTurn } from '../../provider.js';
 import type { AgentConfig } from '../../types/config-types.js';
 
@@ -124,6 +127,18 @@ for (const branch of branches) {
       expect(rec?.sessionId).not.toBe('');
       expect(rec?.surface).toBe('cli');
       expect(rec?.actor).toBe('main');
+    });
+
+    it('writes the presence file synchronously, before query() returns', () => {
+      // Regression guard for an ENOTEMPTY teardown race. Both providers expose a
+      // synchronous close(), so an async presence write has no handle a caller
+      // can await: it outlived the turn and recreated `presence/` while a host
+      // that points AFK_HOME at a scratch dir was rmdir-ing that tree
+      // (grant-manager.test.ts died exactly this way on macOS CI). The same
+      // unawaited write also let an immediate `/afk on` no-op on ENOENT before
+      // the file existed. No await, no polling — the file must already be there.
+      triggerPresence(branch.makeProvider(), branch.freshConfig());
+      expect(readdirSync(getPresenceDir())).toHaveLength(1);
     });
 
     it('does not write a second, differently-identified file on the next turn', async () => {

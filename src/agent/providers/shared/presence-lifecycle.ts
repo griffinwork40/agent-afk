@@ -47,7 +47,7 @@
 
 import { randomUUID } from 'node:crypto';
 import {
-  writePresenceFile,
+  writePresenceFileSync,
   removePresenceFileSync,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
@@ -233,9 +233,14 @@ export function registerPresenceLifecycle(args: PresenceLifecycleArgs): string |
   }
 
   const workspace = args.runtimeStateSource.getWorkspace();
-  // Fire-and-forget — presence is best-effort and must never throw into the
-  // query path.
-  void writePresenceFile({
+  // Ordered-operation constraint: this write must be durable before `query()`
+  // continues. Both providers expose a synchronous `close()`, so an async write
+  // issued here has no handle any caller can await and outlives the turn that
+  // started it — which raced host teardown of a scratch `AFK_HOME` (ENOTEMPTY,
+  // the write recreating `presence/` mid-rmdir) and let an immediate `/afk on`
+  // no-op on ENOENT before the file existed. Sync is cheap here: one ~300-byte
+  // write, once per advertised id, never once per turn. Never throws.
+  writePresenceFileSync({
     sessionId,
     surface: args.surface,
     // Presence is written only under the top-level gate above, so depth is
