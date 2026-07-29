@@ -30,6 +30,7 @@
 
 import { BlockList, isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import { Agent } from 'undici';
 import { env } from '../config/env.js';
 import { retryFetch, type RetryFetchOptions } from './retryFetch.js';
 import type { FetchFn } from './types.js';
@@ -129,6 +130,42 @@ function isBlockedAddress(ip: string): boolean {
   if (family === 0) return false;
   return blockList.check(ip, family === 4 ? 'ipv4' : 'ipv6');
 }
+
+/**
+ * Undici resolves through this callback at socket-connect time. Classifying
+ * all answers here closes the time-of-check/time-of-use gap that would exist
+ * if fetch performed a second, unchecked DNS lookup after the preflight.
+ */
+const guardedDispatcher = new Agent({
+  connect: {
+    lookup(hostname, _options, callback) {
+      void defaultLookup(hostname).then(
+        (records) => {
+          const blocked = records.find((record) => isBlockedAddress(record.address));
+          if (blocked !== undefined) {
+            callback(
+              new EgressBlockedError(
+                `refusing to connect to ${hostname} (resolved) — internal/private address ` +
+                  `${blocked.address} (loopback, link-local, cloud metadata, or RFC1918 space). ` +
+                  'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
+              ),
+              '',
+              0,
+            );
+            return;
+          }
+          const selected = records[0];
+          if (selected === undefined) {
+            callback(new Error(`DNS lookup returned no addresses for ${hostname}`), '', 0);
+            return;
+          }
+          callback(null, selected.address, isIP(selected.address));
+        },
+        (err: unknown) => callback(err as Error, '', 0),
+      );
+    },
+  },
+});
 
 async function defaultLookup(hostname: string): Promise<readonly { address: string }[]> {
   return lookup(hostname, { all: true, verbatim: true });
@@ -259,7 +296,17 @@ export async function guardedFetch(
   let target = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertEgressAllowed(target, guardOpts);
-    const res = await retryFetch(fetchFn, target, { ...init, redirect: 'manual' }, opts.retry ?? {});
+    // Production fetches use an Undici dispatcher whose lookup callback
+    // classifies the exact DNS answer used for the socket. Injected test
+    // fetches retain the standard RequestInit surface.
+    const requestInit = {
+      ...init,
+      redirect: 'manual' as const,
+      ...(fetchFn === globalThis.fetch && !(opts.allowPrivateHosts ?? privateHostsAllowed())
+        ? { dispatcher: guardedDispatcher }
+        : {}),
+    } as RequestInit;
+    const res = await retryFetch(fetchFn, target, requestInit, opts.retry ?? {});
     if (!REDIRECT_STATUS.has(res.status)) return res;
 
     const location = res.headers.get('location');

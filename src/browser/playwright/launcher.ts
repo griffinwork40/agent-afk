@@ -341,10 +341,24 @@ export class BrowserLauncher {
       timeoutMs: number;
       waitUntil: 'load' | 'domcontentloaded' | 'networkidle';
       signal?: AbortSignal;
+      requestGuard?: (url: string) => Promise<void>;
     },
   ): Promise<{ html: string; finalUrl: string; httpStatus: number | null }> {
     const browser = await this.ensureBrowser();
     const context = await browser.newContext(this.contextOptions());
+    let guardError: unknown;
+
+    if (opts.requestGuard !== undefined) {
+      await context.route('**/*', async (route) => {
+        try {
+          await opts.requestGuard!(route.request().url());
+          await route.continue();
+        } catch (err) {
+          guardError = err;
+          await route.abort('blockedbyclient');
+        }
+      });
+    }
 
     const onAbort = (): void => {
       void context.close().catch(() => {
@@ -363,11 +377,21 @@ export class BrowserLauncher {
 
     try {
       const page = await context.newPage();
-      const resp = await page.goto(url, {
-        timeout: opts.timeoutMs,
-        waitUntil: opts.waitUntil,
-      });
+      let resp;
+      try {
+        resp = await page.goto(url, {
+          timeout: opts.timeoutMs,
+          waitUntil: opts.waitUntil,
+        });
+      } catch (err) {
+        throw guardError ?? err;
+      }
+      if (guardError !== undefined) throw guardError;
       const html = await page.content();
+      // A script can start a request immediately after the load event. Do not
+      // return successful content if the route guard rejected such a late
+      // subresource while the DOM was being serialized.
+      if (guardError !== undefined) throw guardError;
       const finalUrl = page.url();
       const httpStatus = resp !== null ? resp.status() : null;
       return { html, finalUrl, httpStatus };

@@ -345,6 +345,24 @@ describe('scrapeToMarkdown — SSRF egress guard (issue #575)', () => {
     { address: '127.0.0.1' },
   ];
 
+  it('passes a pre-request guard to the renderer for redirects and subresources', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: SHELL_HTML }));
+    const renderFn = vi.fn<RenderFn>(async (_url, renderOpts) => {
+      await renderOpts.requestGuard?.('http://169.254.169.254/latest/meta-data/');
+      return { html: richHtml('unreachable'), finalUrl: 'https://example.com/', httpStatus: 200 };
+    });
+
+    await expect(
+      scrapeToMarkdown('https://example.com/', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/internal\/private address 169\.254\.169\.254/);
+  });
+
   it('refuses an internal IP literal without fetching or rendering', async () => {
     const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml() }));
     const renderFn = vi.fn<RenderFn>(async () => ({

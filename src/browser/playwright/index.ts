@@ -362,6 +362,7 @@ export class PlaywrightProvider implements BrowserProvider {
       timeoutMs: input.timeoutMs ?? 30000,
       waitUntil: input.waitFor ?? 'load',
       signal: input.signal,
+      requestGuard: input.requestGuard,
     });
   }
 

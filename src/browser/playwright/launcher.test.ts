@@ -34,6 +34,7 @@ interface StubPage {
 
 interface StubContext {
   newPage: ReturnType<typeof vi.fn>;
+  route: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   storageState: ReturnType<typeof vi.fn>;
   _pages: StubPage[];
@@ -88,6 +89,7 @@ function makeStubContext(): StubContext {
   const ctx: StubContext = {
     close: vi.fn().mockResolvedValue(undefined),
     newPage: vi.fn(),
+    route: vi.fn().mockResolvedValue(undefined),
     storageState: vi.fn().mockResolvedValue({ cookies: [{ name: 'sid', value: 'abc' }], origins: [] }),
     _pages: [],
   };
@@ -351,6 +353,43 @@ describe('BrowserLauncher', () => {
         launcher.renderHtml('https://nope.invalid', { timeoutMs: 5000, waitUntil: 'load' }),
       ).rejects.toThrow(/ERR_NAME_NOT_RESOLVED/);
       expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('checks every browser request before allowing it onto the network', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+      const requestGuard = vi.fn(async (url: string) => {
+        if (url.includes('169.254.169.254')) throw new Error('private request blocked');
+      });
+
+      await launcher.renderHtml('https://example.com', {
+        timeoutMs: 5000,
+        waitUntil: 'load',
+        requestGuard,
+      });
+
+      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
+        request: () => { url: () => string };
+        continue: () => Promise<void>;
+        abort: (reason: string) => Promise<void>;
+      }) => Promise<void>;
+      const allowed = {
+        request: () => ({ url: () => 'https://cdn.example/app.js' }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(allowed);
+      expect(allowed.continue).toHaveBeenCalledOnce();
+
+      const blocked = {
+        request: () => ({ url: () => 'http://169.254.169.254/latest' }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(blocked);
+      expect(blocked.continue).not.toHaveBeenCalled();
+      expect(blocked.abort).toHaveBeenCalledWith('blockedbyclient');
     });
 
     it('short-circuits a pre-aborted signal without navigating', async () => {

@@ -89,11 +89,16 @@ async function safeExtract(html: string, url: string): Promise<ExtractedContent>
  */
 async function renderViaBrowser(
   url: string,
-  opts: { timeoutMs: number; signal: AbortSignal },
+  opts: { timeoutMs: number; signal: AbortSignal; requestGuard?: (url: string) => Promise<void> },
 ): Promise<RenderedPage> {
   const { getBrowserProvider } = await import('../browser/registry.js');
   const provider = await getBrowserProvider();
-  return provider.render({ url, timeoutMs: opts.timeoutMs, signal: opts.signal });
+  return provider.render({
+    url,
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
+    requestGuard: opts.requestGuard,
+  });
 }
 
 /**
@@ -186,7 +191,11 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // then re-validate `finalUrl` after, because an in-browser redirect chain is
     // opaque to us (same pre/post pattern `act()` uses for the domain policy).
     await assertEgressAllowed(url, guardOpts);
-    const rendered = await renderFn(url, { timeoutMs: opts.timeoutMs, signal: opts.signal });
+    const rendered = await renderFn(url, {
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+      requestGuard: (requestUrl) => assertEgressAllowed(requestUrl, guardOpts),
+    });
     // Only re-check a finalUrl that actually MOVED to another http(s) target:
     // the pre-check already cleared `url`, and a non-http landing spot
     // (`about:blank`, a stubbed empty string) names no egress target to
