@@ -297,6 +297,124 @@ describe('open()', () => {
     );
   });
 
+  // -------------------------------------------------------------------------
+  // Regression: #576 — post-redirect domain-policy re-check in open()
+  //
+  // goto() follows 30x redirects, so an allowed URL can land on a blocked
+  // host. open() must re-check the LANDED url and refuse, mirroring act().
+  // -------------------------------------------------------------------------
+
+  it('returns BlockedByPolicy when an allowed URL redirects to a blocked domain (#576)', async () => {
+    // Tab landed somewhere other than the requested (allowed) URL.
+    asMock(ctx.page?.['url']).mockReturnValue('https://evil.com/landed');
+
+    // First call = pre-navigation check on the requested URL (allowed).
+    // Second call = post-navigation check on the landed URL (blocked).
+    asMock(enforceDomainPolicy)
+      .mockReturnValueOnce({ allowed: true })
+      .mockReturnValue({ allowed: false, reason: 'not in AFK_BROWSER_ALLOWED_DOMAINS' });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://allowed.example/redirect',
+      screenshot: true,
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'https://evil.com/landed',
+      reason: 'not in AFK_BROWSER_ALLOWED_DOMAINS',
+    });
+
+    // The redirect WAS followed, so the policy must have been re-checked
+    // against the landed URL — not just the requested one.
+    expect(asMock(enforceDomainPolicy)).toHaveBeenCalledWith(
+      'https://evil.com/landed',
+      expect.anything(),
+    );
+
+    // Mirrors act(): best-effort goBack() off the compromised tab.
+    expect(asMock(ctx.page?.['goBack'])).toHaveBeenCalled();
+  });
+
+  it('leaks no page content when a redirect lands on a blocked domain (#576)', async () => {
+    asMock(ctx.page?.['url']).mockReturnValue('https://evil.com/secrets');
+    asMock(enforceDomainPolicy)
+      .mockReturnValueOnce({ allowed: true })
+      .mockReturnValue({ allowed: false, reason: 'blocked by AFK_BROWSER_BLOCKED_DOMAINS: evil.com' });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://allowed.example/redirect',
+      screenshot: true,
+    });
+
+    // No observation built — the blocked page's DOM/text is never read.
+    expect(observePage).not.toHaveBeenCalled();
+
+    // No screenshot of the blocked page, even though screenshot:true.
+    expect(asMock(ctx.page?.['screenshot'])).not.toHaveBeenCalled();
+    expect(writeScreenshotSidecar).not.toHaveBeenCalled();
+
+    // The refusal carries only the URL and reason — no page payload.
+    expect(Object.keys(result).sort()).toEqual(['outcome', 'reason', 'url']);
+
+    // Session state is not updated with the blocked page.
+    expect(provider.describe('sess1')?.url).toBeNull();
+  });
+
+  it('closes the session when rollback from a blocked redirect fails', async () => {
+    asMock(ctx.page?.['url']).mockReturnValue('https://evil.com/secrets');
+    asMock(ctx.page?.['goBack']).mockRejectedValue(new Error('rollback timed out'));
+    asMock(enforceDomainPolicy)
+      .mockReturnValueOnce({ allowed: true })
+      .mockReturnValue({ allowed: false, reason: 'not in AFK_BROWSER_ALLOWED_DOMAINS' });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://allowed.example/redirect',
+    });
+
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy' });
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('sess1');
+    expect(provider.describe('sess1')).toBeNull();
+    expect(observePage).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when an allowed URL redirects to another allowed domain (#576)', async () => {
+    asMock(ctx.page?.['url']).mockReturnValue('https://also-allowed.example/landed');
+    const obs = makeStubObservation({ url: 'https://also-allowed.example/landed' });
+    asMock(observePage).mockResolvedValue(obs);
+    asMock(enforceDomainPolicy).mockReturnValue({ allowed: true });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://allowed.example/redirect',
+    });
+
+    expect(result).toBe(obs);
+    expect(asMock(ctx.page?.['goBack'])).not.toHaveBeenCalled();
+  });
+
+  it('re-throws the navigation error rather than a policy refusal when goto never left about:blank', async () => {
+    // Fresh tab: goto() failed, so page.url() is still about:blank. Its empty
+    // hostname would fail a non-empty allowlist — the nav error must win.
+    asMock(ctx.page?.['goto']).mockRejectedValue(new Error('net::ERR_NAME_NOT_RESOLVED'));
+    asMock(ctx.page?.['url']).mockReturnValue('about:blank');
+    asMock(enforceDomainPolicy)
+      .mockReturnValueOnce({ allowed: true })
+      .mockReturnValue({ allowed: false, reason: 'not in AFK_BROWSER_ALLOWED_DOMAINS' });
+
+    const provider = makeProvider();
+    await expect(
+      provider.open({ sessionId: 'sess1', url: 'https://allowed.example' }),
+    ).rejects.toThrow('net::ERR_NAME_NOT_RESOLVED');
+  });
+
   it('updates session state after open', async () => {
     const el = makeStubElement('el_001');
     const obs = makeStubObservation({
