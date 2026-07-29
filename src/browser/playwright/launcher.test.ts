@@ -1091,4 +1091,27 @@ describe('BrowserLauncher — chromium-missing launch decoration', () => {
     await launcher.closeSession('unused-session');
     await expect(launcher.ensureBrowser()).resolves.toBe(currentStubBrowser);
   });
+
+  it('names the browser_close reset, so the fast-failed message is self-sufficient', async () => {
+    const launcher = new BrowserLauncher({ ...TEST_CONFIG, headless: false });
+    vi.mocked(chromium.launch).mockRejectedValue(new Error(EXEC_MISSING));
+
+    const first = await launcher.ensureBrowser().then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    // The latched fast-fail rethrows the STORED error verbatim, so the advice has
+    // to be baked in at decoration time — this asserts it survives that path.
+    const fastFailed = await launcher.ensureBrowser().then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+
+    expect(first?.message).toMatch(/install chromium/);
+    expect(first?.message).toMatch(/call browser_close once to retry/);
+    // Identical by design: the fast-fail must not degrade the remediation.
+    expect(fastFailed?.message).toBe(first?.message);
+    // Only one real launch attempt was paid for — the point of issue #722.
+    expect(vi.mocked(chromium.launch)).toHaveBeenCalledTimes(1);
+  });
 });

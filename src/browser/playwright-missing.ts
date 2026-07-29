@@ -163,7 +163,26 @@ export interface PlaywrightHintOptions {
    * satisfies one does NOT satisfy the other.
    */
   headless?: boolean;
+  /**
+   * Set by callers that LATCH this failure (currently only `BrowserLauncher`).
+   * When true the hint also names the reset the latch requires, because
+   * installing the binary alone does not recover the session — see
+   * `LATCH_RESET_NOTE`. Left false by non-latching callers (`afk browser
+   * login`, the per-operation handler catches) where the advice would be wrong.
+   */
+  latched?: boolean;
 }
+
+/**
+ * Contract: appended only when `opts.latched` is true. Naming the install
+ * command without naming the reset is an incomplete remediation — a caller that
+ * follows the hint verbatim (install, then retry `browser_open`) fast-fails on
+ * the identical latched error forever, because retrying never clears the latch.
+ * `browser_close` -> `closeSession()` is the only in-session clear.
+ */
+const LATCH_RESET_NOTE =
+  'This session already latched the failure, so browser tools keep fast-failing ' +
+  'with this same error — after installing, call browser_close once to retry.';
 
 /**
  * Returns the install hint appropriate to which half of the dependency is
@@ -171,6 +190,7 @@ export interface PlaywrightHintOptions {
  */
 export function playwrightMissingHint(err: unknown, opts?: PlaywrightHintOptions): string {
   const text = flattenErrorText(err);
+  const resetNote = opts?.latched === true ? ` ${LATCH_RESET_NOTE}` : '';
 
   if (text.includes("Executable doesn't exist")) {
     // Package is installed; the chromium browser binary was never downloaded.
@@ -185,7 +205,7 @@ export function playwrightMissingHint(err: unknown, opts?: PlaywrightHintOptions
     }
     return (
       'browser tools require the Playwright chromium binary. ' +
-      `Install via: ${playwrightInstallCommand()}.${artifactNote}`
+      `Install via: ${playwrightInstallCommand()}.${artifactNote}${resetNote}`
     );
   }
 
@@ -193,7 +213,7 @@ export function playwrightMissingHint(err: unknown, opts?: PlaywrightHintOptions
   return (
     'browser tools require the optional `playwright` peer dependency. ' +
     `Install via: pnpm add playwright (then ${playwrightInstallCommand()}). ` +
-    'Or pick a different tool.'
+    `Or pick a different tool.${resetNote}`
   );
 }
 
@@ -207,10 +227,23 @@ export function playwrightMissingHint(err: unknown, opts?: PlaywrightHintOptions
  * exceeded") and the witness trace records it verbatim, so decorating
  * unconditionally would corrupt timeout classification and trace payloads.
  * Only a confirmed Playwright-missing error is ever rewritten.
+ *
+ * Contract: `latched` is opt-in and defaults false. Pass true only from a
+ * caller that latches the returned error, so the message can name the reset
+ * (see `LATCH_RESET_NOTE`). The decoration happens HERE, before the latch is
+ * set, which is what lets the latched fast-fail rethrow the stored error
+ * verbatim and still carry the reset advice — no re-messaging at the fast-fail
+ * site, which the identity Invariant above forbids.
  */
-export function decoratePlaywrightLaunchError(err: unknown, headless: boolean): unknown {
+export function decoratePlaywrightLaunchError(
+  err: unknown,
+  headless: boolean,
+  latched = false,
+): unknown {
   if (!isPlaywrightMissing(err)) return err;
 
   const base = err instanceof Error ? err.message : String(err);
-  return new Error(`${base}\n\n${playwrightMissingHint(err, { headless })}`, { cause: err });
+  return new Error(`${base}\n\n${playwrightMissingHint(err, { headless, latched })}`, {
+    cause: err,
+  });
 }

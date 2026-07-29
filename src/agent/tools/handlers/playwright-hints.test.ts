@@ -66,6 +66,53 @@ describe('playwrightMissingHint', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Latch reset advice (issue #722 review follow-up)
+//
+// Naming the install command without naming the reset is an incomplete
+// remediation: a caller that installs chromium and retries `browser_open`
+// fast-fails on the identical latched error forever. The advice is opt-in
+// because non-latching callers exist (`afk browser login` launches chromium
+// directly, and the `browser_close` handler would be told to call itself).
+// ---------------------------------------------------------------------------
+
+describe('playwrightMissingHint — latch reset advice', () => {
+  const EXEC_MISSING = "Executable doesn't exist at /ms-playwright/chromium/chrome";
+
+  it('names the browser_close reset when the caller latched the failure', () => {
+    const hint = playwrightMissingHint(EXEC_MISSING, { headless: false, latched: true });
+    expect(hint).toMatch(/install chromium/);
+    expect(hint).toMatch(/call browser_close once to retry/);
+  });
+
+  it('OMITS the reset advice by default, so non-latching callers are not misled', () => {
+    // `afk browser login` and the per-operation handler catches reach this hint
+    // with no latch in play; telling them to call browser_close would be wrong.
+    expect(playwrightMissingHint(EXEC_MISSING, { headless: false })).not.toMatch(/browser_close/);
+    expect(playwrightMissingHint(EXEC_MISSING)).not.toMatch(/browser_close/);
+    expect(playwrightMissingHint(EXEC_MISSING, { headless: false, latched: false })).not.toMatch(
+      /browser_close/,
+    );
+  });
+
+  it('also names the reset on the package-missing branch, which latches too', () => {
+    const hint = playwrightMissingHint('Cannot find package playwright', { latched: true });
+    expect(hint).toMatch(/pnpm add playwright/);
+    expect(hint).toMatch(/call browser_close once to retry/);
+  });
+
+  it('decoratePlaywrightLaunchError defaults to NOT latched', () => {
+    const err = decoratePlaywrightLaunchError(new Error(EXEC_MISSING), false);
+    expect((err as Error).message).toMatch(/install chromium/);
+    expect((err as Error).message).not.toMatch(/browser_close/);
+  });
+
+  it('decoratePlaywrightLaunchError adds the reset when told the caller latches', () => {
+    const err = decoratePlaywrightLaunchError(new Error(EXEC_MISSING), false, true);
+    expect((err as Error).message).toMatch(/call browser_close once to retry/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Install-command resolution (issue #721)
 // ---------------------------------------------------------------------------
 

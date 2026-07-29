@@ -230,7 +230,11 @@ export class BrowserLauncher {
         // Headed and headless need DIFFERENT chromium downloads, and only this
         // frame knows which one was requested — a handler catch sees just a
         // string. Passing it through lets the hint name the missing artifact.
-        const decorated = decoratePlaywrightLaunchError(err, this.config.headless);
+        // `latched: true` — this frame is the only caller that latches, so it is
+        // the only one where the hint may tell the caller to reset via
+        // browser_close. Set at decoration time so the verbatim rethrow at the
+        // fast-fail path carries the advice without re-messaging the error.
+        const decorated = decoratePlaywrightLaunchError(err, this.config.headless, true);
         // Latch the DECORATED error, not `err`: the fast-failed retry must
         // carry the same install remediation as this first failure.
         this.latchLaunchFailure(decorated);
