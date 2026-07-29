@@ -81,6 +81,22 @@ async function main(): Promise<void> {
   }
   const cols = stdout.columns ?? 100;
 
+  if (arg === 'widen-evict' && cols > 80) {
+    // Fail closed instead of asking politely. The band must be COMMITTED at a
+    // narrow width for a later widen to have anything to rejoin; rendering this
+    // scenario in an already-wide pane silently proves nothing, which is the
+    // exact failure mode (a test that cannot observe its target) this scenario
+    // exists to correct. There is no pause-and-hope here on purpose: the width
+    // has to be right BEFORE the first commitAbove, not after a countdown.
+    // eslint-disable-next-line no-console
+    console.error(
+      `widen-evict needs a NARROW pane to commit at — this one is ${cols} cols.\n` +
+        'Resize the window to 48-70 cols (or cmd-+ to grow the font) and re-run.\n' +
+        'The whole point is to widen AFTERWARDS, so starting wide leaves no room to widen into.',
+    );
+    process.exit(2);
+  }
+
   if (arg === 'widen-evict') {
     // Printed BEFORE arm() on purpose: the compositor stays LIVE through the
     // resize (that is the real-session case, and the case the PTY guard drives),
@@ -90,7 +106,7 @@ async function main(): Promise<void> {
       [
         '',
         '=== widen-evict — REFLOW axis (#540 axis-2) ===',
-        `Start narrow. This pane is ${cols} cols; 48-70 is ideal. Resize it NOW if wider.`,
+        `Pane is ${cols} cols — narrow enough to commit at. Do NOT resize until told.`,
         '',
         'After the render settles you get 45s. During that window:',
         '  1. DRAG THIS WINDOW WIDER (or press cmd-minus to shrink the font).',

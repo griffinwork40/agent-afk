@@ -14,7 +14,11 @@ refuses a non-TTY (`exit 2`), so it cannot be piped, screen-scraped, or run from
 agent shell. `tmux` is a valid extra row but not a substitute: it reflows only
 *soft*-wrapped lines and never sends SIGWINCH itself.
 
+**Run from the repo root** — `pnpm exec` resolves against the nearest workspace, so
+running from `~` fails with `ERR_PNPM_RECURSIVE_EXEC_NO_PACKAGE`:
+
 ```bash
+cd ~/Projects/open_source/agent-afk
 pnpm exec tsx scripts/visual-void-repro.ts <scenario>
 ```
 
@@ -61,9 +65,10 @@ band-hold archive (already fixed by #665) rather than grow-eviction. Only a
 |---|---|---|
 | Grow-eviction → widen | `visual-void-repro.ts widen-evict` | see below |
 
-Procedure: start the pane **narrow (48–70 cols)**, run it, and during the 45s hold
-**drag the window wider** (or `cmd`-`-` to shrink the font — same effect). Then
-scroll up:
+Procedure: start the pane **narrow (48–70 cols)** — the scenario refuses to run
+above 80 cols and exits 2, because content has to be *committed* narrow for a later
+widen to have anything to rejoin. Then during the 45s hold **drag the window wider**
+(or `cmd`-`-` to shrink the font — same effect). Then scroll up:
 
 - `LONGLINE-MARKER … END-OF-LONGLINE` — **PASS** it rejoined into one soft-wrapped
   paragraph. **FAIL** it is split across rows that break **mid-word**, with
@@ -85,8 +90,16 @@ guard drove the one already-fixed write site. Verify, do not assume — composit
 phase traces go to **stderr**, so redirect it and leave stdout (the visual output)
 alone:
 
+Run these as **two separate commands** — the script holds for 45s, and pasting both
+at once can join them into one line:
+
 ```bash
 AFK_DEBUG_COMPOSITOR=1 pnpm exec tsx scripts/visual-void-repro.ts widen-evict 2>/tmp/comp.log
+```
+
+then, after it exits:
+
+```bash
 grep -E 'commitAbove:phase1|evict:enter' /tmp/comp.log
 ```
 
