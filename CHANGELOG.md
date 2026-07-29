@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.2] - 2026-07-29
+
+### Fixed
+- latch launch failures so browser_* stops retrying a cold chromium launch (#722) (#748) (4819481)
+
 ## [5.82.1] - 2026-07-29
 
 ### Fixed
