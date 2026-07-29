@@ -103,11 +103,51 @@ export class BrowserLauncher {
   // second browser process.
   private launchPromise: Promise<Browser> | undefined;
 
+  // Latched launch failure — see the "Launch-failure latch" section below.
+  // Wrapped in an object rather than stored bare so "no latch" is distinct from
+  // "latched an undefined throw"; `unknown` alone conflates the two.
+  private launchFailure: { error: unknown } | undefined;
+
   // Set to true by `shutdown()` so a second call no-ops cleanly.
   private shutdownComplete = false;
 
   constructor(config: BrowserConfig) {
     this.config = config;
+  }
+
+  // -------------------------------------------------------------------------
+  // Launch-failure latch
+  // -------------------------------------------------------------------------
+
+  /*
+   * Invariant: the latch holds the DECORATED launch error — the one carrying
+   * the install command built by `decoratePlaywrightLaunchError` — never the
+   * raw Playwright error. That remediation is the only actionable half of the
+   * message, so fast-failing with the undecorated error would trade a slow
+   * useful failure for a fast useless one and lose the point of issue #721.
+   *
+   * Invariant: the latch is set ONLY on an `ensureBrowser()` rejection, and is
+   * dropped on launch success, on `closeSession()`, and on `shutdown()`. A live
+   * browser and a set latch are therefore mutually exclusive states.
+   *
+   * Invariant (clear-before-set ordering): the reset is defined and invoked
+   * ahead of the setter because the constraint governing this pair is EXTERNAL
+   * to the process — chromium's launchability is a property of the host
+   * filesystem, not of this object. An operator who runs the advertised install
+   * command changes that host state with no signal reaching us, so every
+   * explicit teardown entry point must drop the latch. An orphaned clear does
+   * not degrade gracefully here: it converts one missing binary into a
+   * permanently browser-less session recoverable only by restarting AFK.
+   */
+
+  /** Drop the latched failure so the next `ensureBrowser()` retries for real. */
+  private clearLaunchFailure(): void {
+    this.launchFailure = undefined;
+  }
+
+  /** Latch an already-decorated launch failure so later calls fast-fail. */
+  private latchLaunchFailure(error: unknown): void {
+    this.launchFailure = { error };
   }
 
   // -------------------------------------------------------------------------
@@ -138,11 +178,25 @@ export class BrowserLauncher {
    * ones. Do NOT move this check up into the handlers' catch blocks: provider
    * construction never launches chromium, which is precisely why the hint was
    * unreachable before issue #721.
+   *
+   * Invariant: once a launch has failed, the decorated error is latched and
+   * every later call rethrows it WITHOUT touching `chromium.launch` (issue
+   * #722). A genuinely missing binary otherwise costs one full launch timeout
+   * per `browser_*` tool call. `closeSession()` / `shutdown()` drop the latch,
+   * so installing chromium mid-session recovers without restarting AFK.
    */
   async ensureBrowser(): Promise<Browser> {
     // Fast path: already connected.
     if (this.browser !== undefined && this.browser.isConnected()) {
       return this.browser;
+    }
+
+    // Latched-failure path: a previous launch failed and nothing has reset the
+    // latch since. Rethrow the decorated error instead of paying another cold
+    // launch. Checked BEFORE the launchPromise coalesce because the two are
+    // never both set — the rejection handler clears the promise as it latches.
+    if (this.launchFailure !== undefined) {
+      throw this.launchFailure.error;
     }
 
     // Crash-recovery path: reference exists but the process is gone. Clear it
@@ -164,6 +218,11 @@ export class BrowserLauncher {
       .then((b) => {
         this.browser = b;
         this.launchPromise = undefined;
+        // A success must never leave a latch behind. Nothing can set one while
+        // this launch is in flight (the latch short-circuits before we get
+        // here), but clearing unconditionally keeps "browser live ⇒ no latch"
+        // true by construction rather than by argument.
+        this.clearLaunchFailure();
         return b;
       })
       .catch((err: unknown) => {
@@ -171,7 +230,11 @@ export class BrowserLauncher {
         // Headed and headless need DIFFERENT chromium downloads, and only this
         // frame knows which one was requested — a handler catch sees just a
         // string. Passing it through lets the hint name the missing artifact.
-        throw decoratePlaywrightLaunchError(err, this.config.headless);
+        const decorated = decoratePlaywrightLaunchError(err, this.config.headless);
+        // Latch the DECORATED error, not `err`: the fast-failed retry must
+        // carry the same install remediation as this first failure.
+        this.latchLaunchFailure(decorated);
+        throw decorated;
       });
 
     return this.launchPromise;
@@ -458,8 +521,16 @@ export class BrowserLauncher {
    *
    * Ordered teardown (page close → context close) ensures Playwright
    * finalizes page-level event listeners before freeing the context.
+   *
+   * Invariant: the launch-failure latch is dropped BEFORE the not-found guard
+   * below. This is the path `browser_close` actually reaches — the handler
+   * calls `provider.close()`, which calls this method, NOT `shutdown()` — and a
+   * failed launch never created a SessionEntry, so a reset placed after the
+   * guard would be unreachable in exactly the case it exists for.
    */
   async closeSession(sessionId: string): Promise<void> {
+    this.clearLaunchFailure();
+
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) {
       return;
@@ -492,8 +563,14 @@ export class BrowserLauncher {
    * Invariant: sessions are closed before `browser.close()`. The reverse
    * order would leave dangling context handles and trigger Playwright
    * "context closed" errors inside the close calls.
+   *
+   * Invariant: the launch-failure latch is dropped BEFORE the
+   * already-shutdown guard, so a second `shutdown()` after a failed launch
+   * still resets it rather than no-opping past the reset.
    */
   async shutdown(): Promise<void> {
+    this.clearLaunchFailure();
+
     if (this.shutdownComplete) {
       return;
     }

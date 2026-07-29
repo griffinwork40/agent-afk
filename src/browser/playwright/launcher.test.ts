@@ -251,6 +251,155 @@ describe('BrowserLauncher', () => {
   });
 
   // -------------------------------------------------------------------------
+  // ensureBrowser — launch-failure latch (issue #722)
+  //
+  // The decorated-error assertions key on "install chromium", the same
+  // substring `hasPlaywrightInstallHint` uses, so they fail if the latch ever
+  // starts caching the raw Playwright error instead of the decorated one.
+  // -------------------------------------------------------------------------
+
+  describe('ensureBrowser — launch-failure latch', () => {
+    // Matches PLAYWRIGHT_MISSING_HINTS, so decoratePlaywrightLaunchError
+    // appends the install remediation to it.
+    const MISSING_BINARY = "Executable doesn't exist at /path/to/chromium-1234/chrome";
+
+    it('attempts chromium.launch exactly once across two sequential failed calls', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      vi.mocked(chromium.launch).mockRejectedValue(new Error(MISSING_BINARY));
+
+      await expect(launcher.ensureBrowser()).rejects.toThrow(/Executable doesn't exist/);
+      await expect(launcher.ensureBrowser()).rejects.toThrow(/Executable doesn't exist/);
+
+      // The whole point of the latch: the second call never re-launches.
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it('fast-fails with the same decorated install-command message', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      vi.mocked(chromium.launch).mockRejectedValue(new Error(MISSING_BINARY));
+
+      const first = await launcher.ensureBrowser().catch((e: unknown) => e);
+      const second = await launcher.ensureBrowser().catch((e: unknown) => e);
+
+      expect(first).toBeInstanceOf(Error);
+      expect((first as Error).message).toContain('install chromium');
+      // Identity, not just equality — the latch caches the decorated object.
+      expect(second).toBe(first);
+      expect((second as Error).message).toBe((first as Error).message);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves the original error as `cause` on the latched error', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const original = new Error(MISSING_BINARY);
+      vi.mocked(chromium.launch).mockRejectedValue(original);
+
+      await launcher.ensureBrowser().catch(() => undefined);
+      const latched = await launcher.ensureBrowser().catch((e: unknown) => e);
+
+      expect((latched as Error).cause).toBe(original);
+    });
+
+    it('latches non-Playwright failures too, by identity', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      // Not a missing-binary error, so decoration passes it through unchanged.
+      const oom = new Error('spawn ENOMEM');
+      vi.mocked(chromium.launch).mockRejectedValue(oom);
+
+      const first = await launcher.ensureBrowser().catch((e: unknown) => e);
+      const second = await launcher.ensureBrowser().catch((e: unknown) => e);
+
+      expect(first).toBe(oom);
+      expect(second).toBe(oom);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it('shutdown() clears the latch so a later call retries the launch', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      vi.mocked(chromium.launch).mockRejectedValueOnce(new Error(MISSING_BINARY));
+
+      await expect(launcher.ensureBrowser()).rejects.toThrow(/install chromium/);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+
+      // Operator installs chromium, then browser state is torn down.
+      await launcher.shutdown();
+
+      // Recovery: the next call launches for real rather than fast-failing.
+      const browser = await launcher.ensureBrowser();
+      expect(chromium.launch).toHaveBeenCalledTimes(2);
+      expect(browser).toBe(currentStubBrowser);
+    });
+
+    it('closeSession() — the browser_close path — clears the latch', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      vi.mocked(chromium.launch).mockRejectedValueOnce(new Error(MISSING_BINARY));
+
+      await expect(launcher.ensureBrowser()).rejects.toThrow(/install chromium/);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+
+      // `browser_close` → provider.close() → closeSession(). A failed launch
+      // never created a SessionEntry, so this must clear the latch even though
+      // the session is unknown.
+      await launcher.closeSession('session-A');
+
+      const browser = await launcher.ensureBrowser();
+      expect(chromium.launch).toHaveBeenCalledTimes(2);
+      expect(browser).toBe(currentStubBrowser);
+    });
+
+    it('leaves no latch after a successful launch', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+
+      await launcher.ensureBrowser();
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+
+      // Simulate a crash so ensureBrowser takes the cold path again. If a
+      // successful launch had left a latch set, this would throw instead of
+      // re-launching.
+      currentStubBrowser.isConnected.mockReturnValue(false);
+      const freshBrowser = makeStubBrowser();
+      vi.mocked(chromium.launch).mockResolvedValueOnce(
+        freshBrowser as unknown as Awaited<ReturnType<typeof chromium.launch>>,
+      );
+
+      await expect(launcher.ensureBrowser()).resolves.toBe(freshBrowser);
+      expect(chromium.launch).toHaveBeenCalledTimes(2);
+    });
+
+    it('recovers to a live browser after a failure, without a stale latch', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      vi.mocked(chromium.launch).mockRejectedValueOnce(new Error(MISSING_BINARY));
+
+      await expect(launcher.ensureBrowser()).rejects.toThrow(/install chromium/);
+      await launcher.closeSession('unknown-session');
+
+      // Successful relaunch, then a third call must reuse it (fast path) —
+      // proving the recovery did not leave a latch that fast-fails instead.
+      const b1 = await launcher.ensureBrowser();
+      const b2 = await launcher.ensureBrowser();
+      expect(b1).toBe(b2);
+      expect(launcher.isBrowserActive()).toBe(true);
+      expect(chromium.launch).toHaveBeenCalledTimes(2);
+    });
+
+    it('still coalesces concurrent callers onto one in-flight launch', async () => {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      vi.mocked(chromium.launch).mockRejectedValueOnce(new Error(MISSING_BINARY));
+
+      // Both callers arrive before the rejection settles, so they must share the
+      // single in-flight promise rather than each starting a launch.
+      const [r1, r2] = await Promise.allSettled([
+        launcher.ensureBrowser(),
+        launcher.ensureBrowser(),
+      ]);
+
+      expect(r1.status).toBe('rejected');
+      expect(r2.status).toBe('rejected');
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // ensureContext
   // -------------------------------------------------------------------------
 
@@ -932,7 +1081,14 @@ describe('BrowserLauncher — chromium-missing launch decoration', () => {
     vi.mocked(chromium.launch).mockRejectedValueOnce(new Error(EXEC_MISSING));
 
     await expect(launcher.ensureBrowser()).rejects.toThrow(/install chromium/);
-    // Decoration must not strand the latch — the retry uses the default mock.
+
+    // History: this test originally retried immediately and expected a
+    // successful launch. Issue #722 made the retry fast-fail on the latched
+    // error by design, so the retry now runs after a reset. The assertion this
+    // test exists for is unchanged — decoration must not strand the rejected
+    // `launchPromise` — it is just no longer observable without clearing the
+    // latch first.
+    await launcher.closeSession('unused-session');
     await expect(launcher.ensureBrowser()).resolves.toBe(currentStubBrowser);
   });
 });
