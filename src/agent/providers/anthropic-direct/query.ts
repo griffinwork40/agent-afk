@@ -52,6 +52,7 @@ import { buildRequestHeaders } from './auth.js';
 import {
   getCacheTtl,
   isCacheEnabled,
+  isExtendedCacheTtlActive,
   withSystemBreakpoint,
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
@@ -303,6 +304,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       client: opts.client,
       authMode: opts.authMode,
       initSessionId: this.initSessionId,
+      ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
     });
@@ -393,6 +395,10 @@ export class AnthropicDirectQuery implements ProviderQuery {
           this.initSessionId,
           randomUUID(),
           this.effort !== undefined,
+          // Pair the stamped TTL with the beta that activates it: composeSystem
+          // and the loop stamp `ttl: getCacheTtl()` under `isCacheEnabled`, so
+          // the header must be negotiated under that same predicate.
+          isExtendedCacheTtlActive({ ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) }),
         );
 
         const runInput: RunTurnInput = {

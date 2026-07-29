@@ -38,6 +38,7 @@ import { randomUUID } from 'node:crypto';
 import type { ProviderEvent } from '../../../provider.js';
 import { runTurn } from '../loop.js';
 import { buildRequestHeaders } from '../auth.js';
+import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { classifyUsageLimitError, waitForReset, waitForHotSwap } from '../usage-limit.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../../cli/keychain.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
@@ -76,6 +77,12 @@ export interface RetryLayerOptions {
   client: Anthropic;
   authMode: AuthMode;
   initSessionId: string;
+  /**
+   * Session `baseUrl` (local-shim mode), forwarded verbatim to
+   * `isExtendedCacheTtlActive` so replayed turns negotiate the 1h-cache beta
+   * under exactly the same condition as the original send.
+   */
+  baseUrl?: string;
   /** Optional: called on 401 to obtain a fresh SDK client. Retry once per 401. */
   tokenRefresher?: () => Promise<Anthropic | null>;
   /** Whether to auto-wait+resume on 429 usage-limit (default true). */
@@ -91,6 +98,7 @@ export class RetryLayer {
   private _client: Anthropic;
   private readonly _authMode: AuthMode;
   private readonly initSessionId: string;
+  private readonly baseUrl?: string;
   private readonly tokenRefresher?: () => Promise<Anthropic | null>;
   private readonly autoResumeOnUsageLimit: boolean;
 
@@ -101,6 +109,7 @@ export class RetryLayer {
     this._client = opts.client;
     this._authMode = opts.authMode;
     this.initSessionId = opts.initSessionId;
+    this.baseUrl = opts.baseUrl;
     this.tokenRefresher = opts.tokenRefresher;
     this.autoResumeOnUsageLimit = opts.autoResumeOnUsageLimit;
   }
@@ -114,6 +123,21 @@ export class RetryLayer {
   }
 
   /** Auth mode the session was constructed with. Immutable. */
+  /**
+   * Rebuild per-request headers for a replay (fresh request id). Re-evaluates
+   * the 1h-cache beta rather than reusing the original header map, so a replay
+   * never asks for a TTL whose activating beta it dropped.
+   */
+  private rotateHeaders(): Record<string, string> {
+    return buildRequestHeaders(
+      this._authMode,
+      this.initSessionId,
+      randomUUID(),
+      undefined,
+      isExtendedCacheTtlActive({ ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) }),
+    );
+  }
+
   get authMode(): AuthMode {
     return this._authMode;
   }
@@ -296,11 +320,7 @@ export class RetryLayer {
 
       // Rotate the request id before replaying (mirrors the oauth-limit
       // resume paths). Same client, same token — only the headers refresh.
-      runInput.headers = buildRequestHeaders(
-        this._authMode,
-        this.initSessionId,
-        randomUUID(),
-      );
+      runInput.headers = this.rotateHeaders();
       // Loop: replay the turn.
     }
 
@@ -377,11 +397,7 @@ export class RetryLayer {
             resumedAccountId = refreshed.accountId;
           }
         }
-        runInput.headers = buildRequestHeaders(
-          this._authMode,
-          this.initSessionId,
-          randomUUID(),
-        );
+        runInput.headers = this.rotateHeaders();
 
         // Replay the turn. Peek the stream: if the FIRST thing it does is
         // re-hit a usage limit we are still limited — stay paused and wait
@@ -492,11 +508,7 @@ export class RetryLayer {
     }
     // 'timer' resolution: deadline passed, same account, same token — no
     // client rebuild needed. Headers still rotated to refresh the request-id.
-    runInput.headers = buildRequestHeaders(
-      this._authMode,
-      this.initSessionId,
-      randomUUID(),
-    );
+    runInput.headers = this.rotateHeaders();
     yield { type: 'resumed', hotSwapped: result === 'hot-swap', accountId: resumedAccountId };
     void emitSessionPhase(runInput.traceWriter, {
       phase: 'usage_limit_resume',
@@ -537,11 +549,7 @@ export class RetryLayer {
       return;
     }
     runInput.client = this._client as unknown as AnthropicClientLike;
-    runInput.headers = buildRequestHeaders(
-      this._authMode,
-      this.initSessionId,
-      randomUUID(),
-    );
+    runInput.headers = this.rotateHeaders();
 
     yield* runTurn(runInput);
   }

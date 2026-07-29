@@ -32,6 +32,7 @@ import {
   OAUTH_BETA_HEADER,
   CLI_USER_AGENT,
   BILLING_HEADER_TEXT,
+  EXTENDED_CACHE_TTL_BETA,
 } from './anthropic-direct/auth.js';
 import type {
   ToolCall,
@@ -482,9 +483,16 @@ describe('AnthropicDirectProvider', () => {
     expect(typeof apiKeyCtorArg['fetch']).toBe('function');
 
     const [params, opts] = messagesCreateMock.mock.calls[0] as CreateArgs;
-    expect(opts?.headers?.['anthropic-beta']).toBeUndefined();
+    // No OAuth identity headers. `anthropic-beta` IS present, but carries only
+    // the extended-cache-ttl beta: the cache policy stamps `ttl: '1h'` in
+    // api-key mode too, and that TTL is silently downgraded to 5m unless the
+    // activating beta rides along. It must not contain the OAuth betas.
+    expect(opts?.headers?.['anthropic-beta']).toBe(EXTENDED_CACHE_TTL_BETA);
+    expect(opts?.headers?.['anthropic-beta']).not.toContain('oauth-2025-04-20');
+    expect(opts?.headers?.['anthropic-beta']).not.toContain('claude-code-20250219');
     expect(opts?.headers?.['x-app']).toBeUndefined();
     expect(opts?.headers?.['User-Agent']).toBeUndefined();
+    expect(opts?.headers?.['X-Claude-Code-Session-Id']).toBeUndefined();
 
     // system is omitted entirely (no userSystem set, no oauth prefix)
     if (params['system'] !== undefined) {
