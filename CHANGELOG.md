@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.3] - 2026-07-29
+
+### Fixed
+- drain bootstrap warnings after the startup screen clear (#745) (#751) (4f85988)
+
 ## [5.82.2] - 2026-07-29
 
 ### Fixed
