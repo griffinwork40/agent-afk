@@ -28,6 +28,20 @@
  * for any non-resumed session. The real id was minted downstream of the gate,
  * inside query construction, from the *different* `config.resume` field.
  *
+ * Known gap (deliberately not closed here): this module keys presence off ONE
+ * provider instance's memo, so it cannot see a second instance. A cross-family
+ * `/model` swap builds a fresh inner provider whose memo starts `null`
+ * (`router/provider-router.ts`), which mints a second id and advertises a
+ * second record, while the swallowed `session.init` leaves the ledger pinned to
+ * the pre-swap id — so the orphan advertises a directory nothing creates.
+ * Bounded, and fails closed on both readers that could act on it: the orphan
+ * carries `afk: false`, and auto-subscribe requires `afk === true`
+ * (`telegram/bot.ts`), while `/watch` selection re-checks `ledgerExists`
+ * (`telegram/watch.ts`). Closing it means threading the live session id into
+ * the router's inner construction so every inner resolves through the
+ * explicit-id branch above; that touches swap/init semantics this module does
+ * not own, so it is tracked separately rather than bundled here.
+ *
  * @module agent/providers/shared/presence-lifecycle
  */
 
@@ -88,16 +102,32 @@ export interface SessionIdResolutionArgs {
 /**
  * Surfaces whose *fresh* (non-resumed) sessions are worth advertising.
  *
- * Contract: only two readers of presence files exist, and both are Telegram —
- * `bot.ts` auto-subscribe filters `surface === 'cli' && afk === true`, and the
- * `/watch` no-argument listing in `watch.ts` renders live records. A minted
- * advertisement on any other surface is invisible to every reader while still
- * costing a file plus a cleanup registration, which is how a long-running
- * daemon accrued one stale live-looking record per scheduled task (12 tasks ⇒
- * 12 records). Gating the MINT — not the write — keeps the pre-existing
- * contract intact: a session carrying an explicit id (`--resume`) still
- * advertises on every surface, which `telegram/presence-surface.test.ts` pins
- * for `cli`, `daemon`, and `telegram` alike.
+ * Contract: three readers of presence files exist. Two are Telegram and both
+ * ignore non-`cli` fresh sessions — `bot.ts` auto-subscribe filters
+ * `surface === 'cli' && afk === true`, and the `/watch` no-argument listing in
+ * `watch.ts` filters `surface !== 'telegram'` (so it would render a `daemon`
+ * record, but selecting one fails closed on `ledgerExists`). The third is
+ * `worktree-sweep.ts`, which reads presence with NO surface filter to protect a
+ * worktree hosting a live session from being reaped.
+ *
+ * That third reader is why this gate is scoped to the MINT rather than the
+ * write, and why it is not a regression: before this module existed, presence
+ * was gated on `config.sessionId`, which only `--resume`/`--continue` populates
+ * and which neither the daemon nor the Telegram surface ever sets. A fresh
+ * daemon session therefore advertised nothing then either, so declining to mint
+ * here restores that exact behavior — it removes no sweep protection that ever
+ * existed, it only refrains from adding some. Widening this set would hand
+ * daemon tasks reap-protection they have never had; that is a deliberate
+ * decision to make on its own merits, not a side effect to inherit from a
+ * Telegram-discoverability fix.
+ *
+ * Minting on a surface no reader consumes would still cost a file plus a
+ * cleanup registration per session, which is how a long-running daemon accrued
+ * one stale live-looking record per scheduled task (12 tasks ⇒ 12 records).
+ * Gating the MINT also keeps the pre-existing contract intact: a session
+ * carrying an explicit id (`--resume`) still advertises on every surface, which
+ * `telegram/presence-surface.test.ts` pins for `cli`, `daemon`, and `telegram`
+ * alike.
  */
 export const PRESENCE_MINT_SURFACES: ReadonlySet<string> = new Set(['cli']);
 
