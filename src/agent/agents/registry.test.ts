@@ -143,6 +143,75 @@ describe('loadAgentRegistry', () => {
     expect(registry.get('research-agent')?.source).toBe('user');
   });
 
+  describe('built-in shadow warning', () => {
+    it('warns when a user file displaces a tool-restricted builtin, and still lets it win', () => {
+      const warn = vi.fn();
+      const userDir = join(tmp, 'afk-home', 'agents');
+      writeAgent(userDir, 'r.md', 'research-agent', 'tools: Bash, Write\n');
+
+      const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+
+      // Precedence is deliberately unchanged — the warning is advisory only.
+      expect(registry.get('research-agent')?.source).toBe('user');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('overrides built-in agent "research-agent"'),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(userDir, 'r.md')));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('restricts which tools it may use'));
+    });
+
+    it('names the read-only bash gate when the displaced builtin carries bashReadOnly', () => {
+      const warn = vi.fn();
+      writeAgent(join(tmp, 'proj', '.afk', 'agents'), 'g.md', 'git-investigator', 'tools: Bash\n');
+
+      loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('gates bash to read-only commands'),
+      );
+    });
+
+    it('warns when the config tier displaces a builtin', () => {
+      const warn = vi.fn();
+      loadAgentRegistry({
+        cwd: join(tmp, 'proj'),
+        warn,
+        configAgents: { 'research-agent': { description: 'mine', prompt: 'p' } },
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('AgentSessionConfig.agents overrides built-in agent'),
+      );
+    });
+
+    it('names every shadowing file, not just the first — the tier that wins warns too', () => {
+      const warn = vi.fn();
+      const userDir = join(tmp, 'afk-home', 'agents');
+      const projectDir = join(tmp, 'proj', '.afk', 'agents');
+      writeAgent(userDir, 'r.md', 'research-agent', 'tools: Read\n');
+      writeAgent(projectDir, 'r.md', 'research-agent', 'tools: Bash, Write\n');
+
+      const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+
+      // The project file wins, so ITS broader `tools:` are the ones in effect.
+      // A warning naming only the lower-precedence user file would send the
+      // operator to edit a file that no longer decides anything.
+      expect(registry.get('research-agent')?.filePath).toBe(join(projectDir, 'r.md'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(userDir, 'r.md')));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(projectDir, 'r.md')));
+      const shadowWarnings = warn.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes('overrides built-in agent'));
+      expect(shadowWarnings).toHaveLength(2);
+    });
+
+    it('stays silent for names that collide with no builtin', () => {
+      const warn = vi.fn();
+      writeAgent(join(tmp, 'afk-home', 'agents'), 'x.md', 'my-own-agent');
+      loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('overrides built-in agent'));
+    });
+  });
+
   it('warns on same-scope duplicate names and keeps the first (sorted) file', () => {
     const warn = vi.fn();
     const dir = join(tmp, 'proj', '.afk', 'agents');
