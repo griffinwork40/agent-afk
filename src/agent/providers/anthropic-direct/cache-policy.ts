@@ -57,6 +57,24 @@ export function getCacheTtl(): '5m' | '1h' {
 }
 
 /**
+ * Contract: true exactly when a request will carry a `ttl: '1h'` breakpoint,
+ * i.e. when the header layer MUST negotiate `extended-cache-ttl-2025-04-11`
+ * for that TTL to be honored. Sole authority for that coupling — header
+ * assembly (`buildRequestHeaders`) asks this rather than re-deriving the
+ * enablement/TTL pair, so "asks for 1h" and "sends the activating beta" can
+ * never diverge.
+ *
+ * Both branches matter:
+ *  - cache disabled (local shim via `baseUrl`, or `AFK_DISABLE_PROMPT_CACHE`)
+ *    → no breakpoint is stamped, so the beta must NOT be sent (keeps the
+ *    local-mode invariant that no `anthropic-beta` reaches a shim).
+ *  - `AFK_PROMPT_CACHE_TTL=5m` → the 5m default needs no beta.
+ */
+export function isExtendedCacheTtlActive(opts?: { baseUrl?: string }): boolean {
+  return isCacheEnabled(opts) && getCacheTtl() === '1h';
+}
+
+/**
  * Return a new array where the last block carries
  * `cache_control: { type: 'ephemeral', ttl }`. Returns the input unchanged
  * when the array is empty or when the tail is a thinking block (the SDK

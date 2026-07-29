@@ -12,6 +12,14 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AuthMode } from './types.js';
 
 /**
+ * Beta that activates the 1-hour prompt-cache TTL. Required in BOTH auth modes
+ * whenever a `cache_control` breakpoint carries `ttl: '1h'`; without it the
+ * server silently downgrades the breakpoint to the default 5-minute TTL (no
+ * error is returned, so the miss is invisible except as cache-read misses).
+ */
+export const EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
+
+/**
  * `anthropic-beta` header value for OAuth mode.
  *
  * Includes `interleaved-thinking-2025-05-14` unconditionally — this matches
@@ -26,7 +34,7 @@ import type { AuthMode } from './types.js';
  * takes effect.
  */
 export const OAUTH_BETA_HEADER =
-  'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,extended-cache-ttl-2025-04-11';
+  `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,${EXTENDED_CACHE_TTL_BETA}`;
 
 /**
  * Additional `anthropic-beta` entry that gates the `output_config.effort`
@@ -87,23 +95,39 @@ export function buildClientOptions(
  * Build per-request HTTP headers.
  *
  * OAuth adds the cli-mimicry headers (always includes the interleaved-thinking
- * beta so 4.x models return visible reasoning blocks).  API-key mode returns
- * an empty object.
+ * beta so 4.x models return visible reasoning blocks).  API-key mode sends no
+ * cli-mimicry headers, but still negotiates {@link EXTENDED_CACHE_TTL_BETA}
+ * when the caller reports that a 1-hour breakpoint is being stamped — see
+ * `extendedCacheTtl`.
  *
  * @param withEffort - When `true`, appends {@link EFFORT_BETA_HEADER} to the
  *   `anthropic-beta` value.  Pass this flag only when the request body carries
  *   `output_config.effort`; the server rejects the field when the beta is
  *   absent, and sending the beta unnecessarily is a no-op but needlessly
  *   broadens the negotiated feature set.
+ * @param extendedCacheTtl - When `true`, guarantees `anthropic-beta` carries
+ *   {@link EXTENDED_CACHE_TTL_BETA} in BOTH auth modes. Callers derive it from
+ *   `isExtendedCacheTtlActive({ baseUrl })` (cache-policy.ts) — the single
+ *   authority pairing "a `ttl: '1h'` breakpoint is stamped" with "the beta that
+ *   activates it is on the wire". Omitting it leaves api-key mode's headers
+ *   untouched, so local-shim and cache-disabled sessions stay header-free.
  */
 export function buildRequestHeaders(
   mode: AuthMode,
   sessionId: string,
   requestId: string,
   withEffort?: boolean,
+  extendedCacheTtl?: boolean,
 ): Record<string, string> {
   if (mode !== 'oauth') {
-    return {};
+    // Invariant: api-key mode sends the extended-cache-ttl beta and NOTHING
+    // else. The cli-mimicry headers (x-app, CLI User-Agent, session id) are
+    // OAuth-only by design — `local-mode-oauth.test.ts` pins that a shim never
+    // sees them, and local mode reports `extendedCacheTtl: false` because
+    // `isCacheEnabled` force-disables caching whenever a baseUrl is set.
+    return extendedCacheTtl === true
+      ? { 'anthropic-beta': EXTENDED_CACHE_TTL_BETA }
+      : {};
   }
   const betaHeader = withEffort
     ? `${OAUTH_BETA_HEADER},${EFFORT_BETA_HEADER}`
