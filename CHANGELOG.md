@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.5] - 2026-07-29
+
+### Fixed
+- send the extended-cache-ttl beta in api-key mode so the 1h TTL is honored (#757) (#758) (a4d973d)
+
 ## [5.82.4] - 2026-07-29
 
 ### Fixed
