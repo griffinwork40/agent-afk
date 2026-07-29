@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.0] - 2026-07-29
+
+### Added
+- warn when an agent file shadows a read-only builtin (+ ADR 0002) (#739) (ce5ef4e)
+
 ## [5.81.8] - 2026-07-28
 
 ### Fixed
