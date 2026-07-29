@@ -14,6 +14,7 @@ import { saveSession } from '../session-store.js';
 import { formatResumeCommand } from '../resume-command.js';
 import { formatCwd } from '../format-cwd.js';
 import { bootstrapSession } from './interactive/bootstrap.js';
+import { drainBootWarnings } from './interactive/boot-warnings.js';
 import { elicitationRouter } from '../../agent/elicitation-router.js';
 import { initTranscript } from './interactive/transcript.js';
 import { runReplLoop, type TurnState } from './interactive/repl-loop.js';
@@ -401,11 +402,29 @@ export function registerInteractiveCommand(program: Command): void {
           ? `Pruned ${bootPrune.removedCount} stale worktree(s). Run /worktree list for details.`
           : undefined;
 
+      // Bootstrap-warning bucket, owned HERE and passed down rather than
+      // created inside `bootstrapSession`, so it is still reachable when
+      // bootstrap throws — a thrown bootstrap returns no ctx to read it from.
+      // `ctx.bootWarnings` is this same array instance, so the success-path
+      // drain below is unaffected by the hoist.
+      const bootWarnings: string[] = [];
       let ctx: InteractiveCtx;
       try {
-        ctx = await bootstrapSession(options, worktreeCwd !== undefined ? { cwd: worktreeCwd } : undefined);
+        ctx = await bootstrapSession(options, {
+          bootWarnings,
+          ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+        });
       } catch (err) {
+        // Constraint: this sequence is externally forced, not stylistic.
+        // `handleCommandError` is typed `never` and calls `process.exit`, so
+        // the drain cannot follow it; and ora owns the terminal line until
+        // `spinner.fail()` stops it, so the drain cannot precede that. Hence
+        // fail → drain → exit. Without the drain, a warning pushed before the
+        // throw (an MCP config warning accompanying an `alwaysLoad` server that
+        // fails to connect) dies with the process — pre-#751 it had already
+        // reached stderr, and the abort path never clears the screen.
         spinner.fail('Invalid options');
+        drainBootWarnings(bootWarnings);
         handleCommandError(err);
       }
 
@@ -759,6 +778,19 @@ export function registerInteractiveCommand(program: Command): void {
         if (ctx.resumeTarget) {
           printResumeBanner(ctx.stats, ctx.completionWriter);
         }
+        // Bootstrap warnings (#745). `bootstrapSession` above ran BEFORE the
+        // screen clear, so any producer that printed directly — the
+        // agent-registry built-in-shadow warning, MCP config warnings — had its
+        // output erased, scrollback included (`\x1b[3J` = Erase Saved Lines).
+        // Those producers now accumulate into ctx.bootWarnings and are emitted
+        // here instead: after the clear, inside the pre-arm block so the
+        // newlines count into preArmAnchorRow and the compositor arms BELOW
+        // them. Printed LAST in the block — a built-in-shadow warning means a
+        // read-only verifier agent may now be write-capable, so it sits closest
+        // to the prompt rather than buried above the banner. Shares its printer
+        // with the bootstrap-abort drain above; the buffer is emptied in place,
+        // so only whichever path ran first emits.
+        drainBootWarnings(ctx.bootWarnings);
         console.log();
       } finally {
         process.stdout.write = origStdoutWrite;

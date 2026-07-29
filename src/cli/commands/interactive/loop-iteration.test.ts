@@ -156,6 +156,11 @@ function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
     options: { thinkingUi: undefined },
     inputSurfaceRef: { current: null },
     backgroundRegistry: new BackgroundAgentRegistry({}),
+    // Required on InteractiveCtx (#745). This fixture feeds runReplLoop
+    // directly and never reaches the drain site, so its absence was a
+    // type-fidelity gap rather than a runtime throw — kept in sync anyway so
+    // the cast cannot hide a future required field.
+    bootWarnings: [],
     ...overrides,
   } as unknown as InteractiveCtx;
 }

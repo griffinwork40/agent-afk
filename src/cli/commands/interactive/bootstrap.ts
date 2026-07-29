@@ -145,7 +145,8 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
 /**
  * Build the session context from CLI options. Throws with a user-facing
  * message when option parsing fails — caller is responsible for spinner
- * teardown and exit code.
+ * teardown, exit code, and draining any `extras.bootWarnings` it supplied
+ * (warnings pushed before the throw never reach the returned ctx).
  *
  * Side effects: constructs an SDK AgentSession (opens a subprocess),
  * registers slash commands, creates a non-terminal readline interface on
@@ -154,7 +155,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
  */
 export async function bootstrapSession(
   options: CliOptions,
-  extras?: { cwd?: string },
+  extras?: { cwd?: string; bootWarnings?: string[] },
 ): Promise<InteractiveCtx> {
   // Witness layer: capture true bootstrap entry time. The trace writer is
   // created a few lines below, so bootstrap_start (writer-ready marker) and
@@ -317,12 +318,33 @@ export async function bootstrapSession(
   // depth — root → skill-forked child → skill-forked grandchild. Without
   // this, the dispatch fast-fails with a 163-byte "BackgroundAgentRegistry
   // is not wired" error after ~24ms (no model call).
+
+  // Bootstrap warnings that must outlive the startup screen clear. Everything
+  // written to stdout/stderr from here until `interactive.ts` finishes clearing
+  // is destroyed — `\x1b[3J` erases scrollback, not just the viewport — so
+  // producers accumulate into this bucket and `interactive.ts` drains it after
+  // the clear. See `InteractiveCtx.bootWarnings` (#745).
+  //
+  // Adopted from the caller when supplied, because this function can throw
+  // AFTER producers have pushed (`McpManager.fromConfig` below rejects for an
+  // `alwaysLoad` server that fails to connect) and a thrown bootstrap returns
+  // no ctx to drain — the warnings would be silently destroyed. The REPL passes
+  // its own array so its catch block can still print them. Callers that don't
+  // care get a local bucket and the prior behaviour.
+  const bootWarnings: string[] = extras?.bootWarnings ?? [];
+
   // Named-agent registry: session-static scan (builtin + user ~/.afk/agents
   // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch
   // on the `agent` tool at every depth of this REPL session.
+  //
+  // `warn` is routed into bootWarnings rather than left to default: the
+  // built-in-shadow warning (an agent file replacing a tool-restricted builtin
+  // like `research-agent`) is a safety signal, and the default writer prints
+  // straight to stderr where the clear eats it.
   const agentRegistry = loadAgentRegistry({
     ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
     pluginAgents: discoverPluginAgents(),
+    warn: (message: string) => bootWarnings.push(message),
   });
 
   const childSkillExecutorFactory = createChildSkillExecutorFactory(
@@ -492,6 +514,12 @@ export async function bootstrapSession(
       ...(options.mcpConfig !== undefined ? { cliOverride: options.mcpConfig } : {}),
     });
     const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;
+    // Config-loader warnings ("your mcp.json had X") reach the operator on both
+    // branches — servers enabled or not — via the post-clear drain. Collected
+    // once here so the two paths cannot diverge: previously the enabled path
+    // printed inside McpManager.fromConfig and the disabled path printed here,
+    // and the clear erased both.
+    for (const w of loaded.warnings) bootWarnings.push(`[mcp] ${w}`);
     if (enabledCount > 0) {
       const sourcesLabel = loaded.sources.length === 1
         ? loaded.sources[0]
@@ -507,8 +535,12 @@ export async function bootstrapSession(
         metadata: { serverCount: enabledCount },
       });
       try {
+        // `warnings` is deliberately NOT forwarded: fromConfig would
+        // `console.warn` them (mcp/manager.ts) mid-bootstrap, where the startup
+        // clear erases them. They ride bootWarnings instead and are drained
+        // after the clear. `chat` still forwards them — it never clears — so
+        // this does not change any other surface, and nothing double-prints.
         mcpManager = await McpManager.fromConfig(loaded.mcpServers, {
-          warnings: loaded.warnings,
           ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
         });
       } finally {
@@ -518,10 +550,10 @@ export async function bootstrapSession(
           metadata: { serverCount: enabledCount },
         });
       }
-    } else if (loaded.warnings.length > 0) {
-      // Surface warnings even when no servers ended up enabled.
-      for (const w of loaded.warnings) console.warn(`[mcp] ${w}`);
     }
+    // No `else` branch for warnings: the no-enabled-servers case used to
+    // console.warn here, and both branches are now covered by the single
+    // bootWarnings collection above.
   }
 
   // Build a fully-wired provider factory that the ProviderRouter calls to
@@ -858,6 +890,10 @@ export async function bootstrapSession(
     options,
     ...(resumeTarget !== undefined ? { resumeTarget } : {}),
     teardownTrustedSkillEvents: undefined,  // wired below
+    // Same array the producers above pushed into — drained post-clear by
+    // interactive.ts. Passed by reference so a late producer (anything between
+    // here and `return ctx`) still lands.
+    bootWarnings,
     backgroundRegistry,
     // Expose the root executor's narrow promotion seam so the turn handler can
     // make Ctrl+B background a running foreground subagent. The executor

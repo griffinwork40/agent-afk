@@ -153,6 +153,8 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
     rl: { close: vi.fn() },
     options: { thinkingUi: undefined },
     backgroundRegistry,
+    // Required on InteractiveCtx (#745) — see the note in loop-iteration.test.ts.
+    bootWarnings: [],
   } as unknown as InteractiveCtx;
 }
 
