@@ -18,10 +18,22 @@
  * coupled to repositionCommittedBand's stateless re-pin and the exact
  * painted/pending accounting — converting them to the top-paint-logical-then-
  * scroll mechanism regressed the verdict-card overflow case (the card's closing
- * border was dropped on a growth eviction). The band-hold archive is the site
- * that actually carries the width-resize content in practice (verified by
- * instrumenting the #540 PTY guards), so retaining physical emission here does
- * NOT reintroduce the fragmentation those guards check. The committedBandMeta
+ * border was dropped on a growth eviction).
+ *
+ * FALSIFIED 2026-07-29 — this note previously claimed "the band-hold archive is
+ * the site that actually carries the width-resize content in practice (verified
+ * by instrumenting the #540 PTY guards), so retaining physical emission here
+ * does NOT reintroduce the fragmentation those guards check". That was an
+ * empirical bet, and it lost: both #540 guards hold a tall overlay across every
+ * commitAbove, so they only ever drive band-hold and could not observe THIS
+ * site. The new PTY guard `width-resize-fragment-evict-growth` drives it
+ * directly (commit under a short frame, then grow) and measures 4 non-wrapped
+ * rows after a widen where a rejoined line shows 1 — i.e. the ordinary
+ * end-of-turn → next-turn sequence DOES carry width-resize content through
+ * here, and it fragments. Reported from a real session: see the analysis in
+ * that guard's header. The physical emission below is therefore a KNOWN DEFECT
+ * retained only because the naive conversion regresses the verdict-card case
+ * above; it is not sound. The committedBandMeta
  * array IS still sliced in lockstep at every eviction below so the 1:1
  * band↔meta invariant (relied on by reflow and the two logical-flush sites)
  * holds. A full turnModel rewrite (docs/proposals/tui-compositor-rewrite.md §5

@@ -107,10 +107,22 @@ scroll → still nothing in scrollback. The byte-level test verified
 but that's irrelevant to whether the LF triggers a scroll under the
 full-screen DECSTBM that `withFullScrollRegion` installs.
 
-The fix passed CI and shipped because **no test verifies actual scrollback
-contents end-to-end on a real PTY.** The only ground truth is running
+The fix passed CI and shipped because **no test verified actual scrollback
+contents end-to-end on a real PTY.** The only ground truth was running
 agent-afk in iTerm2 / Apple Terminal / xterm and visually scrolling up to
 see what's there.
+
+**Updated 2026-07-29 — that gap is closed for contents, but not for coverage.**
+`tests/pty/` (issue #541, `11fb1eb`) spawns a real pty, replays the byte stream
+through an xterm emulator, and asserts against reconstructed scrollback
+(`inScrollback`, and `logicalSpan` for hard-break/soft-wrap spans). So the
+harness CAN certify scrollback contents. The residual risk moved from
+capability to aim: a scenario only covers the write site its `drive()` happens
+to exercise, and for a long time every width-resize guard drove the band-hold
+archive alone — leaving the grow-eviction site (`terminal-compositor.frame-preserve.ts`)
+unobserved while a comment there asserted it did not matter. It did.
+When adding a scrollback guard, state which of the write sites it drives in its
+`ref` field, and check whether the others are covered by anything.
 
 ### CUP-to-rows: makes the scroll fire, but pushes the WRONG row
 
