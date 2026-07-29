@@ -30,6 +30,7 @@ import { BrowserLauncher } from './launcher.js';
 import { observePage } from './observe.js';
 import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
+import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,12 @@ export class PlaywrightProvider implements BrowserProvider {
    * Invariant: domain policy is enforced BEFORE the page is created so that
    * blocked URLs never touch the browser process. The BrowserContext is
    * created lazily on first open() via ensurePage().
+   *
+   * Invariant: domain policy is ALSO re-enforced on the URL the tab actually
+   * landed on, because goto() follows 30x redirects. Defense in depth — the
+   * pre-navigation check is kept, not replaced. Both checks are required: the
+   * first keeps blocked hosts from being contacted at all, the second keeps a
+   * redirect-laundered blocked host from being observed.
    */
   async open(input: OpenInput): Promise<OpenOutcome> {
     // Domain policy check before any browser interaction.
@@ -138,6 +145,26 @@ export class PlaywrightProvider implements BrowserProvider {
       });
     } catch (err) {
       navError = err;
+    }
+
+    // Re-check the LANDED url: goto() follows 30x redirects, so an allowed URL
+    // can hand the tab to a blocked host after the pre-navigation check passed
+    // (#576). Runs before any screenshot or observation so a blocked page's
+    // content is never read. Shared with act() — see domain-recheck.ts.
+    //
+    // Exception: when goto() threw before the tab left its blank starting page
+    // there is no landed URL to vet. `about:blank` has an empty hostname, so a
+    // non-empty allowlist would refuse it and relabel a DNS/timeout failure as
+    // a policy refusal, swallowing navError. The nav error is the real signal.
+    const landedUrl = page.url();
+    const neverNavigated =
+      navError !== null && (landedUrl === '' || landedUrl === 'about:blank');
+
+    if (!neverNavigated) {
+      const blocked = await recheckLandedUrl(page, this.config, input.url);
+      if (blocked !== null) {
+        return blocked;
+      }
     }
 
     // Capture screenshot if requested or if navigation threw.
@@ -219,7 +246,9 @@ export class PlaywrightProvider implements BrowserProvider {
    *
    * Invariant: post-action URL is checked against domain policy. If the
    * action triggered navigation to a blocked domain, we navigate back
-   * (best-effort) and return BlockedByPolicy.
+   * (best-effort) and return BlockedByPolicy. The check lives in
+   * `recheckLandedUrl()` and is shared with open() so both navigation paths
+   * enforce identical policy.
    */
   async act(input: ActInput): Promise<ActOutcome> {
     const { sessionId } = input;
@@ -304,19 +333,11 @@ export class PlaywrightProvider implements BrowserProvider {
       }
     }
 
-    // Check post-action URL for policy violations.
-    const postActionUrl = page.url();
-    if (postActionUrl !== preActionUrl) {
-      const postPolicy = enforceDomainPolicy(postActionUrl, this.config);
-      if (!postPolicy.allowed) {
-        // Navigate back best-effort — do not throw if it fails.
-        await page.goBack().catch(() => { /* best-effort */ });
-        return {
-          outcome: 'blocked_by_policy',
-          url: postActionUrl,
-          reason: postPolicy.reason,
-        };
-      }
+    // Check post-action URL for policy violations. Shared with open() so the
+    // two navigation paths cannot drift apart — see domain-recheck.ts.
+    const blocked = await recheckLandedUrl(page, this.config, preActionUrl);
+    if (blocked !== null) {
+      return blocked;
     }
 
     // Capture screenshot if requested or if action threw.
