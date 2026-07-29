@@ -1,5 +1,5 @@
 /**
- * Presence session-id resolution contract.
+ * Presence session-id RESOLUTION contract (pure unit level).
  *
  * The bug this guards: presence was gated on `config.sessionId`, which is set
  * ONLY under `--resume`/`--continue`. Every fresh top-level session therefore
@@ -10,34 +10,17 @@
  * work for a non-resumed session. The real id was minted downstream of the
  * gate, inside query construction, from the *different* `config.resume` field.
  *
- * `presence-surface.test.ts` did not catch it because every config it builds
- * passes an explicit `sessionId` — it only ever exercised the resumed shape.
- * The end-to-end cases below deliberately omit `sessionId`, which is the real
- * shape of a fresh REPL session (see `cli/commands/interactive/bootstrap.ts`,
- * where `sessionId` arrives only via `...deps.resumeConfig`).
- *
- * Harness note: the presence write is fire-and-forget but scheduled
- * *synchronously* inside `provider.query()`, before any streaming — so these
- * tests call `query()` once, never iterate it, and assert on the real presence
- * file under a temp `AFK_HOME`. No SDK mock is needed because the client is
- * built lazily and never used. Same approach as `presence-surface.test.ts`.
+ * End-to-end advertisement behavior (real provider, real presence file) lives
+ * in `presence-advertise.test.ts`; this file covers the resolver alone.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { describe, it, expect } from 'vitest';
 import { resolveTopLevelSessionId, isTopLevelSession } from './presence-lifecycle.js';
-import {
-  AnthropicDirectProvider,
-  OpenAICompatibleProvider,
-} from '../index.js';
-import { readPresenceFiles, type PresenceFileInfo } from '../../awareness/presence.js';
-import type { ModelProvider, ProviderQuery, ProviderUserTurn } from '../../provider.js';
-import type { AgentConfig } from '../../types/config-types.js';
 
 describe('resolveTopLevelSessionId', () => {
-  const topLevel = { depth: undefined, parentSessionId: undefined };
+  // 'cli' is the default surface for both providers (see each ctor's
+  // `opts.surface ?? 'cli'`) and the only surface a presence consumer reads.
+  const topLevel = { depth: undefined, parentSessionId: undefined, surface: 'cli' };
 
   it('mints an id for a fresh top-level session that supplied none (the regression)', () => {
     const out = resolveTopLevelSessionId({
@@ -109,6 +92,7 @@ describe('resolveTopLevelSessionId', () => {
       resume: undefined,
       depth: 1,
       parentSessionId: undefined,
+      surface: 'cli',
       memoized: null,
     });
     // Forks must not inherit or share a minted id — that would collide on the
@@ -123,9 +107,82 @@ describe('resolveTopLevelSessionId', () => {
       resume: undefined,
       depth: undefined,
       parentSessionId: 'parent-1',
+      surface: 'cli',
       memoized: null,
     });
     expect(out.id).toBeUndefined();
+    expect(out.memoized).toBeNull();
+  });
+
+  it('mints only on a surface a presence consumer reads', () => {
+    // A daemon task or Telegram chat session advertising presence is invisible
+    // to both readers (bot.ts filters surface === 'cli'; watch.ts lists live
+    // records) while still costing a file + a cleanup registration — that is how
+    // a long-running daemon accrued one stale live-looking record per task.
+    for (const surface of ['daemon', 'telegram', 'unknown']) {
+      const out = resolveTopLevelSessionId({
+        sessionId: undefined,
+        resume: undefined,
+        depth: 0,
+        parentSessionId: undefined,
+        surface,
+        memoized: null,
+      });
+      expect(out.id, surface).toBeUndefined();
+      expect(out.memoized, surface).toBeNull();
+    }
+  });
+
+  it('still honors an explicit id on a non-minting surface (resume advertises everywhere)', () => {
+    // presence-surface.test.ts pins this contract for cli/daemon/telegram: the
+    // surface gate applies to the MINT, never to an explicitly supplied id.
+    const out = resolveTopLevelSessionId({
+      sessionId: 'resumed-daemon-task',
+      resume: undefined,
+      depth: 0,
+      parentSessionId: undefined,
+      surface: 'daemon',
+      memoized: null,
+    });
+    expect(out.id).toBe('resumed-daemon-task');
+  });
+
+  it('keeps the memoized id across a reset() (/clear) on the same provider instance', () => {
+    const first = resolveTopLevelSessionId({
+      sessionId: undefined,
+      resume: undefined,
+      ...topLevel,
+      memoized: null,
+    });
+    // AgentSession.reset() deletes config.resume AND config.sessionId, then
+    // rebuilds the query on the SAME provider instance. Id stability is load
+    // bearing: the AFK elicitation channel and the remote-abort watcher are
+    // bound to the id captured at `/afk on`, and the `afk` marker lives on that
+    // id's presence file, so a new mint here would silently strand both.
+    const afterClear = resolveTopLevelSessionId({
+      sessionId: undefined,
+      resume: undefined,
+      ...topLevel,
+      memoized: first.memoized,
+    });
+    expect(afterClear.id).toBe(first.id);
+    expect(afterClear.memoized).toBe(first.memoized);
+  });
+
+  it('resolves a fork to its parent id (subagent.ts threads resume) without minting', () => {
+    // subagent.ts sets `resume: options.parent.sessionId` on every child config,
+    // so the explicit branch returns the parent id — which is exactly what fork
+    // query construction already used. Presence stays blocked by the
+    // isTopLevelSession re-gate in registerPresenceLifecycle, asserted e2e below.
+    const out = resolveTopLevelSessionId({
+      sessionId: undefined,
+      resume: 'parent-session-id',
+      depth: 1,
+      parentSessionId: 'parent-session-id',
+      surface: 'cli',
+      memoized: null,
+    });
+    expect(out.id).toBe('parent-session-id');
     expect(out.memoized).toBeNull();
   });
 });
@@ -141,120 +198,3 @@ describe('isTopLevelSession', () => {
     expect(isTopLevelSession(0, 'parent')).toBe(false);
   });
 });
-
-// ---------------------------------------------------------------------------
-// End-to-end: a fresh session (NO config.sessionId) must advertise presence.
-// ---------------------------------------------------------------------------
-
-let tmpHome: string;
-let savedHome: string | undefined;
-
-beforeEach(() => {
-  tmpHome = mkdtempSync(join(tmpdir(), 'afk-presence-fresh-'));
-  savedHome = process.env['AFK_HOME'];
-  process.env['AFK_HOME'] = tmpHome;
-});
-
-afterEach(() => {
-  if (savedHome === undefined) delete process.env['AFK_HOME'];
-  else process.env['AFK_HOME'] = savedHome;
-  rmSync(tmpHome, { recursive: true, force: true });
-});
-
-async function* emptyPrompt(): AsyncIterable<ProviderUserTurn> {
-  // never iterated — the presence write is scheduled synchronously in query()
-}
-
-/** Drive query() far enough to schedule the presence write, then best-effort close. */
-function triggerPresence(provider: ModelProvider, config: AgentConfig): void {
-  let query: ProviderQuery | undefined;
-  try {
-    query = provider.query({ prompt: emptyPrompt(), config });
-  } catch {
-    // A post-write throw (e.g. the OpenAI builder validating creds) is fine —
-    // the presence write is already scheduled.
-  }
-  if (query !== undefined) {
-    void Promise.resolve(query.close()).catch(() => undefined);
-  }
-}
-
-/** Poll until any presence record appears, else undefined. */
-async function waitForAnyPresence(): Promise<PresenceFileInfo | undefined> {
-  for (let i = 0; i < 100; i++) {
-    const records = await readPresenceFiles();
-    if (records[0] !== undefined) return records[0];
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  return undefined;
-}
-
-interface Branch {
-  name: string;
-  makeProvider: () => ModelProvider;
-  /** A fresh-session config — deliberately NO sessionId, as a new REPL builds. */
-  freshConfig: () => AgentConfig;
-  /** A fork config — must NOT advertise presence. */
-  forkConfig: () => AgentConfig;
-}
-
-const branches: Branch[] = [
-  {
-    name: 'anthropic-direct',
-    makeProvider: () => new AnthropicDirectProvider({}),
-    freshConfig: () => ({ model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' }),
-    forkConfig: () => ({
-      model: 'claude-sonnet-5',
-      apiKey: 'sk-ant-oat01-test',
-      depth: 1,
-      parentSessionId: 'parent-1',
-    }),
-  },
-  {
-    name: 'openai-compatible',
-    makeProvider: () => new OpenAICompatibleProvider({}),
-    freshConfig: () => ({ model: 'gpt-5.1', apiKey: 'test-openai-key' }),
-    forkConfig: () => ({
-      model: 'gpt-5.1',
-      apiKey: 'test-openai-key',
-      depth: 1,
-      parentSessionId: 'parent-1',
-    }),
-  },
-];
-
-for (const branch of branches) {
-  describe(`fresh-session presence — ${branch.name}`, () => {
-    it('writes a presence file with a defined sessionId when config.sessionId is absent', async () => {
-      triggerPresence(branch.makeProvider(), branch.freshConfig());
-      const rec = await waitForAnyPresence();
-      // THE REPRODUCER: before the fix this was undefined — no file at all.
-      expect(rec).toBeDefined();
-      expect(rec?.sessionId).toBeTypeOf('string');
-      expect(rec?.sessionId).not.toBe('');
-      expect(rec?.surface).toBe('cli');
-      expect(rec?.actor).toBe('main');
-    });
-
-    it('does not write a second, differently-identified file on the next turn', async () => {
-      const provider = branch.makeProvider();
-      triggerPresence(provider, branch.freshConfig());
-      const first = await waitForAnyPresence();
-      expect(first).toBeDefined();
-
-      // query() runs once per turn — a second turn must reuse the same id.
-      triggerPresence(provider, branch.freshConfig());
-      await new Promise((resolve) => setTimeout(resolve, 60));
-
-      const records = await readPresenceFiles();
-      expect(records).toHaveLength(1);
-      expect(records[0]?.sessionId).toBe(first?.sessionId);
-    });
-
-    it('does not advertise presence for a fork', async () => {
-      triggerPresence(branch.makeProvider(), branch.forkConfig());
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      expect(await readPresenceFiles()).toHaveLength(0);
-    });
-  });
-}

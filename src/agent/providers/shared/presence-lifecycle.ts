@@ -5,8 +5,11 @@
  *   1. the top-level-session guard ({@link isTopLevelSession}),
  *   2. resolving the session id presence must advertise
  *      ({@link resolveTopLevelSessionId}),
- *   3. the best-effort presence write + cleanup-handler registration
+ *   3. the best-effort presence write, keyed on the advertised id
  *      ({@link registerPresenceLifecycle}).
+ *
+ * Exit/signal cleanup deliberately does NOT live here — it is process-scoped,
+ * not session-scoped, and lives in `./presence-signals.ts`.
  *
  * Invariant: the id written into the presence file MUST be the same id used for
  * that session's ledger directory (`~/.afk/state/sessions/<id>/events.jsonl`).
@@ -35,6 +38,11 @@ import {
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { actorFromDepth } from '../../session/session-identity.js';
+import { debugLog } from '../../../utils/debug.js';
+import {
+  registerPresenceCleanup,
+  unregisterPresenceCleanup,
+} from './presence-signals.js';
 
 export interface PresenceLifecycleArgs {
   depth: number | undefined;
@@ -68,9 +76,30 @@ export interface SessionIdResolutionArgs {
   resume: string | undefined;
   depth: number | undefined;
   parentSessionId: string | undefined;
+  /**
+   * The provider instance's user-facing surface (`'cli' | 'daemon' |
+   * 'telegram'`). Gates minting only — see {@link PRESENCE_MINT_SURFACES}.
+   */
+  surface: string | undefined;
   /** The provider instance's memoized mint, or `null` if it has not minted. */
   memoized: string | null;
 }
+
+/**
+ * Surfaces whose *fresh* (non-resumed) sessions are worth advertising.
+ *
+ * Contract: only two readers of presence files exist, and both are Telegram —
+ * `bot.ts` auto-subscribe filters `surface === 'cli' && afk === true`, and the
+ * `/watch` no-argument listing in `watch.ts` renders live records. A minted
+ * advertisement on any other surface is invisible to every reader while still
+ * costing a file plus a cleanup registration, which is how a long-running
+ * daemon accrued one stale live-looking record per scheduled task (12 tasks ⇒
+ * 12 records). Gating the MINT — not the write — keeps the pre-existing
+ * contract intact: a session carrying an explicit id (`--resume`) still
+ * advertises on every surface, which `telegram/presence-surface.test.ts` pins
+ * for `cli`, `daemon`, and `telegram` alike.
+ */
+export const PRESENCE_MINT_SURFACES: ReadonlySet<string> = new Set(['cli']);
 
 export interface SessionIdResolution {
   /**
@@ -89,12 +118,29 @@ export interface SessionIdResolution {
  *
  * Precedence: an explicit id (`config.sessionId`, then `config.resume`) always
  * wins, so resume semantics are bit-for-bit unchanged. Only a top-level session
- * with no explicit id gets a mint, and that mint is memoized so it stays stable
- * across turns on the same provider instance.
+ * on a {@link PRESENCE_MINT_SURFACES} surface with no explicit id gets a mint,
+ * and that mint is memoized so it stays stable across turns on the same
+ * provider instance.
  *
- * Contract: never mints for a fork — returns `id: undefined` there, so fork
- * query construction keeps its existing per-call mint and cannot inherit a
- * parent's id (which would collide on the ledger directory).
+ * Invariant: the memoized mint survives `AgentSession.reset()` (`/clear`) on
+ * purpose, so the post-clear session keeps its id. Two mechanisms depend on it.
+ * (1) `LedgerLifecycle.seal()` resets its own latch precisely "so the same
+ * instance is reused cleanly across a reset() cycle" and writes a delimiting
+ * `closed`/`reset` record, so one ledger file legitimately holds both
+ * conversations. (2) The AFK elicitation channel and the remote-abort watcher
+ * are bound to the id captured at `/afk on` (`cli/afk-mode-toggle.ts`), and the
+ * `afk` marker lives on THAT id's presence file — minting a new id here would
+ * leave the operator's phone relay and remote `/abort` bound to an id nothing
+ * writes to any more, silently, which is the exact failure mode this module's
+ * header forbids. A caller that genuinely wants a new identity constructs a new
+ * provider instance rather than resetting one.
+ *
+ * Contract: never *mints* for a fork. An explicit parent id still wins via the
+ * precedence above — `subagent.ts` sets `resume: parent.sessionId` on every
+ * child config, so a fork resolves to its parent's id, which is exactly the id
+ * fork query construction already used before this helper existed. Presence
+ * stays blocked for forks by the independent `isTopLevelSession` re-gate in
+ * {@link registerPresenceLifecycle}, so a fork never advertises.
  */
 export function resolveTopLevelSessionId(
   args: SessionIdResolutionArgs,
@@ -106,49 +152,75 @@ export function resolveTopLevelSessionId(
     return { id: undefined, memoized: args.memoized };
   }
 
+  // Mint only for a surface some presence consumer actually reads. Returning
+  // `undefined` here restores the pre-gate behavior for every other surface:
+  // query construction keeps its own per-call mint and nothing is advertised.
+  if (args.surface === undefined || !PRESENCE_MINT_SURFACES.has(args.surface)) {
+    return { id: undefined, memoized: args.memoized };
+  }
+
   const minted = args.memoized ?? randomUUID();
   return { id: minted, memoized: minted };
 }
 
 /**
- * Write top-level session presence once per provider instance and return the
- * updated `_presenceSessionId` slot.
+ * Write top-level session presence and return the updated `_presenceSessionId`
+ * slot. Writes once per advertised *id* — not once per turn, and not once per
+ * provider instance.
  *
- * Per-instance (not per-process) on purpose: one OS process can legitimately
- * host several concurrent top-level sessions, and each must advertise its own
- * presence file.
+ * Per-instance state (not per-process) on purpose: one OS process can
+ * legitimately host several concurrent top-level sessions, and each must
+ * advertise its own presence file.
+ *
+ * History: the guard here used to be `currentPresenceSessionId === null`, i.e.
+ * once per provider instance for the life of the process. The REPL memoizes
+ * provider instances per model family (`cli/commands/interactive/provider-factory.ts`),
+ * so `/resume` builds a NEW session on an instance that had already advertised
+ * the previous session's id: the resumed session was never advertised, while the
+ * closed session's file — `afk: true` if the operator had toggled it — survived
+ * and kept the Telegram watcher tailing a ledger nothing writes to any more.
+ * Keying on the id instead makes the advertised id follow the live session.
  */
 export function registerPresenceLifecycle(args: PresenceLifecycleArgs): string | null {
-  // Guard: only write once per provider instance (not once per turn).
-  if (
-    isTopLevelSession(args.depth, args.parentSessionId) &&
-    args.sessionId !== undefined &&
-    args.currentPresenceSessionId === null
-  ) {
-    const sessionId = args.sessionId;
-    const workspace = args.runtimeStateSource.getWorkspace();
-    // Fire-and-forget — presence is best-effort and must never throw into the
-    // query path.
-    void writePresenceFile({
-      sessionId,
-      surface: args.surface,
-      // Presence is written only under the top-level gate above, so depth is
-      // 0/undefined here ⇒ 'main'. Derived (not hardcoded) to stay correct
-      // if that gate is ever changed.
-      actor: actorFromDepth(args.depth),
-      cwd: args.cwd ?? process.cwd(),
-      startedAt: new Date().toISOString(),
-      model: { provider: args.providerName, name: args.model },
-      workspace,
-      pid: process.pid,
-    });
-    // Sync cleanup on process exit (cannot await in exit handler).
-    process.once('exit', () => { removePresenceFileSync(sessionId); });
-    // Best-effort cleanup on signals — fires before 'exit'.
-    process.once('SIGINT', () => { removePresenceFileSync(sessionId); process.exit(130); });
-    process.once('SIGTERM', () => { removePresenceFileSync(sessionId); process.exit(143); });
-    return sessionId;
+  const sessionId = args.sessionId;
+  if (!isTopLevelSession(args.depth, args.parentSessionId) || sessionId === undefined) {
+    return args.currentPresenceSessionId;
+  }
+  // Already advertising this exact id — presence is per session, not per turn.
+  if (args.currentPresenceSessionId === sessionId) return sessionId;
+
+  const previous = args.currentPresenceSessionId;
+  if (previous !== null) {
+    // Ordered-operation constraint (governed by this module's header invariant):
+    // drop the stale record BEFORE writing the new one. A crash between the two
+    // steps must leave ZERO presence records — a loud absence the watcher
+    // reports honestly — rather than two live-looking records, one of which
+    // points at a ledger nothing writes to. Silent misdirection is strictly
+    // worse than absence, so absence is the safe intermediate state.
+    debugLog(`⚑ presence: advertised id changed ${previous} → ${sessionId} — rewriting`);
+    unregisterPresenceCleanup(previous);
+    removePresenceFileSync(previous);
   }
 
-  return args.currentPresenceSessionId;
+  const workspace = args.runtimeStateSource.getWorkspace();
+  // Fire-and-forget — presence is best-effort and must never throw into the
+  // query path.
+  void writePresenceFile({
+    sessionId,
+    surface: args.surface,
+    // Presence is written only under the top-level gate above, so depth is
+    // 0/undefined here ⇒ 'main'. Derived (not hardcoded) to stay correct
+    // if that gate is ever changed.
+    actor: actorFromDepth(args.depth),
+    cwd: args.cwd ?? process.cwd(),
+    startedAt: new Date().toISOString(),
+    model: { provider: args.providerName, name: args.model },
+    workspace,
+    pid: process.pid,
+  });
+  // Cleanup on process exit/signal is owned by the process-level registry —
+  // one set of listeners per process, not three per session, and it never
+  // pre-empts a surface's own graceful shutdown. See ./presence-signals.ts.
+  registerPresenceCleanup(sessionId);
+  return sessionId;
 }

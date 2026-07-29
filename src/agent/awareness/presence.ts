@@ -162,10 +162,18 @@ function presenceFilePath(sessionId: string): string {
 /**
  * Ensure the presence directory exists. Returns `true` on success, `false` on
  * any fs error (caller treats write as best-effort).
+ *
+ * `mode: 0o700` — presence records include `cwd`, `pid`, and (for AFK
+ * sessions) an `afk` posture marker; a default umask would otherwise leave
+ * the directory (and, by extension, every file mkdir creates under it)
+ * world-readable. `recursive: true` no-ops the mode on an already-existing
+ * directory (Node does not chmod on the recursive/no-op path), so this only
+ * takes effect on first creation — existing installs are unaffected until
+ * the dir is recreated.
  */
 async function ensurePresenceDir(): Promise<boolean> {
   try {
-    await mkdir(getPresenceDir(), { recursive: true });
+    await mkdir(getPresenceDir(), { recursive: true, mode: 0o700 });
     return true;
   } catch {
     return false;
@@ -240,7 +248,10 @@ export async function writePresenceFile(info: PresenceFileInfo): Promise<void> {
         heartbeatAt: new Date().toISOString(),
         ...info,
       };
-      await writeFile(filePath, JSON.stringify(record, null, 2), 'utf8');
+      // mode: 0o600 — presence records carry cwd/pid/afk-posture; a default
+      // umask would otherwise leave them world-readable (every mutator below
+      // matches this mode so a read-modify-write cannot loosen it back up).
+      await writeFile(filePath, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — swallow silently.
     }
@@ -265,7 +276,7 @@ export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.heartbeatAt = new Date().toISOString();
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -286,7 +297,7 @@ export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<v
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.afk = afk;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -323,7 +334,7 @@ export async function setPresenceBlocked(sessionId: string, blocked: boolean): P
       } else {
         delete parsed.blockedSince;
       }
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -348,7 +359,7 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.cwd = cwd;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
     }

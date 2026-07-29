@@ -774,6 +774,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       resume: config.resume,
       depth: config.depth,
       parentSessionId: config.parentSessionId,
+      surface: this.surface,
       memoized: this._mintedSessionId,
     });
     this._mintedSessionId = resolvedSession.memoized;
