@@ -549,6 +549,67 @@ export const SCENARIOS: Record<string, PtyScenario> = {
   },
 
   // ─────────────────────────────────────────────────────────────────────────
+  // width-resize-fragment-evict-growth (#540 axis-2 · the EVICTION site):
+  // frame-preserve.ts:10-30 justifies leaving the growth-eviction paths on
+  // pre-wrapped PHYSICAL rows by asserting "the band-hold archive is the site
+  // that actually carries the width-resize content in practice". The two guards
+  // above only ever drive band-hold (they hold a tall overlay across every
+  // commitAbove), so nothing tests that claim. This scenario drives the OTHER
+  // site: commit with a SHORT frame so the run lands in the band and is painted
+  // (no archive), THEN grow the overlay so preserveRowsBeforeFrameRender's
+  // grow-eviction scrolls those painted rows into scrollback as app hard
+  // newlines — the real end-of-turn → next-turn sequence from the 2026-07-29
+  // report. On a WIDEN the terminal cannot rejoin app hard-newlines, so the
+  // line stays fragmented: measured 4 non-wrapped rows at HEAD (22751af), where
+  // a rejoined line would show 1. RED-guard shape (minNonWrappedRows) — it
+  // asserts the defect so the blind spot cannot silently persist; flip it to
+  // `maxNonWrappedRows: 1` when the A2 unification retires physical eviction.
+  // ─────────────────────────────────────────────────────────────────────────
+  'width-resize-fragment-evict-growth': {
+    description: 'logical line evicted by frame GROWTH stays FRAGMENTED in scrollback on a WIDER resize (RED guard, #540 axis-2)',
+    cols: 48,
+    rows: 24,
+    ref: '#540 axis-2 · frame-preserve.ts grow-eviction (physical rows)',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'M');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+      // Phase 1 — commit under a SHORT frame (no overlay). The run fits above
+      // the frame, so decideCommitMode takes neither band-hold nor the archive:
+      // these rows are CUP-painted into the band as hard-wrapped physical rows.
+      // 186 cols → 4 physical rows at 48; committed first so it sits at band[0].
+      const longLine = `LOGSTART_${'x'.repeat(170)}_LOGEND`;
+      c.setOverlay('');
+      c.commitAbove(longLine + '\n');
+      for (let k = 0; k < 10; k++) c.commitAbove(`FILLER_${String(k).padStart(2, '0')}\n`);
+      ix.repaint();
+      await settle();
+      // Phase 2 — GROW the frame. desiredTopRow drops below prevTopRow, so
+      // growOverflow = bandLen - growRoom > 0 and the top band rows (including
+      // all 4 rows of the long line) are evicted to scrollback physically.
+      c.setOverlay(Array.from({ length: 18 }, (_, i) => `thinking ${i} tall`).join('\n'));
+      ix.repaint();
+      await settle();
+      c.setOverlay('');
+      ix.repaint(); ix.repaint();
+      await settle();
+      await requestResize(ctx, 110, 24); // WIDEN 48 → 110
+      ix.repaint(); ix.repaint();
+      await settle();
+    },
+    expect: {
+      inScrollback: ['LOGSTART'], // precondition: the line was evicted off screen
+      // >=2 non-wrapped rows == still fragmented. Deliberately not pinned to the
+      // measured 4: the exact count depends on eviction row math, but ANY value
+      // >1 means the terminal could not rejoin it.
+      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', minNonWrappedRows: 2 },
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
   // #745 — bootstrap warnings must survive the startup screen clear.
   //
   // The headless test (interactive.boot-warnings.test.ts) proves the warning
