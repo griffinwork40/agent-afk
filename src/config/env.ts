@@ -1255,6 +1255,24 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
 
+  // ── Web egress ────────────────────────────────────────────────────────────
+  {
+    name: 'AFK_WEB_ALLOW_PRIVATE_HOSTS',
+    description:
+      'Opt out of the web_scrape SSRF egress guard. When unset (default) the guard is ACTIVE: ' +
+      'the markdown, raw, and headless-render paths refuse loopback (127/8, ::1), link-local ' +
+      '(169.254/16 — including the 169.254.169.254 cloud instance-metadata endpoint), RFC1918 ' +
+      '(10/8, 172.16/12, 192.168/16), carrier-grade NAT (100.64/10), IPv6 unique-local (fc00::/7), ' +
+      '0.0.0.0/8, and the IPv4-mapped/compatible IPv6 forms of all of those. Hostnames are ' +
+      'resolved and the RESOLVED addresses are classified (DNS-rebinding guard), and the check is ' +
+      're-applied on every redirect hop. Set to 1/true to allow private-host access — needed only ' +
+      'to scrape a local dev server. Enabling it restores a model-reachable SSRF path (issue #575).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+
   // ── CLI / capture-mode ────────────────────────────────────────────────────
   {
     name: 'AFK_DEMO_CLEAN',
@@ -1525,6 +1543,9 @@ export const env = {
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
   get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
+
+  // Web egress
+  get AFK_WEB_ALLOW_PRIVATE_HOSTS(): string | undefined { return process.env['AFK_WEB_ALLOW_PRIVATE_HOSTS']; },
 
   // CLI / capture-mode
   get AFK_DEMO_CLEAN(): string | undefined { return process.env['AFK_DEMO_CLEAN']; },

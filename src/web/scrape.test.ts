@@ -31,10 +31,12 @@ function makeResponse(opts: {
   contentType?: string;
   body?: string;
   url?: string;
+  headers?: Record<string, string>;
 }): Response {
   const status = opts.status ?? 200;
   const headers = new Headers();
   if (opts.contentType !== undefined) headers.set('content-type', opts.contentType);
+  for (const [k, v] of Object.entries(opts.headers ?? {})) headers.set(k, v);
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -48,6 +50,17 @@ function freshSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+/**
+ * Hermetic DNS seam for the SSRF egress guard (issue #575): resolves every
+ * hostname to a fixed PUBLIC address so these tests never issue real DNS and
+ * never depend on network reachability. Guard behaviour is covered in
+ * `src/web/egress-guard.test.ts`; the guard's integration with this module is
+ * covered by the `egress guard` describe block at the bottom of this file.
+ */
+const publicLookup = async (): Promise<readonly { address: string }[]> => [
+  { address: '93.184.216.34' },
+];
+
 describe('scrapeToMarkdown — fetch-first happy path', () => {
   it('uses the fetch result and does NOT render when content is rich', async () => {
     const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml() }));
@@ -58,6 +71,7 @@ describe('scrapeToMarkdown — fetch-first happy path', () => {
       renderFn,
       timeoutMs: 5000,
       signal: freshSignal(),
+      lookupFn: publicLookup,
     });
 
     expect(out.usedRender).toBe(false);
@@ -81,6 +95,7 @@ describe('scrapeToMarkdown — render escalation', () => {
       renderFn,
       timeoutMs: 5000,
       signal: freshSignal(),
+      lookupFn: publicLookup,
     });
 
     expect(renderFn).toHaveBeenCalledOnce();
@@ -103,6 +118,7 @@ describe('scrapeToMarkdown — render escalation', () => {
       renderFn,
       timeoutMs: 5000,
       signal: freshSignal(),
+      lookupFn: publicLookup,
     });
 
     expect(renderFn).toHaveBeenCalledOnce();
@@ -123,6 +139,7 @@ describe('scrapeToMarkdown — graceful degradation', () => {
       renderFn,
       timeoutMs: 5000,
       signal: freshSignal(),
+      lookupFn: publicLookup,
     });
 
     expect(out.usedRender).toBe(false);
@@ -143,6 +160,7 @@ describe('scrapeToMarkdown — graceful degradation', () => {
         renderFn,
         timeoutMs: 5000,
         signal: freshSignal(),
+        lookupFn: publicLookup,
       }),
     ).rejects.toThrow(/could not retrieve/i);
   });
@@ -160,6 +178,7 @@ describe('scrapeToMarkdown — content-type handling', () => {
       renderFn,
       timeoutMs: 5000,
       signal: freshSignal(),
+      lookupFn: publicLookup,
     });
 
     expect(out.markdown).toBe('{"hello":"world"}');
@@ -177,6 +196,7 @@ describe('scrapeToMarkdown — content-type handling', () => {
         fetchFn: fetchFn as unknown as typeof fetch,
         timeoutMs: 5000,
         signal: freshSignal(),
+        lookupFn: publicLookup,
       }),
     ).rejects.toThrow(/binary content/i);
   });
@@ -195,6 +215,7 @@ describe('scrapeToMarkdown — cancellation', () => {
         fetchFn: fetchFn as unknown as typeof fetch,
         timeoutMs: 5000,
         signal: ac.signal,
+        lookupFn: publicLookup,
       }),
     ).rejects.toThrow();
   });
@@ -218,6 +239,7 @@ describe('scrapeToMarkdown — cancellation', () => {
         renderFn,
         timeoutMs: 5000,
         signal: ac.signal,
+        lookupFn: publicLookup,
       }),
     ).rejects.toThrow(/render aborted/);
   });
@@ -246,6 +268,7 @@ describe('scrapeToMarkdown — cancellation', () => {
         renderFn,
         timeoutMs: 5000,
         signal: ac.signal,
+        lookupFn: publicLookup,
       }),
     ).rejects.toThrow();
     // The abort must short-circuit before any render escalation.
@@ -272,6 +295,7 @@ describe('scrapeToMarkdown — cancellation', () => {
         renderFn,
         timeoutMs: 5000,
         signal: ac.signal,
+        lookupFn: publicLookup,
       }),
     ).rejects.toThrow();
     expect(renderFn).toHaveBeenCalledOnce();
@@ -303,6 +327,7 @@ describe('scrapeToMarkdown — render produces fewer chars than thin fetch', () 
       renderFn,
       timeoutMs: 5000,
       signal: freshSignal(),
+      lookupFn: publicLookup,
     });
 
     // Render was invoked (thin fetch triggered escalation)…
@@ -311,5 +336,122 @@ describe('scrapeToMarkdown — render produces fewer chars than thin fetch', () 
     expect(out.usedRender).toBe(false);
     // The thin fetched content should be present (the "Loading" text from SHELL_HTML).
     expect(out.markdown).toContain('Loading');
+  });
+});
+
+describe('scrapeToMarkdown — SSRF egress guard (issue #575)', () => {
+  /** Resolves every hostname to loopback — the DNS-rebinding scenario. */
+  const rebindLookup = async (): Promise<readonly { address: string }[]> => [
+    { address: '127.0.0.1' },
+  ];
+
+  it('refuses an internal IP literal without fetching or rendering', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml() }));
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: richHtml('rendered'),
+      finalUrl: 'http://169.254.169.254/',
+      httpStatus: 200,
+    }));
+
+    await expect(
+      scrapeToMarkdown('http://169.254.169.254/latest/meta-data/', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/internal\/private address 169\.254\.169\.254/);
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    // Critical: the refusal must NOT degrade into the render escalation, which
+    // is a second, independent egress path.
+    expect(renderFn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a hostname that resolves to loopback (DNS rebinding) and does NOT escalate to render', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml() }));
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: richHtml('rendered'),
+      finalUrl: 'https://safe-looking.example/',
+      httpStatus: 200,
+    }));
+
+    await expect(
+      scrapeToMarkdown('https://safe-looking.example/', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: rebindLookup,
+      }),
+    ).rejects.toThrow(/internal\/private address 127\.0\.0\.1/);
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(renderFn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a redirect hop that lands on internal space', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ status: 302, headers: { location: 'http://169.254.169.254/latest/' } }),
+    );
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: richHtml('rendered'),
+      finalUrl: 'https://example.com/a',
+      httpStatus: 200,
+    }));
+
+    await expect(
+      scrapeToMarkdown('https://example.com/a', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/internal\/private address 169\.254\.169\.254/);
+
+    // Only the first (public) hop was requested.
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(renderFn).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the RENDER path redirects to internal space (post-navigation re-check)', async () => {
+    // Fetch yields thin content → escalation fires; the render then reports a
+    // finalUrl inside link-local space, which the post-check must catch.
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: SHELL_HTML }));
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: richHtml('rendered from internal'),
+      finalUrl: 'http://169.254.169.254/latest/meta-data/',
+      httpStatus: 200,
+    }));
+
+    await expect(
+      scrapeToMarkdown('https://example.com/a', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: freshSignal(),
+        lookupFn: publicLookup,
+      }),
+    ).rejects.toThrow(/internal\/private address 169\.254\.169\.254/);
+
+    expect(renderFn).toHaveBeenCalledOnce();
+  });
+
+  it('allows an internal target when AFK_WEB_ALLOW_PRIVATE_HOSTS=1', async () => {
+    vi.stubEnv('AFK_WEB_ALLOW_PRIVATE_HOSTS', '1');
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml('localhost body') }));
+
+    const out = await scrapeToMarkdown('http://127.0.0.1:3000/', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+      lookupFn: publicLookup,
+    });
+
+    expect(out.markdown).toContain('localhost body');
+    expect(fetchFn).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
   });
 });
