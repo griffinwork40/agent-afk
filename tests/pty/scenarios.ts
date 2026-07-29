@@ -547,6 +547,79 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
     },
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // #745 — bootstrap warnings must survive the startup screen clear.
+  //
+  // The headless test (interactive.boot-warnings.test.ts) proves the warning
+  // bytes are WRITTEN after the clear escape. Per docs/scrollback.md:9-13 that
+  // cannot prove they are actually READABLE afterwards: `\x1b[3J` is Erase
+  // Saved Lines, a property of the real terminal's scroll engine, not of our
+  // code. This scenario reproduces the true startup byte sequence in a real pty
+  // and asserts against the emulator buffer that the pre-clear write is GONE
+  // while the post-clear warning is present — the one assertion that would have
+  // caught the two prior fixes docs/scrollback.md:14-15 says shipped green.
+  // ─────────────────────────────────────────────────────────────────────────
+  'boot-warning-survives-clear': {
+    description: 'bootstrap warning emitted after the startup clear is readable; pre-clear write is erased',
+    cols: 80,
+    rows: 24,
+    ref: '#745 · interactive.ts startup clear vs. bootstrap warnings',
+    async drive({ stdout, stdin }): Promise<void> {
+      // Phase 1 — bootstrap: content written BEFORE the clear. This is what the
+      // agent-registry/MCP producers used to do (straight to stderr/stdout).
+      // Enough rows to push into scrollback, so the assertion covers scrollback
+      // erasure and not merely a viewport wipe.
+      for (let i = 0; i < 30; i++) stdout.write(`PRECLEAR_LINE_${i}\n`);
+
+      // Phase 2 — the startup clear, byte-identical to interactive.ts.
+      // `\x1b[3J` erases saved lines (scrollback); `\x1b[2J` the viewport;
+      // `\x1b[H` homes the cursor.
+      stdout.write('\x1b[3J\x1b[2J\x1b[H');
+
+      // Phase 3 — the pre-arm print block, in production order: banner, then
+      // the drained bootstrap warnings, then the trailing blank line.
+      const BANNER_ROWS = 11;
+      for (let i = 0; i < BANNER_ROWS; i++) stdout.write(`POSTCLEAR_BANNER_${i}\n`);
+      stdout.write('  [afk] agents: SHADOWWARN overrides built-in agent "research-agent"\n');
+      stdout.write('  [mcp] MCPWARN unknown key\n');
+      stdout.write('\n');
+
+      // Phase 4 — arm the compositor below the pre-arm content, exactly as
+      // runReplLoop does with `preArmAnchorRow`. The warnings must remain
+      // readable after the live frame installs and repaints, not be overwritten
+      // by a CUP-positioned frame that mis-measured the anchor row.
+      const anchorRow = BANNER_ROWS + 3; // banner + 2 warnings + blank
+      const statusLine = wireProductionFooter(stdout, 'M');
+      const c = new TerminalCompositor({
+        stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow,
+      });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setOverlay('preflight-line');
+      c.setOverlay('');
+      c.commitAbove('FIRST_TURN_OUTPUT');
+      ix.repaint();
+      await settle();
+    },
+    expect: {
+      // The bug, inverted: pre-clear writes are unrecoverable. If any survives,
+      // the scenario's premise (and the whole issue) is wrong — that would mean
+      // the warnings were never actually lost and this fix is unnecessary.
+      absent: ['PRECLEAR_LINE_0', 'PRECLEAR_LINE_29'],
+      // The fix: both drained warnings are readable in the live buffer after
+      // the clear, and survive the compositor arming + first commit over them.
+      inViewport: ['SHADOWWARN', 'MCPWARN'],
+      // Exactly once — a drain that re-printed on every repaint would spam.
+      exactlyOnce: ['SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
+      // Warnings sit above the first turn's output, below the banner.
+      order: [
+        ['POSTCLEAR_BANNER_10', 'SHADOWWARN'],
+        ['SHADOWWARN', 'MCPWARN'],
+        ['MCPWARN', 'FIRST_TURN_OUTPUT'],
+      ],
+    },
+  },
 };
 
 export type ScenarioName = keyof typeof SCENARIOS;

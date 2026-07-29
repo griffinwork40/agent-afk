@@ -380,6 +380,9 @@ describe('interactive command exit teardown', () => {
         // Stub registry: the teardown path calls cancelAll() during normal
         // session close. Real registry is exercised by bgsub.test.ts.
         backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        // #745: interactive.ts drains this after the startup screen clear.
+        // Required on InteractiveCtx — a fixture omitting it throws at the drain.
+        bootWarnings: [],
       })),
     }));
     vi.doMock('./commands/interactive/transcript.js', () => ({
@@ -537,6 +540,9 @@ describe('interactive worktree flag', () => {
       rl,
       options,
       backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+      // #745: interactive.ts drains this after the startup screen clear.
+      // Required on InteractiveCtx — a fixture omitting it throws at the drain.
+      bootWarnings: [],
     }));
   }
 
@@ -707,6 +713,9 @@ describe('interactive worktree flag', () => {
         rl,
         options: { model: 'claude-opus-4', maxTurns: '10', debug: false, worktree: 'summary-test' },
         backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        // #745: interactive.ts drains this after the startup screen clear.
+        // Required on InteractiveCtx — a fixture omitting it throws at the drain.
+        bootWarnings: [],
       })),
     }));
 
@@ -810,6 +819,9 @@ describe('interactive worktree flag', () => {
         rl,
         options: { model: 'sonnet', maxTurns: '10', debug: false, worktree: 'feat-spec' },
         backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        // #745: interactive.ts drains this after the startup screen clear.
+        // Required on InteractiveCtx — a fixture omitting it throws at the drain.
+        bootWarnings: [],
       })),
     }));
 
@@ -932,6 +944,9 @@ describe('interactive signal-handler wiring (PR #486)', () => {
         rl,
         options: { model: 'sonnet', maxTurns: '10', debug: false },
         backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        // #745: interactive.ts drains this after the startup screen clear.
+        // Required on InteractiveCtx — a fixture omitting it throws at the drain.
+        bootWarnings: [],
       })),
     }));
 

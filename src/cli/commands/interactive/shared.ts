@@ -372,6 +372,19 @@ export interface InteractiveCtx {
   resumeTarget?: ResolvedResumeTarget;
   teardownTrustedSkillEvents?: () => void;
   /**
+   * Warnings produced DURING bootstrap that must survive the interactive
+   * startup screen clear (`\x1b[3J\x1b[2J\x1b[H`, interactive.ts). `\x1b[3J`
+   * is Erase Saved Lines — it wipes scrollback too, so anything bootstrap
+   * writes straight to stderr is unrecoverable even by scrolling up (#745).
+   *
+   * Producers push here instead of printing; `interactive.ts` drains this
+   * AFTER the clear, next to the update-notice re-emit that solves the same
+   * problem for pre-`program.parse()` output. Empty on every other surface —
+   * `chat`/`daemon`/`telegram` never clear the screen, so their producers keep
+   * printing directly and are unaffected.
+   */
+  bootWarnings: string[];
+  /**
    * MCP manager — owns connections to every server in `~/.afk/config/mcp.json`.
    * Lifetime is tied to the REPL session: connected at bootstrap, disconnected
    * by the teardown path in `interactive.ts`. Subagents share this reference

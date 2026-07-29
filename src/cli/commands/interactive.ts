@@ -759,6 +759,22 @@ export function registerInteractiveCommand(program: Command): void {
         if (ctx.resumeTarget) {
           printResumeBanner(ctx.stats, ctx.completionWriter);
         }
+        // Bootstrap warnings (#745). `bootstrapSession` above ran BEFORE the
+        // screen clear, so any producer that printed directly — the
+        // agent-registry built-in-shadow warning, MCP config warnings — had its
+        // output erased, scrollback included (`\x1b[3J` = Erase Saved Lines).
+        // Those producers now accumulate into ctx.bootWarnings and are emitted
+        // here instead: after the clear, inside the pre-arm block so the
+        // newlines count into preArmAnchorRow and the compositor arms BELOW
+        // them. Printed LAST in the block — a built-in-shadow warning means a
+        // read-only verifier agent may now be write-capable, so it sits closest
+        // to the prompt rather than buried above the banner.
+        if (ctx.bootWarnings.length > 0) {
+          for (const w of ctx.bootWarnings) {
+            console.warn(palette.warning(`  ${w}`));
+          }
+          ctx.bootWarnings.length = 0;
+        }
         console.log();
       } finally {
         process.stdout.write = origStdoutWrite;
