@@ -28,6 +28,7 @@ import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'fs';
 
 function mockGrants(): GrantManager {
   return {
@@ -589,6 +590,54 @@ describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () =>
     expect(
       hook(ctx('python -c "import json; json.load(open(\'~/.afk/config/mcp.json\'))"')).decision,
     ).not.toBe('block');
+  });
+});
+
+describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const relocated = join(tmpdir(), 'agent-afk-relocated-home');
+
+  afterEach(() => {
+    delete process.env['AFK_HOME'];
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('blocks the configured absolute spelling and $AFK_HOME spelling', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx(`cat ${relocated}/config/afk.env`)).decision).toBe('block');
+    expect(hook(ctx('cat "$AFK_HOME/config/afk.env"')).decision).toBe('block');
+  });
+
+  it('keeps relocated mcp.json readable in both spellings', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx(`cat ${relocated}/config/mcp.json`)).decision).not.toBe('block');
+    expect(hook(ctx('cat "$AFK_HOME/config/mcp.json"')).decision).not.toBe('block');
+  });
+
+  it('keeps the relocated carve-out exact-file only', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx(`cat ${relocated}/config/mcp.json.bak`)).decision).toBe('block');
+    expect(hook(ctx('cat "$AFK_HOME/config/mcp.json/child"')).decision).toBe('block');
+  });
+
+  it('blocks the configured spelling when AFK_HOME is a symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'afk-home-symlink-'));
+    const target = join(root, 'target');
+    const link = join(root, 'configured');
+    mkdirSync(join(target, 'config'), { recursive: true });
+    symlinkSync(target, link, 'dir');
+    process.env['AFK_HOME'] = link;
+
+    try {
+      expect(hook(ctx(`cat ${link}/config/afk.env`)).decision).toBe('block');
+      expect(hook(ctx('cat "$AFK_HOME/config/afk.env"')).decision).toBe('block');
+      expect(hook(ctx(`cat ${link}/config/mcp.json`)).decision).not.toBe('block');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -85,6 +85,7 @@ import {
   parseReadDenylistEntries,
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
+import { getAfkHome } from '../../../paths.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -199,7 +200,8 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // is wired (headless), so check 2 fails open there and check 1 falls back to
     // the lexical signal.
     const home = homedir();
-    const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home), home);
+    const afkHome = configuredAfkHome();
+    const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home, afkHome), home, afkHome);
     const restrictedSubstrings = grantManager
       ? deriveRestrictedSubstrings(grantManager.getGrants())
       : [];
@@ -285,10 +287,25 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
  * variable-assembled paths (`H=$HOME; …$H/…`) are intentionally out of scope
  * (see module-header threat model). Shared by both checks.
  */
-function normalizeHomeRefs(command: string, home: string): string {
-  return command
+function normalizeHomeRefs(command: string, home: string, afkHome: string | undefined): string {
+  const normalized = afkHome === undefined ? command : command.replace(/\$AFK_HOME/g, afkHome);
+  return normalized
     .replace(/\$HOME/g, home)
     .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
+}
+
+/** Return AFK_HOME's configured absolute spelling, or nothing when malformed. */
+function configuredAfkHome(): string | undefined {
+  try {
+    return getAfkHome();
+  } catch {
+    return undefined;
+  }
+}
+
+function relocatedAfkSensitiveRoots(): string[] {
+  const afkHome = configuredAfkHome();
+  return afkHome === undefined ? [] : [path.join(afkHome, 'config')];
 }
 
 /** Placeholder left behind by {@link scrubAllowlistedRefs}. Deliberately free of
@@ -312,11 +329,20 @@ function escapeRegExp(literal: string): string {
  * unreachable while normalization runs first, and is kept as the one spelling
  * that would silently stop being carved out if that order ever changed.
  */
-function allowlistedFileForms(home: string): string[] {
-  return READ_ALLOWLIST_REL.flatMap((rel) => {
+function allowlistedFileForms(home: string, afkHome: string | undefined): string[] {
+  const homeForms = READ_ALLOWLIST_REL.flatMap((rel) => {
     if (isReadDenied(path.join(home, rel)).denied) return [];
     return [path.join(home, rel), `~/${rel}`, `$HOME/${rel}`];
   });
+  if (afkHome === undefined) return homeForms;
+
+  const afkForms = READ_ALLOWLIST_REL.flatMap((rel) => {
+    if (!rel.startsWith('.afk/')) return [];
+    const relocated = path.join(afkHome, rel.slice('.afk/'.length));
+    if (isReadDenied(relocated).denied) return [];
+    return [relocated, `$AFK_HOME/${rel.slice('.afk/'.length)}`];
+  });
+  return [...new Set([...homeForms, ...afkForms])];
 }
 
 /**
@@ -334,9 +360,9 @@ function allowlistedFileForms(home: string): string[] {
  * the only text carrying the denied enclosing root. Dropping this guard
  * entirely would turn one readable file into a readable directory.
  */
-function scrubAllowlistedRefs(text: string, home: string): string {
+function scrubAllowlistedRefs(text: string, home: string, afkHome: string | undefined): string {
   let out = text;
-  for (const form of allowlistedFileForms(home)) {
+  for (const form of allowlistedFileForms(home, afkHome)) {
     const exactRef = new RegExp(`${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])`, 'g');
     out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);
   }
@@ -468,6 +494,7 @@ export function deriveRestrictedSubstrings(grants: {
       ...builtinBashSensitiveRoots(),
       ...getReadDenylist(),
       ...readDenylistExtrasAsSpelled(),
+      ...relocatedAfkSensitiveRoots(),
     ]),
   ];
 
