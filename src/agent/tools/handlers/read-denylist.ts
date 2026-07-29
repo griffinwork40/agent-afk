@@ -41,7 +41,7 @@
  */
 
 import { env } from '../../../config/env.js';
-import { basename, dirname, join, resolve } from 'path';
+import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 
@@ -267,6 +267,25 @@ function resolveLists(): {
 export function getReadDenylist(): readonly string[] {
   const { builtins, extras } = resolveLists();
   return [...builtins, ...extras];
+}
+
+/**
+ * Denylist entries INSIDE `root`, as root-relative POSIX segments (glob-ready).
+ *
+ * Invariant: the normalization CHOKEPOINT for descendant-pruning callers
+ * (`grep.ts`). `getReadDenylist()` entries are always `safeRealpath`-resolved,
+ * but a caller's own root (e.g. `resolveAndContain`'s return value) typically
+ * is NOT. macOS symlinks `/tmp` -> `/private/tmp`, so an unresolved root vs. a
+ * resolved denylist via raw `path.relative` never lines up and pruning
+ * silently no-ops (grep.test.ts "prunes protected descendants"). Resolving
+ * `root` HERE with the same `safeRealpath` makes both sides symmetric.
+ */
+export function getReadDenylistDescendants(root: string): string[] {
+  const realRoot = safeRealpath(resolve(root));
+  const rels = getReadDenylist().map((blocked) => relative(realRoot, blocked));
+  return rels
+    .filter((rel) => rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`))
+    .map((rel) => rel.split(sep).join('/'));
 }
 
 /**
