@@ -161,7 +161,12 @@ export class PlaywrightProvider implements BrowserProvider {
       navError !== null && (landedUrl === '' || landedUrl === 'about:blank');
 
     if (!neverNavigated) {
-      const blocked = await recheckLandedUrl(page, this.config, input.url);
+      const blocked = await recheckLandedUrl(
+        page,
+        this.config,
+        input.url,
+        () => this.close({ sessionId }),
+      );
       if (blocked !== null) {
         return blocked;
       }
@@ -335,7 +340,12 @@ export class PlaywrightProvider implements BrowserProvider {
 
     // Check post-action URL for policy violations. Shared with open() so the
     // two navigation paths cannot drift apart — see domain-recheck.ts.
-    const blocked = await recheckLandedUrl(page, this.config, preActionUrl);
+    const blocked = await recheckLandedUrl(
+      page,
+      this.config,
+      preActionUrl,
+      () => this.close({ sessionId }),
+    );
     if (blocked !== null) {
       return blocked;
     }

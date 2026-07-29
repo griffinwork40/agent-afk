@@ -57,6 +57,8 @@ export interface RecheckablePage {
  * @param config     Browser config carrying the allow/block lists.
  * @param clearedUrl A URL already cleared by this policy — the pre-navigation
  *                   target for `open()`, the pre-action URL for `act()`.
+ * @param invalidateSession Closes the session if rollback fails, preventing a
+ *                          later read from observing the blocked page.
  * @returns `BlockedByPolicy` when the landed URL is refused (after a
  *          best-effort `goBack()`), or `null` when the tab may be observed.
  */
@@ -64,6 +66,7 @@ export async function recheckLandedUrl(
   page: RecheckablePage,
   config: BrowserConfig,
   clearedUrl: string,
+  invalidateSession: () => Promise<void>,
 ): Promise<BlockedByPolicy | null> {
   const landedUrl = page.url();
 
@@ -77,10 +80,14 @@ export async function recheckLandedUrl(
     return null;
   }
 
-  // Navigate back best-effort — do not throw if it fails. The refusal is
-  // reported either way; leaving the tab parked on a blocked host is the
-  // lesser evil compared to masking the policy outcome with a goBack error.
-  await page.goBack().catch(() => { /* best-effort */ });
+  // If rollback fails, invalidate the session before returning the refusal.
+  // Otherwise a later observe() or screenshot() could read the blocked page
+  // without passing through this post-navigation policy check.
+  try {
+    await page.goBack();
+  } catch {
+    await invalidateSession();
+  }
 
   return {
     outcome: 'blocked_by_policy',

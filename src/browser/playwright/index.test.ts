@@ -365,6 +365,25 @@ describe('open()', () => {
     expect(provider.describe('sess1')?.url).toBeNull();
   });
 
+  it('closes the session when rollback from a blocked redirect fails', async () => {
+    asMock(ctx.page?.['url']).mockReturnValue('https://evil.com/secrets');
+    asMock(ctx.page?.['goBack']).mockRejectedValue(new Error('rollback timed out'));
+    asMock(enforceDomainPolicy)
+      .mockReturnValueOnce({ allowed: true })
+      .mockReturnValue({ allowed: false, reason: 'not in AFK_BROWSER_ALLOWED_DOMAINS' });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://allowed.example/redirect',
+    });
+
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy' });
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('sess1');
+    expect(provider.describe('sess1')).toBeNull();
+    expect(observePage).not.toHaveBeenCalled();
+  });
+
   it('proceeds normally when an allowed URL redirects to another allowed domain (#576)', async () => {
     asMock(ctx.page?.['url']).mockReturnValue('https://also-allowed.example/landed');
     const obs = makeStubObservation({ url: 'https://also-allowed.example/landed' });

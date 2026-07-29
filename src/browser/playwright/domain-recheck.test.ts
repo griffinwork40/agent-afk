@@ -38,6 +38,10 @@ function makePage(landedUrl: string): RecheckablePage & {
   };
 }
 
+function recheck(page: RecheckablePage, config: BrowserConfig, clearedUrl: string) {
+  return recheckLandedUrl(page, config, clearedUrl, vi.fn().mockResolvedValue(undefined));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -49,7 +53,7 @@ describe('recheckLandedUrl', () => {
     const page = makePage('https://example.com/page');
     const config = makeConfig({ blockedDomains: ['example.com'] });
 
-    const result = await recheckLandedUrl(page, config, 'https://example.com/page');
+    const result = await recheck(page, config, 'https://example.com/page');
 
     expect(result).toBeNull();
     expect(page.goBack).not.toHaveBeenCalled();
@@ -59,7 +63,7 @@ describe('recheckLandedUrl', () => {
     const page = makePage('https://b.example/landed');
     const config = makeConfig({ allowedDomains: ['a.example', 'b.example'] });
 
-    const result = await recheckLandedUrl(page, config, 'https://a.example/start');
+    const result = await recheck(page, config, 'https://a.example/start');
 
     expect(result).toBeNull();
     expect(page.goBack).not.toHaveBeenCalled();
@@ -69,7 +73,7 @@ describe('recheckLandedUrl', () => {
     const page = makePage('https://evil.com/landed');
     const config = makeConfig({ allowedDomains: ['a.example'] });
 
-    const result = await recheckLandedUrl(page, config, 'https://a.example/start');
+    const result = await recheck(page, config, 'https://a.example/start');
 
     expect(result).toEqual({
       outcome: 'blocked_by_policy',
@@ -82,7 +86,7 @@ describe('recheckLandedUrl', () => {
     const page = makePage('https://tracker.evil.com/pixel');
     const config = makeConfig({ blockedDomains: ['*.evil.com'] });
 
-    const result = await recheckLandedUrl(page, config, 'https://a.example/start');
+    const result = await recheck(page, config, 'https://a.example/start');
 
     expect(result).toMatchObject({
       outcome: 'blocked_by_policy',
@@ -95,26 +99,30 @@ describe('recheckLandedUrl', () => {
     const page = makePage('https://evil.com/landed');
     const config = makeConfig({ allowedDomains: ['a.example'] });
 
-    await recheckLandedUrl(page, config, 'https://a.example/start');
+    await recheck(page, config, 'https://a.example/start');
 
     expect(page.goBack).toHaveBeenCalledTimes(1);
   });
 
-  it('still returns the refusal when goBack() itself rejects', async () => {
+  it('invalidates the session and still returns the refusal when goBack() rejects', async () => {
     const page = makePage('https://evil.com/landed');
     page.goBack.mockRejectedValue(new Error('navigation failed'));
     const config = makeConfig({ allowedDomains: ['a.example'] });
 
-    // A goBack failure must not mask the policy outcome.
+    const invalidateSession = vi.fn().mockResolvedValue(undefined);
+
+    // A goBack failure must not mask the policy outcome or leave a readable
+    // session parked on the blocked page.
     await expect(
-      recheckLandedUrl(page, config, 'https://a.example/start'),
+      recheckLandedUrl(page, config, 'https://a.example/start', invalidateSession),
     ).resolves.toMatchObject({ outcome: 'blocked_by_policy' });
+    expect(invalidateSession).toHaveBeenCalledTimes(1);
   });
 
   it('returns null for any landed host when both lists are empty (fail-open)', async () => {
     const page = makePage('https://anything.example/landed');
 
-    const result = await recheckLandedUrl(page, makeConfig(), 'https://a.example/start');
+    const result = await recheck(page, makeConfig(), 'https://a.example/start');
 
     expect(result).toBeNull();
   });
@@ -122,7 +130,7 @@ describe('recheckLandedUrl', () => {
   it('blocks an unparseable landed URL', async () => {
     const page = makePage('not a url');
 
-    const result = await recheckLandedUrl(page, makeConfig(), 'https://a.example/start');
+    const result = await recheck(page, makeConfig(), 'https://a.example/start');
 
     expect(result).toMatchObject({
       outcome: 'blocked_by_policy',
