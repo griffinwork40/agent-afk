@@ -14,6 +14,10 @@
  * name into a write-capable agent. The fix routes such producers into
  * `ctx.bootWarnings` and drains them after the clear.
  *
+ * Two exits out of bootstrap must both surface the buffer: the success path
+ * drains after the clear, and the abort path drains in `interactive.ts`'s catch
+ * before `handleCommandError` exits (see the `bootstrap abort path` block).
+ *
  * These tests assert ORDER — that the warning bytes are written AFTER the clear
  * escape — via `mock.invocationCallOrder`, the same technique
  * `interactive-lifecycle.test.ts` uses for the clearScreen/compositor ordering.
@@ -31,6 +35,12 @@ import { Command } from 'commander';
 
 const mockBootstrapSession = vi.fn();
 const mockRunReplLoop = vi.fn();
+// Stands in for the real `never`-returning handler, which calls process.exit.
+// Throwing instead makes the abort path observable AND preserves the property
+// the drain ordering depends on: nothing after this call runs.
+const mockHandleCommandError = vi.fn((err: unknown): never => {
+  throw err instanceof Error ? err : new Error(String(err));
+});
 
 // ---------------------------------------------------------------------------
 // Mocks — hoisted above imports. Mirrors interactive.resume.test.ts's thin
@@ -91,9 +101,7 @@ vi.mock('../update-checker.js', () => ({
 }));
 
 vi.mock('../errors/index.js', () => ({
-  handleCommandError: vi.fn((err: unknown): never => {
-    throw err instanceof Error ? err : new Error(String(err));
-  }),
+  get handleCommandError() { return mockHandleCommandError; },
 }));
 
 vi.mock('ora', () => ({
@@ -160,7 +168,10 @@ function makeCtx(bootWarnings: string[]): Record<string, unknown> {
  * evaluated across the two together — exactly why `interactive.ts` wraps both
  * when measuring `preArmAnchorRow`.
  */
-async function runAndCapture(bootWarnings: string[]): Promise<string[]> {
+async function runAndCapture(
+  bootWarnings: string[],
+  opts?: { failBootstrap?: Error },
+): Promise<string[]> {
   // `interactive.ts` installs SIGINT/SIGTERM/SIGHUP handlers before the clear
   // and unregisters them only via its cleanup path, which never runs here (we
   // short-circuit at runReplLoop). Snapshot the pre-existing listeners so the
@@ -183,7 +194,22 @@ async function runAndCapture(bootWarnings: string[]): Promise<string[]> {
     writes.push(a.map(String).join(' '));
   });
 
-  mockBootstrapSession.mockResolvedValue(makeCtx(bootWarnings));
+  if (opts?.failBootstrap !== undefined) {
+    // Reproduces the real abort shape: producers push into the CALLER-owned
+    // bucket (`extras.bootWarnings`), and only then does bootstrap throw — e.g.
+    // an MCP config warning collected just before `McpManager.fromConfig`
+    // rejects on an `alwaysLoad` server. No ctx is ever returned, so the
+    // post-clear drain is unreachable by construction.
+    const failure = opts.failBootstrap;
+    mockBootstrapSession.mockImplementation(
+      async (_options: unknown, extras?: { bootWarnings?: string[] }) => {
+        for (const w of bootWarnings) extras?.bootWarnings?.push(w);
+        throw failure;
+      },
+    );
+  } else {
+    mockBootstrapSession.mockResolvedValue(makeCtx(bootWarnings));
+  }
   // Stop the boot chain right after the pre-arm print block.
   mockRunReplLoop.mockRejectedValue(new Error('test-shortcircuit'));
 
@@ -218,6 +244,8 @@ describe('afk interactive — bootstrap warnings survive the startup clear (#745
   beforeEach(() => {
     mockBootstrapSession.mockReset();
     mockRunReplLoop.mockReset();
+    // `mockClear`, not `mockReset` — the throwing implementation must survive.
+    mockHandleCommandError.mockClear();
   });
 
   afterEach(() => {
@@ -276,5 +304,52 @@ describe('afk interactive — bootstrap warnings survive the startup clear (#745
     // interactive.ts empties the array in place after printing; the REPL loop
     // and any later reader must see nothing left to emit.
     expect(bootWarnings).toHaveLength(0);
+  });
+
+  /**
+   * Regression found in review of PR #751: the post-clear drain sits ~360 lines
+   * after the `bootstrapSession` await. When bootstrap THROWS, `ctx` is never
+   * assigned and `handleCommandError` exits the process, so every warning
+   * buffered before the throw was destroyed — silently, with no clear to blame.
+   *
+   * That was a strict regression, not an inherited gap: before #751 these
+   * producers wrote to stderr the moment they fired, and the abort path never
+   * reaches the clear, so the diagnostic stayed on screen next to the failure
+   * it explained. The fix hoists the buffer into `interactive.ts` and drains it
+   * in the catch, which is why these tests exercise the CALLER-owned bucket.
+   */
+  describe('bootstrap abort path', () => {
+    it('emits warnings buffered before a bootstrap failure', async () => {
+      const writes = await runAndCapture(
+        ['[mcp] server "foo": unknown key "cmd"'],
+        { failBootstrap: new Error('mcp server "foo" (alwaysLoad) failed to connect') },
+      );
+
+      // `handleCommandError` is mocked to throw, mirroring the real `never`
+      // return: if these bytes are present at all, they were written BEFORE the
+      // process would have exited. Presence is the ordering proof on this path.
+      expect(writes.some((w) => w.includes('unknown key "cmd"'))).toBe(true);
+      // Proves we actually went down the abort path rather than succeeding.
+      expect(mockHandleCommandError).toHaveBeenCalledTimes(1);
+    });
+
+    it('never reaches the screen clear, so immediate emission is safe', async () => {
+      const writes = await runAndCapture(['[mcp] pre-throw'], {
+        failBootstrap: new Error('boom'),
+      });
+      // `\x1b[3J` is the only reason buffering was needed in the first place.
+      // It does not run here, so nothing erases the drained warning — and no
+      // second drain exists on this path to double-print it.
+      expect(writes.some((w) => w.includes(CLEAR))).toBe(false);
+      expect(writes.filter((w) => w.includes('pre-throw'))).toHaveLength(1);
+    });
+
+    it('prints nothing when bootstrap fails before any producer ran', async () => {
+      const writes = await runAndCapture([], { failBootstrap: new Error('bad --model') });
+      // Absence of noise: the drain must add no header or blank line of its own
+      // to the far more common "bad flag" failure.
+      expect(writes.some((w) => w.includes('[mcp]'))).toBe(false);
+      expect(mockHandleCommandError).toHaveBeenCalledTimes(1);
+    });
   });
 });

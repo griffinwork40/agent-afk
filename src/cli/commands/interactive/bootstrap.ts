@@ -145,7 +145,8 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
 /**
  * Build the session context from CLI options. Throws with a user-facing
  * message when option parsing fails — caller is responsible for spinner
- * teardown and exit code.
+ * teardown, exit code, and draining any `extras.bootWarnings` it supplied
+ * (warnings pushed before the throw never reach the returned ctx).
  *
  * Side effects: constructs an SDK AgentSession (opens a subprocess),
  * registers slash commands, creates a non-terminal readline interface on
@@ -154,7 +155,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
  */
 export async function bootstrapSession(
   options: CliOptions,
-  extras?: { cwd?: string },
+  extras?: { cwd?: string; bootWarnings?: string[] },
 ): Promise<InteractiveCtx> {
   // Witness layer: capture true bootstrap entry time. The trace writer is
   // created a few lines below, so bootstrap_start (writer-ready marker) and
@@ -323,7 +324,14 @@ export async function bootstrapSession(
   // is destroyed — `\x1b[3J` erases scrollback, not just the viewport — so
   // producers accumulate into this bucket and `interactive.ts` drains it after
   // the clear. See `InteractiveCtx.bootWarnings` (#745).
-  const bootWarnings: string[] = [];
+  //
+  // Adopted from the caller when supplied, because this function can throw
+  // AFTER producers have pushed (`McpManager.fromConfig` below rejects for an
+  // `alwaysLoad` server that fails to connect) and a thrown bootstrap returns
+  // no ctx to drain — the warnings would be silently destroyed. The REPL passes
+  // its own array so its catch block can still print them. Callers that don't
+  // care get a local bucket and the prior behaviour.
+  const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
   // Named-agent registry: session-static scan (builtin + user ~/.afk/agents
   // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch

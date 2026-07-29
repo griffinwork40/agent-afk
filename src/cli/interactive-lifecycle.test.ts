@@ -171,7 +171,88 @@ describe('interactive bootstrap status line hooks', () => {
  * suggest.ts:355 forwards `ctx.baseUrl` as an `openaiBaseUrl` provider hint, so
  * `suggestBaseUrl` MUST carry `openaiBaseUrl`, never `baseUrl`.
  */
-describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', () => {
+// Mocks shared with the status-line test above — enough to let
+// bootstrapSession reach the InteractiveCtx construction without a real
+// session/TTY. `loadConfig` is left unmocked here so each caller can override
+// it per-case. Module-scope so more than one describe can drive the REAL
+// bootstrapSession without duplicating the mock wall.
+function applyCommonMocks(): void {
+  const rl = { on: vi.fn(), close: vi.fn() };
+  vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  vi.doMock('node:readline', () => ({ createInterface: vi.fn(() => rl) }));
+  vi.doMock('../agent/session.js', () => ({
+    AgentSession: class MockAgentSession {
+      close = vi.fn(async () => undefined);
+      interrupt = vi.fn(async () => undefined);
+    },
+  }));
+  vi.doMock('../agent/default-hook-registry.js', () => ({
+    createDefaultHookRegistry: vi.fn(() => ({
+      // register stub: bootstrap now registers the terminal-state gate (#237)
+      // on the 'Stop' event, so the mock registry must expose `.register`.
+      registry: { register: vi.fn() },
+      memoryStore: { close: vi.fn() },
+      // Real factory always returns this ref (default-hook-registry.ts);
+      // bootstrap.ts writes `.current` once the provider exists, so the mock
+      // must include it or the assignment throws "Cannot set properties of
+      // undefined". Mirrors the status-line test mock above.
+      pathApprovalGrantRef: { current: undefined },
+    })),
+  }));
+  vi.doMock('../agent/memory/index.js', () => ({
+    MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+    injectHotMemory: vi.fn((config: unknown) => config),
+    memoryToolSchemas: [],
+    MEMORY_TOOL_NAMES: [],
+    createMemoryHandlers: vi.fn(() => new Map()),
+  }));
+  vi.doMock('./shared-helpers.js', () => ({
+    parseThinking: vi.fn(() => undefined),
+    parseEffort: vi.fn(() => undefined),
+    parseMaxOutputTokens: vi.fn(() => undefined),
+    parseProvider: vi.fn(() => undefined),
+    getApiKey: vi.fn(() => 'test-key'),
+    getApiKeyForModel: vi.fn(() => 'test-key'),
+    getModel: vi.fn(() => 'sonnet'),
+    getThinking: vi.fn(() => undefined),
+    getEffort: vi.fn(() => undefined),
+    getMaxOutputTokens: vi.fn(() => undefined),
+    getMaxToolUseIterations: vi.fn(() => undefined),
+    getDefaultSubagentModel: vi.fn(() => 'sonnet'),
+    findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
+    loadSystemPrompt: vi.fn(() => undefined),
+    loadConfigSystemPrompt: vi.fn(() => undefined),
+    resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
+    // Required since bootstrap.ts now calls isGrantManager — return false so
+    // these tests don't care about grant wiring.
+    isGrantManager: vi.fn(() => false),
+  }));
+  vi.doMock('./status-line.js', () => ({
+    StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
+  }));
+  vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
+  vi.doMock('./slash/writer.js', () => ({
+    createConsoleWriter: vi.fn(() => ({
+      line: vi.fn(), raw: vi.fn(), success: vi.fn(),
+      info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+    })),
+  }));
+}
+
+/**
+ * Regression (PR #751 review): `bootstrapSession` must ADOPT a caller-supplied
+ * `bootWarnings` array rather than allocating its own.
+ *
+ * `interactive.ts` owns the bucket so it can still drain it when bootstrap
+ * throws — a thrown bootstrap returns no ctx, and the post-clear drain is
+ * unreachable. If bootstrap silently allocated a private array instead, the
+ * success path would look identical while the abort path lost every warning
+ * again. Every other test in this area mocks `bootstrapSession` wholesale, so
+ * this identity assertion is the only thing standing between that refactor and
+ * a silent repeat of the bug (`docs/scrollback.md`: two prior fixes in this
+ * domain shipped green while broken).
+ */
+describe('interactive bootstrap — adopts the caller-owned bootWarnings bucket', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
@@ -181,71 +262,46 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
     vi.restoreAllMocks();
   });
 
-  // Mocks shared with the status-line test above — enough to let
-  // bootstrapSession reach the InteractiveCtx construction without a real
-  // session/TTY. `loadConfig` is the subject: it is overridden per-case.
-  function applyCommonMocks(): void {
-    const rl = { on: vi.fn(), close: vi.fn() };
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    vi.doMock('node:readline', () => ({ createInterface: vi.fn(() => rl) }));
-    vi.doMock('../agent/session.js', () => ({
-      AgentSession: class MockAgentSession {
-        close = vi.fn(async () => undefined);
-        interrupt = vi.fn(async () => undefined);
-      },
-    }));
-    vi.doMock('../agent/default-hook-registry.js', () => ({
-      createDefaultHookRegistry: vi.fn(() => ({
-        // register stub: bootstrap now registers the terminal-state gate (#237)
-        // on the 'Stop' event, so the mock registry must expose `.register`.
-        registry: { register: vi.fn() },
-        memoryStore: { close: vi.fn() },
-        // Real factory always returns this ref (default-hook-registry.ts);
-        // bootstrap.ts writes `.current` once the provider exists, so the mock
-        // must include it or the assignment throws "Cannot set properties of
-        // undefined". Mirrors the status-line test mock above.
-        pathApprovalGrantRef: { current: undefined },
-      })),
-    }));
-    vi.doMock('../agent/memory/index.js', () => ({
-      MemoryStore: vi.fn(() => ({ close: vi.fn() })),
-      injectHotMemory: vi.fn((config: unknown) => config),
-      memoryToolSchemas: [],
-      MEMORY_TOOL_NAMES: [],
-      createMemoryHandlers: vi.fn(() => new Map()),
-    }));
-    vi.doMock('./shared-helpers.js', () => ({
-      parseThinking: vi.fn(() => undefined),
-      parseEffort: vi.fn(() => undefined),
-      parseMaxOutputTokens: vi.fn(() => undefined),
-      parseProvider: vi.fn(() => undefined),
-      getApiKey: vi.fn(() => 'test-key'),
-      getApiKeyForModel: vi.fn(() => 'test-key'),
-      getModel: vi.fn(() => 'sonnet'),
-      getThinking: vi.fn(() => undefined),
-      getEffort: vi.fn(() => undefined),
-      getMaxOutputTokens: vi.fn(() => undefined),
-      getMaxToolUseIterations: vi.fn(() => undefined),
-      getDefaultSubagentModel: vi.fn(() => 'sonnet'),
-      findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
-      loadSystemPrompt: vi.fn(() => undefined),
-      loadConfigSystemPrompt: vi.fn(() => undefined),
-      resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
-      // Required since bootstrap.ts now calls isGrantManager — return false so
-      // these tests don't care about grant wiring.
-      isGrantManager: vi.fn(() => false),
-    }));
-    vi.doMock('./status-line.js', () => ({
-      StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
-    }));
-    vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
-    vi.doMock('./slash/writer.js', () => ({
-      createConsoleWriter: vi.fn(() => ({
-        line: vi.fn(), raw: vi.fn(), success: vi.fn(),
-        info: vi.fn(), warn: vi.fn(), error: vi.fn(),
-      })),
-    }));
-  }
+  it('exposes the caller-supplied array as ctx.bootWarnings (same instance)', async () => {
+    applyCommonMocks();
+    vi.doMock('./config.js', () => ({ loadConfig: vi.fn(() => ({})) }));
+
+    const bootWarnings: string[] = [];
+    const { bootstrapSession } = await import('./commands/interactive/bootstrap.js');
+    const ctx = await bootstrapSession({ model: 'sonnet', maxTurns: '10' }, { bootWarnings });
+
+    // Identity, not deep equality: two empty arrays are `toEqual`-equal, so
+    // only `toBe` can distinguish adoption from a private allocation.
+    expect(ctx.bootWarnings).toBe(bootWarnings);
+
+    // And the sharing is live in the direction that matters — a producer
+    // pushing inside bootstrap is visible to the caller's catch block.
+    ctx.bootWarnings.push('[mcp] pushed by a producer');
+    expect(bootWarnings).toEqual(['[mcp] pushed by a producer']);
+  });
+
+  it('still allocates its own bucket when the caller supplies none', async () => {
+    applyCommonMocks();
+    vi.doMock('./config.js', () => ({ loadConfig: vi.fn(() => ({})) }));
+
+    const { bootstrapSession } = await import('./commands/interactive/bootstrap.js');
+    const ctx = await bootstrapSession({ model: 'sonnet', maxTurns: '10' });
+
+    // Backward compatibility: `extras.bootWarnings` is optional, so non-REPL
+    // callers keep a working (if unrecoverable-on-throw) bucket.
+    expect(ctx.bootWarnings).toEqual([]);
+  });
+});
+
+describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('uses cliConfig.openaiBaseUrl when only openaiBaseUrl is configured', async () => {
     applyCommonMocks();
@@ -583,7 +639,9 @@ describe('interactive worktree flag', () => {
     // slot). When no env var or config sets it, the slot is undefined.
     expect(setupWorktree).toHaveBeenCalledWith('feat-spec', undefined);
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
-    expect(bootstrapMock.mock.calls[0]![1]).toEqual({ cwd: '/tmp/afk-wt/feat-spec' });
+    // `toMatchObject`, not `toEqual`: `extras` also carries the boot-warning
+    // bucket (#745/#751). What this pins is the worktree cwd threading.
+    expect(bootstrapMock.mock.calls[0]![1]).toMatchObject({ cwd: '/tmp/afk-wt/feat-spec' });
     expect(worktreeCleanup).toHaveBeenCalledTimes(1);
     expect(session.close).toHaveBeenCalledTimes(1);
 
@@ -627,7 +685,11 @@ describe('interactive worktree flag', () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(setupWorktree).not.toHaveBeenCalled();
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
-    expect(bootstrapMock.mock.calls[0]![1]).toBeUndefined();
+    // `extras` is always passed now (it carries the boot-warning bucket,
+    // #745/#751), so assert the absent-key property that actually matters: no
+    // cwd is threaded in when --worktree was not requested. The conditional
+    // spread must omit the key entirely, not set it to undefined.
+    expect(bootstrapMock.mock.calls[0]![1]).not.toHaveProperty('cwd');
   });
 
   // ── Item #1: worktree branch line persists past spinner.succeed ─────────

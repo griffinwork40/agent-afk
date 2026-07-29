@@ -379,7 +379,10 @@ export interface InteractiveCtx {
    *
    * Producers push here instead of printing; `interactive.ts` drains this
    * AFTER the clear, next to the update-notice re-emit that solves the same
-   * problem for pre-`program.parse()` output. Empty on every other surface —
+   * problem for pre-`program.parse()` output. The REPL owns the array and
+   * passes it INTO `bootstrapSession` (`extras.bootWarnings`) so it survives a
+   * bootstrap that throws — this field is that same instance. Empty on every
+   * other surface —
    * `chat`/`daemon`/`telegram` never clear the screen, so their producers keep
    * printing directly and are unaffected.
    */
