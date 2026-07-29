@@ -26,7 +26,7 @@
  * (user/project/config) shadows the lower scope by design (higher scope wins)
  * — precedence is silent between file scopes, but displacing a BUILT-IN warns
  * (see {@link warnIfShadowsBuiltin}), because the tool-restricted builtins are
- * a safety surface that ten bundled skills dispatch by bare name.
+ * a safety surface that nine bundled skills dispatch by bare name.
  *
  * Loading is synchronous and session-static — called once at bootstrap
  * (mirrors the plugins scan), then threaded by reference through executor
@@ -110,21 +110,37 @@ export function collectMarkdownFiles(dir: string, depth = 0): string[] {
  * and precedence is deliberately UNCHANGED here — this only makes the swap
  * visible, and never blocks it.
  *
- * It is worth a warning because the tool-restricted builtins (`research-agent`,
- * `git-investigator`, `Explore`) are a safety surface, not just a default: the
- * bundled orchestration skills dispatch them by bare name, so a single file at
+ * Invariant: `builtins` MUST be the immutable snapshot of the builtin tier, NOT
+ * the registry under construction. Every tier that displaces a name rewrites
+ * the live registry's entry, so a lookup there reports the *current winner* and
+ * only the FIRST displacer would warn: with `research-agent` defined in both
+ * `~/.afk/agents` and `<cwd>/.afk/agents`, the user file warns while the
+ * project file — whose broader `tools:` are the ones that actually take effect
+ * — passes silently, pointing the operator at a file whose edit changes
+ * nothing. Reading the snapshot instead warns once per shadowing file, each
+ * naming its own path.
+ *
+ * It is worth warning at all because the tool-restricted builtins
+ * (`research-agent`, `Explore`, and `git-investigator` via nested dispatch) are
+ * a safety surface, not just a default: nine bundled orchestration skills
+ * dispatch them by bare name, so a single file at
  * `~/.afk/agents/research-agent.md` declaring broader `tools:` converts every
  * "mechanically locked read-only verifier" in those skills into a
  * write-capable agent, for every project on the machine, with no other signal.
  */
 function warnIfShadowsBuiltin(
-  registry: Map<string, RegisteredAgent>,
+  builtins: ReadonlyMap<string, RegisteredAgent>,
   name: string,
   origin: string,
   warn: (message: string) => void,
 ): void {
-  const prior = registry.get(name);
-  if (prior?.source !== 'builtin') return;
+  const prior = builtins.get(name);
+  // Defense in depth: by contract `builtins` is the immutable snapshot, so every
+  // entry is source 'builtin' and the second check is redundant. It stays because
+  // `Map` is assignable to `ReadonlyMap`: a future call site wired to the live
+  // registry would otherwise start warning about ordinary higher-scope-wins
+  // shadowing between two operator files, which is silent by design.
+  if (prior === undefined || prior.source !== 'builtin') return;
   const restriction =
     prior.bashReadOnly === true
       ? ' — the built-in restricts its tools and gates bash to read-only commands; the override replaces both'
@@ -148,6 +164,7 @@ function warnIfShadowsBuiltin(
  */
 function scanScope(
   registry: Map<string, RegisteredAgent>,
+  builtins: ReadonlyMap<string, RegisteredAgent>,
   dir: string,
   source: AgentSource,
   warn: (message: string) => void,
@@ -189,7 +206,7 @@ function scanScope(
       crossDirSeen.set(parsed.name, filePath);
     }
 
-    warnIfShadowsBuiltin(registry, parsed.name, filePath, warn);
+    warnIfShadowsBuiltin(builtins, parsed.name, filePath, warn);
 
     registry.set(parsed.name, {
       name: parsed.name,
@@ -220,33 +237,41 @@ export function loadAgentRegistry(options: LoadAgentRegistryOptions = {}): Agent
   const cwd = options.cwd ?? process.cwd();
   const warn = options.warn ?? ((message: string) => process.stderr.write(message + '\n'));
 
-  const registry = new Map<string, RegisteredAgent>(builtinAgents());
+  // Snapshot the builtin tier before any merge mutates the registry: the
+  // shadow warning must resolve names against the ORIGINAL builtins, or only
+  // the first displacing tier warns (see {@link warnIfShadowsBuiltin}).
+  const builtins = builtinAgents();
+  const registry = new Map<string, RegisteredAgent>(builtins);
 
   // plugin scope (namespaced <plugin>:<agent>; between builtin and user).
   // Pre-scanned + first-wins-deduped by discoverPluginAgents, so this is a
   // straight merge: later user/project/config scopes still shadow by name.
+  // The shadow check below is a defensive guard on the public `pluginAgents`
+  // option rather than a live path: discoverPluginAgents namespaces every name
+  // `<plugin>:<agent>` and builtin names carry no colon, so a discovered
+  // plugin agent cannot collide with a bare builtin.
   if (options.pluginAgents !== undefined) {
     for (const agent of options.pluginAgents) {
-      warnIfShadowsBuiltin(registry, agent.name, `plugin agent (${agent.source})`, warn);
+      warnIfShadowsBuiltin(builtins, agent.name, `plugin agent (${agent.source})`, warn);
       registry.set(agent.name, agent);
     }
   }
 
   // user scope
-  scanScope(registry, join(getAfkHome(), 'agents'), 'user', warn);
+  scanScope(registry, builtins, join(getAfkHome(), 'agents'), 'user', warn);
   // project scope: Claude Code compat first so AFK-native wins within the tier.
   // Share one tracker across the two project dirs so a name defined in BOTH
   // .claude/agents and .afk/agents warns on override (each dir still keeps its
   // own same-directory keep-first policy; .afk continues to win the tier).
   const projectSeen = new Map<string, string>();
-  scanScope(registry, join(cwd, '.claude', 'agents'), 'project', warn, projectSeen);
-  scanScope(registry, join(cwd, '.afk', 'agents'), 'project', warn, projectSeen);
+  scanScope(registry, builtins, join(cwd, '.claude', 'agents'), 'project', warn, projectSeen);
+  scanScope(registry, builtins, join(cwd, '.afk', 'agents'), 'project', warn, projectSeen);
 
   // config scope (programmatic, highest)
   if (options.configAgents !== undefined) {
     for (const [name, definition] of Object.entries(options.configAgents)) {
       if (name.trim().length === 0) continue;
-      warnIfShadowsBuiltin(registry, name, 'AgentSessionConfig.agents', warn);
+      warnIfShadowsBuiltin(builtins, name, 'AgentSessionConfig.agents', warn);
       registry.set(name, { name, definition, source: 'config' });
     }
   }

@@ -183,6 +183,27 @@ describe('loadAgentRegistry', () => {
       );
     });
 
+    it('names every shadowing file, not just the first — the tier that wins warns too', () => {
+      const warn = vi.fn();
+      const userDir = join(tmp, 'afk-home', 'agents');
+      const projectDir = join(tmp, 'proj', '.afk', 'agents');
+      writeAgent(userDir, 'r.md', 'research-agent', 'tools: Read\n');
+      writeAgent(projectDir, 'r.md', 'research-agent', 'tools: Bash, Write\n');
+
+      const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+
+      // The project file wins, so ITS broader `tools:` are the ones in effect.
+      // A warning naming only the lower-precedence user file would send the
+      // operator to edit a file that no longer decides anything.
+      expect(registry.get('research-agent')?.filePath).toBe(join(projectDir, 'r.md'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(userDir, 'r.md')));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(projectDir, 'r.md')));
+      const shadowWarnings = warn.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes('overrides built-in agent'));
+      expect(shadowWarnings).toHaveLength(2);
+    });
+
     it('stays silent for names that collide with no builtin', () => {
       const warn = vi.fn();
       writeAgent(join(tmp, 'afk-home', 'agents'), 'x.md', 'my-own-agent');
