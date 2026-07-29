@@ -13,6 +13,20 @@
  *   short           a 3-line report under a tall overlay, then collapse
  *   grow-collapse   commit, grow the overlay taller, then collapse (re-pin path)
  *   resize          commit under a tall overlay, resize width mid-turn, collapse
+ *   widen-evict     REFLOW axis (#540 axis-2) — commit under a SHORT frame, grow
+ *                   the overlay so grow-eviction pushes those painted rows to
+ *                   scrollback, collapse, then WAIT for you to drag the window
+ *                   WIDER by hand. See the reflow-axis note below.
+ *
+ * Reflow axis vs. void axis — why `widen-evict` needs a human hand: the four
+ * scenarios above check the VOID class (contiguity). `resize` does NOT check
+ * reflow, because it fakes the resize by assigning `stdout.columns` and emitting
+ * a synthetic 'resize' — the real terminal never resizes, so its scrollback is
+ * never reflowed, and terminal-owned reflow is the whole mechanism of the
+ * fragmentation bug. It also only ever narrows, and commits under a tall overlay
+ * so it drives the band-hold archive (already fixed by #665) rather than
+ * grow-eviction. Only a REAL OS window resize makes the emulator reflow its own
+ * scrollback, so `widen-evict` sets the state up and then blocks on you.
  *
  * Interactive scenarios (run afk for real and eyeball — cannot be scripted as
  * pure output): dropdown headroom (open the slash-command menu on a fresh
@@ -34,8 +48,8 @@ import { TerminalCompositor } from '../src/cli/terminal-compositor.js';
 import { StatusLine } from '../src/cli/status-line.js';
 import { renderMarkdownToTerminal } from '../src/cli/formatter.js';
 
-type Scenario = 'long' | 'short' | 'grow-collapse' | 'resize';
-const SCENARIOS: readonly Scenario[] = ['long', 'short', 'grow-collapse', 'resize'];
+type Scenario = 'long' | 'short' | 'grow-collapse' | 'resize' | 'widen-evict';
+const SCENARIOS: readonly Scenario[] = ['long', 'short', 'grow-collapse', 'resize', 'widen-evict'];
 
 function tallOverlay(n: number): string {
   return Array.from({ length: n }, (_, i) => `  thinking ${i} — held overlay keeping the frame tall`).join('\n');
@@ -66,6 +80,29 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const cols = stdout.columns ?? 100;
+
+  if (arg === 'widen-evict') {
+    // Printed BEFORE arm() on purpose: the compositor stays LIVE through the
+    // resize (that is the real-session case, and the case the PTY guard drives),
+    // so nothing may write raw rows into its geometry once armed. A pre-arm print
+    // is the same shape as the production banner and is safe.
+    stdout.write(
+      [
+        '',
+        '=== widen-evict — REFLOW axis (#540 axis-2) ===',
+        `Start narrow. This pane is ${cols} cols; 48-70 is ideal. Resize it NOW if wider.`,
+        '',
+        'After the render settles you get 45s. During that window:',
+        '  1. DRAG THIS WINDOW WIDER (or press cmd-minus to shrink the font).',
+        '  2. Scroll up to the LONGLINE-MARKER … END-OF-LONGLINE line.',
+        '       FAIL  it is split across rows breaking MID-WORD, continuations at col 0',
+        '       PASS  it rejoined into one soft-wrapped paragraph',
+        '  3. Confirm CARD-BOTTOM is still present — the previous logical-archive',
+        '     attempt dropped exactly that border row on a growth eviction.',
+        '',
+      ].join('\n') + '\n',
+    );
+  }
 
   const statusLine = new StatusLine({ stream: stdout, force: true, throttleMs: 0 });
   statusLine.start();
@@ -107,6 +144,25 @@ async function main(): Promise<void> {
     ix.repaint();
     commit('BODY-TAIL-ROW  committed after the growth\n\n');
     collapse();
+  } else if (arg === 'widen-evict') {
+    // Commit under a SHORT frame (no overlay) so these rows land in the band and
+    // are CUP-painted as hard-wrapped PHYSICAL rows — deliberately NOT routed to
+    // the band-hold archive that #665 converted to logical lines.
+    c.setOverlay('');
+    c.commitAbove(`LONGLINE-MARKER ${'reflow '.repeat(24)}END-OF-LONGLINE\n\n`);
+    // A boxed card whose CLOSING BORDER is the row the previous logical-archive
+    // attempt dropped on a growth eviction (frame-preserve.ts:10-30). Keeping it
+    // in view means that regression cannot pass unnoticed.
+    c.commitAbove(
+      '┌─ CARD-TOP ───────────────┐\n│ card body row            │\n└─ CARD-BOTTOM ────────────┘\n\n',
+    );
+    for (let i = 1; i <= 4; i++) c.commitAbove(`PROSE-${String(i).padStart(2, '0')}  report line\n\n`);
+    ix.repaint();
+    // Grow the frame: preserveRowsBeforeFrameRender evicts the painted rows above
+    // into scrollback as app hard newlines — the site the PTY guards cannot see.
+    c.setOverlay(tallOverlay(30));
+    ix.repaint();
+    collapse();
   } else {
     // `long` and `resize` share the report+table body.
     commit('HEADER-MARKER  Diagnosis summary\n\n');
@@ -121,7 +177,9 @@ async function main(): Promise<void> {
     collapse();
   }
 
-  await new Promise((r) => setTimeout(r, 6000));
+  // widen-evict needs a human to physically resize the OS window mid-hold, so it
+  // holds far longer than the look-and-scroll scenarios.
+  await new Promise((r) => setTimeout(r, arg === 'widen-evict' ? 45000 : 6000));
   c.disarm();
   statusLine.stop();
   stdout.write(`\n[visual-void-repro:${arg} done — scroll up to inspect scrollback]\n`);
