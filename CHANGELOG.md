@@ -11,15 +11,6 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
-### Fixed
-- advertise presence for fresh sessions so Telegram AFK can discover them (#738)
-- stop presence cleanup from pre-empting a surface's graceful shutdown, and from leaking three process listeners per session (#738)
-- rewrite presence when a provider instance's advertised session id changes, so `/resume` in a live REPL no longer leaves the watcher tailing a closed session's ledger (#738)
-- write presence files `0600` and the presence dir `0700` instead of inheriting the umask (#738)
-
-### Changed
-- a fresh `openai-compatible` session now carries a real session id instead of the `openai-pending-` sentinel, narrowing that sentinel's reachability (#738)
-
 ## [5.81.6] - 2026-07-28
 
 ### Fixed
