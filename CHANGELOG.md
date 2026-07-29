@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.4] - 2026-07-29
+
+### Fixed
+- archive eviction paths as logical lines so scrolled-off content reflows (#540) (#756) (f21234b)
+
+### Changed
+- pin the grow-eviction width-resize defect the #540 guards cannot see (#755) (b673c60)
+
 ## [5.82.3] - 2026-07-29
 
 ### Fixed
