@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
 import { statSync } from 'node:fs';
-import { getQuotaSnapshot, type QuotaSnapshot } from '../../../agent/quota-cache.js';
+import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
@@ -17,6 +17,7 @@ import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
 import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../context-sparkline.js';
+import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { palette } from '../../palette.js';
 
 /**
@@ -780,26 +781,6 @@ export function contextRatio(stats: SessionStats, sampler?: ContextSampler): num
   return used / contextLimitFor(stats.model);
 }
 
-/**
- * Compact status-line rendering of the subscription-quota cache, e.g.
- * `5h 62% · 7d 31%`. Returns undefined when nothing is cached — permanently the
- * case under API-key auth, since only subscription OAuth responses carry the
- * `anthropic-ratelimit-unified-*` headers — so the caller omits the segment
- * entirely rather than drawing a placeholder. `utilization` is a 0..1 fraction
- * (clamped at the cache boundary), hence the ×100.
- */
-function formatQuotaSegment(snapshot: QuotaSnapshot | undefined): string | undefined {
-  if (snapshot === undefined) return undefined;
-  const segments: string[] = [];
-  if (snapshot.fiveHourUtilization !== undefined) {
-    segments.push(`5h ${Math.round(snapshot.fiveHourUtilization * 100)}%`);
-  }
-  if (snapshot.sevenDayUtilization !== undefined) {
-    segments.push(`7d ${Math.round(snapshot.sevenDayUtilization * 100)}%`);
-  }
-  return segments.length > 0 ? segments.join(' · ') : undefined;
-}
-
 export function formatStatusFields(
   stats: SessionStats,
   sampler?: ContextSampler,
@@ -835,7 +816,7 @@ export function formatStatusFields(
 
   const branch = gitSampler?.getBranch();
   const pr = gitSampler?.getPr();
-  const quota = formatQuotaSegment(getQuotaSnapshot());
+  const quotaWindows = quotaWindowsFromSnapshot(getQuotaSnapshot());
 
   return {
     model: stats.model,
@@ -849,6 +830,6 @@ export function formatStatusFields(
     ...(stats.cwd !== undefined ? { cwd: stats.cwd } : {}),
     ...(branch !== undefined ? { branch } : {}),
     ...(pr !== undefined ? { pr } : {}),
-    ...(quota !== undefined ? { quota } : {}),
+    ...(quotaWindows !== undefined ? { quotaWindows } : {}),
   };
 }
