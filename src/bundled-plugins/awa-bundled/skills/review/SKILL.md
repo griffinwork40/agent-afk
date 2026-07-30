@@ -55,6 +55,11 @@ Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA
 2. Distinguish `diff-context` citations (line visible in the diff hunk, no re-read required) from `file-state` citations (line in the post-merge file, re-read required before quoting).
 3. If the line does not exist at that ref, omit the finding entirely — do not paraphrase or reconstruct from memory.
 
+**Bounded git access (per agent — overrides the general "multiple parallel queries" dispatch guidance for reviews).** Keep citation verification to one short pass:
+- Re-read **only** `file-state` citations at the reviewed ref. A `diff-context` citation is already grounded in the diff hunk — do **not** issue a git re-read for it.
+- Collect every needed re-read and resolve them in a **single** `git-investigator` dispatch (batch the queries). Never re-dispatch `git-investigator` per finding, and never run more than one `git-investigator` per agent.
+- This bounds a full review to one brief git pass per agent instead of an open-ended archaeology loop — the pattern that let a review balloon to tens of minutes and exhaust the API rate limit with no output.
+
 Banned words: "ensure", "consider", "may", "could". No `file:line` citation → omit the finding.
 
 **Spec-compliance assessment (mandatory framing for the spec-compliance dimension).** Judge the diff against the `stated-intent` — not against the diff's own apparent goals, and not against the repo's global constraints:
