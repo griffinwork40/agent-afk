@@ -650,6 +650,34 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
       expect(stripAnsi(overlay)).toContain('bash');
     });
 
+    it('grouped root bash reserves its result summary and fits within terminal width', () => {
+      const lane = new ToolLane();
+      const cols = process.stdout.columns ?? 88;
+      const commands = [
+        'cd credential-floor-gaps && echo "=== 1. INLINE REVIEW COMMENTS ===" && gh api repos/griffinwork40/agent-afk/pulls/753/comments --paginate',
+        'cd credential-floor-gaps && echo "=== 2. REVIEW SUMMARY BODIES ===" && gh pr view 753 --json reviews,comments,latestReviews',
+        'cd credential-floor-gaps && echo "=== 4. CI CHECKS ===" && gh pr checks 753 2>&1 | head -40',
+      ];
+      const lineCounts = [20, 20, 19];
+      for (const [index, command] of commands.entries()) {
+        const id = `bash-group-${index}`;
+        lane.addStart(id, 'bash', ` ${command}`);
+        lane.addResult(id, { ...makeResult('output'), lineCount: lineCounts[index] });
+      }
+
+      const lines = lane.flush();
+      const rendered = stripAnsi(lines.join('\n'));
+      expect(rendered).toContain('bash ×3');
+      expect(rendered).toContain('59 lines total');
+      expect(rendered).toContain('…');
+      for (const line of lines) {
+        expect(
+          displayWidth(stripAnsi(line)),
+          `grouped root line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+        ).toBeLessThanOrEqual(cols);
+      }
+    });
+
     it('orchestrator-root in-progress bash with long input fits within terminal width', () => {
       const lane = new ToolLane();
       const cols = process.stdout.columns ?? 88;

@@ -1,5 +1,4 @@
 import { palette } from '../../palette.js';
-import { styleForToolName } from '../../tool-category.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { formatToolCallStat } from '../../format-utils.js';
 import {
@@ -14,6 +13,7 @@ import {
 import type { ToolEntry, Entry } from './tool-lane-render.js';
 import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
+import { formatGroupedToolResults } from './tool-lane-render-grouped-root.js';
 
 /**
  * Compose a NESTING root's committed-scrollback closer — the `Done (…)` line —
@@ -276,7 +276,7 @@ function renderGroupedRootTools(
         lines.push('  ' + e.prefix);
       }
     } else {
-      lines.push(formatGroupedToolResults(toolName, entries, homeDir));
+      lines.push(formatGroupedToolResults(toolName, entries, cols, homeDir));
       // Emit per-entry diff blocks under the grouped header. Each diff hangs
       // at the same 4-space indent as the single-entry path above, giving
       // the grouped case the same visual treatment as individual entries.
@@ -314,60 +314,6 @@ function renderGroupedRootTools(
     }
   }
   return lines;
-}
-
-function formatGroupedToolResults(
-  toolName: string,
-  entries: ToolEntry[],
-  homeDir?: string,
-): string {
-  const { color, glyph } = styleForToolName(toolName);
-  // sanitizeLabel before shortenPaths — same ordering rationale as the
-  // diff-separator labels above (shortenPaths emits OSC 8 hyperlinks that
-  // sanitizeLabel would strip).
-  const targets = entries.map((e) => shortenPaths(sanitizeLabel(e.toolInput)).trim());
-  const header =
-    color(glyph + ' ') +
-    color.bold(toolName) +
-    palette.dim(` ×${entries.length}`) +
-    ' ' +
-    palette.toolArg(targets.join(', '));
-
-  const completed = entries.filter((e) => e.result);
-  const errors = completed.filter((e) => e.result!.isError);
-
-  if (errors.length > 0) {
-    const successCount = completed.length - errors.length;
-    const lineCounts = completed
-      .filter((e) => !e.result!.isError)
-      .map((e) => e.result!.lineCount)
-      .filter((c): c is number => c !== undefined);
-    const totalLines = lineCounts.reduce((a, b) => a + b, 0);
-    const parts: string[] = [];
-    if (totalLines > 0) parts.push(`${totalLines} lines`);
-    if (successCount > 0) parts.push(`${successCount} ok`);
-    parts.push(palette.error(`${errors.length} error${errors.length > 1 ? 's' : ''}`));
-    return '  ' + header + palette.dim(' — ') + parts.join(palette.dim(', '));
-  }
-
-  const lineCounts = completed
-    .map((e) => e.result?.lineCount)
-    .filter((c): c is number => c !== undefined);
-  if (lineCounts.length === completed.length && lineCounts.length > 0) {
-    const allSame = lineCounts.every((c) => c === lineCounts[0]);
-    if (allSame) {
-      return '  ' + header + palette.dim(` — ${lineCounts[0]} lines each`);
-    }
-    const total = lineCounts.reduce((a, b) => a + b, 0);
-    return '  ' + header + palette.dim(` — ${total} lines total`);
-  }
-
-  if (completed.length > 0) {
-    const outcomes = completed.map((e) => formatOutcome(e.result!, homeDir, 60, e.toolName));
-    return '  ' + header + palette.dim(' — ') + outcomes.join(palette.dim(', '));
-  }
-
-  return '  ' + header;
 }
 
 export {
