@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.6] - 2026-07-30
+
+### Fixed
+- split ttfb_timeout out of the rate_limit phase (#766) (97d8e3d)
+
 ## [5.82.5] - 2026-07-29
 
 ### Fixed
