@@ -410,6 +410,10 @@ export const SessionPhaseNameSchema = z.enum([
   'rate_limit',
   'usage_limit_pause',
   'usage_limit_resume',
+  // Mid-stream overload (529) exhaustion park/unpark. See SessionPhaseName
+  // JSDoc in types.ts — wall-clock bounded, no reset deadline to key on.
+  'overload_pause',
+  'overload_resume',
   'idle_watchdog_fired',
   'suspected_loop',
   // Per-session compaction disable (single event, at most once). See

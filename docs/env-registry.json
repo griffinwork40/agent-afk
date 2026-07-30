@@ -515,6 +515,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_OVERLOAD_PAUSE_MS",
+      "description": "Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity.",
+      "type": "number",
+      "required": false,
+      "example": "600000",
+      "category": "model"
+    },
+    {
       "name": "AFK_PLAIN_OUTPUT",
       "description": "Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the TerminalCompositor live overlay (both the persistent between-turn compositor AND the per-turn StreamRenderer overlay), AND the input surface downgrades to the simple non-TTY line reader instead of the fancy compositor-backed input box. Same code path already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior (live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true (case-insensitive).",
       "type": "boolean",

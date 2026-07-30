@@ -109,6 +109,20 @@ describe('classifyClosureReason', () => {
     expect(classifyClosureReason({ ...base, sawProviderError: true })).toBe('abort');
   });
 
+  // #762: overload exhaustion commits its turn CLEANLY (so the session stays
+  // resumable and finalTurnCount > 0), which means sawProviderError is false.
+  // The closure must still read `abort` — the turn did not end because the model
+  // was done — so the failure stays loud despite the clean terminal.
+  it('classifies overload exhaustion as abort even with no provider error', () => {
+    expect(
+      classifyClosureReason({
+        ...base,
+        sawProviderError: false,
+        lastStopReason: 'overload_exhausted',
+      }),
+    ).toBe('abort');
+  });
+
   it('a classified abort signal outranks a provider error event', () => {
     // A genuine budget/timeout abort also emits an error event; the more
     // specific abort classification wins.

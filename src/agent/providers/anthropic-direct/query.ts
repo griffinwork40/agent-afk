@@ -161,6 +161,12 @@ export interface AnthropicDirectQueryOptions {
    */
   autoResumeOnUsageLimit?: boolean;
   /**
+   * User-facing surface (`AgentConfig.surface`) forwarded verbatim to
+   * {@link RetryLayer} so the overload-pause ceiling can differ for interactive
+   * vs. daemon sessions (#762). Undefined ⇒ treated as non-interactive.
+   */
+  surface?: string;
+  /**
    * Factory for rebuilding the cwd-dependent pair (userSystem + dispatcher)
    * when `setCwd()` is called mid-session. When absent, `setCwd()` is a
    * no-op (e.g. external-dispatcher callers that own their own lifecycle).
@@ -307,6 +313,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
+      ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
     });
     this.state = createSessionState({
       model: opts.model,
