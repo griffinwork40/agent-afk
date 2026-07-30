@@ -14,7 +14,6 @@
 
 import { SubagentManager } from '../../subagent.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
-import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { appendInjectContext } from '../subagent/inject-context.js';
 import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
@@ -25,6 +24,7 @@ import { getCurrentSink } from '../../_lib/skill-sink-channel.js';
 import { loadSkillPrompts } from '../../../skills/_lib/prompt-loader.js';
 import { debugLog } from '../../../utils/debug.js';
 import { buildForkedChildConfig } from './fork-child-config.js';
+import { renderForkOutcome } from './fork-result.js';
 import { substituteSkillArgs } from './load-mode.js';
 import type { SkillExecutorInternals } from './types.js';
 
@@ -358,47 +358,10 @@ export async function runForkedSkillToResult(
     const result = await handle.runToResult(userMessage);
 
     // Assign (don't return) so the finally can append the in-turn
-    // SubagentStop injectContext after teardown.
-    if (result.status === 'succeeded' && result.message) {
-      // A `succeeded` result can still be an incomplete partial (capped or
-      // stream-truncated). annotateIfIncomplete prepends a parent-visible
-      // marker in that case and is a no-op for clean completions.
-      // incompleteToolResultFields adds the structured counterpart to that
-      // banner, alongside it, for non-model consumers.
-      toolResult = {
-        content: annotateIfIncomplete(result.message.content, result.stopReason),
-        ...incompleteToolResultFields(result.stopReason),
-      };
-      return toolResult;
-    }
-
-    // Cancelled mid-flight but produced text: surface the partial output with
-    // a clear marker rather than discarding it. incompleteToolResultFields
-    // adds the structured incomplete/incompleteReason counterpart for
-    // non-model consumers (no-op when stopReason is absent or clean).
-    if (
-      result.status === 'cancelled' &&
-      typeof result.partialOutput === 'string' &&
-      result.partialOutput.length > 0
-    ) {
-      const marker = '[skill cancelled mid-flight — partial output preserved below]';
-      toolResult = {
-        content: `${marker}\n\n${result.partialOutput}`,
-        ...incompleteToolResultFields(result.stopReason),
-      };
-      return toolResult;
-    }
-
-    // incompleteToolResultFields flags the ZERO-OUTPUT stream_incomplete case
-    // (see `subagent/result.ts`) that resolves `status:'failed'` and routes
-    // through this literal — no-op for any other failure or an absent
-    // stopReason.
-    const errorMessage = result.error?.message ?? noOutputError;
-    toolResult = {
-      content: errorMessage,
-      isError: true,
-      ...incompleteToolResultFields(result.stopReason),
-    };
+    // SubagentStop injectContext after teardown. Outcome triage — including
+    // preserving partial output off a non-clean terminal status — lives in
+    // `fork-result.ts` as a pure function.
+    toolResult = renderForkOutcome(result, noOutputError);
     return toolResult;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
