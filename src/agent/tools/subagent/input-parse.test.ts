@@ -11,11 +11,18 @@
  * plain input → output assertions with no mock harness.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { parseAgentInput, type AgentInput } from './input-parse.js';
+
+// Invariant: the AFK breadth targets are derived from env on EVERY call, so a
+// leaked `stubEnv` would silently change what later cases in this file treat as
+// too-broad. Unstub after each test rather than relying on case ordering.
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('parseAgentInput', () => {
   describe('input shape', () => {
@@ -384,6 +391,54 @@ describe('parseAgentInput', () => {
       expect(() => parseAgentInput({ prompt: 'p', cwd: FS_ROOT })).toThrow(
         /must not be a filesystem root, your home directory, or an ancestor/,
       );
+    });
+
+    // A relocated AFK_HOME is neither the home dir nor an ancestor of it, so
+    // the home-only targets did not catch it — yet granting it as `cwd` empties
+    // that child's AFK-anchored credential floor by exactly the route `$HOME`
+    // empties the home-anchored one (the bash grant filter drops any candidate
+    // whose ancestor was granted, and `${AFK_HOME}/config` is one).
+    it('throws when cwd is a relocated AFK_HOME', () => {
+      vi.stubEnv('AFK_HOME', '/tmp/relocated-afk-home');
+      expect(() => parseAgentInput({ prompt: 'p', cwd: '/tmp/relocated-afk-home' })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+      // An ancestor of the relocated home is refused too.
+      expect(() => parseAgentInput({ prompt: 'p', cwd: '/tmp' })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('throws when cwd is a relocated AFK_STATE_DIR', () => {
+      vi.stubEnv('AFK_STATE_DIR', '/tmp/relocated-afk-state');
+      expect(() => parseAgentInput({ prompt: 'p', cwd: '/tmp/relocated-afk-state' })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    // Descendants stay legal: a plugin/worktree dir BELOW the AFK home is a
+    // legitimate cwd and must not be swept up by the breadth guard.
+    it('still accepts a subdir BELOW a relocated AFK_HOME', () => {
+      vi.stubEnv('AFK_HOME', '/tmp/relocated-afk-home');
+      const result = parseAgentInput({ prompt: 'p', cwd: '/tmp/relocated-afk-home/plugins/x' });
+      expect(result.cwd).toBe('/tmp/relocated-afk-home/plugins/x');
+    });
+
+    it('throws when a writeRoots entry is a relocated AFK_HOME', () => {
+      vi.stubEnv('AFK_HOME', '/tmp/relocated-afk-home');
+      expect(() =>
+        parseAgentInput({ prompt: 'p', writeRoots: ['/tmp/relocated-afk-home'] }),
+      ).toThrow(/must not be a filesystem root, your home directory, or an ancestor/);
+    });
+
+    // A malformed AFK_HOME must not loosen the guard: the home-anchored
+    // rejections still fire, and parseAgentInput does not throw the env error.
+    it('keeps the home-anchored guard when AFK_HOME is malformed', () => {
+      vi.stubEnv('AFK_HOME', 'relative/not-absolute');
+      expect(() => parseAgentInput({ prompt: 'p', cwd: os.homedir() })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+      expect(parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/feat-y' }).cwd).toBe('/tmp/wt/feat-y');
     });
 
     it('still accepts a normal absolute project subdir (not broad)', () => {
