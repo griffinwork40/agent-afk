@@ -63,7 +63,13 @@ describe('registerWorktreeRoot', () => {
   });
 
   it('never throws on an unwritable state dir (best-effort contract)', async () => {
-    process.env['AFK_STATE_DIR'] = '/proc/nonexistent-cannot-write';
+    // Point the state dir BENEATH a regular file: mkdir then fails immediately
+    // with ENOTDIR on every platform. (Do not reach for a path under /proc —
+    // mkdir there hangs on Linux rather than erroring, which times the test out
+    // instead of exercising the contract.)
+    const blocker = join(stateDir, 'not-a-dir');
+    await fs.writeFile(blocker, 'x', 'utf-8');
+    process.env['AFK_STATE_DIR'] = join(blocker, 'nested');
     await expect(registerWorktreeRoot('/tmp/whatever')).resolves.toBeUndefined();
   });
 
