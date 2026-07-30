@@ -3,7 +3,7 @@ import { getTerminalWidth } from '../../terminal-size.js';
 import { formatToolCallStat } from '../../format-utils.js';
 import { MAX_VISIBLE_CHILDREN, batchBadge } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
-import { getGlyphs } from './tool-lane-render.js';
+import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
 
 /**
@@ -123,17 +123,31 @@ function formatAgentSummary(
   const externalAncestors: readonly boolean[] = ancestorIsLast;
 
   const head = palette.dim(g.turnRoot);
-  const agentLine = stats.length > 0
-    ? ancestorPrefix + head + agent.prefix + palette.dim(' — ' + stats.join(' · '))
-    : ancestorPrefix + head + agent.prefix;
+  // Invariant: ONE width read per render frame, shared by the head row below
+  // and the recursive child frame. Two reads could straddle a resize and emit
+  // a head row clamped to the old width above children clamped to the new one.
+  const cols = getTerminalWidth();
+  // Clamped for the same reason every child row is: a root nesting entry
+  // arrives with an unbounded prefix (the root dispatch path passes no
+  // maxWidth), and the stats tail adds ~28 columns on top — a depth-0 `agent`
+  // frame with more than MAX_VISIBLE_CHILDREN children measures ~109 columns
+  // in an 88-column terminal. Plain clamp, not the grouped path's suffix
+  // reservation: identity leads the row and the stats tail is expendable,
+  // matching how the live overlay clamps the same row.
+  const agentLine = clampLineToTerminal(
+    stats.length > 0
+      ? ancestorPrefix + head + agent.prefix + palette.dim(' — ' + stats.join(' · '))
+      : ancestorPrefix + head + agent.prefix,
+    cols,
+  );
 
   // Pass agentResultSummary into renderFlushChildren so it is added as a
   // synthetic sibling BEFORE assignConnectors runs — ensuring the Done line
   // receives the correct LAST connector (not a hardcoded '⎿', which was Bug #5).
-  // Thread `g` so the head row and child rows share one glyph set. `cols` is
-  // read here at the head so the recursive flush frame uses the same width.
-  // `externalAncestors` extends the spine column-set leftward by `extraDepth`
-  // so descendant rows align under the head row's ancestor spines.
+  // Thread `g` so the head row and child rows share one glyph set, and `cols`
+  // (read once above) so the head row and the recursive flush frame agree on
+  // width. `externalAncestors` extends the spine column-set leftward by
+  // `extraDepth` so descendant rows align under the head row's ancestor spines.
   const childLines = renderFlushChildren(
     children,
     childMap,
@@ -141,7 +155,7 @@ function formatAgentSummary(
     // #532: badge the closer (Done line) when this NESTING root ran in a
     // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
     summaryWithBatchBadge(agent),
-    getTerminalWidth(),
+    cols,
     externalAncestors,
     g,
   );
@@ -172,6 +186,10 @@ function formatAgentSummary(
  * outermost ancestor floating without a spine that connects to its
  * children.
  *
+ * That shared encoding includes the terminal-width clamp: both paths clamp the
+ * head row to `getTerminalWidth()`, so a row that overflows is elided
+ * identically no matter which path committed it.
+ *
  * Width invariant matches formatAgentSummary: `g.spine` is 2 cells,
  * `g.turnRoot` is 2 cells, so the total head-row indent is
  * `2 * (ancestorIsLast.length + 1)` cells before `agent.prefix` — exactly the
@@ -187,7 +205,11 @@ function formatAgentHeader(agent: ToolEntry, ancestorIsLast: readonly boolean[] 
   const g = getGlyphs();
   const ancestorPrefix = palette.dim(g.spine.repeat(ancestorIsLast.length));
   const head = palette.dim(g.turnRoot);
-  return ancestorPrefix + head + agent.prefix;
+  // The terminal-width clamp is part of the shared head-row encoding — see the
+  // encoding constraint above. formatAgentSummary clamps its head row, so this
+  // one must too, or the same entry committed through the two paths would
+  // differ whenever the row exceeds the terminal width.
+  return clampLineToTerminal(ancestorPrefix + head + agent.prefix, getTerminalWidth());
 }
 
 /**
