@@ -15,6 +15,7 @@ import {
   CANCELLED_PARTIAL_MARKER,
 } from './fork-result.js';
 import { STREAM_INCOMPLETE, type SubagentResult } from '../../subagent/result.js';
+import { MODEL_CAP_BYTES } from '../handlers/_output-cap.js';
 
 const NO_OUTPUT = 'Forked skill failed with no output';
 
@@ -106,6 +107,34 @@ describe('renderForkOutcome — failed (the R2a fix)', () => {
     );
     expect(out.content).toContain('partial findings');
     expect(out.isError).toBe(true);
+  });
+
+  it('caps oversized partial output to a marked head-and-tail view', () => {
+    const partial = `HEAD${'x'.repeat(MODEL_CAP_BYTES)}TAIL`;
+    const out = renderForkOutcome(
+      makeResult({ status: 'failed', error: new Error('timed out'), partialOutput: partial }),
+      NO_OUTPUT,
+    );
+
+    expect(out.content.startsWith(failedPartialMarker('timed out'))).toBe(true);
+    expect(out.content).toContain('bytes truncated: showing first');
+    expect(out.content).toContain('TAIL');
+    expect(Buffer.byteLength(out.content, 'utf8')).toBeLessThanOrEqual(MODEL_CAP_BYTES);
+    expect(out.truncated).toBe(true);
+    expect(out.isError).toBe(true);
+  });
+
+  it('caps oversized cancelled partial output too', () => {
+    const partial = `HEAD${'x'.repeat(MODEL_CAP_BYTES)}TAIL`;
+    const out = renderForkOutcome(
+      makeResult({ status: 'cancelled', partialOutput: partial }),
+      NO_OUTPUT,
+    );
+
+    expect(out.content.startsWith(CANCELLED_PARTIAL_MARKER)).toBe(true);
+    expect(out.content).toContain('TAIL');
+    expect(out.truncated).toBe(true);
+    expect(out.isError).toBeUndefined();
   });
 
   it('still returns a bare error when the fork produced no text', () => {

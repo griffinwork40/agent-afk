@@ -24,6 +24,7 @@
 
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import type { SubagentResult } from '../../subagent/result.js';
+import { capForModel } from '../handlers/_output-cap.js';
 import type { ToolResult } from '../types.js';
 
 /** Marker prefix for output preserved off a user/parent cancellation. */
@@ -39,6 +40,15 @@ export function failedPartialMarker(errorMessage: string): string {
 function usablePartial(result: SubagentResult): string | undefined {
   const partial = result.partialOutput;
   return typeof partial === 'string' && partial.length > 0 ? partial : undefined;
+}
+
+/** Preserve partial text without allowing a failed fork to flood the parent context. */
+function renderPartial(marker: string, partial: string): Pick<ToolResult, 'content' | 'truncated'> {
+  const capped = capForModel(`${marker}\n\n${partial}`);
+  return {
+    content: capped.content,
+    ...(capped.truncated ? { truncated: true } : {}),
+  };
 }
 
 /**
@@ -73,7 +83,7 @@ export function renderForkOutcome(result: SubagentResult, noOutputError: string)
 
   if (result.status === 'cancelled' && partial !== undefined) {
     return {
-      content: `${CANCELLED_PARTIAL_MARKER}\n\n${partial}`,
+      ...renderPartial(CANCELLED_PARTIAL_MARKER, partial),
       ...incompleteToolResultFields(result.stopReason),
     };
   }
@@ -82,7 +92,7 @@ export function renderForkOutcome(result: SubagentResult, noOutputError: string)
 
   if (partial !== undefined) {
     return {
-      content: `${failedPartialMarker(errorMessage)}\n\n${partial}`,
+      ...renderPartial(failedPartialMarker(errorMessage), partial),
       isError: true,
       ...incompleteToolResultFields(result.stopReason),
     };
