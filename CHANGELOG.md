@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.10] - 2026-07-30
+
+### Fixed
+- bound grouped tool summaries to terminal width (#773) (d52dbf2)
+
 ## [5.82.9] - 2026-07-30
 
 ### Fixed
