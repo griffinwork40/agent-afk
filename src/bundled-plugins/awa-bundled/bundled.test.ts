@@ -110,8 +110,15 @@ const PINNED_HASHES = {
   // shell it needs) instead of as a fourth sub-agent, absence-claim grounding
   // uses the shell-free `Grep` tool, and a "Concurrency floor" block documents
   // the real budget (peak 2 concurrent, 3 dispatched, zero nesting) so the
-  // regression cannot be reintroduced silently.
-  review: 'de275974a1d2179a533ad64b317379c8eee576966174866ad0327e2a6955f4ca',
+  // regression cannot be reintroduced silently — now guarded by an assertion,
+  // not just this comment (see 'review Wave 1 keeps the no-git citation
+  // contract' below). Re-bumped after review feedback on PR #777: the
+  // concurrency floor now states its conditional post-synthesis budget and
+  // bounds the shadow-verify wave, Wave 1.5 Check A verifies `file-state`
+  // citations at EVERY severity (not just blocking/critical/high, which left
+  // medium-and-lower citations permanently unverified), and the research-agent
+  // `tools:` quote is now exact.
+  review: 'fde056df77dc4e8769376ed40398cd5e6a32226b6e1c69cc272baa387be3f666',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
   // landed in this branch's commit 1e35850 — adds high-confidence language
   // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
@@ -327,7 +334,7 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     /^context: fork$/,
   ],
 
-  // review — namespace-only divergence (back-port landed; #441 closed):
+  // History: review — namespace-only divergence (back-port landed; #441 closed):
   //   The bundled review is now the de-namespaced mirror of upstream
   //   example-plugin review. The previously-allowlisted #441 drift —
   //   Wave 1.5 (citation + absence-claim verification), reviewed-ref
@@ -481,6 +488,33 @@ describe('bundled skills', () => {
         .sort();
       const registered = [...SKILLS].sort();
       expect(entries).toEqual(registered);
+    });
+
+    // Invariant: #726 — Wave 1 of /review dispatches `research-agent`, which has
+    // no Bash. Any mandate to run a git command inside the Wave 1 section forces
+    // each agent to nest a `git-investigator` just to run it, silently doubling a
+    // declared 2-agent wave into 4+ sessions and cascading into 429s.
+    //
+    // This cannot be written as "the Wave 1 section contains no `git ...`": the
+    // Invariant block legitimately QUOTES `git show` to explain what must not be
+    // mandated, and Wave 1.5 / target-resolution run in the orchestrator where git
+    // is correct. So assert the guard clauses are PRESENT — reintroducing the
+    // mandate means deleting them, which this catches.
+    it('review Wave 1 keeps the no-git citation contract (#726)', () => {
+      const content = readBundled('review');
+      const start = content.indexOf('**Wave 1 — Full review');
+      const end = content.indexOf('**Wave 1.5 —');
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+
+      const waveOne = content.slice(start, end);
+      expect(waveOne).toContain('do **not** run git');
+      expect(waveOne).toContain('**Invariant — why Wave 1 does not run git.**');
+      expect(content).toContain('**Concurrency floor —');
+      // Wave 1.5 stays inline in the orchestrator, never a fourth sub-agent.
+      expect(content).toContain(
+        '**Wave 1.5 — Citation + absence-claim verification (INLINE',
+      );
     });
   });
 
