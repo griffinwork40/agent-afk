@@ -540,15 +540,27 @@ export const composeTool: AnthropicToolDef = {
           'the node\'s [FAILED] section. Disabled when omitted. Minimum 1000ms; ' +
           'values above 3600000ms are clamped.',
       },
+      max_tool_rounds_per_node: {
+        type: 'number',
+        description:
+          'Optional per-node tool-use ROUND budget. A round is one ' +
+          'assistant turn that requests tools — a round containing three ' +
+          'parallel tool calls costs 1, not 3. When a node spends its ' +
+          'budget it is NOT killed: it runs one final wind-down round with ' +
+          'tools stripped and must answer from what it already gathered, so ' +
+          'the node still returns a real (if shallower) result instead of ' +
+          'dying mid-round with nothing. Useful for bounding runaway agents ' +
+          'that keep retrying. Disabled when omitted. Must be a positive ' +
+          'integer between 1 and 1000.',
+      },
       max_tool_calls_per_node: {
         type: 'number',
         description:
-          'Optional per-node tool-call budget. When any single subagent ' +
-          'emits more than this many tool calls, that subagent is cancelled, ' +
-          'siblings continue, and partial findings are surfaced under the ' +
-          'node\'s [FAILED] section with a message naming the budget. ' +
-          'Useful for bounding runaway agents that keep retrying. Disabled ' +
-          'when omitted. Must be a positive integer between 1 and 1000.',
+          'DEPRECATED alias for `max_tool_rounds_per_node` — prefer that ' +
+          'key. Accepted unchanged for back-compat, but the unit is now ' +
+          'tool-use ROUNDS, not individual tool calls, and spending the ' +
+          'budget triggers a graceful wind-down rather than cancelling the ' +
+          'node. Setting both keys uses `max_tool_rounds_per_node` and warns.',
       },
     },
     required: ['nodes'],

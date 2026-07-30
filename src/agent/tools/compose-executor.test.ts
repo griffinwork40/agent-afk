@@ -3,11 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ToolCall } from './types.js';
-import type { OutputEvent } from '../types.js';
-import type {
-  SubagentProgressMeta,
-  SubagentProgressSink,
-} from '../types/session-types.js';
+import type { SubagentProgressSink } from '../types/session-types.js';
 
 // Mock SubagentManager + runSubagentDAG before importing the executor.
 const mockForkSubagent = vi.fn();
@@ -15,7 +11,8 @@ const mockTeardownAll = vi.fn(async () => {});
 const mockKill = vi.fn(async (_id: string) => true);
 
 // Capture the most recent SubagentManager constructor options so tests can
-// inspect / invoke the chained progressSink the executor installs.
+// assert what the executor passes (notably: that it does NOT install a
+// progressSink override, leaving ambient sink resolution to fork time).
 interface CapturedManagerOpts {
   progressSink?: SubagentProgressSink;
   apiKey?: string;
@@ -47,25 +44,6 @@ vi.mock('../routing-telemetry.js', () => ({
 }));
 
 import { ComposeExecutor, cleanupComposeSpills, type ComposeExecutorContext } from './compose-executor.js';
-
-// Synthetic event factory — a tool_use_detail chunk is what handle.ts emits
-// for each tool_use block in the assistant message. The budget sink filters
-// for these specifically.
-function toolUseEvent(toolName: string, id: string): OutputEvent {
-  return {
-    type: 'chunk',
-    chunk: {
-      type: 'tool_use_detail',
-      toolUseId: `tu-${id}-${Math.random().toString(36).slice(2, 8)}`,
-      toolName,
-      toolInput: '{}',
-    },
-  };
-}
-
-function meta(subagentId: string): SubagentProgressMeta {
-  return { subagentId };
-}
 
 function makeCall(input: unknown): ToolCall {
   return {
@@ -910,7 +888,7 @@ describe('ComposeExecutor', () => {
   // budget. Tests synthesize events directly into the captured sink to
   // avoid timing-dependent assertions.
   // -------------------------------------------------------------------------
-  describe('max_tool_calls_per_node input validation', () => {
+  describe('max_tool_calls_per_node input validation (deprecated alias)', () => {
     it('rejects non-number', async () => {
       const executor = new ComposeExecutor(makeContext());
       const result = await executor.execute(makeCall({
@@ -1001,6 +979,39 @@ describe('ComposeExecutor', () => {
     });
   });
 
+  describe('max_tool_rounds_per_node input validation', () => {
+    it('rejects non-number, zero, negative, fractional, and out-of-range values', async () => {
+      const executor = new ComposeExecutor(makeContext());
+      for (const v of ['5', 0, -5, 5.5, NaN, Infinity, -Infinity, 1001]) {
+        mockRunSubagentDAG.mockClear();
+        const result = await executor.execute(makeCall({
+          nodes: [{ id: 'a', prompt: 'task a' }],
+          max_tool_rounds_per_node: v,
+        }));
+        expect(result.isError).toBe(true);
+        // The error names the key the caller actually used, not the alias.
+        expect(result.content).toContain('max_tool_rounds_per_node');
+        expect(result.content).not.toContain('max_tool_calls_per_node');
+        expect(mockRunSubagentDAG).not.toHaveBeenCalled();
+      }
+    });
+
+    it('accepts the boundary values 1 and 1000 without a deprecation warning', async () => {
+      const executor = new ComposeExecutor(makeContext());
+      for (const v of [1, 1000]) {
+        mockRunSubagentDAG.mockClear();
+        mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+        const result = await executor.execute(makeCall({
+          nodes: [{ id: 'a', prompt: 'task a' }],
+          max_tool_rounds_per_node: v,
+        }));
+        expect(result.isError).toBeFalsy();
+        expect(result.content).not.toContain('deprecated');
+        expect(mockRunSubagentDAG.mock.calls[0][0].nodes[0].maxToolUseIterations).toBe(v);
+      }
+    });
+  });
+
   describe('cwd re-anchoring', () => {
     it('seeds ctx.cwd into the SubagentManager so DAG nodes anchor to the worktree', async () => {
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
@@ -1060,203 +1071,107 @@ describe('ComposeExecutor', () => {
     });
   });
 
-  describe('max_tool_calls_per_node enforcement', () => {
-    it('installs a progressSink on the SubagentManager when budget is set', async () => {
+  // -------------------------------------------------------------------------
+  // Budget enforcement is delegated to the provider loop: the per-node budget
+  // rides in the node's fork config as `maxToolUseIterations`, where the
+  // shared wind-down policy spends it and then runs one tools-stripped round.
+  // These tests pin the WIRING (does the budget reach the fork config?) — the
+  // wind-down behavior itself is owned by providers/shared/tool-loop-cap.ts
+  // and tested there. The executor must never kill a node for tool volume.
+  // -------------------------------------------------------------------------
+  describe('max_tool_rounds_per_node enforcement (graceful wind-down)', () => {
+    it('forwards the budget to every DAG node as maxToolUseIterations', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok', b: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }, { id: 'b', prompt: 'task b' }],
+        max_tool_rounds_per_node: 4,
+      }));
+
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes).toHaveLength(2);
+      for (const node of dagOpts.nodes) {
+        expect(node.maxToolUseIterations).toBe(4);
+      }
+    });
+
+    it('omits maxToolUseIterations when no budget is set (node inherits the fork default)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      // Absent (not 0, not undefined-valued) so forkSubagent's
+      // `?? SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` fallback applies.
+      expect(dagOpts.nodes[0]).not.toHaveProperty('maxToolUseIterations');
+    });
+
+    it('accepts the deprecated max_tool_calls_per_node alias and warns', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+        max_tool_calls_per_node: 6,
+      }));
+
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].maxToolUseIterations).toBe(6);
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('deprecated');
+      expect(result.content).toContain('max_tool_rounds_per_node');
+    });
+
+    it('prefers max_tool_rounds_per_node and warns when both keys are supplied', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+        max_tool_rounds_per_node: 3,
+        max_tool_calls_per_node: 99,
+      }));
+
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].maxToolUseIterations).toBe(3);
+      expect(result.content).toContain('ignoring the deprecated key');
+    });
+
+    it('does not override the ambient progressSink', async () => {
+      // The executor no longer chains a counting sink. Leaving progressSink
+      // unset lets SubagentManager resolve the ambient sink at fork time
+      // (`this.progressSink ?? getCurrentSink()`), so a sink installed after
+      // this manager is constructed is still observed.
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext());
 
       await executor.execute(makeCall({
         nodes: [{ id: 'a', prompt: 'task a' }],
-        max_tool_calls_per_node: 3,
+        max_tool_rounds_per_node: 2,
       }));
 
       expect(lastManagerOpts).toBeDefined();
-      expect(typeof lastManagerOpts?.progressSink).toBe('function');
+      expect(lastManagerOpts?.progressSink).toBeUndefined();
     });
 
-    it('installs a progressSink even when budget is absent (preserves ambient routing)', async () => {
-      // The sink is always chained so CLI rendering keeps working. Disabling
-      // the budget just means the counter branch never fires; ambient
-      // forwarding stays intact.
+    it('never kills a node for tool volume (regression: budget must not cancel)', async () => {
+      // The pre-wind-down implementation called manager.kill() once a node
+      // crossed the budget, which destroyed the node's deliverable and failed
+      // the whole compose call. No budget value may reach kill() again.
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext());
 
       await executor.execute(makeCall({
         nodes: [{ id: 'a', prompt: 'task a' }],
+        max_tool_rounds_per_node: 1,
       }));
 
-      expect(typeof lastManagerOpts?.progressSink).toBe('function');
-    });
-
-    it('calls manager.kill once when a subagent exceeds the budget', async () => {
-      mockRunSubagentDAG.mockResolvedValue({ outputs: {}, failed: [], skipped: [] });
-      const executor = new ComposeExecutor(makeContext());
-
-      await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'task a' }],
-        max_tool_calls_per_node: 2,
-      }));
-
-      const sink = lastManagerOpts?.progressSink;
-      expect(sink).toBeDefined();
-      if (!sink) return;
-
-      // Two events under budget: no kill yet.
-      sink(toolUseEvent('bash', 'a-sub'), meta('a-sub-1'));
-      sink(toolUseEvent('read_file', 'a-sub'), meta('a-sub-1'));
       expect(mockKill).not.toHaveBeenCalled();
-
-      // Third event pushes over budget: kill fires exactly once for the
-      // offender. Subsequent events for the same id don't re-fire kill.
-      sink(toolUseEvent('write_file', 'a-sub'), meta('a-sub-1'));
-      expect(mockKill).toHaveBeenCalledTimes(1);
-      expect(mockKill).toHaveBeenCalledWith('a-sub-1');
-
-      // SDK may yield buffered events between our kill and the iterator
-      // actually throwing — guard against double-kill of the same id.
-      sink(toolUseEvent('grep', 'a-sub'), meta('a-sub-1'));
-      sink(toolUseEvent('glob', 'a-sub'), meta('a-sub-1'));
-      expect(mockKill).toHaveBeenCalledTimes(1);
     });
 
-    it('does not kill siblings under the same budget', async () => {
-      mockRunSubagentDAG.mockResolvedValue({ outputs: {}, failed: [], skipped: [] });
-      const executor = new ComposeExecutor(makeContext());
-
-      await executor.execute(makeCall({
-        nodes: [
-          { id: 'a', prompt: 'a' },
-          { id: 'b', prompt: 'b' },
-        ],
-        max_tool_calls_per_node: 2,
-      }));
-
-      const sink = lastManagerOpts?.progressSink;
-      if (!sink) throw new Error('progressSink missing');
-
-      // A exceeds: 3 tool calls under id 'a-sub-1'.
-      sink(toolUseEvent('bash', 'a'), meta('a-sub-1'));
-      sink(toolUseEvent('bash', 'a'), meta('a-sub-1'));
-      sink(toolUseEvent('bash', 'a'), meta('a-sub-1'));
-      // B stays within budget: 1 tool call under id 'b-sub-1'.
-      sink(toolUseEvent('bash', 'b'), meta('b-sub-1'));
-
-      expect(mockKill).toHaveBeenCalledTimes(1);
-      expect(mockKill).toHaveBeenCalledWith('a-sub-1');
-      expect(mockKill).not.toHaveBeenCalledWith('b-sub-1');
-    });
-
-    it('counts only tool_use_detail chunks — content / thinking / message events are ignored', async () => {
-      mockRunSubagentDAG.mockResolvedValue({ outputs: {}, failed: [], skipped: [] });
-      const executor = new ComposeExecutor(makeContext());
-
-      await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'a' }],
-        max_tool_calls_per_node: 1,
-      }));
-
-      const sink = lastManagerOpts?.progressSink;
-      if (!sink) throw new Error('progressSink missing');
-
-      // Non-tool events: not counted.
-      sink({ type: 'chunk', chunk: { type: 'content', content: 'hello' } }, meta('s1'));
-      sink({ type: 'chunk', chunk: { type: 'thinking', content: 'think' } }, meta('s1'));
-      sink({ type: 'message', message: { role: 'assistant', content: '', timestamp: new Date() } }, meta('s1'));
-      sink({ type: 'done' }, meta('s1'));
-      expect(mockKill).not.toHaveBeenCalled();
-
-      // Two tool calls: first under budget, second exceeds (budget = 1).
-      sink(toolUseEvent('bash', 'a'), meta('s1'));
-      expect(mockKill).not.toHaveBeenCalled();
-      sink(toolUseEvent('bash', 'a'), meta('s1'));
-      expect(mockKill).toHaveBeenCalledTimes(1);
-    });
-
-    it('forwards every event to the ambient sink for CLI rendering', async () => {
-      // The compose-executor reads `getCurrentSink()` at execute time. We
-      // can't easily inject one in unit tests, but we CAN verify that when
-      // ambient is undefined (the default in tests), no error is thrown
-      // and budget logic still works. The chained-sink defensive try/catch
-      // around the ambient call is exercised here implicitly: any throw
-      // from the ambient path must not break counting.
-      mockRunSubagentDAG.mockResolvedValue({ outputs: {}, failed: [], skipped: [] });
-      const executor = new ComposeExecutor(makeContext());
-
-      await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'a' }],
-        max_tool_calls_per_node: 1,
-      }));
-
-      const sink = lastManagerOpts?.progressSink;
-      if (!sink) throw new Error('progressSink missing');
-
-      // These should not throw even with no ambient sink.
-      expect(() => sink(toolUseEvent('bash', 'a'), meta('s1'))).not.toThrow();
-      expect(() => sink(toolUseEvent('bash', 'a'), meta('s1'))).not.toThrow();
-      expect(mockKill).toHaveBeenCalledOnce();
-    });
-
-    it('relabels the failed error message to name the budget violation', async () => {
-      // The sink fires kill (which records 's1' as exceeded), then the DAG
-      // returns a failed entry whose error carries `subagentId: 's1'`.
-      // compose's post-process replaces the message with a budget-named
-      // string while preserving partialOutput on cause.
-      const originalErr = Object.assign(new Error('Subagent a cancelled'), {
-        subagentId: 's1',
-        partialOutput: 'I had read 3 files when killed',
-      });
-      mockRunSubagentDAG.mockImplementation(async () => {
-        // Fire the budget-exceed events while runSubagentDAG is "running"
-        // so the executor's `exceeded` set contains 's1' by the time we
-        // return the failed result.
-        const sink = lastManagerOpts?.progressSink;
-        if (!sink) throw new Error('progressSink missing');
-        sink(toolUseEvent('bash', 'a'), meta('s1'));
-        sink(toolUseEvent('bash', 'a'), meta('s1'));
-        sink(toolUseEvent('bash', 'a'), meta('s1')); // exceeds budget=2
-        return { outputs: {}, failed: [{ id: 'a', error: originalErr }], skipped: [] };
-      });
-
-      const executor = new ComposeExecutor(makeContext());
-      const result = await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'a' }],
-        max_tool_calls_per_node: 2,
-      }));
-
-      expect(result.isError).toBe(true);
-      expect(result.content).toContain('## a [FAILED]');
-      expect(result.content).toContain('exceeded max_tool_calls_per_node of 2');
-      expect(result.content).toContain('observed 3');
-      // Partial findings still surface — the relabel preserves them.
-      expect(result.content).toContain('### Partial findings before failure:');
-      expect(result.content).toContain('I had read 3 files when killed');
-    });
-
-    it('does NOT relabel failed entries that did not exceed the budget', async () => {
-      // A failure with a different cause (e.g. timeout, internal error)
-      // must keep its original message even when the budget option is set.
-      const timeoutErr = Object.assign(
-        new Error('Subagent a aborted: DAG node "a" exceeded nodeTimeoutMs of 30ms'),
-        { subagentId: 's-different' },
-      );
-      mockRunSubagentDAG.mockResolvedValue({
-        outputs: {},
-        failed: [{ id: 'a', error: timeoutErr }],
-        skipped: [],
-      });
-
-      const executor = new ComposeExecutor(makeContext());
-      const result = await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'a' }],
-        max_tool_calls_per_node: 5,
-      }));
-
-      // The original timeout message survives — no budget relabel.
-      expect(result.content).toContain('exceeded nodeTimeoutMs');
-      expect(result.content).not.toContain('exceeded max_tool_calls_per_node');
-    });
-
-    it('coexists with node_timeout_ms and fail_fast', async () => {
+    it('keeps the budget off the DAG-level options (it is per-node, not per-run)', async () => {
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext());
 
@@ -1264,76 +1179,14 @@ describe('ComposeExecutor', () => {
         nodes: [{ id: 'a', prompt: 'a' }],
         fail_fast: false,
         node_timeout_ms: 30_000,
-        max_tool_calls_per_node: 20,
+        max_tool_rounds_per_node: 20,
       }));
 
       const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
-      // Budget enforcement is internal to compose-executor — only fail_fast
-      // and nodeTimeoutMs propagate to the DAG layer (correct separation of
-      // concerns: the DAG doesn't know about subagent tool calls).
       expect(dagOpts.failFast).toBe(false);
       expect(dagOpts.nodeTimeoutMs).toBe(30_000);
+      expect(dagOpts).not.toHaveProperty('maxToolRoundsPerNode');
       expect(dagOpts).not.toHaveProperty('maxToolCallsPerNode');
-    });
-
-    it('default behavior unchanged when max_tool_calls_per_node is absent', async () => {
-      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
-      const executor = new ComposeExecutor(makeContext());
-
-      await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'a' }],
-      }));
-
-      const sink = lastManagerOpts?.progressSink;
-      if (!sink) throw new Error('progressSink missing');
-
-      // Even an absurd number of tool calls must not trigger kill when
-      // budget is undefined.
-      for (let i = 0; i < 100; i++) {
-        sink(toolUseEvent('bash', 'a'), meta('s1'));
-      }
-      expect(mockKill).not.toHaveBeenCalled();
-    });
-
-    it('TDZ guard: sink invoked during SubagentManager construction does not throw (issue #1)', async () => {
-      // Simulate a pathological SubagentManager constructor that fires the
-      // progressSink synchronously before returning (e.g. via a hook). The
-      // sink must silently return early instead of dereferencing `manager`
-      // (which is unassigned at that moment). This tests the `if (!manager) return`
-      // guard added to address the TDZ footgun.
-      const { SubagentManager } = await import('../subagent.js');
-      const mockCtor = vi.mocked(SubagentManager);
-
-      mockCtor.mockImplementationOnce((opts: CapturedManagerOpts) => {
-        lastManagerOpts = opts;
-        // Fire the sink synchronously inside the constructor — before
-        // `manager = new SubagentManager(...)` has returned and the LHS binding
-        // has been updated.
-        if (opts.progressSink) {
-          expect(() =>
-            opts.progressSink!(toolUseEvent('bash', 'ctor-test'), meta('s-ctor')),
-          ).not.toThrow();
-        }
-        return {
-          forkSubagent: mockForkSubagent,
-          teardownAll: mockTeardownAll,
-          kill: mockKill,
-        };
-      });
-
-      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
-      const executor = new ComposeExecutor(makeContext());
-
-      // Should not throw even though the sink fires before manager is assigned.
-      await expect(executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'a' }],
-        max_tool_calls_per_node: 1,
-      }))).resolves.not.toThrow();
-
-      // The early-return guard means kill was NOT fired during construction
-      // (the event was dropped rather than crashing). Normal budget
-      // enforcement still works for events that arrive after construction.
-      expect(mockKill).not.toHaveBeenCalled();
     });
   });
 

@@ -23,8 +23,6 @@ import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
 import type { SubagentExecutionError } from '../subagent/result.js';
-import type { SubagentProgressSink } from '../types/session-types.js';
-import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { getSessionsDir } from '../../paths.js';
 
 export interface ComposeExecutorContext {
@@ -148,7 +146,13 @@ interface ComposeInput {
   edges?: DAGEdge[];
   fail_fast?: boolean;
   node_timeout_ms?: number;
-  max_tool_calls_per_node?: number;
+  /**
+   * Per-node tool-use ROUND budget, normalized from either
+   * `max_tool_rounds_per_node` (preferred) or the deprecated
+   * `max_tool_calls_per_node` alias. Forwarded to each node's fork config as
+   * `maxToolUseIterations` — see the budget note in {@link ComposeExecutor}.
+   */
+  max_tool_rounds_per_node?: number;
 }
 
 interface ParseResult {
@@ -164,12 +168,13 @@ interface ParseResult {
 const MIN_NODE_TIMEOUT_MS = 1_000;
 const MAX_NODE_TIMEOUT_MS = 3_600_000;
 
-// Bounds for the per-node tool-call budget. A floor of 1 prevents the
-// "always-fail" degenerate (budget=0 would kill on the first tool, making
-// the subagent useless). The ceiling of 1000 is a sanity cap — past that
-// the budget no longer constrains useful work and is almost always a typo.
-const MIN_NODE_TOOL_CALLS = 1;
-const MAX_NODE_TOOL_CALLS = 1_000;
+// Bounds for the per-node tool-use round budget. A floor of 1 keeps at least
+// one tool-using round before the wind-down round fires (budget=0 means "no
+// cap" to the provider loop, the opposite of what a caller passing 0 wants).
+// The ceiling of 1000 is a sanity cap — past that the budget no longer
+// constrains useful work and is almost always a typo.
+const MIN_NODE_TOOL_ROUNDS = 1;
+const MAX_NODE_TOOL_ROUNDS = 1_000;
 
 function parseComposeInput(input: unknown): ParseResult {
   if (typeof input !== 'object' || input === null) {
@@ -289,30 +294,48 @@ function parseComposeInput(input: unknown): ParseResult {
     }
   }
 
-  let maxToolCallsPerNode: number | undefined;
-  if (obj['max_tool_calls_per_node'] !== undefined) {
-    const val = obj['max_tool_calls_per_node'];
+  // `max_tool_calls_per_node` is the pre-wind-down name for the same knob and
+  // is still accepted; the preferred key wins when both are present so a
+  // caller migrating incrementally never silently gets the older value.
+  const ROUNDS_KEY = 'max_tool_rounds_per_node';
+  const LEGACY_ROUNDS_KEY = 'max_tool_calls_per_node';
+  const usedKey = obj[ROUNDS_KEY] !== undefined ? ROUNDS_KEY : LEGACY_ROUNDS_KEY;
+  if (obj[ROUNDS_KEY] !== undefined && obj[LEGACY_ROUNDS_KEY] !== undefined) {
+    warnings.push(
+      `both "${ROUNDS_KEY}" and the deprecated "${LEGACY_ROUNDS_KEY}" were ` +
+      `supplied; using "${ROUNDS_KEY}" and ignoring the deprecated key.`,
+    );
+  } else if (obj[LEGACY_ROUNDS_KEY] !== undefined) {
+    warnings.push(
+      `"${LEGACY_ROUNDS_KEY}" is deprecated — use "${ROUNDS_KEY}". The unit ` +
+      `is tool-use ROUNDS (a round with N parallel calls costs 1), and ` +
+      `spending the budget now triggers a tools-stripped wind-down round ` +
+      `instead of cancelling the node.`,
+    );
+  }
+
+  let maxToolRoundsPerNode: number | undefined;
+  if (obj[usedKey] !== undefined) {
+    const val = obj[usedKey];
     if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
-      throw new Error('"max_tool_calls_per_node" must be a positive finite number');
+      throw new Error(`"${usedKey}" must be a positive finite number`);
     }
     if (!Number.isInteger(val)) {
       throw new Error(
-        `"max_tool_calls_per_node" must be an integer (got ${val}). ` +
-        `Tool calls are discrete events; fractional budgets are not meaningful.`,
+        `"${usedKey}" must be an integer (got ${val}). ` +
+        `Tool-use rounds are discrete events; fractional budgets are not meaningful.`,
       );
     }
-    if (val < MIN_NODE_TOOL_CALLS) {
-      throw new Error(
-        `"max_tool_calls_per_node" must be at least ${MIN_NODE_TOOL_CALLS}`,
-      );
+    if (val < MIN_NODE_TOOL_ROUNDS) {
+      throw new Error(`"${usedKey}" must be at least ${MIN_NODE_TOOL_ROUNDS}`);
     }
-    if (val > MAX_NODE_TOOL_CALLS) {
+    if (val > MAX_NODE_TOOL_ROUNDS) {
       throw new Error(
-        `"max_tool_calls_per_node" must be at most ${MAX_NODE_TOOL_CALLS} ` +
+        `"${usedKey}" must be at most ${MAX_NODE_TOOL_ROUNDS} ` +
         `(got ${val}). A larger budget no longer constrains useful work.`,
       );
     }
-    maxToolCallsPerNode = val;
+    maxToolRoundsPerNode = val;
   }
 
   return {
@@ -321,7 +344,7 @@ function parseComposeInput(input: unknown): ParseResult {
       edges,
       fail_fast: failFast,
       node_timeout_ms: nodeTimeoutMs,
-      max_tool_calls_per_node: maxToolCallsPerNode,
+      max_tool_rounds_per_node: maxToolRoundsPerNode,
     },
     warnings,
   };
@@ -535,58 +558,24 @@ export class ComposeExecutor {
         ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(this.ctx.depth) }
         : {};
 
-    // Per-node tool-call budget: count tool_use_detail chunks per subagentId
-    // via a chained progressSink that forwards to the ambient sink (so CLI
-    // rendering stays intact) and kills the offending handle on the first
-    // event that pushes count above the budget. Disabled when the option
-    // is absent — chained sink still preserves ambient routing unchanged.
+    // Contract: the per-node tool budget is enforced BY THE PROVIDER LOOP, not
+    // by this executor. `max_tool_rounds_per_node` is forwarded to each node's
+    // fork config as `maxToolUseIterations`, where the shared wind-down policy
+    // (providers/shared/tool-loop-cap.ts) spends the budget and then runs one
+    // final tools-stripped round so the node answers from what it gathered.
     //
-    // The closure references `manager` lazily; manager is constructed
-    // below with this sink installed. The `exceeded` set guards against
-    // re-firing kill() for the same id when the SDK has events in flight
-    // between our kill request and the iterator actually throwing.
-    //
-    // TDZ guard: `manager` is assigned after `chainedSink` is constructed,
-    // so the sink must check `manager !== undefined` before dereferencing
-    // it. In practice the SubagentManager constructor is synchronous and no
-    // event can be emitted before it returns, but the guard makes this safe
-    // against future hook-based or test-injection scenarios where a progress
-    // event might fire during construction.
-    const budget = parsed.max_tool_calls_per_node;
-    const toolCounts = new Map<string, number>();
-    const exceeded = new Set<string>();
-    const ambient = getCurrentSink();
-    // Use a definite-assignment assertion so TypeScript treats the binding
-    // as always-assigned; the runtime guard below (`if (!manager) return`)
-    // is the actual safety net for the pre-assignment window.
-    let manager!: SubagentManager;
-    const chainedSink: SubagentProgressSink = (event, meta) => {
-      // Forward to ambient FIRST so CLI rendering observes the event even
-      // if our counter logic throws (defensive — sinks shouldn't throw but
-      // the CLI shouldn't lose rendering if a counter bug slips in).
-      if (ambient !== undefined) {
-        try {
-          ambient(event, meta);
-        } catch {
-          // ambient sink errors are isolated — they must not break counting
-          // or the upstream stream consumer.
-        }
-      }
-      // Safety net: if the sink fires synchronously during SubagentManager
-      // construction (e.g. via an injected hook), `manager` is not yet
-      // assigned. Return early rather than throw a ReferenceError.
-      if (!manager) return;
-      if (budget === undefined) return;
-      if (event.type !== 'chunk' || event.chunk.type !== 'tool_use_detail') return;
-      const next = (toolCounts.get(meta.subagentId) ?? 0) + 1;
-      toolCounts.set(meta.subagentId, next);
-      if (next > budget && !exceeded.has(meta.subagentId)) {
-        exceeded.add(meta.subagentId);
-        // Fire-and-forget cancel. handle.cancel() is idempotent via the
-        // stopDispatched guard, so a no-op if the handle already torn down.
-        void manager.kill(meta.subagentId).catch(() => undefined);
-      }
-    };
+    // This executor previously policed the budget itself: a chained
+    // progressSink counted `tool_use_detail` chunks per subagentId and called
+    // manager.kill() past the limit. That was wrong twice over. (1) The count
+    // was provider-dependent — anthropic-direct emits `tool.use.start` twice
+    // per tool block, so the budget bit at half its stated value there and at
+    // full value on openai-compatible. (2) Killing mid-round destroys the
+    // node's deliverable: a subagent's answer only exists once it stops calling
+    // tools, so a killed node returned ~90 bytes of failure text no matter how
+    // much work it had done, and `isError` then failed the whole compose call,
+    // discarding healthy siblings too.
+    const maxToolRoundsPerNode = parsed.max_tool_rounds_per_node;
+    let manager: SubagentManager;
 
     // Read-scope inheritance (#547): derive the DAG nodes' parentReadRoots from
     // the parent session's read scope + this executor's cwd, mirroring the
@@ -604,7 +593,10 @@ export class ComposeExecutor {
       // `this.ctx.defaultModel`), so that model is the provider source of truth
       // for the fork-time credential fallback (see SubagentManager.parentProvider).
       parentModel: this.ctx.defaultModel,
-      progressSink: chainedSink,
+      // No progressSink override: SubagentManager falls back to the ambient
+      // sink (`this.progressSink ?? getCurrentSink()`) at fork time, which is
+      // strictly better than capturing it here — a sink installed after this
+      // manager is constructed is still observed.
       ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
       // Anchor every forked DAG node to the session's worktree (re-anchored via
       // setCwd). Without this the manager's parentCwd is undefined and nodes
@@ -705,6 +697,12 @@ export class ComposeExecutor {
           model: nodeModel,
           idPrefix: `compose-${n.id}`,
           ...(resolvedNodeApiKey !== undefined ? { apiKey: resolvedNodeApiKey } : {}),
+          // Budget enforcement: the provider loop caps tool-use rounds and
+          // winds down gracefully. Omitted when unset so the fork keeps
+          // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (subagent.ts).
+          ...(maxToolRoundsPerNode !== undefined
+            ? { maxToolUseIterations: maxToolRoundsPerNode }
+            : {}),
         };
       });
 
@@ -716,29 +714,6 @@ export class ComposeExecutor {
         failFast: parsed.fail_fast,
         nodeTimeoutMs: parsed.node_timeout_ms,
       });
-
-      // Relabel errors for subagents the budget sink killed. Otherwise the
-      // [FAILED] section would show a generic "cancelled" message — the
-      // parent wouldn't learn why the node was stopped. Partial findings
-      // already attached by attachSubagentContext are preserved on the
-      // new error so formatDAGResult can still render them.
-      if (budget !== undefined && exceeded.size > 0) {
-        for (const failure of result.failed) {
-          const original = failure.error as SubagentExecutionError;
-          const sid = original.subagentId;
-          if (sid === undefined || !exceeded.has(sid)) continue;
-          const observed = toolCounts.get(sid) ?? budget + 1;
-          const labeled = new Error(
-            `Subagent ${failure.id} exceeded max_tool_calls_per_node of ${budget} (observed ${observed})`,
-            { cause: failure.error },
-          ) as SubagentExecutionError;
-          if (original.partialOutput !== undefined) {
-            labeled.partialOutput = original.partialOutput;
-          }
-          labeled.subagentId = sid;
-          failure.error = labeled;
-        }
-      }
 
       void appendRoutingDecision({
         ...identity,
