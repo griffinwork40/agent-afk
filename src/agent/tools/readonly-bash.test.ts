@@ -7,6 +7,8 @@ describe('classifyBashCommand', () => {
       ['git commit -m x', 'git commit'],
       ['git push', 'git push'],
       ['git checkout -b f', 'git checkout'],
+      ['git clone https://example.com/x /tmp/z', 'git clone'],
+      ['git init /tmp/newrepo', 'git init'],
       ['rm -rf x', 'rm -rf'],
       ['mv a b', 'mv'],
       ['echo x > file.txt', 'redirection to file'],
@@ -521,10 +523,13 @@ describe('classifyBashCommand', () => {
   describe('git worktree mutations are blocked', () => {
     const blocked: Array<[string, string]> = [
       ['git worktree remove .afk-worktrees/old', 'git worktree remove'],
+      ['git worktree remove /tmp/x', 'git worktree remove (absolute path)'],
       ['git worktree prune', 'git worktree prune'],
       ['git worktree move .afk-worktrees/a .afk-worktrees/b', 'git worktree move'],
       ['git worktree lock .afk-worktrees/x', 'git worktree lock'],
       ['git worktree unlock .afk-worktrees/x', 'git worktree unlock'],
+      ['git worktree add -b foo /tmp/x HEAD', 'git worktree add'],
+      ['git -C /some/other/repo worktree add -b foo /tmp/y HEAD', 'git -C <dir> then git worktree add'],
     ];
     for (const [cmd, label] of blocked) {
       it(`blocks: ${label} (${cmd})`, () => {
