@@ -695,12 +695,19 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
-  // Progress-aware idle watchdog fired on a forked sub-agent turn: the child
-  // produced no observable OutputEvent for the idle window and its controller
-  // was aborted (see subagent/idle-watchdog.ts). A single event (no paired
-  // start); carries `idleTimeoutMs`, `elapsedSinceLastProgressMs`, and
-  // `lastEventType` in `metadata`. Distinct from `rate_limit`/`usage_limit_*`,
-  // which mark LEGITIMATE waits — this marks an unexplained stall that fired.
+  // A progress-aware watchdog fired on unexplained silence. Two sources, told
+  // apart by `metadata.source`:
+  //   - absent → a forked sub-agent turn: the child produced no observable
+  //     OutputEvent for the idle window and its controller was aborted (see
+  //     subagent/idle-watchdog.ts). Carries `idleTimeoutMs`,
+  //     `elapsedSinceLastProgressMs`, and `lastEventType`.
+  //   - `'model-stream'` → a provider stream that had ALREADY produced a first
+  //     content token then went silent for the whole stall window, so the round
+  //     was aborted instead of hanging (see providers/shared/stream-stall-timeout.ts,
+  //     issue #762). Carries `stallTimeoutMs` + `elapsedSinceLastProgressMs`.
+  // A single event either way (no paired start). Distinct from
+  // `rate_limit`/`usage_limit_*`, which mark LEGITIMATE waits — this marks an
+  // unexplained stall that fired.
   | 'idle_watchdog_fired'
   // OBSERVE-ONLY loop telemetry (see tools/suspected-loop-detector.ts): a
   // FORKED sub-agent issued the same (tool, normalized-args) fingerprint

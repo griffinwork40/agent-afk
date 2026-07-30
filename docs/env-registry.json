@@ -474,8 +474,17 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_STALL_TIMEOUT_MS",
+      "description": "Progress-aware POST-first-byte stall window (ms) for the anthropic-direct streaming loop. Bounds how long a stream that has ALREADY produced content may then go completely silent. Every streamed output event resets the window, so this is NOT a total-round cap: a legitimately long, actively-streaming round (large code emission, extended thinking) survives indefinitely, while a stream wedged mid-flight is aborted and surfaces as a real terminal error instead of hanging. Complements AFK_MODEL_TTFB_TIMEOUT_MS, which governs only the window BEFORE the first token; this one takes over after it. Default 1200000 (20min) — above the 18.5min maximum post-first-byte stream duration observed across 86,076 rounds in 12,381 local traces (p99 122s, p99.9 234s), so no healthy round trips it. Set to 0 to disable (issue #762).",
+      "type": "number",
+      "required": false,
+      "default": "1200000",
+      "example": "600000",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_TTFB_TIMEOUT_MS",
-      "description": "Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. Bounds how long a single model call may stall BEFORE its first streamed CONTENT token (a text/thinking delta or tool_use); the connection-level message_start and keep-alive pings do NOT count. Once a content token streams, the timer is cleared and the rest of the response runs unbounded, so a normal slow call (below the bound) and any actively-streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried once, then surfaces as an error (raise this value or set 0 for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.",
+      "description": "Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. Bounds how long a single model call may stall BEFORE its first streamed CONTENT token (a text/thinking delta or tool_use); the connection-level message_start and keep-alive pings do NOT count. Once a content token streams, the timer is cleared and the rest of the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, so a normal slow call (below the bound) and any actively-streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried once, then surfaces as an error (raise this value or set 0 for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.",
       "type": "number",
       "required": false,
       "default": "180000",
