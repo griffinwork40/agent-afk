@@ -253,17 +253,30 @@ function renderGroupedRootTools(
   homeDir?: string,
 ): string[] {
   const lines: string[] = [];
-  // Read once per call: diff body lines below are clamped to this width so
-  // long file content never soft-wraps to column 0 in scrollback (orphaning
-  // its continuation past the indent). Mirrors the clamp on every other
-  // diff-emission path; see tool-lane-render-children.ts.
+  // Read once per call: EVERY line this function emits is clamped to this
+  // width so nothing soft-wraps to column 0 in scrollback (orphaning its
+  // continuation past the indent). Mirrors the clamp on every other
+  // emission path; see tool-lane-render-children.ts.
+  //
+  // Invariant: root entries arrive here with an UNBOUNDED prefix — the root
+  // dispatch path (stream-renderer-orchestrator.ts) calls
+  // addStartWithAgentContext without a maxWidth, unlike the subagent-child
+  // path (stream-renderer-subagent.ts) which budgets it at cols - 14. So the
+  // clamp here is the only thing standing between a 350-column bash command
+  // and a wrapped scrollback row. The live overlay already clamps its
+  // equivalents (tool-lane.ts); flush must not be the lone exception.
   const cols = getTerminalWidth();
   for (const toolName of groupOrder) {
     const entries = groups.get(toolName)!;
     if (entries.length === 1) {
       const e = entries[0]!;
       if (e.result) {
-        lines.push('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result));
+        // Plain clamp, not suffix-reservation as in the grouped path: for a
+        // single entry the args ARE the identity and the outcome is the
+        // expendable tail, which is exactly how the overlay clamps the same
+        // row ("clamping should elide the outcome tail, not the leading
+        // prefix that carries the tool identity" — tool-lane.test.ts).
+        lines.push(clampLineToTerminal('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (2 for the row indent, 2 more to clear the
@@ -273,7 +286,7 @@ function renderGroupedRootTools(
           }
         }
       } else {
-        lines.push('  ' + e.prefix);
+        lines.push(clampLineToTerminal('  ' + e.prefix, cols));
       }
     } else {
       lines.push(formatGroupedToolResults(toolName, entries, cols, homeDir));
@@ -305,7 +318,7 @@ function renderGroupedRootTools(
           // fully scrubbed before linkification adds our own escapes.
           const sanitized = sanitizeLabel(e.toolInput);
           const label = shortenPaths(sanitized).trim() || sanitized.trim();
-          lines.push('    ' + palette.dim(`── ${label} ──`));
+          lines.push(clampLineToTerminal('    ' + palette.dim(`── ${label} ──`), cols));
         }
         for (const line of formatDiffBlock(e.diff!, 'flush', '    ')) {
           lines.push(clampLineToTerminal(line, cols));

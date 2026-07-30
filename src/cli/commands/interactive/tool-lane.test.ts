@@ -718,6 +718,73 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
       }
     });
 
+    /**
+     * Regression for the sibling rows of the grouped-width fix.
+     * `renderGroupedRootTools` emits four row shapes; only the grouped one was
+     * bounded, so the same long bash command rendered correctly in the live
+     * overlay (which clamps every row) and then wrapped the moment it
+     * committed to scrollback via flush().
+     *
+     * Root entries are the exposed case: the root dispatch path
+     * (stream-renderer-orchestrator.ts) calls addStartWithAgentContext with no
+     * maxWidth, so `prefix` arrives unbudgeted — unlike subagent children
+     * (stream-renderer-subagent.ts), which cap it at cols - 14. The call shape
+     * below mirrors that root path exactly; using addStart() instead would
+     * test a path production never takes.
+     */
+    it('flush root rows fit within terminal width (completed, in-flight, diff separators)', () => {
+      const cols = process.stdout.columns ?? 88;
+      const longCommand = ' ' + 'echo hello world '.repeat(20);
+
+      const completed = new ToolLane();
+      completed.addStartWithAgentContext('root-done', 'bash', longCommand, undefined);
+      completed.addResult('root-done', { ...makeResult('output'), lineCount: 40 });
+
+      const inFlight = new ToolLane();
+      inFlight.addStartWithAgentContext('root-live', 'bash', longCommand, undefined);
+
+      // Two grouped entries carrying diffs trigger the labeled `── file ──`
+      // separator. A long BASENAME is what overflows it — shortenPaths
+      // collapses directories, so a long directory alone would not reproduce.
+      const separators = new ToolLane();
+      const longName = 'src/generated/' + 'very-long-component-name'.repeat(3);
+      for (const suffix of ['a', 'b']) {
+        const id = `write-${suffix}`;
+        separators.addStartWithAgentContext(id, 'write_file', ` ${longName}-${suffix}.ts`, undefined);
+        separators.addResult(id, { ...makeResult('ok'), lineCount: 3 });
+        separators.addDiff(id, {
+          addedLines: 1,
+          removedLines: 0,
+          hunks: [{
+            oldStart: 1, oldLines: 0, newStart: 1, newLines: 1,
+            lines: [{ kind: '+', text: 'short' }],
+          }],
+        });
+      }
+
+      // flush() drains the lane, so capture each render exactly once.
+      const rendered: ReadonlyArray<readonly [string, string[]]> = [
+        ['completed', completed.flush()],
+        ['in-flight', inFlight.flush()],
+        ['diff separators', separators.flush()],
+      ];
+
+      for (const [label, lines] of rendered) {
+        expect(lines.length, `${label}: rendered nothing`).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(
+            displayWidth(stripAnsi(line)),
+            `${label} flush line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+          ).toBeLessThanOrEqual(cols);
+        }
+      }
+
+      // Tool identity must survive the clamp — the outcome tail is the
+      // expendable part, matching the overlay contract pinned above.
+      expect(stripAnsi((rendered[0]![1]).join('\n'))).toContain('bash');
+      expect(stripAnsi((rendered[2]![1]).join('\n'))).toContain('──');
+    });
+
     it('orchestrator-root in-progress bash with long input fits within terminal width', () => {
       const lane = new ToolLane();
       const cols = process.stdout.columns ?? 88;
