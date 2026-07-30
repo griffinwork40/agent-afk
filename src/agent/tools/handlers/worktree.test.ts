@@ -109,7 +109,11 @@ describe('worktree handler — create', () => {
         // (mkdir synchronously inside the responder.)
         return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
       }
-      if (call.args.includes('rev-parse') && call.args.includes('HEAD')) {
+      // Two distinct rev-parses now run: `rev-parse HEAD` at the anchor to
+      // resolve the default base (#760), then `rev-parse <base>` for meta's
+      // baseSha. Real git answers both with the same commit — emulate that.
+      // `--git-common-dir` is also a rev-parse, so it must not be shadowed.
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir')) {
         return { stdout: 'base-sha-123\n', stderr: '' };
       }
       return undefined;
@@ -126,10 +130,12 @@ describe('worktree handler — create', () => {
     expect(parsed.note).toMatch(/not installed/i);
     expect(parsed.note).toContain(wtPath);
 
-    // git worktree add argv shape
+    // git worktree add argv shape. #760: an unspecified base is resolved to the
+    // anchor's HEAD sha before the add, since the add itself runs `-C repoRoot`
+    // where a literal `HEAD` would mean the MAIN checkout's tip.
     const addCall = mock.calls.find((c) => c.args.includes('add'));
     expect(addCall?.args).toEqual([
-      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/my-feature', wtPath, 'HEAD',
+      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/my-feature', wtPath, 'base-sha-123',
     ]);
 
     // Meta written with owner 'agent' + pid
@@ -139,6 +145,53 @@ describe('worktree handler — create', () => {
     expect(meta['pid']).toBe(process.pid);
     expect(meta['baseSha']).toBe('base-sha-123');
     expect(typeof meta['createdAt']).toBe('string');
+  });
+
+  // #760: the calling session is usually INSIDE a worktree whose HEAD differs
+  // from the main checkout's. Because `git worktree add` must run from the main
+  // repo root, a literal `HEAD` base resolved there — silently basing the new
+  // branch on main's tip. The default must follow the anchor instead.
+  it("bases an unspecified create on the ANCHOR's HEAD, not the main checkout's", async () => {
+    const anchor = join(afkRoot, 'calling-session');
+    const wtPath = join(afkRoot, 'derived');
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      // Distinguish the two checkouts by the `-C <dir>` the caller used.
+      if (call.args.includes('rev-parse') && call.args.includes('HEAD')) {
+        const dir = call.args[call.args.indexOf('-C') + 1];
+        return { stdout: dir === anchor ? 'anchor-sha\n' : 'main-sha\n', stderr: '' };
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(anchor, { execFile: mock });
+    const result = await handler({ action: 'create', name: 'derived' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+
+    const addCall = mock.calls.find((c) => c.args.includes('add'));
+    expect(addCall?.args.at(-1)).toBe('anchor-sha');
+    expect(addCall?.args.at(-1)).not.toBe('main-sha');
+    // The add itself still runs from the MAIN repo root — only the base moved.
+    expect(addCall?.args.slice(0, 2)).toEqual(['-C', repoRoot]);
+  });
+
+  it('honours an explicit base ref unchanged (no anchor resolution)', async () => {
+    const wtPath = join(afkRoot, 'pinned');
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler(
+      { action: 'create', name: 'pinned', base: 'origin/main' },
+      SIGNAL,
+    );
+    expect(result.isError).toBeUndefined();
+    const addCall = mock.calls.find((c) => c.args.includes('add'));
+    expect(addCall?.args.at(-1)).toBe('origin/main');
   });
 
   it('refuses when a worktree already exists at the target path', async () => {
