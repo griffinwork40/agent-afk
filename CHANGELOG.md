@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.8] - 2026-07-30
+
+### Fixed
+- follow AFK_HOME in the credential floor + reject overly broad subagent cwd/writeRoots (#753) (2675eaf)
+
 ## [5.82.7] - 2026-07-30
 
 ### Fixed
