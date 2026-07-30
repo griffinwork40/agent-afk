@@ -28,6 +28,9 @@ describe('isRebuildableIgnoredEntry', () => {
     '.turbo/', '.vite/', '.cache/', 'coverage/', '.nyc_output/',
     'tsconfig.tsbuildinfo', 'app.tsbuildinfo', '.eslintcache',
     '__pycache__/', '.venv/', '.DS_Store', 'debug.log',
+    '.afk-worktree-meta.json',
+    'packages/app/node_modules/', 'packages/app/dist/',
+    'crates/server/target/', 'packages/app/.cache/',
   ];
   for (const entry of rebuildable) {
     it(`treats ${entry} as rebuildable`, () => {
@@ -47,15 +50,16 @@ describe('isRebuildableIgnoredEntry', () => {
     });
   }
 
-  it('does not let a rebuildable name nested under a real dir pass as rebuildable', () => {
-    // Patterns are anchored: only a top-level `dist/` is build output.
+  it('does not confuse a file containing a rebuildable directory name with output', () => {
     expect(isRebuildableIgnoredEntry('my-notes/dist-plan.md')).toBe(false);
   });
 });
 
 describe('hasNonRebuildableIgnoredFiles', () => {
   it('is false when every ignored entry is rebuildable', async () => {
-    const exec = mockExec('!! node_modules/\n!! dist/\n!! .eslintcache\n');
+    const exec = mockExec(
+      '!! .afk-worktree-meta.json\n!! packages/app/node_modules/\n!! packages/app/dist/\n',
+    );
     expect(await hasNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toBe(false);
   });
 

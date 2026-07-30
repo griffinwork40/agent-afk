@@ -28,44 +28,47 @@ import type { ExecFileFn } from './worktree-sweep.js';
 
 /**
  * Ignored paths that a build can regenerate from committed sources. Matched
- * against the repo-relative path git reports, anchored at the start.
+ * against the repo-relative path git reports. Directory patterns may occur at
+ * any package boundary so monorepo output is treated the same as root output.
  *
  * Deliberately NOT listed (so they protect the tree): `.env*`, `.vscode/`,
  * `.idea/`, and anything else unrecognised — editor and environment files are
  * hand-authored local state, not build output.
  */
 const REBUILDABLE_IGNORED_PATTERNS: readonly RegExp[] = [
+  // AFK owns and recreates this bookkeeping marker.
+  /^\.afk-worktree-meta\.json$/,
   // Dependency trees
-  /^node_modules\//,
-  /^\.pnpm(-store)?\//,
-  /^\.yarn\//,
-  /^bower_components\//,
-  /^vendor\/bundle\//,
+  /(?:^|\/)node_modules\//,
+  /(?:^|\/)\.pnpm(-store)?\//,
+  /(?:^|\/)\.yarn\//,
+  /(?:^|\/)bower_components\//,
+  /(?:^|\/)vendor\/bundle\//,
   // Build output
-  /^dist\//,
-  /^build\//,
-  /^out\//,
-  /^lib-cov\//,
-  /^\.next\//,
-  /^\.nuxt\//,
-  /^\.svelte-kit\//,
-  /^\.output\//,
-  /^target\//,
+  /(?:^|\/)dist\//,
+  /(?:^|\/)build\//,
+  /(?:^|\/)out\//,
+  /(?:^|\/)lib-cov\//,
+  /(?:^|\/)\.next\//,
+  /(?:^|\/)\.nuxt\//,
+  /(?:^|\/)\.svelte-kit\//,
+  /(?:^|\/)\.output\//,
+  /(?:^|\/)target\//,
   // Caches
-  /^\.turbo\//,
-  /^\.parcel-cache\//,
-  /^\.vite\//,
-  /^\.cache\//,
-  /^\.gradle\//,
-  /^__pycache__\//,
-  /^\.pytest_cache\//,
-  /^\.mypy_cache\//,
-  /^\.ruff_cache\//,
-  /^\.venv\//,
-  /^venv\//,
+  /(?:^|\/)\.turbo\//,
+  /(?:^|\/)\.parcel-cache\//,
+  /(?:^|\/)\.vite\//,
+  /(?:^|\/)\.cache\//,
+  /(?:^|\/)\.gradle\//,
+  /(?:^|\/)__pycache__\//,
+  /(?:^|\/)\.pytest_cache\//,
+  /(?:^|\/)\.mypy_cache\//,
+  /(?:^|\/)\.ruff_cache\//,
+  /(?:^|\/)\.venv\//,
+  /(?:^|\/)venv\//,
   // Coverage + incremental-build metadata
-  /^coverage\//,
-  /^\.nyc_output\//,
+  /(?:^|\/)coverage\//,
+  /(?:^|\/)\.nyc_output\//,
   /\.tsbuildinfo$/,
   /^\.eslintcache$/,
   /^\.stylelintcache$/,
