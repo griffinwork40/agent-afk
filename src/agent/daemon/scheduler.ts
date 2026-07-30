@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import * as cron from 'node-cron';
 import { runSweep } from '../worktree-sweep.js';
 import type { ExecFileFn } from '../worktree-sweep.js';
+import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext } from './queue-store.js';
 import { getQueueDir } from '../../paths.js';
@@ -462,12 +463,15 @@ export class CronScheduler {
     };
 
     try {
-      const repoRoot = await resolveWorktreePruneRoot(
+      const primaryRoot = await resolveWorktreePruneRoot(
         builtinPruneExecFile,
         process.cwd(),
         env.AFK_WORKTREE_SWEEP_ROOT,
       );
-      if (repoRoot === null) {
+      // The sweep is per-root, so the daemon's own cwd used to bound what could
+      // ever be reclaimed. Visit every root known to hold managed trees (#761).
+      const roots = await sweepRootSet(primaryRoot);
+      if (roots.length === 0) {
         // Daemon cwd is not inside a git repo (commonly $HOME under launchd).
         // Skip rather than erroring on every tick; the per-repo REPL boot-prune
         // still handles cleanup for repos the user actually works in.
@@ -488,15 +492,26 @@ export class CronScheduler {
       const maxAgeDaysDirty =
         parseInt(env.AFK_WORKTREE_MAX_AGE_DIRTY ?? '', 10) || 30;
 
-      const result = await runSweep({
-        execFile: builtinPruneExecFile,
-        repoRoot,
-        dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
-        maxAgeDaysClean,
-        maxAgeDaysDirty,
-        scope: 'all',
-        telemetryPath: this.telemetryPath(),
-      });
+      // Sequential on purpose: runSweep takes a single machine-global advisory
+      // lock, so parallel roots would just contend and the losers short-circuit.
+      const results = [];
+      for (const repoRoot of roots) {
+        results.push(await runSweep({
+          execFile: builtinPruneExecFile,
+          repoRoot,
+          dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
+          maxAgeDaysClean,
+          maxAgeDaysDirty,
+          scope: 'all',
+          telemetryPath: this.telemetryPath(),
+        }));
+      }
+      const result = {
+        dryRun: results.some((r) => r.dryRun),
+        removed: results.flatMap((r) => r.removed),
+        warnings: results.flatMap((r) => r.warnings),
+        candidates: results.flatMap((r) => r.candidates),
+      };
 
       // 'stale-clean' is intentionally absent: the sweep engine preserves +
       // warns on stale-clean (commits ahead of base) rather than removing.

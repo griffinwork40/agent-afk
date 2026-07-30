@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree-sweep.js';
+import { registerWorktreeRoot } from '../../worktree-root-registry.js';
 import { env } from '../../../config/env.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
@@ -95,6 +96,12 @@ export async function createManagedWorktree(
   await execFile('git', [
     '-C', repoRoot, 'worktree', 'add', '-b', branch, worktreePath, baseRef,
   ]);
+  // The sweep is per-root, so a root the daemon never resolves is a root whose
+  // trees leak forever (#761). Record it here — the single chokepoint every
+  // managed create funnels through, tool path and isolation path alike. Awaited
+  // but non-throwing, so it orders before the meta write without being able to
+  // fail the create.
+  await registerWorktreeRoot(repoRoot);
   // Meta write is what makes this tree a first-class citizen of the sweep
   // protocol (age from createdAt, PID liveness). Best-effort: never fail the
   // create over the rev-parse or the write.
