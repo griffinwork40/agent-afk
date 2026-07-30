@@ -86,6 +86,7 @@ import {
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
 import { getAfkHome } from '../../../paths.js';
+import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -286,19 +287,53 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
  * the substring checks catch the non-adversarial accident case. NOT a parser —
  * variable-assembled paths (`H=$HOME; …$H/…`) are intentionally out of scope
  * (see module-header threat model). Shared by both checks.
+ *
+ * Invariant: duplicate forward slashes are collapsed LAST, after every
+ * substitution, because the substitutions themselves can create them — a
+ * trailing-separator `AFK_HOME` turns `$AFK_HOME/config` into `/relocated//config`.
+ * POSIX collapses interior separators, so `/a//b` and `/a/b` open the same file,
+ * but the restricted needles are built with `path.join`, which emits only the
+ * collapsed form, and the final match is a literal `includes()`. Without this
+ * the two spellings never meet and the guard fails OPEN.
+ *
+ * This is NOT specific to `AFK_HOME`: `~/.afk//config/afk.env` bypassed the
+ * default-home floor the same way, because the `//` lands inside the span the
+ * needle covers. Collapsing here fixes the whole class in one place rather than
+ * one spelling at a time.
+ *
+ * Safe for non-path text: the result is used ONLY for substring matching and is
+ * never executed, so mangling a `https://` URL in this scanned copy cannot
+ * affect what runs, and no sensitive root resembles a mangled scheme.
  */
 function normalizeHomeRefs(command: string, home: string, afkHome: string | undefined): string {
   const normalized = afkHome === undefined ? command : command.replace(/\$AFK_HOME/g, afkHome);
   return normalized
     .replace(/\$HOME/g, home)
-    .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
+    .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`)
+    .replace(/\/{2,}/g, '/');
 }
 
-/** Return AFK_HOME's configured absolute spelling, or nothing when malformed. */
+/**
+ * Return AFK_HOME's configured absolute spelling, or nothing when malformed.
+ *
+ * Invariant: `path.resolve` here — NOT the raw `getAfkHome()` string — is what
+ * keeps this spelling and the `path.join`-built needles
+ * ({@link relocatedAfkSensitiveRoots}, {@link allowlistedFileForms}) in the
+ * same normal form. `getAfkHome()` only rejects non-absolute paths and `/`
+ * (`src/paths.ts`); it does NOT collapse a trailing separator. With
+ * `AFK_HOME=/opt/my-afk/`, substituting the raw string into the command text
+ * produced `/opt/my-afk//config/afk.env` (interior `//`), while
+ * `path.join(afkHome, 'config')` collapses to `/opt/my-afk/config` — a literal
+ * `includes()` between the two then misses, and the command that opens the
+ * very file the guard exists to block sails through. Resolving once, here at
+ * the source, means every downstream consumer of this function's return value
+ * shares one spelling and the mismatch cannot recur.
+ */
 function configuredAfkHome(): string | undefined {
   try {
-    return getAfkHome();
-  } catch {
+    return path.resolve(getAfkHome());
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
     return undefined;
   }
 }

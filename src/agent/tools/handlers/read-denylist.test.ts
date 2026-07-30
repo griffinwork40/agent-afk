@@ -396,6 +396,22 @@ describe('read-denylist — AFK_HOME-relocated credential tree (#740)', () => {
     process.env['AFK_HOME'] = relocated;
     expect(isReadDenied(target).denied).toBe(true);
   });
+
+  // paths.ts treats '' as unset (`envVal !== undefined && envVal !== ''`).
+  // That branch was covered on no surface. Pin it: an empty AFK_HOME must
+  // behave exactly like an unset one, never widening or emptying the floor.
+  it('treats an empty AFK_HOME as unset', () => {
+    process.env['AFK_HOME'] = '';
+    _resetReadDenylistCacheForTests();
+
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
+    // The mcp.json carve-out still applies under the default home.
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'mcp.json')).denied).toBe(false);
+    const configEntryCount = getReadDenylist().filter(
+      (p) => p === safeRealpath(join(homedir(), '.afk', 'config')),
+    ).length;
+    expect(configEntryCount).toBe(1);
+  });
 });
 
 describe('parseReadDenylistEntries — the single parser both surfaces share', () => {

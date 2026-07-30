@@ -639,6 +639,70 @@ describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Regression: a TRAILING SEPARATOR on AFK_HOME used to fail OPEN here.
+  // `$AFK_HOME` was substituted into the command text verbatim, yielding an
+  // interior `//` (`/relocated//config/afk.env`), while the restricted needle
+  // was built with path.join, which collapses it (`/relocated/config`). The
+  // final match is a literal includes(), so the two spellings never met and
+  // the command opened the very file this hook exists to block. POSIX
+  // collapses interior separators, so the bypass was real, not cosmetic.
+  // Fixed by resolving once at the source in configuredAfkHome().
+  it('blocks a trailing-separator AFK_HOME in both spellings', () => {
+    process.env['AFK_HOME'] = `${relocated}/`;
+
+    expect(hook(ctx('cat "$AFK_HOME/config/afk.env"')).decision).toBe('block');
+    expect(hook(ctx(`cat ${relocated}//config/afk.env`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${relocated}/config/afk.env`)).decision).toBe('block');
+  });
+
+  it('keeps the mcp.json carve-out working under a trailing-separator AFK_HOME', () => {
+    process.env['AFK_HOME'] = `${relocated}/`;
+
+    expect(hook(ctx('cat "$AFK_HOME/config/mcp.json"')).decision).not.toBe('block');
+    expect(hook(ctx(`cat ${relocated}/config/mcp.json`)).decision).not.toBe('block');
+  });
+
+  // Fail-safe: getAfkHome() throws on a non-absolute AFK_HOME. configuredAfkHome()
+  // must swallow it and fall back to the default floor rather than propagating.
+  it('stays fail-safe when AFK_HOME is relative (getAfkHome() throws)', () => {
+    process.env['AFK_HOME'] = 'relative/not-absolute';
+
+    expect(() => hook(ctx('echo hi'))).not.toThrow();
+    expect(hook(ctx('echo hi')).decision).not.toBe('block');
+    // The default-home floor still applies.
+    expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'afk.env')}`)).decision).toBe(
+      'block',
+    );
+  });
+
+  // paths.ts treats '' as unset. Pin that the bash surface agrees, so an empty
+  // AFK_HOME can never widen the floor beyond the default-home coverage.
+  it('treats an empty AFK_HOME as unset', () => {
+    process.env['AFK_HOME'] = '';
+
+    expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'afk.env')}`)).decision).toBe(
+      'block',
+    );
+    expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'mcp.json')}`)).decision).not.toBe(
+      'block',
+    );
+  });
+
+  // The double-separator bypass was never AFK_HOME-specific: with NO AFK_HOME
+  // set at all, `~/.afk//config/afk.env` slipped past the default-home floor,
+  // because the `//` lands inside the span the needle covers. Pinned here so a
+  // future change to normalizeHomeRefs cannot silently reopen the class.
+  it('blocks a double separator against the DEFAULT home floor (no AFK_HOME)', () => {
+    delete process.env['AFK_HOME'];
+    const afkEnv = join(homedir(), '.afk', 'config', 'afk.env');
+
+    expect(hook(ctx(`cat ${afkEnv.replace('/.afk/config/', '/.afk//config/')}`)).decision).toBe(
+      'block',
+    );
+    expect(hook(ctx('cat ~/.afk//config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat "$HOME/.afk//config/afk.env"')).decision).toBe('block');
+  });
 });
 
 describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash surface', () => {

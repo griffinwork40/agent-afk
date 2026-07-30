@@ -18,7 +18,8 @@ import { env } from '../../../config/env.js';
 import { realpathSync } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { homedir } from 'os';
-import { getAfkHome } from '../../../paths.js';
+import { getAfkHome, getAfkStateDir } from '../../../paths.js';
+import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 
 /**
  * Paths that write_file / edit_file must never touch — credential stores,
@@ -57,26 +58,46 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
  * the read denylist, `state` belongs here too (writes to session/todo/
  * transcript state are never legitimate for a model to perform directly).
  *
- * `getAfkHome()` throws when `AFK_HOME` is set but not absolute (or is `/`,
- * see `paths.ts`). Caught and dropped here — a malformed env var must never
- * empty the credential floor; the hardcoded `homedir()`-based entries still
- * apply regardless.
+ * Invariant: the state tier is derived via `getAfkStateDir()`, NOT
+ * `join(getAfkHome(), 'state')` alone. `AFK_STATE_DIR` relocates the ENTIRE
+ * state tier INDEPENDENTLY of `AFK_HOME` (`paths.ts`: it returns `AFK_STATE_DIR`
+ * verbatim when set and only falls back to `join(getAfkHome(), 'state')`
+ * otherwise). Deriving the tier from `AFK_HOME` alone left an operator running
+ * `AFK_STATE_DIR=/opt/state` with zero write protection on their real state
+ * tier — the same env-relocation gap this module exists to close. Both
+ * spellings are emitted; the caller's `new Set` collapses them when they
+ * coincide.
+ *
+ * Invariant: the two derivations sit in SEPARATE `try` blocks so one malformed
+ * env var cannot drop the other's entries. A single combined block would let a
+ * bad `AFK_STATE_DIR` also discard the `config` entry it never influenced.
+ *
+ * `getAfkHome()` / `getAfkStateDir()` throw when their env var is set but not
+ * absolute (or is `/`, see `paths.ts`). Caught and dropped here — a malformed
+ * env var must never empty the credential floor; the hardcoded
+ * `homedir()`-based entries still apply regardless. The throw is no longer
+ * silent: {@link warnAfkHomeRejectedOnce} surfaces it once per process.
  *
  * Called fresh on every {@link getWriteDenylist} call (this module is
  * uncached, unlike the read denylist), so no separate cache-key concern
- * applies here — a runtime `AFK_HOME` change is picked up on the very next
- * call.
+ * applies here — a runtime `AFK_HOME` / `AFK_STATE_DIR` change is picked up on
+ * the very next call.
  */
 function derivedAfkHomeWriteEntries(): string[] {
+  const entries: string[] = [];
   try {
     const home = getAfkHome();
-    return [
-      safeRealpath(resolve(join(home, 'config'))),
-      safeRealpath(resolve(join(home, 'state'))),
-    ];
-  } catch {
-    return [];
+    entries.push(safeRealpath(resolve(join(home, 'config'))));
+    entries.push(safeRealpath(resolve(join(home, 'state'))));
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
   }
+  try {
+    entries.push(safeRealpath(resolve(getAfkStateDir())));
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
+  }
+  return entries;
 }
 
 /**

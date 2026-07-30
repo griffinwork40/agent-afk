@@ -35,6 +35,7 @@ import { basename, dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
+import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 
 /**
  * Paths that `read_file` / `grep` / `glob` / `list_directory` must never read —
@@ -194,7 +195,8 @@ export function parseReadDenylistEntries(raw: string | undefined): string[] {
 function derivedAfkHomeReadEntry(): string[] {
   try {
     return [safeRealpath(resolve(join(getAfkHome(), 'config')))];
-  } catch {
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
     return [];
   }
 }
@@ -226,7 +228,8 @@ function derivedAfkHomeAllowEntries(): string[] {
     return READ_ALLOWLIST_REL.filter((rel) => rel.startsWith(AFK_HOME_REL_PREFIX)).map((rel) =>
       resolveExceptionEntry(join(afkHome, rel.slice(AFK_HOME_REL_PREFIX.length))),
     );
-  } catch {
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
     return [];
   }
 }
