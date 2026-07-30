@@ -1,19 +1,10 @@
 import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { formatToolCallStat } from '../../format-utils.js';
-import {
-  MAX_VISIBLE_CHILDREN,
-  formatOutcome,
-  formatDiffBlock,
-  doneGlyph,
-  sanitizeLabel,
-  shortenPaths,
-  batchBadge,
-} from './tool-lane-format.js';
+import { MAX_VISIBLE_CHILDREN, batchBadge } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
-import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
+import { getGlyphs } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
-import { formatGroupedToolResults } from './tool-lane-render-grouped-root.js';
 
 /**
  * Compose a NESTING root's committed-scrollback closer — the `Done (…)` line —
@@ -247,92 +238,5 @@ function formatAgentChildren(
   );
 }
 
-function renderGroupedRootTools(
-  groups: Map<string, ToolEntry[]>,
-  groupOrder: string[],
-  homeDir?: string,
-): string[] {
-  const lines: string[] = [];
-  // Read once per call: EVERY line this function emits is clamped to this
-  // width so nothing soft-wraps to column 0 in scrollback (orphaning its
-  // continuation past the indent). Mirrors the clamp on every other
-  // emission path; see tool-lane-render-children.ts.
-  //
-  // Invariant: root entries arrive here with an UNBOUNDED prefix — the root
-  // dispatch path (stream-renderer-orchestrator.ts) calls
-  // addStartWithAgentContext without a maxWidth, unlike the subagent-child
-  // path (stream-renderer-subagent.ts) which budgets it at cols - 14. So the
-  // clamp here is the only thing standing between a 350-column bash command
-  // and a wrapped scrollback row. The live overlay already clamps its
-  // equivalents (tool-lane.ts); flush must not be the lone exception.
-  const cols = getTerminalWidth();
-  for (const toolName of groupOrder) {
-    const entries = groups.get(toolName)!;
-    if (entries.length === 1) {
-      const e = entries[0]!;
-      if (e.result) {
-        // Plain clamp, not suffix-reservation as in the grouped path: for a
-        // single entry the args ARE the identity and the outcome is the
-        // expendable tail, which is exactly how the overlay clamps the same
-        // row ("clamping should elide the outcome tail, not the leading
-        // prefix that carries the tool identity" — tool-lane.test.ts).
-        lines.push(clampLineToTerminal('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
-        if (e.diff && !e.result.isError) {
-          // Root-level scrollback diff: indent 4 spaces so it sits under
-          // the outcome line (2 for the row indent, 2 more to clear the
-          // tool-name column visually).
-          for (const line of formatDiffBlock(e.diff, 'flush', '    ')) {
-            lines.push(clampLineToTerminal(line, cols));
-          }
-        }
-      } else {
-        lines.push(clampLineToTerminal('  ' + e.prefix, cols));
-      }
-    } else {
-      lines.push(formatGroupedToolResults(toolName, entries, cols, homeDir));
-      // Emit per-entry diff blocks under the grouped header. Each diff hangs
-      // at the same 4-space indent as the single-entry path above, giving
-      // the grouped case the same visual treatment as individual entries.
-      // When multiple entries have diffs, emit a labeled `── filename ──`
-      // separator before each diff block so the reader can attribute hunks
-      // to specific files at a glance (e.g. write_file ×2 renders two diffs
-      // with "── globals.css ──" / "── layout.tsx ──" labels).
-      //
-      // External constraint (presentation invariant): when N>1 grouped entries
-      // each contribute a diff block, the blocks must be visually separated by
-      // a labeled divider so a reader can attribute hunks to specific files.
-      // Without the divider, two 62-line `write_file` diffs fuse into one
-      // 124-line block in the rendered transcript with no file boundary
-      // visible — see audit RC-3.
-      // `sanitizeLabel` wraps the user-controlled toolInput to prevent
-      // control-sequence injection into the dim separator line.
-      const entriesWithDiffs = entries.filter((e) => e.diff && e.result && !e.result.isError);
-      const needSeparators = entriesWithDiffs.length > 1;
-      for (const e of entriesWithDiffs) {
-        if (needSeparators) {
-          // Order is load-bearing: sanitizeLabel BEFORE shortenPaths.
-          // shortenPaths emits OSC 8 hyperlink escapes (the one sanctioned
-          // escape producer in the lane); sanitizeLabel strips ALL ANSI, so
-          // running it after would kill the link. Sanitizing first is
-          // equally safe — toolInput is the injection surface, and it is
-          // fully scrubbed before linkification adds our own escapes.
-          const sanitized = sanitizeLabel(e.toolInput);
-          const label = shortenPaths(sanitized).trim() || sanitized.trim();
-          lines.push(clampLineToTerminal('    ' + palette.dim(`── ${label} ──`), cols));
-        }
-        for (const line of formatDiffBlock(e.diff!, 'flush', '    ')) {
-          lines.push(clampLineToTerminal(line, cols));
-        }
-      }
-    }
-  }
-  return lines;
-}
 
-export {
-  formatAgentSummary,
-  formatAgentHeader,
-  formatAgentChildren,
-  renderGroupedRootTools,
-  formatGroupedToolResults,
-};
+export { formatAgentSummary, formatAgentHeader, formatAgentChildren };
