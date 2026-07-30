@@ -101,7 +101,17 @@ const PINNED_HASHES = {
   // ~/.afk/skills/ if it drifts back.
   refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
-  review: 'f313e3779af068a623692473abab2300938db8da3ebf3e2998d47fcb21ee9627',
+  // Hash bumped (#726): Wave 1's per-agent citation requirement no longer
+  // mandates a `git show` re-read at the reviewed ref. `research-agent` has no
+  // shell, so that clause forced every Wave 1 agent to nest a `git-investigator`
+  // purely to run one command — doubling the concurrency of a declared 2-agent
+  // wave and cascading into 429s. Ref-anchored verification is now centralized:
+  // Wave 1.5 runs INLINE in the orchestrator (which already holds the read-only
+  // shell it needs) instead of as a fourth sub-agent, absence-claim grounding
+  // uses the shell-free `Grep` tool, and a "Concurrency floor" block documents
+  // the real budget (peak 2 concurrent, 3 dispatched, zero nesting) so the
+  // regression cannot be reintroduced silently.
+  review: 'de275974a1d2179a533ad64b317379c8eee576966174866ad0327e2a6955f4ca',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
   // landed in this branch's commit 1e35850 — adds high-confidence language
   // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
@@ -330,6 +340,17 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
   //   is the same contract-namespace shift as devils-advocate / parallelize
   //   / shadow-verify: bundled uses /contract (self-contained routing),
   //   upstream uses /agent-workflow-amplifiers:contract (third-party ns).
+  //
+  //   NEW DRIFT (#726), back-port PENDING: bundled now scopes Wave 1 citations
+  //   to diff-context and hoists Wave 1.5 inline to the orchestrator, because a
+  //   shell-less research-agent had to nest a git-investigator to satisfy the
+  //   old per-agent `git show` clause — a 2-agent wave was really 4+ sessions.
+  //   Upstream example-plugin still carries the nesting-inducing form and has
+  //   the SAME latent defect; this fix should be ported there. Until it is, the
+  //   normalized-drift comparison will flag the citation-requirement, Wave 1.5
+  //   header, absence-grounding, and concurrency-floor blocks. Deliberately NOT
+  //   allowlisted below: allowlisting would silence the signal that upstream is
+  //   still broken, which is the one thing worth remembering here.
   review: [
     // Bundled side: bare /contract invocation (no plugin prefix).
     /^\/contract$/,
