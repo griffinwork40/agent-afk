@@ -703,6 +703,39 @@ describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
     expect(hook(ctx('cat ~/.afk//config/afk.env')).decision).toBe('block');
     expect(hook(ctx('cat "$HOME/.afk//config/afk.env"')).decision).toBe('block');
   });
+
+  // The bypass is positional, not character-specific: any lexically-different
+  // but POSIX-equivalent spelling that SPLITS the span a needle covers defeats
+  // the literal includes(). `//`, `/./` and `/../` are the same defect. The
+  // same spellings AFTER the needle were always caught, which is why the class
+  // was easy to under-diagnose from the `//` report alone.
+  it('blocks dot and dot-dot segments that split the needle span', () => {
+    delete process.env['AFK_HOME'];
+
+    expect(hook(ctx('cat ~/.afk/./config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat ~/.afk/../.afk/config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat "$HOME/.afk/./config/afk.env"')).decision).toBe('block');
+  });
+
+  // Braced ${VAR} is the ordinary spelling a non-adversarial model emits, so it
+  // sits inside this hook's accidental-access threat model — unlike the runtime
+  // variable assembly (`H=$HOME; …$H/…`) the module header rules out and the
+  // "documented bypass" test pins.
+  it('blocks the braced ${AFK_HOME} spelling', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx('cat ${AFK_HOME}/config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat "${AFK_HOME}/config/afk.env"')).decision).toBe('block');
+    // Carve-out parity: the braced spelling of mcp.json stays readable.
+    expect(hook(ctx('cat ${AFK_HOME}/config/mcp.json')).decision).not.toBe('block');
+  });
+
+  it('blocks the braced ${HOME} spelling', () => {
+    delete process.env['AFK_HOME'];
+
+    expect(hook(ctx('cat ${HOME}/.afk/config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat ${HOME}/.ssh/id_rsa')).decision).toBe('block');
+  });
 });
 
 describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash surface', () => {

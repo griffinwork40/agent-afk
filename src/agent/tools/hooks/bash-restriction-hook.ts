@@ -288,30 +288,49 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
  * variable-assembled paths (`H=$HOME; …$H/…`) are intentionally out of scope
  * (see module-header threat model). Shared by both checks.
  *
- * Invariant: duplicate forward slashes are collapsed LAST, after every
- * substitution, because the substitutions themselves can create them — a
- * trailing-separator `AFK_HOME` turns `$AFK_HOME/config` into `/relocated//config`.
- * POSIX collapses interior separators, so `/a//b` and `/a/b` open the same file,
- * but the restricted needles are built with `path.join`, which emits only the
- * collapsed form, and the final match is a literal `includes()`. Without this
- * the two spellings never meet and the guard fails OPEN.
+ * Invariant: every path-like span is lexically normalized LAST, after all
+ * substitutions, because the substitutions themselves create the mismatches —
+ * a trailing-separator `AFK_HOME` turns `$AFK_HOME/config` into
+ * `/relocated//config`. The restricted needles are built with `path.join` /
+ * `resolve`, which emit only the normal form, and the final match is a literal
+ * `includes()`. Any spelling that is POSIX-equivalent but lexically different
+ * therefore fails OPEN unless it is folded to the same normal form here.
  *
- * This is NOT specific to `AFK_HOME`: `~/.afk//config/afk.env` bypassed the
- * default-home floor the same way, because the `//` lands inside the span the
- * needle covers. Collapsing here fixes the whole class in one place rather than
- * one spelling at a time.
+ * `path.posix.normalize` (not a bare `//` collapse) is what makes this a CLASS
+ * fix: `//`, `/./`, and `/../` all reduce. The distinguishing factor is not
+ * which character is used but WHERE it lands — a separator that splits the span
+ * the needle covers breaks the match, while the same characters after the
+ * needle are harmless. `~/.afk/./config/afk.env` and `~/.afk//config/afk.env`
+ * both defeated the default-home floor for exactly this reason; neither is
+ * `AFK_HOME`-specific.
+ *
+ * Braced `${VAR}` is substituted alongside bare `$VAR` because it is the
+ * ordinary spelling a non-adversarial model emits, not an evasion — it sits
+ * inside this hook's accidental-access threat model, unlike the runtime
+ * variable assembly (`H=$HOME; …$H/…`) the module header rules out.
  *
  * Safe for non-path text: the result is used ONLY for substring matching and is
- * never executed, so mangling a `https://` URL in this scanned copy cannot
- * affect what runs, and no sensitive root resembles a mangled scheme.
+ * never executed, so mangling `https://x` to `https:/x` in this scanned copy
+ * cannot affect what runs, and no sensitive root resembles a mangled scheme.
  */
 function normalizeHomeRefs(command: string, home: string, afkHome: string | undefined): string {
-  const normalized = afkHome === undefined ? command : command.replace(/\$AFK_HOME/g, afkHome);
+  const normalized =
+    afkHome === undefined ? command : command.replace(/\$\{AFK_HOME\}|\$AFK_HOME\b/g, afkHome);
   return normalized
-    .replace(/\$HOME/g, home)
+    .replace(/\$\{HOME\}|\$HOME\b/g, home)
     .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`)
-    .replace(/\/{2,}/g, '/');
+    .replace(PATH_LIKE_SPAN, (span) => path.posix.normalize(span));
 }
+
+/**
+ * An absolute-path-like run inside a command string: a `/` followed by
+ * everything up to the next shell metacharacter, quote, or whitespace.
+ *
+ * Contract: deliberately greedy on ordinary path characters and deliberately
+ * stops at `'"`;|&()<>` and whitespace so one span cannot swallow a following
+ * argument and drag unrelated text through `normalize`.
+ */
+const PATH_LIKE_SPAN = /\/[^\s'"`;|&()<>]*/g;
 
 /**
  * Return AFK_HOME's configured absolute spelling, or nothing when malformed.
