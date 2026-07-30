@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.7] - 2026-07-30
+
+### Fixed
+- classify git worktree add and git clone as mutating in the read-only guard (#768) (e94e631)
+
 ## [5.82.6] - 2026-07-30
 
 ### Fixed
