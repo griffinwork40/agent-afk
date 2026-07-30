@@ -76,7 +76,13 @@ export function formatGroupedToolResults(
     .map((entry) => shortenPaths(sanitizeLabel(entry.toolInput)).trim())
     .join(', ');
   const targetWidth = Math.max(0, cols - displayWidth(prefix) - displayWidth(suffix));
-  const targetPreview = truncateDisplayWidth(targets, targetWidth);
+  // Colorize BEFORE truncating: `palette.toolArg` is the same dim wrapper the
+  // single-entry path applies via formatToolLine, so grouped args must not
+  // render brighter than their ungrouped siblings. Wrapping first is safe
+  // because truncateDisplayWidth tokenizes ANSI — escapes cost zero width, so
+  // the reserved `targetWidth` budget is unaffected — and it re-closes both
+  // the OSC 8 span and the SGR state when the cut lands inside them.
+  const targetPreview = truncateDisplayWidth(palette.toolArg(targets), targetWidth);
 
   return clampLineToTerminal(prefix + targetPreview + suffix, cols);
 }

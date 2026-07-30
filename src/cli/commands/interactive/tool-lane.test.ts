@@ -10,8 +10,10 @@
  */
 
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import chalk from 'chalk';
 import { ToolLane } from './tool-lane.js';
 import { displayWidth, stripAnsi } from '../../display.js';
+import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
 
@@ -675,6 +677,44 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
           displayWidth(stripAnsi(line)),
           `grouped root line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
         ).toBeLessThanOrEqual(cols);
+      }
+    });
+
+    /**
+     * Regression for the styling half of the width fix: bounding the grouped
+     * row must not cost it the `palette.toolArg` dim wrapper that the
+     * single-entry path still applies via `formatToolLine`
+     * (tool-lane-format-args.ts). The first cut of this fix dropped it, so
+     * grouped args rendered at full brightness beside dimmed ungrouped ones —
+     * invisible to every other assertion in this block, because they all
+     * compare ANSI-stripped text.
+     *
+     * `chalk.level` is forced because the suite runs non-TTY, where the
+     * palette collapses to identity and the assertion would be vacuous. Safe
+     * to mutate: every theme is built from the shared chalk export, which
+     * reads the global level at call time (see palette.ts).
+     */
+    it('grouped root targets keep the dim toolArg styling', () => {
+      const originalLevel = chalk.level;
+      chalk.level = 3;
+      try {
+        const lane = new ToolLane();
+        // Three entries: bash is a leaf tool, which collapses at
+        // GROUP_THRESHOLD_LEAF = 3. Short commands keep the row inside 88
+        // cols, so the targets reach the assertion untruncated and the
+        // expected escape sequence is exact.
+        const commands = ['git status', 'git log', 'git diff'];
+        for (const [index, command] of commands.entries()) {
+          const id = `bash-style-${index}`;
+          lane.addStart(id, 'bash', ` ${command}`);
+          lane.addResult(id, { ...makeResult('output'), lineCount: 2 });
+        }
+
+        const row = lane.flush().join('\n');
+        expect(stripAnsi(row)).toContain('bash ×3');
+        expect(row).toContain(palette.toolArg(commands.join(', ')));
+      } finally {
+        chalk.level = originalLevel;
       }
     });
 
