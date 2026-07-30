@@ -408,6 +408,9 @@ export const SessionPhaseNameSchema = z.enum([
   // JSDoc in types.ts — carries the ESC→terminal wall-clock in durationMs.
   'interrupt_halt',
   'rate_limit',
+  // Client-side TTFB watchdog re-drive — distinct from `rate_limit` (no server
+  // throttle, no retry-after). See SessionPhaseName JSDoc in types.ts.
+  'ttfb_timeout',
   'usage_limit_pause',
   'usage_limit_resume',
   'idle_watchdog_fired',
