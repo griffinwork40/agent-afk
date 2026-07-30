@@ -34,7 +34,7 @@ import type { AbortOrigin, TraceWriter } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
-import { touchWorktreeOccupancy } from './worktree-occupancy.js';
+import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { getAfkStateDir } from '../paths.js';
@@ -982,8 +982,19 @@ export class SubagentManager {
     // for cwds outside `.afk-worktrees/`, so it can never delay or fail the
     // fork. Single wiring point — agent/skill/compose/farm dispatches all
     // converge here, whether cwd came per-call or via manager inheritance.
+    //
+    // Ordering constraint: one touch only protects the tree for the sweep's
+    // MIN_EMPTY_AGE_MS (1h), after which a still-running child ages back into
+    // the `empty` verdict and is force-removed mid-flight (#759). So arm a
+    // heartbeat alongside the initial touch, and capture its stop handle HERE —
+    // before the session is constructed — so every exit path below (settle,
+    // construction throw) already has the inverse in hand and cannot orphan the
+    // timer. The timer is unref()'d, so even a leaked one cannot hold the
+    // process open.
+    let stopOccupancyHeartbeat: () => void = () => {};
     if (childConfig.cwd !== undefined) {
       void touchWorktreeOccupancy(childConfig.cwd);
+      stopOccupancyHeartbeat = startWorktreeOccupancyHeartbeat(childConfig.cwd);
     }
 
     let session: AgentSession;
@@ -992,7 +1003,9 @@ export class SubagentManager {
     } catch (err) {
       // Construction failed (e.g. invalid model, sync init failure).
       // Release the graph node that was registered above to prevent an orphan
-      // accumulating on repeated retries (e.g. forge/farm retry loops).
+      // accumulating on repeated retries (e.g. forge/farm retry loops), and
+      // disarm the occupancy heartbeat — there is no child left to protect.
+      stopOccupancyHeartbeat();
       this.abortGraph.dispose(id);
       throw err;
     }
@@ -1023,6 +1036,10 @@ export class SubagentManager {
       options.config.timeoutMs ?? resolveSubagentTimeoutMs(),
       registry,
       () => {
+        // Runs on every terminal outcome of the child — success, failure,
+        // timeout, and abort — so it is the settle hook the heartbeat's
+        // teardown belongs on.
+        stopOccupancyHeartbeat();
         this.active.delete(id);
         this.abortGraph.dispose(id);
       },

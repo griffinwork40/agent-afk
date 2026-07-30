@@ -12,6 +12,8 @@ import { join, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import { getWorktreeSweepLockPath, getTelemetryPath } from '../paths.js';
 import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js';
+// Type-only back-import there, so this pairing carries no runtime cycle.
+import { hasNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -602,6 +604,18 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         const statusResult = await execFile('git', ['-C', entry.path, 'status', '--porcelain']);
         isDirty = statusResult.stdout.trim().length > 0;
       } catch { isDirty = true; /* treat as dirty — safe fallback */ }
+
+      // Invariant: bare `--porcelain` reports untracked files but NEVER ignored
+      // ones, so a tree holding only ignored content reads clean here and every
+      // removal path below runs `remove --force`, deleting it. Committed work
+      // survives (branch refs live in the shared .git), but a worktree-local
+      // `.env` or scratch file does not (#759). Probe for ignored content a
+      // rebuild could NOT restore and treat it as dirty. Rebuildable output
+      // (node_modules/, dist/, caches) is deliberately NOT protective — that
+      // would make every worktree immortal and defeat the sweep.
+      if (!isDirty) {
+        isDirty = await hasNonRebuildableIgnoredFiles(execFile, entry.path);
+      }
 
       if (!isDirty && entry.head) {
         // Contract: `commitsAhead > 0` marks a worktree as holding unmerged

@@ -164,6 +164,94 @@ describe('empty-detection', () => {
     expect(result.dryRun).toBe(false);
   });
 
+  // #759: bare `status --porcelain` never lists IGNORED files, so a tree whose
+  // only content is ignored read CLEAN and every removal path runs
+  // `remove --force`, deleting it. Committed work survives (branch refs live in
+  // the shared .git) but worktree-local `.env`/scratch state does not.
+  it('does NOT reap a clean tree holding a non-rebuildable ignored file (.env)', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-has-dotenv');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'interactive', createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), baseSha: 'base123', baseBranch: 'main' }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot, head: 'base123' })}\n\n` +
+      `${worktreeBlock({ path: worktreePath, head: 'base123', branch: 'refs/heads/afk/has-dotenv' })}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      // The ignored-aware probe is a DIFFERENT call than the bare dirty check.
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! .env\n!! node_modules/\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // tracked tree is clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates.some((c) => c.verdict === 'empty')).toBe(false);
+    expect(result.removed).not.toContain(worktreePath);
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
+  // The counterweight: if ANY ignored entry were protective, node_modules/ and
+  // dist/ would make every worktree immortal and the sweep would never reclaim.
+  it('still reaps a clean tree whose only ignored content is rebuildable output', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-only-build-output');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'interactive', createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), baseSha: 'base123', baseBranch: 'main' }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot, head: 'base123' })}\n\n` +
+      `${worktreeBlock({ path: worktreePath, head: 'base123', branch: 'refs/heads/afk/only-build-output' })}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! node_modules/\n!! dist/\n!! coverage/\n!! tsconfig.tsbuildinfo\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates.some((c) => c.verdict === 'empty')).toBe(true);
+    expect(result.removed).toContain(worktreePath);
+  });
+
   it('does not remove empty worktree in dry-run mode', async () => {
     const worktreePath = join(afkWorktreesDir, 'afk-empty-dry');
     await fs.mkdir(worktreePath, { recursive: true });

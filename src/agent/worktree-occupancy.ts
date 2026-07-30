@@ -17,10 +17,14 @@
  *   - `ownerLiveness` resolves to 'alive' while this process runs, which
  *     suppresses the accelerated `dead-owner` path.
  *
- * Residual gap (accepted): a subagent running longer than MIN_EMPTY_AGE_MS
- * (1h) in a tree that stays clean can still cross the `empty` threshold.
- * The `worktree` tool's `keep` action (git worktree lock) is the sanctioned
- * escape hatch for anything that must survive unconditionally.
+ * A single touch only buys MIN_EMPTY_AGE_MS (1h) of protection, so a child that
+ * outlives it in a clean tree used to age back across the `empty` threshold and
+ * get reaped mid-run (#759). `startWorktreeOccupancyHeartbeat` closes that by
+ * re-asserting the occupation for as long as the child runs.
+ *
+ * The `worktree` tool's `keep` action (git worktree lock) remains the sanctioned
+ * escape hatch for anything that must survive unconditionally, including across
+ * process exit.
  *
  * Best-effort by contract: every failure is swallowed. A missed touch
  * degrades to today's behavior; it must never block or fail a dispatch.
@@ -33,6 +37,12 @@ import { join, resolve, sep } from 'node:path';
 
 const META_FILENAME = '.afk-worktree-meta.json';
 const AFK_WORKTREES_SEGMENT = `${sep}.afk-worktrees${sep}`;
+
+/**
+ * Heartbeat period. Must stay comfortably below the sweep's MIN_EMPTY_AGE_MS
+ * (1h, `worktree-sweep.ts`) so a tick always lands before the age gate re-arms.
+ */
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 600_000; // 10 minutes
 
 /**
  * Resolve the worktree root containing `cwd`, when `cwd` sits inside an
@@ -78,4 +88,39 @@ export async function touchWorktreeOccupancy(cwd: string): Promise<void> {
   } catch {
     /* best-effort — never block dispatch */
   }
+}
+
+/**
+ * Keep the worktree containing `cwd` marked as occupied for as long as the
+ * caller runs, returning the function that stops it.
+ *
+ * Invariant: the sweep derives `ageMs` from `meta.createdAt`, so ONE touch at
+ * dispatch protects a child for only MIN_EMPTY_AGE_MS. A longer-running child
+ * ages back into the `empty` verdict and is force-removed mid-flight (#759).
+ * Occupation must therefore be re-asserted periodically, not stamped once.
+ *
+ * Ordering constraint (governed by the Node event loop, not by this module):
+ * `stop` is defined and captured BEFORE the interval is armed, so there is no
+ * window in which a timer exists without a handle able to cancel it. The timer
+ * is `unref()`d so a pending heartbeat can never hold the process open past the
+ * work it was protecting.
+ *
+ * Callers MUST call the returned function from a `finally`, so it runs on normal
+ * return, on throw, and on abort alike.
+ */
+export function startWorktreeOccupancyHeartbeat(
+  cwd: string,
+  intervalMs: number = DEFAULT_HEARTBEAT_INTERVAL_MS,
+): () => void {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stop = (): void => {
+    if (timer === undefined) return;
+    clearInterval(timer);
+    timer = undefined;
+  };
+  // Nothing to protect outside a managed tree — hand back an inert stop.
+  if (worktreeRootFor(cwd) === undefined) return stop;
+  timer = setInterval(() => { void touchWorktreeOccupancy(cwd); }, intervalMs);
+  timer.unref();
+  return stop;
 }

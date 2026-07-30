@@ -6,7 +6,11 @@ import { promises as fs } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { touchWorktreeOccupancy, worktreeRootFor } from './worktree-occupancy.js';
+import {
+  touchWorktreeOccupancy,
+  worktreeRootFor,
+  startWorktreeOccupancyHeartbeat,
+} from './worktree-occupancy.js';
 
 let repoRoot: string;
 let worktreePath: string;
@@ -98,5 +102,59 @@ describe('touchWorktreeOccupancy', () => {
     await expect(
       touchWorktreeOccupancy(join(repoRoot, '.afk-worktrees', 'gone', 'src')),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('startWorktreeOccupancyHeartbeat', () => {
+  it('re-asserts occupancy on an interval so a long child never ages out (#759)', async () => {
+    const metaPath = join(worktreePath, '.afk-worktree-meta.json');
+    // Backdate meta well past the sweep's 1h MIN_EMPTY_AGE_MS: this is the state
+    // a >1h child used to be reaped in.
+    await fs.writeFile(
+      metaPath,
+      JSON.stringify({ owner: 'agent', createdAt: new Date(Date.now() - 7_200_000).toISOString() }),
+    );
+
+    const stop = startWorktreeOccupancyHeartbeat(worktreePath, 10);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+    } finally {
+      stop();
+    }
+
+    const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+    const ageMs = Date.now() - new Date(String(meta['createdAt'])).getTime();
+    expect(ageMs).toBeLessThan(3_600_000);
+    expect(meta['pid']).toBe(process.pid);
+    expect(meta['owner']).toBe('agent'); // unrelated fields preserved
+  });
+
+  it('stops touching after stop() is called', async () => {
+    const metaPath = join(worktreePath, '.afk-worktree-meta.json');
+    await fs.writeFile(metaPath, JSON.stringify({ owner: 'agent' }));
+
+    const stop = startWorktreeOccupancyHeartbeat(worktreePath, 10);
+    await new Promise((r) => setTimeout(r, 40));
+    stop();
+    const afterStop = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+
+    await new Promise((r) => setTimeout(r, 60));
+    const later = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+    expect(later['createdAt']).toBe(afterStop['createdAt']);
+  });
+
+  it('is idempotent — calling stop() twice is safe', async () => {
+    const stop = startWorktreeOccupancyHeartbeat(worktreePath, 10);
+    stop();
+    expect(() => stop()).not.toThrow();
+  });
+
+  it('returns an inert stop for a cwd outside a managed worktree', async () => {
+    const outside = join(repoRoot, 'not-a-worktree');
+    await fs.mkdir(outside, { recursive: true });
+    const stop = startWorktreeOccupancyHeartbeat(outside, 10);
+    await new Promise((r) => setTimeout(r, 40));
+    stop();
+    await expect(fs.readFile(join(outside, '.afk-worktree-meta.json'), 'utf-8')).rejects.toThrow();
   });
 });
