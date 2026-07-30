@@ -348,16 +348,22 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
   //   / shadow-verify: bundled uses /contract (self-contained routing),
   //   upstream uses /agent-workflow-amplifiers:contract (third-party ns).
   //
-  //   NEW DRIFT (#726), back-port PENDING: bundled now scopes Wave 1 citations
-  //   to diff-context and hoists Wave 1.5 inline to the orchestrator, because a
-  //   shell-less research-agent had to nest a git-investigator to satisfy the
-  //   old per-agent `git show` clause — a 2-agent wave was really 4+ sessions.
-  //   Upstream example-plugin still carries the nesting-inducing form and has
-  //   the SAME latent defect; this fix should be ported there. Until it is, the
-  //   normalized-drift comparison will flag the citation-requirement, Wave 1.5
-  //   header, absence-grounding, and concurrency-floor blocks. Deliberately NOT
-  //   allowlisted below: allowlisting would silence the signal that upstream is
-  //   still broken, which is the one thing worth remembering here.
+  //   NEW DRIFT (#726) — bundled scopes Wave 1 citations to diff-context and
+  //   hoists Wave 1.5 inline, because a shell-less research-agent had to nest a
+  //   git-investigator to satisfy the old per-agent `git show` clause (a 2-agent
+  //   wave was really 4+ sessions). There is NO upstream copy to back-port to:
+  //   upstream deleted its review skill on 2026-07-24 (ce27e45), deliberate
+  //   dedup of a skill that only ever shadowed this one — sibling commit abb54c5
+  //   names `review` as "shadowing bundled agent-afk copies", and the #596/#624
+  //   mirrors were hand-syncs of this file. Consequences: bundled is now the
+  //   SOLE copy, UPSTREAM_PATHS['review'] names a path that no longer exists,
+  //   and the drift row below can only ever skip — do NOT read that skip as
+  //   "upstream verified", it is indistinguishable from "sibling not checked
+  //   out". The defect CLASS was ported to the one place it still lived
+  //   upstream: /weekly-reflect dispatched two shell-mandating survey waves as
+  //   `research-agent` (upstream PR #77; all 40 upstream SKILL.md scanned, no
+  //   other instance). Nothing is allowlisted for review — with the upstream
+  //   file gone there is no diff left to silence.
   review: [
     // Bundled side: bare /contract invocation (no plugin prefix).
     /^\/contract$/,
