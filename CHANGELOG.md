@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.9] - 2026-07-30
+
+### Fixed
+- resolve the default create base at the calling session's anchor (#760) (#769) (b4192bd)
+
 ## [5.82.8] - 2026-07-30
 
 ### Fixed
