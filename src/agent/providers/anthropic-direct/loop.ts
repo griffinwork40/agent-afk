@@ -189,17 +189,24 @@ async function createWithRetry(
  * Emit the trace + surface events for a single time-to-first-byte-timeout
  * re-drive, then return so the caller can `continue` the round with a fresh
  * `messages.create`. Mirrors the mid-stream overload retry's signalling: a
- * `rate_limit` trace phase (so the re-drive is legible in `afk trace show`)
- * plus a `stream.retry` event so surfaces discard any partial paint. No backoff
- * sleep — the point is to fail-fast off a stalled endpoint, and the single
- * retry is gated by the per-round `ttfbRetried` flag so it cannot stack.
+ * dedicated `ttfb_timeout` trace phase (so the re-drive is legible in
+ * `afk trace show`) plus a `stream.retry` event so surfaces discard any partial
+ * paint. No backoff sleep — the point is to fail-fast off a stalled endpoint,
+ * and the single retry is gated by the per-round `ttfbRetried` flag so it
+ * cannot stack.
+ *
+ * The phase is NOT `rate_limit`: this timer is ours, fires with no server
+ * throttle and no retry-after, and the two are otherwise indistinguishable in a
+ * trace — which made every self-inflicted 180s stall read as provider
+ * throttling. `metadata.reason` stays `'ttfb-timeout'` so analyses written
+ * against the pre-split shape keep matching.
  */
 async function* emitTtfbRetry(
   input: RunTurnInput,
   requestStartedAt: number,
 ): AsyncGenerator<ProviderEvent, void, void> {
   void emitSessionPhase(input.traceWriter, {
-    phase: 'rate_limit',
+    phase: 'ttfb_timeout',
     durationMs: Date.now() - requestStartedAt,
     metadata: { reason: 'ttfb-timeout', source: 'first-byte', resolvedModel: input.model },
   });
