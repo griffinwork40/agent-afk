@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.1] - 2026-07-31
+
+### Fixed
+- refresh the system-prompt date line when the local day rolls over (#784) (180882f)
+- kill the unbounded post-first-byte round with a progress-aware stall watchdog (#762) (#763) (219e0b6)
+
 ## [5.83.0] - 2026-07-31
 
 ### Added
