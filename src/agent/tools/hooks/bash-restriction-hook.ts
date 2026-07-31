@@ -414,24 +414,27 @@ function allowlistedFileForms(home: string, afkHome: string | undefined): string
  * the only text carrying the denied enclosing root. Dropping this guard
  * entirely would turn one readable file into a readable directory.
  *
- * A SECOND lookahead `(?!"[\w./\\*?\[\]{}-])` closes the quote-concatenation
+ * A SECOND lookahead `(?!['"\`][\w./\\*?\[\]{}-])` closes the quote-concatenation
  * bypass (PR #805 P1): shell concatenates `~/.ssh/config".bak"` into
- * `~/.ssh/config.bak`, so a `"` immediately followed by a path character means
- * the quote OPENS a suffix extending the path past the exact-file boundary —
- * the span must NOT be scrubbed, leaving `.ssh`/`.afk/config` visible to the
- * scanner. A CLOSING quote (`"~/.ssh/config"` with EOL/space after) is
- * intentionally unaffected: the first lookahead already passes `"` (it is not
- * in the path-char class), and the second only rejects `"` + path-char. This
- * is what lets a legitimately quoted whole exact reference stay scrubbed (and
- * allowed) while a quote-concatenated sibling/traversal stays blocked. The
- * same hole, prior to this PR, admitted the `mcp.json` carve-out too:
- * `cat ~/.afk/config/mcp.json"/../afk.env"` would have laundered `.afk/config`.
+ * `~/.ssh/config.bak`, so a quote character immediately followed by a path
+ * character means the quote OPENS a suffix extending the path past the
+ * exact-file boundary — the span must NOT be scrubbed, leaving `.ssh`/
+ * `.afk/config` visible to the scanner. All three shell quote characters
+ * (`"`, `'`, `` ` ``) are covered — single-quote and backtick concatenation
+ * are equivalent bypasses. A CLOSING quote (`"~/.ssh/config"` with EOL/space
+ * after) is intentionally unaffected: the first lookahead already passes
+ * quote chars (they are not in the path-char class), and the second only
+ * rejects a quote + path-char. This is what lets a legitimately quoted whole
+ * exact reference stay scrubbed (and allowed) while a quote-concatenated
+ * sibling/traversal stays blocked. The same hole, prior to this PR, admitted
+ * the `mcp.json` carve-out too: `cat ~/.afk/config/mcp.json"/../afk.env"`
+ * would have laundered `.afk/config`.
  */
 function scrubAllowlistedRefs(text: string, home: string, afkHome: string | undefined): string {
   let out = text;
   for (const form of allowlistedFileForms(home, afkHome)) {
     const exactRef = new RegExp(
-      `${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])(?!"[\\w./\\\\*?\\[\\]{}-])`,
+      `${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])(?!['"\`][\\w./\\\\*?\\[\\]{}-])`,
       'g',
     );
     out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);

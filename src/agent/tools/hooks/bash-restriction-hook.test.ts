@@ -609,6 +609,13 @@ describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () =>
     expect(hook(ctx(`cat ~/.afk/config/mcp.json"/../afk.env"`)).decision).toBe('block');
   });
 
+  it('P1: mcp.json single-quote and backtick concat stay blocked (all shell quotes)', () => {
+    expect(hook(ctx(`cat ${mcp}'.bak'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.afk/config/mcp.json'/../afk.env'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${mcp}\`.bak\``)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.afk/config/mcp.json\`/../afk.env\``)).decision).toBe('block');
+  });
+
   it('P1: a quoted whole exact ref still scrubs and stays allowed (no regression)', () => {
     // The second lookahead rejects ONLY `" + path-char`; a closing quote
     // followed by EOL/space must still match the carve-out and scrub.
@@ -655,6 +662,15 @@ describe('createBashRestrictionHook — ssh config / known_hosts carve-out parit
     expect(hook(ctx(`cat ~/.ssh/config"/../id_rsa"`)).decision).toBe('block');
     expect(hook(ctx(`cat $HOME/.ssh/config"/../github_key"`)).decision).toBe('block');
     expect(hook(ctx(`cat ~/.ssh/known_hosts"/../github_key"`)).decision).toBe('block');
+  });
+
+  it('P1: single-quote and backtick concat stay blocked (all shell quotes)', () => {
+    expect(hook(ctx(`cat ${sshConfig}'.bak'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config'.bak'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config'/../github_key'`)).decision).toBe('block');
+    expect(hook(ctx(`cat $HOME/.ssh/config'/../github_key'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}\`.bak\``)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config\`/../github_key\``)).decision).toBe('block');
   });
 
   it('P1: a quoted whole ssh exact ref still scrubs and stays allowed (no regression)', () => {
