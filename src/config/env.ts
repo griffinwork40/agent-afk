@@ -288,7 +288,8 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
       'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
       '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
       'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
-      'the response runs unbounded, so a normal slow call (below the bound) and any actively-' +
+      'the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, ' +
+      'so a normal slow call (below the bound) and any actively-' +
       'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
       'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
       'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
@@ -298,6 +299,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     default: '180000',
     example: '120000',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MODEL_STALL_TIMEOUT_MS',
+    description:
+      'Progress-aware POST-first-byte stall window (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a stream that has ALREADY produced content may then go completely silent. ' +
+      'Every streamed output event resets the window, so this is NOT a total-round cap: a ' +
+      'legitimately long, actively-streaming round (large code emission, extended thinking) ' +
+      'survives indefinitely, while a stream wedged mid-flight is aborted and surfaces as a real ' +
+      'terminal error instead of hanging. Complements AFK_MODEL_TTFB_TIMEOUT_MS, which governs ' +
+      'only the window BEFORE the first token; this one takes over after it. Default 1200000 ' +
+      '(20min) — above the 18.5min maximum post-first-byte stream duration observed across 86,076 ' +
+      'rounds in 12,381 local traces (p99 122s, p99.9 234s), so no healthy round trips it. ' +
+      'Set to 0 to disable (issue #762).',
+    type: 'number',
+    required: false,
+    default: '1200000',
+    example: '600000',
     category: 'model',
   },
   {
@@ -1406,6 +1426,7 @@ export const env = {
   get AFK_MICROCOMPACT_TOOL_RESULT_BYTES(): string | undefined { return process.env['AFK_MICROCOMPACT_TOOL_RESULT_BYTES']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
   get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
+  get AFK_MODEL_STALL_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_STALL_TIMEOUT_MS']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
   get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },
   get AFK_MODEL_LARGE_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LARGE_BASE_URL']; },
