@@ -47,6 +47,7 @@ import {
   SUSPECTED_LOOP_WINDOW_SIZE,
   type SuspectedLoopWindow,
 } from './suspected-loop-detector.js';
+import { RepeatFailureGuard } from './repeat-failure-guard.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -275,6 +276,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * dispatcher reconstruction. See {@link checkRepeatCircuitBreaker}.
    */
   private repeatBreaker: { fingerprint: string; count: number } | null = null;
+
+  /**
+   * Enforcing failure-streak guard (#723). Separate from `repeatBreaker` above:
+   * that one nudges on byte-identical calls regardless of outcome, this one
+   * refuses execution after consecutive FAILURES of the same normalized call.
+   */
+  private readonly repeatFailureGuard = new RepeatFailureGuard();
 
   /**
    * Denial circuit breaker state (#546). Counts CONSECUTIVE path-approval READ
@@ -627,6 +635,30 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
+   * Enforcing repeat-FAILURE guard (#723). Returns a refusal — and emits the
+   * telemetry the issue requires — when this exact call has already failed
+   * REPEAT_FAILURE_REFUSAL_THRESHOLD times in a row. Honours the same
+   * exempt-tool list as the advisory breaker, so a tool whose repeated identical
+   * calls are legitimate is never refused either.
+   */
+  private checkRepeatFailureGuard(call: ToolCall): ToolResult | null {
+    if (REPEAT_BREAKER_EXEMPT_TOOLS.has(call.name)) return null;
+    const verdict = this.repeatFailureGuard.check(call);
+    if (verdict === null) return null;
+    // Measurement (#723 requires the behaviour be observable) rides the
+    // EXISTING per-call `tool_call` trace event via `failureClass:
+    // 'repeat-failure'`, which `src/improve/scan/detectors/tool-failure-density.ts`
+    // already consumes. Deliberately no new `session_phase` name: that union is
+    // closed in two places (trace/types.ts + the hand-listed zod enum in
+    // trace/events.ts), and this file's own output-cap comment records the
+    // precedent that widening it for a diagnostic is out of scope.
+    debugLog(
+      `[repeat-failure-guard #723] refused ${verdict.tool} after ${verdict.count} identical failures`,
+    );
+    return verdict.result;
+  }
+
+  /**
    * OBSERVE-ONLY suspected-loop telemetry (see
    * {@link import('./suspected-loop-detector.js')}). Pushes this call's
    * normalized fingerprint into the per-dispatcher sliding window and, on the
@@ -835,6 +867,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const repeatBlock = this.checkRepeatCircuitBreaker(call);
     if (repeatBlock) return repeatBlock;
 
+    // 2c-bis. Enforcing repeat-FAILURE guard (#723). Unlike the advisory
+    // breaker above, this one stops execution: a call that has already failed
+    // identically N times is refused with the prior error quoted back.
+    const failureRefusal = this.checkRepeatFailureGuard(call);
+    if (failureRefusal) return failureRefusal;
+
     // 2d. OBSERVE-ONLY suspected-loop telemetry (forked children only). Records
     // the fingerprint and emits a `suspected_loop` trace signal on first
     // recurrence past threshold. Pure observability — never blocks, never
@@ -952,6 +990,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
       const repeatBlock = this.checkRepeatCircuitBreaker(call);
       if (repeatBlock) {
         results[i] = repeatBlock;
+        blocked.add(i);
+        continue;
+      }
+
+      // Enforcing repeat-FAILURE guard (#723). Same placement rationale as
+      // execute() step 2c-bis, on the sequential phase-1 path so the streak
+      // reflects real call order.
+      const batchFailureRefusal = this.checkRepeatFailureGuard(call);
+      if (batchFailureRefusal) {
+        results[i] = batchFailureRefusal;
         blocked.add(i);
         continue;
       }
@@ -1093,7 +1141,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private async executeCore(call: ToolCall): Promise<ToolResult> {
     const result = await this.executeCoreInner(call);
-    return this.applyOutputCap(result);
+    const capped = this.applyOutputCap(result);
+    // Invariant: recorded here, in the core both execute() and executeBatch()
+    // funnel through, so the streak sees every executed call exactly once. Runs
+    // after the output cap so the quoted error matches what the model was shown.
+    this.repeatFailureGuard.note(call, capped);
+    return capped;
   }
 
   /**
