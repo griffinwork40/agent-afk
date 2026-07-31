@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.11] - 2026-07-31
+
+### Fixed
+- clamp agent frame head rows to terminal width (#786) (03af774)
+
 ## [5.82.10] - 2026-07-30
 
 ### Fixed
