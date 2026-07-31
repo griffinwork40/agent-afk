@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { formatQuotaUsage } from './quota-footer.js';
+import { TWO_HOURS_MS } from '../agent/providers/anthropic-direct/query/retry-layer.js';
 
 const NOW = new Date('2026-07-29T12:00:00Z');
 const inMinutes = (m: number): Date => new Date(NOW.getTime() + m * 60_000);
@@ -139,5 +140,49 @@ describe('formatQuotaUsage — shape', () => {
     const r = formatQuotaUsage({ fiveHour: { utilization: 1 }, observedAt: NOW }, NOW);
     // eslint-disable-next-line no-control-regex
     expect(r.text).not.toMatch(/\u001b\[/);
+  });
+});
+
+describe('formatQuotaUsage — the auto-resume promise', () => {
+  const hot = (resetsAt?: Date): Parameters<typeof formatQuotaUsage>[0] => ({
+    fiveHour: { utilization: 0.97, ...(resetsAt !== undefined ? { resetsAt } : {}) },
+    observedAt: NOW,
+  });
+
+  it('withholds the promise when auto-resume is switched off', () => {
+    const r = formatQuotaUsage(hot(inMinutes(12)), NOW, { autoResume: false });
+    expect(r.text).not.toContain('auto-resumes');
+    expect(r.text).toBe('  5h quota 97% used — resets in 12m — turns stop at the cap — auto-resume is off');
+  });
+
+  it('withholds the promise when the reset is beyond the wait ceiling', () => {
+    // A hot 7d window routinely resets days out. The retry layer surfaces the
+    // error rather than waiting that long, so a resume promise would be a lie
+    // that walks an AFK user away from a turn which is about to terminate.
+    const r = formatQuotaUsage(
+      { sevenDay: { utilization: 0.97, resetsAt: inMinutes(3 * 60) }, observedAt: NOW },
+      NOW,
+    );
+    expect(r.text).not.toContain('auto-resumes');
+    expect(r.text).toContain('too far out to wait');
+  });
+
+  it('tracks the retry layer\u2019s real ceiling rather than a drifted copy', () => {
+    // Drift guard. quota-footer.ts holds a LOCAL copy of the threshold so the
+    // provider graph stays out of the render path; these boundary assertions
+    // are what make that copy safe — move TWO_HOURS_MS in retry-layer.ts and
+    // this fails instead of the copy going quietly stale.
+    const atCeiling = formatQuotaUsage(hot(new Date(NOW.getTime() + TWO_HOURS_MS)), NOW);
+    expect(atCeiling.text).toContain('AFK pauses and auto-resumes at the cap');
+    const pastCeiling = formatQuotaUsage(hot(new Date(NOW.getTime() + TWO_HOURS_MS + 60_000)), NOW);
+    expect(pastCeiling.text).toContain('too far out to wait');
+  });
+
+  it('keeps the promise when no deadline is known — the layer still parks', () => {
+    expect(formatQuotaUsage(hot(), NOW).text).toContain('AFK pauses and auto-resumes at the cap');
+  });
+
+  it('promises by default, matching the provider\u2019s own default', () => {
+    expect(formatQuotaUsage(hot(inMinutes(12)), NOW).text).toContain('auto-resumes');
   });
 });

@@ -1240,3 +1240,63 @@ describe('StatusLine — AFK_PLAIN_OUTPUT full render opt-out', () => {
     status.stop();
   });
 });
+
+describe('StatusLine clock ticker', () => {
+  let stream: MockStream;
+
+  beforeEach(() => {
+    stream = mockStream();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('arms no recurring timer by default', () => {
+    // The house rule the compositor states for caret blink: construction must
+    // stay free of an auto-started ticker, enablement is resolved caller-side.
+    vi.useFakeTimers();
+    const before = vi.getTimerCount();
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    expect(vi.getTimerCount()).toBe(before);
+    status.stop();
+  });
+
+  it('arms no ticker on a disabled (non-TTY) line', () => {
+    vi.useFakeTimers();
+    const dead = mockStream({ isTTY: false });
+    const before = vi.getTimerCount();
+    const status = new StatusLine({
+      stream: dead as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+      tickMs: 30_000,
+    });
+    status.start();
+    expect(vi.getTimerCount()).toBe(before);
+    status.stop();
+  });
+
+  it('re-paints on tick so clock-derived content recomputes, and stops at stop()', () => {
+    // Regression guard for the frozen quota countdown: the row renders a reset
+    // countdown and a `~` staleness marker against the paint-time clock, and
+    // every OTHER repaint here is event-driven — an idle session fires none of
+    // them, so without this ticker the countdown sat frozen indefinitely.
+    vi.useFakeTimers();
+    const status = new StatusLine({
+      stream: stream as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+      tickMs: 30_000,
+    });
+    status.start();
+    status.repaint({ model: 'sonnet' });
+    stream.writes.length = 0;
+
+    vi.advanceTimersByTime(30_000);
+    expect(stream.writes.length).toBeGreaterThan(0);
+
+    status.stop();
+    stream.writes.length = 0;
+    vi.advanceTimersByTime(120_000);
+    expect(stream.writes.length).toBe(0);
+  });
+});

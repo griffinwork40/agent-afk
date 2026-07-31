@@ -80,12 +80,24 @@ interface StatusLineOpts {
   force?: boolean;
   /** Minimum ms between repaints — avoids flicker on fast streams. */
   throttleMs?: number;
+  /**
+   * Interval in ms at which a started line re-paints itself from `lastFields`,
+   * so clock-derived content stays true. `0` (the default) never ticks.
+   *
+   * Defaults OFF and is enabled by the interactive caller (bootstrap.ts),
+   * mirroring how the compositor resolves caret-blink enablement caller-side:
+   * every direct/test construction stays free of an auto-started recurring
+   * timer.
+   */
+  tickMs?: number;
 }
 
 export class StatusLine {
   private readonly stream: NodeJS.WriteStream;
   private readonly force: boolean;
   private readonly throttleMs: number;
+  private readonly tickMs: number;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
   private lastRepaint = 0;
   private lastFields: StatusLineFields | null = null;
@@ -101,6 +113,7 @@ export class StatusLine {
     this.stream = opts.stream ?? process.stdout;
     this.force = opts.force ?? false;
     this.throttleMs = opts.throttleMs ?? 100;
+    this.tickMs = opts.tickMs ?? 0;
   }
 
   private get enabled(): boolean {
@@ -131,6 +144,21 @@ export class StatusLine {
         this.onResize();
       });
       this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => this.resetGeometry());
+    }
+    // Invariant: this is the ONLY time-driven repaint of the status row, and
+    // clock-derived content depends on it. The quota segment renders a reset
+    // countdown and a `~` staleness marker computed against `new Date()` at
+    // paint time (quota-indicator.ts), and grades droppability from that same
+    // freshness — but every other repaint here is event-driven (turn events,
+    // git/context samplers, resize, a NEW quota reading). An idle session fires
+    // none of them, so without this ticker a countdown sits frozen and a
+    // reading never crosses into `stale` on screen. `flush()` re-renders from
+    // `lastFields`, so each tick recomputes those values against the current
+    // clock. `unref()` keeps the interval from holding the process open; the
+    // inverse lives at the top of stop(), ahead of its early return.
+    if (this.tickMs > 0 && this.tickTimer === null) {
+      this.tickTimer = setInterval(() => this.flush(), this.tickMs);
+      this.tickTimer.unref();
     }
   }
 
@@ -345,6 +373,13 @@ export class StatusLine {
 
   /** Release the scroll region and clear the status row. */
   stop(): void {
+    // Cleared FIRST, ahead of the `!started || !enabled` early return below: an
+    // armed ticker is the one piece of state that can outlive a line which is
+    // no longer started, so a late return must never skip its teardown.
+    if (this.tickTimer !== null) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
     if (this.resizeUnsub !== null) {
       this.resizeUnsub();
       this.resizeUnsub = null;
