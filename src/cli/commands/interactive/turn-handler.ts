@@ -13,6 +13,9 @@ import { usageLimitBox } from '../../render.js';
 import { runPicker } from '../../render/picker.js';
 import { classifyError, presentError } from '../../errors/index.js';
 import { contextLimitFor } from '../../model-limits.js';
+import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
+import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { formatQuotaUsage } from '../../quota-footer.js';
 import {
   contextRatio,
   type CompletionWriter,
@@ -937,6 +940,21 @@ export function printTurnFooter(
           ? palette.warning
           : palette.dim;
     write(colorFn(usage.text));
+  }
+  // Subscription quota, same cadence and tone mapping as the context line above.
+  // Ordered AFTER it deliberately: context is the constraint on THIS turn, quota
+  // is the constraint on the next hour — nearest deadline reads first. Silent
+  // below 80% (the status-line indicator covers that range ambiently) and silent
+  // forever under API-key auth, where the quota headers never arrive.
+  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()));
+  if (quota.text !== null) {
+    const quotaColorFn =
+      quota.tier === 'over' || quota.tier === 'near'
+        ? palette.error
+        : quota.tier === 'caution'
+          ? palette.warning
+          : palette.dim;
+    write(quotaColorFn(quota.text));
   }
   write('');
 }

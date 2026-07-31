@@ -18,6 +18,7 @@ import { truncateDisplayWidth, displayWidth } from './display.js';
 import { palette } from './palette.js';
 import { ResizeBus } from './terminal-size.js';
 import { formatContextBar } from './context-bar.js';
+import { formatQuotaIndicator, type QuotaWindows } from './quota-indicator.js';
 import { formatCwd } from './format-cwd.js';
 import { isPlainOutputRequested } from '../config/env.js';
 
@@ -58,14 +59,18 @@ export interface StatusLineFields {
    */
   pr?: number;
   /**
-   * Pre-formatted Claude subscription quota summary (e.g. `5h 62% · 7d 31%`),
-   * or undefined when no quota headers have been observed in this process —
-   * which is the PERMANENT state under API-key auth, since only subscription
-   * OAuth responses carry `anthropic-ratelimit-unified-*`. Undefined must draw
-   * no segment at all rather than a placeholder. Rendered rightmost and dropped
-   * first on a narrow terminal: the most peripheral field on the line.
+   * Claude subscription quota windows (5h / 7d rolling utilization + reset
+   * deadlines), or undefined when no quota headers have been observed in this
+   * process — which is the PERMANENT state under API-key auth, since only
+   * subscription OAuth responses carry `anthropic-ratelimit-unified-*`.
+   * Undefined must draw no segment at all rather than a placeholder.
+   *
+   * Passed RAW (not pre-formatted) so the line can grade the segment's tone AND
+   * its droppability from the same severity — see the render block below.
+   * Mirrors how `contextPct`/`contextLimit` are passed raw for
+   * `formatContextBar`.
    */
-  quota?: string;
+  quotaWindows?: QuotaWindows;
 }
 
 interface StatusLineOpts {
@@ -509,10 +514,25 @@ export class StatusLine {
     // Invariant: every droppablePriority on this line must be UNIQUE. The shed
     // loop below drops EVERY part sharing the current maximum priority in one
     // pass, so reusing the token count's 4 here would make the quota segment and
-    // the token count vanish together instead of shedding one at a time. 5 =
-    // drop 1st, ahead of tokens — quota is the most peripheral field here.
-    if (f.quota !== undefined) {
-      parts.push({ text: palette.chrome(f.quota), droppablePriority: 5 }); // drop 1st
+    // the token count vanish together instead of shedding one at a time.
+    //
+    // Contract: quota droppability is SEVERITY-INVERTED. At calm/caution it is 5
+    // — drop 1st, ahead of tokens, the most peripheral field on the line. At
+    // `critical` (>80% of a rolling window) it becomes 0 — drop LAST, behind even
+    // the branch — because the one moment the quota is the most important field
+    // on the row is exactly the moment a narrow terminal used to shed it first.
+    // Promotion requires a FRESH reading: a stale critical (see STALE_AFTER_MS)
+    // may have already drained, so it keeps the peripheral priority rather than
+    // out-ranking identity fields on the strength of an old number. Still never
+    // `undefined` (never-drop) — the top-of-method invariant reserves that for
+    // model/mode, and stacking another never-drop field would force the final
+    // blind truncation to shear the model off the right edge.
+    if (f.quotaWindows !== undefined) {
+      const quota = formatQuotaIndicator(f.quotaWindows);
+      if (quota !== undefined) {
+        const priority = quota.severity === 'critical' && !quota.stale ? 0 : 5;
+        parts.push({ text: quota.text, droppablePriority: priority });
+      }
     }
 
     // Join with separator and measure the result.
