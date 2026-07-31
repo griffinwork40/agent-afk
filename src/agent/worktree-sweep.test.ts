@@ -164,6 +164,99 @@ describe('empty-detection', () => {
     expect(result.dryRun).toBe(false);
   });
 
+  // #759: bare `status --porcelain` never lists IGNORED files, so a tree whose
+  // only content is ignored read CLEAN and every removal path runs
+  // `remove --force`, deleting it. Committed work survives (branch refs live in
+  // the shared .git) but worktree-local `.env`/scratch state does not.
+  it('does NOT reap a clean tree holding a non-rebuildable ignored file (.env)', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-has-dotenv');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'interactive', createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), baseSha: 'base123', baseBranch: 'main' }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot, head: 'base123' })}\n\n` +
+      `${worktreeBlock({ path: worktreePath, head: 'base123', branch: 'refs/heads/afk/has-dotenv' })}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      // The ignored-aware probe is a DIFFERENT call than the bare dirty check.
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! .env\n!! node_modules/\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // tracked tree is clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates.some((c) => c.verdict === 'empty')).toBe(false);
+    expect(result.removed).not.toContain(worktreePath);
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
+  // The counterweight: if ANY ignored entry were protective, node_modules/ and
+  // dist/ would make every worktree immortal and the sweep would never reclaim.
+  it('still reaps a clean tree whose only ignored content is rebuildable output', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-only-build-output');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'interactive', createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), baseSha: 'base123', baseBranch: 'main' }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot, head: 'base123' })}\n\n` +
+      `${worktreeBlock({ path: worktreePath, head: 'base123', branch: 'refs/heads/afk/only-build-output' })}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! node_modules/\n!! dist/\n!! coverage/\n!! tsconfig.tsbuildinfo\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates.some((c) => c.verdict === 'empty')).toBe(true);
+    expect(result.removed).toContain(worktreePath);
+    // Discriminates this test from pre-existing clean+0-ahead+old => `empty`
+    // behaviour: without this, hardcoding `hasNonRebuildableIgnoredFiles` to
+    // always return `false` still passes, because nothing here proves the
+    // probe ran at all. Assert the `--ignored` call actually happened.
+    expect(mock.calls.some((c) => c.args.includes('status') && c.args.includes('--ignored'))).toBe(true);
+  });
+
   it('does not remove empty worktree in dry-run mode', async () => {
     const worktreePath = join(afkWorktreesDir, 'afk-empty-dry');
     await fs.mkdir(worktreePath, { recursive: true });
@@ -418,6 +511,102 @@ describe('stale-dirty-never-removes', () => {
     expect(result.candidates.some((c) => c.verdict === 'stale-dirty')).toBe(true);
     expect(result.removed).not.toContain(worktreePath);
     expect(result.warnings.some((w) => w.includes('stale-dirty') || w.includes(worktreePath))).toBe(true);
+  });
+
+  // An ignored-state protect is reported through the SAME stale-dirty path as a
+  // real diff, so the warning used to tell the reader to go look for uncommitted
+  // changes in a tree `git status` calls clean. Pin the honest label.
+  it('names ignored local state as the reason, not "uncommitted changes"', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-ignored-only-old');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 40).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = worktreeBlock({ path: worktreePath, head: 'tip456' });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      // The ignored probe: a hand-kept file no rebuild restores.
+      if (args.includes('--ignored')) {
+        return { stdout: '!! local-notes.md\n', stderr: '' };
+      }
+      // Bare status: CLEAN. This is the whole point — the tree has no diff.
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysDirty: 30,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(worktreePath);
+    const warning = result.warnings.find((w) => w.includes(worktreePath) && w.includes('stale-dirty'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('non-rebuildable ignored files');
+    expect(warning).not.toContain('uncommitted changes');
+  });
+
+  // A probe that protects because git FAILED must say so; otherwise the tree is
+  // preserved forever with no trace of why.
+  it('warns distinctly when the ignored probe itself fails', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-probe-broken');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 40).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = worktreeBlock({ path: worktreePath, head: 'tip456' });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('--ignored')) throw new Error('stdout maxBuffer length exceeded');
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysDirty: 30,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(worktreePath);
+    expect(
+      result.warnings.some(
+        (w) => w.includes('ignored-file probe failed') && w.includes(worktreePath),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1800,6 +1989,115 @@ describe('empty-verdict liveness gate (#380)', () => {
       (c) => c.args.includes('remove') && c.args.includes('--force') && c.args.includes(worktreePath),
     );
     expect(removeCalls).toHaveLength(0);
+  });
+
+  /**
+   * Invariant: what actually protects a worktree hosting a running subagent is
+   * the LIVE PID stamped by `touchWorktreeOccupancy`, not the age gate. A
+   * forked subagent runs in this same OS process, so `ownerLiveness` resolves
+   * 'alive' for its whole run and `empty` — which requires
+   * `ownerLiveness !== 'alive'` — is unreachable however old the tree gets.
+   *
+   * These two cases pin that relationship in the direction the occupancy
+   * heartbeat depends on. Without them the heartbeat's rationale is untestable
+   * prose: nothing failed when the module docblock claimed a live child "ages
+   * back into the `empty` verdict", because no test drove the heartbeat's
+   * effect through `runSweep` at all.
+   */
+  it('never reaps a clean tree whose meta carries a live pid, however old', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-live-pid-old-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        pid: process.pid, // alive — exactly what touchWorktreeOccupancy stamps
+        createdAt: new Date(Date.now() - 86_400_000 * 7).toISOString(), // 7d ≫ 1h gate
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/live-pid-old-wt',
+    });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).not.toBe('empty');
+    expect(candidate?.verdict).not.toBe('dead-owner');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('DOES reap an aged clean tree whose meta has no pid — the state the heartbeat defends', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-no-pid-old-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+    // No `pid`: the stamp never landed, or the meta was written by something
+    // else. ownerLiveness → 'unknown', so MIN_EMPTY_AGE_MS is the only guard —
+    // which is precisely why the heartbeat keeps re-asserting `createdAt`.
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        createdAt: new Date(Date.now() - 86_400_000 * 7).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/no-pid-old-wt',
+    });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: true, // classification only — no filesystem mutation needed
+      telemetryPath: telemetryFile,
+      readPresence: async () => [],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).toBe('empty');
   });
 });
 

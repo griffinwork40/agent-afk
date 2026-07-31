@@ -710,10 +710,13 @@ export const worktreeTool: AnthropicToolDef = {
     '- `release` — unlock a previously kept worktree, returning it to normal sweep lifecycle.\n' +
     '- `list` — dry-run sweep report: every afk-managed worktree with its verdict ' +
     '(active | empty | stale-clean | stale-dirty | locked | dead-owner | orphaned-*), owner, and age ' +
-    'in days. Verdicts empty/dead-owner/orphaned-* are removal candidates on the next sweep.\n' +
+    'in days. `stale-dirty` also covers a tree that `git status` calls clean but which holds ' +
+    'non-rebuildable ignored files (e.g. `.env`). Verdicts empty/dead-owner/orphaned-* are removal ' +
+    'candidates on the next sweep.\n' +
     '- `remove` — remove a worktree checkout you no longer need (branch ref is always preserved). ' +
-    'Refuses dirty trees, locked trees, and trees with commits ahead of base unless `force: true`. ' +
-    'Never removes the main worktree or paths outside `.afk-worktrees/`.\n\n' +
+    'Refuses dirty trees, locked trees, trees with commits ahead of base, and trees holding ' +
+    'non-rebuildable ignored files (e.g. `.env`) unless `force: true`. Never removes the main ' +
+    'worktree or paths outside `.afk-worktrees/`.\n\n' +
     'Finishing with a worktree: a worktree is scaffolding, not an artifact — once its work has landed ' +
     'somewhere durable (pushed branch, open PR, merged commit), remove it in the same turn instead of ' +
     'leaving it for the sweep. Two cases differ:\n' +
@@ -722,8 +725,11 @@ export const worktreeTool: AnthropicToolDef = {
     'it was preserved with commits-ahead it is LOCKED, and a locked worktree is never reaped — call ' +
     '`release` first, then `remove` (remove refuses a locked tree, so the order is mandatory). ' +
     '`remove` also refuses a tree with commits ahead of base unless `force: true`; once the branch is ' +
-    'pushed that force is safe, because remove never deletes the branch ref — the commits stay on the ' +
-    'branch and on the remote, and only the directory goes away.\n' +
+    'pushed that force is safe for COMMITS specifically, because remove never deletes the branch ref ' +
+    '— they stay on the branch and on the remote. `force` is NOT safe for local state, though: it also ' +
+    'deletes untracked/ignored files (`.env`, a gitignored plan) that never made it into a commit, so ' +
+    'confirm nothing irreplaceable is sitting there first — removal now refuses such a tree unless ' +
+    'forced.\n' +
     '- The worktree you are RUNNING IN (your own cwd): never remove it mid-session. Deleting your own ' +
     'working directory strands every later tool call on a path that no longer exists. Session-end ' +
     'cleanup already removes it when the tree is clean — just tell the operator it will be reclaimed ' +
