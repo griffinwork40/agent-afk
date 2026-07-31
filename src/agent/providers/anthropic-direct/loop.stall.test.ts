@@ -26,6 +26,7 @@ import {
   collect,
   ctx,
   makeTextStream,
+  makeToolUseStream,
   makeDispatcher,
 } from './loop.test-helpers.js';
 
@@ -177,6 +178,158 @@ describe('runTurn post-first-byte stall watchdog (#762)', () => {
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(0);
     expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
     expect(events.some((e) => e.type === 'assistant.message' && e.text === 'progressing')).toBe(true);
+  });
+
+  it('does NOT fire while a tool call streams its argument payload (input_json_delta yields nothing)', async () => {
+    // Regression guard for the review finding on this PR: `input_json_delta` is
+    // consumed by translate.ts WITHOUT yielding, so between `tool.use.start` and
+    // `tool.use` a healthy stream produces zero translated events. If the
+    // watchdog only counted translated output, a large tool-argument emission
+    // would read as dead air and be aborted as a stall. Window is deliberately
+    // SHORTER than the total argument-streaming span.
+    process.env[STALL_KEY] = '30000';
+    const GAP_MS = 20_000;
+    const CHUNKS = ['{"pa', 'th":"', '/tmp/', 'a.txt', '","co', 'ntent', '":"x"', '}'];
+    // Takes the per-request signal and REJECTS on abort, exactly as the SDK's
+    // stream iterator does. Without this the mock would keep yielding through a
+    // fired watchdog and the test would pass whether or not the fix is present.
+    function chunkedToolArgStream(signal: AbortSignal): AsyncIterable<RawMessageStreamEvent> {
+      const queue: RawMessageStreamEvent[] = [
+        ...makeToolUseStream('tool_1', 'write_file', '{}').slice(0, 2), // start + block_start
+        ...CHUNKS.map(
+          (partial_json) =>
+            ({
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'input_json_delta', partial_json },
+            }) as unknown as RawMessageStreamEvent,
+        ),
+        ...makeToolUseStream('tool_1', 'write_file', '{}').slice(3), // block_stop → message_stop
+      ];
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<RawMessageStreamEvent> {
+          let i = 0;
+          return {
+            async next(): Promise<IteratorResult<RawMessageStreamEvent>> {
+              if (i >= queue.length) return { done: true, value: undefined };
+              const value = queue[i]!;
+              i++;
+              // Gap ONLY before the non-yielding argument deltas, so this test
+              // isolates the invisible-progress span from every other phase.
+              if ((value as { delta?: { type?: string } }).delta?.type === 'input_json_delta') {
+                await new Promise<void>((resolve, reject) => {
+                  if (signal.aborted) { reject(new Error('aborted')); return; }
+                  const t = setTimeout(resolve, GAP_MS);
+                  (t as { unref?: () => void }).unref?.();
+                  signal.addEventListener(
+                    'abort',
+                    () => { clearTimeout(t); reject(new Error('aborted')); },
+                    { once: true },
+                  );
+                });
+              }
+              return { done: false, value };
+            },
+          };
+        },
+      };
+    }
+    let callCount = 0;
+    let requestAborted = false;
+    const callerSignal = new AbortController().signal;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn((_params: unknown, opts: unknown) => {
+          callCount++;
+          const signal = (opts as { signal: AbortSignal }).signal;
+          signal.addEventListener('abort', () => { requestAborted = true; });
+          // Round 1 streams the tool args slowly; round 2 closes the turn.
+          return callCount === 1 ? chunkedToolArgStream(signal) : fromArray(makeTextStream('done'));
+        }),
+      },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {},
+        signal: callerSignal, ctx,
+      }),
+    );
+    // 8 chunks × 20s = 160s of yield-free streaming — 5.3× the 30s window.
+    await vi.advanceTimersByTimeAsync(400_000);
+    const events = await resultPromise;
+
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(callerSignal.aborted).toBe(false);
+    // The load-bearing assertion: the watchdog never aborted the request during
+    // the yield-free argument span. Without the raw-progress wiring this flips
+    // true at t=30s and the round dies as a false-positive stall.
+    expect(requestAborted).toBe(false);
+    // The tool round completed and the turn moved on, proving the argument
+    // payload was accumulated rather than truncated by an abort.
+    expect(callCount).toBe(2);
+    expect(events.some((e) => e.type === 'tool.use')).toBe(true);
+    expect(events.some((e) => e.type === 'assistant.message' && e.text === 'done')).toBe(true);
+  });
+
+  it('STILL fires when a wedged stream emits only keep-alive pings (pings are not progress)', async () => {
+    // The inverse guard for the test above: widening "progress" to cover
+    // non-yielding frames must NOT extend to pings, or a wedged socket could
+    // hold the window open forever with keep-alives and #762 would be back.
+    process.env[STALL_KEY] = '30000';
+    function pingOnlyAfterContent(signal: AbortSignal): AsyncIterable<RawMessageStreamEvent> {
+      const prefix = makeTextStream('partial').slice(0, 3); // start, block_start, delta
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<RawMessageStreamEvent> {
+          let i = 0;
+          return {
+            async next(): Promise<IteratorResult<RawMessageStreamEvent>> {
+              if (i < prefix.length) {
+                const value = prefix[i]!;
+                i++;
+                return { done: false, value };
+              }
+              // Keep-alives forever, 10s apart — comfortably inside the window.
+              await new Promise<void>((resolve, reject) => {
+                if (signal.aborted) { reject(new Error('aborted')); return; }
+                const t = setTimeout(resolve, 10_000);
+                (t as { unref?: () => void }).unref?.();
+                signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
+              });
+              return { done: false, value: { type: 'ping' } as unknown as RawMessageStreamEvent };
+            },
+          };
+        },
+      };
+    }
+    let requestAborted = false;
+    const callerSignal = new AbortController().signal;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn((_params: unknown, opts: unknown) => {
+          const signal = (opts as { signal: AbortSignal }).signal;
+          signal.addEventListener('abort', () => { requestAborted = true; });
+          return pingOnlyAfterContent(signal);
+        }),
+      },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {},
+        signal: callerSignal, ctx,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(61_000);
+    const events = await resultPromise;
+
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect(String((errorEvent as { error: Error }).error.message)).toMatch(/stalled/i);
+    expect(requestAborted).toBe(true);
+    expect(callerSignal.aborted).toBe(false);
   });
 
   it(`${STALL_KEY}=0 disables the watchdog (matching the TTFB=0 convention)`, async () => {

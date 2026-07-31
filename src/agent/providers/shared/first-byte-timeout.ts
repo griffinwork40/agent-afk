@@ -26,6 +26,7 @@
  */
 
 import { env } from '../../../config/env.js';
+import { clampTimerDelayMs, MAX_TIMER_DELAY_MS } from './timer-limits.js';
 
 /** Default TTFB bound (ms). ~2× the measured p99 ttfb (≈85s) — see issue #583. */
 export const DEFAULT_MODEL_TTFB_TIMEOUT_MS = 180_000;
@@ -37,13 +38,18 @@ export const DEFAULT_MODEL_TTFB_TIMEOUT_MS = 180_000;
  * is the explicit disable escape hatch (returned as `0`). Unset, empty, or
  * unparseable input falls back to {@link DEFAULT_MODEL_TTFB_TIMEOUT_MS};
  * negative values are treated as invalid and also fall back to the default.
+ *
+ * Values above {@link MAX_TIMER_DELAY_MS} are clamped DOWN to it, because Node
+ * coerces an over-ceiling `setTimeout` delay to `1` — so "raise the bound past
+ * 2^31-1" would otherwise mean "abort every call almost immediately". Same
+ * clamp as `resolveStallTimeoutMs`; see `timer-limits.ts`.
  */
 export function resolveTtfbTimeoutMs(): number {
   const raw = env.AFK_MODEL_TTFB_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === '') return DEFAULT_MODEL_TTFB_TIMEOUT_MS;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_MODEL_TTFB_TIMEOUT_MS;
-  return n;
+  return clampTimerDelayMs(n);
 }
 
 /** Marker error thrown/attached when a request is aborted for a TTFB stall. */

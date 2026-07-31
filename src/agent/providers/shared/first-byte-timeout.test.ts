@@ -8,6 +8,7 @@ import {
   isTtfbTimeoutError,
   resolveTtfbTimeoutMs,
 } from './first-byte-timeout.js';
+import { MAX_TIMER_DELAY_MS } from './timer-limits.js';
 
 describe('resolveTtfbTimeoutMs', () => {
   const KEY = 'AFK_MODEL_TTFB_TIMEOUT_MS';
@@ -46,6 +47,18 @@ describe('resolveTtfbTimeoutMs', () => {
     expect(resolveTtfbTimeoutMs()).toBe(DEFAULT_MODEL_TTFB_TIMEOUT_MS);
     process.env[KEY] = '-5';
     expect(resolveTtfbTimeoutMs()).toBe(DEFAULT_MODEL_TTFB_TIMEOUT_MS);
+  });
+
+  it('clamps an above-ceiling override to the platform timer maximum', () => {
+    // Unclamped, Node coerces such a delay to 1ms — so "raise the bound" would
+    // abort every call almost immediately instead of extending it.
+    process.env[KEY] = '3000000000';
+    expect(resolveTtfbTimeoutMs()).toBe(MAX_TIMER_DELAY_MS);
+    process.env[KEY] = String(MAX_TIMER_DELAY_MS + 1);
+    expect(resolveTtfbTimeoutMs()).toBe(MAX_TIMER_DELAY_MS);
+    // Exactly at the ceiling is still honoured verbatim.
+    process.env[KEY] = String(MAX_TIMER_DELAY_MS);
+    expect(resolveTtfbTimeoutMs()).toBe(MAX_TIMER_DELAY_MS);
   });
 });
 

@@ -5,9 +5,12 @@
  * Contract: fire when a stream that HAS already produced a first content token
  * then goes fully silent for a whole window — the signal that distinguishes a
  * "legitimately long, actively-streaming round" (a big code emission, extended
- * thinking) from a "stream wedged mid-flight". The ONLY thing that resets the
- * clock is a real translated output event, so a round making observable
- * progress survives indefinitely while a round producing nothing dies loudly.
+ * thinking) from a "stream wedged mid-flight". The only thing that resets the
+ * clock is real provider output — a translated event, or a consumed-but-unyielded
+ * content delta such as a tool call's streaming argument payload — so a round
+ * making observable progress survives indefinitely while a round producing
+ * nothing dies loudly. Keep-alive pings are excluded by construction, so a
+ * wedged stream cannot hold the window open with them.
  *
  * Why this is NOT an absolute per-round wall-clock cap: `armFirstByteTimeout`'s
  * companion invariant (pinned by `loop.ttfb.test.ts`, "does NOT abort a stream
@@ -63,6 +66,7 @@
  */
 
 import { env } from '../../../config/env.js';
+import { clampTimerDelayMs, MAX_TIMER_DELAY_MS } from './timer-limits.js';
 
 /**
  * Default post-first-byte stall window (ms).
@@ -98,13 +102,19 @@ export const DEFAULT_MODEL_STALL_TIMEOUT_MS = 1_200_000;
  * `AFK_MODEL_TTFB_TIMEOUT_MS` convention. Unset, empty, or unparseable input
  * falls back to {@link DEFAULT_MODEL_STALL_TIMEOUT_MS}; negative values are
  * treated as invalid and also fall back to the default.
+ *
+ * Values above {@link MAX_TIMER_DELAY_MS} are clamped DOWN to it rather than
+ * passed through: Node coerces an over-ceiling `setTimeout` delay to `1`, so an
+ * operator following this module's own advice to "raise
+ * AFK_MODEL_STALL_TIMEOUT_MS" past 2^31-1 would otherwise abort every round
+ * milliseconds after its first content token — the exact inverse of intent.
  */
 export function resolveStallTimeoutMs(): number {
   const raw = env.AFK_MODEL_STALL_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === '') return DEFAULT_MODEL_STALL_TIMEOUT_MS;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_MODEL_STALL_TIMEOUT_MS;
-  return n;
+  return clampTimerDelayMs(n);
 }
 
 /** Marker error thrown/attached when a request is aborted for a mid-stream stall. */

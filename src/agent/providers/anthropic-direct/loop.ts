@@ -555,6 +555,14 @@ export async function* runTurn(
       for await (const out of translateMessageStream(
         abortableStream(events, input.signal) as Parameters<typeof translateMessageStream>[0],
         input.ctx,
+        // Second reset source for the stall watchdog: content deltas the
+        // translator consumes WITHOUT yielding (a tool call's streaming
+        // argument payload, a thinking signature). Those are real output, so
+        // they must re-arm the window — without this, a long `input_json_delta`
+        // run looks identical to a wedged socket and gets killed as a stall.
+        // Pings deliberately do not reach here (see translate.ts), so a
+        // keep-alive-only stream still fires.
+        () => stall.progress(),
       )) {
         // First-byte boundary = the first NON-error translated output (a real
         // content/tool event, or the end-of-stream turn-result). An in-band
@@ -588,11 +596,15 @@ export async function* runTurn(
           });
         }
         // Observable progress for the post-first-byte stall watchdog (#762).
-        // EVERY translated output re-arms the window — this is the sole reset
-        // source, so "slow but streaming" survives indefinitely while genuine
-        // silence fires. The first call also ARMS the (until-now dormant)
-        // watchdog, which is why the pre-first-byte window stays governed
-        // exclusively by the TTFB bound above and the two never overlap.
+        // EVERY translated output re-arms the window, so "slow but streaming"
+        // survives indefinitely while genuine silence fires. This is one of two
+        // reset sources; the other is the `onRawProgress` callback passed above,
+        // which covers content deltas that yield nothing. The first call from
+        // either source ARMS the (until-now dormant) watchdog, which is why the
+        // pre-first-byte window stays governed by the TTFB bound above: a
+        // non-yielding delta can only precede the first translated event in
+        // pathological orderings, and even then the far tighter TTFB bound
+        // fires first.
         stall.progress();
         if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate yielded:', out.kind, out.kind === 'event' ? out.event.type : '');
         if (out.kind === 'event') {
