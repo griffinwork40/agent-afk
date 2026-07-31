@@ -32,6 +32,7 @@ import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
+import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { debugLog } from '../../utils/debug.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
@@ -337,7 +338,19 @@ export class SubagentExecutor implements SubagentControl {
     return this.activeForegroundHandles.size > 0;
   }
 
+  /**
+   * Monotonic cancellation counter. Bumped on every `cancelActiveForeground()`
+   * so an in-flight `execute()` can detect "a cancel happened while I was
+   * between stream-cut retry attempts" — a window in which the handle maps are
+   * empty and the cancel would otherwise be invisible. See `execute()`.
+   */
+  private cancelGeneration = 0;
+
   async cancelActiveForeground(): Promise<number> {
+    // Bump BEFORE the empty-map early return: a cancel that arrives while an
+    // `agent` call sits between retry attempts finds nothing to cancel, and
+    // suppressing the pending re-fork is the only way to honour it.
+    this.cancelGeneration += 1;
     // Snapshot first: cancel() resolves the run, whose finally removes the entry
     // from the map while we iterate. handle.cancel() is idempotent and aborts
     // the child session; its runToResult settles (buildResultFromError with any
@@ -396,7 +409,50 @@ export class SubagentExecutor implements SubagentControl {
     return { active, backgroundJobs };
   }
 
+  /**
+   * Dispatch the `agent` tool, re-forking once if the child's model stream is
+   * cut mid-flight with nothing to salvage.
+   *
+   * Contract: every attempt runs the FULL {@link executeOnce} body, so each
+   * re-dispatch parses input and forks a brand-new child (fresh session, fresh
+   * trace, fresh worktree when isolating). That is required for a retry to mean
+   * anything — a spent `SubagentHandle` cannot be re-run. Attempt-scoped
+   * telemetry and trace events are emitted per attempt by design: the failed
+   * first attempt stays visible in `afk trace show` rather than being silently
+   * swallowed by the rescue.
+   *
+   * Only the ZERO-OUTPUT cut is retried, and only for a READ-ONLY child — see
+   * {@link isZeroOutputStreamCut} (buffered partials and tool-budget caps are
+   * excluded) and the `canRedispatch` gate below (side effects and cancellation).
+   */
   async execute(call: ToolCall): Promise<ToolResult> {
+    // Invariant: default to NOT side-effect-free. `executeOnce` flips this only
+    // once it has actually resolved the child's write capability; every earlier
+    // return path (input validation, depth ceiling, fork failure) therefore
+    // leaves retry disabled rather than guessing.
+    const probe: StreamCutProbe = { sideEffectFree: false };
+    // Cancellation cannot be observed through `activeForegroundHandles` between
+    // attempts — attempt 1's finally has already emptied it and attempt 2 has
+    // not registered yet, so `cancelActiveForeground()` would find nothing to
+    // cancel and never abort `call.signal`. Snapshot the cancel generation
+    // instead and refuse to re-fork if it moved. A counter (not a boolean) keeps
+    // this correct when several `agent` calls are in flight concurrently.
+    const cancelGenerationAtStart = this.cancelGeneration;
+    return runWithStreamCutRetry({
+      dispatch: () => this.executeOnce(call, probe),
+      signal: call.signal,
+      canRedispatch: () =>
+        probe.sideEffectFree && this.cancelGeneration === cancelGenerationAtStart,
+      onRedispatch: (attempt) => {
+        debugLog(
+          `subagent-executor: read-only child stream cut with zero output; ` +
+            `re-dispatching a fresh fork (attempt ${attempt + 1})`,
+        );
+      },
+    });
+  }
+
+  private async executeOnce(call: ToolCall, probe?: StreamCutProbe): Promise<ToolResult> {
     // If signal is already aborted, return immediately
     if (call.signal.aborted) {
       return {
@@ -533,6 +589,12 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
+
+    // Stream-cut retry eligibility (see `execute()`): a re-dispatch re-runs the
+    // whole prompt, so it is only safe when the child cannot mutate anything.
+    // `childWriteCapable` is the authoritative answer — it already accounts for
+    // the named agent's tool allowlist, the parent's cage, and readOnlyBash.
+    if (probe !== undefined) probe.sideEffectFree = !childWriteCapable;
 
     // isolation:"worktree" — fork the child inside a fresh managed git worktree
     // so its writes/tests never collide with siblings sharing the parent tree.
