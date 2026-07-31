@@ -17,6 +17,7 @@ import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js'
 // THIS file) is `import type`, which TypeScript erases at compile time — so
 // no runtime require()/import cycle exists between the two modules.
 import { probeNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
+import { classifyOrphanDir } from './worktree-orphan-guard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -544,6 +545,19 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           owner: 'interactive',
           ageMs: orphanAgeMs,
         });
+        // Invariant: the orphan path has no git information — the directory is
+        // absent from `git worktree list`, so `git status` cannot classify it
+        // and none of the registered-candidate protections apply. The guard is
+        // the substitute floor and it runs in dry-run too, so `list` reports the
+        // preservation instead of implying the next tick will delete (#794).
+        const guard = await classifyOrphanDir(orphanPath, orphanAgeMs, MIN_EMPTY_AGE_MS);
+        if (!guard.remove) {
+          result.warnings.push(
+            `[WARN] orphaned dir preserved (${guard.because}` +
+              `${guard.detail === undefined ? '' : `: ${guard.detail}`}): ${orphanPath}`,
+          );
+          continue;
+        }
         if (!effectiveDryRun) {
           try {
             await fs.rm(orphanPath, { recursive: true, force: true });
