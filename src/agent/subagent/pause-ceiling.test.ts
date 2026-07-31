@@ -34,6 +34,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
+import type { PauseExtensionGrantInfo } from './pause-ceiling.js';
 import { PAUSE_WINDOW_SLACK_MS } from './pause-window.js';
 import { withTimeout, type TimeoutExtender } from '../timeout.js';
 import { TimeoutError } from '../../utils/errors.js';
@@ -395,5 +396,61 @@ describe('PauseAwareCeiling', () => {
     expect(run.fired()).toBe(true);
     // Finite and predictable: never beyond budget + cap.
     expect(ceiling.totalGrantedMs).toBeLessThanOrEqual(SUBAGENT_MAX_PAUSE_EXTENSION_MS);
+  });
+
+  it('invokes the onGrant observer with the extension details on each non-zero grant', async () => {
+    // Observability wiring: the handle passes an onGrant callback that emits a
+    // `pause_extension_grated` witness event. Here we verify the callback
+    // receives the grant amount, running totals, remaining cap, count, and the
+    // pause description — the exact fields the trace event carries.
+    const grants: PauseExtensionGrantInfo[] = [];
+    const ceiling = new PauseAwareCeiling(
+      BUDGET,
+      SUBAGENT_MAX_PAUSE_EXTENSION_MS,
+      (info) => {
+        grants.push(info);
+      },
+    );
+    const run = startGuarded(ceiling);
+
+    // A 5-min provider park; credit accrues while it is open.
+    const parkMs = 5 * 60_000;
+    const resetsAt = new Date(Date.now() + parkMs);
+    ceiling.onEvent({ type: 'paused', reason: 'usage-limit', resetsAt });
+
+    // Base deadline reached → onDeadline grants the credited park window.
+    await vi.advanceTimersByTimeAsync(BUDGET);
+    expect(run.fired()).toBe(false);
+    expect(grants).toHaveLength(1);
+
+    const g = grants[0]!;
+    expect(g.grantMs).toBe(parkMs + PAUSE_WINDOW_SLACK_MS);
+    expect(g.totalGrantedMs).toBe(g.grantMs);
+    expect(g.grantCount).toBe(1);
+    expect(g.remainingCapMs).toBe(SUBAGENT_MAX_PAUSE_EXTENSION_MS - g.grantMs);
+    expect(g.pauseDescription).toBe(`paused (usage-limit, resetsAt=${resetsAt.toISOString()})`);
+
+    // Drive the re-armed wait to completion so no promise is left dangling.
+    await vi.advanceTimersByTimeAsync(g.grantMs + 1);
+    await run.done;
+    expect(run.fired()).toBe(true);
+  });
+
+  it('does NOT invoke onGrant when no extension is granted (no pause observed)', async () => {
+    const grants: PauseExtensionGrantInfo[] = [];
+    const ceiling = new PauseAwareCeiling(
+      BUDGET,
+      SUBAGENT_MAX_PAUSE_EXTENSION_MS,
+      (info) => {
+        grants.push(info);
+      },
+    );
+    const run = startGuarded(ceiling);
+
+    // No pause event: the ceiling fires at the budget and never calls onGrant.
+    await vi.advanceTimersByTimeAsync(BUDGET);
+    await run.done;
+    expect(run.fired()).toBe(true);
+    expect(grants).toHaveLength(0);
   });
 });

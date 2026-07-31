@@ -81,6 +81,25 @@ export const SUBAGENT_MAX_PAUSE_EXTENSION_MS = 2 * 60 * 60_000;
 const MIN_EXTENSION_GRANT_MS = 1_000;
 
 /**
+ * Snapshot handed to {@link PauseAwareCeiling}'s `onGrant` observer each time
+ * `onDeadline` grants a bounded extension. Lets the handle emit a
+ * `pause_extension_granted` witness event without the ceiling itself importing
+ * the trace layer.
+ */
+export interface PauseExtensionGrantInfo {
+  /** ms granted by THIS deadline decision (floored to MIN_EXTENSION_GRANT_MS). */
+  grantMs: number;
+  /** total ms granted across all deadlines so far, capped at `maxExtensionMs`. */
+  totalGrantedMs: number;
+  /** ms of extension budget remaining after this grant (0 ⇒ cap exhausted). */
+  remainingCapMs: number;
+  /** number of separate grants made so far, including this one. */
+  grantCount: number;
+  /** human-readable description of the most recent pause signal, if any. */
+  pauseDescription: string | undefined;
+}
+
+/**
  * Wall-clock ceiling extender driven exclusively by provider pause signals.
  *
  * ## Semantics: the budget bounds WORKING time, not wall time
@@ -140,17 +159,33 @@ export class PauseAwareCeiling implements TimeoutExtender {
   private grantCount = 0;
 
   /**
+   * Optional observer invoked once per NON-ZERO grant, AFTER `grantedMs` and
+   * `grantCount` are updated. Decouples the ceiling from the trace layer: the
+   * handle wires a callback that emits a `pause_extension_granted` witness
+   * event, so the ceiling itself needs no trace import and stays pure
+   * (testable without a trace writer). Never throws back into `onDeadline` —
+   * callers must keep it side-effect-free beyond observation.
+   */
+  private readonly onGrant?: (info: PauseExtensionGrantInfo) => void;
+
+  /**
    * @param baseTimeoutMs — the fork's configured wall-clock budget, echoed into
    *   the error message so the base budget and the granted extension are
    *   separately legible.
    * @param maxExtensionMs — absolute cap on total accumulated extension.
    *   Defaults to {@link SUBAGENT_MAX_PAUSE_EXTENSION_MS}; a non-positive value
    *   disables extension entirely (the pre-change behaviour).
+   * @param onGrant — optional observer invoked each time `onDeadline` grants a
+   *   bounded extension, carrying the grant details for observability. Omit for
+   *   the pre-change behaviour (no observer).
    */
   constructor(
     private readonly baseTimeoutMs: number,
     private readonly maxExtensionMs: number = SUBAGENT_MAX_PAUSE_EXTENSION_MS,
-  ) {}
+    onGrant?: (info: PauseExtensionGrantInfo) => void,
+  ) {
+    this.onGrant = onGrant;
+  }
 
   /**
    * Feed one streamed {@link OutputEvent}.
@@ -272,6 +307,22 @@ export class PauseAwareCeiling implements TimeoutExtender {
     const grantMs = Math.min(Math.max(uncreditedMs, MIN_EXTENSION_GRANT_MS), remainingCapMs);
     this.grantedMs += grantMs;
     this.grantCount += 1;
+    // Observe the grant for witness-layer traceability. A throw here must never
+    // strand the wait — wrap so a faulty observer cannot suppress the extension.
+    if (this.onGrant) {
+      try {
+        this.onGrant({
+          grantMs,
+          totalGrantedMs: this.grantedMs,
+          remainingCapMs: this.maxExtensionMs - this.grantedMs,
+          grantCount: this.grantCount,
+          pauseDescription: this.lastPauseDescription,
+        });
+      } catch {
+        // Observability is best-effort: never let an observer fault eat the
+        // extension the provider pause entitles the child to.
+      }
+    }
     return grantMs;
   }
 

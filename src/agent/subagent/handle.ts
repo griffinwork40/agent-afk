@@ -20,7 +20,7 @@ import { dispatchSubagentStop } from '../subagent-hooks.js';
 import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { IdleWatchdog } from './idle-watchdog.js';
-import { PauseAwareCeiling } from './pause-ceiling.js';
+import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
 import {
   buildResultFromMessage,
   buildResultFromError,
@@ -217,7 +217,25 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // applies (`timeoutMs <= 0`): there is no ceiling to extend.
     const pauseCeiling =
       Number.isFinite(this.timeoutMs) && this.timeoutMs > 0
-        ? new PauseAwareCeiling(this.timeoutMs)
+        ? new PauseAwareCeiling(this.timeoutMs, SUBAGENT_MAX_PAUSE_EXTENSION_MS, (info) => {
+            // Witness-layer: each non-zero pause extension is now observable in
+            // the trace, not just in the eventual terminal timeout error. Fire-
+            // and-forget so a slow trace write can never delay the deadline
+            // re-arm (mirrors the `idle_watchdog_fired` emit a few lines down).
+            void emitSessionPhase(this.traceWriter, {
+              phase: 'pause_extension_granted',
+              metadata: {
+                subagentId: this.id,
+                grantMs: info.grantMs,
+                totalGrantedMs: info.totalGrantedMs,
+                remainingCapMs: info.remainingCapMs,
+                grantCount: info.grantCount,
+                ...(info.pauseDescription !== undefined && {
+                  pauseDescription: info.pauseDescription,
+                }),
+              },
+            });
+          })
         : undefined;
     this.pauseCeiling = pauseCeiling;
     const p = withTimeout(this.streamToFinalMessage(prompt, sinkOverride), this.timeoutMs, {
