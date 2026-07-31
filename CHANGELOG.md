@@ -11,6 +11,26 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.11] - 2026-07-31
+
+### Fixed
+- clamp agent frame head rows to terminal width (#786) (03af774)
+
+## [5.82.10] - 2026-07-30
+
+### Fixed
+- bound grouped tool summaries to terminal width (#773) (d52dbf2)
+
+## [5.82.9] - 2026-07-30
+
+### Fixed
+- resolve the default create base at the calling session's anchor (#760) (#769) (b4192bd)
+
+## [5.82.8] - 2026-07-30
+
+### Fixed
+- follow AFK_HOME in the credential floor + reject overly broad subagent cwd/writeRoots (#753) (2675eaf)
+
 ## [5.82.7] - 2026-07-30
 
 ### Fixed
