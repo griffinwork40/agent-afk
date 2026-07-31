@@ -785,6 +785,83 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
       expect(stripAnsi((rendered[2]![1]).join('\n'))).toContain('──');
     });
 
+    /**
+     * Regression for the agent-frame HEAD rows, the last unbounded rows in the
+     * flush path. `formatAgentSummary` and `formatAgentHeader` both emit a head
+     * row for the same entry (eagerly via flushSource, or at dispose-time), and
+     * their encodings are contractually coupled — so both clamp, or neither
+     * can. Measured at cols=88 before the fix: 109 for the summary head with
+     * stats, 181 for the eager header, 105 for the heartbeat-annotated label.
+     *
+     * Nesting labels are already clipped to NESTING_LABEL_MAX = 60, so the
+     * overflow comes from what surrounds them: the spine indent, the tool name,
+     * the `[subagent]` dispatch tag and — for the summary head — the
+     * ` — N tool calls · M lines` stats tail, which only appears once a frame
+     * has more than MAX_VISIBLE_CHILDREN (3) children. That makes the common
+     * case a plain root `agent` dispatch that made four or more tool calls.
+     */
+    it('agent frame head rows fit within terminal width', () => {
+      const cols = process.stdout.columns ?? 88;
+      const longPrompt = JSON.stringify({
+        prompt:
+          'Audit every emission site in the tool lane renderer and classify each as bounded or unbounded with file:line citations',
+        agent_type: 'research-agent',
+      });
+
+      // Summary head WITH the stats tail: >3 children is what makes stats
+      // render. Root dispatch shape — no maxWidth, as the orchestrator calls it.
+      const summary = new ToolLane();
+      summary.addStartWithAgentContext('parent', 'agent', ` (${longPrompt})`, undefined);
+      for (let i = 0; i < 5; i++) {
+        summary.addStartWithAgentContext(`child-${i}`, 'read_file', ` src/file-${i}.ts`, 'parent');
+        summary.addResult(`child-${i}`, { ...makeResult('output'), lineCount: 120 });
+      }
+      summary.addResult('parent', { ...makeResult('done'), lineCount: 4 });
+
+      // Eager header committed by flushSource for a still-live ancestor.
+      const eager = new ToolLane();
+      eager.addStartWithAgentContext('skill-1', 'skill', ` (${longPrompt})`, undefined);
+      eager.addStartWithAgentContext('agent-1', 'agent', ` (${longPrompt})`, 'skill-1');
+      eager.addStartWithAgentContext('tool-1', 'bash', ' git status', 'agent-1');
+      eager.addResult('tool-1', { ...makeResult('output'), lineCount: 3 });
+      eager.addResult('agent-1', { ...makeResult('done'), lineCount: 2 });
+
+      // Heartbeat/pause refresh: stream-renderer.ts re-labels the synthetic
+      // Agent entry with an annotation and passes no maxWidth at all.
+      const heartbeat = new ToolLane();
+      heartbeat.addStartWithAgentContext(
+        'synth',
+        'Agent',
+        ' (awa-private:research-agent-investigating-tool-lane-emission-sites) · waiting 2m 45s',
+        undefined,
+      );
+      heartbeat.addStartWithAgentContext('hb-child', 'bash', ' git status', 'synth');
+      heartbeat.addResult('hb-child', { ...makeResult('output'), lineCount: 3 });
+      heartbeat.addResult('synth', { ...makeResult('done'), lineCount: 1 });
+
+      const rendered: ReadonlyArray<readonly [string, string[]]> = [
+        ['summary head', summary.flush()],
+        ['eager header', eager.flushSource('agent-1')],
+        ['heartbeat label', heartbeat.flush()],
+      ];
+
+      for (const [label, blocks] of rendered) {
+        expect(blocks.length, `${label}: rendered nothing`).toBeGreaterThan(0);
+        // formatAgentSummary returns head + children joined by \n, so split
+        // before measuring — display width of a string containing \n is
+        // meaningless and would mask a wrapped head row.
+        for (const line of blocks.flatMap((block) => block.split('\n'))) {
+          expect(
+            displayWidth(stripAnsi(line)),
+            `${label} line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+          ).toBeLessThanOrEqual(cols);
+        }
+      }
+
+      // The frame must still be identifiable after the clamp.
+      expect(stripAnsi((rendered[0]![1]).join('\n'))).toContain('agent');
+    });
+
     it('orchestrator-root in-progress bash with long input fits within terminal width', () => {
       const lane = new ToolLane();
       const cols = process.stdout.columns ?? 88;
