@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.2] - 2026-07-31
+
+### Fixed
+- regenerate the env-registry var count so scan:env:check passes (#792) (6b6b30a)
+
 ## [5.83.1] - 2026-07-31
 
 ### Fixed
