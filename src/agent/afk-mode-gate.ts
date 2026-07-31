@@ -87,11 +87,124 @@ import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
 import { redactInlineSecrets } from './session/prompt-dump.js';
 import { worktreeRootFor } from './worktree-occupancy.js';
+import { safeRealpath } from './tools/handlers/write-denylist.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
 /** Cap the tool-input preview shown to the operator in the approval prompt. */
 const MAX_INPUT_PREVIEW = 300;
+
+/**
+ * In-workspace leaf directories whose `rm -rf` is a routine clean-rebuild
+ * step (issue #579 O3). The AFK gate classifies ALL `rm` as `high` (BASH_HIGH
+ * at risk-classifier.ts:51-53 — stricter than the repo's own
+ * `safe-destruct-detect.ts` which calls recursive-only deletes "common and
+ * usually safe"), so a headless `rm -rf node_modules && pnpm install` stalls.
+ *
+ * This is a NARROW carve-out, not a general "in-workspace rm" pass: the
+ * basename must be in this curated set, the resolved target (symlink-deref'd)
+ * must be strictly inside the workspace root, and the raw token must carry no
+ * shell metacharacters. Everything else stays `high` → blocked. This
+ * structurally excludes the failure modes a blanket "in-workspace" check
+ * misses: `rm -rf ./` (collapses to workspace root — basename is the repo
+ * name, not in the set), `rm -rf symlink→/etc` (safeRealpath resolves outside
+ * the workspace), `rm -rf node_modules /etc` (multi-target — `/etc` basename
+ * not in the set), `rm -rf *.log` (glob metacharacter — rejected), `rm -rf
+ * .git` (not in the set — history loss protection).
+ */
+const RM_RF_SAFE_LEAF_DIRS: ReadonlySet<string> = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  '.next',
+  'coverage',
+  '.cache',
+  '__pycache__',
+  '.turbo',
+  '.parcel-cache',
+  'out',
+  'target',
+]);
+
+/** Shell metacharacters whose presence in an `rm` target makes tokenization
+ *  unreliable (glob expansion, var interpolation, command substitution). */
+const SHELL_METACHAR = /[*?$`(){};|&<>'"\\]/;
+
+/**
+ * Extract the path targets from a plain `rm` command, returning `null` when
+ * the command shape cannot be confidently parsed (shell operators, no
+ * targets, or any target with metacharacters). The command must start with
+ * `rm` (not `rmdir`, not `sudo rm`) — `sudo rm` stays `high` unconditionally.
+ */
+function extractRmTargets(cmd: string): string[] | null {
+  // Must start with `rm ` (word-boundary — not `rmdir`).
+  if (!/^rm\b/.test(cmd)) return null;
+  // Fail closed if the command chains shell operators — tokenization is
+  // unreliable for `rm -rf x && rm /etc` or `rm -rf x; rm /etc`.
+  if (/[;&|]/.test(cmd)) return null;
+  const tokens = cmd.trim().split(/\s+/);
+  // tokens[0] === 'rm'
+  const targets: string[] = [];
+  let pastFlags = false;
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '--') {
+      pastFlags = true;
+      continue;
+    }
+    if (!pastFlags && t.startsWith('-')) continue; // flag like -rf, -r, -f, -v
+    targets.push(t);
+  }
+  if (targets.length === 0) return null;
+  return targets;
+}
+
+/**
+ * Issue #579 O3 — decides whether an `rm` command that classified as `high`
+ * is a routine in-workspace clean-rebuild (e.g. `rm -rf node_modules`) that
+ * AFK autonomous mode should permit unattended. Returns `true` only when
+ * every target's basename is in the curated allowlist, the symlink-deref'd
+ * resolved path is strictly inside the workspace root, and the raw token
+ * carries no shell metacharacters. Fails CLOSED on any ambiguity.
+ */
+function isSafeInWorkspaceRm(
+  cmd: string,
+  resolveBase: string,
+  workspaceRoot: string,
+): boolean {
+  const targets = extractRmTargets(cmd);
+  if (targets === null) return false;
+
+  const wsRoot = safeRealpath(workspaceRoot);
+  for (const target of targets) {
+    // Reject shell metacharacters (glob, var expansion, command sub).
+    if (SHELL_METACHAR.test(target)) return false;
+    // Reject dangerous anchors lexically before resolution.
+    if (
+      target === '/' ||
+      target === '.' ||
+      target === '..' ||
+      target === '~' ||
+      target.startsWith('~/') ||
+      target === '$HOME' ||
+      target.startsWith('$HOME/')
+    ) {
+      return false;
+    }
+    // Reject `.git` explicitly (catastrophic history loss).
+    if (target === '.git' || target.startsWith('.git/')) return false;
+
+    // Resolve against the call's cwd and dereference symlinks.
+    const resolved = safeRealpath(path.resolve(resolveBase, target));
+
+    // Must be strictly inside the workspace root — NOT the root itself.
+    if (resolved === wsRoot || !resolved.startsWith(wsRoot + path.sep)) return false;
+
+    // Basename must be in the curated allowlist.
+    if (!RM_RF_SAFE_LEAF_DIRS.has(path.basename(resolved))) return false;
+  }
+  return true;
+}
 
 export interface AfkModeGateOptions {
   /**
@@ -330,6 +443,26 @@ export function createAfkModeGate(
       cwd: resolveBase,
       workspaceRoot,
     });
+
+    // Issue #579 O3 — a `rm -rf <leaf-dir>` inside the workspace is a routine
+    // clean-rebuild step (node_modules, dist, build, …), not the destructive
+    // operation the blanket `BASH_HIGH` substring list assumes. Downgrade it
+    // BEFORE the high-risk gate fires, so a headless `rm -rf node_modules &&
+    // pnpm install` does not stall on an approval prompt that nobody will
+    // answer. `isSafeInWorkspaceRm` fails CLOSED: anything it cannot
+    // confidently classify as a curated in-workspace leaf-dir delete stays
+    // `high` and is gated as before.
+    if (risk === 'high' && toolName === 'bash') {
+      const cmd =
+        typeof context.input === 'object' &&
+        context.input !== null &&
+        'command' in context.input
+          ? String((context.input as Record<string, unknown>)['command'] ?? '')
+          : '';
+      if (cmd && isSafeInWorkspaceRm(cmd, resolveBase, workspaceRoot)) {
+        return {};
+      }
+    }
 
     if (risk !== 'high') return {};
 
