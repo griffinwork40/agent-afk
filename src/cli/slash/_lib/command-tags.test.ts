@@ -210,3 +210,42 @@ describe('streaming-chunk safety — extractSkillTag', () => {
     expect(result.text).toBe('Paragraph ends here.\n');
   });
 });
+
+describe('whitespace-only deltas survive (word-separator preservation)', () => {
+  // Regression: `/^[ \t]+$/gm` also matched a delta that was ENTIRELY spaces,
+  // because /m anchors match the string's own ends. Both functions run per-delta
+  // in the streaming orchestrator, whose `if (!cleaned) return` then dropped the
+  // emptied delta — so the space between two words was destroyed and the words
+  // fused on screen ("The6 lint errors", "branch,as requested.").
+  it.each([' ', '  ', '\t', ' \t '])(
+    'stripCommandTags passes a whitespace-only delta %j through verbatim',
+    (delta) => {
+      expect(stripCommandTags(delta)).toBe(delta);
+    },
+  );
+
+  it.each([' ', '  ', '\t'])(
+    'extractSkillTag passes a whitespace-only delta %j through verbatim',
+    (delta) => {
+      const result = extractSkillTag(delta, 'ship');
+      expect(result.found).toBe(false);
+      expect(result.text).toBe(delta);
+    },
+  );
+
+  it('reassembles a delta stream whose separator arrives as its own chunk', () => {
+    // The exact observed failure: Anthropic split "The 6 lint errors" so the
+    // space was its own text_delta.
+    const deltas = ['The', ' ', '6 lint errors are pre-existing'];
+    const rendered = deltas.map((d) => stripCommandTags(d)).filter((c) => c).join('');
+    expect(rendered).toBe('The 6 lint errors are pre-existing');
+    expect(rendered).not.toContain('The6');
+  });
+
+  it('still normalizes an interior whitespace-only line to keep paragraph breaks detectable', () => {
+    // The behavior the regex exists for: a blank line carrying stray indentation
+    // must become a true '\n\n' so findBlockBoundary sees the paragraph break.
+    expect(stripCommandTags('para one\n   \npara two')).toBe('para one\n\npara two');
+    expect(extractSkillTag('para one\n  \npara two', 'ship').text).toBe('para one\n\npara two');
+  });
+});

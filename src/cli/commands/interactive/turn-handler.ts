@@ -32,6 +32,7 @@ import {
 } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
+import { joinAtRoundSeam } from './turn-text-seam.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
 import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
@@ -82,6 +83,11 @@ export async function runTurn(
   // the duplicated partial text. Prior rounds (before the checkpoint) are
   // untouched — the retry is per-round, not per-turn.
   let roundStartResponseLen = 0;
+  // Set when a tool_result closes a round, consumed by the next content chunk:
+  // that chunk opens a NEW assistant text block, so it joins across a round
+  // seam (paragraph break) rather than concatenating verbatim like an
+  // intra-round delta. See {@link joinAtRoundSeam}.
+  let pendingRoundSeam = false;
   let streamingStarted = false;
   let streamErrorRendered = false;
   let rendererDisposed = false;
@@ -399,7 +405,10 @@ export async function runTurn(
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'content') {
-          responseText += event.chunk.content;
+          responseText = pendingRoundSeam
+            ? joinAtRoundSeam(responseText, event.chunk.content)
+            : responseText + event.chunk.content;
+          pendingRoundSeam = false;
           streamingStarted = true;
         } else if (event.type === 'message' && !streamingStarted) {
           responseText = event.message.content;
@@ -412,6 +421,10 @@ export async function runTurn(
           // renderer.process(event) below, which resets the live display via
           // handleOrchestratorEvent's `stream_retry` case.
           responseText = responseText.slice(0, roundStartResponseLen);
+          // Truncating back to the round checkpoint also removes the seam break
+          // this round's first chunk inserted, so re-arm it: the re-streamed
+          // round is still a new text block after the prior round's text.
+          pendingRoundSeam = responseText.length > 0;
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
@@ -424,6 +437,9 @@ export async function runTurn(
           // Round boundary: the next round's text appends after this point.
           // Checkpoint so a `stream_retry` truncates back to here, not to 0.
           roundStartResponseLen = responseText.length;
+          // This tool_result closes a round: the next content chunk starts a new
+          // assistant text block and must join across the seam, not fuse.
+          pendingRoundSeam = true;
           const pending = pendingTools.get(c.toolUseId);
           if (pending) {
             pending.result = c.content;
@@ -586,6 +602,7 @@ export async function runTurn(
           // above the freshly-armed overlay, not the disposed one.
           responseText = '';
           roundStartResponseLen = 0;
+          pendingRoundSeam = false;
           streamingStarted = false;
           toolEvents.length = 0;
           pendingTools.clear();
