@@ -16,6 +16,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Changed
 - grade the status-line usage indicator by severity — per-window tone, the binding window's reset countdown, a stale-reading marker, and drop-last priority so a critical reading survives a narrow terminal (9d2b28d)
+## [5.82.13] - 2026-07-31
+
+### Fixed
+- block SSRF egress to internal hosts in web_scrape (#575) (#750) (8a9e586)
+- preserve a failed skill fork's partial output (#767) (e7d8cad)
 
 ## [5.82.12] - 2026-07-31
 

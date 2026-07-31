@@ -265,6 +265,8 @@ export interface RenderInput {
   waitFor?: WaitForOption;
   /** Optional cancellation — aborting tears down the ephemeral context. */
   signal?: AbortSignal;
+  /** Optional egress check applied before every navigation and subresource request. */
+  requestGuard?: (url: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

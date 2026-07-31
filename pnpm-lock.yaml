@@ -68,6 +68,9 @@ importers:
       turndown:
         specifier: ^7.2.4
         version: 7.2.4
+      undici:
+        specifier: ^7.27.0
+        version: 7.27.0
       wrap-ansi:
         specifier: ^10.0.0
         version: 10.0.0
