@@ -36,6 +36,7 @@ import {
   getReadDenylist,
   BUILTIN_READ_DENYLIST,
   BUILTIN_READ_ALLOWLIST,
+  READ_ALLOWLIST_REL,
   resolveExceptionEntry,
   parseReadDenylistEntries,
   _resetReadDenylistCacheForTests,
@@ -224,6 +225,50 @@ describe('isReadDenied — built-in exception for ~/.afk/config/mcp.json', () =>
   });
 });
 
+// Issue #579 O2 — `~/.ssh` stays whole-dir floored (SSH private keys have
+// arbitrary names like `github_key`, so a deny-glob would fail-open), but two
+// well-known NON-secret siblings are carved out as exact files so the agent can
+// do git/ssh host-alias work unconfined. Mirrors the mcp.json carve-out pattern.
+describe('isReadDenied — built-in exceptions for ~/.ssh/config and ~/.ssh/known_hosts', () => {
+  const sshConfig = join(homedir(), '.ssh', 'config');
+  const knownHosts = join(homedir(), '.ssh', 'known_hosts');
+
+  it('allows the carved-out non-secret siblings', () => {
+    expect(isReadDenied(sshConfig).denied).toBe(false);
+    expect(isReadDenied(knownHosts).denied).toBe(false);
+  });
+
+  it('is an EXACT-file carve-out — siblings and pseudo-children stay denied', () => {
+    // Private key material (arbitrary names) stays denied — the whole-dir floor.
+    expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'github_key')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'id_ed25519')).denied).toBe(true);
+    // Suffix/pseudo-child siblings stay denied (exact-match, not prefix).
+    expect(isReadDenied(sshConfig + '.bak').denied).toBe(true);
+    expect(isReadDenied(join(sshConfig, 'child')).denied).toBe(true);
+    expect(isReadDenied(knownHosts + '.old').denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh')).denied).toBe(true);
+  });
+
+  it('stays re-deniable via AFK_READ_DENYLIST (extras outrank the exception)', () => {
+    process.env['AFK_READ_DENYLIST'] = sshConfig;
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(sshConfig).denied).toBe(true);
+
+    delete process.env['AFK_READ_DENYLIST'];
+    _resetReadDenylistCacheForTests();
+    process.env['AFK_READ_DENYLIST'] = join(homedir(), '.ssh');
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(sshConfig).denied).toBe(true);
+    expect(isReadDenied(knownHosts).denied).toBe(true);
+  });
+
+  it('assertNotReadDenied does not throw for the carve-outs', () => {
+    expect(() => assertNotReadDenied(sshConfig)).not.toThrow();
+    expect(() => assertNotReadDenied(knownHosts)).not.toThrow();
+  });
+});
+
 // Regression guard for PR #728 review P1: the exception list must never be
 // expressed as the symlink TARGET of its own leaf. `safeRealpath` on the whole
 // entry would let a `mcp.json` symlinked at a protected file put THAT file in
@@ -265,21 +310,34 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     expect(basename(resolved)).toBe('mcp.json');
   });
 
-  it('keeps every built-in exception inside the resolved ~/.afk/config dir', () => {
+  it('keeps every built-in exception inside its expected resolved parent', () => {
+    // mcp.json lives inside ~/.afk/config; .ssh/config & known_hosts live
+    // inside ~/.ssh. Each entry must resolve into the dir that floors it.
+    const expected: Record<string, string> = {
+      '.afk/config/mcp.json': safeRealpath(join(homedir(), '.afk', 'config')),
+      '.ssh/config': safeRealpath(join(homedir(), '.ssh')),
+      '.ssh/known_hosts': safeRealpath(join(homedir(), '.ssh')),
+    };
     for (const entry of BUILTIN_READ_ALLOWLIST) {
       const resolved = resolveExceptionEntry(entry);
       expect(basename(resolved)).toBe(basename(entry));
-      expect(dirname(resolved)).toBe(safeRealpath(join(homedir(), '.afk', 'config')));
+      const rel = READ_ALLOWLIST_REL.find((r) => entry.endsWith(r));
+      expect(rel, `unmapped entry: ${entry}`).toBeDefined();
+      if (rel) expect(dirname(resolved)).toBe(expected[rel]!);
     }
   });
 
   it('a protected path is still denied when reached directly (the P1 regression)', () => {
     // Belt-and-braces on the real built-ins: whatever the exception list resolves
-    // to, a direct credential read must never be admitted by it.
+    // to, a direct credential read must never be admitted by it. The carve-out
+    // leaves are known non-secret names (mcp.json, config, known_hosts) — NEVER
+    // key material (id_rsa, etc.).
     for (const entry of BUILTIN_READ_ALLOWLIST) {
-      expect(resolveExceptionEntry(entry)).not.toMatch(/\/\.(ssh|aws|gnupg)\//);
+      const leaf = entry.split('/').pop();
+      expect(leaf).toMatch(/^(mcp\.json|config|known_hosts)$/);
     }
     expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'github_key')).denied).toBe(true);
     expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
   });
 });
