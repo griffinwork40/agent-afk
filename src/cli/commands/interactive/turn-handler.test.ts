@@ -136,6 +136,38 @@ describe('runTurn — happy path', () => {
     expect(onAfterTurn).toHaveBeenCalledTimes(1);
   });
 
+  it('separates round-boundary text so the text before a tool call does not fuse with the text after it', async () => {
+    // Regression: responseText accumulated EVERY round's text with '' between
+    // them, so the assistant text block before a tool call fused with the block
+    // after it and the paragraph break vanished. Persisted transcripts showed
+    // "…(build doesn't type/lint check).All lint errors are pre-existing" and
+    // "…the affected test suites.Diff is clean" — the reported missing-space
+    // artifacts. Verbatim '' joining is still correct WITHIN a round (deltas
+    // split mid-word), so only the round seam gets a separator.
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: "Now running lint (build doesn't type/lint check)." } },
+      { type: 'chunk', chunk: { type: 'tool_use_detail', toolName: 'bash', toolUseId: 'tu-1', toolInput: '{"command":"pnpm lint"}' } },
+      { type: 'chunk', chunk: { type: 'tool_result', toolUseId: 'tu-1', content: '6 problems' } },
+      // Two deltas of the NEXT round's text: they must fuse with each other
+      // (mid-word split) but not with the pre-tool-call text.
+      { type: 'chunk', chunk: { type: 'content', content: 'All lint errors are pre-' } },
+      { type: 'chunk', chunk: { type: 'content', content: 'existing.' } },
+      { type: 'done', metadata: { durationMs: 10 } },
+    ];
+
+    const session = streamFrom(events);
+    const { h, onTurnComplete } = makeHandles();
+    const stats = makeStats();
+
+    await runTurn({ text: 'run lint', attachments: [] }, session, stats, h);
+
+    const recorded = onTurnComplete.mock.calls[0]?.[1] as string;
+    expect(recorded).not.toContain('check).All');
+    expect(recorded).toBe(
+      "Now running lint (build doesn't type/lint check).\n\nAll lint errors are pre-existing.",
+    );
+  });
+
   it('uses message event content when no content chunks streamed', async () => {
     const events: OutputEvent[] = [
       { type: 'message', message: { role: 'assistant', content: 'no-stream answer' } },
