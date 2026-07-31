@@ -6,9 +6,9 @@
 // ESM importers cannot reassign an imported binding (same pattern as
 // `setState()` in the #366 plugin-skills split).
 
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { config as dotenvConfig } from 'dotenv';
+import { config as dotenvConfig, parse as dotenvParse } from 'dotenv';
 import { isValidModel } from '../../agent/session/model-resolution.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { getEnvConfigPath, getLegacyEnvConfigPath } from '../../paths.js';
@@ -111,6 +111,62 @@ export function _resetOpenAIBaseUrlWarnCache(): void {
   warnedOpenAIBaseUrlSuffix.clear();
 }
 
+/** Warn-once tracker for blank ambient env vars unshadowed by an env file. */
+const warnedBlankEnvShadow = new Set<string>();
+
+/** Test-only hook to reset the blank-shadow warn-once tracker. Internal API. */
+export function _resetBlankEnvShadowWarnCache(): void {
+  warnedBlankEnvShadow.clear();
+}
+
+/**
+ * Invariant: an empty or whitespace-only environment variable carries no
+ * configuration value, so it must never shadow a real value defined by an
+ * afk env file. dotenv's `override: false` skip is PRESENCE-based
+ * (`key in process.env`), not value-based, so a dotfile that exports
+ * `OPENAI_API_KEY=""` — a common idiom for "clear this key" — permanently masks
+ * the real key in `~/.afk/config/afk.env`. The OpenAI auth resolver correctly
+ * treats the blank as absent (`auth.ts` guards `.length > 0`) and falls through
+ * to `~/.codex/auth.json`, so the operator gets a "set OPENAI_API_KEY" error
+ * for a key they demonstrably HAVE set. Same failure shape for any credential.
+ *
+ * Deleting the blank entry for exactly the keys this file defines restores
+ * file-beats-blank precedence while leaving real ambient values authoritative
+ * (standard dotenv behavior is unchanged). Applied before EVERY file in the
+ * chain, so a blank in an earlier file cannot shadow a real value in a later
+ * one either — "blank means unset" holds uniformly at every layer.
+ *
+ * Returns the key names that were unshadowed (never their values).
+ *
+ * Exported under the `_` internal-API prefix (same idiom as the `_reset*` hooks
+ * above) so the precedence rule is unit-testable without driving the whole
+ * `loadEnvConfig()` path, whose `dotenvLoaded` latch is deliberately one-shot.
+ */
+export function _clearBlankEnvShadows(filePath: string): string[] {
+  let parsed: Record<string, string>;
+  try {
+    parsed = dotenvParse(readFileSync(filePath));
+  } catch {
+    // Unreadable/malformed file: let dotenvConfig report it as it always has.
+    return [];
+  }
+
+  const cleared: string[] = [];
+  for (const key of Object.keys(parsed)) {
+    // Keys are arbitrary operator-authored names parsed from the env file, so
+    // they cannot route through the typed `env.X` getters in src/config/env.ts.
+    const ambient = process.env[key]; // audit-env-access: allow dynamic key from parsed env file
+    if (ambient !== undefined && ambient.trim() === '') {
+      // Only unshadow when the file supplies a real replacement — a blank
+      // overriding a blank is a no-op and not worth reporting.
+      if ((parsed[key] ?? '').trim() === '') continue;
+      delete process.env[key]; // audit-env-access: allow dynamic key from parsed env file
+      cleared.push(key);
+    }
+  }
+  return cleared;
+}
+
 export function loadEnvConfig(): Partial<CliConfig> {
   if (envConfigCache !== undefined) return envConfigCache;
   if (!dotenvLoaded) {
@@ -125,7 +181,20 @@ export function loadEnvConfig(): Partial<CliConfig> {
 
     for (const envPath of envPaths) {
       if (existsSync(envPath)) {
+        // Must run BEFORE dotenvConfig: it mutates process.env so dotenv's
+        // presence-based `override: false` check sees the blank as absent.
+        const unshadowed = _clearBlankEnvShadows(envPath);
         dotenvConfig({ path: envPath, override: false });
+        for (const key of unshadowed) {
+          if (warnedBlankEnvShadow.has(key)) continue;
+          warnedBlankEnvShadow.add(key);
+          // eslint-disable-next-line no-console -- one-shot operator UX warning
+          console.warn(
+            `[afk] ${key} is set to an empty value in your shell environment; ` +
+              `using the value from ${envPath} instead.\n` +
+              `      Remove the blank \`export ${key}=""\` from your shell profile to silence this.`,
+          );
+        }
       }
     }
 
