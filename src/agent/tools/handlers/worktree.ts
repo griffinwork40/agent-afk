@@ -316,6 +316,14 @@ export function createWorktreeHandler(
                 isError: true,
               };
             }
+            if (outcome.reason === 'ignored-local-state') {
+              return {
+                content: `Refused: ${entry.path} holds non-rebuildable ignored files (e.g. .env, a gitignored plan) that ` +
+                  `\`git status\` cannot see, so removal would silently delete them. Move/back up what you need, or ` +
+                  'pass force: true to discard them along with the checkout.',
+                isError: true,
+              };
+            }
             return {
               content: `Refused: ${entry.path} has ${outcome.commitsAhead} commit(s) ahead of its base. The branch ref would survive, but pass force: true to confirm removing the checkout.`,
               isError: true,

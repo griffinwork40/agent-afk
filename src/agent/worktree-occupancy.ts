@@ -41,8 +41,13 @@ const AFK_WORKTREES_SEGMENT = `${sep}.afk-worktrees${sep}`;
 /**
  * Heartbeat period. Must stay comfortably below the sweep's MIN_EMPTY_AGE_MS
  * (1h, `worktree-sweep.ts`) so a tick always lands before the age gate re-arms.
+ * Exported (alongside `worktree-sweep.ts`'s `MIN_EMPTY_AGE_MS`) so the margin
+ * between the two is a checkable relationship instead of a prose comment
+ * linking two private constants in different files — see
+ * `worktree-occupancy.test.ts`'s "heartbeat interval stays comfortably below
+ * the sweep's age gate" assertion.
  */
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 600_000; // 10 minutes
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 600_000; // 10 minutes
 
 /**
  * Resolve the worktree root containing `cwd`, when `cwd` sits inside an

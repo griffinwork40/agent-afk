@@ -250,6 +250,11 @@ describe('empty-detection', () => {
 
     expect(result.candidates.some((c) => c.verdict === 'empty')).toBe(true);
     expect(result.removed).toContain(worktreePath);
+    // Discriminates this test from pre-existing clean+0-ahead+old => `empty`
+    // behaviour: without this, hardcoding `hasNonRebuildableIgnoredFiles` to
+    // always return `false` still passes, because nothing here proves the
+    // probe ran at all. Assert the `--ignored` call actually happened.
+    expect(mock.calls.some((c) => c.args.includes('status') && c.args.includes('--ignored'))).toBe(true);
   });
 
   it('does not remove empty worktree in dry-run mode', async () => {

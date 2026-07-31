@@ -12,7 +12,10 @@ import { join, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import { getWorktreeSweepLockPath, getTelemetryPath } from '../paths.js';
 import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js';
-// Type-only back-import there, so this pairing carries no runtime cycle.
+// Runtime value import. Safe despite the mutual reference: the only import
+// going the other way (worktree-ignored-probe.ts importing ExecFileFn from
+// THIS file) is `import type`, which TypeScript erases at compile time — so
+// no runtime require()/import cycle exists between the two modules.
 import { hasNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
 
 // ---------------------------------------------------------------------------
@@ -163,8 +166,13 @@ export interface SweepResult {
  * same tick. One hour is generous enough to cover any human-paced workflow
  * while still letting `empty` survive a sweep when the user has had time to
  * commit.
+ *
+ * Exported so `worktree-occupancy.ts`'s `DEFAULT_HEARTBEAT_INTERVAL_MS` can be
+ * checked against it directly instead of via a prose comment linking two
+ * private constants in different files — raising the heartbeat interval above
+ * this gate would silently re-break #759 with no test failures otherwise.
  */
-const MIN_EMPTY_AGE_MS = 3_600_000; // 1 hour
+export const MIN_EMPTY_AGE_MS = 3_600_000; // 1 hour
 
 /**
  * Maximum age of a `.afk-worktree-meta.json` whose `pid` field we still

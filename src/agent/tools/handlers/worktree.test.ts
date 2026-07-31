@@ -379,6 +379,37 @@ describe('worktree handler — remove guards', () => {
     expect(result.content).toContain('commit(s) ahead');
   });
 
+  // #759 (second removal path): a tree whose only content is a non-rebuildable
+  // ignored file (`.env`) reads clean to bare `status --porcelain` and used to
+  // reach `git worktree remove` undefended.
+  it('refuses a worktree holding a non-rebuildable ignored file without force', async () => {
+    const wtPath = join(afkRoot, 'dotenv-wt');
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('--ignored')) return { stdout: '!! .env\n', stderr: '' };
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'dotenv-wt' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('non-rebuildable ignored files');
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
+  it('force removes a worktree holding a non-rebuildable ignored file with --force', async () => {
+    const wtPath = join(afkRoot, 'dotenv-force-wt');
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`, (call) => {
+      if (call.args.includes('--ignored')) return { stdout: '!! .env\n', stderr: '' };
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'remove', path: 'dotenv-force-wt', force: true }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const removeCall = mock.calls.find((c) => c.args.includes('remove'));
+    expect(removeCall?.args).toContain('--force');
+  });
+
   it('removes a clean worktree and preserves the branch', async () => {
     const wtPath = join(afkRoot, 'clean-wt');
     const mock = makeMock(

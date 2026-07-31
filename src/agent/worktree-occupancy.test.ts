@@ -10,7 +10,9 @@ import {
   touchWorktreeOccupancy,
   worktreeRootFor,
   startWorktreeOccupancyHeartbeat,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
 } from './worktree-occupancy.js';
+import { MIN_EMPTY_AGE_MS } from './worktree-sweep.js';
 
 let repoRoot: string;
 let worktreePath: string;
@@ -156,5 +158,16 @@ describe('startWorktreeOccupancyHeartbeat', () => {
     await new Promise((r) => setTimeout(r, 40));
     stop();
     await expect(fs.readFile(join(outside, '.afk-worktree-meta.json'), 'utf-8')).rejects.toThrow();
+  });
+});
+
+describe('DEFAULT_HEARTBEAT_INTERVAL_MS vs. MIN_EMPTY_AGE_MS', () => {
+  // #759: the heartbeat only re-arms the sweep's age gate if a tick reliably
+  // lands before the gate re-opens. Before this test the two constants were
+  // private in different files, linked only by a prose comment — raising the
+  // interval above the gate would silently reintroduce the bug with zero test
+  // failures. No timers: plain arithmetic on the exported constants.
+  it('stays comfortably below the sweep age gate (<= 1/4 of it, margin explicit)', () => {
+    expect(DEFAULT_HEARTBEAT_INTERVAL_MS).toBeLessThanOrEqual(MIN_EMPTY_AGE_MS / 4);
   });
 });

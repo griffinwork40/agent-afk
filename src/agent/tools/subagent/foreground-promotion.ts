@@ -396,9 +396,10 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       appendInjectContext(toolResult, injectContext);
 
       // isolation:"worktree" teardown — remove the child's worktree now that it
-      // has finished. A dirty / commits-ahead tree is preserved and locked
-      // (WIP is never destroyed); the promoted path skips this (guarded by
-      // !promoted) so a still-running detached job keeps its tree. Best-effort:
+      // has finished. A dirty / commits-ahead / ignored-local-state tree is
+      // preserved and locked (WIP and non-rebuildable ignored files are never
+      // destroyed); the promoted path skips this (guarded by !promoted) so a
+      // still-running detached job keeps its tree. Best-effort:
       // teardownIsolatedWorktree never throws, so it cannot break the finally.
       if (args.isolationTeardown) {
         const { repoRoot, worktreePath } = args.isolationTeardown;
