@@ -85,7 +85,7 @@ const PINNED_HASHES = {
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
   'intent-lock':
-    'a0844035c011205eaab9b61e793c4dbe32a48eea0f84ae9fa7b7b4a59e801066',
+    '026fd98093ffc6daf5884d69206d0dacdc583151a91fd99a784a249062958764',
   // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',

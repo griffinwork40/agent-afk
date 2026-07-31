@@ -31,12 +31,19 @@ Check for these signal classes before starting any multi-step task:
 - "tool" / "skill" / "plugin" — the project's loadable units OR the agent's available tools
 - "MCP" / "terminal" / "REPL" — primitives the project implements that the agent also has
 
+**No task statement at all** — the request is a bare fragment with no imperative verb, so the referent to resolve is the *goal itself* rather than a noun inside it:
+- A lone path, repo URL, or issue/PR link with no stated ask
+- A bare noun phrase: "the 429s", "usage indicators", "that timeout"
+- A continuation cue assuming carried-over context: "ok now the other one", "same as before"
+- A pasted error, log line, stack trace, or diff with no question attached
+
 **Skip when:**
 - Referent resolves unambiguously from immediately prior context (file was just read this turn, entity was named and confirmed, prior message established the binding).
 - Request is reversible, exploratory, and any misread is immediately correctable without cost.
 - User has already provided the interpretation explicitly ("I mean X by 'the text'", "agent-afk's memory", "my session", "this codebase's hooks").
 - Single-step clarification would cost more than simply proceeding and correcting.
 - Dual-referent term has no matching symbol in cwd — no parity risk, standard interpretation applies.
+- Fragment's goal is fixed by the immediately prior turn (agent just proposed two options and the user named one) — the task statement carries over intact.
 
 ---
 
@@ -44,7 +51,9 @@ Check for these signal classes before starting any multi-step task:
 
 ### Step 1 — Scan
 
-Before acting, scan the request for signal classes above. List every ambiguous referent, unverified characterization, identity assumption, or code-vs-runtime dual referent found. If zero are found, skip this skill entirely.
+Before acting, scan the request for signal classes above. List every ambiguous referent, unverified characterization, identity assumption, code-vs-runtime dual referent, or missing task statement found. If zero are found, skip this skill entirely.
+
+**When the finding is a missing task statement**, reconstruct the candidate goal from ambient evidence before classifying it — recent commits, branch name, open diff, the named file's contents, the prior turn. Cite the evidence the reconstruction rests on, so a wrong read is visibly wrong rather than silently load-bearing. Resolve this in-context; dispatch a sub-agent to reconstruct only when in-context reasoning cannot produce a single confident reading. The reconstructed goal is then classified by Step 2 exactly like any other finding.
 
 ### Step 2 — Classify each finding
 
@@ -72,6 +81,10 @@ For each finding, determine:
 
 One sentence. No preamble. Append to the start of the work output, not as a standalone turn. The user can correct asynchronously; work continues.
 
+**Lock format (reconstructed goal):**
+
+> Reading [fragment] as: [reconstructed task statement] (from [evidence]). Proceeding on that basis — correct me if wrong.
+
 **If multiple locks needed:** stack them, one per line, before the work output.
 
 **Asking format (irreversible + multiple reads only):**
@@ -88,13 +101,16 @@ One question. State what it unlocks. Do not proceed until answered.
 
 **ground-state** fires before implementation to survey repo state. Intent-lock fires before *any* multi-step work on requests with ambiguous inputs — including non-implementation work like drafting, research, or messaging. They can both fire on the same request (ground-state runs after intent-lock resolves).
 
+**ask-gate** and **trajectory-check** are user-scope skills that may not exist in this installation — reference them only if present, and never block on them. When a reconstructed goal must escalate to Asking, `ask-gate` (if available) governs whether a human is actually reachable before blocking; if it is absent, apply its rule inline — do not block on a question when the surface is non-interactive. When a session-end goal-vs-execution check is wanted, that is `trajectory-check` (if available) invoked with the locked statement from Step 4 as its canonical-goal input, not the original fragment. Do not reimplement either check here.
+
 **premise-gate** checks named-entity and status-claim pairs during research and analysis. Intent-lock fires *before* work begins on the request itself. They address the same underlying hazard at different points in the pipeline: intent-lock at request intake, premise-gate during execution.
 
 ---
 
 ## Exit criteria
 
-- Every ambiguous referent, unverified characterization, identity assumption, and code-vs-runtime dual referent is either locked (one-sentence interpretation emitted) or escalated to Asking.
+- Every ambiguous referent, unverified characterization, identity assumption, code-vs-runtime dual referent, and missing task statement is either locked (one-sentence interpretation emitted) or escalated to Asking.
+- A reconstructed goal is never acted on silently — the lock names both the reading and the evidence it rests on.
 - No multi-step work begins on a request whose interpretation gates an irreversible action when multiple plausible reads exist.
 - Lock statements are visible in the turn output before the work they govern.
 - Asking state contains exactly one question and states what it unlocks.
