@@ -58,6 +58,12 @@ import {
   armFirstByteTimeout,
   resolveTtfbTimeoutMs,
 } from '../shared/first-byte-timeout.js';
+import {
+  armStreamStallWatchdog,
+  isStallTimeoutError,
+  resolveStallTimeoutMs,
+  stallTimeoutError,
+} from '../shared/stream-stall-timeout.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 import {
   TOOL_USE_LOOP_CAPPED,
@@ -196,17 +202,24 @@ async function createWithRetry(
  * Emit the trace + surface events for a single time-to-first-byte-timeout
  * re-drive, then return so the caller can `continue` the round with a fresh
  * `messages.create`. Mirrors the mid-stream overload retry's signalling: a
- * `rate_limit` trace phase (so the re-drive is legible in `afk trace show`)
- * plus a `stream.retry` event so surfaces discard any partial paint. No backoff
- * sleep — the point is to fail-fast off a stalled endpoint, and the single
- * retry is gated by the per-round `ttfbRetried` flag so it cannot stack.
+ * dedicated `ttfb_timeout` trace phase (so the re-drive is legible in
+ * `afk trace show`) plus a `stream.retry` event so surfaces discard any partial
+ * paint. No backoff sleep — the point is to fail-fast off a stalled endpoint,
+ * and the single retry is gated by the per-round `ttfbRetried` flag so it
+ * cannot stack.
+ *
+ * The phase is NOT `rate_limit`: this timer is ours, fires with no server
+ * throttle and no retry-after, and the two are otherwise indistinguishable in a
+ * trace — which made every self-inflicted 180s stall read as provider
+ * throttling. `metadata.reason` stays `'ttfb-timeout'` so analyses written
+ * against the pre-split shape keep matching.
  */
 async function* emitTtfbRetry(
   input: RunTurnInput,
   requestStartedAt: number,
 ): AsyncGenerator<ProviderEvent, void, void> {
   void emitSessionPhase(input.traceWriter, {
-    phase: 'rate_limit',
+    phase: 'ttfb_timeout',
     durationMs: Date.now() - requestStartedAt,
     metadata: { reason: 'ttfb-timeout', source: 'first-byte', resolvedModel: input.model },
   });
@@ -341,6 +354,16 @@ export async function* runTurn(
   // cannot stack on top of the overload backoff into a longer worst case.
   const ttfbTimeoutMs = resolveTtfbTimeoutMs();
   let ttfbRetried = false;
+  // Per-round POST-first-byte stall bound (issue #762). The TTFB bound above is
+  // cleared by the first content token, so before this a stream that stalled
+  // mid-flight had NO bound of any kind: two real sessions hung 38.9 and 63.5
+  // minutes and sealed `incomplete: true` (the process-exit backstop) with no
+  // `loop_end` and no `closure` at all. This watchdog is progress-AWARE — every
+  // translated output event re-arms it — so a legitimately long, actively
+  // streaming round is never cut off (the invariant loop.ttfb.test.ts pins),
+  // while a round that goes silent for the whole window dies loudly with a real
+  // terminal error. `0` (or AFK_MODEL_STALL_TIMEOUT_MS=0) disables it.
+  const stallTimeoutMs = resolveStallTimeoutMs();
   const taskId = randomUUID();
   const loopStartTime = Date.now();
 
@@ -433,6 +456,31 @@ export async function* runTurn(
     // whose FIRST token is slower than the bound is treated as a stall. Disposed
     // in the retry/error paths below and again defensively per round.
     const ttfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
+    // Arm the POST-first-byte stall watchdog for THIS round, CHAINED onto
+    // `ttfb.signal` so the request signal carries all three abort sources (user
+    // interrupt → TTFB stall → mid-stream stall) in one linked signal. It stays
+    // DORMANT until the first translated event calls `stall.progress()` below,
+    // so the pre-first-byte window remains governed solely by the TTFB bound and
+    // the two can never both be pending. Every subsequent event re-arms it, so
+    // only genuine silence — not slowness — can fire it. Disposed alongside
+    // `ttfb` on every exit path below.
+    const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, (info) => {
+      // Witness layer: reuse the `idle_watchdog_fired` phase — the established
+      // vocabulary for "a progress-aware watchdog fired on unexplained silence"
+      // (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
+      // fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
+      // never delay the abort.
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'idle_watchdog_fired',
+        durationMs: info.elapsedSinceLastProgressMs,
+        resolvedModel: input.model,
+        metadata: {
+          source: 'model-stream',
+          stallTimeoutMs: info.stallTimeoutMs,
+          elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
+        },
+      });
+    });
     let retryTtfb = false;
     // Definite-assignment: `events` is read only past the `if (retryTtfb)`
     // guard below. Every path that leaves it unassigned either `return`s (the
@@ -452,7 +500,11 @@ export async function* runTurn(
           input.client,
           params,
           input.headers,
-          ttfb.signal,
+          // `stall.signal` is `ttfb.signal` chained with the mid-stream stall
+          // watchdog, so the one request signal covers user interrupt + TTFB
+          // stall + post-first-byte stall. When either watchdog is disabled its
+          // arm() returns the base signal unchanged, so this degrades cleanly.
+          stall.signal,
           input.signal,
         ),
         input,
@@ -463,9 +515,11 @@ export async function* runTurn(
       // occurrence this round, re-drive the request once instead of erroring.
       if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried) {
         ttfb.dispose();
+        stall.dispose();
         retryTtfb = true;
       } else {
         ttfb.dispose();
+        stall.dispose();
         if (input.signal.aborted) {
           yield {
             type: 'turn.completed',
@@ -518,6 +572,14 @@ export async function* runTurn(
       for await (const out of translateMessageStream(
         abortableStream(events, input.signal) as Parameters<typeof translateMessageStream>[0],
         input.ctx,
+        // Second reset source for the stall watchdog: content deltas the
+        // translator consumes WITHOUT yielding (a tool call's streaming
+        // argument payload, a thinking signature). Those are real output, so
+        // they must re-arm the window — without this, a long `input_json_delta`
+        // run looks identical to a wedged socket and gets killed as a stall.
+        // Pings deliberately do not reach here (see translate.ts), so a
+        // keep-alive-only stream still fires.
+        () => stall.progress(),
       )) {
         // First-byte boundary = the first NON-error translated output (a real
         // content/tool event, or the end-of-stream turn-result). An in-band
@@ -550,6 +612,17 @@ export async function* runTurn(
             resolvedModel: input.model,
           });
         }
+        // Observable progress for the post-first-byte stall watchdog (#762).
+        // EVERY translated output re-arms the window, so "slow but streaming"
+        // survives indefinitely while genuine silence fires. This is one of two
+        // reset sources; the other is the `onRawProgress` callback passed above,
+        // which covers content deltas that yield nothing. The first call from
+        // either source ARMS the (until-now dormant) watchdog, which is why the
+        // pre-first-byte window stays governed by the TTFB bound above: a
+        // non-yielding delta can only precede the first translated event in
+        // pathological orderings, and even then the far tighter TTFB bound
+        // fires first.
+        stall.progress();
         if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate yielded:', out.kind, out.kind === 'event' ? out.event.type : '');
         if (out.kind === 'event') {
           if (out.event.type === 'error') {
@@ -561,6 +634,25 @@ export async function* runTurn(
             // is unambiguously a first-byte stall. Re-drive once, then fail fast.
             if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
               retryTtfb = true;
+              break;
+            }
+            // Post-first-byte STALL (#762): the watchdog aborted the per-request
+            // controller after a full window with no translated output, and
+            // translate.ts surfaced that abort as this in-band error event.
+            // `input.signal.aborted` is false (we never touch the caller's
+            // signal), so this is unambiguously a stall and NOT a user
+            // interrupt. Deliberately NOT retried: unlike a TTFB stall (which
+            // costs only a prefill) a mid-stream stall has already burned a
+            // partial generation, and the pre-fix behaviour was an invisible
+            // 38–63-minute hang — terminating loudly is the fix. Swap in the
+            // operator-facing message so the surface shows a real diagnosis
+            // instead of a bare `model_stream_stall_timeout`, then fall into the
+            // same fatal lane (`translatorErrored`) that yields a terminal
+            // `error` event → real `closure` → a seal that is NOT
+            // `incomplete: true`.
+            if (stall.timedOut() && !input.signal.aborted) {
+              yield { type: 'error', error: stallTimeoutError(stallTimeoutMs) };
+              translatorErrored = true;
               break;
             }
             // Mid-stream transient overload (529 / overloaded_error): the SDK
@@ -662,9 +754,11 @@ export async function* runTurn(
       // this branch is unreachable once any event has streamed. Re-drive once.
       if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
         ttfb.dispose();
+        stall.dispose();
         retryTtfb = true;
       } else {
         ttfb.dispose();
+        stall.dispose();
         if (input.signal.aborted) {
           yield {
             type: 'turn.completed',
@@ -674,6 +768,17 @@ export async function* runTurn(
           return;
         }
         const e = err instanceof Error ? err : new Error(String(err));
+        // Post-first-byte STALL (#762) reaching us as a THROW rather than an
+        // in-band error event (abortableStream re-raises the linked signal's
+        // abort reason, which for a stall is the STALL_TIMEOUT_MESSAGE marker).
+        // Same terminal treatment as the in-band branch above: surface the
+        // operator-facing message and return, never hang. Checked BEFORE the
+        // overload re-drive so a stall can never be mistaken for a retryable
+        // overload.
+        if ((stall.timedOut() || isStallTimeoutError(e)) && !input.signal.aborted) {
+          yield { type: 'error', error: stallTimeoutError(stallTimeoutMs) };
+          return;
+        }
         // Defensive: a mid-stream overload normally reaches us as an in-band
         // error event (handled in the loop above), but if translate.ts ever
         // re-throws one, route it into the same retry path rather than crashing.
@@ -689,10 +794,11 @@ export async function* runTurn(
         }
       }
     }
-    // Dispose the stall timer for this round once stream consumption is done
+    // Dispose both stall timers for this round once stream consumption is done
     // (clean end, turn-result, or a retry decision) — idempotent, so the
     // firstByteSeen() / catch-path disposes above are harmless duplicates.
     ttfb.dispose();
+    stall.dispose();
 
     if (retryTtfb) {
       // Mid-stream TTFB timeout: re-drive the round once, mirroring the

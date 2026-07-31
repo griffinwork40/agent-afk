@@ -14,7 +14,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as path from 'node:path';
-import { runTurn, formatContextUsage } from './turn-handler.js';
+import { runTurn, formatContextUsage, printTurnFooter } from './turn-handler.js';
+import { recordQuotaSnapshot, resetQuotaCacheForTests } from '../../../agent/quota-cache.js';
+
+// Only `resolveAutoResumeOnUsageLimit` is stubbed; every other config export
+// stays real. Defaults to `true` (the production default) so the ~70 other
+// tests in this file are unaffected — a case opts in by flipping the stub.
+const configStub = vi.hoisted(() => ({ autoResume: true }));
+vi.mock('../../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../config.js')>()),
+  resolveAutoResumeOnUsageLimit: () => configStub.autoResume,
+}));
 import { getCurrentSink } from '../../../agent/_lib/skill-sink-channel.js';
 import type { AgentSession } from '../../../agent/session.js';
 import type { OutputEvent } from '../../../agent/types.js';
@@ -2315,5 +2325,86 @@ describe('formatContextUsage — proactive escalating context tiers', () => {
     expect(over.text).toContain('OVER');
     expect(over.text).toContain('silently truncated');
     expect(formatContextUsage(1.05, LIMIT).tier).toBe('over');
+  });
+});
+
+describe('printTurnFooter — subscription-quota line', () => {
+  beforeEach(() => {
+    resetQuotaCacheForTests();
+    configStub.autoResume = true;
+  });
+  afterEach(() => {
+    resetQuotaCacheForTests();
+    configStub.autoResume = true;
+  });
+
+  const footerLines = (): string[] => {
+    const written: string[] = [];
+    printTurnFooter({ durationMs: 1200, totalCostUsd: 0.01 }, makeStats(), (line) => written.push(line));
+    return written;
+  };
+
+  it('prints nothing quota-related when no headers have been observed (API-key auth)', () => {
+    expect(footerLines().join('\n')).not.toContain('quota');
+  });
+
+  it('prints nothing quota-related below the 80% caution bar', () => {
+    recordQuotaSnapshot({ fiveHourUtilization: 0.62, observedAt: new Date() });
+    expect(footerLines().join('\n')).not.toContain('quota');
+  });
+
+  it('prints the quota line with its deadline once the binding window is hot', () => {
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.94,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      sevenDayUtilization: 0.24,
+      observedAt: new Date(),
+    });
+    const out = footerLines().join('\n');
+    expect(out).toContain('5h quota 94% used');
+    expect(out).toContain('resets in 12m');
+  });
+
+  it('honours a config-set autoResumeOnUsageLimit=false through the real call path', () => {
+    // Covers the wiring, not just the pure formatter: the five quota-footer.ts
+    // unit tests pass `{ autoResume }` explicitly, so a DEAD read at this call
+    // site stayed invisible to them. That is exactly how the first cut of this
+    // shipped — the display and provider must resolve the same persisted flag,
+    // or the promise can contradict runtime behaviour.
+    configStub.autoResume = false;
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.97,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      observedAt: new Date(),
+    });
+    const out = footerLines().join('\n');
+    expect(out).toContain('5h quota 97% used');
+    expect(out).not.toContain('auto-resumes');
+    expect(out).toContain('auto-resume is off');
+  });
+
+  it('promises auto-resume through the real call path when the flag is on', () => {
+    configStub.autoResume = true;
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.97,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      observedAt: new Date(),
+    });
+    expect(footerLines().join('\n')).toContain('AFK pauses and auto-resumes at the cap');
+  });
+
+  it('orders the quota line AFTER the context line — nearest deadline reads first', () => {
+    // Context constrains THIS turn; quota constrains the next hour.
+    const stats = makeStats();
+    // `sonnet` reports a 1M context window, so this lands at ~90% — the context
+    // line's caution tier — rather than the quiet tier.
+    stats.turnTokens.push({ input: 900_000, output: 2_000, cache: 0 });
+    recordQuotaSnapshot({ fiveHourUtilization: 0.94, observedAt: new Date() });
+    const written: string[] = [];
+    printTurnFooter({ durationMs: 1200 }, stats, (line) => written.push(line));
+    const contextIdx = written.findIndex((l) => l.includes('context'));
+    const quotaIdx = written.findIndex((l) => l.includes('quota'));
+    expect(contextIdx).toBeGreaterThanOrEqual(0);
+    expect(quotaIdx).toBeGreaterThan(contextIdx);
   });
 });

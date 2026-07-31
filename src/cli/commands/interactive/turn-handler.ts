@@ -13,6 +13,9 @@ import { usageLimitBox } from '../../render.js';
 import { runPicker } from '../../render/picker.js';
 import { classifyError, presentError } from '../../errors/index.js';
 import { contextLimitFor } from '../../model-limits.js';
+import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
+import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { formatQuotaUsage } from '../../quota-footer.js';
 import {
   contextRatio,
   type CompletionWriter,
@@ -31,7 +34,7 @@ import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
-import { loadTelegramConfig } from '../../config.js';
+import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -937,6 +940,28 @@ export function printTurnFooter(
           ? palette.warning
           : palette.dim;
     write(colorFn(usage.text));
+  }
+  // Subscription quota, same cadence and tone mapping as the context line above.
+  // Ordered AFTER it deliberately: context is the constraint on THIS turn, quota
+  // is the constraint on the next hour — nearest deadline reads first. Silent
+  // below 80% (the status-line indicator covers that range ambiently) and silent
+  // forever under API-key auth, where the quota headers never arrive.
+  // The park-and-resume promise is conditional on the real retry configuration
+  // (see capNote, quota-footer.ts), so the flag is read rather than assumed.
+  // Via the memoized-tier resolver, NOT loadConfig(): the latter re-installs
+  // process-global slot bindings on every call, disqualifying it for a
+  // per-turn display read.
+  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
+    autoResume: resolveAutoResumeOnUsageLimit(),
+  });
+  if (quota.text !== null) {
+    const quotaColorFn =
+      quota.tier === 'over' || quota.tier === 'near'
+        ? palette.error
+        : quota.tier === 'caution'
+          ? palette.warning
+          : palette.dim;
+    write(quotaColorFn(quota.text));
   }
   write('');
 }

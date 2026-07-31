@@ -188,6 +188,64 @@ describe('setupWorktree', () => {
     expect(removeIdx).toBeLessThan(branchIdx);
   });
 
+  // Invariant: bare `git status --porcelain` never reports IGNORED files, so a
+  // tree whose only content is a gitignored `.env` reads clean and used to fall
+  // straight through to `remove --force` — destroying it (#759). Session-end
+  // cleanup is the most frequently executed removal path, so this guard is the
+  // one that matters most.
+  it('cleanup preserves a clean tree that holds a non-rebuildable ignored file', async () => {
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('rev-parse')) {
+        return { stdout: `${repoRoot}/.git\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! .env\n!! node_modules/\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean to the dirty check
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const handle = await setupWorktree('feat-x', { execFile: mock });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const callsBefore = mock.calls.length;
+    await handle.cleanup();
+    const cleanupCalls = mock.calls.slice(callsBefore);
+
+    expect(
+      cleanupCalls.some((c) => c.args.includes('worktree') && c.args.includes('remove')),
+    ).toBe(false);
+    const logged = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).toMatch(/preserved/);
+    expect(logged).toMatch(/ignored/);
+    logSpy.mockRestore();
+  });
+
+  it('cleanup still removes a clean tree whose ignored content is only build output', async () => {
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('rev-parse')) {
+        return { stdout: `${repoRoot}/.git\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! node_modules/\n!! .afk-worktree-meta.json\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const handle = await setupWorktree('feat-x', { execFile: mock });
+    const callsBefore = mock.calls.length;
+    await handle.cleanup();
+    const cleanupCalls = mock.calls.slice(callsBefore);
+
+    expect(
+      cleanupCalls.some((c) => c.args.includes('worktree') && c.args.includes('remove')),
+    ).toBe(true);
+  });
+
   it('cleanup with a dirty tree preserves the worktree and logs', async () => {
     const mock = makeMock(async ({ args }) => {
       if (args.includes('rev-parse')) {

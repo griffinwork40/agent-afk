@@ -18,13 +18,13 @@
  *     later). When no backend is configured the handler returns a clear,
  *     actionable error. See `src/web/search.ts`.
  *
- * Security note: this tool can issue arbitrary outbound HTTP(S) requests to
- * any host the operator's network can reach. The bash tool already has
- * unrestricted network access in agent-afk's threat model, so web_scrape does
- * not widen the surface — it just gives the model a structured, size-capped,
- * timeout-enforced alternative to `curl | head -c …`. The markdown render
- * escalation deliberately bypasses the interactive browser domain allowlist
- * for the same reason (see `BrowserProvider.render()`).
+ * Security note: every egress path here (raw, markdown fetch, headless render)
+ * goes through the SSRF egress guard in `src/web/egress-guard.ts` —
+ * internal/private targets refused, resolved IP classified, every redirect hop
+ * re-checked; see that module for the threat model (issue #575). The render
+ * escalation still bypasses the interactive browser domain allowlist
+ * (`BrowserProvider.render()`), which governs agent-driven navigation, but it
+ * does NOT bypass the egress guard.
  *
  * @module agent/tools/handlers/web-scrape
  */
@@ -32,7 +32,8 @@
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../web/scrape.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../web/search.js';
-import { retryFetch } from '../../../web/retryFetch.js';
+import { checkEgressTarget, guardedFetch, EgressBlockedError } from '../../../web/egress-guard.js';
+import type { EgressGuardOptions as GuardOpts } from '../../../web/egress-guard.js';
 import type { RenderFn } from '../../../web/types.js';
 import { headAndTail } from './_output-cap.js';
 import {
@@ -70,6 +71,11 @@ interface WebScrapeOptions {
    * can exercise escalation without launching chromium.
    */
   renderFn?: RenderFn;
+  /**
+   * Override for tests: DNS resolution used by the SSRF egress guard. Defaults
+   * (inside the guard) to `dns/promises.lookup`, keeping tests off the network.
+   */
+  lookupFn?: GuardOpts['lookupFn'];
 }
 
 type Mode = 'markdown' | 'raw' | 'search';
@@ -160,6 +166,7 @@ function capBody(body: string, maxBytes: number): { content: string; truncated: 
 export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler {
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
   const env = opts.env ?? process.env;
+  const guardOpts: GuardOpts = opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {};
 
   return async (input, signal) => {
     if (typeof fetchFn !== 'function') {
@@ -206,18 +213,40 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         ac.abort(new Error(`web_scrape timeout after ${parsed.timeoutMs}ms`));
       }, parsed.timeoutMs);
 
+      // Ordered-operation constraint: this SSRF pre-check is the handler's first
+      // `await` (the guard resolves DNS, so it cannot sit in the synchronous
+      // `parseInput`) and MUST come after the abort listener + timer are wired
+      // above — awaiting before that wiring drops a parent abort landing in the
+      // window, leaving the later fetch waiting on a cancel that never fires.
+      // The abort re-check below reports such a cancel as an abort, not a
+      // verdict. Redirect hops are re-validated inside the fetch paths; this
+      // pass just gives a blocked INITIAL url a clean refusal (issue #575).
+      if (parsed.url !== undefined) {
+        const verdict = await checkEgressTarget(parsed.url, guardOpts);
+        if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+        if (!verdict.allowed) return { content: `web_scrape blocked: ${verdict.reason}`, isError: true };
+      }
+
       // ---- raw mode: direct GET, no transformation --------------------------
       if (parsed.mode === 'raw') {
         let res: Response;
         try {
-          // retryFetch survives transient 429/5xx + network blips (idempotent GET).
-          res = await retryFetch(fetchFn, parsed.url!, {
+          // guardedFetch = retryFetch (transient 429/5xx + network blips on an
+          // idempotent GET) behind the egress guard, which forces
+          // redirect:'manual' and re-validates every hop (issue #575).
+          const init = {
             method: 'GET',
             headers: { 'User-Agent': 'agent-afk/web_scrape', Accept: '*/*' },
             signal: ac.signal,
-          });
+          };
+          res = await guardedFetch(fetchFn, parsed.url!, init, guardOpts);
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+          // A redirect hop that landed on internal space — name the refusal
+          // rather than reporting it as a generic network failure.
+          if (err instanceof EgressBlockedError) {
+            return { content: `web_scrape blocked: ${err.message}`, isError: true };
+          }
           return {
             content: `web_scrape network error: ${err instanceof Error ? err.message : String(err)}`,
             isError: true,
@@ -251,6 +280,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             renderFn: opts.renderFn,
             timeoutMs: parsed.timeoutMs,
             signal: ac.signal,
+            ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
           });
           if (result.markdown.trim().length === 0) {
             return {
@@ -262,6 +292,12 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+          // As in raw mode: a guard refusal (initial URL, redirect hop, or the
+          // render path's post-navigation re-check) is a policy decision, not a
+          // markdown-extraction failure.
+          if (err instanceof EgressBlockedError) {
+            return { content: `web_scrape blocked: ${err.message}`, isError: true };
+          }
           const base = err instanceof Error ? err.message : String(err);
           // A chromium-missing LAUNCH failure is already decorated by
           // BrowserLauncher, so `base` may carry the remediation. Only add it

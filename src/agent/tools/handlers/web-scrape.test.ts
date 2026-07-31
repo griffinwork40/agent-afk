@@ -32,6 +32,18 @@ function makeFetch(handler: (url: string, init: RequestInit) => Promise<Response
 
 const signal = (): AbortSignal => new AbortController().signal;
 
+/**
+ * Hermetic DNS seam for the SSRF egress guard (issue #575). Every handler in
+ * this file injects it so the guard classifies a fixed PUBLIC address instead of
+ * issuing a real `dns.lookup` — that keeps the suite offline and, critically,
+ * keeps the guard's pre-check off the macrotask queue so the cancellation tests
+ * still observe fetch being reached. Guard behaviour itself is covered in
+ * `src/web/egress-guard.test.ts`.
+ */
+const publicLookup = async (): Promise<readonly { address: string }[]> => [
+  { address: '93.184.216.34' },
+];
+
 /** A content-rich, server-rendered article that survives Readability. */
 function richArticleHtml(marker = 'main article content'): string {
   const paras = Array.from(
@@ -61,6 +73,7 @@ describe('web_scrape handler — input validation', () => {
   const handler = createWebScrapeHandler({
     fetchFn: makeFetch(() => makeResponse({ body: 'unused' })),
     env: {},
+    lookupFn: publicLookup,
   });
 
   it('rejects non-object input', async () => {
@@ -122,7 +135,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
   it('fetches the URL, extracts main content, and returns markdown — no render', async () => {
     const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));
     const fetchFn = makeFetch(() => makeResponse({ contentType: 'text/html', body: richArticleHtml() }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
 
     const r = await handler({ url: 'https://example.com/article' }, signal());
     expect(r.isError).toBeUndefined();
@@ -135,7 +148,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
 
   it('requires no API key for markdown mode', async () => {
     const fetchFn = makeFetch(() => makeResponse({ contentType: 'text/html', body: richArticleHtml() }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ url: 'https://example.com/article' }, signal());
     expect(r.isError).toBeUndefined();
     expect(r.content).toContain('main article content');
@@ -149,7 +162,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
       finalUrl: 'https://example.com/app',
       httpStatus: 200,
     }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
 
     const r = await handler({ url: 'https://example.com/app' }, signal());
     expect(r.isError).toBeUndefined();
@@ -162,7 +175,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     const fetchFn = makeFetch(() => makeResponse({ contentType: 'text/html', body: empty }));
     // Render also yields nothing.
     const renderFn = vi.fn<RenderFn>(async () => ({ html: empty, finalUrl: 'https://e.com', httpStatus: 200 }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
 
     const r = await handler({ url: 'https://example.com/empty' }, signal());
     expect(r.isError).toBe(true);
@@ -176,7 +189,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     const renderFn = vi.fn<RenderFn>(async () => {
       throw new Error('Cannot find package playwright');
     });
-    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
 
     const r = await handler({ url: 'https://example.com/x' }, signal());
     expect(r.isError).toBe(true);
@@ -202,7 +215,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     const renderFn = vi.fn<RenderFn>(async () => {
       throw decorated;
     });
-    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
 
     const r = await handler({ url: 'https://example.com/x' }, signal());
     expect(r.isError).toBe(true);
@@ -221,7 +234,7 @@ describe('web_scrape handler — raw mode', () => {
       seenInit = init;
       return makeResponse({ body: '{"ok":true}' });
     });
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://api.example.com/v1/x' }, signal());
     expect(r.isError).toBeUndefined();
     expect(seenUrl).toBe('https://api.example.com/v1/x');
@@ -233,7 +246,7 @@ describe('web_scrape handler — raw mode', () => {
 
   it('returns isError on non-2xx response', async () => {
     const fetchFn = makeFetch(() => makeResponse({ status: 404, statusText: 'Not Found', body: '' }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com/missing' }, signal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/HTTP 404 Not Found/);
@@ -243,7 +256,7 @@ describe('web_scrape handler — raw mode', () => {
     const fetchFn = makeFetch(() => {
       throw new Error('ECONNREFUSED');
     });
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com' }, signal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/network error: ECONNREFUSED/);
@@ -264,7 +277,7 @@ describe('web_scrape handler — search mode (Exa)', () => {
         { title: 'Result 2', highlights: ['desc 2'], url: 'https://r2.example' },
       ]);
     }) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'exa-secret' } });
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'exa-secret' }, lookupFn: publicLookup });
 
     const r = await handler({ mode: 'search', query: 'playwright scraping' }, signal());
     expect(r.isError).toBeUndefined();
@@ -279,7 +292,7 @@ describe('web_scrape handler — search mode (Exa)', () => {
 
   it('returns a clear error (and makes no request) when EXA_API_KEY is unset', async () => {
     const fetchFn = vi.fn(async () => makeResponse({ body: '' })) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'search', query: 'whatever' }, signal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/EXA_API_KEY/);
@@ -295,7 +308,7 @@ describe('web_scrape handler — search mode (Exa)', () => {
       text: async (): Promise<string> => 'quota exceeded',
       json: async (): Promise<unknown> => ({}),
     } as unknown as Response)) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' } });
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' }, lookupFn: publicLookup });
     const r = await handler({ mode: 'search', query: 'q' }, signal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/search error \(exa\)/);
@@ -304,7 +317,7 @@ describe('web_scrape handler — search mode (Exa)', () => {
 
   it('handles an empty result set without throwing', async () => {
     const fetchFn = vi.fn(async () => exaResponse([])) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' } });
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' }, lookupFn: publicLookup });
     const r = await handler({ mode: 'search', query: 'no hits' }, signal());
     expect(r.isError).toBeUndefined();
     expect(r.content).toMatch(/no results/);
@@ -320,7 +333,7 @@ describe('web_scrape handler — truncation', () => {
   it('truncates body exceeding max_bytes to head+tail with a marker and truncated:true (raw mode)', async () => {
     const big = 'x'.repeat(5000);
     const fetchFn = makeFetch(() => makeResponse({ body: big }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     // 500 > the marker's ~160-byte reserve, so head AND tail are non-empty and
     // head-preservation is observable (a cap below the reserve degenerates to
     // marker-only, which is a headAndTail edge case, not what we assert here).
@@ -338,7 +351,7 @@ describe('web_scrape handler — truncation', () => {
   it('does NOT truncate body smaller than max_bytes (no marker, no truncated flag)', async () => {
     const small = 'hello world';
     const fetchFn = makeFetch(() => makeResponse({ body: small }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 1000 }, signal());
     expect(r.content).toBe(small);
     expect(r.truncated).toBeUndefined();
@@ -347,7 +360,7 @@ describe('web_scrape handler — truncation', () => {
   it('handles multi-byte UTF-8 cleanly (no garbage at the cut points)', async () => {
     const body = '🎉'.repeat(200); // 800 bytes; cut at 200 keeps head+tail of whole emoji
     const fetchFn = makeFetch(() => makeResponse({ body }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 200 }, signal());
     // Head begins on a code-point boundary and the tail ends on one — no U+FFFD.
     expect(r.content.startsWith('🎉')).toBe(true);
@@ -363,7 +376,7 @@ describe('web_scrape handler — truncation', () => {
     // (sub)agent context window (issue #661).
     const big = 'y'.repeat(150_000);
     const fetchFn = makeFetch(() => makeResponse({ body: big }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com' }, signal());
     expect(r.isError).toBeUndefined();
     expect(r.truncated).toBe(true);
@@ -377,7 +390,7 @@ describe('web_scrape handler — truncation', () => {
     // of caller-raised cap that let a 4MB body crash a child before #661.
     const twoMb = 'z'.repeat(2_000_000);
     const fetchFn = makeFetch(() => makeResponse({ body: twoMb }));
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 5_000_000 }, signal());
     expect(r.isError).toBeUndefined();
     expect(r.truncated).toBe(true);
@@ -399,7 +412,7 @@ describe('web_scrape handler — cancellation', () => {
         });
       });
     });
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const ac = new AbortController();
     const pending = handler({ mode: 'raw', url: 'https://example.com' }, ac.signal);
     await new Promise((r) => setImmediate(r));
@@ -420,7 +433,7 @@ describe('web_scrape handler — cancellation', () => {
         });
       });
     });
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const r = await handler({ mode: 'raw', url: 'https://example.com', timeout_ms: 20 }, signal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/timeout after 20ms/);
@@ -428,7 +441,7 @@ describe('web_scrape handler — cancellation', () => {
 
   it('returns immediately if signal is already aborted at call time, without calling fetch', async () => {
     const fetchFn = vi.fn(async () => makeResponse({ body: 'should not be called' })) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
     const ac = new AbortController();
     ac.abort(new Error('pre-cancelled'));
     const r = await handler({ url: 'https://example.com' }, ac.signal);
@@ -447,5 +460,103 @@ describe('web_scrape handler — runtime guard', () => {
     const r = await handler({ url: 'https://example.com' }, signal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/global fetch\(\) is not present/);
+  });
+});
+
+describe('web_scrape handler — SSRF egress guard (issue #575)', () => {
+  /** Resolves every hostname to loopback — the DNS-rebinding scenario. */
+  const rebindLookup = async (): Promise<readonly { address: string }[]> => [
+    { address: '127.0.0.1' },
+  ];
+
+  for (const mode of ['raw', 'markdown'] as const) {
+    it(`${mode} mode: refuses the cloud metadata IP without issuing a request`, async () => {
+      const fetchFn = vi.fn(async () => makeResponse({ body: 'must not be fetched' })) as unknown as FetchFn;
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
+      const r = await handler(
+        { mode, url: 'http://169.254.169.254/latest/meta-data/iam/security-credentials/' },
+        signal(),
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/^web_scrape blocked:/);
+      expect(r.content).toContain('169.254.169.254');
+      expect(r.content).toContain('AFK_WEB_ALLOW_PRIVATE_HOSTS');
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it(`${mode} mode: refuses loopback`, async () => {
+      const fetchFn = vi.fn(async () => makeResponse({ body: 'must not be fetched' })) as unknown as FetchFn;
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
+      const r = await handler({ mode, url: 'http://127.0.0.1:8080/admin' }, signal());
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/^web_scrape blocked:/);
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it(`${mode} mode: refuses RFC1918`, async () => {
+      const fetchFn = vi.fn(async () => makeResponse({ body: 'must not be fetched' })) as unknown as FetchFn;
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
+      const r = await handler({ mode, url: 'http://192.168.1.1/' }, signal());
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/^web_scrape blocked:/);
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it(`${mode} mode: refuses a hostname that resolves to loopback (DNS rebinding)`, async () => {
+      const fetchFn = vi.fn(async () => makeResponse({ body: 'must not be fetched' })) as unknown as FetchFn;
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: rebindLookup });
+      const r = await handler({ mode, url: 'https://totally-safe.example.com/' }, signal());
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/^web_scrape blocked:/);
+      expect(r.content).toContain('127.0.0.1');
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it(`${mode} mode: refuses a redirect hop into internal space`, async () => {
+      const calls: string[] = [];
+      const fetchFn = makeFetch((url) => {
+        calls.push(url);
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+        });
+      });
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
+      const r = await handler({ mode, url: 'https://public.example/redirector' }, signal());
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/^web_scrape blocked:/);
+      expect(r.content).toContain('169.254.169.254');
+      // Only the initial public hop was requested; the internal hop never was.
+      expect(calls).toEqual(['https://public.example/redirector']);
+    });
+  }
+
+  it('allows an internal host when AFK_WEB_ALLOW_PRIVATE_HOSTS=1 (raw mode)', async () => {
+    vi.stubEnv('AFK_WEB_ALLOW_PRIVATE_HOSTS', '1');
+    const fetchFn = makeFetch(() => makeResponse({ body: 'local dev server body' }));
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
+    const r = await handler({ mode: 'raw', url: 'http://127.0.0.1:3000/api' }, signal());
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toBe('local dev server body');
+    vi.unstubAllEnvs();
+  });
+
+  it('still allows a normal public URL with the guard active', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: 'public body' }));
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });
+    const r = await handler({ mode: 'raw', url: 'https://example.com/x' }, signal());
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toBe('public body');
+  });
+
+  it('does not consult the egress guard in search mode (no url to classify)', async () => {
+    const lookupFn = vi.fn(async () => {
+      throw new Error('search mode must not resolve DNS for the guard');
+    });
+    const fetchFn = makeFetch(() => exaResponse([{ title: 'T', url: 'https://a.example', highlights: ['h'] }]));
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' }, lookupFn });
+    const r = await handler({ mode: 'search', query: 'anything' }, signal());
+    expect(r.isError).toBeUndefined();
+    expect(lookupFn).not.toHaveBeenCalled();
   });
 });

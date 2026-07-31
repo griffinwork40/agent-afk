@@ -18,6 +18,7 @@ import { truncateDisplayWidth, displayWidth } from './display.js';
 import { palette } from './palette.js';
 import { ResizeBus } from './terminal-size.js';
 import { formatContextBar } from './context-bar.js';
+import { formatQuotaIndicator, type QuotaWindows } from './quota-indicator.js';
 import { formatCwd } from './format-cwd.js';
 import { isPlainOutputRequested } from '../config/env.js';
 
@@ -58,14 +59,18 @@ export interface StatusLineFields {
    */
   pr?: number;
   /**
-   * Pre-formatted Claude subscription quota summary (e.g. `5h 62% · 7d 31%`),
-   * or undefined when no quota headers have been observed in this process —
-   * which is the PERMANENT state under API-key auth, since only subscription
-   * OAuth responses carry `anthropic-ratelimit-unified-*`. Undefined must draw
-   * no segment at all rather than a placeholder. Rendered rightmost and dropped
-   * first on a narrow terminal: the most peripheral field on the line.
+   * Claude subscription quota windows (5h / 7d rolling utilization + reset
+   * deadlines), or undefined when no quota headers have been observed in this
+   * process — which is the PERMANENT state under API-key auth, since only
+   * subscription OAuth responses carry `anthropic-ratelimit-unified-*`.
+   * Undefined must draw no segment at all rather than a placeholder.
+   *
+   * Passed RAW (not pre-formatted) so the line can grade the segment's tone AND
+   * its droppability from the same severity — see the render block below.
+   * Mirrors how `contextPct`/`contextLimit` are passed raw for
+   * `formatContextBar`.
    */
-  quota?: string;
+  quotaWindows?: QuotaWindows;
 }
 
 interface StatusLineOpts {
@@ -75,12 +80,24 @@ interface StatusLineOpts {
   force?: boolean;
   /** Minimum ms between repaints — avoids flicker on fast streams. */
   throttleMs?: number;
+  /**
+   * Interval in ms at which a started line re-paints itself from `lastFields`,
+   * so clock-derived content stays true. `0` (the default) never ticks.
+   *
+   * Defaults OFF and is enabled by the interactive caller (bootstrap.ts),
+   * mirroring how the compositor resolves caret-blink enablement caller-side:
+   * every direct/test construction stays free of an auto-started recurring
+   * timer.
+   */
+  tickMs?: number;
 }
 
 export class StatusLine {
   private readonly stream: NodeJS.WriteStream;
   private readonly force: boolean;
   private readonly throttleMs: number;
+  private readonly tickMs: number;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
   private lastRepaint = 0;
   private lastFields: StatusLineFields | null = null;
@@ -96,6 +113,7 @@ export class StatusLine {
     this.stream = opts.stream ?? process.stdout;
     this.force = opts.force ?? false;
     this.throttleMs = opts.throttleMs ?? 100;
+    this.tickMs = opts.tickMs ?? 0;
   }
 
   private get enabled(): boolean {
@@ -126,6 +144,21 @@ export class StatusLine {
         this.onResize();
       });
       this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => this.resetGeometry());
+    }
+    // Invariant: this is the ONLY time-driven repaint of the status row, and
+    // clock-derived content depends on it. The quota segment renders a reset
+    // countdown and a `~` staleness marker computed against `new Date()` at
+    // paint time (quota-indicator.ts), and grades droppability from that same
+    // freshness — but every other repaint here is event-driven (turn events,
+    // git/context samplers, resize, a NEW quota reading). An idle session fires
+    // none of them, so without this ticker a countdown sits frozen and a
+    // reading never crosses into `stale` on screen. `flush()` re-renders from
+    // `lastFields`, so each tick recomputes those values against the current
+    // clock. `unref()` keeps the interval from holding the process open; the
+    // inverse lives at the top of stop(), ahead of its early return.
+    if (this.tickMs > 0 && this.tickTimer === null) {
+      this.tickTimer = setInterval(() => this.flush(), this.tickMs);
+      this.tickTimer.unref();
     }
   }
 
@@ -340,6 +373,13 @@ export class StatusLine {
 
   /** Release the scroll region and clear the status row. */
   stop(): void {
+    // Cleared FIRST, ahead of the `!started || !enabled` early return below: an
+    // armed ticker is the one piece of state that can outlive a line which is
+    // no longer started, so a late return must never skip its teardown.
+    if (this.tickTimer !== null) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
     if (this.resizeUnsub !== null) {
       this.resizeUnsub();
       this.resizeUnsub = null;
@@ -509,10 +549,25 @@ export class StatusLine {
     // Invariant: every droppablePriority on this line must be UNIQUE. The shed
     // loop below drops EVERY part sharing the current maximum priority in one
     // pass, so reusing the token count's 4 here would make the quota segment and
-    // the token count vanish together instead of shedding one at a time. 5 =
-    // drop 1st, ahead of tokens — quota is the most peripheral field here.
-    if (f.quota !== undefined) {
-      parts.push({ text: palette.chrome(f.quota), droppablePriority: 5 }); // drop 1st
+    // the token count vanish together instead of shedding one at a time.
+    //
+    // Contract: quota droppability is SEVERITY-INVERTED. At calm/caution it is 5
+    // — drop 1st, ahead of tokens, the most peripheral field on the line. At
+    // `critical` (>80% of a rolling window) it becomes 0 — drop LAST, behind even
+    // the branch — because the one moment the quota is the most important field
+    // on the row is exactly the moment a narrow terminal used to shed it first.
+    // Promotion requires a FRESH reading: a stale critical (see STALE_AFTER_MS)
+    // may have already drained, so it keeps the peripheral priority rather than
+    // out-ranking identity fields on the strength of an old number. Still never
+    // `undefined` (never-drop) — the top-of-method invariant reserves that for
+    // model/mode, and stacking another never-drop field would force the final
+    // blind truncation to shear the model off the right edge.
+    if (f.quotaWindows !== undefined) {
+      const quota = formatQuotaIndicator(f.quotaWindows);
+      if (quota !== undefined) {
+        const priority = quota.severity === 'critical' && !quota.stale ? 0 : 5;
+        parts.push({ text: quota.text, droppablePriority: priority });
+      }
     }
 
     // Join with separator and measure the result.

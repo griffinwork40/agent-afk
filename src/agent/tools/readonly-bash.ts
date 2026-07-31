@@ -559,7 +559,7 @@ const GIT_GLOBAL_FLAG_WITH_ARG = new Set([
 ]);
 const GIT_MUTATING_SUBCMDS = new Set([
   'commit', 'push', 'pull', 'merge', 'rebase', 'reset', 'checkout', 'switch', 'restore',
-  'cherry-pick', 'revert', 'am', 'apply', 'clean', 'add', 'rm', 'mv', 'init',
+  'cherry-pick', 'revert', 'am', 'apply', 'clean', 'add', 'rm', 'mv', 'init', 'clone',
 ]);
 
 /** Split git argv (tokens after `git`) into the subcommand + its trailing args, skipping global flags. */
@@ -600,8 +600,8 @@ function gitSegmentReason(argv: readonly string[]): string | null {
     case 'remote':
       return ['add', 'remove', 'rm', 'set-url', 'rename'].includes(next) ? 'git remote mutation' : null;
     case 'worktree':
-      return ['remove', 'prune', 'move', 'lock', 'unlock'].includes(next)
-        ? 'git worktree mutation (remove/prune/move)'
+      return ['add', 'remove', 'prune', 'move', 'lock', 'unlock'].includes(next)
+        ? 'git worktree mutation (add/remove/prune/move)'
         : null;
     case 'stash':
       // `stash list`/`stash show` read; bare `stash` (implicit push) + push/drop/

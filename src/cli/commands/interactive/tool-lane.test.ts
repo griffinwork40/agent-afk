@@ -10,8 +10,10 @@
  */
 
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import chalk from 'chalk';
 import { ToolLane } from './tool-lane.js';
 import { displayWidth, stripAnsi } from '../../display.js';
+import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
 
@@ -648,6 +650,216 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
       // Tool name must survive — clamping should elide the outcome tail, not
       // the leading prefix that carries the tool identity.
       expect(stripAnsi(overlay)).toContain('bash');
+    });
+
+    it('grouped root bash reserves its result summary and fits within terminal width', () => {
+      const lane = new ToolLane();
+      const cols = process.stdout.columns ?? 88;
+      const commands = [
+        'cd credential-floor-gaps && echo "=== 1. INLINE REVIEW COMMENTS ===" && gh api repos/griffinwork40/agent-afk/pulls/753/comments --paginate',
+        'cd credential-floor-gaps && echo "=== 2. REVIEW SUMMARY BODIES ===" && gh pr view 753 --json reviews,comments,latestReviews',
+        'cd credential-floor-gaps && echo "=== 4. CI CHECKS ===" && gh pr checks 753 2>&1 | head -40',
+      ];
+      const lineCounts = [20, 20, 19];
+      for (const [index, command] of commands.entries()) {
+        const id = `bash-group-${index}`;
+        lane.addStart(id, 'bash', ` ${command}`);
+        lane.addResult(id, { ...makeResult('output'), lineCount: lineCounts[index] });
+      }
+
+      const lines = lane.flush();
+      const rendered = stripAnsi(lines.join('\n'));
+      expect(rendered).toContain('bash ×3');
+      expect(rendered).toContain('59 lines total');
+      expect(rendered).toContain('…');
+      for (const line of lines) {
+        expect(
+          displayWidth(stripAnsi(line)),
+          `grouped root line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+        ).toBeLessThanOrEqual(cols);
+      }
+    });
+
+    /**
+     * Regression for the styling half of the width fix: bounding the grouped
+     * row must not cost it the `palette.toolArg` dim wrapper that the
+     * single-entry path still applies via `formatToolLine`
+     * (tool-lane-format-args.ts). The first cut of this fix dropped it, so
+     * grouped args rendered at full brightness beside dimmed ungrouped ones —
+     * invisible to every other assertion in this block, because they all
+     * compare ANSI-stripped text.
+     *
+     * `chalk.level` is forced because the suite runs non-TTY, where the
+     * palette collapses to identity and the assertion would be vacuous. Safe
+     * to mutate: every theme is built from the shared chalk export, which
+     * reads the global level at call time (see palette.ts).
+     */
+    it('grouped root targets keep the dim toolArg styling', () => {
+      const originalLevel = chalk.level;
+      chalk.level = 3;
+      try {
+        const lane = new ToolLane();
+        // Three entries: bash is a leaf tool, which collapses at
+        // GROUP_THRESHOLD_LEAF = 3. Short commands keep the row inside 88
+        // cols, so the targets reach the assertion untruncated and the
+        // expected escape sequence is exact.
+        const commands = ['git status', 'git log', 'git diff'];
+        for (const [index, command] of commands.entries()) {
+          const id = `bash-style-${index}`;
+          lane.addStart(id, 'bash', ` ${command}`);
+          lane.addResult(id, { ...makeResult('output'), lineCount: 2 });
+        }
+
+        const row = lane.flush().join('\n');
+        expect(stripAnsi(row)).toContain('bash ×3');
+        expect(row).toContain(palette.toolArg(commands.join(', ')));
+      } finally {
+        chalk.level = originalLevel;
+      }
+    });
+
+    /**
+     * Regression for the sibling rows of the grouped-width fix.
+     * `renderGroupedRootTools` emits four row shapes; only the grouped one was
+     * bounded, so the same long bash command rendered correctly in the live
+     * overlay (which clamps every row) and then wrapped the moment it
+     * committed to scrollback via flush().
+     *
+     * Root entries are the exposed case: the root dispatch path
+     * (stream-renderer-orchestrator.ts) calls addStartWithAgentContext with no
+     * maxWidth, so `prefix` arrives unbudgeted — unlike subagent children
+     * (stream-renderer-subagent.ts), which cap it at cols - 14. The call shape
+     * below mirrors that root path exactly; using addStart() instead would
+     * test a path production never takes.
+     */
+    it('flush root rows fit within terminal width (completed, in-flight, diff separators)', () => {
+      const cols = process.stdout.columns ?? 88;
+      const longCommand = ' ' + 'echo hello world '.repeat(20);
+
+      const completed = new ToolLane();
+      completed.addStartWithAgentContext('root-done', 'bash', longCommand, undefined);
+      completed.addResult('root-done', { ...makeResult('output'), lineCount: 40 });
+
+      const inFlight = new ToolLane();
+      inFlight.addStartWithAgentContext('root-live', 'bash', longCommand, undefined);
+
+      // Two grouped entries carrying diffs trigger the labeled `── file ──`
+      // separator. A long BASENAME is what overflows it — shortenPaths
+      // collapses directories, so a long directory alone would not reproduce.
+      const separators = new ToolLane();
+      const longName = 'src/generated/' + 'very-long-component-name'.repeat(3);
+      for (const suffix of ['a', 'b']) {
+        const id = `write-${suffix}`;
+        separators.addStartWithAgentContext(id, 'write_file', ` ${longName}-${suffix}.ts`, undefined);
+        separators.addResult(id, { ...makeResult('ok'), lineCount: 3 });
+        separators.addDiff(id, {
+          addedLines: 1,
+          removedLines: 0,
+          hunks: [{
+            oldStart: 1, oldLines: 0, newStart: 1, newLines: 1,
+            lines: [{ kind: '+', text: 'short' }],
+          }],
+        });
+      }
+
+      // flush() drains the lane, so capture each render exactly once.
+      const rendered: ReadonlyArray<readonly [string, string[]]> = [
+        ['completed', completed.flush()],
+        ['in-flight', inFlight.flush()],
+        ['diff separators', separators.flush()],
+      ];
+
+      for (const [label, lines] of rendered) {
+        expect(lines.length, `${label}: rendered nothing`).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(
+            displayWidth(stripAnsi(line)),
+            `${label} flush line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+          ).toBeLessThanOrEqual(cols);
+        }
+      }
+
+      // Tool identity must survive the clamp — the outcome tail is the
+      // expendable part, matching the overlay contract pinned above.
+      expect(stripAnsi((rendered[0]![1]).join('\n'))).toContain('bash');
+      expect(stripAnsi((rendered[2]![1]).join('\n'))).toContain('──');
+    });
+
+    /**
+     * Regression for the agent-frame HEAD rows, the last unbounded rows in the
+     * flush path. `formatAgentSummary` and `formatAgentHeader` both emit a head
+     * row for the same entry (eagerly via flushSource, or at dispose-time), and
+     * their encodings are contractually coupled — so both clamp, or neither
+     * can. Measured at cols=88 before the fix: 109 for the summary head with
+     * stats, 181 for the eager header, 105 for the heartbeat-annotated label.
+     *
+     * Nesting labels are already clipped to NESTING_LABEL_MAX = 60, so the
+     * overflow comes from what surrounds them: the spine indent, the tool name,
+     * the `[subagent]` dispatch tag and — for the summary head — the
+     * ` — N tool calls · M lines` stats tail, which only appears once a frame
+     * has more than MAX_VISIBLE_CHILDREN (3) children. That makes the common
+     * case a plain root `agent` dispatch that made four or more tool calls.
+     */
+    it('agent frame head rows fit within terminal width', () => {
+      const cols = process.stdout.columns ?? 88;
+      const longPrompt = JSON.stringify({
+        prompt:
+          'Audit every emission site in the tool lane renderer and classify each as bounded or unbounded with file:line citations',
+        agent_type: 'research-agent',
+      });
+
+      // Summary head WITH the stats tail: >3 children is what makes stats
+      // render. Root dispatch shape — no maxWidth, as the orchestrator calls it.
+      const summary = new ToolLane();
+      summary.addStartWithAgentContext('parent', 'agent', ` (${longPrompt})`, undefined);
+      for (let i = 0; i < 5; i++) {
+        summary.addStartWithAgentContext(`child-${i}`, 'read_file', ` src/file-${i}.ts`, 'parent');
+        summary.addResult(`child-${i}`, { ...makeResult('output'), lineCount: 120 });
+      }
+      summary.addResult('parent', { ...makeResult('done'), lineCount: 4 });
+
+      // Eager header committed by flushSource for a still-live ancestor.
+      const eager = new ToolLane();
+      eager.addStartWithAgentContext('skill-1', 'skill', ` (${longPrompt})`, undefined);
+      eager.addStartWithAgentContext('agent-1', 'agent', ` (${longPrompt})`, 'skill-1');
+      eager.addStartWithAgentContext('tool-1', 'bash', ' git status', 'agent-1');
+      eager.addResult('tool-1', { ...makeResult('output'), lineCount: 3 });
+      eager.addResult('agent-1', { ...makeResult('done'), lineCount: 2 });
+
+      // Heartbeat/pause refresh: stream-renderer.ts re-labels the synthetic
+      // Agent entry with an annotation and passes no maxWidth at all.
+      const heartbeat = new ToolLane();
+      heartbeat.addStartWithAgentContext(
+        'synth',
+        'Agent',
+        ' (awa-private:research-agent-investigating-tool-lane-emission-sites) · waiting 2m 45s',
+        undefined,
+      );
+      heartbeat.addStartWithAgentContext('hb-child', 'bash', ' git status', 'synth');
+      heartbeat.addResult('hb-child', { ...makeResult('output'), lineCount: 3 });
+      heartbeat.addResult('synth', { ...makeResult('done'), lineCount: 1 });
+
+      const rendered: ReadonlyArray<readonly [string, string[]]> = [
+        ['summary head', summary.flush()],
+        ['eager header', eager.flushSource('agent-1')],
+        ['heartbeat label', heartbeat.flush()],
+      ];
+
+      for (const [label, blocks] of rendered) {
+        expect(blocks.length, `${label}: rendered nothing`).toBeGreaterThan(0);
+        // formatAgentSummary returns head + children joined by \n, so split
+        // before measuring — display width of a string containing \n is
+        // meaningless and would mask a wrapped head row.
+        for (const line of blocks.flatMap((block) => block.split('\n'))) {
+          expect(
+            displayWidth(stripAnsi(line)),
+            `${label} line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+          ).toBeLessThanOrEqual(cols);
+        }
+      }
+
+      // The frame must still be identifiable after the clamp.
+      expect(stripAnsi((rendered[0]![1]).join('\n'))).toContain('agent');
     });
 
     it('orchestrator-root in-progress bash with long input fits within terminal width', () => {

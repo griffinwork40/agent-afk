@@ -111,6 +111,32 @@ describe('runSubagentDAG', () => {
     expect(forkOptions.parent.getInputStreamRef).toBeUndefined();
   });
 
+  it('forwards maxToolUseIterations into the node fork config, and omits it when unset', async () => {
+    // The per-node tool budget is enforced by the provider loop's wind-down
+    // policy, so it must ride in the fork config rather than being policed by
+    // the caller. Absent (not 0) when unset so forkSubagent's
+    // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS fallback still applies.
+    pushHandle('capped');
+    pushHandle('uncapped');
+    const manager = managerFromQueue();
+
+    await runSubagentDAG({
+      manager,
+      parentSession: makeParent(),
+      nodes: [
+        { id: 'A', systemPrompt: 's', promptBuilder: () => 'p', maxToolUseIterations: 7 },
+        { id: 'B', systemPrompt: 's', promptBuilder: () => 'p' },
+      ],
+      edges: [],
+    });
+
+    const fork = manager.forkSubagent as unknown as ReturnType<typeof vi.fn>;
+    const configs = fork.mock.calls.map((c: unknown[]) => (c[0] as { config: Record<string, unknown> }).config);
+    const capped = configs.find((c) => c['maxToolUseIterations'] !== undefined);
+    expect(capped?.['maxToolUseIterations']).toBe(7);
+    expect(configs.filter((c) => 'maxToolUseIterations' in c)).toHaveLength(1);
+  });
+
   it('two-node chain: output of first feeds promptBuilder of second', async () => {
     pushHandle('first-output');
     pushHandle('second-output');

@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree-sweep.js';
+import { hasNonRebuildableIgnoredFiles } from '../../worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
@@ -57,6 +58,36 @@ export function sanitizeSlug(name: string): string {
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^[-.]+|[-.]+$/g, '')
     .slice(0, 80);
+}
+
+/**
+ * Contract: resolve the DEFAULT base ref at `anchor` — the calling session's own
+ * checkout — returning a concrete SHA.
+ *
+ * `git worktree add` must run from the MAIN repo root, so handing it the literal
+ * `HEAD` resolves against the MAIN checkout's HEAD rather than the caller's. A
+ * session working inside worktree A that requests a new tree with no explicit
+ * base therefore silently got a branch based on main's tip (#760), while the
+ * design intent is the opposite: `docs/proposals/first-class-worktree-isolation.md`
+ * line 107 — "Base = HEAD of `this.currentCwd`'s repo".
+ *
+ * Resolving to a SHA here (rather than passing a ref through) is what makes the
+ * base unambiguous at the add site, which runs with a different `-C`.
+ *
+ * Documented fallback: when the anchor has no resolvable HEAD (not a git repo, or
+ * an unborn branch) this returns the literal `'HEAD'` — the pre-#760 behaviour —
+ * so the change can never turn a previously working create into a failure.
+ */
+export async function resolveAnchorBaseRef(
+  execFile: ExecFileFn,
+  anchor: string,
+): Promise<string> {
+  try {
+    const out = await execFile('git', ['-C', anchor, 'rev-parse', 'HEAD']);
+    const sha = out.stdout.trim();
+    if (sha) return sha;
+  } catch { /* fall through to the literal ref */ }
+  return 'HEAD';
 }
 
 export interface CreateManagedWorktreeArgs {
@@ -162,7 +193,8 @@ export async function managedWorktreeCommitsAhead(
 export type GuardedRemoveOutcome =
   | { removed: true; branchPreserved: string | null }
   | { removed: false; reason: 'dirty' }
-  | { removed: false; reason: 'commits-ahead'; commitsAhead: number };
+  | { removed: false; reason: 'commits-ahead'; commitsAhead: number }
+  | { removed: false; reason: 'ignored-local-state' };
 
 export interface RemoveManagedWorktreeArgs {
   execFile: ExecFileFn;
@@ -176,10 +208,21 @@ export interface RemoveManagedWorktreeArgs {
 }
 
 /**
- * Guarded worktree removal. Refuses (returns `removed:false` + reason) a dirty
- * or commits-ahead tree unless `force`. Emits `git worktree remove [--force]
- * <path>` on success. Never removes the branch ref. Caller maps the reason to
- * user-facing text (handler) or preserve-and-lock (executor teardown).
+ * Guarded worktree removal. Refuses (returns `removed:false` + reason) a dirty,
+ * commits-ahead, or ignored-local-state tree unless `force`. Emits `git
+ * worktree remove [--force] <path>` on success. Never removes the branch ref.
+ * Caller maps the reason to user-facing text (handler) or preserve-and-lock
+ * (executor teardown).
+ *
+ * Invariant: `isManagedWorktreeDirty` uses bare `git status --porcelain`,
+ * which never reports IGNORED entries — a worktree whose only content is a
+ * non-rebuildable ignored file (`.env`, a gitignored plan) reads clean here
+ * and would otherwise reach `git worktree remove` and be destroyed (#759,
+ * same defect the sweep engine hardened against in `worktree-sweep.ts`; this
+ * is the second, more frequently executed removal path). The
+ * `hasNonRebuildableIgnoredFiles` probe closes it without changing what
+ * "dirty" means for other callers of `isManagedWorktreeDirty` — it is a
+ * separate guard, not a redefinition.
  */
 export async function removeManagedWorktreeGuarded(
   args: RemoveManagedWorktreeArgs,
@@ -188,6 +231,9 @@ export async function removeManagedWorktreeGuarded(
   if (!force) {
     if (await isManagedWorktreeDirty(execFile, worktreePath)) {
       return { removed: false, reason: 'dirty' };
+    }
+    if (await hasNonRebuildableIgnoredFiles(execFile, worktreePath)) {
+      return { removed: false, reason: 'ignored-local-state' };
     }
     const ahead = await managedWorktreeCommitsAhead(execFile, repoRoot, worktreePath);
     if (ahead > 0) {
@@ -214,7 +260,7 @@ export async function createIsolatedWorktree(args: {
   cwd: string;
   /** Raw slug hint (sanitized here); e.g. `iso-agent-tool-3-a1b2c3`. */
   slugHint: string;
-  /** Base ref for the branch. Default `HEAD`. */
+  /** Base ref for the branch. Default: HEAD of `cwd`'s checkout (#760). */
   baseRef?: string;
 }): Promise<ManagedWorktreeInfo & { repoRoot: string }> {
   const execFile = args.execFile ?? defaultExecFile;
@@ -223,7 +269,8 @@ export async function createIsolatedWorktree(args: {
   const worktreePath = join(ctx.afkWorktreesRoot, slug);
   const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
   const branch = `${prefix}${slug}`;
-  const baseRef = args.baseRef ?? 'HEAD';
+  // Default base is the ANCHOR's HEAD (args.cwd), not the main checkout's (#760).
+  const baseRef = args.baseRef ?? await resolveAnchorBaseRef(execFile, args.cwd);
   // Invariant: isolation:"worktree" fans out SEVERAL parallel dispatches, each
   // running `git worktree add` against the SAME main repo — which serializes on
   // the repo/index lock. A burst can transiently fail with a lock error, so we
@@ -258,17 +305,30 @@ export async function createIsolatedWorktree(args: {
 /** Result of {@link teardownIsolatedWorktree}. */
 export interface IsolatedTeardownResult {
   removed: boolean;
-  /** True when the tree was kept (dirty/ahead) and locked against the sweep. */
+  /** True when the tree was kept (dirty/ahead/ignored) and locked against the sweep. */
   preserved: boolean;
-  reason?: 'dirty' | 'commits-ahead';
+  reason?: 'dirty' | 'commits-ahead' | 'ignored-local-state';
+}
+
+/**
+ * Human-legible label for a preserved tree's lock reason. `dirty` and
+ * `commits-ahead` are self-explanatory; `ignored-local-state` is not — the
+ * tree LOOKS clean to `git status`, so the lock reason is the only place the
+ * operator can learn why it was kept anyway.
+ */
+export function describePreserveReason(reason: NonNullable<IsolatedTeardownResult['reason']>): string {
+  if (reason === 'ignored-local-state') {
+    return 'ignored-local-state: non-rebuildable ignored files present (e.g. .env) — git status looked clean';
+  }
+  return reason;
 }
 
 /**
  * Tear down an isolated worktree after its subagent finishes. Removes a
- * clean tree; PRESERVES a dirty / commits-ahead tree (WIP is never destroyed)
- * and `git worktree lock`s it so the sweep engine never reaps it out from
- * under work in progress. Best-effort — never throws (teardown runs in a
- * `finally`).
+ * clean tree; PRESERVES a dirty / commits-ahead / ignored-local-state tree
+ * (WIP and untracked local state are never destroyed) and `git worktree
+ * lock`s it so the sweep engine never reaps it out from under work in
+ * progress. Best-effort — never throws (teardown runs in a `finally`).
  */
 export async function teardownIsolatedWorktree(args: {
   execFile?: ExecFileFn;
@@ -284,11 +344,12 @@ export async function teardownIsolatedWorktree(args: {
       force: false,
     });
     if (outcome.removed) return { removed: true, preserved: false };
-    // Dirty or commits-ahead → preserve WIP; lock so the sweep never reaps it.
+    // Dirty, commits-ahead, or ignored-local-state → preserve WIP/local state;
+    // lock so the sweep never reaps it.
     try {
       await execFile('git', [
         '-C', args.repoRoot, 'worktree', 'lock',
-        '--reason', `afk: isolated-worktree preserved (${outcome.reason})`,
+        '--reason', `afk: isolated-worktree preserved (${describePreserveReason(outcome.reason)})`,
         args.worktreePath,
       ]);
     } catch { /* best-effort */ }

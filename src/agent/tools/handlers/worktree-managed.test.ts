@@ -121,10 +121,56 @@ describe('removeManagedWorktreeGuarded — guards + argv', () => {
     // No status check when forced.
     expect(mock.calls.some((c) => c.args.includes('status'))).toBe(false);
   });
+
+  // #759 (second removal path): bare `status --porcelain` never reports
+  // ignored files, so a tree whose only content is a non-rebuildable ignored
+  // file (`.env`) reads clean and reached `git worktree remove` undefended.
+  it('refuses a tree holding a non-rebuildable ignored file without force (reason: ignored-local-state)', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'has-dotenv');
+    const mock = makeMock((call) => {
+      if (call.args.includes('--ignored')) return { stdout: '!! .env\n!! node_modules/\n', stderr: '' };
+      if (call.args.includes('status')) return { stdout: '', stderr: '' }; // tracked tree is clean
+      return { stdout: '', stderr: '' };
+    });
+    const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(outcome).toEqual({ removed: false, reason: 'ignored-local-state' });
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
+  // Counterweight: ignored build output alone must NOT block removal, or
+  // every worktree with node_modules/ would become unreapable.
+  it('still succeeds when the only ignored content is rebuildable output', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'only-build-output');
+    const mock = makeMock((call) => {
+      if (call.args.includes('--ignored')) return { stdout: '!! node_modules/\n!! dist/\n', stderr: '' };
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(outcome.removed).toBe(true);
+    const rm = mock.calls.find((c) => c.args.includes('remove'));
+    expect(rm?.args).toEqual(['-C', repoRoot, 'worktree', 'remove', wtPath]);
+  });
+
+  it('force:true still removes even when non-rebuildable ignored content is present', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'force-dotenv');
+    const mock = makeMock((call) => {
+      if (call.args.includes('--ignored')) return { stdout: '!! .env\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const outcome = await removeManagedWorktreeGuarded({
+      execFile: mock, repoRoot, worktreePath: wtPath, force: true,
+    });
+    expect(outcome.removed).toBe(true);
+    const rm = mock.calls.find((c) => c.args.includes('remove'));
+    expect(rm?.args).toContain('--force');
+    // Explicit override bypasses the ignored-state probe entirely.
+    expect(mock.calls.some((c) => c.args.includes('--ignored'))).toBe(false);
+  });
 });
 
 describe('createIsolatedWorktree', () => {
-  it('resolves the repo root and creates an afk/iso-* branch based on HEAD', async () => {
+  it("resolves the repo root and creates an afk/iso-* branch based on the anchor's HEAD", async () => {
     const mock = makeMock((call) => {
       if (call.args.includes('--git-common-dir')) return { stdout: `${repoRoot}/.git\n`, stderr: '' };
       if (call.args.includes('add')) {
@@ -138,10 +184,12 @@ describe('createIsolatedWorktree', () => {
     expect(iso.repoRoot).toBe(repoRoot);
     expect(iso.path).toBe(join(repoRoot, '.afk-worktrees', 'iso-diagnose-1-abc123'));
     expect(iso.branch).toBe('afk/iso-diagnose-1-abc123');
-    expect(iso.baseRef).toBe('HEAD');
+    // #760: the default base is the anchor's RESOLVED HEAD sha, not the literal
+    // ref (which `git -C <repoRoot>` would resolve at the MAIN checkout instead).
+    expect(iso.baseRef).toBe('headsha');
     const addCall = mock.calls.find((c) => c.args.includes('add'));
     expect(addCall?.args).toEqual([
-      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/iso-diagnose-1-abc123', iso.path, 'HEAD',
+      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/iso-diagnose-1-abc123', iso.path, 'headsha',
     ]);
   });
 
@@ -172,7 +220,7 @@ describe('createIsolatedWorktree', () => {
     expect(iso.repoRoot).toBe(repoRoot);
     expect(iso.path).toBe(join(repoRoot, '.afk-worktrees', 'iso-parallel-2-def456'));
     expect(iso.branch).toBe('afk/iso-parallel-2-def456');
-    expect(iso.baseRef).toBe('HEAD');
+    expect(iso.baseRef).toBe('headsha');
     // Retried EXACTLY once → `worktree add` invoked twice, second time won.
     expect(mock.calls.filter((c) => c.args.includes('add'))).toHaveLength(2);
   });
@@ -228,5 +276,23 @@ describe('teardownIsolatedWorktree', () => {
     });
     const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
     expect(result).toEqual({ removed: false, preserved: false });
+  });
+
+  // The tree LOOKS clean to `git status`, so the lock reason is the only
+  // place the operator can learn WHY it was preserved instead of removed.
+  it('preserves + locks a tree holding non-rebuildable ignored files, naming the reason', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'iso-has-dotenv');
+    const mock = makeMock((call) => {
+      if (call.args.includes('--ignored')) return { stdout: '!! .env\n', stderr: '' };
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'ignored-local-state' });
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
+    const lock = mock.calls.find((c) => c.args.includes('lock'));
+    expect(lock?.args.join(' ')).toContain('afk: isolated-worktree preserved (ignored-local-state');
+    // Legible without needing to already know the reason code.
+    expect(lock?.args.join(' ')).toMatch(/non-rebuildable ignored files/);
   });
 });

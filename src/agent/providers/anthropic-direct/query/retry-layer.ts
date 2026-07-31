@@ -54,7 +54,13 @@ import type {
   RunTurnInput,
 } from '../types.js';
 
-const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+/**
+ * Both the total usage-limit polling budget and the maximum reset lead time the
+ * layer will wait out. Exported so surfaces that *describe* this behaviour to
+ * the user (see `cli/quota-footer.ts`) can be drift-tested against the real
+ * threshold instead of hardcoding a second copy of it.
+ */
+export const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 // Transient rate-limit (429 + retry-after header, no `|ts`) replay budget.
 // The SDK has already auto-retried twice by the time the error surfaces here,

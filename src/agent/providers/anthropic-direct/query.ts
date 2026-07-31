@@ -57,6 +57,7 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
+import { refreshEnvironmentDate } from './query/date-rollover.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
@@ -596,6 +597,14 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * side has anything to contribute — the loop omits the field entirely.
    */
   private composeSystem(): ContentBlockParam[] | null {
+    // Date rollover: `userSystem` was assembled once at session start, so a
+    // session resident across local midnight would keep telling the model it
+    // is still yesterday. This re-renders that one line only when the rendered
+    // date actually changes, so same-day turns are byte-identical and the
+    // cache breakpoint below still hits. See query/date-rollover.ts.
+    if (this.state.userSystem) {
+      this.state.userSystem = refreshEnvironmentDate(this.state.userSystem);
+    }
     const prefix = this.systemPrefix;
     const userSys = this.state.userSystem;
     const blocks: ContentBlockParam[] = [];

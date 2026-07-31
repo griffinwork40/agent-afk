@@ -680,7 +680,11 @@ export async function bootstrapSession(
   // its inter-turn raw writes through statusLine.withFullScrollRegion(...) —
   // see repl-renderer.ts for the DECSTBM sub-region scroll-loss contract this
   // wiring is defending against.
-  const statusLine = new StatusLine();
+  // `tickMs` is resolved caller-side (StatusLine defaults it off, like the
+  // compositor's caret blink) so only the REPL gets a recurring timer. 30s is
+  // half the quota countdown's minute granularity, which is the finest
+  // clock-derived value the row renders.
+  const statusLine = new StatusLine({ tickMs: 30_000 });
   const replRenderer = createReplRenderer(process.stdout, { statusLine });
 
   // Stable hookRegistry shared across sessions (including swaps).

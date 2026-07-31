@@ -687,6 +687,15 @@ export type SessionPhaseName =
   // turns and on a session `close()` (only a user/turn interrupt qualifies).
   | 'interrupt_halt'
   | 'rate_limit'
+  // Client-side time-to-first-byte watchdog re-drive: OUR timer fired because no
+  // content token arrived within `AFK_MODEL_TTFB_TIMEOUT_MS` (default 180s), so
+  // the request was aborted and re-driven once. Deliberately NOT `rate_limit`:
+  // nothing throttled us and there is no server retry-after — conflating the two
+  // made a self-inflicted 3-minute stall read as provider throttling in every
+  // trace (5 such stalls in one `/ground-state` pre-flight were misattributed
+  // this way). `durationMs` is the dead wait before the abort; metadata keeps
+  // `reason: 'ttfb-timeout'` so pre-split analyses still match.
+  | 'ttfb_timeout'
   // OAuth subscription usage-limit park/unpark. Unlike `rate_limit` (a short,
   // bounded retry-after backoff), these bracket a potentially multi-HOUR pause
   // while the turn waits for the subscription window to reset (or a keychain
@@ -705,12 +714,19 @@ export type SessionPhaseName =
   // expected, and is always followed by a real `closure`.
   | 'overload_pause'
   | 'overload_resume'
-  // Progress-aware idle watchdog fired on a forked sub-agent turn: the child
-  // produced no observable OutputEvent for the idle window and its controller
-  // was aborted (see subagent/idle-watchdog.ts). A single event (no paired
-  // start); carries `idleTimeoutMs`, `elapsedSinceLastProgressMs`, and
-  // `lastEventType` in `metadata`. Distinct from `rate_limit`/`usage_limit_*`,
-  // which mark LEGITIMATE waits — this marks an unexplained stall that fired.
+  // A progress-aware watchdog fired on unexplained silence. Two sources, told
+  // apart by `metadata.source`:
+  //   - absent → a forked sub-agent turn: the child produced no observable
+  //     OutputEvent for the idle window and its controller was aborted (see
+  //     subagent/idle-watchdog.ts). Carries `idleTimeoutMs`,
+  //     `elapsedSinceLastProgressMs`, and `lastEventType`.
+  //   - `'model-stream'` → a provider stream that had ALREADY produced a first
+  //     content token then went silent for the whole stall window, so the round
+  //     was aborted instead of hanging (see providers/shared/stream-stall-timeout.ts,
+  //     issue #762). Carries `stallTimeoutMs` + `elapsedSinceLastProgressMs`.
+  // A single event either way (no paired start). Distinct from
+  // `rate_limit`/`usage_limit_*`, which mark LEGITIMATE waits — this marks an
+  // unexplained stall that fired.
   | 'idle_watchdog_fired'
   // OBSERVE-ONLY loop telemetry (see tools/suspected-loop-detector.ts): a
   // FORKED sub-agent issued the same (tool, normalized-args) fingerprint
