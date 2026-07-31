@@ -14,6 +14,10 @@ auto-release workflow to deduplicate commits across successive runs.
 ### Fixed
 - tick the status line on a 30s timer so the quota reset countdown and the stale-reading marker stay true on an idle session instead of freezing at their last event-driven paint
 - stop the turn footer promising pause-and-auto-resume when the runtime will not deliver it — the promise is now conditional on `autoResumeOnUsageLimit` and on the reset landing inside the retry layer's two-hour wait ceiling
+## [5.83.2] - 2026-07-31
+
+### Fixed
+- regenerate the env-registry var count so scan:env:check passes (#792) (6b6b30a)
 
 ## [5.83.1] - 2026-07-31
 
