@@ -11,6 +11,59 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.1] - 2026-07-31
+
+### Fixed
+- refresh the system-prompt date line when the local day rolls over (#784) (180882f)
+- kill the unbounded post-first-byte round with a progress-aware stall watchdog (#762) (#763) (219e0b6)
+
+## [5.83.0] - 2026-07-31
+
+### Added
+- warn in the turn footer once a subscription rolling window passes 80% used, with its reset countdown and the note that AFK pauses and auto-resumes at the cap
+
+### Changed
+- grade the status-line usage indicator by severity — per-window tone, the binding window's reset countdown, a stale-reading marker, and drop-last priority so a critical reading survives a narrow terminal (9d2b28d)
+
+### Added
+- make the subscription-usage indicator severity-graded and time-aware (#765) (42a7a13)
+
+## [5.82.13] - 2026-07-31
+
+### Fixed
+- block SSRF egress to internal hosts in web_scrape (#575) (#750) (8a9e586)
+- preserve a failed skill fork's partial output (#767) (e7d8cad)
+
+## [5.82.12] - 2026-07-31
+
+### Fixed
+- stop the citation contract forcing a nested git dispatch (#726) (#777) (f94cbe7)
+
+## [5.82.11] - 2026-07-31
+
+### Fixed
+- clamp agent frame head rows to terminal width (#786) (03af774)
+
+## [5.82.10] - 2026-07-30
+
+### Fixed
+- bound grouped tool summaries to terminal width (#773) (d52dbf2)
+
+## [5.82.9] - 2026-07-30
+
+### Fixed
+- resolve the default create base at the calling session's anchor (#760) (#769) (b4192bd)
+
+## [5.82.8] - 2026-07-30
+
+### Fixed
+- follow AFK_HOME in the credential floor + reject overly broad subagent cwd/writeRoots (#753) (2675eaf)
+
+## [5.82.7] - 2026-07-30
+
+### Fixed
+- classify git worktree add and git clone as mutating in the read-only guard (#768) (e94e631)
+
 ## [5.82.6] - 2026-07-30
 
 ### Fixed

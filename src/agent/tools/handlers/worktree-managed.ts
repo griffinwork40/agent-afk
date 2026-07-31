@@ -59,6 +59,36 @@ export function sanitizeSlug(name: string): string {
     .slice(0, 80);
 }
 
+/**
+ * Contract: resolve the DEFAULT base ref at `anchor` — the calling session's own
+ * checkout — returning a concrete SHA.
+ *
+ * `git worktree add` must run from the MAIN repo root, so handing it the literal
+ * `HEAD` resolves against the MAIN checkout's HEAD rather than the caller's. A
+ * session working inside worktree A that requests a new tree with no explicit
+ * base therefore silently got a branch based on main's tip (#760), while the
+ * design intent is the opposite: `docs/proposals/first-class-worktree-isolation.md`
+ * line 107 — "Base = HEAD of `this.currentCwd`'s repo".
+ *
+ * Resolving to a SHA here (rather than passing a ref through) is what makes the
+ * base unambiguous at the add site, which runs with a different `-C`.
+ *
+ * Documented fallback: when the anchor has no resolvable HEAD (not a git repo, or
+ * an unborn branch) this returns the literal `'HEAD'` — the pre-#760 behaviour —
+ * so the change can never turn a previously working create into a failure.
+ */
+export async function resolveAnchorBaseRef(
+  execFile: ExecFileFn,
+  anchor: string,
+): Promise<string> {
+  try {
+    const out = await execFile('git', ['-C', anchor, 'rev-parse', 'HEAD']);
+    const sha = out.stdout.trim();
+    if (sha) return sha;
+  } catch { /* fall through to the literal ref */ }
+  return 'HEAD';
+}
+
 export interface CreateManagedWorktreeArgs {
   execFile: ExecFileFn;
   /** MAIN repo root (from {@link resolveRepoContext}). */
@@ -214,7 +244,7 @@ export async function createIsolatedWorktree(args: {
   cwd: string;
   /** Raw slug hint (sanitized here); e.g. `iso-agent-tool-3-a1b2c3`. */
   slugHint: string;
-  /** Base ref for the branch. Default `HEAD`. */
+  /** Base ref for the branch. Default: HEAD of `cwd`'s checkout (#760). */
   baseRef?: string;
 }): Promise<ManagedWorktreeInfo & { repoRoot: string }> {
   const execFile = args.execFile ?? defaultExecFile;
@@ -223,7 +253,8 @@ export async function createIsolatedWorktree(args: {
   const worktreePath = join(ctx.afkWorktreesRoot, slug);
   const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
   const branch = `${prefix}${slug}`;
-  const baseRef = args.baseRef ?? 'HEAD';
+  // Default base is the ANCHOR's HEAD (args.cwd), not the main checkout's (#760).
+  const baseRef = args.baseRef ?? await resolveAnchorBaseRef(execFile, args.cwd);
   // Invariant: isolation:"worktree" fans out SEVERAL parallel dispatches, each
   // running `git worktree add` against the SAME main repo — which serializes on
   // the repo/index lock. A burst can transiently fail with a lock error, so we

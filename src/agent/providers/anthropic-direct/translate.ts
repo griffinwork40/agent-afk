@@ -127,10 +127,19 @@ function buildTurnResult(
  * - On stream throw or inline `error`-typed event, yields a final
  *   `{kind: 'event', event: {type: 'error', ...}}` and returns. Does NOT
  *   re-throw and does NOT emit a turn-result after an error.
+ *
+ * @param onRawProgress — optional callback invoked for every `content_block_delta`
+ *   that this translator consumes WITHOUT yielding anything (`input_json_delta`,
+ *   `signature_delta`, `citations_delta`, unknown delta kinds). Those spans are
+ *   real provider output but invisible to a consumer watching only the yielded
+ *   stream, so a caller enforcing a silence bound needs them; see the invariant
+ *   at the `content_block_delta` case below. Deliberately NOT called for pings
+ *   or unknown top-level frames — a keep-alive is not progress.
  */
 export async function* translateMessageStream(
   events: AsyncIterable<RawMessageStreamEvent>,
   ctx: TranslateCtx,
+  onRawProgress?: () => void,
 ): AsyncIterable<TranslateOutput> {
   const blocks: Array<BlockAcc | undefined> = [];
   let stopReason: string | null = null;
@@ -189,6 +198,16 @@ export async function* translateMessageStream(
           break;
         }
 
+        // Invariant: every branch below either YIELDS a translated event or
+        // calls `onRawProgress` — never neither. A consumer bounding silence
+        // (the post-first-byte stall watchdog, #762/#763) resets its window on
+        // observable progress, and a content delta IS progress even when it
+        // produces no visible event. `input_json_delta` in particular streams
+        // an entire tool-call argument payload while yielding nothing between
+        // `tool.use.start` and `tool.use`, so a large argument emission would
+        // otherwise read as dead air and be aborted as a stall. Pings and
+        // unknown top-level frames stay excluded on purpose: a wedged stream
+        // that emits only keep-alives must still fire the watchdog.
         case 'content_block_delta': {
           const acc = blocks[evt.index];
           const delta = evt.delta;
@@ -208,6 +227,7 @@ export async function* translateMessageStream(
             if (acc && acc.kind === 'tool_use') {
               acc.partialJson += delta.partial_json;
             }
+            onRawProgress?.();
           } else if (delta.type === 'thinking_delta') {
             if (acc && acc.kind === 'thinking') {
               acc.thinking += delta.thinking;
@@ -224,8 +244,12 @@ export async function* translateMessageStream(
             if (acc && acc.kind === 'thinking') {
               acc.signature = delta.signature;
             }
+            onRawProgress?.();
+          } else {
+            // citations_delta and unknown delta kinds: no translated event, but
+            // still provider output — count it as progress, never as silence.
+            onRawProgress?.();
           }
-          // citations_delta and unknown delta kinds: ignore silently.
           break;
         }
 

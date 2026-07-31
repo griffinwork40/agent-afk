@@ -28,6 +28,7 @@ export {
   buildRuntimeSnapshot,
   parseView,
   formatEnvironmentFragment,
+  formatEnvironmentDateLine,
 } from './runtime-snapshot.js';
 
 export {

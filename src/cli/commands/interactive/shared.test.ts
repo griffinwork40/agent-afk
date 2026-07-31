@@ -390,40 +390,54 @@ describe('formatStatusFields — subscription-quota segment', () => {
   it('omits the quota field entirely when no headers have been observed', () => {
     // Permanent state under API-key auth — must be absent, not a placeholder.
     const fields = formatStatusFields(makeStats([]));
-    expect('quota' in fields).toBe(false);
+    expect('quotaWindows' in fields).toBe(false);
   });
 
-  it('renders both windows as rounded percentages', () => {
+  it('forwards both windows as raw 0..1 fractions, not pre-formatted text', () => {
+    // The adapter must NOT format: `quota-indicator.ts` owns tone, countdown and
+    // staleness so the status line can grade droppability from the same severity
+    // it renders with.
     recordQuotaSnapshot({
       fiveHourUtilization: 0.62,
       sevenDayUtilization: 0.31,
       observedAt: new Date(),
     });
-    expect(formatStatusFields(makeStats([])).quota).toBe('5h 62% · 7d 31%');
+    const windows = formatStatusFields(makeStats([])).quotaWindows;
+    expect(windows?.fiveHour?.utilization).toBe(0.62);
+    expect(windows?.sevenDay?.utilization).toBe(0.31);
   });
 
-  it('renders only the 5h window when the 7d window is absent', () => {
+  it('forwards the reset deadlines and the observation time verbatim', () => {
+    // Regression guard: these three fields were parsed by the cache but read by
+    // nothing for the segment's whole first life. The countdown and the stale
+    // marker both depend on them surviving the hand-off.
+    const fiveHourResetsAt = new Date('2026-07-29T17:00:00Z');
+    const sevenDayResetsAt = new Date('2026-08-02T09:00:00Z');
+    const observedAt = new Date('2026-07-29T12:00:00Z');
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.62,
+      fiveHourResetsAt,
+      sevenDayUtilization: 0.31,
+      sevenDayResetsAt,
+      observedAt,
+    });
+    const windows = formatStatusFields(makeStats([])).quotaWindows;
+    expect(windows?.fiveHour?.resetsAt).toBe(fiveHourResetsAt);
+    expect(windows?.sevenDay?.resetsAt).toBe(sevenDayResetsAt);
+    expect(windows?.observedAt).toBe(observedAt);
+  });
+
+  it('carries only the 5h window when the 7d window is absent', () => {
     recordQuotaSnapshot({ fiveHourUtilization: 0.05, observedAt: new Date() });
-    expect(formatStatusFields(makeStats([])).quota).toBe('5h 5%');
+    const windows = formatStatusFields(makeStats([])).quotaWindows;
+    expect(windows?.fiveHour?.utilization).toBe(0.05);
+    expect(windows?.sevenDay).toBeUndefined();
   });
 
-  it('renders only the 7d window when the 5h window is absent', () => {
+  it('carries only the 7d window when the 5h window is absent', () => {
     recordQuotaSnapshot({ sevenDayUtilization: 0.5, observedAt: new Date() });
-    expect(formatStatusFields(makeStats([])).quota).toBe('7d 50%');
-  });
-
-  it('treats utilization as a 0..1 fraction, never as an already-scaled percent', () => {
-    // Units regression guard: the same class of bug as rendering a fraction as
-    // if it were a percentage. 0.62 must be 62% — not 0% and not 6200%.
-    recordQuotaSnapshot({ fiveHourUtilization: 0.62, observedAt: new Date() });
-    const quota = formatStatusFields(makeStats([])).quota;
-    expect(quota).toContain('62%');
-    expect(quota).not.toContain('6200');
-    expect(quota).not.toContain('0%');
-  });
-
-  it('rounds to the nearest whole percent', () => {
-    recordQuotaSnapshot({ fiveHourUtilization: 0.626, observedAt: new Date() });
-    expect(formatStatusFields(makeStats([])).quota).toBe('5h 63%');
+    const windows = formatStatusFields(makeStats([])).quotaWindows;
+    expect(windows?.sevenDay?.utilization).toBe(0.5);
+    expect(windows?.fiveHour).toBeUndefined();
   });
 });

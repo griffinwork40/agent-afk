@@ -22,7 +22,8 @@
 
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.js';
-import { retryFetch } from './retryFetch.js';
+import { assertEgressAllowed, guardedFetch, EgressBlockedError } from './egress-guard.js';
+import type { EgressGuardOptions } from './egress-guard.js';
 import { debugLog } from '../utils/debug.js';
 
 /** Content-types we treat as HTML (run the extraction pipeline). */
@@ -54,6 +55,12 @@ export interface ScrapeOptions {
   timeoutMs: number;
   /** Combined parent+timeout signal. Aborting cancels fetch and render. */
   signal: AbortSignal;
+  /**
+   * Override for tests: DNS resolution used by the SSRF egress guard. Defaults
+   * (inside the guard) to `dns/promises.lookup`. Injecting it keeps unit tests
+   * off the network, matching the `fetchFn` / `renderFn` seams above.
+   */
+  lookupFn?: EgressGuardOptions['lookupFn'];
 }
 
 export interface ScrapeResult {
@@ -82,11 +89,16 @@ async function safeExtract(html: string, url: string): Promise<ExtractedContent>
  */
 async function renderViaBrowser(
   url: string,
-  opts: { timeoutMs: number; signal: AbortSignal },
+  opts: { timeoutMs: number; signal: AbortSignal; requestGuard?: (url: string) => Promise<void> },
 ): Promise<RenderedPage> {
   const { getBrowserProvider } = await import('../browser/registry.js');
   const provider = await getBrowserProvider();
-  return provider.render({ url, timeoutMs: opts.timeoutMs, signal: opts.signal });
+  return provider.render({
+    url,
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
+    requestGuard: opts.requestGuard,
+  });
 }
 
 /**
@@ -99,6 +111,8 @@ async function renderViaBrowser(
 export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promise<ScrapeResult> {
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
   const renderFn = opts.renderFn ?? renderViaBrowser;
+  const guardOpts: EgressGuardOptions =
+    opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {};
 
   // ---- Phase 1: plain fetch -------------------------------------------------
   let fetched: ExtractedContent | null = null;
@@ -107,13 +121,15 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   let fetchErr: unknown = null;
 
   try {
-    // retryFetch survives transient 429/5xx + network blips (idempotent GET)
-    // before we fall through to render escalation.
-    const res = await retryFetch(fetchFn, url, {
-      headers: FETCH_HEADERS,
-      redirect: 'follow',
-      signal: opts.signal,
-    });
+    // guardedFetch = retryFetch (transient 429/5xx + network blips on an
+    // idempotent GET) wrapped in the SSRF egress guard, which forces
+    // redirect:'manual' so every hop is re-validated (issue #575).
+    const res = await guardedFetch(
+      fetchFn,
+      url,
+      { headers: FETCH_HEADERS, signal: opts.signal },
+      guardOpts,
+    );
     fetchStatus = res.status;
     fetchedUrl = res.url || url;
     const contentType = res.headers.get('content-type') ?? '';
@@ -142,6 +158,12 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   } catch (err) {
     // Abort is terminal — propagate so the handler reports cancellation.
     if (opts.signal.aborted) throw err;
+    // Invariant: an egress refusal is TERMINAL and must never fall through to
+    // the render escalation. The headless render is a second, independent
+    // egress path (chromium does its own DNS + redirect handling), so degrading
+    // to it would hand an attacker exactly the internal fetch the guard just
+    // refused. Re-throw before any escalation decision (issue #575).
+    if (err instanceof EgressBlockedError) throw err;
     // A thrown binary-content error must surface, not silently escalate.
     if (err instanceof Error && err.message.startsWith('web_scrape markdown mode received binary')) {
       throw err;
@@ -163,7 +185,24 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
 
   // ---- Phase 3: render escalation -------------------------------------------
   try {
-    const rendered = await renderFn(url, { timeoutMs: opts.timeoutMs, signal: opts.signal });
+    // Invariant: the render escalation is a SECOND egress path — chromium does
+    // its own DNS resolution and follows redirects internally, so the
+    // plain-fetch guard above does not cover it. Validate before navigating,
+    // then re-validate `finalUrl` after, because an in-browser redirect chain is
+    // opaque to us (same pre/post pattern `act()` uses for the domain policy).
+    await assertEgressAllowed(url, guardOpts);
+    const rendered = await renderFn(url, {
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+      requestGuard: (requestUrl) => assertEgressAllowed(requestUrl, guardOpts),
+    });
+    // Only re-check a finalUrl that actually MOVED to another http(s) target:
+    // the pre-check already cleared `url`, and a non-http landing spot
+    // (`about:blank`, a stubbed empty string) names no egress target to
+    // classify — treating those as refusals would break benign renders.
+    if (rendered.finalUrl !== url && /^https?:\/\//i.test(rendered.finalUrl)) {
+      await assertEgressAllowed(rendered.finalUrl, guardOpts);
+    }
     const renderedContent = await safeExtract(rendered.html, rendered.finalUrl);
     // Same async-boundary abort re-check as the fetch path above: extraction
     // does not observe the signal, so honor a cancel/timeout that landed during
@@ -181,6 +220,10 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   } catch (renderErr) {
     // Abort during render is terminal.
     if (opts.signal.aborted) throw renderErr;
+    // An egress refusal on the render path is terminal too: degrading to thin
+    // fetched content here would report partial success for a request the guard
+    // refused, hiding the block from the caller.
+    if (renderErr instanceof EgressBlockedError) throw renderErr;
     // Render failed (e.g. Playwright not installed). If we have *some* fetched
     // content, degrade gracefully to it. If a missing-Playwright error is the
     // only signal AND we have nothing, re-throw it so the handler can hint.
