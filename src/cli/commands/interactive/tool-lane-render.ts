@@ -309,6 +309,10 @@ export {
   formatAgentSummary,
   formatAgentHeader,
   formatAgentChildren,
+} from './tool-lane-render-agent.js';
+
+// Re-export from grouped-root module
+export {
   renderGroupedRootTools,
   formatGroupedToolResults,
-} from './tool-lane-render-agent.js';
+} from './tool-lane-render-grouped-root.js';

@@ -259,4 +259,53 @@ describe('runTurn TTFB stall timeout (#583)', () => {
     expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(0);
   });
+  // A TTFB re-drive must be legible in the trace as ITS OWN phase. Before the
+  // split it emitted `rate_limit`, making a self-inflicted 180s stall
+  // indistinguishable from provider throttling (the same phase the SDK's real
+  // 429/503 backoff uses) — 5 such stalls in one pre-flight were misread that
+  // way. `metadata.reason` stays 'ttfb-timeout' for pre-split analyses.
+  it('emits a ttfb_timeout session_phase — not rate_limit — on the re-drive', async () => {
+    process.env[KEY] = '180000';
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+    let callCount = 0;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn((_params: unknown, opts: unknown) => {
+          callCount++;
+          const signal = (opts as { signal: AbortSignal }).signal;
+          return callCount === 1
+            ? postHeaderStallStream(signal)
+            : fromArray(makeTextStream('recovered'));
+        }),
+      },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {},
+        signal: new AbortController().signal, ctx, traceWriter: writer,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(DEFAULT_MODEL_TTFB_TIMEOUT_MS + 1_000);
+    await resultPromise;
+
+    const phases = writer.events.filter((e) => e.kind === 'session_phase');
+    const ttfbStalls = phases.filter(
+      (e) => (e.payload as { phase: string }).phase === 'ttfb_timeout',
+    );
+    expect(ttfbStalls).toHaveLength(1);
+    const payload = ttfbStalls[0]!.payload as {
+      durationMs?: number;
+      metadata?: Record<string, unknown>;
+    };
+    // The dead wait is recorded, and the legacy reason tag is preserved.
+    expect(payload.durationMs).toBeGreaterThanOrEqual(DEFAULT_MODEL_TTFB_TIMEOUT_MS);
+    expect(payload.metadata?.['reason']).toBe('ttfb-timeout');
+    // The conflated phase is gone: no rate_limit was emitted for OUR watchdog.
+    expect(
+      phases.filter((e) => (e.payload as { phase: string }).phase === 'rate_limit'),
+    ).toHaveLength(0);
+  });
 });

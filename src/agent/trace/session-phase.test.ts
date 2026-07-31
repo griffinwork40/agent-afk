@@ -257,6 +257,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     model_ttfb: true,
     interrupt_halt: true,
     rate_limit: true,
+    ttfb_timeout: true,
     usage_limit_pause: true,
     usage_limit_resume: true,
     idle_watchdog_fired: true,

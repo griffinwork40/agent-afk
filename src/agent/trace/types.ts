@@ -687,6 +687,15 @@ export type SessionPhaseName =
   // turns and on a session `close()` (only a user/turn interrupt qualifies).
   | 'interrupt_halt'
   | 'rate_limit'
+  // Client-side time-to-first-byte watchdog re-drive: OUR timer fired because no
+  // content token arrived within `AFK_MODEL_TTFB_TIMEOUT_MS` (default 180s), so
+  // the request was aborted and re-driven once. Deliberately NOT `rate_limit`:
+  // nothing throttled us and there is no server retry-after — conflating the two
+  // made a self-inflicted 3-minute stall read as provider throttling in every
+  // trace (5 such stalls in one `/ground-state` pre-flight were misattributed
+  // this way). `durationMs` is the dead wait before the abort; metadata keeps
+  // `reason: 'ttfb-timeout'` so pre-split analyses still match.
+  | 'ttfb_timeout'
   // OAuth subscription usage-limit park/unpark. Unlike `rate_limit` (a short,
   // bounded retry-after backoff), these bracket a potentially multi-HOUR pause
   // while the turn waits for the subscription window to reset (or a keychain

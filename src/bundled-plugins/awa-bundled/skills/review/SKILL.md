@@ -44,16 +44,22 @@ Never fabricate intent. When none is available the value is the literal `(none s
 
 **Triage (inline).** From the resolved diff extract: change type (hotfix | feature | refactor | dep-bump | new-service), files changed, total lines changed, summary. Classify regime: `light` if ≤300 lines or change type is hotfix/dep-bump; `full` otherwise.
 
+**Concurrency floor — declared, conditional, and enforced.** *Through synthesis*, a full-regime review peaks at **2 concurrent sub-agent sessions** (Wave 1's two dimension agents) and dispatches **3 in total** (Wave 1 ×2, then Wave 2 ×1, sequential). Wave 1.5 runs inline in the orchestrator and dispatches nothing. **No wave nests a child**: the sub-agents are shell-less by design, and nothing in this skill requires them to run a command, so none of them needs to nest a `git-investigator` to comply. If you add a requirement here that needs a shell, you have silently doubled this floor — put that requirement in Wave 1.5 instead.
+
+**The post-synthesis tail is the conditional half of that budget.** A review that surfaces a `critical`/`high` finding invokes `/shadow-verify` (see **Post-synthesis** below), which dispatches one verifier per claim in parallel — so the whole-run budget is **peak 3 concurrent, 5–6 total**, and it lands on exactly the high-stakes reviews most likely to hit a rate ceiling. Bound it: **at most 3 claims in a single round, no repeat rounds**, and hand the verifiers Wave 1.5's manifest so each re-derives the *claim* instead of re-locating evidence Wave 1.5 already pinned at the ref. Wave 1.5 verifies that a citation is real; shadow-verify re-derives whether the inference drawn from it holds — never substitute one for the other.
+
 **Wave 1 — Full review (regime=full, 2 parallel agents, `subagent_type: "research-agent"`).** Dispatch:
 - **security · api-compat** — contracts, auth, injection, breaking changes, secret exposure.
 - **correctness · spec-compliance · test-coverage · perf-observability** — logic bugs, regressions, whether the change satisfies its **stated intent** (unmet requirement or unrequested scope creep), missing tests, hot-path perf, logging gaps.
 
 Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA)** + the **stated intent** (what the change is meant to accomplish, or `(none supplied)`), the severity rubric, and the finding schema.
 
-**Citation requirement (enforced per agent):** Before quoting any line in a `blocking` or `high/critical` finding, the agent MUST read that exact line from the branch HEAD using `git show <reviewed-ref>:<file>` (or `gh api /repos/{owner}/{repo}/contents/{path}?ref=<sha>` if outside a git context). The agent must:
-1. State the ref it read from in each finding: `ref: <sha>`.
-2. Distinguish `diff-context` citations (line visible in the diff hunk, no re-read required) from `file-state` citations (line in the post-merge file, re-read required before quoting).
-3. If the line does not exist at that ref, omit the finding entirely — do not paraphrase or reconstruct from memory.
+**Citation requirement (enforced per agent).** Wave 1 agents cite from the diff and from file reads available in their own session. They do **not** run git and do **not** re-read at the reviewed ref — that verification is centralized in Wave 1.5 below, which re-reads every `blocking`/`critical`/`high` citation **and every `file-state` citation at any severity** at the ref, then drops the fabricated ones. Each agent must:
+1. State the reviewed ref it was given in each finding: `ref: <sha>`.
+2. Classify every citation as `diff-context` (line visible in the diff hunk) or `file-state` (line in the post-merge file, not visible in the hunk). Tag every `file-state` citation `[UNVERIFIED: not re-read]` so Wave 1.5 knows to check it — a Wave 1 `Read` observes the **working tree**, which equals the reviewed ref only when that ref is the checked-out HEAD, so for a PR, branch, or commit target that is not checked out locally the tag is load-bearing, not decorative.
+3. Never paraphrase or reconstruct a line from memory. If the line is not visible in the diff, cite it as `file-state` and let Wave 1.5 resolve it — do not invent the content.
+
+**Invariant — why Wave 1 does not run git.** `research-agent` has no shell (`tools: Read, Grep, Glob, WebFetch, WebSearch, Agent(git-investigator)` — no `Bash`, and that single `Agent(...)` entry is the nesting path this rule closes), so a mandatory `git show` forces it to dispatch a nested `git-investigator` purely to run one command. That doubles the concurrent session count of *every* Wave 1 agent, and is the structural cause of the rate-limit cascade in #726. Ref-anchored verification is therefore performed once, centrally, by a shell-capable actor — never N times by shell-less ones. Do not reintroduce a per-agent re-read here.
 
 Banned words: "ensure", "consider", "may", "could". No `file:line` citation → omit the finding.
 
@@ -62,14 +68,14 @@ Banned words: "ensure", "consider", "may", "could". No `file:line` citation → 
 - `stated-intent` is `(none supplied)` → do **not** assess spec-compliance and do **not** substitute the global constraints for the spec. Emit exactly one line: `unverified — spec-compliance not assessed: no stated intent supplied (pass --brief/--spec, or review a PR/commit)`. Silently treating the diff or the constraints as "the spec" is the precise failure this rule prevents.
 
 **api-compat reachability pre-check (mandatory before surfacing any breaking-change finding).**
-For every symbol flagged as a breaking change, grep production source files (exclude `*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `/test/`, `/tests/`) for imports or usages of that symbol. Decision table:
+For every symbol flagged as a breaking change, search production source files with the `Grep` tool — which needs no shell, so this check never forces a nested dispatch — for imports or usages of that symbol, excluding `*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `/test/`, `/tests/`. Decision table:
 - Zero production importers → downgrade finding to `nit`, append `[UNVERIFIED: no production importers]`, set confidence `low`.
 - One or more production importers → severity stands; include one importer path as evidence.
 
-If grep tooling is unavailable, tag the finding `[UNVERIFIED: reachability not checked]` and downgrade one severity tier.
+If the `Grep` tool is unavailable, tag the finding `[UNVERIFIED: reachability not checked]` and downgrade one severity tier.
 
-**Absence-claim grounding (mandatory for any claim that something does not exist).** Before emitting a finding of the form "no test covers X", "no handler validates Y", "no caller invokes Z", "X is not tested": grep the production tree (`rg --no-heading -n <pattern>` or `git grep -n <pattern>`) for plausible match strings. Decision table:
-- Zero matches → finding stands; cite the grep command in the evidence field.
+**Absence-claim grounding (mandatory for any claim that something does not exist).** Before emitting a finding of the form "no test covers X", "no handler validates Y", "no caller invokes Z", "X is not tested": search the production tree with the `Grep` tool — which needs no shell, so this check never forces a nested dispatch — for plausible match strings. Decision table:
+- Zero matches → finding stands; cite the search pattern in the evidence field.
 - One or more matches → emit `unverified — absence claim refuted by <path>:<line>` instead of the finding.
 - Grep tooling unavailable or claim cannot be reduced to a pattern → tag finding `[UNVERIFIED: absence not checked]` and downgrade one severity tier.
 
@@ -77,14 +83,14 @@ This is the agent's first-line self-check; **Wave 1.5 Check B** independently re
 
 **Wave 1 — Light review (regime=light, 1 agent, `subagent_type: "research-agent"`).** Single agent covers all dimensions (including spec-compliance). Same `stated-intent` input, rubric, schema, and citation requirement.
 
-**Wave 1.5 — Citation + absence-claim verification (1 agent, `subagent_type: "research-agent"`).** Run after Wave 1 returns, before Wave 2 synthesis. This agent performs two independent checks.
+**Wave 1.5 — Citation + absence-claim verification (INLINE — run by the orchestrator, dispatches nothing).** Run after Wave 1 returns, before Wave 2 synthesis. The orchestrator already holds exactly the read-only shell this verification needs (`git show` / `git diff` / `gh pr diff` / `grep` / `rg` — see the shell grant above), so running it inline costs **zero** additional sessions and zero nesting. A shell-less sub-agent here would have to nest a `git-investigator` to run the very commands the orchestrator can already run. Two independent checks:
 
-**Check A — Citation verification.** Extracts every `file:line` citation from any `blocking`, `critical`, or `high` finding across all Wave 1 results. For each citation, runs `git show <reviewed-ref>:<file>` (or equivalent) and checks whether the quoted evidence snippet actually appears at that line in the reviewed ref — not in main, not in diff context alone. Classifies each citation as:
+**Check A — Citation verification.** Extracts (a) every `file:line` citation from any `blocking`, `critical`, or `high` finding, **and (b) every citation tagged `file-state` at any severity** — `medium`, `low`, and `nit` included — across all Wave 1 results. Both sets are checked, because Wave 1 never re-reads at the ref: an unverified `file-state` citation in a `low` finding is exactly as fabricable as one in a `high` finding, and quoting a line absent from the reviewed change is a defect at every tier. For each citation, runs `git show <reviewed-ref>:<file>` (or equivalent) and checks whether the quoted evidence snippet actually appears at that line in the reviewed ref — not in main, not in diff context alone. Classifies each citation as:
 - `verified` — content matches what is actually at that line on the reviewed ref.
 - `diff-only` — line appears in the diff hunk but no longer exists at the reviewed ref HEAD (e.g., deleted block). Finding must be downgraded: the issue may already be resolved.
 - `fabricated` — line does not exist at the reviewed ref and was not in the diff hunk; the evidence snippet is unverifiable. Finding is **dropped** from the report.
 
-**Check B — Absence-claim verification.** Extracts every **absence claim** from blocking/critical/high findings — claims of the form "no test covers X", "no handler validates Y", "no caller invokes Z", "X is not tested", "Y has no validation". Citations are not required for absence claims, so Check A cannot catch them; they need their own gate. For each, identify the asserted-absent symbol, test name, or behavior, then run `git grep -n <pattern> <reviewed-ref>` (or `rg --no-heading -n <pattern>` if outside a git context) across the production tree (exclude the same paths as the api-compat reachability check: tests, mocks, fixtures, when the claim is about production code). Classify as:
+**Check B — Absence-claim verification.** Extracts every **absence claim** across all Wave 1 results **at any severity** — `medium`, `low`, and `nit` included, for the same reason Check A checks every `file-state` citation: Wave 1's absence grounding is a self-check by an agent that never re-read at the ref, so an unverified absence claim in a `low` finding is exactly as fabricable as one in a `high` finding. These are claims of the form "no test covers X", "no handler validates Y", "no caller invokes Z", "X is not tested", "Y has no validation". Citations are not required for absence claims, so Check A cannot catch them; they need their own gate. For each, identify the asserted-absent symbol, test name, or behavior, then run `git grep -n <pattern> <reviewed-ref>` (or `rg --no-heading -n <pattern>` if outside a git context) across the production tree (exclude the same paths as the api-compat reachability check: tests, mocks, fixtures, when the claim is about production code). Classify as:
 - `confirmed-absent` — zero matches in the asserted scope; finding stands.
 - `false-absent` — one or more matches in the asserted scope; finding is **dropped** (the asserted-absent entity exists at the reviewed ref). Name the matching path(s) in the dropped-findings manifest.
 - `grep-unavailable` — tooling missing, symbol ambiguous, or absence claim cannot be reduced to a grep pattern; finding tagged `[UNVERIFIED: absence not checked]` and downgraded one severity tier.
@@ -106,12 +112,12 @@ Sort overall: critical → high → medium → low → nit; security first withi
 
 Confidence `low` → auto-downgrade one tier + append `[low confidence — verify with runtime context]`.
 
-**Output per dimension:** if you have read the file(s) at the reviewed ref and have either real findings or a confirmed clean read, emit findings or `no issues found — read <file> at <ref>`. If evidence is insufficient — you could not read the file, the tool was unavailable, no production importers were found for the symbol, or no test file exists at the asserted path — emit `unverified — <reason>` naming the missing evidence rather than invent a finding to fill the slot. Banned words from the hedging list (`ensure`, `consider`, `may`, `could`) remain banned **inside findings**; the `unverified` channel is the sanctioned path for uncertainty.
+**Output per dimension:** if you have read the relevant file(s) and have either real findings or a confirmed clean read, emit findings or `no issues found — read <file>`. If evidence is insufficient — you could not read the file, the tool was unavailable, no production importers were found for the symbol, or no test file exists at the asserted path — emit `unverified — <reason>` naming the missing evidence rather than invent a finding to fill the slot. Banned words from the hedging list (`ensure`, `consider`, `may`, `could`) remain banned **inside findings**; the `unverified` channel is the sanctioned path for uncertainty.
 
 **Finding schema:** `severity · confidence · dimension · file:line_range · ref:<sha> · citation-type:(diff-context|file-state) · finding (one concrete sentence naming the failure mode) · evidence (verbatim code ≤4 lines) · suggestion (one concrete fix)`.
 
 **Epistemic scope disclosure (required in synthesis output).** The "What was not checked" section must include:
-- Which ref(s) Wave 1 agents actually read from (list the SHA or `unknown` if patch-file input). Example: `Read against branch HEAD abc1234 — citations verified at that ref.`
+- Which ref citations were verified against in Wave 1.5 (list the SHA or `unknown` if patch-file input). Example: `Citations verified inline against branch HEAD abc1234.`
 - If any citations could not be verified against a live ref (patch-file input): `Citation verification skipped — no live ref available; diff-context citations only.`
 - Any topical gaps (e.g. 'did not review Telegram surface', 'did not run tests').
 - Whether a **stated intent** was available and spec-compliance was assessed. Example: `Stated intent: PR #123 title+body — spec-compliance assessed.` or `Stated intent: (none supplied) — spec-compliance not assessed.`
