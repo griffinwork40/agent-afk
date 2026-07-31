@@ -146,8 +146,8 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
 
 /**
  * Home-relative files that sit INSIDE a denied directory but are deliberately
- * readable. Matched as EXACT files (never as a prefix), so `mcp.json.bak` and
- * `mcp.json/<child>` stay denied.
+ * readable. Matched as EXACT files (never as a prefix), so `mcp.json.bak`,
+ * `mcp.json/<child>`, `config.bak`, and `known_hosts.old` stay denied.
  *
  * `~/.afk/config/mcp.json` is the MCP server REGISTRY, not a credential store:
  * its `env` / `headers` values are documented to hold `${VAR}` placeholders
@@ -161,11 +161,26 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
  * `AFK_READ_DENYLIST=~/.afk/config/mcp.json` — see the ordering invariant in
  * {@link isReadDenied}.
  *
+ * `~/.ssh/config` and `~/.ssh/known_hosts` sit inside the whole-dir `~/.ssh`
+ * floor (which stays — SSH private keys have ARBITRARY names like `github_key`,
+ * so a key-name glob would fail-open). These two files are well-known
+ * non-secret siblings the agent legitimately needs for git/ssh host-alias
+ * work: `config` carries host aliases (IdentityFile PATHS, not key material),
+ * `known_hosts` is the trusted-host list. Neither is a private key. They are
+ * carved out as EXACT files so `~/.ssh/id_*`, `~/.ssh/config.bak`, and any
+ * other sibling stay denied. Operators who consider either sensitive in their
+ * environment can re-deny explicitly with
+ * `AFK_READ_DENYLIST=~/.ssh/config` (extras outrank the exception).
+ *
  * Kept home-RELATIVE so the REPL `@`-file injector
  * (`cli/commands/interactive/at-file-inject.ts`), which resolves against an
  * injectable home, shares this one list instead of duplicating it.
  */
-export const READ_ALLOWLIST_REL: readonly string[] = ['.afk/config/mcp.json'];
+export const READ_ALLOWLIST_REL: readonly string[] = [
+  '.afk/config/mcp.json',
+  '.ssh/config',
+  '.ssh/known_hosts',
+];
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
