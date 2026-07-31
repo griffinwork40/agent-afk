@@ -61,6 +61,18 @@ export interface SubagentDAGNode {
    * `AgentConfig.apiKey`.
    */
   apiKey?: string;
+  /**
+   * Per-node cap on tool-use ROUNDS within the node's turn. Forwarded into the
+   * fork config as `AgentConfig.maxToolUseIterations`, where the provider loop
+   * spends the budget and then runs one tools-stripped wind-down round (see
+   * providers/shared/tool-loop-cap.ts) so a capped node still returns a real
+   * answer instead of being cut off mid-round. Omit to inherit
+   * `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS`; `0` opts into unbounded.
+   * Passing `0` disables the anti-hang cap entirely — it does not request the
+   * default. The compose tool's input schema rejects `0` outright, so the two
+   * layers disagree deliberately.
+   */
+  maxToolUseIterations?: number;
 }
 
 export interface SubagentDAGOptions {
@@ -96,6 +108,9 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
           ...(spec.readRoots !== undefined ? { readRoots: spec.readRoots } : {}),
           ...(spec.writeRoots !== undefined ? { writeRoots: spec.writeRoots } : {}),
           ...(spec.apiKey !== undefined ? { apiKey: spec.apiKey } : {}),
+          ...(spec.maxToolUseIterations !== undefined
+            ? { maxToolUseIterations: spec.maxToolUseIterations }
+            : {}),
         },
         idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
         ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),
