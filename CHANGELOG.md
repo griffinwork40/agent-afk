@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.12] - 2026-07-31
+
+### Fixed
+- stop the citation contract forcing a nested git dispatch (#726) (#777) (f94cbe7)
+
 ## [5.82.11] - 2026-07-31
 
 ### Fixed
