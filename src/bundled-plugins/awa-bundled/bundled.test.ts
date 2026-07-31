@@ -85,7 +85,7 @@ const PINNED_HASHES = {
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
   'intent-lock':
-    '026fd98093ffc6daf5884d69206d0dacdc583151a91fd99a784a249062958764',
+    'ecb4477a40c5f7a64b79779e01a6186f834dd3d4dc59c13a5c4e4b12191cf13b',
   // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
@@ -209,6 +209,23 @@ describe('bundled skills', () => {
         .sort();
       const registered = [...SKILLS].sort();
       expect(entries).toEqual(registered);
+    });
+
+    it('intent-lock preserves all signal classes and reconstructed-goal lock', () => {
+      const content = readBundled('intent-lock');
+      for (const heading of [
+        '**Ambiguous referents**',
+        '**Unverified characterizations**',
+        '**Identity assumptions**',
+        '**Code-vs-runtime dual referent**',
+        '**No task statement at all**',
+      ]) {
+        expect(content).toContain(heading);
+      }
+      expect(content).toContain('**Lock format (reconstructed goal):**');
+      expect(content).toContain(
+        '> Reading [fragment] as: [reconstructed task statement] (from [evidence]).',
+      );
     });
 
     // Invariant: #726 — Wave 1 of /review dispatches `research-agent`, which has
