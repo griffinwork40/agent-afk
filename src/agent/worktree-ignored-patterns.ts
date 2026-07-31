@@ -113,6 +113,17 @@ const INSPECTABLE_REBUILDABLE_DIRS: readonly RegExp[] = [
 /**
  * Individual ignored FILES a rebuild restores.
  *
+ * Invariant: every entry is matched against the final path segment ONLY (see
+ * `classifyIgnoredEntry`), so each is anchored to a bare filename and never to
+ * a path. Depth must not change the verdict for a machine-generated name.
+ * Mixing anchoring styles here is what broke that: four entries were `^`-only
+ * while the log emitters used `(?:^|\/)`, and the table was tested against the
+ * whole path — so a nested `src/.DS_Store` matched nothing, fell through to
+ * `protected`, and made the worktree permanently unreachable by the automatic
+ * sweep, while the identical filename at the repo root was reaped. The
+ * directory tables above are the deliberate opposite: they match the whole
+ * path, because a directory pattern is only meaningful as a prefix.
+ *
  * The log entries are deliberately an emitter allowlist rather than a bare
  * `/\.log$/`: that suffix matched every ignored `*.log`, so a captured agent
  * transcript or a hand-kept `decisions.log` was classified as build noise and
@@ -121,6 +132,7 @@ const INSPECTABLE_REBUILDABLE_DIRS: readonly RegExp[] = [
 const REBUILDABLE_FILE_PATTERNS: readonly RegExp[] = [
   // AFK owns and recreates this bookkeeping marker.
   /^\.afk-worktree-meta\.json$/,
+  // Deliberately unanchored at the front: the leaf is `<project>.tsbuildinfo`.
   /\.tsbuildinfo$/,
   /^\.eslintcache$/,
   /^\.stylelintcache$/,
@@ -128,12 +140,12 @@ const REBUILDABLE_FILE_PATTERNS: readonly RegExp[] = [
   // No `Thumbs.db` entry: `/\.db$/` above is sensitive and tested first, so it
   // is already protected and a rebuildable entry here would be unreachable.
   // Known log emitters only.
-  /(?:^|\/)debug\.log$/,
-  /(?:^|\/)npm-debug\.log$/,
-  /(?:^|\/)yarn-error\.log$/,
-  /(?:^|\/)yarn-debug\.log$/,
-  /(?:^|\/)pnpm-debug\.log$/,
-  /(?:^|\/)lerna-debug\.log$/,
+  /^debug\.log$/,
+  /^npm-debug\.log$/,
+  /^yarn-error\.log$/,
+  /^yarn-debug\.log$/,
+  /^pnpm-debug\.log$/,
+  /^lerna-debug\.log$/,
 ];
 
 /**
@@ -170,12 +182,20 @@ export function isSensitiveLeaf(relPath: string): boolean {
  * Classify one ignored entry. Precedence is deliberate: a sensitive leaf wins
  * over every rebuildable pattern, and anything unrecognised falls through to
  * `protected` so the default answer is always "leave it alone".
+ *
+ * Contract: the file table is tested against the LEAF and the two directory
+ * tables against the WHOLE path. That split is load-bearing in both directions.
+ * A machine-generated filename is rebuildable wherever it sits, so matching it
+ * on the full path made depth decide the verdict. A directory name is only
+ * meaningful as a prefix, so leaf-matching those would classify a bare file
+ * named `dist` as build output — and would collapse the deliberate `logs/`
+ * asymmetry documented above.
  */
 export function classifyIgnoredEntry(relPath: string): IgnoredEntryClass {
   const normalized = normalizeIgnoredPath(relPath);
   if (normalized === '') return 'protected';
   if (isSensitiveLeaf(normalized)) return 'protected';
-  if (REBUILDABLE_FILE_PATTERNS.some((re) => re.test(normalized))) return 'opaque';
+  if (REBUILDABLE_FILE_PATTERNS.some((re) => re.test(leafOf(normalized)))) return 'opaque';
   if (OPAQUE_REBUILDABLE_DIRS.some((re) => re.test(normalized))) return 'opaque';
   if (INSPECTABLE_REBUILDABLE_DIRS.some((re) => re.test(normalized))) return 'inspectable';
   return 'protected';
