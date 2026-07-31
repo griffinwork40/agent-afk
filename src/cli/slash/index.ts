@@ -27,6 +27,7 @@ import { allowDirCmd } from './commands/allow-dir.js';
 import { keysCmd } from './commands/keys.js';
 import { worktreeCmd } from './commands/worktree.js';
 import { reauthCmd } from './commands/reauth.js';
+import { retryCmd } from './commands/retry.js';
 import { transcriptCmd } from './commands/transcript.js';
 import { editorCmd } from './commands/editor.js';
 import { searchCmd } from './commands/search.js';
@@ -58,6 +59,7 @@ export function registerAll(): void {
   register(allowDirCmd);
   register(worktreeCmd);
   register(reauthCmd);
+  register(retryCmd);
   register(transcriptCmd);
   register(editorCmd);
   register(searchCmd);
