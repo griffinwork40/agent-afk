@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.7] - 2026-07-31
+
+### Fixed
+- accept common truthy values for TELEGRAM_VERBOSE (#683) (#802) (29b0903)
+
+### Changed
+- extract two named concerns over the 350-LOC ceiling (#782) (#801) (d7df7ea)
+- add anthropic-direct query.test.ts for subagentId threading (#634) (#803) (49b8afd)
+
 ## [5.83.6] - 2026-07-31
 
 ### Fixed
