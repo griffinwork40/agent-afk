@@ -561,7 +561,10 @@ export const composeTool: AnthropicToolDef = {
           'key. Accepted unchanged for back-compat, but the unit is now ' +
           'tool-use ROUNDS, not individual tool calls, and spending the ' +
           'budget triggers a graceful wind-down rather than cancelling the ' +
-          'node. Setting both keys uses `max_tool_rounds_per_node` and warns.',
+          'node. Setting both keys uses `max_tool_rounds_per_node` and warns. ' +
+          'Because exhaustion no longer hard-stops the node, this key is no ' +
+          'longer a cost or runtime ceiling — it now only marks where ' +
+          'wind-down begins.',
       },
     },
     required: ['nodes'],
