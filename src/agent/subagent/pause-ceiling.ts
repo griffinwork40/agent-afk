@@ -71,6 +71,16 @@ import { describePauseEvent, pauseWindowMs } from './pause-window.js';
 export const SUBAGENT_MAX_PAUSE_EXTENSION_MS = 2 * 60 * 60_000;
 
 /**
+ * Minimum size of a single granted extension. Prevents a pathological re-arm
+ * cadence: without a floor, a deadline landing ~1ms after a pause opens would
+ * grant ~1ms at a time and re-arm the timer millions of times across a long
+ * park. Purely a timer-efficiency guard — it never lets total extension exceed
+ * {@link SUBAGENT_MAX_PAUSE_EXTENSION_MS}, so the finite worst-case bound is
+ * unchanged.
+ */
+const MIN_EXTENSION_GRANT_MS = 1_000;
+
+/**
  * Wall-clock ceiling extender driven exclusively by provider pause signals.
  *
  * ## Semantics: the budget bounds WORKING time, not wall time
@@ -162,12 +172,21 @@ export class PauseAwareCeiling implements TimeoutExtender {
       // The park is over: bank its credit and close it. Banking (rather than
       // discarding) is the point — the time the child spent parked was never
       // working time, so it is owed back even though the pause has ended.
-      this.closedCreditMs += this.openPauseCreditMs();
-      this.pauseStartedAtMs = undefined;
-      this.pauseWindowCapMs = 0;
+      this.closePause();
       return;
     }
     if (event.type !== 'paused' && event.type !== 'rate_limit') return;
+
+    // Self-close an expired pause before recording a new one. `resumed` is
+    // emitted ONLY on the OAuth park path (`retry-layer.ts:415,512`); a
+    // transient `rate_limit` NEVER has a matching `resumed`. Without this, a
+    // rate_limit pause would stay open forever and each later signal would
+    // widen its window by the elapsed gap (`elapsedIntoPause + windowMs`),
+    // crediting ordinary WORKING time 1:1 — e.g. a 5s retry-after seen every
+    // 10 min would credit the full 10 min. A pause is therefore closed as soon
+    // as its OWN reported window has elapsed, so credit can only ever reflect
+    // time the provider actually said it was parked.
+    this.closeExpiredPause();
 
     const windowMs = pauseWindowMs(event);
     if (windowMs === undefined || windowMs <= 0) {
@@ -203,6 +222,25 @@ export class PauseAwareCeiling implements TimeoutExtender {
     return Math.max(0, Math.min(elapsed, this.pauseWindowCapMs));
   }
 
+  /** Bank the open pause's credit and close it. No-op when none is open. */
+  private closePause(): void {
+    if (this.pauseStartedAtMs === undefined) return;
+    this.closedCreditMs += this.openPauseCreditMs();
+    this.pauseStartedAtMs = undefined;
+    this.pauseWindowCapMs = 0;
+  }
+
+  /**
+   * Close the open pause if its provider-reported window has already elapsed.
+   * Keeps an unresumed pause (every `rate_limit`, and an OAuth park whose
+   * `resumed` never arrives) from accruing beyond what the provider stated, and
+   * prevents a later signal from retroactively widening a stale window.
+   */
+  private closeExpiredPause(): void {
+    if (this.pauseStartedAtMs === undefined) return;
+    if (Date.now() - this.pauseStartedAtMs >= this.pauseWindowCapMs) this.closePause();
+  }
+
   /**
    * Called by `withTimeout` when the ceiling deadline is reached. Returns the ms
    * to extend by, or `0` to let the timeout fire.
@@ -222,11 +260,16 @@ export class PauseAwareCeiling implements TimeoutExtender {
     const remainingCapMs = this.maxExtensionMs - this.grantedMs;
     if (!(remainingCapMs > 0)) return 0; // cap exhausted → fire as before
 
+    this.closeExpiredPause();
+
     const totalCreditMs = this.closedCreditMs + this.openPauseCreditMs();
     const uncreditedMs = totalCreditMs - this.grantedMs;
     if (uncreditedMs <= 0) return 0; // no parked time owed → fire as before
 
-    const grantMs = Math.min(uncreditedMs, remainingCapMs);
+    // Floor each grant so a deadline landing a hair after a pause opens cannot
+    // produce a long run of ~1ms re-arms (millions of timer wakeups). Never
+    // exceeds the remaining cap, so the finite worst-case bound is unaffected.
+    const grantMs = Math.min(Math.max(uncreditedMs, MIN_EXTENSION_GRANT_MS), remainingCapMs);
     this.grantedMs += grantMs;
     this.grantCount += 1;
     return grantMs;
@@ -249,8 +292,10 @@ export class PauseAwareCeiling implements TimeoutExtender {
       `last provider pause: ${this.lastPauseDescription}`,
     ];
     if (this.pauseStartedAtMs !== undefined) {
+      const elapsed = Date.now() - this.pauseStartedAtMs;
+      const state = elapsed >= this.pauseWindowCapMs ? 'expired' : 'still open';
       parts.push(
-        `pause still open since ${new Date(this.pauseStartedAtMs).toISOString()} ` +
+        `last pause ${state}, opened ${new Date(this.pauseStartedAtMs).toISOString()} ` +
           `(reported window ${this.pauseWindowCapMs}ms)`,
       );
     }

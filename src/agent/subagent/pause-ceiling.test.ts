@@ -262,6 +262,39 @@ describe('PauseAwareCeiling', () => {
     expect(ceiling.totalGrantedMs).toBe(parkedForMs);
   });
 
+  it('does NOT credit working time when repeated `rate_limit`s never pair with `resumed`', async () => {
+    // Regression: `resumed` is emitted ONLY on the OAuth park path
+    // (`retry-layer.ts:415,512`) — a transient `rate_limit` never has one. An
+    // earlier revision left such a pause open forever, so each later signal
+    // widened its window by the elapsed gap and credited ordinary WORKING time
+    // 1:1: a 5s retry-after seen every 10 min credited the full 10 min, quietly
+    // inflating the budget toward `timeoutMs + cap`.
+    const ceiling = new PauseAwareCeiling(BUDGET);
+    const run = startGuarded(ceiling);
+
+    const retryAfterMs = 5_000;
+    const gapMs = 10 * 60_000;
+    let parkedMs = 0;
+    // Four brief throttles spread across (and past) the budget.
+    for (let i = 0; i < 4; i++) {
+      ceiling.onEvent({ type: 'rate_limit', retryAfterMs });
+      parkedMs += retryAfterMs + PAUSE_WINDOW_SLACK_MS;
+      await vi.advanceTimersByTimeAsync(gapMs);
+      // The child is demonstrably working between throttles.
+      ceiling.onEvent(contentEvent);
+    }
+
+    // 40 min elapsed so far; cross the 45-min budget plus any credited park.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    await run.done;
+    expect(run.fired()).toBe(true);
+    // Credit reflects only the ~4 brief reported windows (140s), NOT the 40 min
+    // of wall time that elapsed while the child was working.
+    expect(ceiling.totalGrantedMs).toBeLessThanOrEqual(parkedMs);
+    expect(ceiling.totalGrantedMs).toBeLessThan(gapMs);
+  });
+
   it('grants nothing for a pause with no knowable window', async () => {
     const ceiling = new PauseAwareCeiling(BUDGET);
     const run = startGuarded(ceiling);
