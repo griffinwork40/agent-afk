@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.8] - 2026-07-31
+
+### Fixed
+- carve ssh config + known_hosts out of read-denylist (#579 O2) (#805) (badd34a)
+
+### Changed
+- fix dangling @link and restate ~60% orphan figure (#730) (#807) (73e8577)
+- close three builtin-shadow warning coverage gaps (#746) (#808) (dcf22ba)
+
 ## [5.83.7] - 2026-07-31
 
 ### Fixed
