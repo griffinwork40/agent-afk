@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- stop a blank environment variable from permanently shadowing the real value in `afk.env` — a shell profile with `export OPENAI_API_KEY=""` masked the key in `~/.afk/config/afk.env` (dotenv's `override: false` skip is presence-based, not value-based), so an OpenAI-compatible-only operator was told to "set OPENAI_API_KEY" for a key they had already set, after the auth chain fell through to `~/.codex/auth.json`
+
 ## [5.83.5] - 2026-07-31
 
 ### Fixed
