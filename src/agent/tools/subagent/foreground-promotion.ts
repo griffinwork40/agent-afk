@@ -26,7 +26,7 @@ import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, measurePartial, buildFailurePayload } from './failure-payload.js';
 import { appendInjectContext } from './inject-context.js';
-import { teardownIsolatedWorktree } from '../handlers/worktree-managed.js';
+import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -406,7 +406,8 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         const outcome = await teardownIsolatedWorktree({ repoRoot, worktreePath });
         if (outcome.preserved) {
           debugLog(
-            `[isolation] preserved worktree ${worktreePath} (${outcome.reason}) — ` +
+            `[isolation] preserved worktree ${worktreePath} ` +
+              `(${outcome.reason ? describePreserveReason(outcome.reason) : 'unknown'}) — ` +
               `locked so the sweep will not reap it; recover via the worktree tool`,
           );
         }

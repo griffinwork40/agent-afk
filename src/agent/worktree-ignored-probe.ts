@@ -15,7 +15,8 @@
  * and `dist/` are ignored in every checkout — defeating the sweep entirely and
  * regrowing the very leak it exists to prevent. So the default stays
  * "reapable": only an ignored entry that does NOT match a known-rebuildable
- * pattern protects the tree.
+ * pattern protects the tree. Classification policy lives in
+ * `worktree-ignored-patterns.ts`; this module is the IO around it.
  *
  * Fail-safe direction: anything unrecognised is treated as non-rebuildable
  * (protect), and a git failure also protects — mirroring the sweep's existing
@@ -25,64 +26,77 @@
  */
 
 import type { ExecFileFn } from './worktree-sweep.js';
+import { classifyIgnoredEntry } from './worktree-ignored-patterns.js';
+
+export {
+  classifyIgnoredEntry,
+  isSensitiveLeaf,
+  type IgnoredEntryClass,
+} from './worktree-ignored-patterns.js';
 
 /**
- * Ignored paths that a build can regenerate from committed sources. Matched
- * against the repo-relative path git reports. Directory patterns may occur at
- * any package boundary so monorepo output is treated the same as root output.
- *
- * Deliberately NOT listed (so they protect the tree): `.env*`, `.vscode/`,
- * `.idea/`, and anything else unrecognised — editor and environment files are
- * hand-authored local state, not build output.
+ * Invariant: `core.quotePath=false` is not optional. With git's default, a
+ * non-ASCII ignored path arrives wrapped in double quotes and octal-escaped
+ * (`"caf\303\251/node_modules/"`), which defeats the `(?:^|\/)` anchors in
+ * every rebuildable pattern. The entry then reads "unrecognised", protects the
+ * tree, and the worktree becomes immortal — the leak the sweep exists to stop.
  */
-const REBUILDABLE_IGNORED_PATTERNS: readonly RegExp[] = [
-  // AFK owns and recreates this bookkeeping marker.
-  /^\.afk-worktree-meta\.json$/,
-  // Dependency trees
-  /(?:^|\/)node_modules\//,
-  /(?:^|\/)\.pnpm(-store)?\//,
-  /(?:^|\/)\.yarn\//,
-  /(?:^|\/)bower_components\//,
-  /(?:^|\/)vendor\/bundle\//,
-  // Build output
-  /(?:^|\/)dist\//,
-  /(?:^|\/)build\//,
-  /(?:^|\/)out\//,
-  /(?:^|\/)lib-cov\//,
-  /(?:^|\/)\.next\//,
-  /(?:^|\/)\.nuxt\//,
-  /(?:^|\/)\.svelte-kit\//,
-  /(?:^|\/)\.output\//,
-  /(?:^|\/)target\//,
-  // Caches
-  /(?:^|\/)\.turbo\//,
-  /(?:^|\/)\.parcel-cache\//,
-  /(?:^|\/)\.vite\//,
-  /(?:^|\/)\.cache\//,
-  /(?:^|\/)\.gradle\//,
-  /(?:^|\/)__pycache__\//,
-  /(?:^|\/)\.pytest_cache\//,
-  /(?:^|\/)\.mypy_cache\//,
-  /(?:^|\/)\.ruff_cache\//,
-  /(?:^|\/)\.venv\//,
-  /(?:^|\/)venv\//,
-  // Coverage + incremental-build metadata
-  /(?:^|\/)coverage\//,
-  /(?:^|\/)\.nyc_output\//,
-  /\.tsbuildinfo$/,
-  /^\.eslintcache$/,
-  /^\.stylelintcache$/,
-  // OS + log noise
-  /^\.DS_Store$/,
-  /^Thumbs\.db$/,
-  /\.log$/,
-];
+const GIT_LITERAL_PATHS = ['-c', 'core.quotePath=false'];
 
-/** True when `relPath` is ignored build output or cache a rebuild would restore. */
+/** True when `relPath` is ignored output a rebuild would restore. */
 export function isRebuildableIgnoredEntry(relPath: string): boolean {
-  const normalized = relPath.replace(/\\/g, '/').replace(/^\.\//, '');
-  if (normalized === '') return true;
-  return REBUILDABLE_IGNORED_PATTERNS.some((re) => re.test(normalized));
+  return classifyIgnoredEntry(relPath) !== 'protected';
+}
+
+/**
+ * Ignored entries git reports for the worktree, or `undefined` when git failed.
+ * `scopePath` restricts the walk to one directory and expands it per-file
+ * (`--untracked-files=all`) instead of collapsing it to a single line.
+ */
+async function readIgnoredEntries(
+  execFile: ExecFileFn,
+  worktreePath: string,
+  scopePath?: string,
+): Promise<string[] | undefined> {
+  const args = [
+    ...GIT_LITERAL_PATHS,
+    '-C', worktreePath,
+    'status', '--porcelain', '--ignored',
+  ];
+  if (scopePath !== undefined) args.push('--untracked-files=all', '--', scopePath);
+  try {
+    const { stdout } = await execFile('git', args);
+    return stdout
+      .split('\n')
+      .filter((line) => line.startsWith('!!'))
+      .map((line) => line.slice(2).trim())
+      .filter((entry) => entry !== '');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Expand ONE build-output directory and report whether it hides local state a
+ * rebuild would not restore.
+ *
+ * Contract: the expansion is deliberately non-recursive — nested results are
+ * classified, never expanded again. That bounds the cost to a single extra git
+ * call per inspectable directory and removes any chance of a cycle when git
+ * echoes the collapsed directory back in the scoped output.
+ */
+async function inspectableDirHidesLocalState(
+  execFile: ExecFileFn,
+  worktreePath: string,
+  dirEntry: string,
+): Promise<boolean> {
+  const nested = await readIgnoredEntries(execFile, worktreePath, dirEntry);
+  if (nested === undefined) return true; // unreadable → protect
+  for (const entry of nested) {
+    if (entry === dirEntry) continue; // git echoed the directory — no new information
+    if (classifyIgnoredEntry(entry) === 'protected') return true;
+  }
+  return false;
 }
 
 /**
@@ -90,28 +104,24 @@ export function isRebuildableIgnoredEntry(relPath: string): boolean {
  * NOT restore — i.e. removing the checkout would destroy something the user
  * cannot get back.
  *
- * Uses `--ignored` in its default (traditional) mode on purpose: it collapses an
- * ignored DIRECTORY into a single `!! node_modules/` line instead of listing
- * every file beneath it, which keeps this cheap on a populated worktree.
+ * The top-level call uses `--ignored` in its default (traditional) mode on
+ * purpose: it collapses an ignored DIRECTORY into a single `!! node_modules/`
+ * line instead of listing every file beneath it, which keeps this cheap on a
+ * populated worktree. Only directories classified `inspectable` — small build
+ * output, not dependency trees — pay for a second, scoped call.
  */
 export async function hasNonRebuildableIgnoredFiles(
   execFile: ExecFileFn,
   worktreePath: string,
 ): Promise<boolean> {
-  let stdout: string;
-  try {
-    const result = await execFile('git', [
-      '-C', worktreePath, 'status', '--porcelain', '--ignored',
-    ]);
-    stdout = result.stdout;
-  } catch {
-    return true; // unreadable → protect, never force-remove on a guess
-  }
-  for (const line of stdout.split('\n')) {
-    if (!line.startsWith('!!')) continue;
-    const entry = line.slice(2).trim();
-    if (entry === '') continue;
-    if (!isRebuildableIgnoredEntry(entry)) return true;
+  const entries = await readIgnoredEntries(execFile, worktreePath);
+  if (entries === undefined) return true; // unreadable → never force-remove on a guess
+  for (const entry of entries) {
+    const verdict = classifyIgnoredEntry(entry);
+    if (verdict === 'protected') return true;
+    if (verdict === 'inspectable' && entry.endsWith('/')) {
+      if (await inspectableDirHidesLocalState(execFile, worktreePath, entry)) return true;
+    }
   }
   return false;
 }

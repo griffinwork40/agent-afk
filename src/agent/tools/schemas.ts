@@ -694,7 +694,9 @@ export const worktreeTool: AnthropicToolDef = {
     '- `release` — unlock a previously kept worktree, returning it to normal sweep lifecycle.\n' +
     '- `list` — dry-run sweep report: every afk-managed worktree with its verdict ' +
     '(active | empty | stale-clean | stale-dirty | locked | dead-owner | orphaned-*), owner, and age ' +
-    'in days. Verdicts empty/dead-owner/orphaned-* are removal candidates on the next sweep.\n' +
+    'in days. `stale-dirty` also covers a tree that `git status` calls clean but which holds ' +
+    'non-rebuildable ignored files (e.g. `.env`). Verdicts empty/dead-owner/orphaned-* are removal ' +
+    'candidates on the next sweep.\n' +
     '- `remove` — remove a worktree checkout you no longer need (branch ref is always preserved). ' +
     'Refuses dirty trees, locked trees, trees with commits ahead of base, and trees holding ' +
     'non-rebuildable ignored files (e.g. `.env`) unless `force: true`. Never removes the main ' +

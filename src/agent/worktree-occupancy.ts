@@ -17,10 +17,22 @@
  *   - `ownerLiveness` resolves to 'alive' while this process runs, which
  *     suppresses the accelerated `dead-owner` path.
  *
- * A single touch only buys MIN_EMPTY_AGE_MS (1h) of protection, so a child that
- * outlives it in a clean tree used to age back across the `empty` threshold and
- * get reaped mid-run (#759). `startWorktreeOccupancyHeartbeat` closes that by
- * re-asserting the occupation for as long as the child runs.
+ * What the heartbeat is actually for. A forked subagent runs IN THIS PROCESS
+ * (`new AgentSession(...)` — `subagent.ts` spawns nothing), so once the touch
+ * above has stamped `pid = process.pid`, `ownerLiveness` resolves to 'alive'
+ * for the child's entire run and the `empty` verdict — which requires
+ * `ownerLiveness !== 'alive'` — is unreachable however long the child runs.
+ * The age gate is therefore NOT the thing that protects a correctly-stamped
+ * tree, and `startWorktreeOccupancyHeartbeat` is defence-in-depth rather than
+ * the primary guard. It covers the states where the stamp is missing or
+ * untrustworthy: a meta file that is absent or unparseable, a torn read of a
+ * concurrent write, or an initial touch that failed transiently. In those
+ * states `ownerLiveness` degrades to 'unknown' and the age gate becomes the
+ * only defence, so re-asserting `createdAt` on a 10-minute cadence is what
+ * keeps the tree out of `empty` until the child finishes.
+ *
+ * Because a torn read is one of the states being defended against, the write
+ * itself must be atomic — see `touchWorktreeOccupancy`.
  *
  * The `worktree` tool's `keep` action (git worktree lock) remains the sanctioned
  * escape hatch for anything that must survive unconditionally, including across
@@ -75,11 +87,22 @@ export function worktreeRootFor(cwd: string): string | undefined {
  *
  * No-op (silently) when `cwd` is not inside an `.afk-worktrees/` tree or on
  * any filesystem error.
+ *
+ * Invariant: the write is atomic (temp file in the same directory, then
+ * `rename`) and must stay that way. A plain `writeFile` truncates before it
+ * fills, so a sweep reading the meta mid-write gets invalid JSON, treats the
+ * tree as having no owner, and drops `ownerLiveness` to 'unknown' — the exact
+ * state in which the tree becomes reapable. The heartbeat rewrites this file
+ * every 10 minutes for the life of every dispatched child, so a non-atomic
+ * write would multiply that window rather than close it. `rename` within one
+ * directory is atomic on POSIX and on NTFS, so a concurrent reader sees either
+ * the old meta or the new one, never a partial one.
  */
 export async function touchWorktreeOccupancy(cwd: string): Promise<void> {
   const root = worktreeRootFor(cwd);
   if (root === undefined) return;
   const metaPath = join(root, META_FILENAME);
+  const tmpPath = `${metaPath}.${process.pid}.tmp`;
   try {
     let meta: Record<string, unknown> = {};
     try {
@@ -89,9 +112,12 @@ export async function touchWorktreeOccupancy(cwd: string): Promise<void> {
     }
     meta['pid'] = process.pid;
     meta['createdAt'] = new Date().toISOString();
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+    await fs.writeFile(tmpPath, JSON.stringify(meta, null, 2), 'utf-8');
+    await fs.rename(tmpPath, metaPath);
   } catch {
-    /* best-effort — never block dispatch */
+    // Best-effort — never block dispatch. Drop the temp file if the rename
+    // never happened, so a failed touch cannot litter the worktree.
+    await fs.rm(tmpPath, { force: true }).catch(() => {});
   }
 }
 
@@ -99,10 +125,15 @@ export async function touchWorktreeOccupancy(cwd: string): Promise<void> {
  * Keep the worktree containing `cwd` marked as occupied for as long as the
  * caller runs, returning the function that stops it.
  *
- * Invariant: the sweep derives `ageMs` from `meta.createdAt`, so ONE touch at
- * dispatch protects a child for only MIN_EMPTY_AGE_MS. A longer-running child
- * ages back into the `empty` verdict and is force-removed mid-flight (#759).
- * Occupation must therefore be re-asserted periodically, not stamped once.
+ * Contract: this is defence-in-depth, not the primary guard. For a tree whose
+ * meta carries this process's pid the `empty` verdict is already unreachable —
+ * it requires `ownerLiveness !== 'alive'`, and an in-process child keeps that
+ * pid alive for its whole run, so `createdAt` never gets consulted. The
+ * heartbeat matters only where the stamp is missing or untrustworthy (absent
+ * or unparseable meta, torn read, transient initial-touch failure); there
+ * `ownerLiveness` is 'unknown' and the MIN_EMPTY_AGE_MS gate is the only thing
+ * standing between a live child and `remove --force`. Re-asserting `createdAt`
+ * every 10 minutes keeps that gate armed for as long as the child runs.
  *
  * Ordering constraint (governed by the Node event loop, not by this module):
  * `stop` is defined and captured BEFORE the interval is armed, so there is no

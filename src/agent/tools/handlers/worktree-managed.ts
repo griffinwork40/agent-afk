@@ -285,7 +285,7 @@ export interface IsolatedTeardownResult {
  * tree LOOKS clean to `git status`, so the lock reason is the only place the
  * operator can learn why it was kept anyway.
  */
-function describePreserveReason(reason: NonNullable<IsolatedTeardownResult['reason']>): string {
+export function describePreserveReason(reason: NonNullable<IsolatedTeardownResult['reason']>): string {
   if (reason === 'ignored-local-state') {
     return 'ignored-local-state: non-rebuildable ignored files present (e.g. .env) — git status looked clean';
   }

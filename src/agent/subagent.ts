@@ -997,84 +997,94 @@ export class SubagentManager {
       stopOccupancyHeartbeat = startWorktreeOccupancyHeartbeat(childConfig.cwd);
     }
 
+    // Ordering constraint: the heartbeat armed above is disarmed by the settle
+    // callback installed on the handle built below, so the guarded span has to
+    // run from construction all the way through `active.set`. A throw anywhere
+    // in between — the parent-stream read, the sink resolve, the handle
+    // constructor — would otherwise return with the interval live and no handle
+    // in existence to ever cancel it, and the tree would never be reaped again.
     let session: AgentSession;
+    let handle: SubagentHandleImpl<T>;
+    let effectiveAgentType: string | undefined;
+    let effectiveResolvedAgentType: string | undefined;
     try {
       session = new AgentSession(childConfig);
+      const parentInputStreamRef = options.parent.getInputStreamRef?.();
+      const parentAbortSignal = options.parent.abortSignal;
+      // Resolve sink: explicit option takes precedence, then ambient from AsyncLocalStorage
+      const sink = this.progressSink ?? getCurrentSink();
+      // Normalize empty-string render hints to undefined so the `??` fallbacks
+      // engage. A caller passing `agentType: ''` or `parentId: ''` would
+      // otherwise produce an empty Agent() label / empty agentContext anchor
+      // rather than the intended fallback (idPrefix / parent.sessionId).
+      effectiveAgentType = options.agentType?.trim() || undefined;
+      effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
+      const effectiveParentId = options.parentId?.trim() || undefined;
+      handle = new SubagentHandleImpl<T>(
+        id,
+        session,
+        childController,
+        this.abortGraph,
+        options.outputSchema,
+        // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS
+        // above). Explicit caller values win, including `0` for unbounded and the
+        // background SUBAGENT_BACKGROUND_TIMEOUT_MS the SubagentExecutor stamps —
+        // `??` preserves that precedence. The default is env-tunable via
+        // AFK_SUBAGENT_TIMEOUT_MS (resolveSubagentTimeoutMs); an unset/invalid
+        // env value returns SUBAGENT_DEFAULT_TIMEOUT_MS, so behaviour is unchanged
+        // when the var is not set.
+        options.config.timeoutMs ?? resolveSubagentTimeoutMs(),
+        registry,
+        () => {
+          // Runs on every terminal outcome of the child — success, failure,
+          // timeout, and abort — so it is the settle hook the heartbeat's
+          // teardown belongs on.
+          stopOccupancyHeartbeat();
+          this.active.delete(id);
+          this.abortGraph.dispose(id);
+        },
+        parentInputStreamRef,
+        parentAbortSignal,
+        // agentType: explicit override → idPrefix fallback. Lets callers
+        // (e.g. compose) supply a render-only label without altering idPrefix
+        // which is also used for routing telemetry.
+        effectiveAgentType ?? options.idPrefix,
+        sink,
+        // parentId: explicit override → parent session id fallback. Lets
+        // callers (e.g. compose) anchor the renderer's nesting at the compose
+        // tool_use_id rather than at the orchestrator session id.
+        effectiveParentId ?? options.parent.sessionId,
+        // traceWriter: child shares the parent's writer so its SubagentStop
+        // hook decision lands in the same trace file. Contract:
+        // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
+        // parent's witness." Resolved once above (per-fork config →
+        // manager-level writer) so the handle's terminal lifecycle emits
+        // pair with the 'started' emit below even when inheritance came
+        // from the manager rather than the per-fork config.
+        effectiveTraceWriter,
+        // onSubagentSucceeded: propagate completion data to the parent
+        // session's session_sealed rollup accumulators.
+        this.onSubagentSucceededCb,
+        // Progress-aware idle-watchdog window for the child's turn (see
+        // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS above). Explicit caller values win,
+        // including `0` to disable the watchdog for this fork — `??` preserves that
+        // precedence. The default is env-tunable via AFK_SUBAGENT_IDLE_TIMEOUT_MS
+        // (resolveSubagentIdleTimeoutMs); an unset/invalid env value returns
+        // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS, so behaviour is unchanged when the var
+        // is not set. Runs concurrently with the wall-clock budget above.
+        options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
+      );
+      this.active.set(id, handle as SubagentHandleImpl<unknown>);
     } catch (err) {
-      // Construction failed (e.g. invalid model, sync init failure).
-      // Release the graph node that was registered above to prevent an orphan
-      // accumulating on repeated retries (e.g. forge/farm retry loops), and
-      // disarm the occupancy heartbeat — there is no child left to protect.
+      // Construction or manager-wiring failed (invalid model, sync init
+      // failure, a throwing parent-stream/sink read). Release the graph node
+      // registered above so an orphan cannot accumulate across retry loops
+      // (forge/farm), and disarm the occupancy heartbeat — there is no child
+      // left to protect, and a live timer here would pin the worktree forever.
       stopOccupancyHeartbeat();
       this.abortGraph.dispose(id);
       throw err;
     }
-    const parentInputStreamRef = options.parent.getInputStreamRef?.();
-    const parentAbortSignal = options.parent.abortSignal;
-    // Resolve sink: explicit option takes precedence, then ambient from AsyncLocalStorage
-    const sink = this.progressSink ?? getCurrentSink();
-    // Normalize empty-string render hints to undefined so the `??` fallbacks
-    // engage. A caller passing `agentType: ''` or `parentId: ''` would
-    // otherwise produce an empty Agent() label / empty agentContext anchor
-    // rather than the intended fallback (idPrefix / parent.sessionId).
-    const effectiveAgentType = options.agentType?.trim() || undefined;
-    const effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
-    const effectiveParentId = options.parentId?.trim() || undefined;
-    const handle = new SubagentHandleImpl<T>(
-      id,
-      session,
-      childController,
-      this.abortGraph,
-      options.outputSchema,
-      // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS
-      // above). Explicit caller values win, including `0` for unbounded and the
-      // background SUBAGENT_BACKGROUND_TIMEOUT_MS the SubagentExecutor stamps —
-      // `??` preserves that precedence. The default is env-tunable via
-      // AFK_SUBAGENT_TIMEOUT_MS (resolveSubagentTimeoutMs); an unset/invalid
-      // env value returns SUBAGENT_DEFAULT_TIMEOUT_MS, so behaviour is unchanged
-      // when the var is not set.
-      options.config.timeoutMs ?? resolveSubagentTimeoutMs(),
-      registry,
-      () => {
-        // Runs on every terminal outcome of the child — success, failure,
-        // timeout, and abort — so it is the settle hook the heartbeat's
-        // teardown belongs on.
-        stopOccupancyHeartbeat();
-        this.active.delete(id);
-        this.abortGraph.dispose(id);
-      },
-      parentInputStreamRef,
-      parentAbortSignal,
-      // agentType: explicit override → idPrefix fallback. Lets callers
-      // (e.g. compose) supply a render-only label without altering idPrefix
-      // which is also used for routing telemetry.
-      effectiveAgentType ?? options.idPrefix,
-      sink,
-      // parentId: explicit override → parent session id fallback. Lets
-      // callers (e.g. compose) anchor the renderer's nesting at the compose
-      // tool_use_id rather than at the orchestrator session id.
-      effectiveParentId ?? options.parent.sessionId,
-      // traceWriter: child shares the parent's writer so its SubagentStop
-      // hook decision lands in the same trace file. Contract:
-      // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
-      // parent's witness." Resolved once above (per-fork config →
-      // manager-level writer) so the handle's terminal lifecycle emits
-      // pair with the 'started' emit below even when inheritance came
-      // from the manager rather than the per-fork config.
-      effectiveTraceWriter,
-      // onSubagentSucceeded: propagate completion data to the parent
-      // session's session_sealed rollup accumulators.
-      this.onSubagentSucceededCb,
-      // Progress-aware idle-watchdog window for the child's turn (see
-      // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS above). Explicit caller values win,
-      // including `0` to disable the watchdog for this fork — `??` preserves that
-      // precedence. The default is env-tunable via AFK_SUBAGENT_IDLE_TIMEOUT_MS
-      // (resolveSubagentIdleTimeoutMs); an unset/invalid env value returns
-      // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS, so behaviour is unchanged when the var
-      // is not set. Runs concurrently with the wall-clock budget above.
-      options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
-    );
-    this.active.set(id, handle as SubagentHandleImpl<unknown>);
 
     // Witness layer: subagent_lifecycle.started fires AFTER the handle is
     // wired into the manager's active map and the abort-graph. Emitting

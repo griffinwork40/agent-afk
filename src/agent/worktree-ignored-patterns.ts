@@ -1,0 +1,164 @@
+/**
+ * Classification policy for the worktree ignored-file probe.
+ *
+ * Contract: split out of `worktree-ignored-probe.ts` so that module holds only
+ * IO (git invocation, line parsing, scoped expansion) while the policy — which
+ * ignored paths a rebuild can restore — lives here as data. Pure and
+ * synchronous; nothing here touches the filesystem.
+ *
+ * @module agent/worktree-ignored-patterns
+ */
+
+/** How the probe must treat one ignored entry git reported. */
+export type IgnoredEntryClass =
+  /** Reapable, and cheap enough to trust without looking inside. */
+  | 'opaque'
+  /** Reapable only if a scoped expansion finds nothing sensitive beneath it. */
+  | 'inspectable'
+  /** Never reapable — removing the checkout would destroy it. */
+  | 'protected';
+
+/**
+ * Leaf filenames that are NEVER rebuildable, whatever directory holds them.
+ *
+ * Invariant: this list outranks every rebuildable pattern below, and the
+ * precedence is load-bearing. `git status --ignored` collapses an ignored
+ * directory to a single line, so a secret nested under `dist/` is invisible
+ * until the probe expands that directory; once expanded, the leaf has to
+ * protect the tree even though its parent matched a build-output pattern.
+ * Without this table, `dist/secrets.env` reads "rebuildable" twice over — once
+ * because git never listed it, and again because the directory prefix matches.
+ * Matched case-insensitively against the final path segment only.
+ */
+const SENSITIVE_LEAF_PATTERNS: readonly RegExp[] = [
+  /^\.env$/,
+  /^\.env\./,
+  /\.pem$/,
+  /\.key$/,
+  /\.p12$/,
+  /\.keystore$/,
+  /\.jks$/,
+  /^id_rsa/,
+  /^id_ed25519/,
+  /^\.netrc$/,
+  /credential/,
+  /secret/,
+  /\.sqlite3?$/,
+  /\.db$/,
+];
+
+/**
+ * Dependency trees and caches: machine-owned, never hand-authored, and often
+ * enormous. Reapable without inspection — expanding `node_modules/` to look for
+ * a stray secret would walk tens of thousands of paths on every sweep tick,
+ * which is exactly the cost the collapsed `--ignored` output exists to avoid.
+ */
+const OPAQUE_REBUILDABLE_DIRS: readonly RegExp[] = [
+  /(?:^|\/)node_modules\//,
+  /(?:^|\/)\.pnpm(-store)?\//,
+  /(?:^|\/)\.yarn\//,
+  /(?:^|\/)bower_components\//,
+  /(?:^|\/)vendor\/bundle\//,
+  /(?:^|\/)\.venv\//,
+  /(?:^|\/)venv\//,
+  /(?:^|\/)__pycache__\//,
+  /(?:^|\/)\.turbo\//,
+  /(?:^|\/)\.parcel-cache\//,
+  /(?:^|\/)\.vite\//,
+  /(?:^|\/)\.cache\//,
+  /(?:^|\/)\.gradle\//,
+  /(?:^|\/)\.pytest_cache\//,
+  /(?:^|\/)\.mypy_cache\//,
+  /(?:^|\/)\.ruff_cache\//,
+  /(?:^|\/)\.nyc_output\//,
+  /(?:^|\/)logs\//,
+];
+
+/**
+ * Build output: small enough to enumerate, and plausibly holding something a
+ * human put there by hand (a generated deliverable, a scratch `.env` a script
+ * dropped next to the bundle). Reapable, but only after a scoped expansion
+ * confirms no sensitive leaf hides inside.
+ */
+const INSPECTABLE_REBUILDABLE_DIRS: readonly RegExp[] = [
+  /(?:^|\/)dist\//,
+  /(?:^|\/)build\//,
+  /(?:^|\/)out\//,
+  /(?:^|\/)lib-cov\//,
+  /(?:^|\/)\.next\//,
+  /(?:^|\/)\.nuxt\//,
+  /(?:^|\/)\.svelte-kit\//,
+  /(?:^|\/)\.output\//,
+  /(?:^|\/)target\//,
+  /(?:^|\/)coverage\//,
+];
+
+/**
+ * Individual ignored FILES a rebuild restores.
+ *
+ * The log entries are deliberately an emitter allowlist rather than a bare
+ * `/\.log$/`: that suffix matched every ignored `*.log`, so a captured agent
+ * transcript or a hand-kept `decisions.log` was classified as build noise and
+ * force-deleted along with the checkout.
+ */
+const REBUILDABLE_FILE_PATTERNS: readonly RegExp[] = [
+  // AFK owns and recreates this bookkeeping marker.
+  /^\.afk-worktree-meta\.json$/,
+  /\.tsbuildinfo$/,
+  /^\.eslintcache$/,
+  /^\.stylelintcache$/,
+  /^\.DS_Store$/,
+  /^Thumbs\.db$/,
+  // Known log emitters only.
+  /(?:^|\/)debug\.log$/,
+  /(?:^|\/)npm-debug\.log$/,
+  /(?:^|\/)yarn-error\.log$/,
+  /(?:^|\/)yarn-debug\.log$/,
+  /(?:^|\/)pnpm-debug\.log$/,
+  /(?:^|\/)lerna-debug\.log$/,
+];
+
+/**
+ * Normalize the repo-relative path git reported: backslashes to forward
+ * slashes, no `./` prefix, and no wrapping double quotes. The probe already
+ * passes `-c core.quotePath=false`, so the quote strip is belt-and-braces for
+ * any caller that does not.
+ */
+export function normalizeIgnoredPath(relPath: string): string {
+  const slashed = relPath.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (slashed.length >= 2 && slashed.startsWith('"') && slashed.endsWith('"')) {
+    return slashed.slice(1, -1);
+  }
+  return slashed;
+}
+
+/** Final path segment, with any trailing directory slash removed. */
+export function leafOf(normalizedPath: string): string {
+  const withoutTrailingSlash = normalizedPath.replace(/\/+$/, '');
+  const lastSlash = withoutTrailingSlash.lastIndexOf('/');
+  return lastSlash === -1
+    ? withoutTrailingSlash
+    : withoutTrailingSlash.slice(lastSlash + 1);
+}
+
+/** True when the entry's final segment names something unrecoverable. */
+export function isSensitiveLeaf(relPath: string): boolean {
+  const leaf = leafOf(normalizeIgnoredPath(relPath)).toLowerCase();
+  if (leaf === '') return false;
+  return SENSITIVE_LEAF_PATTERNS.some((re) => re.test(leaf));
+}
+
+/**
+ * Classify one ignored entry. Precedence is deliberate: a sensitive leaf wins
+ * over every rebuildable pattern, and anything unrecognised falls through to
+ * `protected` so the default answer is always "leave it alone".
+ */
+export function classifyIgnoredEntry(relPath: string): IgnoredEntryClass {
+  const normalized = normalizeIgnoredPath(relPath);
+  if (normalized === '') return 'protected';
+  if (isSensitiveLeaf(normalized)) return 'protected';
+  if (REBUILDABLE_FILE_PATTERNS.some((re) => re.test(normalized))) return 'opaque';
+  if (OPAQUE_REBUILDABLE_DIRS.some((re) => re.test(normalized))) return 'opaque';
+  if (INSPECTABLE_REBUILDABLE_DIRS.some((re) => re.test(normalized))) return 'inspectable';
+  return 'protected';
+}

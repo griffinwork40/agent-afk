@@ -1894,6 +1894,115 @@ describe('empty-verdict liveness gate (#380)', () => {
     );
     expect(removeCalls).toHaveLength(0);
   });
+
+  /**
+   * Invariant: what actually protects a worktree hosting a running subagent is
+   * the LIVE PID stamped by `touchWorktreeOccupancy`, not the age gate. A
+   * forked subagent runs in this same OS process, so `ownerLiveness` resolves
+   * 'alive' for its whole run and `empty` — which requires
+   * `ownerLiveness !== 'alive'` — is unreachable however old the tree gets.
+   *
+   * These two cases pin that relationship in the direction the occupancy
+   * heartbeat depends on. Without them the heartbeat's rationale is untestable
+   * prose: nothing failed when the module docblock claimed a live child "ages
+   * back into the `empty` verdict", because no test drove the heartbeat's
+   * effect through `runSweep` at all.
+   */
+  it('never reaps a clean tree whose meta carries a live pid, however old', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-live-pid-old-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        pid: process.pid, // alive — exactly what touchWorktreeOccupancy stamps
+        createdAt: new Date(Date.now() - 86_400_000 * 7).toISOString(), // 7d ≫ 1h gate
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/live-pid-old-wt',
+    });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).not.toBe('empty');
+    expect(candidate?.verdict).not.toBe('dead-owner');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('DOES reap an aged clean tree whose meta has no pid — the state the heartbeat defends', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-no-pid-old-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+    // No `pid`: the stamp never landed, or the meta was written by something
+    // else. ownerLiveness → 'unknown', so MIN_EMPTY_AGE_MS is the only guard —
+    // which is precisely why the heartbeat keeps re-asserting `createdAt`.
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        createdAt: new Date(Date.now() - 86_400_000 * 7).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/no-pid-old-wt',
+    });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: true, // classification only — no filesystem mutation needed
+      telemetryPath: telemetryFile,
+      readPresence: async () => [],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).toBe('empty');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -53,6 +53,35 @@ describe('isRebuildableIgnoredEntry', () => {
   it('does not confuse a file containing a rebuildable directory name with output', () => {
     expect(isRebuildableIgnoredEntry('my-notes/dist-plan.md')).toBe(false);
   });
+
+  // A sensitive leaf outranks its containing directory. Without this, the
+  // build-output prefix patterns classify `dist/secrets.env` as reapable.
+  const sensitiveUnderBuildOutput = [
+    'dist/secrets.env', 'dist/.env', 'build/.env.local', 'out/private.pem',
+    'target/service.key', 'coverage/id_rsa', 'dist/nested/app-credentials.json',
+    'packages/app/dist/.env',
+  ];
+  for (const entry of sensitiveUnderBuildOutput) {
+    it(`treats ${entry} as NON-rebuildable despite its parent directory`, () => {
+      expect(isRebuildableIgnoredEntry(entry)).toBe(false);
+    });
+  }
+
+  // The narrowed log rule: emitters stay reapable, hand-kept logs do not.
+  it('treats a hand-kept log as NON-rebuildable', () => {
+    expect(isRebuildableIgnoredEntry('decisions.log')).toBe(false);
+    expect(isRebuildableIgnoredEntry('transcripts/session.log')).toBe(false);
+  });
+
+  it('keeps known log emitters rebuildable', () => {
+    for (const entry of ['npm-debug.log', 'debug.log', 'pnpm-debug.log', 'logs/run.log']) {
+      expect(isRebuildableIgnoredEntry(entry)).toBe(true);
+    }
+  });
+
+  it('classifies a non-ASCII nested dependency dir as rebuildable', () => {
+    expect(isRebuildableIgnoredEntry('café/node_modules/')).toBe(true);
+  });
 });
 
 describe('hasNonRebuildableIgnoredFiles', () => {
@@ -80,5 +109,65 @@ describe('hasNonRebuildableIgnoredFiles', () => {
 
   it('fails SAFE — an unreadable tree protects rather than reaps', async () => {
     expect(await hasNonRebuildableIgnoredFiles(throwingExec, '/tmp/wt')).toBe(true);
+  });
+});
+
+/**
+ * Traditional `--ignored` collapses an ignored directory to one line, so a
+ * secret nested under `dist/` is invisible to the top-level call. These pin the
+ * scoped second call that closes that blind spot — and pin that it is NOT paid
+ * for dependency trees.
+ */
+describe('hasNonRebuildableIgnoredFiles — collapsed-directory expansion', () => {
+  /** Records every git argv so a test can assert which calls were made. */
+  function recordingExec(
+    responder: (args: readonly string[]) => string,
+  ): { exec: ExecFileFn; calls: string[][] } {
+    const calls: string[][] = [];
+    const exec = (async (_cmd: string, args: string[]) => {
+      calls.push([...args]);
+      return { stdout: responder(args), stderr: '' };
+    }) as unknown as ExecFileFn;
+    return { exec, calls };
+  }
+
+  const isScoped = (args: readonly string[]): boolean => args.includes('--untracked-files=all');
+
+  it('expands a collapsed build dir and protects when it hides a secret', async () => {
+    const { exec, calls } = recordingExec((args) =>
+      isScoped(args) ? '!! dist/cli/index.js\n!! dist/secrets.env\n' : '!! dist/\n',
+    );
+    expect(await hasNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toBe(true);
+    expect(calls.filter(isScoped)).toHaveLength(1);
+  });
+
+  it('expands a collapsed build dir and reaps when it holds only output', async () => {
+    const { exec, calls } = recordingExec((args) =>
+      isScoped(args) ? '!! dist/cli/index.js\n!! dist/assets/app.css\n' : '!! dist/\n',
+    );
+    expect(await hasNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toBe(false);
+    expect(calls.filter(isScoped)).toHaveLength(1);
+  });
+
+  it('never pays for an expansion of an opaque dependency tree', async () => {
+    const { exec, calls } = recordingExec(() => '!! node_modules/\n!! .pnpm/\n');
+    expect(await hasNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toBe(false);
+    expect(calls.filter(isScoped)).toHaveLength(0);
+  });
+
+  it('protects when the scoped expansion itself fails', async () => {
+    const exec = (async (_cmd: string, args: string[]) => {
+      if (args.includes('--untracked-files=all')) throw new Error('fatal: bad pathspec');
+      return { stdout: '!! dist/\n', stderr: '' };
+    }) as unknown as ExecFileFn;
+    expect(await hasNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toBe(true);
+  });
+
+  it('passes core.quotePath=false so non-ASCII paths arrive literal', async () => {
+    const { exec, calls } = recordingExec(() => '!! café/node_modules/\n');
+    expect(await hasNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toBe(false);
+    expect(calls[0]).toEqual(
+      expect.arrayContaining(['-c', 'core.quotePath=false']),
+    );
   });
 });
