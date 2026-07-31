@@ -14,6 +14,10 @@ import type { OutputEvent, ProgressEvent } from '../../agent/types.js';
 // an independent copy of the progress map. See the SubagentCtx comment in
 // stream-renderer-subagent.ts for the companion rationale.
 import type { SourceState } from './stream-renderer-source.js';
+import {
+  deriveChildActivity,
+  type ChildActivityTracker,
+} from './child-activity-select.js';
 import type { Writer } from '../slash/types.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { ToolLane } from '../commands/interactive/tool-lane.js';
@@ -124,6 +128,20 @@ export interface OrchestratorCtx {
    * can compose the full frame without carrying a separate copy.
    */
   lastProgressByTask: Map<string, ProgressEvent>;
+  /**
+   * Live source map, read-only here. Present so `setComposedOverlay` can name
+   * the active subagent in the banner's detail slot while the parent turn is
+   * blocked awaiting a foreground child (at which point `lastProgressByTask`
+   * receives no updates and the thinking lane is already drained). Optional so
+   * non-TTY surfaces and tests can omit it and keep the previous behaviour.
+   */
+  sources?: ReadonlyMap<string, SourceState>;
+  /**
+   * Sticky selector for the child named in the banner detail slot. Stateful, so
+   * it is owned by StreamRenderer and passed in — `setComposedOverlay` rebuilds
+   * its ctx object per call and cannot hold the selection itself.
+   */
+  childActivity?: ChildActivityTracker;
 }
 
 /**
@@ -488,7 +506,13 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   // uncommitted phase only — peekPhase clears at each seal boundary, so a
   // stale clause never outlives the phase that produced it). Falls back to
   // the event's own tool-derived summary inside formatProgressBanner.
-  const activity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
+  // Fallback chain for the detail slot: the model's own in-flight clause wins,
+  // but it is empty for the whole of a foreground subagent dispatch (the phase
+  // is sealed at the agent tool_use_detail boundary). Naming the busiest child
+  // there keeps the line moving with real work instead of going blank — which
+  // is what made a working fan-out read as a hung session.
+  const activity =
+    deriveProgressActivity(ctx.thinkingLane.peekPhase()) ?? deriveChildActivity(ctx);
   for (const progress of ctx.lastProgressByTask.values()) {
     bannerLines.push(...formatProgressBanner(progress, undefined, activity));
   }

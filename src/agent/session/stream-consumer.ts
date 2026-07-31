@@ -406,6 +406,9 @@ export function transformProviderEvent(
           totalTokens: event.progress.totalTokens,
           toolUses: event.progress.toolUses,
           durationMs: event.progress.durationMs,
+          ...(event.progress.lastActivityAt !== undefined
+            ? { lastActivityAt: event.progress.lastActivityAt }
+            : {}),
         },
       };
 

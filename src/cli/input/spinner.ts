@@ -27,6 +27,16 @@ export interface SpinnerControllerOptions {
    * {@link goblinSpinnerEnabled}. Purely cosmetic — no timer/width change.
    */
   goblin?: boolean;
+  /**
+   * Optional source of a work-derived verb. Consulted on every verb pick; when
+   * it returns a string that verb is used verbatim, otherwise the flavour pool
+   * supplies one. Lets the spinner describe the tool actually in flight instead
+   * of rotating random noir verbs that imply state changes which never happened.
+   *
+   * Pull-based on purpose: the controller already ticks at 80ms, so reading the
+   * current verb during that tick adds no timer and no new repaint path.
+   */
+  workVerb?: () => string | undefined;
 }
 
 /**
@@ -48,15 +58,27 @@ export class SpinnerController {
   private readonly captureMode: boolean;
   private readonly onTick: () => void;
   private readonly goblin: boolean;
+  private readonly workVerb: (() => string | undefined) | undefined;
 
   constructor(opts: SpinnerControllerOptions) {
     this.captureMode = opts.captureMode;
     this.onTick = opts.onTick;
     this.goblin = opts.goblin ?? false;
+    this.workVerb = opts.workVerb;
   }
 
-  /** Pick a verb from the active theme's pool. */
+  /**
+   * Pick a verb: the real in-flight activity when one is known, else the active
+   * theme's flavour pool. A throwing provider must never take down the render
+   * loop, so it degrades to the pool rather than propagating.
+   */
   private pickVerb(): string {
+    try {
+      const derived = this.workVerb?.();
+      if (derived) return derived;
+    } catch {
+      // fall through to the flavour pool
+    }
     return this.goblin ? pickRandomGoblinVerb() : pickRandomVerb();
   }
 
@@ -144,7 +166,20 @@ export class SpinnerController {
     if (!this.state) return;
     this.state.frameIndex = (this.state.frameIndex + 1) % SPINNER_FRAMES.length;
     const now = Date.now();
-    if (now >= this.state.nextVerbRotateAt) {
+    // Two triggers for a re-pick: the flavour rotation window elapsing, and the
+    // work-derived verb disagreeing with what is displayed. The second keeps the
+    // verb honest without waiting out a rotation — and is self-throttling,
+    // because the provider reports a tool CATEGORY, so a burst of reads yields
+    // one stable "Reading" rather than a flicker of new words.
+    const derived = (() => {
+      try {
+        return this.workVerb?.();
+      } catch {
+        return undefined;
+      }
+    })();
+    const workVerbChanged = derived !== undefined && derived !== this.state.verb;
+    if (now >= this.state.nextVerbRotateAt || workVerbChanged) {
       this.state.verb = this.pickVerb();
       this.state.nextVerbRotateAt = now + rotateMs;
     }

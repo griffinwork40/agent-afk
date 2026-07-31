@@ -662,6 +662,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
             // names the ROUND — leave it.
             toolUses: toolCallCount,
             durationMs: Date.now() - turnStartTime,
+            // Coarse round-boundary liveness for progress-only consumers. See
+            // the ProgressEvent.lastActivityAt contract: NOT the stall source.
+            lastActivityAt: Date.now(),
           },
           sessionId: this.initSessionId,
         };

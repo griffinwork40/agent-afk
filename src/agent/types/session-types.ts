@@ -144,6 +144,19 @@ export interface ProgressEvent {
   totalTokens: number;
   toolUses: number;
   durationMs: number;
+  /**
+   * Epoch ms when this progress event was emitted.
+   *
+   * Contract: COARSE liveness only. Progress events fire at tool-ROUND
+   * boundaries, so this timestamp cannot detect a session wedged mid-tool-call —
+   * the case that actually matters. It exists for consumers that see nothing but
+   * progress events (daemon summaries, log post-processing).
+   *
+   * NOT the stall source. Anything rendering a "no output for Xs" signal must
+   * sample every event via `ActivityTracker` (agent/progress/activity-tracker.ts),
+   * which is why that judgement is not a field on this payload.
+   */
+  lastActivityAt?: number;
 }
 
 /** Metadata for routing progress events to a subagent sink. */

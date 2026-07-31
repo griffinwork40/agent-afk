@@ -1237,6 +1237,9 @@ export async function* runTurn(
         // calls. The `summary` above legitimately names the ROUND — leave it.
         toolUses: toolCallCount,
         durationMs: Date.now() - loopStartTime,
+        // Coarse round-boundary liveness for progress-only consumers. See the
+        // ProgressEvent.lastActivityAt contract: this is NOT the stall source.
+        lastActivityAt: Date.now(),
       },
       sessionId: input.ctx.sessionId,
     };

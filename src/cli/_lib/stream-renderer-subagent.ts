@@ -148,6 +148,13 @@ export function handleSubagentEvent(
       if (event.progress.toolUses !== undefined) {
         source.stats.progressReportedToolUses = event.progress.toolUses;
       }
+      // Retain the provider's per-round headline for the progress banner's
+      // detail slot. Deliberately does NOT call setComposedOverlay: the banner
+      // is repainted by the discrete tool_use_detail / tool_result transitions
+      // below, which arrive at least as often as progress events. Repainting
+      // here too would break the "at most one setComposedOverlay call per
+      // event" invariant documented in stream-renderer-orchestrator.ts.
+      if (event.progress.summary) source.lastProgressSummary = event.progress.summary;
       return;
 
     case 'chunk': {

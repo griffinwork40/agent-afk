@@ -101,6 +101,12 @@ export interface ProviderProgress {
   totalTokens: number;
   toolUses: number;
   durationMs: number;
+  /**
+   * Epoch ms at emission. COARSE liveness only — progress events fire at
+   * tool-round boundaries, so this cannot detect a turn wedged mid-tool-call.
+   * Mirrors `ProgressEvent.lastActivityAt`; see that contract before consuming.
+   */
+  lastActivityAt?: number;
 }
 
 /** Harness-native event lane emitted by every `ProviderQuery`. */
