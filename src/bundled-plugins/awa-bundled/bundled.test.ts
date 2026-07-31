@@ -115,7 +115,11 @@ const PINNED_HASHES = {
   // budget and bounds the shadow-verify wave, Wave 1.5 Check A verifies
   // `file-state` citations at EVERY severity (not just blocking/critical/high,
   // which left medium-and-lower citations permanently unverified), and the
-  // research-agent `tools:` quote is now exact.
+  // research-agent `tools:` quote is now exact. Re-bumped again after the #777
+  // review: the api-compat reachability pre-check sat inside the Wave 1 slice
+  // still saying "grep production source files", the one shell-implying verb the
+  // rest of this change removed, and Check B verified absence claims only at
+  // blocking/critical/high — the same severity-scope gap Check A had just closed.
   //
   // The bundled copy is the SOLE copy of /review: upstream deleted its own
   // review skill on 2026-07-24 (ce27e45), a deliberate dedup of a skill that
@@ -123,7 +127,7 @@ const PINNED_HASHES = {
   // CLASS was ported to the one place it still lived upstream: /weekly-reflect
   // dispatched two shell-mandating survey waves as `research-agent` (upstream
   // PR #77; all 40 upstream SKILL.md scanned, no other instance).
-  review: 'fde056df77dc4e8769376ed40398cd5e6a32226b6e1c69cc272baa387be3f666',
+  review: 'e40dbb244d3b0d074f366e6d3a7e27d053b00657571fb8d4d8027549350e0e81',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
   // landed in this branch's commit 1e35850 — adds high-confidence language
   // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
