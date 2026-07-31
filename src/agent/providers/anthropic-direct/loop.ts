@@ -914,10 +914,16 @@ export async function* runTurn(
     //
     // The failure is still surfaced, twice over: the OVERLOAD_EXHAUSTED
     // stopReason drives an `abort` closure + `failed` seal downstream, and the
-    // display-only notice replaces the raw `{"type":"overloaded_error"}` SSE
-    // envelope operators were misreading as a TypeScript error. The notice is
-    // NOT pushed into `input.messages` — it is operator context, not model
-    // context (mirrors the `stop_reason: 'refusal'` notice below).
+    // notice replaces the raw `{"type":"overloaded_error"}` SSE envelope
+    // operators were misreading as a TypeScript error.
+    //
+    // Contract: the notice is NOT appended to THIS turn's `input.messages`, so
+    // it never re-enters the request that is failing. It is NOT invisible to the
+    // model, though — `session/stream-consumer.ts` materializes every non-empty
+    // `assistant.message` into `conversationHistory`, which threads back as
+    // model context on the next turn and on `--resume`. Same shape as the
+    // `stop_reason: 'refusal'` notice below. Read as "not retried into the dead
+    // request", not "operator-only".
     if (overloadExhausted) {
       void emitSessionPhase(input.traceWriter, {
         phase: 'rate_limit',

@@ -155,7 +155,9 @@ describe('overload pause tier — interactive pause + ceiling', () => {
     const events = await promise;
 
     // Bounded: it stopped probing rather than looping forever...
-    expect(runTurnMock.mock.calls.length).toBeLessThan(6);
+    // Mathematical max for a 150s ceiling on a 60-120s probe band is 3. The
+    // old bound (< 6) tolerated a ceiling regression of ~5 probes (~10 min).
+    expect(runTurnMock.mock.calls.length).toBeLessThanOrEqual(3);
     // ...and the LAST thing it did was emit a real terminal, never silence.
     expect(events.at(-1)?.type).toBe('turn.completed');
     const last = events.at(-1);
@@ -174,10 +176,15 @@ describe('overload pause tier — interactive pause + ceiling', () => {
     await vi.advanceTimersByTimeAsync(100); // attempt 1 exhausts, tier enters the park
     ac.abort('interrupted');
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    const events = await promise;
 
     // Aborted during the probe sleep — no replay was ever attempted.
     expect(runTurnMock).toHaveBeenCalledTimes(1);
+    // This tier yields NOTHING on the post-sleep abort exit, by design: query.ts
+    // detects a terminal-less clean return and synthesizes an `interrupted`
+    // terminal, so the turn still commits and the seal is `cancelled` (the
+    // more-specific status). Pinned so a change to that exit is deliberate.
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(false);
   });
 
   // A concurrent close() must not leave the tier spinning either.
@@ -190,7 +197,119 @@ describe('overload pause tier — interactive pause + ceiling', () => {
     await vi.advanceTimersByTimeAsync(100);
     closed = true;
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    const events = await promise;
     expect(runTurnMock).toHaveBeenCalledTimes(1);
+    // Same intentional silence as the abort exit above; see that test's note.
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(false);
+  });
+});
+
+// Trace-fidelity and replay-hygiene contracts for the park (#764 review).
+describe('overload pause tier — trace fidelity and replay hygiene', () => {
+  /** Captures `session_phase` rows so a phantom pause/resume cycle is visible. */
+  function makeCapturingInput(signal: AbortSignal): {
+    input: RunTurnInput;
+    phases: { phase: string; outcome?: unknown; ceilingMs?: unknown; durationMs?: number }[];
+  } {
+    const phases: { phase: string; outcome?: unknown; ceilingMs?: unknown; durationMs?: number }[] =
+      [];
+    const input = makeInput(signal);
+    input.traceWriter = {
+      write: (row: { kind: string; payload: Record<string, unknown> }) => {
+        if (row.kind === 'session_phase') {
+          const md = (row.payload['metadata'] ?? {}) as Record<string, unknown>;
+          phases.push({
+            phase: String(row.payload['phase']),
+            outcome: md['outcome'],
+            ceilingMs: md['ceilingMs'],
+            durationMs: row.payload['durationMs'] as number | undefined,
+          });
+        }
+        return Promise.resolve();
+      },
+    } as unknown as RunTurnInput['traceWriter'];
+    return { input, phases };
+  }
+
+  const notice: ProviderEvent = {
+    type: 'assistant.message',
+    text: 'Anthropic is overloaded (HTTP 529) …',
+    sessionId: 's1',
+  };
+
+  // THE REGRESSION: a re-exhausting probe forwards the notice (and any partial
+  // deltas) BEFORE its sentinel terminal. Gating `overload_resume` on the first
+  // forwarded event therefore logged a phantom 'recovered' on every probe — a
+  // 10-minute park read as ~9 recover/park cycles that never happened.
+  it('does not log a phantom resume when a probe re-exhausts', async () => {
+    vi.useFakeTimers();
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '600000';
+    // Two attempts that emit the notice then re-exhaust, then a clean recovery.
+    scriptTurns([notice, exhausted], [notice, exhausted], [{ ...notice, text: 'ok' }, cleanDone]);
+    const { input, phases } = makeCapturingInput(new AbortController().signal);
+    const promise = drain(makeLayer('cli').turnWithRetries(input, () => false));
+    await vi.advanceTimersByTimeAsync(600_000);
+    await promise;
+
+    expect(phases.filter((p) => p.phase === 'overload_pause')).toHaveLength(1);
+    const resumes = phases.filter((p) => p.phase === 'overload_resume');
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]?.outcome).toBe('recovered');
+  });
+
+  it('marks a ceiling-reached park as such, never as recovered', async () => {
+    vi.useFakeTimers();
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '150000';
+    scriptTurns([notice, exhausted]); // never recovers
+    const { input, phases } = makeCapturingInput(new AbortController().signal);
+    const promise = drain(makeLayer('cli').turnWithRetries(input, () => false));
+    await vi.advanceTimersByTimeAsync(600_000);
+    await promise;
+
+    const resumes = phases.filter((p) => p.phase === 'overload_resume');
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]?.outcome).toBe('ceiling-reached');
+    expect(phases.filter((p) => p.phase === 'overload_pause')).toHaveLength(1);
+  });
+
+  // Codex P1: the failed attempt's partial output was already forwarded, so a
+  // recovering replay rendered appended to dead text with no reset marker.
+  it('resets the surface with stream.retry before replaying', async () => {
+    vi.useFakeTimers();
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '600000';
+    scriptTurns([notice, exhausted], [{ ...notice, text: 'recovered' }, cleanDone]);
+    const promise = drain(
+      makeLayer('cli').turnWithRetries(makeInput(new AbortController().signal), () => false),
+    );
+    await vi.advanceTimersByTimeAsync(600_000);
+    const events = await promise;
+
+    const retryIdx = events.findIndex((e) => e.type === 'stream.retry');
+    expect(retryIdx).toBeGreaterThan(-1);
+    // The reset must precede the replayed attempt's output, not trail it.
+    const recoveredIdx = events.findIndex(
+      (e) => e.type === 'assistant.message' && e.text === 'recovered',
+    );
+    expect(recoveredIdx).toBeGreaterThan(retryIdx);
+  });
+
+  // Codex P2: the ceiling was advisory, not a wall clock — an unclamped probe
+  // sleep parked a full 60s minimum regardless of how little budget remained.
+  it('clamps the probe sleep to the remaining ceiling', async () => {
+    vi.useFakeTimers();
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '1'; // 1ms ceiling
+    scriptTurns([exhausted]);
+    const promise = drain(
+      makeLayer('cli').turnWithRetries(makeInput(new AbortController().signal), () => false),
+    );
+    // Far below one probe interval (60s): an unclamped sleep would still be parked.
+    await vi.advanceTimersByTimeAsync(1_000);
+    const events = await promise;
+
+    expect(events.at(-1)?.type).toBe('turn.completed');
+    const last = events.at(-1);
+    if (last?.type === 'turn.completed') {
+      expect(last.usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
+    }
   });
 });

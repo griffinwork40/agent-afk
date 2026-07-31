@@ -8,6 +8,7 @@ import type { ProviderEvent } from '../../provider.js';
 import {
   OVERLOAD_EXHAUSTED,
   OVERLOAD_PAUSE_CEILING_MS,
+  OVERLOAD_PAUSE_MAX_MS,
   OVERLOAD_PROBE_MIN_MS,
   OVERLOAD_PROBE_MAX_MS,
   classifyOverloadExhaustion,
@@ -164,5 +165,30 @@ describe('overload pause ceiling — forked-child default surface', () => {
       surface: 'daemon',
     });
     expect(resolveOverloadPauseCeilingMs(declaredSurfaceOf(daemon))).toBe(0);
+  });
+});
+
+// Invariant: an operator-supplied ceiling is clamped. Without an upper bound a
+// typo parks ANY surface — a daemon included — for years on a capacity blip,
+// which is the silent always-on hang the surface gate exists to prevent (#764).
+describe('resolveOverloadPauseCeilingMs — operator override is clamped', () => {
+  afterEach(() => {
+    delete process.env['AFK_OVERLOAD_PAUSE_MS'];
+  });
+
+  it('clamps an absurd override to the 2-hour maximum', () => {
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '99999999999';
+    expect(resolveOverloadPauseCeilingMs('cli')).toBe(OVERLOAD_PAUSE_MAX_MS);
+    expect(resolveOverloadPauseCeilingMs('daemon')).toBe(OVERLOAD_PAUSE_MAX_MS);
+  });
+
+  it('leaves a sane override untouched', () => {
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '90000';
+    expect(resolveOverloadPauseCeilingMs('daemon')).toBe(90_000);
+  });
+
+  it('still treats 0 as fail-fast everywhere', () => {
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '0';
+    expect(resolveOverloadPauseCeilingMs('cli')).toBe(0);
   });
 });

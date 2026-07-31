@@ -61,6 +61,15 @@ export const OVERLOAD_EXHAUSTED_NOTICE =
 export const OVERLOAD_PAUSE_CEILING_MS = 10 * 60 * 1000;
 
 /**
+ * Hard upper bound on an operator-supplied `AFK_OVERLOAD_PAUSE_MS`, matching the
+ * 2-hour worst case of the usage-limit park. Without it a typo
+ * (`AFK_OVERLOAD_PAUSE_MS=99999999999`) parks ANY surface — a daemon included —
+ * for years on an upstream capacity blip, which is precisely the silent
+ * always-on hang the surface gate exists to prevent.
+ */
+export const OVERLOAD_PAUSE_MAX_MS = 2 * 60 * 60 * 1000;
+
+/**
  * Probe cadence bounds. A 529 carries **no reset timestamp**, so unlike
  * `waitForReset` there is no authoritative deadline to key on — the only honest
  * strategy is to re-probe on a jittered interval until the plain wall-clock
@@ -135,7 +144,8 @@ const INTERACTIVE_SURFACES = new Set(['cli', 'repl', 'telegram']);
  * `AFK_OVERLOAD_PAUSE_MS` overrides BOTH the gate and the ceiling for every
  * surface: `0` disables the pause everywhere (pure fail-fast, the pre-#762
  * timing minus the fatal closure), a positive integer enables it with that
- * ceiling in milliseconds. A non-numeric or negative value is ignored.
+ * ceiling in milliseconds. A non-numeric or negative value is ignored, and an
+ * over-large one is clamped to {@link OVERLOAD_PAUSE_MAX_MS}.
  *
  * @param surface `AgentConfig.surface` as plumbed through the provider
  *                (`index.ts` → `query.ts` → `RetryLayer`). `undefined` is
@@ -146,7 +156,9 @@ export function resolveOverloadPauseCeilingMs(surface: string | undefined): numb
   const raw = env.AFK_OVERLOAD_PAUSE_MS;
   if (raw !== undefined && raw.trim() !== '') {
     const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.min(Math.floor(parsed), OVERLOAD_PAUSE_MAX_MS);
+    }
   }
   return surface !== undefined && INTERACTIVE_SURFACES.has(surface)
     ? OVERLOAD_PAUSE_CEILING_MS
