@@ -12,6 +12,7 @@ import type { Message } from '../types.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -53,9 +54,20 @@ export const STREAM_INCOMPLETE = 'stream_incomplete';
  * NOT present to the parent model as a complete answer. Note: the ZERO-OUTPUT
  * {@link STREAM_INCOMPLETE} case resolves `status: 'failed'` (nothing to
  * salvage) and so is surfaced through the failure path — not annotated here.
+ *
+ * {@link OVERLOAD_EXHAUSTED} is included for the same reason (#762/#764): an
+ * exhausted mid-stream 529 now ends the child's turn CLEANLY, so
+ * `handle.ts`'s `if (finalMessage) return finalMessage` short-circuits every
+ * salvage guard and the run resolves `succeeded` with the operator-facing
+ * overload notice as its only content. Without this arm, mint's phase guards
+ * accept that notice as a real spec/plan/research artifact.
  */
 export function isIncompleteStopReason(stopReason: string | undefined): boolean {
-  return stopReason === TOOL_USE_LOOP_CAPPED || stopReason === STREAM_INCOMPLETE;
+  return (
+    stopReason === TOOL_USE_LOOP_CAPPED ||
+    stopReason === STREAM_INCOMPLETE ||
+    stopReason === OVERLOAD_EXHAUSTED
+  );
 }
 
 /**
@@ -73,7 +85,9 @@ export function annotateIfIncomplete(content: string, stopReason: string | undef
   const why =
     stopReason === TOOL_USE_LOOP_CAPPED
       ? 'hit its tool-use iteration cap before finishing'
-      : 'was cut off before finishing (its stream ended without a final message)';
+      : stopReason === OVERLOAD_EXHAUSTED
+        ? 'was stopped by a sustained upstream overload (HTTP 529) before finishing'
+        : 'was cut off before finishing (its stream ended without a final message)';
   return (
     `[⚠ PARTIAL RESULT — the subagent ${why}. The text below is an incomplete ` +
     `intermediate finding, NOT a final answer; treat it as such.]\n\n${content}`
@@ -100,7 +114,7 @@ export function incompleteToolResultFields(
 ): { incomplete?: true; incompleteReason?: string } {
   if (!isIncompleteStopReason(stopReason)) return {};
   // Safe: isIncompleteStopReason(stopReason) === true implies stopReason is
-  // one of the two string sentinels above, never undefined.
+  // one of the three string sentinels above, never undefined.
   return { incomplete: true, incompleteReason: stopReason as string };
 }
 

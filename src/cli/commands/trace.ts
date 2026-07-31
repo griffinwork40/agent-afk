@@ -484,6 +484,26 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const hotSwap = md['hotSwapped'] === true ? '  (hot-swap)' : '';
         return line('resumed', `usage-limit${parked}${hotSwap}`);
       }
+      // Overload park/unpark (#762) is the same class of gap as the usage-limit
+      // park above — up to a 10-minute silence with no other trace signal — so it
+      // renders in the DEFAULT view too. A 529 carries no reset timestamp, so the
+      // ceiling is what bounds it; show that instead of a deadline.
+      if (p.phase === 'overload_pause') {
+        const md = p.metadata ?? {};
+        const ceiling = md['ceilingMs'];
+        const ceilBit =
+          typeof ceiling === 'number' ? `  ceiling ${fmtDuration(ceiling)}` : '  no ceiling';
+        const surface = md['surface'];
+        const surfaceBit = surface !== undefined ? `  ${String(surface)}` : '';
+        return line('paused', `overloaded (529)${ceilBit}${surfaceBit}`);
+      }
+      if (p.phase === 'overload_resume') {
+        const md = p.metadata ?? {};
+        const parked = p.durationMs !== undefined ? `  parked ${fmtDuration(p.durationMs)}` : '';
+        const outcome = md['outcome'];
+        const outcomeBit = outcome !== undefined ? `  ${String(outcome)}` : '';
+        return line('resumed', `overloaded${parked}${outcomeBit}`);
+      }
       // A per-session compaction disable is high-signal for the same reason as
       // the stalls above: it explains an otherwise-invisible future failure (the
       // session can no longer shed context, so it will eventually overflow the

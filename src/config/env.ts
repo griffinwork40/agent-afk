@@ -467,6 +467,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_OVERLOAD_PAUSE_MS',
+    description: 'Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity.',
+    type: 'number',
+    required: false,
+    example: '600000',
+    category: 'model',
+  },
+  {
     name: 'AFK_PROMPT_CACHE_TTL',
     description: 'TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h.',
     type: 'string',
@@ -1440,6 +1448,7 @@ export const env = {
   get AFK_MODEL_SMALL_API_KEY(): string | undefined { return process.env['AFK_MODEL_SMALL_API_KEY']; },
   get AFK_MODEL_SMALL_BASE_URL(): string | undefined { return process.env['AFK_MODEL_SMALL_BASE_URL']; },
   get AFK_VISION_MODELS(): string | undefined { return process.env['AFK_VISION_MODELS']; },
+  get AFK_OVERLOAD_PAUSE_MS(): string | undefined { return process.env['AFK_OVERLOAD_PAUSE_MS']; },
   get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },

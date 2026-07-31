@@ -19,6 +19,7 @@
  */
 
 import { BudgetExceededError, TimeoutError } from '../../utils/errors.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 import { emitClosure } from '../trace/emit.js';
 import type { ClosureReason } from '../trace/index.js';
 import type { TraceWriter } from '../trace/writer.js';
@@ -95,6 +96,11 @@ export function deriveSealStatus(s: ClosureSignals): 'succeeded' | 'failed' | 'c
   const signal = s.signal;
   if (signal.aborted && signal.reason !== 'closed') return 'cancelled';
   if (s.sawProviderError) return 'failed';
+  // Overload exhaustion (#762) reaches here with `sawProviderError: false` — the
+  // turn was committed CLEANLY so the session stays resumable — but it is a
+  // failure, not a success. Checked after abort so a genuine user cancel during
+  // the pause keeps its more-specific `cancelled` status.
+  if (s.lastStopReason === OVERLOAD_EXHAUSTED) return 'failed';
   return 'succeeded';
 }
 
