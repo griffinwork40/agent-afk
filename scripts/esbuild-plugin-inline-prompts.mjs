@@ -107,6 +107,18 @@ function escapeForTemplate(str) {
   return str.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
 }
 
+/**
+ * Contract: true when a call LOOKS like a prompt read this plugin is responsible
+ * for inlining — it resolves a path against the module's own directory and names
+ * a `.md` file — regardless of whether the path could be resolved. Used to tell a
+ * genuine near-miss (parameterized prompt path, must fail the build) from an
+ * unrelated `readFileSync` the plugin has no business touching (no `__dirname`
+ * anchor, or not a markdown file), which must stay silent.
+ */
+function isPromptShapedRead(callText) {
+  return /__dirname|\bhere\b/.test(callText) && /\.md['"`]/.test(callText);
+}
+
 function tryResolveReadFileSyncPath(callText, fileDir) {
   const joinMatch = callText.match(
     /readFileSync\(\s*(?:join|resolve)\s*\(\s*(?:__dirname|here)\s*,\s*(.+?)\)\s*,\s*['"]utf-?8['"]\s*\)/
@@ -182,7 +194,12 @@ export function prepareSources() {
       if (tmpPath === promptLoaderPath) continue;
 
       const content = readFileSync(tmpPath, 'utf-8');
-      if (!content.includes('readFileSync') || !/\.md['"]/.test(content)) continue;
+      // Invariant: the `.md` probe must accept a BACKTICK as well as a quote.
+      // A parameterized read ends its path in a template literal
+      // (`${name}.md`), so a quote-only test skipped the whole file here and the
+      // near-miss check below could never see it — the resolver was unreachable
+      // for exactly the shape that ships a broken bundle (#776).
+      if (!content.includes('readFileSync') || !/\.md['"`]/.test(content)) continue;
 
       // Use the ORIGINAL directory for path resolution (tmp copy won't have .md files
       // if they're not in the ts tree, but the original src does)
@@ -214,6 +231,23 @@ export function prepareSources() {
           const replacement = '`' + escapeForTemplate(mdContent) + '`';
           result = result.slice(0, match.index) + replacement + result.slice(match.index + match[0].length);
           stats.replacedCalls++;
+        } else if (isPromptShapedRead(match[0])) {
+          // Fail CLOSED (#776). Previously this branch did not exist: an
+          // unresolvable path left the call untouched and the build SUCCEEDED,
+          // shipping a bundle that reads a .md absent from the package. Every
+          // other gate misses it — lint and tests run against src/, and the
+          // non-dist build copies all .md unconditionally, masking it entirely.
+          const line = content.slice(0, match.index).split('\n').length;
+          throw new Error(
+            `[inline-prompts] Unresolvable prompt read at ${relative(repoRoot, origPath)}:${line}\n` +
+              `    ${match[0].replace(/\s+/g, ' ').slice(0, 160)}\n` +
+              `  Every join()/resolve() argument must be a string LITERAL so the path can be\n` +
+              `  resolved at build time and the prompt inlined. A parameterized path (template\n` +
+              `  literal or variable) cannot be resolved here, and leaving it in place would\n` +
+              `  ship a runtime readFileSync on a file that is not in the published package.\n` +
+              `  Fix: use a literal path at this call site, or teach\n` +
+              `  tryResolveReadFileSyncPath() to understand this shape.`,
+          );
         }
       }
 
