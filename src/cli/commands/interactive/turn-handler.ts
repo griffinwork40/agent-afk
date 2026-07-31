@@ -948,10 +948,9 @@ export function printTurnFooter(
   // forever under API-key auth, where the quota headers never arrive.
   // The park-and-resume promise is conditional on the real retry configuration
   // (see capNote, quota-footer.ts), so the flag is read rather than assumed.
-  // Via the memoized-tier resolver, NOT loadConfig(): loadConfig's return value
-  // is a field whitelist that drops autoResumeOnUsageLimit (so the read would
-  // be inert), and it re-installs process-global slot bindings on every call —
-  // both disqualifying for a per-turn display read.
+  // Via the memoized-tier resolver, NOT loadConfig(): the latter re-installs
+  // process-global slot bindings on every call, disqualifying it for a
+  // per-turn display read.
   const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
     autoResume: resolveAutoResumeOnUsageLimit(),
   });

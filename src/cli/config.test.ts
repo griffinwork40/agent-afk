@@ -1252,17 +1252,13 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     expect(resolveCliPermissionMode()).toBe('plan');
   });
 
-  it('resolveAutoResumeOnUsageLimit() reads the flag loadConfig() drops', () => {
-    // Regression guard: `loadConfig()`'s return value is an explicit field
-    // whitelist that omits autoResumeOnUsageLimit, so the obvious
-    // `loadConfig().autoResumeOnUsageLimit` read is permanently `undefined`.
-    // The footer's "auto-resume is off" copy hangs off this resolver instead;
-    // the second assertion is what fails if anyone re-routes it via loadConfig.
+  it('preserves autoResumeOnUsageLimit for both display and provider configuration', () => {
     mockConfig({});
     expect(resolveAutoResumeOnUsageLimit()).toBe(true);
+    expect(loadConfig().autoResumeOnUsageLimit).toBeUndefined();
     _resetConfigCache();
     mockConfig({ autoResumeOnUsageLimit: false });
     expect(resolveAutoResumeOnUsageLimit()).toBe(false);
-    expect(loadConfig().autoResumeOnUsageLimit).toBeUndefined();
+    expect(loadConfig().autoResumeOnUsageLimit).toBe(false);
   });
 });

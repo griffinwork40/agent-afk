@@ -2369,8 +2369,8 @@ describe('printTurnFooter — subscription-quota line', () => {
     // Covers the wiring, not just the pure formatter: the five quota-footer.ts
     // unit tests pass `{ autoResume }` explicitly, so a DEAD read at this call
     // site stayed invisible to them. That is exactly how the first cut of this
-    // shipped — `loadConfig().autoResumeOnUsageLimit` is permanently undefined,
-    // so the promise was unconditional and 13,754 green tests missed it.
+    // shipped — the display and provider must resolve the same persisted flag,
+    // or the promise can contradict runtime behaviour.
     configStub.autoResume = false;
     recordQuotaSnapshot({
       fiveHourUtilization: 0.97,

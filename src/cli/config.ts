@@ -116,10 +116,7 @@ export function resolveCliPermissionMode(): PermissionMode {
  * call and enforces the `local-*` guard. A per-turn display read must do
  * neither.
  *
- * Contract: `loadConfig()` cannot answer this question — its return value is an
- * explicit field whitelist that drops `autoResumeOnUsageLimit`, so reading it
- * from there always yields `undefined`. Defaults to `true`, matching the
- * provider's own default (`query.ts`).
+ * Defaults to `true`, matching the provider's own default (`query.ts`).
  */
 export function resolveAutoResumeOnUsageLimit(): boolean {
   return loadJsonConfig().config.autoResumeOnUsageLimit ?? true;
@@ -174,6 +171,9 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     // afk.config.json / env / override `permissionMode` still wins.
     permissionMode: merged.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE,
     ...(merged.autoRouting !== undefined ? { autoRouting: merged.autoRouting } : {}),
+    ...(merged.autoResumeOnUsageLimit !== undefined
+      ? { autoResumeOnUsageLimit: merged.autoResumeOnUsageLimit }
+      : {}),
     ...(merged.daemon !== undefined ? { daemon: merged.daemon } : {}),
     ...(merged.telegram !== undefined ? { telegram: merged.telegram } : {}),
     ...(merged.bgSummaries !== undefined ? { bgSummaries: merged.bgSummaries } : {}),
