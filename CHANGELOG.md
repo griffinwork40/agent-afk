@@ -11,11 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.0] - 2026-07-31
+
 ### Added
 - warn in the turn footer once a subscription rolling window passes 80% used, with its reset countdown and the note that AFK pauses and auto-resumes at the cap
 
 ### Changed
 - grade the status-line usage indicator by severity — per-window tone, the binding window's reset countdown, a stale-reading marker, and drop-last priority so a critical reading survives a narrow terminal (9d2b28d)
+
+### Added
+- make the subscription-usage indicator severity-graded and time-aware (#765) (42a7a13)
+
 ## [5.82.13] - 2026-07-31
 
 ### Fixed
