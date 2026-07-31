@@ -34,7 +34,7 @@ import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
-import { loadConfig, loadTelegramConfig } from '../../config.js';
+import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -947,11 +947,13 @@ export function printTurnFooter(
   // below 80% (the status-line indicator covers that range ambiently) and silent
   // forever under API-key auth, where the quota headers never arrive.
   // The park-and-resume promise is conditional on the real retry configuration
-  // (see capNote, quota-footer.ts), so the flag is read here rather than
-  // assumed — same inline-config pattern as the loadTelegramConfig() call in
-  // runTurn above. `?? true` matches the provider's own default (query.ts).
+  // (see capNote, quota-footer.ts), so the flag is read rather than assumed.
+  // Via the memoized-tier resolver, NOT loadConfig(): loadConfig's return value
+  // is a field whitelist that drops autoResumeOnUsageLimit (so the read would
+  // be inert), and it re-installs process-global slot bindings on every call —
+  // both disqualifying for a per-turn display read.
   const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
-    autoResume: loadConfig().autoResumeOnUsageLimit ?? true,
+    autoResume: resolveAutoResumeOnUsageLimit(),
   });
   if (quota.text !== null) {
     const quotaColorFn =

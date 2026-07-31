@@ -12,6 +12,7 @@ import {
   getModelId,
   _resetConfigCache,
   resolveCliPermissionMode,
+  resolveAutoResumeOnUsageLimit,
   DEFAULT_CLI_PERMISSION_MODE,
 } from './config.js';
 import {
@@ -1249,5 +1250,19 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     _resetConfigCache();
     mockConfig({ permissionMode: 'plan' });
     expect(resolveCliPermissionMode()).toBe('plan');
+  });
+
+  it('resolveAutoResumeOnUsageLimit() reads the flag loadConfig() drops', () => {
+    // Regression guard: `loadConfig()`'s return value is an explicit field
+    // whitelist that omits autoResumeOnUsageLimit, so the obvious
+    // `loadConfig().autoResumeOnUsageLimit` read is permanently `undefined`.
+    // The footer's "auto-resume is off" copy hangs off this resolver instead;
+    // the second assertion is what fails if anyone re-routes it via loadConfig.
+    mockConfig({});
+    expect(resolveAutoResumeOnUsageLimit()).toBe(true);
+    _resetConfigCache();
+    mockConfig({ autoResumeOnUsageLimit: false });
+    expect(resolveAutoResumeOnUsageLimit()).toBe(false);
+    expect(loadConfig().autoResumeOnUsageLimit).toBeUndefined();
   });
 });

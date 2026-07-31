@@ -106,6 +106,25 @@ export function resolveCliPermissionMode(): PermissionMode {
   return loadJsonConfig().config.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE;
 }
 
+/**
+ * Whether a usage-limit pause will auto-resume, for display surfaces that
+ * *describe* that behaviour to the user (the quota footer, `quota-footer.ts`).
+ *
+ * Reads the memoized JSON tier directly, side-effect-free — same rationale as
+ * `loadTelegramConfig` / `resolveCliPermissionMode`, and deliberately NOT
+ * `loadConfig`, which re-installs process-global model-slot bindings on every
+ * call and enforces the `local-*` guard. A per-turn display read must do
+ * neither.
+ *
+ * Contract: `loadConfig()` cannot answer this question — its return value is an
+ * explicit field whitelist that drops `autoResumeOnUsageLimit`, so reading it
+ * from there always yields `undefined`. Defaults to `true`, matching the
+ * provider's own default (`query.ts`).
+ */
+export function resolveAutoResumeOnUsageLimit(): boolean {
+  return loadJsonConfig().config.autoResumeOnUsageLimit ?? true;
+}
+
 export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
   const envConfig = loadEnvConfig();
   const { config: jsonConfig, sourcePath: jsonSourcePath, modelsPartial } = loadJsonConfig();
