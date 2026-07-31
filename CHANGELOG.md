@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.9] - 2026-07-31
+
+### Fixed
+- preserve the turn and bound a pause when mid-stream overload retries exhaust (#762) (#764) (7f5083c)
+- stop annihilating whitespace-only text deltas and fusing round-boundary prose (#810) (9db7413)
+
+### Changed
+- close breadth-guard and warn-latch coverage gaps from #753 (#783) (#812) (a0be547)
+
 ## [5.83.8] - 2026-07-31
 
 ### Fixed
