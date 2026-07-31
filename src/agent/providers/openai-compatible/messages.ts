@@ -12,6 +12,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { ProviderUserTurn } from '../../provider.js';
+import { refreshEnvironmentDate } from '../shared/date-rollover.js';
 
 /**
  * A single OpenAI Chat Completions content part. The multimodal `content`
@@ -227,7 +228,14 @@ export function buildMessages(args: {
 
   const sys = resolveSystemPrompt(args.config);
   if (sys !== undefined) {
-    messages.push({ role: 'system', content: sys });
+    // Invariant: buildMessages() runs once per runIteration() — i.e. once per
+    // turn — so re-rendering the `# Environment` date line here (rather than
+    // once at session construction) is what keeps a resident session's
+    // reported date current across a local-midnight crossing. Mirrors the
+    // anthropic-direct fix in query.ts; see providers/shared/date-rollover.ts
+    // for why this is safe for the prompt-cache: the string is returned by
+    // reference on same-day turns.
+    messages.push({ role: 'system', content: refreshEnvironmentDate(sys) });
   }
 
   if (args.resumeHistory) {
