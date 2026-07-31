@@ -16,6 +16,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as path from 'node:path';
 import { runTurn, formatContextUsage, printTurnFooter } from './turn-handler.js';
 import { recordQuotaSnapshot, resetQuotaCacheForTests } from '../../../agent/quota-cache.js';
+
+// Only `resolveAutoResumeOnUsageLimit` is stubbed; every other config export
+// stays real. Defaults to `true` (the production default) so the ~70 other
+// tests in this file are unaffected — a case opts in by flipping the stub.
+const configStub = vi.hoisted(() => ({ autoResume: true }));
+vi.mock('../../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../config.js')>()),
+  resolveAutoResumeOnUsageLimit: () => configStub.autoResume,
+}));
 import { getCurrentSink } from '../../../agent/_lib/skill-sink-channel.js';
 import type { AgentSession } from '../../../agent/session.js';
 import type { OutputEvent } from '../../../agent/types.js';
@@ -2322,9 +2331,11 @@ describe('formatContextUsage — proactive escalating context tiers', () => {
 describe('printTurnFooter — subscription-quota line', () => {
   beforeEach(() => {
     resetQuotaCacheForTests();
+    configStub.autoResume = true;
   });
   afterEach(() => {
     resetQuotaCacheForTests();
+    configStub.autoResume = true;
   });
 
   const footerLines = (): string[] => {
@@ -2352,6 +2363,34 @@ describe('printTurnFooter — subscription-quota line', () => {
     const out = footerLines().join('\n');
     expect(out).toContain('5h quota 94% used');
     expect(out).toContain('resets in 12m');
+  });
+
+  it('honours a config-set autoResumeOnUsageLimit=false through the real call path', () => {
+    // Covers the wiring, not just the pure formatter: the five quota-footer.ts
+    // unit tests pass `{ autoResume }` explicitly, so a DEAD read at this call
+    // site stayed invisible to them. That is exactly how the first cut of this
+    // shipped — the display and provider must resolve the same persisted flag,
+    // or the promise can contradict runtime behaviour.
+    configStub.autoResume = false;
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.97,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      observedAt: new Date(),
+    });
+    const out = footerLines().join('\n');
+    expect(out).toContain('5h quota 97% used');
+    expect(out).not.toContain('auto-resumes');
+    expect(out).toContain('auto-resume is off');
+  });
+
+  it('promises auto-resume through the real call path when the flag is on', () => {
+    configStub.autoResume = true;
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.97,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      observedAt: new Date(),
+    });
+    expect(footerLines().join('\n')).toContain('AFK pauses and auto-resumes at the cap');
   });
 
   it('orders the quota line AFTER the context line — nearest deadline reads first', () => {

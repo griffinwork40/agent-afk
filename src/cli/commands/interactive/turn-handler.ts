@@ -34,7 +34,7 @@ import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
-import { loadTelegramConfig } from '../../config.js';
+import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -946,7 +946,14 @@ export function printTurnFooter(
   // is the constraint on the next hour — nearest deadline reads first. Silent
   // below 80% (the status-line indicator covers that range ambiently) and silent
   // forever under API-key auth, where the quota headers never arrive.
-  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()));
+  // The park-and-resume promise is conditional on the real retry configuration
+  // (see capNote, quota-footer.ts), so the flag is read rather than assumed.
+  // Via the memoized-tier resolver, NOT loadConfig(): the latter re-installs
+  // process-global slot bindings on every call, disqualifying it for a
+  // per-turn display read.
+  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
+    autoResume: resolveAutoResumeOnUsageLimit(),
+  });
   if (quota.text !== null) {
     const quotaColorFn =
       quota.tier === 'over' || quota.tier === 'near'
