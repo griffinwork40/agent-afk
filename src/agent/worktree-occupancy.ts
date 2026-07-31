@@ -44,6 +44,7 @@
  * @module agent/worktree-occupancy
  */
 
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
@@ -98,11 +99,20 @@ export function worktreeRootFor(cwd: string): string | undefined {
  * directory is atomic on POSIX and on NTFS, so a concurrent reader sees either
  * the old meta or the new one, never a partial one.
  */
-export async function touchWorktreeOccupancy(cwd: string): Promise<void> {
+export async function touchWorktreeOccupancy(
+  cwd: string,
+  isCancelled?: () => boolean,
+): Promise<void> {
   const root = worktreeRootFor(cwd);
   if (root === undefined) return;
+  if (isCancelled?.() === true) return;
   const metaPath = join(root, META_FILENAME);
-  const tmpPath = `${metaPath}.${process.pid}.tmp`;
+  // Invariant: the temp name must be unique per CALL, not per process. Subagents
+  // run in-process and inherit the parent cwd verbatim, so a worktree-isolated
+  // parent fanning out N children arms N heartbeats against the same root — a
+  // pid-only name gives all of them one temp path, and their write/rename pairs
+  // interleave on a single file.
+  const tmpPath = `${metaPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     let meta: Record<string, unknown> = {};
     try {
@@ -113,6 +123,14 @@ export async function touchWorktreeOccupancy(cwd: string): Promise<void> {
     meta['pid'] = process.pid;
     meta['createdAt'] = new Date().toISOString();
     await fs.writeFile(tmpPath, JSON.stringify(meta, null, 2), 'utf-8');
+    // Ordering constraint (Node event loop): the caller's cancel signal can flip
+    // during either await above, and `rename` is the only irreversible step. Re-check
+    // immediately before it — never between read and write — so a cancelled touch
+    // leaves the meta file byte-identical and takes its temp file with it.
+    if (isCancelled?.() === true) {
+      await fs.rm(tmpPath, { force: true }).catch(() => {});
+      return;
+    }
     await fs.rename(tmpPath, metaPath);
   } catch {
     // Best-effort — never block dispatch. Drop the temp file if the rename
@@ -149,14 +167,24 @@ export function startWorktreeOccupancyHeartbeat(
   intervalMs: number = DEFAULT_HEARTBEAT_INTERVAL_MS,
 ): () => void {
   let timer: ReturnType<typeof setInterval> | undefined;
+  // Invariant: clearing the interval is NOT sufficient for "stops touching".
+  // Each tick fires an un-awaited async touch, so one already past its first
+  // await survives `clearInterval` and lands its rename after the caller
+  // believes the heartbeat is disarmed — re-stamping `createdAt` on a tree the
+  // sweep was about to judge. This flag is what the touch honours to make the
+  // disarm actually observable.
+  let stopped = false;
   const stop = (): void => {
+    stopped = true;
     if (timer === undefined) return;
     clearInterval(timer);
     timer = undefined;
   };
   // Nothing to protect outside a managed tree — hand back an inert stop.
   if (worktreeRootFor(cwd) === undefined) return stop;
-  timer = setInterval(() => { void touchWorktreeOccupancy(cwd); }, intervalMs);
+  timer = setInterval(() => {
+    void touchWorktreeOccupancy(cwd, () => stopped);
+  }, intervalMs);
   timer.unref();
   return stop;
 }

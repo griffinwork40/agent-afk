@@ -1,7 +1,7 @@
 /**
  * Tests for the worktree occupancy touch helper.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join, sep } from 'node:path';
@@ -169,5 +169,65 @@ describe('DEFAULT_HEARTBEAT_INTERVAL_MS vs. MIN_EMPTY_AGE_MS', () => {
   // failures. No timers: plain arithmetic on the exported constants.
   it('stays comfortably below the sweep age gate (<= 1/4 of it, margin explicit)', () => {
     expect(DEFAULT_HEARTBEAT_INTERVAL_MS).toBeLessThanOrEqual(MIN_EMPTY_AGE_MS / 4);
+  });
+});
+
+/**
+ * The disarm and the atomic-write temp path both had gaps that only show up
+ * under concurrency: `clearInterval` cannot stop a touch already past its first
+ * await, and a pid-only temp name collides across in-process subagents sharing
+ * one cwd.
+ */
+describe('heartbeat disarm and write isolation', () => {
+  it('honours cancellation mid-flight and leaves the meta byte-identical', async () => {
+    const metaPath = join(worktreePath, '.afk-worktree-meta.json');
+    await fs.writeFile(metaPath, JSON.stringify({ owner: 'agent', createdAt: 'ORIGINAL' }));
+
+    // Cancel before the rename lands: the meta must not be re-stamped.
+    await touchWorktreeOccupancy(worktreePath, () => true);
+
+    const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+    expect(meta['createdAt']).toBe('ORIGINAL');
+    const leftovers = (await fs.readdir(worktreePath)).filter((f) => f.endsWith('.tmp'));
+    expect(leftovers).toEqual([]);
+  });
+
+  it('writes normally when not cancelled', async () => {
+    const metaPath = join(worktreePath, '.afk-worktree-meta.json');
+    await fs.writeFile(metaPath, JSON.stringify({ owner: 'agent', createdAt: 'ORIGINAL' }));
+    await touchWorktreeOccupancy(worktreePath, () => false);
+    const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+    expect(meta['createdAt']).not.toBe('ORIGINAL');
+  });
+
+  // Two heartbeats armed for one root in a single process (a worktree-isolated
+  // parent fanning out subagents) must not share a temp filename.
+  it('survives concurrent touches without leaking a temp file or a torn meta', async () => {
+    const metaPath = join(worktreePath, '.afk-worktree-meta.json');
+    await fs.writeFile(metaPath, JSON.stringify({ owner: 'agent' }));
+
+    await Promise.all(
+      Array.from({ length: 8 }, () => touchWorktreeOccupancy(worktreePath)),
+    );
+
+    const raw = await fs.readFile(metaPath, 'utf-8');
+    expect(() => JSON.parse(raw) as unknown).not.toThrow();
+    expect((JSON.parse(raw) as Record<string, unknown>)['pid']).toBe(process.pid);
+    const leftovers = (await fs.readdir(worktreePath)).filter((f) => f.endsWith('.tmp'));
+    expect(leftovers).toEqual([]);
+  });
+
+  it('unrefs the interval so a pending heartbeat cannot hold the process open', () => {
+    const unref = vi.fn();
+    const spy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockReturnValue({ unref } as unknown as ReturnType<typeof setInterval>);
+    try {
+      const stop = startWorktreeOccupancyHeartbeat(worktreePath, 10);
+      expect(unref).toHaveBeenCalledTimes(1);
+      stop();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

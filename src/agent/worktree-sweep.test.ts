@@ -512,6 +512,102 @@ describe('stale-dirty-never-removes', () => {
     expect(result.removed).not.toContain(worktreePath);
     expect(result.warnings.some((w) => w.includes('stale-dirty') || w.includes(worktreePath))).toBe(true);
   });
+
+  // An ignored-state protect is reported through the SAME stale-dirty path as a
+  // real diff, so the warning used to tell the reader to go look for uncommitted
+  // changes in a tree `git status` calls clean. Pin the honest label.
+  it('names ignored local state as the reason, not "uncommitted changes"', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-ignored-only-old');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 40).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = worktreeBlock({ path: worktreePath, head: 'tip456' });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      // The ignored probe: a hand-kept file no rebuild restores.
+      if (args.includes('--ignored')) {
+        return { stdout: '!! local-notes.md\n', stderr: '' };
+      }
+      // Bare status: CLEAN. This is the whole point — the tree has no diff.
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysDirty: 30,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(worktreePath);
+    const warning = result.warnings.find((w) => w.includes(worktreePath) && w.includes('stale-dirty'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('non-rebuildable ignored files');
+    expect(warning).not.toContain('uncommitted changes');
+  });
+
+  // A probe that protects because git FAILED must say so; otherwise the tree is
+  // preserved forever with no trace of why.
+  it('warns distinctly when the ignored probe itself fails', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-probe-broken');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 40).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = worktreeBlock({ path: worktreePath, head: 'tip456' });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('--ignored')) throw new Error('stdout maxBuffer length exceeded');
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysDirty: 30,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(worktreePath);
+    expect(
+      result.warnings.some(
+        (w) => w.includes('ignored-file probe failed') && w.includes(worktreePath),
+      ),
+    ).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

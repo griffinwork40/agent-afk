@@ -43,6 +43,29 @@ export {
  */
 const GIT_LITERAL_PATHS = ['-c', 'core.quotePath=false'];
 
+/**
+ * Invariant: a scoped `--untracked-files=all` expansion of a populated `dist/`
+ * or `target/` can print far more than Node's 1MB default, and an execFile
+ * maxBuffer overflow REJECTS rather than truncating. Without a raised ceiling
+ * the reject lands in the `catch` below, protects the tree, and every
+ * large-build worktree becomes permanently unreapable — the immortality this
+ * module's docblock exists to prevent. The timeout bounds the other direction:
+ * a wedged git must not stall the sweep indefinitely.
+ */
+const PROBE_EXEC_OPTS = { maxBuffer: 64 * 1024 * 1024, timeout: 10_000 } as const;
+
+/** Why the probe says a tree must be preserved. */
+export type IgnoredProbeVerdict =
+  | { protect: false }
+  /** Found an ignored entry a rebuild would not restore. */
+  | { protect: true; because: 'non-rebuildable-entry' }
+  /**
+   * git itself failed, so the answer is unknown and we protect on principle.
+   * Distinguished from a real find so callers can SAY SO: a silent protect here
+   * is indistinguishable from a genuine one and hides a permanent leak.
+   */
+  | { protect: true; because: 'git-failed'; detail: string };
+
 /** True when `relPath` is ignored output a rebuild would restore. */
 export function isRebuildableIgnoredEntry(relPath: string): boolean {
   return classifyIgnoredEntry(relPath) !== 'protected';
@@ -57,7 +80,7 @@ async function readIgnoredEntries(
   execFile: ExecFileFn,
   worktreePath: string,
   scopePath?: string,
-): Promise<string[] | undefined> {
+): Promise<{ entries: string[] } | { failure: string }> {
   const args = [
     ...GIT_LITERAL_PATHS,
     '-C', worktreePath,
@@ -65,14 +88,17 @@ async function readIgnoredEntries(
   ];
   if (scopePath !== undefined) args.push('--untracked-files=all', '--', scopePath);
   try {
-    const { stdout } = await execFile('git', args);
-    return stdout
-      .split('\n')
-      .filter((line) => line.startsWith('!!'))
-      .map((line) => line.slice(2).trim())
-      .filter((entry) => entry !== '');
-  } catch {
-    return undefined;
+    const { stdout } = await execFile('git', args, PROBE_EXEC_OPTS);
+    return {
+      entries: stdout
+        .split('\n')
+        .filter((line) => line.startsWith('!!'))
+        .map((line) => line.slice(2).trim())
+        .filter((entry) => entry !== ''),
+    };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { failure: scopePath === undefined ? detail : `expanding ${scopePath}: ${detail}` };
   }
 }
 
@@ -89,14 +115,18 @@ async function inspectableDirHidesLocalState(
   execFile: ExecFileFn,
   worktreePath: string,
   dirEntry: string,
-): Promise<boolean> {
+): Promise<IgnoredProbeVerdict> {
   const nested = await readIgnoredEntries(execFile, worktreePath, dirEntry);
-  if (nested === undefined) return true; // unreadable → protect
-  for (const entry of nested) {
-    if (entry === dirEntry) continue; // git echoed the directory — no new information
-    if (classifyIgnoredEntry(entry) === 'protected') return true;
+  if ('failure' in nested) {
+    return { protect: true, because: 'git-failed', detail: nested.failure };
   }
-  return false;
+  for (const entry of nested.entries) {
+    if (entry === dirEntry) continue; // git echoed the directory — no new information
+    if (classifyIgnoredEntry(entry) === 'protected') {
+      return { protect: true, because: 'non-rebuildable-entry' };
+    }
+  }
+  return { protect: false };
 }
 
 /**
@@ -110,18 +140,33 @@ async function inspectableDirHidesLocalState(
  * populated worktree. Only directories classified `inspectable` — small build
  * output, not dependency trees — pay for a second, scoped call.
  */
+export async function probeNonRebuildableIgnoredFiles(
+  execFile: ExecFileFn,
+  worktreePath: string,
+): Promise<IgnoredProbeVerdict> {
+  const top = await readIgnoredEntries(execFile, worktreePath);
+  // Unreadable → never force-remove on a guess.
+  if ('failure' in top) return { protect: true, because: 'git-failed', detail: top.failure };
+  for (const entry of top.entries) {
+    const verdict = classifyIgnoredEntry(entry);
+    if (verdict === 'protected') return { protect: true, because: 'non-rebuildable-entry' };
+    if (verdict === 'inspectable' && entry.endsWith('/')) {
+      const nested = await inspectableDirHidesLocalState(execFile, worktreePath, entry);
+      if (nested.protect) return nested;
+    }
+  }
+  return { protect: false };
+}
+
+/**
+ * Boolean form, kept as the default surface: most callers only need "may I
+ * remove this?" and collapsing the verdict keeps their code honest about
+ * failing safe. Use `probeNonRebuildableIgnoredFiles` when the caller can
+ * REPORT why, so a protect-on-failure is not silent.
+ */
 export async function hasNonRebuildableIgnoredFiles(
   execFile: ExecFileFn,
   worktreePath: string,
 ): Promise<boolean> {
-  const entries = await readIgnoredEntries(execFile, worktreePath);
-  if (entries === undefined) return true; // unreadable → never force-remove on a guess
-  for (const entry of entries) {
-    const verdict = classifyIgnoredEntry(entry);
-    if (verdict === 'protected') return true;
-    if (verdict === 'inspectable' && entry.endsWith('/')) {
-      if (await inspectableDirHidesLocalState(execFile, worktreePath, entry)) return true;
-    }
-  }
-  return false;
+  return (await probeNonRebuildableIgnoredFiles(execFile, worktreePath)).protect;
 }
