@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.82.13] - 2026-07-31
+
+### Fixed
+- block SSRF egress to internal hosts in web_scrape (#575) (#750) (8a9e586)
+- preserve a failed skill fork's partial output (#767) (e7d8cad)
+
 ## [5.82.12] - 2026-07-31
 
 ### Fixed
