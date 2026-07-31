@@ -16,6 +16,7 @@ import {
   resolveOverloadPauseCeilingMs,
 } from './overload-pause.js';
 import { classifyUsageLimitError } from './usage-limit.js';
+import { AnthropicDirectProvider } from './index.js';
 
 const completed = (stopReason?: string | null): ProviderEvent => ({
   type: 'turn.completed',
@@ -122,5 +123,46 @@ describe('jitterBackoff / nextProbeDelayMs', () => {
       expect(d).toBeGreaterThanOrEqual(OVERLOAD_PROBE_MIN_MS);
       expect(d).toBeLessThanOrEqual(OVERLOAD_PROBE_MAX_MS);
     }
+  });
+});
+
+// Invariant: a provider constructed the way a FORKED CHILD constructs one —
+// `new AnthropicDirectProvider({ permissions, … })` with no `surface` — must
+// resolve a ceiling of 0 (fail fast). Every fork site in tools/nesting.ts and
+// providers/index.ts omits `surface`, so what a headless child gets is whatever
+// an unstated surface resolves to. The gate therefore reads the DECLARED
+// surface, not the 'cli'-defaulted one presence advertising needs (#764).
+describe('overload pause ceiling — forked-child default surface', () => {
+  afterEach(() => {
+    delete process.env['AFK_OVERLOAD_PAUSE_MS'];
+  });
+
+  const declaredSurfaceOf = (p: AnthropicDirectProvider): string | undefined =>
+    (p as unknown as { declaredSurface: string | undefined }).declaredSurface;
+
+  it('fails fast for a provider constructed without an explicit surface', () => {
+    const forkDefaulted = new AnthropicDirectProvider({ permissions: { allowedTools: [] } });
+    expect(declaredSurfaceOf(forkDefaulted)).toBeUndefined();
+    expect(resolveOverloadPauseCeilingMs(declaredSurfaceOf(forkDefaulted))).toBe(0);
+  });
+
+  it('leaves presence advertising on its interactive default', () => {
+    // The 'cli' default is load-bearing for presence (presence-lifecycle.test.ts):
+    // decoupling the pause gate must not disturb it.
+    const forkDefaulted = new AnthropicDirectProvider({ permissions: { allowedTools: [] } });
+    expect((forkDefaulted as unknown as { surface: string }).surface).toBe('cli');
+  });
+
+  it('still parks an explicitly interactive surface', () => {
+    const repl = new AnthropicDirectProvider({ permissions: { allowedTools: [] }, surface: 'cli' });
+    expect(resolveOverloadPauseCeilingMs(declaredSurfaceOf(repl))).toBe(OVERLOAD_PAUSE_CEILING_MS);
+  });
+
+  it('fails fast on an explicitly headless surface', () => {
+    const daemon = new AnthropicDirectProvider({
+      permissions: { allowedTools: [] },
+      surface: 'daemon',
+    });
+    expect(resolveOverloadPauseCeilingMs(declaredSurfaceOf(daemon))).toBe(0);
   });
 });
