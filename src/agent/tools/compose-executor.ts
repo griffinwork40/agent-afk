@@ -23,6 +23,8 @@ import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
 import type { SubagentExecutionError } from '../subagent/result.js';
+import type { SubagentProgressSink } from '../types/session-types.js';
+import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { getSessionsDir } from '../../paths.js';
 
 export interface ComposeExecutorContext {
@@ -576,6 +578,16 @@ export class ComposeExecutor {
     // discarding healthy siblings too.
     const maxToolRoundsPerNode = parsed.max_tool_rounds_per_node;
     let manager: SubagentManager;
+    // Resolve the ambient sink when an event is delivered (rather than when
+    // the manager is constructed), while preserving compose's historical
+    // guarantee that renderer failures cannot fail a child node.
+    const isolatingProgressSink: SubagentProgressSink = (event, meta) => {
+      try {
+        getCurrentSink()?.(event, meta);
+      } catch {
+        // Progress rendering is best-effort and must not affect execution.
+      }
+    };
 
     // Read-scope inheritance (#547): derive the DAG nodes' parentReadRoots from
     // the parent session's read scope + this executor's cwd, mirroring the
@@ -593,10 +605,10 @@ export class ComposeExecutor {
       // `this.ctx.defaultModel`), so that model is the provider source of truth
       // for the fork-time credential fallback (see SubagentManager.parentProvider).
       parentModel: this.ctx.defaultModel,
-      // No progressSink override: SubagentManager falls back to the ambient
-      // sink (`this.progressSink ?? getCurrentSink()`) at fork time, which is
-      // strictly better than capturing it here — a sink installed after this
-      // manager is constructed is still observed.
+      // Keep ambient rendering failures isolated from node execution. The
+      // forwarding sink resolves the ambient sink per event, so sinks
+      // installed after manager construction are still observed.
+      progressSink: isolatingProgressSink,
       ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
       // Anchor every forked DAG node to the session's worktree (re-anchored via
       // setCwd). Without this the manager's parentCwd is undefined and nodes

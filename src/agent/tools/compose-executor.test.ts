@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ToolCall } from './types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
+import { runWithSink } from '../_lib/skill-sink-channel.js';
 
 // Mock SubagentManager + runSubagentDAG before importing the executor.
 const mockForkSubagent = vi.fn();
@@ -11,8 +12,7 @@ const mockTeardownAll = vi.fn(async () => {});
 const mockKill = vi.fn(async (_id: string) => true);
 
 // Capture the most recent SubagentManager constructor options so tests can
-// assert what the executor passes (notably: that it does NOT install a
-// progressSink override, leaving ambient sink resolution to fork time).
+// assert what the executor passes.
 interface CapturedManagerOpts {
   progressSink?: SubagentProgressSink;
   apiKey?: string;
@@ -1139,11 +1139,7 @@ describe('ComposeExecutor', () => {
       expect(result.content).toContain('ignoring the deprecated key');
     });
 
-    it('does not override the ambient progressSink', async () => {
-      // The executor no longer chains a counting sink. Leaving progressSink
-      // unset lets SubagentManager resolve the ambient sink at fork time
-      // (`this.progressSink ?? getCurrentSink()`), so a sink installed after
-      // this manager is constructed is still observed.
+    it('forwards to the ambient progressSink while isolating renderer errors', async () => {
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext());
 
@@ -1153,7 +1149,20 @@ describe('ComposeExecutor', () => {
       }));
 
       expect(lastManagerOpts).toBeDefined();
-      expect(lastManagerOpts?.progressSink).toBeUndefined();
+      expect(lastManagerOpts?.progressSink).toBeTypeOf('function');
+
+      const ambient = vi.fn(() => {
+        throw new Error('renderer failed');
+      });
+      const event = {
+        type: 'chunk',
+        chunk: { type: 'text', text: 'hello' },
+      } as Parameters<SubagentProgressSink>[0];
+      const meta = { subagentId: 'a' } as Parameters<SubagentProgressSink>[1];
+      await runWithSink(ambient, async () => {
+        expect(() => lastManagerOpts?.progressSink?.(event, meta)).not.toThrow();
+      });
+      expect(ambient).toHaveBeenCalledWith(event, meta);
     });
 
     it('never kills a node for tool volume (regression: budget must not cancel)', async () => {

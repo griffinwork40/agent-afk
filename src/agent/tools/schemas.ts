@@ -550,8 +550,9 @@ export const composeTool: AnthropicToolDef = {
           'tools stripped and must answer from what it already gathered, so ' +
           'the node still returns a real (if shallower) result instead of ' +
           'dying mid-round with nothing. Useful for bounding runaway agents ' +
-          'that keep retrying. Disabled when omitted. Must be a positive ' +
-          'integer between 1 and 1000.',
+          'that keep retrying. When omitted, nodes inherit the subagent ' +
+          'default of 50 tool-use rounds. Must be a positive integer between ' +
+          '1 and 1000.',
       },
       max_tool_calls_per_node: {
         type: 'number',
