@@ -196,6 +196,34 @@ describe('buildChildConfig', () => {
     });
   });
 
+  describe('childSideEffectFree (stream-cut retry gating)', () => {
+    it('is true only for an explicitly pure-read cage', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'grep', 'config_get'] }),
+      );
+      expect(childSideEffectFree).toBe(true);
+    });
+
+    it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'agent'])(
+      'is false when the cage grants side-effecting tool %s',
+      (tool) => {
+        const { childSideEffectFree } = buildChildConfig(
+          baseArgs({ allowedTools: ['read_file', tool] }),
+        );
+        expect(childSideEffectFree).toBe(false);
+      },
+    );
+
+    it('allows bash only when the read-only command gate is enforced', () => {
+      expect(buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'bash'], readOnlyBash: true }),
+      ).childSideEffectFree).toBe(true);
+      expect(buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'bash'] }),
+      ).childSideEffectFree).toBe(false);
+    });
+  });
+
   describe('systemPrompt selection', () => {
     it('appends the handoff contract to the parent base prompt for an unnamed dispatch', () => {
       const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));

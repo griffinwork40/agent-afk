@@ -439,7 +439,8 @@ export class SubagentExecutor implements SubagentControl {
     // this correct when several `agent` calls are in flight concurrently.
     const cancelGenerationAtStart = this.cancelGeneration;
     return runWithStreamCutRetry({
-      dispatch: () => this.executeOnce(call, probe),
+      dispatch: (attempt) =>
+        this.executeOnce(call, probe, attempt > 0 ? cancelGenerationAtStart : undefined),
       signal: call.signal,
       canRedispatch: () =>
         probe.sideEffectFree && this.cancelGeneration === cancelGenerationAtStart,
@@ -452,7 +453,11 @@ export class SubagentExecutor implements SubagentControl {
     });
   }
 
-  private async executeOnce(call: ToolCall, probe?: StreamCutProbe): Promise<ToolResult> {
+  private async executeOnce(
+    call: ToolCall,
+    probe?: StreamCutProbe,
+    retryCancelGeneration?: number,
+  ): Promise<ToolResult> {
     // If signal is already aborted, return immediately
     if (call.signal.aborted) {
       return {
@@ -562,7 +567,7 @@ export class SubagentExecutor implements SubagentControl {
     // Build the child config + nested-dispatch wiring. All context this needs
     // is passed explicitly; the recursive child executor is injected as a
     // factory so child-config.ts never imports this class at runtime.
-    const { childConfig, childParentSession, childManager, childWriteCapable } = buildChildConfig({
+    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree } = buildChildConfig({
       parsed,
       namedAgent,
       depth,
@@ -592,9 +597,9 @@ export class SubagentExecutor implements SubagentControl {
 
     // Stream-cut retry eligibility (see `execute()`): a re-dispatch re-runs the
     // whole prompt, so it is only safe when the child cannot mutate anything.
-    // `childWriteCapable` is the authoritative answer — it already accounts for
-    // the named agent's tool allowlist, the parent's cage, and readOnlyBash.
-    if (probe !== undefined) probe.sideEffectFree = !childWriteCapable;
+    // This is stricter than `!childWriteCapable`: non-file tools can mutate
+    // remote or persistent state too, so the entire surface must be pure-read.
+    if (probe !== undefined) probe.sideEffectFree = childSideEffectFree;
 
     // isolation:"worktree" — fork the child inside a fresh managed git worktree
     // so its writes/tests never collide with siblings sharing the parent tree.
@@ -694,6 +699,13 @@ export class SubagentExecutor implements SubagentControl {
       // depth-2 forks it spawns carry handle.id as their parentId.
       if (childParentSession !== undefined) {
         childParentSession.sessionId = handle.id;
+      }
+      // Cancellation can land while a retry's fresh fork awaits hooks/read
+      // scope resolution, before either foreground map contains the handle.
+      if (retryCancelGeneration !== undefined && this.cancelGeneration !== retryCancelGeneration) {
+        await childManager?.teardownAll();
+        await handle.teardown();
+        return { content: 'Agent tool call aborted', isError: true };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

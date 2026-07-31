@@ -104,15 +104,17 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
    * what drives `childWriteCapable === false` in `buildChildConfig` and hence
    * `probe.sideEffectFree === true`. Retry is ONLY eligible for such a child.
    */
-  function makeExecutor(opts?: { readOnly?: boolean }): SubagentExecutor {
+  function makeExecutor(opts?: { readOnly?: boolean; allowedTools?: string[] }): SubagentExecutor {
     const ctx: SubagentExecutorContext = {
       subagentManager: mockSubagentMgr as never,
       parentSession: mockParentSession as never,
       defaultConfig: { apiKey: 'test-key', systemPrompt: 'test system prompt' },
       depth: 0,
-      ...(opts?.readOnly === true
-        ? { allowedTools: ['read_file', 'grep', 'glob'] as never }
-        : {}),
+      ...(opts?.allowedTools !== undefined
+        ? { allowedTools: opts.allowedTools as never }
+        : opts?.readOnly === true
+          ? { allowedTools: ['read_file', 'grep', 'glob'] as never }
+          : {}),
     };
     return new SubagentExecutor(ctx);
   }
@@ -164,6 +166,16 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
     expect(result).toEqual(ZERO_OUTPUT_CUT);
   });
 
+  it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'agent'])(
+    'refuses to retry a child with non-file side-effecting tool %s',
+    async (tool) => {
+      runForegroundWithPromotion.mockResolvedValue(ZERO_OUTPUT_CUT);
+      const result = await makeExecutor({ allowedTools: ['read_file', tool] }).execute(makeCall());
+      expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(ZERO_OUTPUT_CUT);
+    },
+  );
+
   it('refuses to re-fork when a cancel lands while between attempts', async () => {
     // Regression guard: across the retry gap BOTH in-flight handle maps are
     // empty, so cancelActiveForeground() finds nothing to cancel and never
@@ -180,6 +192,25 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
 
     expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledTimes(1);
     expect(result).toEqual(ZERO_OUTPUT_CUT);
+  });
+
+  it('tears down a fresh retry fork when cancellation lands while forkSubagent awaits', async () => {
+    const executor = makeExecutor({ readOnly: true });
+    const secondHandle = mockHandle('retry-handle');
+    runForegroundWithPromotion.mockResolvedValueOnce(ZERO_OUTPUT_CUT);
+    mockSubagentMgr.forkSubagent
+      .mockResolvedValueOnce(mockHandle('first-handle'))
+      .mockImplementationOnce(async () => {
+        await executor.cancelActiveForeground();
+        return secondHandle;
+      });
+
+    const result = await executor.execute(makeCall());
+
+    expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledTimes(2);
+    expect(runForegroundWithPromotion).toHaveBeenCalledTimes(1);
+    expect(secondHandle.teardown).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ content: 'Agent tool call aborted', isError: true });
   });
 
   it('does NOT retry a tool-budget cap (a requested ceiling, not a transport failure)', async () => {

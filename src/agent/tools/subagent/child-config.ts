@@ -42,6 +42,9 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
+import { READ_ONLY_PHASE_TOOLS } from '../../tool-category.js';
+
+const SIDE_EFFECT_FREE_TOOLS = new Set(READ_ONLY_PHASE_TOOLS);
 
 /** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
@@ -122,6 +125,8 @@ export interface BuildChildConfigResult {
    * isolate, so its worktree is skipped with a debug note.
    */
   childWriteCapable: boolean;
+  /** True only when every granted tool is proven free of persistent side effects. */
+  childSideEffectFree: boolean;
 }
 
 /**
@@ -202,6 +207,15 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
     effectiveReadOnlyBash !== true;
   const childWriteCapable = canWriteFiles || canMutateViaBash;
+  // Retry safety is stricter than filesystem write capability. Fail closed for
+  // unrestricted/unknown surfaces and prove every tool against the audited
+  // pure-read contract; non-file tools can mutate remote or persistent state.
+  const childSideEffectFree =
+    effectiveAllowedTools !== undefined &&
+    effectiveAllowedTools.every(
+      (tool) =>
+        SIDE_EFFECT_FREE_TOOLS.has(tool) || (tool === 'bash' && effectiveReadOnlyBash === true),
+    );
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under
@@ -433,5 +447,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager, childWriteCapable };
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree };
 }
