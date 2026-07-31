@@ -12,6 +12,72 @@ import { isAbsolute, parse as parsePath, resolve as resolvePath, relative as rel
 import { homedir } from 'node:os';
 import { isReadDenied } from '../handlers/read-denylist.js';
 import { realpathSafe } from '../handlers/_cwd-utils.js';
+import { getAfkHome, getAfkStateDir } from '../../../paths.js';
+import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+
+// Home targets for the shared breadth guard below. Computed once at module
+// scope — `homedir()` is stable per process, so there is no need to
+// re-resolve it on every `parseAgentInput` call. Check against BOTH the
+// lexical home and its realpath: if the home dir is itself behind a symlink,
+// a symlink-resolved candidate would otherwise slip past a lexical-only home
+// comparison.
+const HOME_TARGETS: readonly string[] = [...new Set([homedir(), realpathSafe(homedir())])];
+
+/**
+ * The AFK-anchored breadth targets, resolved PER CALL rather than at module
+ * scope.
+ *
+ * Invariant: unlike `homedir()`, these are env-driven (`AFK_HOME`,
+ * `AFK_STATE_DIR`) and therefore NOT stable per process — hoisting them would
+ * snapshot one spelling at import and never observe a runtime relocation. This
+ * is the same trap the read denylist documents: derive inside the call, not at
+ * module scope.
+ *
+ * Why they belong in the breadth guard at all: a granted root that is at-or-
+ * above the AFK home empties that child's AFK-anchored credential floor by
+ * exactly the route `$HOME` emptied the home-anchored one. The bash hook's
+ * grant filter (`deriveRestrictedSubstrings`) drops any candidate an ancestor
+ * of which has been granted, and `${AFK_HOME}/config` is such a candidate. A
+ * relocated `AFK_HOME` (say `/opt/my-afk`) is neither the home dir nor an
+ * ancestor of it, so the home-only targets did not catch it.
+ *
+ * A malformed env var throws; caught and skipped so a bad value can never
+ * loosen the guard, and surfaced once via the shared warn latch.
+ */
+function afkBreadthTargets(): string[] {
+  const targets: string[] = [];
+  for (const derive of [getAfkHome, getAfkStateDir]) {
+    try {
+      const dir = derive();
+      targets.push(dir, realpathSafe(dir));
+    } catch (err) {
+      warnAfkHomeRejectedOnce(err);
+    }
+  }
+  return targets;
+}
+
+/**
+ * True when `candidate` is "too broad" to pre-grant as a `cwd`, `writeRoots`,
+ * or `readRoots` entry: a filesystem root, the home dir itself, or an
+ * ANCESTOR of home (home lexically inside it → relative(candidate, home)
+ * neither escapes with '..' nor is absolute).
+ *
+ * Shared by all three fields (#740): each one ends up in the child's grant
+ * snapshot and feeds the bash-restriction hook's grant filter
+ * (`deriveRestrictedSubstrings`), where an ancestor-based containment check
+ * drops any credential root beneath a granted path. A too-broad grant on ANY
+ * of the three — not just `readRoots`, which already carried this guard —
+ * silently empties that child's credential floor, so the rejection must be
+ * identical across all three call sites.
+ */
+function isTooBroadRoot(candidate: string): boolean {
+  if (candidate === parsePath(candidate).root) return true;
+  return [...HOME_TARGETS, ...afkBreadthTargets()].some((h) => {
+    const rel = relativePath(candidate, h);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  });
+}
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
@@ -52,11 +118,19 @@ export interface AgentInput {
    * `AgentConfig.cwd`, which `SubagentManager.forkSubagent` applies in
    * preference to the parent fallback (see `src/agent/subagent.ts:291-297`).
    *
-   * Validation is format-only at parse time (existence/git-worktree status
-   * is not checked) — a non-existent path surfaces as an ENOENT on the
-   * child's first cwd-relative tool call, which the parent sees as a
-   * structured failure. Mirrors the existing AgentConfig.cwd contract
-   * used by `afk interactive -w` and the diagnose/farm orchestrators.
+   * Existence/git-worktree status is not checked at parse time — a
+   * non-existent path surfaces as an ENOENT on the child's first cwd-relative
+   * tool call, which the parent sees as a structured failure. Mirrors the
+   * existing AgentConfig.cwd contract used by `afk interactive -w` and the
+   * diagnose/farm orchestrators.
+   *
+   * Validation is NOT format-only, though (#740): this becomes the
+   * dispatcher's `resolveBase`, which feeds the bash-restriction hook's grant
+   * filter (`deriveRestrictedSubstrings`) — an ancestor-based containment
+   * check that drops any credential root beneath a granted path. A filesystem
+   * root, `os.homedir()`, or an ancestor of home is refused for that reason,
+   * same breadth guard {@link readRoots} carries (checked on both the lexical
+   * and symlink-resolved form).
    *
    * Caveat: this field affects only the dispatched child's cwd. Depth-2+
    * forks (the child itself calling `agent`) inherit through
@@ -72,7 +146,10 @@ export interface AgentInput {
    * writeRoots here lets the PARENT deliberately grant additional write roots.
    * Composed WITH the child's cwd (never replaces it), so the child keeps write
    * access to its own tree. Each entry must be an absolute path with no `..`
-   * segments. Mutually exclusive with `isolation:'worktree'` (isolation's
+   * segments, PLUS the same BREADTH rejection {@link cwd} and {@link readRoots}
+   * carry (#740): a filesystem root, `os.homedir()`, or an ancestor of home is
+   * refused, because an over-broad write root feeds the same bash-restriction
+   * grant filter. Mutually exclusive with `isolation:'worktree'` (isolation's
    * contract is total confinement). Unlike the #416 read grant this is never
    * automatic — writing outside the worktree breaks isolation, so it requires
    * explicit parent intent.
@@ -211,9 +288,9 @@ export function parseAgentInput(input: unknown): AgentInput {
     mode = modeValue;
   }
 
-  // cwd: optional absolute path. Format-only validation here — existence is
-  // not checked because the call site is sync and any ENOENT surfaces
-  // cleanly through the child's first tool call. Rules:
+  // cwd: optional absolute path. Existence is not checked because the call
+  // site is sync and any ENOENT surfaces cleanly through the child's first
+  // tool call. Rules:
   //   1. Must be a non-empty string when present.
   //   2. Must be absolute (`path.isAbsolute`) — relative paths would otherwise
   //      resolve against `process.cwd()` and silently land somewhere
@@ -222,6 +299,18 @@ export function parseAgentInput(input: unknown): AgentInput {
   //      silently collapse them; rejecting forces the caller to write
   //      what they mean. Splits on both `/` and `\\` so the check holds
   //      on Windows too.
+  //   4. BREADTH (#740) — must not be a filesystem root, os.homedir(), or an
+  //      ancestor of homedir. `cwd` becomes the dispatcher's `resolveBase`,
+  //      which seeds the child's implicit read/write root AND is consulted by
+  //      the bash-restriction hook's grant filter (`deriveRestrictedSubstrings`)
+  //      as an ancestor-based containment check: a broad `resolveBase` drops
+  //      every credential root beneath it from that child's bash restriction,
+  //      silently emptying the credential floor for its bash surface. Checked
+  //      on BOTH the lexical path AND its symlink-resolved target, same as
+  //      readRoots — a symlink to `/`/home would otherwise pass a lexical-only
+  //      check (#664 Codex P1). Unlike readRoots, there is no DENYLIST
+  //      (isReadDenied) rejection here — that is a separate, deliberately
+  //      out-of-scope hardening decision; this is breadth-only.
   let cwd: string | undefined;
   const cwdValue = agentInput['cwd'];
   if (cwdValue !== undefined) {
@@ -244,12 +333,29 @@ export function parseAgentInput(input: unknown): AgentInput {
         `Agent tool cwd must not contain '..' segments, got: ${JSON.stringify(cwdValue)}`,
       );
     }
+    const resolvedCwd = resolvePath(cwdValue);
+    const realResolvedCwd = realpathSafe(resolvedCwd);
+    if (isTooBroadRoot(resolvedCwd) || isTooBroadRoot(realResolvedCwd)) {
+      throw new Error(
+        `Agent tool cwd must not be a filesystem root, your home directory, ` +
+          `or an ancestor of it (checked after resolving symlinks) — pass a ` +
+          `specific subdirectory instead, got: ${JSON.stringify(cwdValue)}`,
+      );
+    }
     cwd = cwdValue;
   }
 
   // writeRoots: optional array of absolute paths pre-granted as extra write
-  // roots to the fork (#435). Same per-entry rules as cwd (non-empty, absolute,
-  // no '..' segments). An empty array normalizes to undefined (no-op grant).
+  // roots to the fork (#435). Per-entry format rules: non-empty, absolute, no
+  // '..' segments. PLUS a BREADTH rejection (#740), same as cwd and readRoots:
+  // a filesystem root, os.homedir(), or an ancestor of it is refused (checked
+  // on both the lexical and symlink-resolved form) because a too-broad write
+  // root feeds the same bash-restriction grant filter
+  // (`deriveRestrictedSubstrings`) that reads `cwd`/`readRoots` — an
+  // over-broad grant would silently drop credential roots from that child's
+  // bash restriction. There is deliberately no DENYLIST (isReadDenied)
+  // rejection here — out of scope, see readRoots below. An empty array
+  // normalizes to undefined (no-op grant).
   let writeRoots: string[] | undefined;
   const writeRootsValue = agentInput['writeRoots'];
   if (writeRootsValue !== undefined) {
@@ -275,6 +381,15 @@ export function parseAgentInput(input: unknown): AgentInput {
           `Agent tool writeRoots entries must not contain '..' segments, got: ${JSON.stringify(entry)}`,
         );
       }
+      const resolvedEntry = resolvePath(entry);
+      const realResolvedEntry = realpathSafe(resolvedEntry);
+      if (isTooBroadRoot(resolvedEntry) || isTooBroadRoot(realResolvedEntry)) {
+        throw new Error(
+          `Agent tool writeRoots entries must not be a filesystem root, your home ` +
+            `directory, or an ancestor of it (checked after resolving symlinks) — ` +
+            `grant a specific subdirectory instead, got: ${JSON.stringify(entry)}`,
+        );
+      }
       roots.push(entry);
     }
     if (roots.length > 0) writeRoots = roots;
@@ -289,12 +404,18 @@ export function parseAgentInput(input: unknown): AgentInput {
   //       Checked on BOTH the lexical path AND its symlink-resolved target: the
   //       containment layer realpaths granted roots (realpathRoot, _cwd-utils),
   //       so a symlink to `/`/home would otherwise pass a lexical-only check and
-  //       become a broad real root at read time (#664 Codex P1).
+  //       become a broad real root at read time (#664 Codex P1). Uses the same
+  //       shared `isTooBroadRoot` helper `cwd` and `writeRoots` apply above
+  //       (#740) — this field's BEHAVIOR is unchanged, only the check is
+  //       factored into one module-scope helper instead of a local closure.
   //   (b) DENYLIST — reject any entry that resolves into the read-denylist
   //       (isReadDenied: ~/.ssh, ~/.afk/config, …). isReadDenied is a pure,
   //       string/realpath-based, non-throwing check (safeRealpath swallows fs
   //       errors), so it is safe to call at parse time. Defense-in-depth ON TOP
   //       of the read-time floor in resolveAndContain / the path-approval hook.
+  //       Deliberately NOT applied to `cwd` or `writeRoots` — out of scope
+  //       there (#740 closes the breadth gap only; the denylist question is a
+  //       separate hardening decision).
   // An empty array normalizes to undefined (no-op grant). Deliberately NOT
   // mutually exclusive with isolation:'worktree' (that constraint is write-only).
   let readRoots: string[] | undefined;
@@ -305,21 +426,6 @@ export function parseAgentInput(input: unknown): AgentInput {
         `Agent tool readRoots must be an array of absolute paths, got: ${JSON.stringify(readRootsValue)}`,
       );
     }
-    const home = homedir();
-    // Check against BOTH the lexical home and its realpath: if the home dir is
-    // itself behind a symlink, a symlink-resolved candidate would otherwise slip
-    // past a lexical-only home comparison.
-    const homeTargets = [...new Set([home, realpathSafe(home)])];
-    // A candidate root is "too broad" to pre-grant when it is a filesystem root,
-    // the home dir itself, or an ANCESTOR of home (home lexically inside it →
-    // relative(candidate, home) neither escapes with '..' nor is absolute).
-    const isTooBroad = (candidate: string): boolean => {
-      if (candidate === parsePath(candidate).root) return true;
-      return homeTargets.some((h) => {
-        const rel = relativePath(candidate, h);
-        return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-      });
-    };
     const roots: string[] = [];
     for (const entry of readRootsValue) {
       if (typeof entry !== 'string' || entry.length === 0) {
@@ -347,7 +453,7 @@ export function parseAgentInput(input: unknown): AgentInput {
       // falls back to the nearest existing ancestor for a not-yet-created path.
       const resolved = resolvePath(entry);
       const realResolved = realpathSafe(resolved);
-      if (isTooBroad(resolved) || isTooBroad(realResolved)) {
+      if (isTooBroadRoot(resolved) || isTooBroadRoot(realResolved)) {
         throw new Error(
           `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
             `or an ancestor of it (checked after resolving symlinks) — grant a specific ` +

@@ -124,7 +124,7 @@ describe('removeManagedWorktreeGuarded — guards + argv', () => {
 });
 
 describe('createIsolatedWorktree', () => {
-  it('resolves the repo root and creates an afk/iso-* branch based on HEAD', async () => {
+  it("resolves the repo root and creates an afk/iso-* branch based on the anchor's HEAD", async () => {
     const mock = makeMock((call) => {
       if (call.args.includes('--git-common-dir')) return { stdout: `${repoRoot}/.git\n`, stderr: '' };
       if (call.args.includes('add')) {
@@ -138,10 +138,12 @@ describe('createIsolatedWorktree', () => {
     expect(iso.repoRoot).toBe(repoRoot);
     expect(iso.path).toBe(join(repoRoot, '.afk-worktrees', 'iso-diagnose-1-abc123'));
     expect(iso.branch).toBe('afk/iso-diagnose-1-abc123');
-    expect(iso.baseRef).toBe('HEAD');
+    // #760: the default base is the anchor's RESOLVED HEAD sha, not the literal
+    // ref (which `git -C <repoRoot>` would resolve at the MAIN checkout instead).
+    expect(iso.baseRef).toBe('headsha');
     const addCall = mock.calls.find((c) => c.args.includes('add'));
     expect(addCall?.args).toEqual([
-      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/iso-diagnose-1-abc123', iso.path, 'HEAD',
+      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/iso-diagnose-1-abc123', iso.path, 'headsha',
     ]);
   });
 
@@ -172,7 +174,7 @@ describe('createIsolatedWorktree', () => {
     expect(iso.repoRoot).toBe(repoRoot);
     expect(iso.path).toBe(join(repoRoot, '.afk-worktrees', 'iso-parallel-2-def456'));
     expect(iso.branch).toBe('afk/iso-parallel-2-def456');
-    expect(iso.baseRef).toBe('HEAD');
+    expect(iso.baseRef).toBe('headsha');
     // Retried EXACTLY once → `worktree add` invoked twice, second time won.
     expect(mock.calls.filter((c) => c.args.includes('add'))).toHaveLength(2);
   });

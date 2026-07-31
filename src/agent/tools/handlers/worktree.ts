@@ -37,6 +37,7 @@ import {
   sanitizeSlug,
   createManagedWorktree,
   removeManagedWorktreeGuarded,
+  resolveAnchorBaseRef,
   type RepoContext,
 } from './worktree-managed.js';
 
@@ -71,9 +72,10 @@ async function detectInstallCommand(worktreePath: string): Promise<string> {
   return 'pnpm install';
 }
 
-function resolveCreateBaseRef(base: unknown): string | { error: string } {
+/** Returns undefined when no base was supplied — the caller resolves it (#760). */
+function resolveCreateBaseRef(base: unknown): string | undefined | { error: string } {
   if (base === undefined || base === null || base === '') {
-    return 'HEAD';
+    return undefined;
   }
   if (typeof base !== 'string') {
     return { error: 'Invalid input: base must be a string when provided' };
@@ -208,10 +210,12 @@ export function createWorktreeHandler(
           }
           const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
           const branch = `${prefix}${slug}`;
-          const baseRef = resolveCreateBaseRef(obj['base']);
-          if (typeof baseRef !== 'string') {
-            return { content: baseRef.error, isError: true };
+          const baseInput = resolveCreateBaseRef(obj['base']);
+          if (typeof baseInput === 'object') {
+            return { content: baseInput.error, isError: true };
           }
+          // An unspecified base resolves at the ANCHOR, not at ctx.repoRoot (#760).
+          const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, anchor);
           const info = await createManagedWorktree({
             execFile,
             repoRoot: ctx.repoRoot,

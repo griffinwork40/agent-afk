@@ -44,6 +44,8 @@ import { env } from '../../../config/env.js';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
+import { getAfkHome } from '../../../paths.js';
+import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 
 /**
  * Paths that `read_file` / `grep` / `glob` / `list_directory` must never read —
@@ -237,21 +239,96 @@ export function parseReadDenylistEntries(raw: string | undefined): string[] {
     .map((p) => resolve(p));
 }
 
+/**
+ * Best-effort derived read-denylist entry for the `AFK_HOME`-relocated config
+ * dir (`${getAfkHome()}/config`), ADDITIVE alongside the hardcoded
+ * `${homedir()}/.afk/config` literal in {@link BUILTIN_READ_DENYLIST} (both
+ * spellings are covered; they are equal, and de-duplicated by the caller,
+ * when `AFK_HOME` is unset). Computed HERE — inside {@link resolveLists}, not
+ * at module scope — because a module-level `getAfkHome()` call would
+ * evaluate once at import time and never observe a runtime `AFK_HOME` change
+ * (the test suite mutates env vars; production operators can too via a
+ * process restart with a different env).
+ *
+ * `getAfkHome()` throws when `AFK_HOME` is set but not absolute (or is `/`,
+ * see `paths.ts`). Caught and dropped here — a malformed env var must never
+ * empty the credential floor; the hardcoded `homedir()`-based entries still
+ * apply regardless.
+ */
+function derivedAfkHomeReadEntry(): string[] {
+  try {
+    return [safeRealpath(resolve(join(getAfkHome(), 'config')))];
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
+    return [];
+  }
+}
+
+const AFK_HOME_REL_PREFIX = '.afk/';
+
+/**
+ * The `AFK_HOME`-relocated spelling of every {@link READ_ALLOWLIST_REL}
+ * carve-out, derived the same way {@link derivedAfkHomeReadEntry} derives the
+ * denied parent.
+ *
+ * Invariant: the allowlist MUST follow `AFK_HOME` whenever the denylist does.
+ * These two move together or the carve-out silently inverts: extending only the
+ * deny side makes `${getAfkHome()}/config/mcp.json` unreadable under a
+ * relocated home while the default-home spelling stays readable — the registry
+ * becomes invisible to both the typed tools and the bash surface for exactly
+ * the operators who relocated it. An empirical probe caught that asymmetry;
+ * a diff read did not.
+ *
+ * Entries are declared relative to the home dir (`.afk/config/mcp.json`), so
+ * the relocated form is the tail after `.afk/` rejoined under `getAfkHome()`.
+ * A non-`.afk/` entry has no relocated spelling and is skipped. `getAfkHome()`
+ * throws on a malformed `AFK_HOME`; caught and dropped, which fails CLOSED
+ * here (no extra carve-out) rather than open.
+ */
+function derivedAfkHomeAllowEntries(): string[] {
+  try {
+    const afkHome = getAfkHome();
+    return READ_ALLOWLIST_REL.filter((rel) => rel.startsWith(AFK_HOME_REL_PREFIX)).map((rel) =>
+      resolveExceptionEntry(join(afkHome, rel.slice(AFK_HOME_REL_PREFIX.length))),
+    );
+  } catch (err) {
+    warnAfkHomeRejectedOnce(err);
+    return [];
+  }
+}
+
 function resolveLists(): {
   builtins: readonly string[];
   extras: readonly string[];
   allow: readonly string[];
 } {
-  const key = env.AFK_READ_DENYLIST ?? '';
+  // Invariant: AFK_HOME is part of the cache key alongside AFK_READ_DENYLIST.
+  // The builtins list now depends on it (derivedAfkHomeReadEntry), so a
+  // runtime AFK_HOME change must invalidate the memo the same way an
+  // AFK_READ_DENYLIST change does — otherwise a stale denylist survives a
+  // relocated AFK_HOME. Joined with U+0000, which cannot occur in either env
+  // value, so the two components can never collide into an ambiguous key.
+  const key = `${env.AFK_READ_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}`;
   if (cached && cached.key === key) return cached;
-  const extras: string[] = parseReadDenylistEntries(key)
+  const extras: string[] = parseReadDenylistEntries(env.AFK_READ_DENYLIST)
     .map((p) => safeRealpath(p))
     .filter(Boolean);
+  const builtins = [
+    ...new Set([
+      ...BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
+      ...derivedAfkHomeReadEntry(),
+    ]),
+  ];
   cached = {
     key,
-    builtins: BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
+    builtins,
     extras,
-    allow: BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
+    allow: [
+      ...new Set([
+        ...BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
+        ...derivedAfkHomeAllowEntries(),
+      ]),
+    ],
   };
   return cached;
 }
