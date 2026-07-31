@@ -46,6 +46,7 @@ import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+import { gateDerivedCarveOuts } from './read-denylist-carveout.js';
 
 /**
  * Paths that `read_file` / `grep` / `glob` / `list_directory` must never read —
@@ -319,6 +320,13 @@ function resolveLists(): {
       ...derivedAfkHomeReadEntry(),
     ]),
   ];
+  // Invariant: the derived carve-outs are gated against the builtin deny
+  // prefixes BEFORE they are unioned in, because `allow` is consulted ahead of
+  // the builtin loop in isReadDenied. Ungated, a home relocated UNDER another
+  // denied root (AFK_HOME=~/.ssh/afk) punched an exact-file hole straight
+  // through that root's floor (#779). The gate is applied here rather than via
+  // isReadDenied because that function reads the list being built.
+  const carvedRoots = derivedAfkHomeReadEntry();
   cached = {
     key,
     builtins,
@@ -326,7 +334,7 @@ function resolveLists(): {
     allow: [
       ...new Set([
         ...BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
-        ...derivedAfkHomeAllowEntries(),
+        ...gateDerivedCarveOuts(derivedAfkHomeAllowEntries(), builtins, carvedRoots),
       ]),
     ],
   };
