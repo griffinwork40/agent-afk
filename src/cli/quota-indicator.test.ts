@@ -39,9 +39,9 @@ describe('formatQuotaIndicator — presence', () => {
 
   it('renders a single window when only one is known', () => {
     const only5h = formatQuotaIndicator({ fiveHour: { utilization: 0.05 }, observedAt: NOW }, NOW);
-    expect(stripAnsi(only5h!.text)).toBe('5h ▁5%');
+    expect(stripAnsi(only5h!.text)).toBe('5h 5%');
     const only7d = formatQuotaIndicator({ sevenDay: { utilization: 0.5 }, observedAt: NOW }, NOW);
-    expect(stripAnsi(only7d!.text)).toBe('7d ▅50%');
+    expect(stripAnsi(only7d!.text)).toBe('7d 50%');
   });
 
   it('treats utilization as a 0..1 fraction and rounds to a whole percent', () => {
@@ -77,41 +77,52 @@ describe('formatQuotaIndicator — severity', () => {
       { fiveHour: { utilization: 0.94 }, sevenDay: { utilization: 0.24 }, observedAt: NOW },
       NOW,
     );
-    expect(r!.text).toContain(palette.error('█94%'));
-    expect(r!.text).toContain(palette.chrome('▂24%'));
+    expect(r!.text).toContain(palette.error('94%'));
+    expect(r!.text).toContain(palette.chrome('24%'));
   });
 
   it('uses the caution tone in the middle band', () => {
     const r = formatQuotaIndicator({ fiveHour: { utilization: 0.62 }, observedAt: NOW }, NOW);
-    expect(r!.text).toContain(palette.warning('▅62%'));
+    expect(r!.text).toContain(palette.warning('62%'));
   });
 
   it('keeps a calm window in chrome, not the near-invisible meta tone', () => {
     // Guard against re-making the context bar's original mistake: a fully
     // recessive readout reads as broken rather than reassuring.
     const r = formatQuotaIndicator({ fiveHour: { utilization: 0.06 }, observedAt: NOW }, NOW);
-    expect(r!.text).toContain(palette.chrome('▁6%'));
-    expect(r!.text).not.toContain(palette.meta('▁6%'));
+    expect(r!.text).toContain(palette.chrome('6%'));
+    expect(r!.text).not.toContain(palette.meta('6%'));
   });
 });
 
-describe('formatQuotaIndicator — gauge glyph (non-colour encoding)', () => {
-  it('scales the block cell with utilization and never renders an empty cell', () => {
-    const cellAt = (u: number) =>
-      stripAnsi(formatQuotaIndicator({ fiveHour: { utilization: u }, observedAt: NOW }, NOW)!.text).slice(3, 4);
-    expect(cellAt(0)).toBe('▁'); // floor cell, so the field is never blank
-    expect(cellAt(0.24)).toBe('▂');
-    expect(cellAt(0.62)).toBe('▅');
-    expect(cellAt(0.94)).toBe('█');
-    expect(cellAt(1)).toBe('█'); // top cell, not an out-of-range read
+describe('formatQuotaIndicator — non-colour encoding', () => {
+  it('never prefixes the percentage with a block-gauge glyph', () => {
+    // Regression guard: a one-cell gauge (`▁`..`█`) shipped here once and read as
+    // a rendering artifact — a solid block of colour abutting the digits at the
+    // top of the ramp, an underscore stub (`▁9%` as `_9%`) at the bottom. One
+    // cell cannot encode magnitude, and the number beside it already does.
+    for (const u of [0, 0.09, 0.24, 0.62, 0.94, 1]) {
+      const text = stripAnsi(formatQuotaIndicator({ fiveHour: { utilization: u }, observedAt: NOW }, NOW)!.text);
+      expect(text).toMatch(/^5h \d{1,3}%$/);
+      expect(text).not.toMatch(/[▁▂▃▄▅▆▇█]/u);
+    }
   });
 
-  it('survives colour stripping — the glyph carries the signal under NO_COLOR', () => {
-    const hot = stripAnsi(formatQuotaIndicator({ fiveHour: { utilization: 0.94 }, observedAt: NOW }, NOW)!.text);
-    const cold = stripAnsi(formatQuotaIndicator({ fiveHour: { utilization: 0.06 }, observedAt: NOW }, NOW)!.text);
-    expect(hot).not.toBe(cold);
-    expect(hot).toContain('█');
-    expect(cold).toContain('▁');
+  it('survives colour stripping — the countdown carries the escalation under NO_COLOR', () => {
+    // With every palette role collapsed to bare text the ladder still reads: the
+    // countdown is absent while calm and present from caution up. Past 80% the
+    // turn footer (quota-footer.ts) prints the escalation as a sentence, which is
+    // what separates caution from critical without colour.
+    const at = (u: number) =>
+      stripAnsi(
+        formatQuotaIndicator(
+          { fiveHour: { utilization: u, resetsAt: inMinutes(12) }, observedAt: NOW },
+          NOW,
+        )!.text,
+      );
+    expect(at(0.06)).toBe('5h 6%');
+    expect(at(0.69)).toBe('5h 69% ⟳12m');
+    expect(at(0.94)).toBe('5h 94% ⟳12m');
   });
 });
 
@@ -121,7 +132,7 @@ describe('formatQuotaIndicator — reset countdown', () => {
       { fiveHour: { utilization: 0.1, resetsAt: inMinutes(30) }, observedAt: NOW },
       NOW,
     );
-    expect(stripAnsi(r!.text)).toBe('5h ▁10%');
+    expect(stripAnsi(r!.text)).toBe('5h 10%');
   });
 
   it('attaches to the BINDING window only, never both', () => {
@@ -133,7 +144,7 @@ describe('formatQuotaIndicator — reset countdown', () => {
       },
       NOW,
     );
-    expect(stripAnsi(r!.text)).toBe('5h █94% ⟳12m · 7d ▂24%');
+    expect(stripAnsi(r!.text)).toBe('5h 94% ⟳12m · 7d 24%');
   });
 
   it('follows the binding window when 7d is the hotter one', () => {
@@ -145,7 +156,7 @@ describe('formatQuotaIndicator — reset countdown', () => {
       },
       NOW,
     );
-    expect(stripAnsi(r!.text)).toBe('5h ▄40% · 7d █88% ⟳2d7h');
+    expect(stripAnsi(r!.text)).toBe('5h 40% · 7d 88% ⟳2d7h');
   });
 
   it('separates two identical percentages by their deadlines', () => {
@@ -166,7 +177,7 @@ describe('formatQuotaIndicator — reset countdown', () => {
 
   it('omits the countdown when the header carried no deadline', () => {
     const r = formatQuotaIndicator({ fiveHour: { utilization: 0.94 }, observedAt: NOW }, NOW);
-    expect(stripAnsi(r!.text)).toBe('5h █94%');
+    expect(stripAnsi(r!.text)).toBe('5h 94%');
   });
 
   it('omits an already-elapsed deadline rather than asserting a passed reset', () => {
@@ -174,7 +185,7 @@ describe('formatQuotaIndicator — reset countdown', () => {
       { fiveHour: { utilization: 0.94, resetsAt: inMinutes(-5) }, observedAt: NOW },
       NOW,
     );
-    expect(stripAnsi(r!.text)).toBe('5h █94%');
+    expect(stripAnsi(r!.text)).toBe('5h 94%');
     expect(stripAnsi(r!.text)).not.toContain('⟳');
   });
 
@@ -205,7 +216,7 @@ describe('formatQuotaIndicator — staleness', () => {
       },
       NOW,
     );
-    expect(stripAnsi(r!.text)).toBe('~5h █94% ⟳12m');
+    expect(stripAnsi(r!.text)).toBe('~5h 94% ⟳12m');
     expect(r!.severity).toBe('critical'); // tone is unchanged: stale-high is pessimistic, not wrong
   });
 
@@ -215,9 +226,10 @@ describe('formatQuotaIndicator — staleness', () => {
 });
 
 describe('formatQuotaIndicator — width budget', () => {
-  it('costs at most a few cells more than the bare-percentage form it replaced', () => {
-    // The row already sheds fields on narrow terminals, so the hot form must not
-    // balloon: `5h 94% · 7d 24%` (16 cells) → at most 8 more with a countdown.
+  it('costs nothing while calm and only the countdown when hot', () => {
+    // The row already sheds fields on narrow terminals. Calm must be EXACTLY the
+    // width of the bare-percentage form it replaced (no glyph, no countdown), and
+    // hot may add only the binding window's deadline.
     const hot = formatQuotaIndicator(
       {
         fiveHour: { utilization: 0.94, resetsAt: inMinutes(12) },
@@ -226,13 +238,14 @@ describe('formatQuotaIndicator — width budget', () => {
       },
       NOW,
     );
-    expect(displayWidth(stripAnsi(hot!.text))).toBeLessThanOrEqual(24);
+    expect(displayWidth(stripAnsi(hot!.text))).toBeLessThanOrEqual(22);
 
     const calm = formatQuotaIndicator(
       { fiveHour: { utilization: 0.06 }, sevenDay: { utilization: 0.12 }, observedAt: NOW },
       NOW,
     );
-    expect(displayWidth(stripAnsi(calm!.text))).toBeLessThanOrEqual(18);
+    expect(stripAnsi(calm!.text)).toBe('5h 6% · 7d 12%');
+    expect(displayWidth(stripAnsi(calm!.text))).toBe(14);
   });
 });
 

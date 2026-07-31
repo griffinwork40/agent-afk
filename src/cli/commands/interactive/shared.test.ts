@@ -394,9 +394,9 @@ describe('formatStatusFields — subscription-quota segment', () => {
   });
 
   it('forwards both windows as raw 0..1 fractions, not pre-formatted text', () => {
-    // The adapter must NOT format: `quota-indicator.ts` owns tone, gauge glyph,
-    // countdown and staleness so the status line can grade droppability from the
-    // same severity it renders with.
+    // The adapter must NOT format: `quota-indicator.ts` owns tone, countdown and
+    // staleness so the status line can grade droppability from the same severity
+    // it renders with.
     recordQuotaSnapshot({
       fiveHourUtilization: 0.62,
       sevenDayUtilization: 0.31,

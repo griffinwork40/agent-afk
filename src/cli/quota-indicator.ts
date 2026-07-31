@@ -10,11 +10,9 @@
  * as the token counter, and was the FIRST field shed on a narrow terminal.
  * Three mechanics fix that, all width-cheap:
  *
- *   1. Per-window severity tone + a one-cell block gauge (`▁`..`█`). Tone tiers
- *      mirror the context bar exactly (`> 0.8` error, `> 0.5` warning, else
- *      chrome) so the two usage readouts on the row grade alike. The gauge is
- *      the redundant non-color encoding, so the signal survives NO_COLOR and
- *      color-vision deficiency — same reason `syntaxString` carries italic.
+ *   1. Per-window severity tone. Tiers mirror the context bar exactly
+ *      (`> 0.8` error, `> 0.5` warning, else chrome) so the two usage readouts
+ *      on the row grade alike.
  *   2. A reset countdown (`⟳12m`) on the BINDING window once it crosses caution.
  *      `94% resets in 12m` and `94% resets in 4h` are opposite situations that
  *      the old segment rendered identically. Only the binding window gets one,
@@ -22,6 +20,19 @@
  *   3. A `stale` flag (see {@link STALE_AFTER_MS}) so the caller can decline to
  *      promote an old reading, and a `~` marker so a long idle session doesn't
  *      show a stale number as live.
+ *
+ * Invariant: the ladder must stay legible with color stripped, and mechanic 2 is
+ * what carries it — the countdown is absent while calm and present from caution
+ * up, so `5h 40%` and `5h 69% ⟳2h13m` differ in plain text, and past 80% the
+ * turn footer (`quota-footer.ts`) prints the escalation as a sentence. No glyph
+ * badge is used for this. An earlier revision prefixed each percentage with a
+ * one-cell block gauge (`▁`..`█`) and it looked broken: one cell cannot encode
+ * magnitude (the sparkline those glyphs come from reads as a curve only because
+ * it has many cells to compare against), so the top of the ramp rendered as a
+ * solid block of color abutting the digits — terminal vocabulary for a cursor or
+ * a selection, i.e. an artifact — and the bottom as an underscore stub, `▁9%`
+ * reading as `_9%`. It also restated, less precisely, the exact number one cell
+ * to its right. Severity banding is tone's job; the number is the magnitude.
  *
  * Pure and clock-injectable: takes plain numbers/Dates rather than the
  * `QuotaSnapshot` type, keeping the render layer decoupled from
@@ -93,7 +104,7 @@ export function quotaWindowsFromSnapshot(snapshot: QuotaSnapshot | undefined): Q
 export type QuotaSeverity = 'calm' | 'caution' | 'critical';
 
 export interface QuotaIndicator {
-  /** ANSI-colored segment text, e.g. `5h █94% ⟳12m · 7d ▂24%`. */
+  /** ANSI-colored segment text, e.g. `5h 94% ⟳12m · 7d 24%`. */
   readonly text: string;
   /** Max severity across the present windows. */
   readonly severity: QuotaSeverity;
@@ -122,12 +133,6 @@ const CRITICAL_ABOVE = 0.8;
  */
 export const STALE_AFTER_MS = 10 * 60 * 1000;
 
-/**
- * Block-height gauge cells, low → high. Same glyph family as the context
- * sparkline (`context-sparkline.ts`), so the row keeps one visual vocabulary.
- */
-const GAUGE_CELLS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const;
-
 /** Prefixes the reset countdown. Recessive tone: it is context for the number, not the signal. */
 const RESET_GLYPH = '⟳';
 
@@ -144,12 +149,6 @@ function toneFor(severity: QuotaSeverity) {
   // rather than reassuring — the same mistake the context bar's single-tone
   // wrap made before it split fill from track.
   return palette.chrome;
-}
-
-/** Utilization → one gauge cell. `0` still shows a floor cell so the field never looks empty. */
-function gaugeCell(utilization: number): string {
-  const index = Math.min(GAUGE_CELLS.length - 1, Math.max(0, Math.floor(utilization * GAUGE_CELLS.length)));
-  return GAUGE_CELLS[index] ?? '█';
 }
 
 /**
@@ -232,7 +231,7 @@ export function formatQuotaIndicator(windows: QuotaWindows, now: Date = new Date
   const rendered = collected.map((w) => {
     const tone = toneFor(w.severity);
     const percent = `${Math.round(w.state.utilization * 100)}%`;
-    let text = `${palette.meta(w.label)} ${tone(`${gaugeCell(w.state.utilization)}${percent}`)}`;
+    let text = `${palette.meta(w.label)} ${tone(percent)}`;
     if (w === binding && w.state.resetsAt !== undefined) {
       const msLeft = w.state.resetsAt.getTime() - now.getTime();
       // A non-positive countdown means the window already rolled over, so the
