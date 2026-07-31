@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.3] - 2026-07-31
+
+### Fixed
+- stop the sweep reaping live trees and discarding ignored files (#759) (#770) (16c4cd9)
+- enforce the per-node tool budget by wind-down, not by killing the node (#772) (71e6560)
+
 ## [5.83.2] - 2026-07-31
 
 ### Fixed
