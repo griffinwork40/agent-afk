@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.83.5] - 2026-07-31
+
+### Fixed
+- keep the hanging indent when a list or blockquote token exceeds the wrap budget (#798) (532f78d)
+
 ## [5.83.4] - 2026-07-31
 
 ### Fixed
