@@ -16,7 +16,7 @@
  *     test pins that behavior.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   builtinBashSensitiveRoots,
   createBashRestrictionHook,
@@ -24,6 +24,7 @@ import {
   SENSITIVE_PATH_SIGNAL,
 } from './bash-restriction-hook.js';
 import { _resetReadDenylistCacheForTests } from '../handlers/read-denylist.js';
+import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir, tmpdir } from 'os';
@@ -770,15 +771,34 @@ describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
 
   // Fail-safe: getAfkHome() throws on a non-absolute AFK_HOME. configuredAfkHome()
   // must swallow it and fall back to the default floor rather than propagating.
+  //
+  // Test hygiene (#783 follow-up to #753): this trips the shared
+  // `warnAfkHomeRejectedOnce` once-latch. Reset it first and spy on
+  // console.warn so the expected warning is captured instead of leaking to
+  // stderr during the run, and restore both in `finally` so the latch does
+  // not stay silently consumed for the rest of this file's later tests.
   it('stays fail-safe when AFK_HOME is relative (getAfkHome() throws)', () => {
-    process.env['AFK_HOME'] = 'relative/not-absolute';
+    resetAfkHomeWarnLatchForTests();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env['AFK_HOME'] = 'relative/not-absolute';
 
-    expect(() => hook(ctx('echo hi'))).not.toThrow();
-    expect(hook(ctx('echo hi')).decision).not.toBe('block');
-    // The default-home floor still applies.
-    expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'afk.env')}`)).decision).toBe(
-      'block',
-    );
+      expect(() => hook(ctx('echo hi'))).not.toThrow();
+      expect(hook(ctx('echo hi')).decision).not.toBe('block');
+      // The default-home floor still applies.
+      expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'afk.env')}`)).decision).toBe(
+        'block',
+      );
+      // Discriminates the fail-safe from a silently-broken one: the warning
+      // must actually fire. `configuredAfkHome()` is called once per `hook()`
+      // invocation (3 calls above), but the shared latch caps it at 1 warn.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('[afk-home]');
+      expect(warn.mock.calls[0]?.[0]).toContain('relative/not-absolute');
+    } finally {
+      warn.mockRestore();
+      resetAfkHomeWarnLatchForTests();
+    }
   });
 
   // paths.ts treats '' as unset. Pin that the bash surface agrees, so an empty

@@ -26,7 +26,7 @@
  * @module agent/tools/handlers/read-denylist.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -42,6 +42,7 @@ import {
   _resetReadDenylistCacheForTests,
 } from './read-denylist.js';
 import { safeRealpath } from './write-denylist.js';
+import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 
 let tmpDir: string;
 
@@ -506,13 +507,33 @@ describe('read-denylist — AFK_HOME-relocated credential tree (#740)', () => {
   // Fail-safe: getAfkHome() throws when AFK_HOME is set but not absolute. The
   // read denylist must not let that throw propagate and empty the floor —
   // it must skip only the derived entry and keep the homedir()-based ones.
+  //
+  // Test hygiene (#783 follow-up to #753): this trips the shared
+  // `warnAfkHomeRejectedOnce` once-latch. Reset it first and spy on
+  // console.warn so the expected warning is captured instead of leaking to
+  // stderr during the run, and restore both in `finally` so the latch does
+  // not stay silently consumed for the rest of this file's later tests.
   it('stays fail-safe when AFK_HOME is a relative path (getAfkHome() throws)', () => {
-    process.env['AFK_HOME'] = 'relative/not-absolute';
-    _resetReadDenylistCacheForTests();
+    resetAfkHomeWarnLatchForTests();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env['AFK_HOME'] = 'relative/not-absolute';
+      _resetReadDenylistCacheForTests();
 
-    expect(() => isReadDenied(join(homedir(), '.afk', 'config', 'afk.env'))).not.toThrow();
-    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
-    expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+      expect(() => isReadDenied(join(homedir(), '.afk', 'config', 'afk.env'))).not.toThrow();
+      expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
+      expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+      // Discriminates the fail-safe from a silently-broken one: the warning
+      // must actually fire exactly once (memoized `resolveLists()` only
+      // recomputes — and thus only re-derives/re-warns — on a cache-key
+      // change, so 3 isReadDenied calls above still produce 1 warn call).
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('[afk-home]');
+      expect(warn.mock.calls[0]?.[0]).toContain('relative/not-absolute');
+    } finally {
+      warn.mockRestore();
+      resetAfkHomeWarnLatchForTests();
+    }
   });
 
   // Cache-invalidation: the memoization key must include AFK_HOME, not just
