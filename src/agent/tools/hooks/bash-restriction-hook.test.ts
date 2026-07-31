@@ -591,6 +591,95 @@ describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () =>
       hook(ctx('python -c "import json; json.load(open(\'~/.afk/config/mcp.json\'))"')).decision,
     ).not.toBe('block');
   });
+
+  // PR #805 P1 — quote-concatenation bypass. Shell concatenates
+  // `~/.ssh/config".bak"` into `~/.ssh/config.bak`; before the second
+  // lookahead, `scrubAllowlistedRefs` treated the `"` as an exact-file
+  // boundary, blanked the `.ssh/config` span, and left nothing for the
+  // scanner to match → the hook returned allow for a denied sibling. The
+  // escalation is traversal: `cat ~/.ssh/config"/../github_key"` resolves to
+  // an ARBITRARILY-NAMED private key, defeating the whole-dir `~/.ssh` floor.
+  // The fix scrubs ONLY when the trailing quote is NOT followed by a path
+  // char, so a legitimately quoted whole exact ref (`"~/.ssh/config"`) still
+  // scrubs and stays allowed while a quote-concatenated suffix stays blocked.
+  // These exercise the mcp.json surface (pre-existing hole) and the ssh
+  // surface (the surface this PR extends the hole onto).
+  it('P1: mcp.json quote-concat suffix stays blocked (config".bak" analogue)', () => {
+    expect(hook(ctx(`cat ${mcp}".bak"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.afk/config/mcp.json"/../afk.env"`)).decision).toBe('block');
+  });
+
+  it('P1: a quoted whole exact ref still scrubs and stays allowed (no regression)', () => {
+    // The second lookahead rejects ONLY `" + path-char`; a closing quote
+    // followed by EOL/space must still match the carve-out and scrub.
+    expect(hook(ctx(`cat "${mcp}"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "~/.afk/config/mcp.json"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "${mcp}" 2>/dev/null`)).decision).not.toBe('block');
+  });
+});
+
+// PR #805 — ssh config / known_hosts carve-out parity on the bash surface.
+// `READ_ALLOWLIST_REL` is shared, so the carve-out propagates here structurally;
+// these pin that propagation so a future refactor of `allowlistedFileForms`
+// cannot silently invert the carve-out on the bash surface without a failing
+// test. Mirrors the mcp.json parity block above.
+describe('createBashRestrictionHook — ssh config / known_hosts carve-out parity (#579 O2)', () => {
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const home = homedir();
+  const sshConfig = `${home}/.ssh/config`;
+  const knownHosts = `${home}/.ssh/known_hosts`;
+
+  it('allows the ssh carve-outs in every home spelling', () => {
+    expect(hook(ctx(`cat ${sshConfig}`)).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/.ssh/config')).decision).not.toBe('block');
+    expect(hook(ctx('cat $HOME/.ssh/config')).decision).not.toBe('block');
+    expect(hook(ctx(`cat ${knownHosts}`)).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/.ssh/known_hosts')).decision).not.toBe('block');
+  });
+
+  it('is EXACT-file: backups, pseudo-children, and well-known keys stay blocked', () => {
+    expect(hook(ctx(`cat ${sshConfig}.bak`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}/child`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${knownHosts}.old`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}/../id_rsa`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}/../github_key`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${home}/.ssh/id_rsa`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${home}/.ssh/github_key`)).decision).toBe('block');
+  });
+
+  it('P1: quote-concatenated sibling/traversal stays blocked (the bypass this PR closes)', () => {
+    // Codex's exact example + the private-key traversal escalation.
+    expect(hook(ctx(`cat ${sshConfig}".bak"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config".bak"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config"/../github_key"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config"/../id_rsa"`)).decision).toBe('block');
+    expect(hook(ctx(`cat $HOME/.ssh/config"/../github_key"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/known_hosts"/../github_key"`)).decision).toBe('block');
+  });
+
+  it('P1: a quoted whole ssh exact ref still scrubs and stays allowed (no regression)', () => {
+    expect(hook(ctx(`cat "${sshConfig}"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "~/.ssh/config"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "$HOME/.ssh/known_hosts"`)).decision).not.toBe('block');
+  });
+
+  it('is EXACT-file: glob/brace-extended siblings stay blocked', () => {
+    expect(hook(ctx(`cat ${sshConfig}*`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${knownHosts}{,.old}`)).decision).toBe('block');
+  });
+
+  it('does not launder a key riding along in the same command', () => {
+    expect(hook(ctx(`cat ${sshConfig} ${home}/.ssh/id_rsa`)).decision).toBe('block');
+  });
+
+  it('extends the carve-out to the interpreter guard', () => {
+    expect(
+      hook(ctx('python -c "print(open(\'~/.ssh/config\').read())"')).decision,
+    ).not.toBe('block');
+    expect(
+      hook(ctx('python -c "print(open(\'~/.ssh/known_hosts\').read())"')).decision,
+    ).not.toBe('block');
+  });
 });
 
 describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
