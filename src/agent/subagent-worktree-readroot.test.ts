@@ -18,7 +18,7 @@
  * capture the config handed to the child AgentSession and assert the scope.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'path';
 import type { Message } from './types.js';
 
@@ -96,6 +96,10 @@ describe('forkSubagent — worktree main-repo read-root grant', () => {
     mockedResolve.mockResolvedValue(undefined);
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('grants [cwd, mainRoot, state] when the manager cwd is a linked worktree', async () => {
     mockedResolve.mockResolvedValue(MAIN);
     const mgr = new SubagentManager({ cwd: WORKTREE });
@@ -132,6 +136,16 @@ describe('forkSubagent — worktree main-repo read-root grant', () => {
     expect(cfg?.cwd).toBe('/plain/repo');
     // No distinct worktree main root, but a confined fork still needs ~/.afk/state.
     expect(cfg?.readRoots).toEqual(['/plain/repo', STATE, FRAMEWORK]);
+  });
+
+  it('grants the configured AFK_FRAMEWORK_DIR override to confined forks', async () => {
+    const configuredFramework = '/configured/agent-framework';
+    vi.stubEnv('AFK_FRAMEWORK_DIR', configuredFramework);
+    const mgr = new SubagentManager({ cwd: '/plain/repo' });
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k' }));
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    expect(cfg?.readRoots).toEqual(['/plain/repo', STATE, configuredFramework]);
   });
 
   it('does NOT override caller-pinned readRoots (e.g. afk farm) and skips resolution', async () => {

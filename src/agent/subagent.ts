@@ -36,6 +36,7 @@ import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './workt
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
+import { env } from '../config/env.js';
 import path from 'path';
 import { buildPhaseRestrictedProvider } from './tools/nesting.js';
 import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
@@ -398,7 +399,9 @@ export class SubagentManager {
         // improve pipeline were hard-denied the one tree their task requires —
         // 46 denials across 15 sessions (card subagent-read-denial-ab89c2bd6a6f).
         // Same guard as Gap A: this dir only, NEVER ~/.afk/config (credentials).
-        ...(parentUnconfined ? {} : { afkFrameworkRoot: getAgentFrameworkDir() }),
+        ...(parentUnconfined
+          ? {}
+          : { afkFrameworkRoot: env.AFK_FRAMEWORK_DIR ?? getAgentFrameworkDir() }),
       });
     }
 
