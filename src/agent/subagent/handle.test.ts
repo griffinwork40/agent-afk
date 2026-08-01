@@ -111,6 +111,34 @@ describe('R1 — runInBackground unhandled-rejection safety', () => {
     );
   }
 
+  it('forwards multimodal content blocks unchanged to sendMessageStream', async () => {
+    const seen: unknown[] = [];
+    const session = makeMinimalSession({
+      async *sendMessageStream(content): AsyncIterable<OutputEvent> {
+        seen.push(content);
+        yield {
+          type: 'message',
+          message: { role: 'assistant', content: 'ok', timestamp: new Date() },
+        };
+      },
+    });
+    const handle = makeHandle(session);
+    const blocks = [
+      { type: 'text' as const, text: 'inspect' },
+      {
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: 'image/png' as const,
+          data: 'aW1n',
+        },
+      },
+    ];
+    const result = await handle.runToResult(blocks);
+    expect(result.status).toBe('succeeded');
+    expect(seen).toEqual([blocks]);
+  });
+
   it('(R1-1) no unhandled rejection when sendMessageStream throws', async () => {
     // Build a session whose sendMessageStream throws — representative of any
     // error that bubbles out of the session layer before a message event lands.

@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 vi.mock('../utils/debug.js', () => ({ debugLog: vi.fn() }));
 
@@ -727,6 +728,21 @@ describe('BackgroundAgentRegistry', () => {
   // ---------------------------------------------------------------------------
 
   describe('persistent log via BgJobLogWriter', () => {
+    it('persists label/hash from the plain prompt and never image base64', async () => {
+      const prompt = 'inspect the attached image';
+      const base64Sentinel = Buffer.from('secret-image-bytes').toString('base64');
+      const handle = createStubHandle('sub-disk-hygiene');
+      const job = registry.register({ handle, prompt, model: 'sonnet' });
+
+      await new Promise((r) => setTimeout(r, 100));
+      const metaPath = path.join(bgTestTmpDir, 'state', 'bg', job.jobId, 'meta.json');
+      const rawMeta = fs.readFileSync(metaPath, 'utf8');
+      const meta = JSON.parse(rawMeta) as { label: string; promptHash: string };
+      expect(meta.label).toBe(prompt);
+      expect(meta.promptHash).toBe(createHash('sha256').update(prompt).digest('hex'));
+      expect(rawMeta).not.toContain(base64Sentinel);
+    });
+
     it('register() writes meta.json to disk with status=running', async () => {
       const handle = createStubHandle('sub-disk-1');
       const job = registry.register({ handle, prompt: 'disk job', model: 'haiku' });

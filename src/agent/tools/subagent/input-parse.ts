@@ -17,6 +17,7 @@ export type AgentExecutionMode = 'foreground' | 'background';
 
 export interface AgentInput {
   prompt: string;
+  attachments?: string[];
   model?: string;
   /** Conversation-turn cap. `0` (the default) means unlimited — no ceiling. */
   max_turns?: number;
@@ -146,6 +147,28 @@ export function parseAgentInput(input: unknown): AgentInput {
     throw new Error('Agent tool prompt cannot be empty');
   }
 
+  let attachments: string[] | undefined;
+  const attachmentsValue = agentInput['attachments'];
+  if (attachmentsValue !== undefined) {
+    if (!Array.isArray(attachmentsValue)) {
+      throw new Error('Agent tool attachments must be an array of absolute image paths');
+    }
+    const paths: string[] = [];
+    for (const entry of attachmentsValue) {
+      if (typeof entry !== 'string') {
+        throw new Error(`Agent tool attachments entries must be strings, got: ${JSON.stringify(entry)}`);
+      }
+      if (entry.trim().length === 0) {
+        throw new Error('Agent tool attachments entries must not be empty strings');
+      }
+      if (!isAbsolute(entry)) {
+        throw new Error(`Agent tool attachments entries must be absolute paths, got: ${JSON.stringify(entry)}`);
+      }
+      paths.push(entry);
+    }
+    if (paths.length > 0) attachments = paths;
+  }
+
   let model: string | undefined;
   const modelValue = agentInput['model'];
   if (modelValue !== undefined) {
@@ -220,6 +243,11 @@ export function parseAgentInput(input: unknown): AgentInput {
       );
     }
     mode = modeValue;
+  }
+  if (mode === 'background' && attachments !== undefined) {
+    throw new Error(
+      'Agent tool attachments are not supported with mode:"background"; use mode:"foreground"',
+    );
   }
 
   // cwd: optional absolute path. Existence is not checked because the call
@@ -446,6 +474,7 @@ export function parseAgentInput(input: unknown): AgentInput {
 
   return {
     prompt,
+    ...(attachments !== undefined ? { attachments } : {}),
     model,
     max_turns,
     max_turns_explicit,

@@ -76,6 +76,41 @@ describe('parseAgentInput', () => {
     });
   });
 
+  describe('attachments', () => {
+    it('accepts absolute image paths and preserves prompt as a string', () => {
+      const result = parseAgentInput({ prompt: '  inspect  ', attachments: ['/tmp/a.png'] });
+      expect(result.prompt).toBe('  inspect  ');
+      expect(result.attachments).toEqual(['/tmp/a.png']);
+    });
+
+    it('rejects a non-array value', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: '/tmp/a.png' })).toThrow(
+        /attachments must be an array/,
+      );
+    });
+
+    it('rejects non-string and empty entries', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: [42] })).toThrow(
+        /attachments entries must be strings/,
+      );
+      expect(() => parseAgentInput({ prompt: 'p', attachments: ['  '] })).toThrow(
+        /must not be empty strings/,
+      );
+    });
+
+    it('rejects relative paths', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: ['a.png'] })).toThrow(
+        /must be absolute paths/,
+      );
+    });
+
+    it('rejects background attachments explicitly', () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', attachments: ['/tmp/a.png'], mode: 'background' }),
+      ).toThrow(/not supported with mode:"background"/);
+    });
+  });
+
   describe('model', () => {
     it('defaults model to undefined when omitted', () => {
       const result = parseAgentInput({ prompt: 'p' });

@@ -8,6 +8,7 @@
  */
 
 import type { ZodType } from 'zod';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortGraph } from '../abort-graph.js';
 import { debugLog } from '../../utils/debug.js';
 import { StreamIncompleteError, TimeoutError } from '../../utils/errors.js';
@@ -39,9 +40,9 @@ export interface SubagentHandle<T = unknown> {
   /** Underlying child session (created eagerly). */
   readonly session: IAgentSession;
   /** Start a single turn against the child. Resolves to the raw assistant message. */
-  run(prompt: string): Promise<Message>;
+  run(prompt: string | ContentBlockParam[]): Promise<Message>;
   /** Run and return a {@link SubagentResult} (honors `outputSchema` if set). */
-  runToResult(prompt: string): Promise<SubagentResult<T>>;
+  runToResult(prompt: string | ContentBlockParam[]): Promise<SubagentResult<T>>;
   /** Fire-and-forget run with optional completion callback and per-event progress hook. */
   runInBackground(
     prompt: string,
@@ -194,7 +195,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     return this.currentStatus;
   }
 
-  async run(prompt: string, sinkOverride?: SubagentProgressSink): Promise<Message> {
+  async run(prompt: string | ContentBlockParam[], sinkOverride?: SubagentProgressSink): Promise<Message> {
     if (this.currentStatus === 'running') throw new Error(`Subagent ${this.id} is already running`);
     // Invariant: reset the captured stop reason here — after the `running`
     // guard, before the `cancelled` short-circuit — so a re-invoked or
@@ -391,7 +392,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    *   caller's `onProgress` without permanently mutating the handle's field.
    */
   private async streamToFinalMessage(
-    prompt: string,
+    prompt: string | ContentBlockParam[],
     sinkOverride?: SubagentProgressSink,
   ): Promise<Message> {
     let finalMessage: Message | undefined;
@@ -608,7 +609,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     );
   }
 
-  async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {
+  async runToResult(
+    prompt: string | ContentBlockParam[],
+    sinkOverride?: SubagentProgressSink,
+  ): Promise<SubagentResult<T>> {
     try {
       const message = await this.run(prompt, sinkOverride);
       return buildResultFromMessage(
