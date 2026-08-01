@@ -27,6 +27,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -587,5 +588,33 @@ describe('parseReadDenylistEntries — the single parser both surfaces share', (
   it('expands a bare ~ and a leading ~/', () => {
     expect(parseReadDenylistEntries('~')).toEqual([homedir()]);
     expect(parseReadDenylistEntries('~/.netrc')).toEqual([join(homedir(), '.netrc')]);
+  });
+});
+
+describe('isReadDenied — case-variant spellings (#736)', () => {
+  afterEach(() => {
+    _resetFsCaseCacheForTests();
+  });
+
+  it('denies a case-variant credential path on a case-insensitive volume', () => {
+    _resetFsCaseCacheForTests(true);
+    // On macOS APFS each of these opens the very same file as its lowercase
+    // spelling, so a case-sensitive comparison was a real credential read.
+    expect(isReadDenied(join(homedir(), '.SSH', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.Ssh', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.AFK', 'config', 'afk.env')).denied).toBe(true);
+  });
+
+  it('leaves case variants alone on a case-sensitive volume', () => {
+    _resetFsCaseCacheForTests(false);
+    // Here ~/.SSH is a genuinely different directory and deserves no floor.
+    expect(isReadDenied(join(homedir(), '.SSH', 'id_rsa')).denied).toBe(false);
+  });
+
+  it('still reports which entry matched on a case-variant hit', () => {
+    _resetFsCaseCacheForTests(true);
+    const r = isReadDenied(join(homedir(), '.SSH', 'id_rsa'));
+    expect(r.denied).toBe(true);
+    expect(r.matched?.toLowerCase()).toContain('.ssh');
   });
 });

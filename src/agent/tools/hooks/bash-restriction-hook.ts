@@ -85,6 +85,7 @@ import {
   parseReadDenylistEntries,
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
+import { textMentionsPath } from '../fs-case.js';
 import {
   configuredAfkHome,
   afkAllowlistFileForms,
@@ -268,7 +269,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     if (restrictedSubstrings.length === 0) return {};
 
     for (const sub of restrictedSubstrings) {
-      if (scanned.includes(sub)) {
+      if (textMentionsPath(scanned, sub)) {
         return {
           decision: 'block',
           reason:
@@ -429,7 +430,7 @@ function scrubAllowlistedRefs(text: string, home: string, afkHome: string | unde
  * `~`/`$HOME` into the home path, which no signal fragment spans.
  */
 function referencesSensitivePath(scanned: string, restrictedSubstrings: string[]): boolean {
-  if (restrictedSubstrings.some((sub) => scanned.includes(sub))) return true;
+  if (restrictedSubstrings.some((sub) => textMentionsPath(scanned, sub))) return true;
   return SENSITIVE_PATH_SIGNAL.test(scanned);
 }
 

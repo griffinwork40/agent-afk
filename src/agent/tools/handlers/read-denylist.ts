@@ -46,6 +46,7 @@ import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+import { pathIsWithin } from '../fs-case.js';
 
 /**
  * Paths that `read_file` / `grep` / `glob` / `list_directory` must never read —
@@ -404,7 +405,7 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
   // first (an early return at the top of this function) would silently invert
   // that contract and make the carve-out unremovable.
   for (const blocked of extras) {
-    if (real === blocked || real.startsWith(blocked + '/')) {
+    if (pathIsWithin(real, blocked)) {
       return { denied: true, matched: blocked };
     }
   }
@@ -414,7 +415,7 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
   // symlinked `mcp.json` cannot smuggle a protected target into this set.
   if (allow.includes(real)) return { denied: false };
   for (const blocked of builtins) {
-    if (real === blocked || real.startsWith(blocked + '/')) {
+    if (pathIsWithin(real, blocked)) {
       return { denied: true, matched: blocked };
     }
   }

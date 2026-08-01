@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import {
   mkdirSync,
   rmSync,
@@ -551,5 +552,25 @@ describe('write-denylist — AFK_HOME-relocated credential tree (#740)', () => {
       warn.mockRestore();
       resetAfkHomeWarnLatchForTests();
     }
+  });
+});
+
+describe('assertNotDenylisted — case-variant spellings (#736)', () => {
+  afterEach(() => {
+    _resetFsCaseCacheForTests();
+  });
+
+  it('refuses a case-variant protected path on a case-insensitive volume', () => {
+    _resetFsCaseCacheForTests(true);
+    expect(() => assertNotDenylisted(join(homedir(), '.SSH', 'id_rsa'), 'write_file')).toThrow(
+      /protected path/,
+    );
+  });
+
+  it('permits it on a case-sensitive volume, where it is a different directory', () => {
+    _resetFsCaseCacheForTests(false);
+    expect(() =>
+      assertNotDenylisted(join(homedir(), '.SSH', 'id_rsa'), 'write_file'),
+    ).not.toThrow();
   });
 });
