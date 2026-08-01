@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import * as cron from 'node-cron';
 import { runSweep } from '../worktree-sweep.js';
-import type { ExecFileFn } from '../worktree-sweep.js';
+import type { ExecFileFn, SweepResult } from '../worktree-sweep.js';
 import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext } from './queue-store.js';
@@ -472,15 +472,20 @@ export class CronScheduler {
       // ever be reclaimed. Visit every root known to hold managed trees (#761).
       const roots = await sweepRootSet(primaryRoot);
       if (roots.length === 0) {
-        // Daemon cwd is not inside a git repo (commonly $HOME under launchd).
-        // Skip rather than erroring on every tick; the per-repo REPL boot-prune
-        // still handles cleanup for repos the user actually works in.
+        // An empty set means BOTH causes hold at once: sweepRootSet always
+        // yields at least the primary when one resolved, so no primary (daemon
+        // cwd outside a git repo, commonly $HOME under launchd) AND nothing
+        // registered. Name both — reporting only the cwd half sent operators
+        // looking for a daemon misconfiguration when the registry was simply
+        // empty. Skip rather than error on every tick; the per-repo REPL
+        // boot-prune still covers repos the user actually works in.
         const skipped: TelemetryRecord = {
           ...baseRecord,
           durationMs: this.now() - startTimeMs,
           status: 'skipped',
           responseExcerpt:
-            'worktree-prune skipped: daemon cwd is not inside a git repository ' +
+            'worktree-prune skipped: no roots to sweep — daemon cwd is not inside a ' +
+            'git repository and no managed worktree roots are registered ' +
             '(set AFK_WORKTREE_SWEEP_ROOT to target a repo)',
         };
         this.writeTelemetry(skipped, task);
@@ -492,24 +497,47 @@ export class CronScheduler {
       const maxAgeDaysDirty =
         parseInt(env.AFK_WORKTREE_MAX_AGE_DIRTY ?? '', 10) || 30;
 
+      // Invariant: one unusable root must never starve the roots after it.
+      // runSweep does not catch a failure of its own opening `git worktree
+      // list`, and builtinPruneExecFile is a bare promisify(execFile), so a
+      // nonzero git exit REJECTS. A registered directory whose .git was
+      // deleted survives the registry's liveness gate (a bare isDirectory()
+      // check), so such a root is sticky, not transient — uncaught, it would
+      // abort the loop on every tick and permanently strand every root ordered
+      // behind it, recreating the #761 leak this fan-out exists to close.
+      // Failures are demoted to warnings so the tick still reports the
+      // removals that already hit disk.
+      //
       // Sequential on purpose: runSweep takes a single machine-global advisory
       // lock, so parallel roots would just contend and the losers short-circuit.
-      const results = [];
+      const results: SweepResult[] = [];
+      const rootFailures: string[] = [];
       for (const repoRoot of roots) {
-        results.push(await runSweep({
-          execFile: builtinPruneExecFile,
-          repoRoot,
-          dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
-          maxAgeDaysClean,
-          maxAgeDaysDirty,
-          scope: 'all',
-          telemetryPath: this.telemetryPath(),
-        }));
+        try {
+          results.push(await runSweep({
+            execFile: builtinPruneExecFile,
+            repoRoot,
+            dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
+            maxAgeDaysClean,
+            maxAgeDaysDirty,
+            scope: 'all',
+            telemetryPath: this.telemetryPath(),
+          }));
+        } catch (err) {
+          rootFailures.push(
+            `[ERROR] sweep failed for ${repoRoot}: ` +
+            redactInlineSecrets(err instanceof Error ? err.message : String(err)),
+          );
+        }
       }
       const result = {
+        // `some`, not `every`: a tick where any root only previewed must not
+        // claim it removed everything. Mixed values are unreachable while the
+        // soft-launch valve resolves uniformly per tick, but the conservative
+        // reading is the safe one if it ever becomes per-root.
         dryRun: results.some((r) => r.dryRun),
         removed: results.flatMap((r) => r.removed),
-        warnings: results.flatMap((r) => r.warnings),
+        warnings: [...rootFailures, ...results.flatMap((r) => r.warnings)],
         candidates: results.flatMap((r) => r.candidates),
       };
 
@@ -521,9 +549,13 @@ export class CronScheduler {
         'orphaned-registration',
         'dead-owner',
       ]);
+      // Bare cross-root totals cannot be attributed to a root, so name the
+      // fan-out width. swept/attempted also surfaces per-root failures, which
+      // are otherwise only visible in the (unpersisted) warnings.
+      const rootsLabel = `${String(results.length)}/${String(roots.length)} root(s)`;
       const summary = result.dryRun
-        ? `🔍 worktree-prune (dry-run): would remove ${result.candidates.filter((c) => prunableVerdicts.has(c.verdict)).length} worktree(s)`
-        : `✂️ worktree-prune: removed ${result.removed.length}, warned ${result.warnings.length}`;
+        ? `🔍 worktree-prune (dry-run): would remove ${result.candidates.filter((c) => prunableVerdicts.has(c.verdict)).length} worktree(s) across ${rootsLabel}`
+        : `✂️ worktree-prune: removed ${result.removed.length}, warned ${result.warnings.length} across ${rootsLabel}`;
 
       const record: TelemetryRecord = {
         ...baseRecord,
