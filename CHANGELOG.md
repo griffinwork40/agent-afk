@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.4] - 2026-08-01
+
+### Changed
+- split loop.ts into a modular loop/ subdirectory (#818) (8d11048)
+
 ## [5.84.3] - 2026-08-01
 
 ### Fixed
