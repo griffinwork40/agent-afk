@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -165,6 +166,8 @@ describe('createAfkModeGate', () => {
     it(
       'allows rm -rf of an allowlisted basename that is a real directory',
       withTempWorkspace(async (root) => {
+        execFileSync('git', ['init', '--quiet'], { cwd: root });
+        writeFileSync(join(root, '.gitignore'), 'build/\n');
         mkdirSync(join(root, 'build'));
         const { gate } = makeGate('autonomous', root);
         const result = await gate({
@@ -173,6 +176,40 @@ describe('createAfkModeGate', () => {
           input: { command: 'rm -rf build' },
         });
         expect(result.decision).toBeUndefined();
+      }),
+    );
+
+    it(
+      'blocks an existing allowlisted directory when git does not ignore it',
+      withTempWorkspace(async (root) => {
+        execFileSync('git', ['init', '--quiet'], { cwd: root });
+        mkdirSync(join(root, 'build'));
+        const { gate } = makeGate('autonomous', root);
+        const result = await gate({
+          event: 'PreToolUse',
+          toolName: 'bash',
+          input: { command: 'rm -rf build' },
+        });
+        expect(result.decision).toBe('block');
+      }),
+    );
+
+    it(
+      'blocks a missing allowlisted target below a symlinked parent outside the workspace',
+      withTempWorkspace(async (root) => {
+        const outside = mkdtempSync(join(tmpdir(), 'afk-rm-outside-'));
+        try {
+          symlinkSync(outside, join(root, 'sub'), 'dir');
+          const { gate } = makeGate('autonomous', root);
+          const result = await gate({
+            event: 'PreToolUse',
+            toolName: 'bash',
+            input: { command: 'rm -rf sub/node_modules' },
+          });
+          expect(result.decision).toBe('block');
+        } finally {
+          rmSync(outside, { recursive: true, force: true });
+        }
       }),
     );
 
@@ -684,6 +721,24 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
       expect(event.kind).toBe('hook_decision');
       expect(event.payload['approvalOutcome']).toBe('approved');
       expect(typeof event.payload['durationMs']).toBe('number');
+    });
+
+    it('emits hook_decision with approvalOutcome:carve-out for an allowed generated-dir delete', async () => {
+      const { writer, calls } = fakeWriter();
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        traceWriter: writer,
+      });
+      const result = await gate({
+        event: 'PreToolUse',
+        toolName: 'bash',
+        input: { command: 'rm -rf node_modules' },
+      });
+      expect(result.decision).toBeUndefined();
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.kind).toBe('hook_decision');
+      expect(event.payload['approvalOutcome']).toBe('carve-out');
+      expect(event.payload['decision']).toBeUndefined();
     });
 
     it('emits hook_decision with approvalOutcome:denied on a deny', async () => {

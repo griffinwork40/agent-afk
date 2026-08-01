@@ -335,9 +335,9 @@ export function createAfkModeGate(
     // Issue #579 O3 — a `rm -rf <leaf-dir>` inside the workspace is a routine
     // clean-rebuild step (node_modules, dist, build, …), not the destructive
     // operation the blanket `BASH_HIGH` substring list assumes. Downgrade it
-    // BEFORE the high-risk gate fires, so a headless `rm -rf node_modules &&
-    // pnpm install` does not stall on an approval prompt that nobody will
-    // answer. `isSafeInWorkspaceRm` (afk-mode-rm-allowlist.ts) fails CLOSED:
+    // BEFORE the high-risk gate fires. Compound commands remain blocked: a
+    // caller must issue `rm -rf node_modules` and `pnpm install` as separate
+    // bash calls. `isSafeInWorkspaceRm` (afk-mode-rm-allowlist.ts) fails CLOSED:
     // anything it cannot confidently classify as a curated, recursive,
     // in-workspace generated-directory delete stays `high` and is gated as
     // before.
@@ -349,6 +349,12 @@ export function createAfkModeGate(
           ? String((context.input as Record<string, unknown>)['command'] ?? '')
           : '';
       if (cmd && isSafeInWorkspaceRm(cmd, resolveBase, workspaceRoot)) {
+        void emitHookDecision(traceWriter, {
+          hookEvent: 'PreToolUse',
+          blockedTool: toolName,
+          durationMs: Date.now() - start,
+          approvalOutcome: 'carve-out',
+        });
         return {};
       }
     }

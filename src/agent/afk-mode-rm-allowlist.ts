@@ -5,8 +5,9 @@
  * AFK's gate classifies ALL `rm` as `high` (BASH_HIGH at risk-classifier.ts:51-53
  * lists both `rm -rf` and `rm ` — stricter than the repo's own
  * `safe-destruct-detect.ts`, which calls recursive-only deletes "common and
- * usually safe"), so a headless `rm -rf node_modules && pnpm install` stalls on
- * an approval prompt nobody will answer.
+ * usually safe"), so even a standalone `rm -rf node_modules` stalls on an
+ * approval prompt nobody will answer. Callers must run a following install as
+ * a separate bash call; compound shell commands intentionally fail closed.
  *
  * This module decides the narrow exception. It is deliberately a separate file
  * from the gate: the parsing/containment logic is the security-load-bearing
@@ -17,6 +18,7 @@
 
 import path from 'path';
 import { lstatSync } from 'fs';
+import { spawnSync } from 'child_process';
 import { safeRealpath } from './tools/handlers/write-denylist.js';
 
 /**
@@ -105,9 +107,20 @@ function parseRmCommand(cmd: string): ParsedRm | null {
  * in an already-clean tree stays a permitted no-op). An existing regular file
  * — or any other stat error — fails CLOSED.
  */
-function isGeneratedDirTarget(resolved: string): boolean {
+function isGeneratedDirTarget(resolved: string, workspaceRoot: string): boolean {
   try {
-    return lstatSync(resolved).isDirectory();
+    if (!lstatSync(resolved).isDirectory()) return false;
+
+    // A familiar basename is not evidence that an existing directory is
+    // disposable: repositories can legitimately track a `build/` or `out/`
+    // source tree. `git check-ignore` deliberately does not report tracked
+    // paths, so requiring a successful match protects both tracked content and
+    // unignored user-authored directories. No repository / no git / any git
+    // error is ambiguous and therefore fails closed.
+    return spawnSync('git', ['check-ignore', '--quiet', '--', resolved], {
+      cwd: workspaceRoot,
+      stdio: 'ignore',
+    }).status === 0;
   } catch (err) {
     // ENOENT: nothing there to delete, so the command is a harmless no-op.
     // Every other errno (EACCES, ELOOP, …) is ambiguous → fail closed.
@@ -166,7 +179,7 @@ export function isSafeInWorkspaceRm(
     if (!RM_RF_SAFE_LEAF_DIRS.has(path.basename(resolved))) return false;
 
     // Must be a generated directory (or absent), never an existing file.
-    if (!isGeneratedDirTarget(resolved)) return false;
+    if (!isGeneratedDirTarget(resolved, wsRoot)) return false;
   }
   return true;
 }
