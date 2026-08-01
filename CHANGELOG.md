@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.6] - 2026-08-01
+
+### Fixed
+- re-render the # Environment date line per turn in openai-compatible (#785) (#804) (f7665d1)
+
+### Changed
+- cover openai-compatible manifest forwarding (closes #742) (#821) (4610e25)
+
 ## [5.84.5] - 2026-08-01
 
 ### Fixed
