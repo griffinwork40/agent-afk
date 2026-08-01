@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.11] - 2026-08-01
+
+### Fixed
+- alias /add-dir to /allow-dir (#837) (4e74dc6)
+
 ## [5.84.10] - 2026-08-01
 
 ### Changed
