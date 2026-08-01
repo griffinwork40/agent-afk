@@ -375,10 +375,20 @@ export function getReadDenylist(): readonly string[] {
  */
 export function getReadDenylistDescendants(root: string): string[] {
   const realRoot = safeRealpath(resolve(root));
-  const rels = getReadDenylist().map((blocked) => relative(realRoot, blocked));
-  return rels
-    .filter((rel) => rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`))
-    .map((rel) => rel.split(sep).join('/'));
+  return getReadDenylist()
+    .filter(
+      (blocked) =>
+        blocked !== realRoot && pathIsWithin(blocked, realRoot, blocked),
+    )
+    .map((blocked) => {
+      // `path.relative` is case-sensitive even when the filesystem is not.
+      // Containment above established that a folded spelling is equivalent;
+      // slicing preserves the denylist entry's glob-ready descendant suffix.
+      const rel = blocked.startsWith(realRoot + sep)
+        ? relative(realRoot, blocked)
+        : blocked.slice(realRoot.length + 1);
+      return rel.split(sep).join('/');
+    });
 }
 
 /**

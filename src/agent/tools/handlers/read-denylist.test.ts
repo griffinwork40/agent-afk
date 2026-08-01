@@ -35,6 +35,7 @@ import {
   isReadDenied,
   assertNotReadDenied,
   getReadDenylist,
+  getReadDenylistDescendants,
   BUILTIN_READ_DENYLIST,
   BUILTIN_READ_ALLOWLIST,
   READ_ALLOWLIST_REL,
@@ -616,5 +617,14 @@ describe('isReadDenied — case-variant spellings (#736)', () => {
     const r = isReadDenied(join(homedir(), '.SSH', 'id_rsa'));
     expect(r.denied).toBe(true);
     expect(r.matched?.toLowerCase()).toContain('.ssh');
+  });
+
+  it('derives grep exclusions from a case-variant readable parent', () => {
+    _resetFsCaseCacheForTests(true);
+    process.env['AFK_READ_DENYLIST'] = join(homedir(), 'readable', '.ssh');
+    _resetReadDenylistCacheForTests();
+
+    const caseVariantParent = join(homedir(), 'READABLE');
+    expect(getReadDenylistDescendants(caseVariantParent)).toContain('.ssh');
   });
 });
