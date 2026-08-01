@@ -639,3 +639,99 @@ describe('context: load default', () => {
     expect(skill.loadBody).toContain('Body.');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fix — fork path: skillDispatchName + isSkillDispatch + anchor ordering
+//
+// PR #737 fixed self-re-dispatch in three places; user-skills.ts was the
+// untested third site. These tests assert:
+//   1. forkSubagent receives skillDispatchName and isSkillDispatch: true
+//   2. The always-sent anchor + user args both appear, anchor before args
+//   3. With no args, the message is exactly the anchor (no delimiter)
+// ---------------------------------------------------------------------------
+
+describe('fork path: skillDispatchName, isSkillDispatch, and anchor ordering (#741)', () => {
+  beforeEach(() => {
+    _resetRegistry();
+    mkdirSync(skillsDir, { recursive: true });
+    mockForkSubagent.mockClear();
+    mockRunToResult.mockClear();
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // cleanup best-effort
+    }
+  });
+
+  function writeForkSkill(name: string): string {
+    const dir = join(skillsDir, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---
+name: ${name}
+description: A fork skill for testing
+context: fork
+---
+
+You do the thing.
+`,
+    );
+    return dir;
+  }
+
+  it('passes skillDispatchName and isSkillDispatch: true to forkSubagent', async () => {
+    const skillName = 'my-fork-skill';
+    writeForkSkill(skillName);
+
+    scanAndRegisterUserSkills();
+    const skill = getSkill(skillName);
+
+    await skill.handler('some args', undefined, undefined);
+
+    expect(mockForkSubagent).toHaveBeenCalledOnce();
+    const callArgs = mockForkSubagent.mock.calls[0]?.[0] as {
+      config?: { skillDispatchName?: string; isSkillDispatch?: boolean };
+    };
+    expect(callArgs?.config?.skillDispatchName).toBe(skillName);
+    expect(callArgs?.config?.isSkillDispatch).toBe(true);
+  });
+
+  it('user message contains anchor before args when args are provided', async () => {
+    const skillName = 'anchor-order-skill';
+    writeForkSkill(skillName);
+
+    scanAndRegisterUserSkills();
+    const skill = getSkill(skillName);
+
+    const args = 'my custom arguments here';
+    await skill.handler(args, undefined, undefined);
+
+    expect(mockRunToResult).toHaveBeenCalledOnce();
+    const userMessage = mockRunToResult.mock.calls[0]?.[0] as string;
+
+    const anchor = `Run the ${skillName} skill now, following the instructions in your system prompt.`;
+    expect(userMessage).toContain(anchor);
+    expect(userMessage).toContain(args);
+    expect(userMessage.indexOf(anchor)).toBeLessThan(userMessage.indexOf(args));
+  });
+
+  it('user message is exactly the anchor when no args are provided', async () => {
+    const skillName = 'no-args-skill';
+    writeForkSkill(skillName);
+
+    scanAndRegisterUserSkills();
+    const skill = getSkill(skillName);
+
+    await skill.handler(undefined, undefined, undefined);
+
+    expect(mockRunToResult).toHaveBeenCalledOnce();
+    const userMessage = mockRunToResult.mock.calls[0]?.[0] as string;
+
+    const anchor = `Run the ${skillName} skill now, following the instructions in your system prompt.`;
+    expect(userMessage).toBe(anchor);
+  });
+});
