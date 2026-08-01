@@ -67,6 +67,32 @@ export const TTFB_TIMEOUT_MESSAGE = 'model_ttfb_timeout';
 export const TTFB_THROTTLE_SLACK_MS = 30_000;
 
 /**
+ * Invariant: the SDK honors a `retry-after` hint ONLY when
+ * `0 <= ms < 60_000`; at or above that it discards the hint entirely.
+ * `@anthropic-ai/sdk` 0.74.0 `client.js:412`:
+ *
+ *     if (!(timeoutMillis && 0 <= timeoutMillis && timeoutMillis < 60 * 1000)) {
+ *         timeoutMillis = this.calculateDefaultRetryTimeoutMillis(...);
+ *     }
+ *
+ * Pinned to the locked SDK version. If that guard changes upstream, this
+ * constant and {@link SDK_MAX_DEFAULT_BACKOFF_MS} must be re-derived — the
+ * accompanying tests assert the arithmetic, not the SDK, so they will NOT catch
+ * an upstream drift on their own.
+ */
+export const SDK_HONORED_RETRY_AFTER_CEILING_MS = 60_000;
+
+/**
+ * Ceiling of the SDK's own fallback backoff, used whenever a `retry-after` is
+ * discarded per {@link SDK_HONORED_RETRY_AFTER_CEILING_MS}. `client.js:419-428`
+ * computes `min(0.5 * 2^n, 8.0)` seconds and then applies 0.75–1.0 jitter, so
+ * 8s is the hard maximum. Deliberately the un-jittered ceiling: over-granting by
+ * up to 2s is harmless, while under-granting would reintroduce the false
+ * positive this whole mechanism exists to remove.
+ */
+export const SDK_MAX_DEFAULT_BACKOFF_MS = 8_000;
+
+/**
  * Contract: the TTFB extension owed for one provider-communicated throttle, or
  * `undefined` when the provider gave no usable window.
  *
@@ -75,12 +101,23 @@ export const TTFB_THROTTLE_SLACK_MS = 30_000;
  * than extending by a guessed amount. The finiteness guard matters because a
  * non-finite delay would re-arm a bogus timer (Node clamps it to 1ms with a
  * TimeoutOverflowWarning), turning an extension into an immediate abort.
+ *
+ * The extension is derived from the wait the SDK will ACTUALLY take, not from
+ * the raw header. Granting the raw value would let a `retry-after: 3600` hint
+ * buy an hour of TTFB grace for a park the SDK caps at ~8s — reinstating the
+ * unbounded post-connect hang that #583/#762 exist to prevent. Because the
+ * honored window is bounded, so is the grace: at most
+ * `60s + 30s = 90s` per throttle, and with the SDK's default `maxRetries: 2`
+ * (`client.js:72`) at most ~180s per round. The watchdog can be deferred, never
+ * disabled.
  */
 export function throttleExtensionMs(retryAfterMs: number | undefined): number | undefined {
   if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
     return undefined;
   }
-  return retryAfterMs + TTFB_THROTTLE_SLACK_MS;
+  const effectiveWaitMs =
+    retryAfterMs < SDK_HONORED_RETRY_AFTER_CEILING_MS ? retryAfterMs : SDK_MAX_DEFAULT_BACKOFF_MS;
+  return effectiveWaitMs + TTFB_THROTTLE_SLACK_MS;
 }
 
 /** Distinguish a TTFB-timeout abort from any other error (e.g. user interrupt). */

@@ -113,9 +113,14 @@ describe('regression: a throttle park no longer trips the TTFB bound', () => {
   it('does not report a first-byte stall for time the provider told us to wait', async () => {
     // The bug: armFirstByteTimeout is armed BEFORE messages.create, so its 180s
     // window covers every 429 backoff the SDK sleeps out INSIDE that call. Two
-    // retries at ~70s each consumed ~140s of the budget, leaving prefill ~40s,
+    // retries at ~55s each consumed ~110s of the budget, leaving prefill ~70s,
     // and the resulting abort was reported as a first-byte stall on a request
     // that had never been given a chance to stream.
+    //
+    // 55s is deliberately just under SDK_HONORED_RETRY_AFTER_CEILING_MS: the SDK
+    // only sleeps out a retry-after while it is < 60s, so this is a park that
+    // genuinely happens. A larger hint would be discarded upstream and clamped
+    // here, which is covered by throttleExtensionMs' own tests.
     vi.useFakeTimers();
     const queue = new ThrottleQueue();
     const ttfb = armFirstByteTimeout(new AbortController().signal, 180_000);
@@ -131,16 +136,16 @@ describe('regression: a throttle park no longer trips the TTFB bound', () => {
     });
     const pump = drain(gen);
 
-    // Two SDK-internal 429 retries, 70s of parking each.
+    // Two SDK-internal 429 retries, 55s of parking each.
     for (let i = 0; i < 2; i++) {
-      queue.push({ status: 429, retryAfterMs: 70_000 });
-      await vi.advanceTimersByTimeAsync(70_000);
+      queue.push({ status: 429, retryAfterMs: 55_000 });
+      await vi.advanceTimersByTimeAsync(55_000);
     }
-    // 140s of the original 180s budget is gone, and prefill has not started.
+    // 110s of the original 180s budget is gone, and prefill has not started.
     expect(ttfb.timedOut()).toBe(false);
 
-    // Prefill now takes a further 100s — which would have blown the un-extended
-    // bound at 180s. With the park forgiven it must survive.
+    // Prefill now takes a further 100s — 210s total, which would have blown the
+    // un-extended bound at 180s. With the park forgiven it must survive.
     await vi.advanceTimersByTimeAsync(100_000);
     expect(ttfb.timedOut()).toBe(false);
     expect(ttfb.signal.aborted).toBe(false);

@@ -3,6 +3,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DEFAULT_MODEL_TTFB_TIMEOUT_MS,
+  SDK_HONORED_RETRY_AFTER_CEILING_MS,
+  SDK_MAX_DEFAULT_BACKOFF_MS,
   TTFB_THROTTLE_SLACK_MS,
   TTFB_TIMEOUT_MESSAGE,
   armFirstByteTimeout,
@@ -129,8 +131,10 @@ describe('armFirstByteTimeout', () => {
 });
 
 describe('throttleExtensionMs', () => {
-  it('adds the slack to a usable retry-after window', () => {
-    expect(throttleExtensionMs(60_000)).toBe(60_000 + TTFB_THROTTLE_SLACK_MS);
+  it('adds the slack to a retry-after the SDK will actually honour', () => {
+    expect(throttleExtensionMs(30_000)).toBe(30_000 + TTFB_THROTTLE_SLACK_MS);
+    // Just under the honoured ceiling: still taken at face value.
+    expect(throttleExtensionMs(59_999)).toBe(59_999 + TTFB_THROTTLE_SLACK_MS);
   });
 
   it('returns undefined when the provider gave no usable window', () => {
@@ -139,6 +143,28 @@ describe('throttleExtensionMs', () => {
     for (const bad of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(throttleExtensionMs(bad as number | undefined)).toBeUndefined();
     }
+  });
+
+  it('clamps a hint the SDK DISCARDS to the SDK\'s own backoff ceiling', () => {
+    // client.js:412 honours retry-after only while `< 60 * 1000`; at or above it
+    // the hint is thrown away and calculateDefaultRetryTimeoutMillis caps the
+    // wait at 8s. Granting the raw header would buy an hour of grace for an ~8s
+    // park — reinstating the unbounded hang #583/#762 exist to prevent.
+    const clamped = SDK_MAX_DEFAULT_BACKOFF_MS + TTFB_THROTTLE_SLACK_MS;
+    expect(throttleExtensionMs(SDK_HONORED_RETRY_AFTER_CEILING_MS)).toBe(clamped);
+    expect(throttleExtensionMs(120_000)).toBe(clamped);
+    expect(throttleExtensionMs(3_600_000)).toBe(clamped); // the one-hour header
+  });
+
+  it('bounds total grace: a throttle can defer the watchdog, never disable it', () => {
+    // Worst honoured case per throttle, and the whole-round ceiling given the
+    // SDK's default maxRetries: 2 (client.js:72). If this ever stops holding, an
+    // endpoint could park a dead request indefinitely.
+    const worstPerThrottle = SDK_HONORED_RETRY_AFTER_CEILING_MS - 1 + TTFB_THROTTLE_SLACK_MS;
+    for (const ms of [1, 59_999, 60_000, 3_600_000, Number.MAX_SAFE_INTEGER]) {
+      expect(throttleExtensionMs(ms)!).toBeLessThanOrEqual(worstPerThrottle);
+    }
+    expect(worstPerThrottle * 2).toBeLessThan(200_000);
   });
 });
 
