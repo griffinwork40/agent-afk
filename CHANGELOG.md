@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.3] - 2026-08-01
+
+### Fixed
+- stop making the operator hand-recover from a usage-limit death (auto re-resolve credentials + /retry) (#811) (b017bc6)
+
+### Changed
+- run the vendored/bundled hash-pin gate on every PR (#775) (#817) (d4d5706)
+
 ## [5.84.2] - 2026-08-01
 
 ### Fixed
