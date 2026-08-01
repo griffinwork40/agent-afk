@@ -1,5 +1,5 @@
 /** Resolve path-backed subagent image attachments under the parent's read policy. */
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { ImageBlockAttachment } from '../../content/image-blocks.js';
 import { resolveAndContain } from '../handlers/_cwd-utils.js';
@@ -15,6 +15,12 @@ const MEDIA_TYPES = new Map<string, ImageBlockAttachment['mediaType']>([
   ['.gif', 'image/gif'],
   ['.webp', 'image/webp'],
 ]);
+
+function byteCapExceeded(): Error {
+  return new Error(
+    `Agent tool image attachments exceed the ${MAX_SUBAGENT_ATTACHMENT_BYTES} byte (5 MiB) total limit`,
+  );
+}
 
 export interface ResolveSubagentAttachmentsArgs {
   paths: readonly string[];
@@ -47,13 +53,18 @@ export async function resolveSubagentAttachments(
       );
     }
     const resolvedPath = resolveAndContain(inputPath, context, 'read');
+
+    // Invariant: stat before read. The byte cap must reject an oversized file
+    // BEFORE its contents enter memory — checking only after readFile would let
+    // a single multi-gigabyte path exhaust the heap on the way to being
+    // refused. stat() supplies the projected total; the post-read check below
+    // is the consistency backstop for a file that grows between the two calls.
+    const projected = totalBytes + (await stat(resolvedPath)).size;
+    if (projected > MAX_SUBAGENT_ATTACHMENT_BYTES) throw byteCapExceeded();
+
     const bytes = await readFile(resolvedPath);
     totalBytes += bytes.byteLength;
-    if (totalBytes > MAX_SUBAGENT_ATTACHMENT_BYTES) {
-      throw new Error(
-        `Agent tool image attachments exceed the ${MAX_SUBAGENT_ATTACHMENT_BYTES} byte (5 MiB) total limit`,
-      );
-    }
+    if (totalBytes > MAX_SUBAGENT_ATTACHMENT_BYTES) throw byteCapExceeded();
     attachments.push({ mediaType, bytes });
   }
   return attachments;

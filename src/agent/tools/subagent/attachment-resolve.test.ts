@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -47,6 +47,26 @@ describe('resolveSubagentAttachments', () => {
     await writeFile(huge, Buffer.alloc(MAX_SUBAGENT_ATTACHMENT_BYTES + 1));
     await expect(
       resolveSubagentAttachments({ paths: [huge], resolveBase: root, readRoots: [root] }),
+    ).rejects.toThrow(/5 MiB/);
+  });
+
+  it('rejects an oversized file via stat, before its bytes enter memory', async () => {
+    // Contract: this file is SPARSE and deliberately larger than Node's maximum
+    // buffer length — truncate() allocates no real blocks, and a readFile() of
+    // it would fail with ERR_FS_FILE_TOO_LARGE rather than the cap message. So
+    // observing the 5 MiB cap error here proves the stat() guard rejected the
+    // path before any read was attempted. Do not "fix" this into a real write:
+    // the sparseness is the assertion mechanism, not a shortcut.
+    const root = await mkdtemp(join(tmpdir(), 'afk-att-'));
+    const sparse = join(root, 'sparse.png');
+    const handle = await open(sparse, 'w');
+    try {
+      await handle.truncate(3 * 1024 * 1024 * 1024);
+    } finally {
+      await handle.close();
+    }
+    await expect(
+      resolveSubagentAttachments({ paths: [sparse], resolveBase: root, readRoots: [root] }),
     ).rejects.toThrow(/5 MiB/);
   });
 });
