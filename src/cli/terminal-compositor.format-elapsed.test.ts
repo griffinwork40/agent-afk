@@ -13,11 +13,20 @@
  * and the padStart zero-padding on the seconds remainder.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatElapsed, ELAPSED_GRACE_MS } from './terminal-compositor.scrollback.js';
 import { stripAnsi } from './display.js';
 
 describe('formatElapsed', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('returns empty string before the grace period elapses', () => {
     const startedAt = Date.now();
     expect(formatElapsed(startedAt)).toBe('');
