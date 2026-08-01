@@ -30,13 +30,9 @@ import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-stor
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
-import { SubagentManager } from '../../agent/subagent.js';
-import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
-import { SkillExecutor } from '../../agent/tools/skill-executor.js';
-import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
-import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../agent/tools/skill-bridge.js';
-import { createChildProviderFactory, createChildSkillExecutorFactory, createStubParentSession } from '../../agent/tools/nesting.js';
-import { loadAgentRegistry } from '../../agent/agents/index.js';
+import { wireExecutors } from '../../agent/session/wire-executors.js';
+import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
@@ -58,21 +54,13 @@ export interface BuildDaemonSessionFactoryOpts {
  * skill-dispatching commands like `/forge-friction --auto` or `/review pr 123`
  * can call the `skill`, `agent`, and `compose` tools.
  *
- * // Invariant: mirrors the executor-wiring order in chat.ts.
- * // The order matters because each executor closes over the ones constructed
- * // above it:
- * //   1. SubagentManager  — root manager for all forked children
- * //   2. childProviderFactory — routes child model → AnthropicDirect / OpenAICompatible
- * //   3. childSkillExecutorFactory — depth-aware factory for nested skill children
- * //   4. SubagentExecutor — wires the `agent` tool
- * //   5. SkillExecutor    — wires the `skill` tool
- * //   6. ComposeExecutor  — wires the `compose` tool
- * //   7. parseProvider()  — builds the root provider with all three executors,
- * //      falling back to AnthropicDirectProvider for Anthropic-routed models.
- * //
- * // The returned factory receives a config that spawnSession() has already
- * // populated (including permissionMode:'bypassPermissions'). The config is
- * // preserved via spread so no caller-set field is lost.
+ * The executor trio (and the single root SubagentManager they share) comes from
+ * `wireExecutors()`; `parseProvider()` then builds the root provider around
+ * them, falling back to AnthropicDirectProvider for Anthropic-routed models.
+ *
+ * The returned factory receives a config that spawnSession() has already
+ * populated (including permissionMode:'bypassPermissions'). The config is
+ * preserved via spread so no caller-set field is lost.
  */
 export function buildDaemonSessionFactory(
   opts: BuildDaemonSessionFactoryOpts,
@@ -94,138 +82,30 @@ export function buildDaemonSessionFactory(
     const abortCtrl = new AbortController();
     const stubParent = createStubParentSession(abortCtrl.signal);
 
-    const rootManager = new SubagentManager({
-      ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-      // Parent model → provider, so the fork-time credential fallback never
-      // crosses the provider boundary (see SubagentManager.parentProvider).
-      parentModel: opts.model,
-      ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      // Witness layer: manager-level writer so daemon-forked `agent`-tool
-      // children (which never set config.timeoutMs / config.traceWriter) still
-      // emit subagent_lifecycle events and hand the writer to their handles.
-      // The scheduler (scheduler.ts:spawnSession) already opened a per-tick
-      // trace and threaded it in as config.traceWriter — reuse THAT SAME
-      // instance here (do not create a duplicate). Mirrors bootstrap.ts:246.
-      // Undefined under AFK_TRACE_DISABLED=1, in which case the spread is
-      // absent and behaviour is unchanged.
-      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
-      // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
-      // surface so forked `agent`-tool children inherit origin 'daemon' (not
-      // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+    // Invariant: ONE root manager per session, shared by all three executors.
+    // The scheduler (scheduler.ts:spawnSession) already opened a per-tick trace
+    // and threaded it in as config.traceWriter — reuse THAT SAME instance here
+    // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
+    // in which case the option is absent and behaviour is unchanged.
+    const { subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
-    });
-
-    const childProviderFactory = createChildProviderFactory(
-      opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {},
-    );
-
-    // Named-agent registry: session-static scan enabling `agent_type`
-    // dispatch for daemon-run tasks (builtin + user + project scopes).
-    const agentRegistry = loadAgentRegistry({
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      pluginAgents: discoverPluginAgents(),
-    });
-
-    const childSkillExecutorFactory = createChildSkillExecutorFactory(
-      opts.model,
-      opts.apiKey,
-      childProviderFactory,
-      opts.baseUrl,
-      // traceWriter: reuse the scheduler's per-tick writer (threaded in as
-      // config.traceWriter) so depth>0 skill forks stay visible in the witness
-      // trace. Undefined under AFK_TRACE_DISABLED=1. Mirrors bootstrap.ts:333.
-      config.traceWriter,
-      // backgroundRegistry: daemon has no background registry — pass undefined
-      undefined,
-      opts.cwd,
-      // Per-model credential resolver — see bootstrap.ts for rationale.
-      getApiKeyForModel,
-      // Surface: daemon skill executor children inherit origin 'daemon'.
-      'daemon',
-      // Resolved default-subagent model threaded into nested skill executors
-      // so skill→skill / skill→agent chains inherit the SAME policy as the
-      // top-level executors — closing the leak where a nested subagent
-      // silently defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
-      getDefaultSubagentModel(opts.model),
-      // Named-agent registry propagates to nested skill executors.
-      agentRegistry,
-      // OpenAI endpoint → nested restricted/depth-cap provider builders.
-      opts.openaiBaseUrl,
-    );
-
-    const subagentExecutor = new SubagentExecutor({
-      subagentManager: rootManager,
       parentSession: stubParent,
-      // Session origin for routing-decision telemetry (daemon/scheduler → daemon).
-      surface: 'daemon',
-      defaultConfig: {
-        ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-        ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
-        ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
-      },
+      apiKey: opts.apiKey,
+      model: opts.model,
+      // The daemon resolves its credential from the task model itself, so the
+      // manager's credential-fallback anchor is the same model.
+      managerParentModel: opts.model,
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
-      childProviderFactory,
-      childSkillExecutorFactory,
-      // Per-model credential resolver — see bootstrap.ts for rationale.
       resolveApiKeyForModel: getApiKeyForModel,
-      depth: 0,
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      // Named-agent dispatch: registry + `inherit` anchor.
-      agentRegistry,
-      parentModel: opts.model,
-      // Witness layer: thread the scheduler's per-tick writer so depth ≥ 2
-      // `agent` forks (nested child managers built inside execute()) stay
-      // visible. Depth-1 forks are covered by rootManager above. Mirrors
-      // bootstrap.ts:395.
-      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
-    });
-
-    const skillExecutor = new SkillExecutor({
-      parentSession: stubParent,
-      // Session origin for skill-invocation + routing telemetry (daemon → daemon).
-      surface: 'daemon',
-      defaultModel: opts.model,
-      defaultSubagentModel: getDefaultSubagentModel(opts.model),
-      ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-      childProviderFactory,
-      childSkillExecutorFactory,
-      // Named-agent registry for skill-forked orchestrator children.
-      agentRegistry,
-      // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
-      resolveApiKeyForModel: getApiKeyForModel,
+      // Daemon tasks carry no base prompt: compose nodes get '' (preserved by
+      // wireExecutors) and forked children fall back to the handoff contract.
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      // Witness layer: without this, daemon skill-forked subagents (every
-      // /forge-friction, /review, etc. fired by a task) emit zero trace events,
-      // making subagent failures undebuggable from disk. Mirrors bootstrap.ts:424.
-      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
-      // Read-scope inheritance (#547): skill-forked children inherit the parent
-      // session's read scope via the root manager. See bootstrap.ts.
-      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
-    });
-
-    const composeExecutor = new ComposeExecutor({
-      parentSession: stubParent,
-      defaultModel: opts.model,
-      defaultSubagentModel: getDefaultSubagentModel(opts.model),
-      ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
-      // Per-model credential resolver — mirrors #640 for the compose fork-path.
-      resolveApiKeyForModel: getApiKeyForModel,
-      // Read-scope inheritance (#547): DAG nodes inherit the parent session's
-      // read scope via the root manager. See bootstrap.ts.
-      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
-      ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
-      // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      systemPrompt: '',
-      // Session identity for routing-decision rows (daemon/scheduler → daemon).
-      surface: 'daemon',
-      depth: 0,
-      // Witness layer: DAG nodes emit subagent_lifecycle into the session
-      // trace. Reuses the scheduler's per-tick writer. Mirrors bootstrap.ts:460.
-      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd, nestedCwd: opts.cwd } : {}),
+      ...(config.traceWriter !== undefined
+        ? { traceWriter: config.traceWriter, skillTraceWriter: config.traceWriter }
+        : {}),
+      // No backgroundRegistry: background dispatch is interactive-only.
     });
 
     memoryStore ??= new MemoryStore();

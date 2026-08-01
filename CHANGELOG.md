@@ -11,6 +11,58 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.9] - 2026-08-01
+
+### Fixed
+- gate orphaned-dir removal on age and content (#794) (#813) (27060bc)
+
+## [5.84.8] - 2026-08-01
+
+### Fixed
+- allow curated in-workspace rm -rf in AFK autonomous mode (#579 O3) (#806) (13403f2)
+
+### Changed
+- split anthropic-direct/index.ts behind characterization tests (#824) (#833) (3bd13ea)
+
+## [5.84.7] - 2026-08-01
+
+### Changed
+- extract a shared wireExecutors() factory (#822) (#834) (6ed0186)
+
+## [5.84.6] - 2026-08-01
+
+### Fixed
+- re-render the # Environment date line per turn in openai-compatible (#785) (#804) (f7665d1)
+
+### Changed
+- cover openai-compatible manifest forwarding (closes #742) (#821) (4610e25)
+
+## [5.84.5] - 2026-08-01
+
+### Fixed
+- refuse a tool call that keeps failing identically (#723) (#814) (7807e67)
+
+### Changed
+- cover user-skills.ts fork path for skillDispatchName + anchor (closes #741) (#820) (3dfa4b4)
+
+## [5.84.4] - 2026-08-01
+
+### Changed
+- split loop.ts into a modular loop/ subdirectory (#818) (8d11048)
+
+## [5.84.3] - 2026-08-01
+
+### Fixed
+- stop making the operator hand-recover from a usage-limit death (auto re-resolve credentials + /retry) (#811) (b017bc6)
+
+### Changed
+- run the vendored/bundled hash-pin gate on every PR (#775) (#817) (d4d5706)
+
+## [5.84.2] - 2026-08-01
+
+### Fixed
+- credit provider-paused time against the wall-clock ceiling (#797) (f6b33cf)
+
 ## [5.84.1] - 2026-08-01
 
 ### Fixed

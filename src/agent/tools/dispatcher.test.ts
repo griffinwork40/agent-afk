@@ -10,6 +10,7 @@ import type { ToolHandler } from './types.js';
 import type { CanUseTool } from '../types/sdk-types.js';
 import { createHookRegistryImpl } from '../hook-registry.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
+import { REPEAT_FAILURE_REFUSAL_THRESHOLD } from './repeat-failure-guard.js';
 
 function makeCall(overrides?: Partial<ToolCall>): ToolCall {
   return {
@@ -634,6 +635,58 @@ describe('SessionToolDispatcher', () => {
       expect(elapsed).toBeLessThan(90);
     });
 
+    it('refuses duplicate safe calls once failures reach the threshold within a batch', async () => {
+      const handler = vi.fn<ToolHandler>().mockResolvedValue({
+        content: 'same failure',
+        isError: true,
+      });
+      const dispatcher = makeDispatcher({ handlers: new Map([['echo', handler]]) });
+      const calls = Array.from({ length: REPEAT_FAILURE_REFUSAL_THRESHOLD + 2 }, (_, i) => ({
+        ...makeBatchCall('echo', `duplicate-${i}`),
+        input: { message: 'same', timeout_ms: i * 1_000 },
+      }));
+
+      const results = await dispatcher.executeBatch(calls);
+
+      expect(handler).toHaveBeenCalledTimes(REPEAT_FAILURE_REFUSAL_THRESHOLD);
+      expect(results.slice(0, REPEAT_FAILURE_REFUSAL_THRESHOLD).every((r) => r.isError)).toBe(true);
+      expect(results[REPEAT_FAILURE_REFUSAL_THRESHOLD]).toMatchObject({
+        isError: true,
+        failureClass: 'repeat-failure',
+      });
+      expect(results[REPEAT_FAILURE_REFUSAL_THRESHOLD + 1]).toMatchObject({
+        isError: true,
+        failureClass: 'repeat-failure',
+      });
+    });
+
+    it('records duplicate safe-call outcomes in input order, not settlement order', async () => {
+      let invocation = 0;
+      const handler = vi.fn<ToolHandler>().mockImplementation(async () => {
+        invocation += 1;
+        if (invocation === 1) await new Promise((resolve) => setTimeout(resolve, 20));
+        return invocation === 3
+          ? { content: 'recovered' }
+          : { content: 'transient failure', isError: true };
+      });
+      const dispatcher = makeDispatcher({ handlers: new Map([['echo', handler]]) });
+      const duplicate = (id: string) => ({
+        ...makeBatchCall('echo', id),
+        input: { message: 'same' },
+      });
+
+      const batch = await dispatcher.executeBatch([
+        duplicate('ordered-1'),
+        duplicate('ordered-2'),
+        duplicate('ordered-3'),
+      ]);
+      const afterRecovery = await dispatcher.execute(duplicate('after-recovery'));
+
+      expect(batch.map((result) => result.isError === true)).toEqual([true, true, false]);
+      expect(afterRecovery.failureClass).not.toBe('repeat-failure');
+      expect(handler).toHaveBeenCalledTimes(4);
+    });
+
     it('runs unsafe tools sequentially', async () => {
       const order: string[] = [];
       const bash1: ToolHandler = async () => {
@@ -1039,8 +1092,9 @@ describe('SessionToolDispatcher', () => {
         );
         await dispatcher.executeBatch(calls);
 
-        // Cap (10) > batch width (4): all four run at once, like allSettled.
-        expect(state.peak).toBe(4);
+        // Identical calls are admitted only up to the repeat-failure threshold
+        // until their outcomes are known, even when the general cap is wider.
+        expect(state.peak).toBe(REPEAT_FAILURE_REFUSAL_THRESHOLD);
       });
 
       it('preserves result order when draining a batch wider than the cap', async () => {

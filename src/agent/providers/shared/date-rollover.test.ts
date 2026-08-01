@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { refreshEnvironmentDate } from './date-rollover.js';
-import { formatEnvironmentFragment } from '../../../awareness/index.js';
-import { assembleSystemPrompt, buildStableSystemPrefix } from './system-prompt.js';
+import { formatEnvironmentFragment } from '../../awareness/index.js';
+import { assembleSystemPrompt, buildStableSystemPrefix } from '../anthropic-direct/query/system-prompt.js';
 
 const TZ = 'America/New_York';
 /** 2026-07-30 18:00 UTC = Thursday 14:00 in New York. */

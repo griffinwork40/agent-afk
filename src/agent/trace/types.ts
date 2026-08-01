@@ -64,6 +64,8 @@ export const TOOL_FAILURE_CLASSES = [
   'abort',
   'elicitation-declined',
   'denial-breaker',
+  /** A call refused after N consecutive identical failures (#723). */
+  'repeat-failure',
 ] as const;
 
 /**
@@ -175,6 +177,7 @@ export type HookEventName =
  * automatic ceiling refusal.
  */
 export type AfkApprovalOutcome =
+  | 'carve-out'
   | 'approved'
   | 'denied'
   | 'unrecognised'
