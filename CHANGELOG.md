@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.0] - 2026-08-01
+
+### Added
+- fold the fragment-goal signal class into intent-lock (#793) (c791d8e)
+
+### Changed
+- migrate hash-pin history blocks to docs/bundled-plugins.md (#790) (#809) (5ea1493)
+
 ## [5.83.9] - 2026-07-31
 
 ### Fixed
