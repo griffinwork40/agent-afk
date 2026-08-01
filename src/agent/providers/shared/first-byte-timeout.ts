@@ -55,6 +55,34 @@ export function resolveTtfbTimeoutMs(): number {
 /** Marker error thrown/attached when a request is aborted for a TTFB stall. */
 export const TTFB_TIMEOUT_MESSAGE = 'model_ttfb_timeout';
 
+/**
+ * Slack added to a provider-communicated throttle window before the TTFB
+ * deadline is pushed out. Guards against the deadline firing the instant the
+ * provider says it will resume — the resumed request still needs a moment to
+ * reach its first token. 30s, deliberately the same value as
+ * `PAUSE_WINDOW_SLACK_MS` in `subagent/pause-window.ts`, which solves the
+ * identical problem for the forked-subagent idle watchdog. Not imported from
+ * there: `providers/` must not depend on `subagent/`.
+ */
+export const TTFB_THROTTLE_SLACK_MS = 30_000;
+
+/**
+ * Contract: the TTFB extension owed for one provider-communicated throttle, or
+ * `undefined` when the provider gave no usable window.
+ *
+ * Mirrors `pauseWindowMs` semantics on purpose: a throttle WITHOUT a knowable
+ * `retry-after` yields `undefined` and the caller keeps its normal bound rather
+ * than extending by a guessed amount. The finiteness guard matters because a
+ * non-finite delay would re-arm a bogus timer (Node clamps it to 1ms with a
+ * TimeoutOverflowWarning), turning an extension into an immediate abort.
+ */
+export function throttleExtensionMs(retryAfterMs: number | undefined): number | undefined {
+  if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+    return undefined;
+  }
+  return retryAfterMs + TTFB_THROTTLE_SLACK_MS;
+}
+
 /** Distinguish a TTFB-timeout abort from any other error (e.g. user interrupt). */
 export function isTtfbTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message === TTFB_TIMEOUT_MESSAGE;
@@ -68,6 +96,16 @@ export interface FirstByteTimeoutHandle {
   timedOut(): boolean;
   /** Call on the first streamed event: cancels the timer so the stream is unbounded thereafter. */
   firstByteSeen(): void;
+  /**
+   * Push the deadline out by `ms` because the provider told us it is parked.
+   *
+   * Only EXPLAINED waiting is forgiven: the caller passes a window derived from
+   * a provider-communicated `retry-after` (see {@link throttleExtensionMs}), so
+   * unexplained prefill silence still trips the bound on schedule. No-op once
+   * the timer has fired, been disposed, or when the bound is disabled — so a
+   * late-draining throttle signal can never resurrect a spent timer.
+   */
+  extend(ms: number): void;
   /** Release the timer + listeners. Idempotent; safe to call in a `finally`. */
   dispose(): void;
 }
@@ -92,6 +130,7 @@ export function armFirstByteTimeout(
       signal: baseSignal,
       timedOut: () => false,
       firstByteSeen: () => {},
+      extend: () => {},
       dispose: () => {},
     };
   }
@@ -100,12 +139,20 @@ export function armFirstByteTimeout(
   const linked = AbortSignal.any([baseSignal, controller.signal]);
   let didTimeout = false;
   let disposed = false;
+  // Absolute deadline, tracked separately from the live timer so `extend` adds
+  // to the ORIGINAL budget rather than restarting a full window from now — two
+  // throttles totalling 40s must cost 40s of grace, not two fresh bounds.
+  let deadline = Date.now() + timeoutMs;
+  let timer: ReturnType<typeof setTimeout>;
 
-  const timer = setTimeout(() => {
-    didTimeout = true;
-    controller.abort(new Error(TTFB_TIMEOUT_MESSAGE));
-  }, timeoutMs);
-  timer.unref();
+  const arm = (delayMs: number): void => {
+    timer = setTimeout(() => {
+      didTimeout = true;
+      controller.abort(new Error(TTFB_TIMEOUT_MESSAGE));
+    }, clampTimerDelayMs(delayMs));
+    timer.unref();
+  };
+  arm(timeoutMs);
 
   const dispose = (): void => {
     if (disposed) return;
@@ -113,10 +160,22 @@ export function armFirstByteTimeout(
     clearTimeout(timer);
   };
 
+  const extend = (ms: number): void => {
+    if (disposed || didTimeout) return;
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return;
+    deadline += ms;
+    clearTimeout(timer);
+    // Floor at 1ms: a deadline already in the past (a throttle drained after a
+    // long park) must still re-arm rather than pass a negative delay, which
+    // Node coerces to 1 anyway — being explicit keeps the intent readable.
+    arm(Math.max(1, deadline - Date.now()));
+  };
+
   return {
     signal: linked,
     timedOut: () => didTimeout,
     firstByteSeen: dispose,
+    extend,
     dispose,
   };
 }
