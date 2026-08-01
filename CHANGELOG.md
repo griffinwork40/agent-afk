@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.15] - 2026-08-01
+
+### Fixed
+- stop pixel art sharing rows with text so resize can't tear it (#842) (062a15a)
+
 ## [5.84.14] - 2026-08-01
 
 ### Fixed
