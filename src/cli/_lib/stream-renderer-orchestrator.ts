@@ -15,6 +15,7 @@ import type { OutputEvent, ProgressEvent } from '../../agent/types.js';
 // stream-renderer-subagent.ts for the companion rationale.
 import type { SourceState } from './stream-renderer-source.js';
 import {
+  childBannerEvent,
   deriveChildBanner,
   type ChildActivityTracker,
 } from './child-activity-select.js';
@@ -522,6 +523,13 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
       ? { ...progress, ...childBanner.stats, lastToolName: undefined }
       : progress;
     bannerLines.push(...formatProgressBanner(event, undefined, activity));
+  }
+  // A live child with no parent progress row to carry it — see childBannerEvent
+  // for why lastProgressByTask is empty for a first-round foreground dispatch.
+  if (childBanner && bannerLines.length === 0) {
+    bannerLines.push(
+      ...formatProgressBanner(childBannerEvent(childBanner.stats), undefined, activity),
+    );
   }
   if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
   ctx.compositor.setOverlay(parts.join('\n'));

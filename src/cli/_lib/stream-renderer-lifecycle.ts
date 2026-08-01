@@ -21,6 +21,7 @@ import { isDebugEnabled } from '../../utils/debug.js';
 import type { SourceState } from './stream-renderer-source.js';
 import { syntheticResult } from './stream-renderer-source.js';
 import {
+  childBannerEvent,
   deriveChildBanner,
   type ChildActivityTracker,
 } from './child-activity-select.js';
@@ -171,6 +172,12 @@ export function registerOverlaySlots(
       // a minimal banner so the `stopping…` state always paints; the synthetic
       // event carries no stats, so formatProgressBanner renders just the glyph +
       // description + stopping clause.
+      //
+      // Ordering constraint: this branch runs BEFORE the child fallback below.
+      // Both fire only when the per-task loop produced nothing, and a stopping
+      // turn must surface `stopping…` rather than a child clause — so soft-stop
+      // claims the empty slot first and the child branch sees a non-empty
+      // bannerLines.
       if (stopping && bannerLines.length === 0) {
         bannerLines.push(
           ...formatProgressBanner(
@@ -178,6 +185,20 @@ export function registerOverlaySlots(
             undefined,
             undefined,
             true,
+          ),
+        );
+      }
+      // A live child while the parent has reported no round yet: the per-task
+      // loop above had nothing to iterate, so the clause and the child-scoped
+      // stats would be dropped. See childBannerEvent for why lastProgressByTask
+      // is empty for the whole of a FIRST-round foreground dispatch.
+      if (childBanner && bannerLines.length === 0) {
+        bannerLines.push(
+          ...formatProgressBanner(
+            childBannerEvent(childBanner.stats),
+            undefined,
+            activity,
+            stopping,
           ),
         );
       }

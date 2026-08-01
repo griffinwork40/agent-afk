@@ -11,6 +11,8 @@ import { formatInterruptAffordance, registerOverlaySlots } from './stream-render
 import { OverlayComposer } from './overlay-composer.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { stripAnsi } from '../display.js';
+import { ChildActivityTracker } from './child-activity-select.js';
+import { freshSourceState, type SourceState } from './stream-renderer-source.js';
 import type { ProgressEvent } from '../../agent/types.js';
 
 describe('formatInterruptAffordance', () => {
@@ -163,6 +165,88 @@ describe('registerOverlaySlots — progress-banner stopping wiring', () => {
 
   it('renders no banner at all when idle (no progress, not stopping)', () => {
     const { captured, composer } = makeComposer(new Map(), () => false);
+    composer.invalidate();
+    composer.flush();
+    expect(captured.at(-1)).toBe('');
+  });
+});
+
+describe('registerOverlaySlots — child banner without a parent progress row', () => {
+  // Regression for PR #840 review (P1). Both provider loops emit the parent's
+  // `progress` event AFTER the round's tools are dispatched and their results
+  // committed, so a foreground subagent launched in the parent's FIRST tool
+  // round runs its whole life while lastProgressByTask is still empty. The
+  // per-task render loop then iterates zero times and the child banner — which
+  // was computed — is discarded, leaving the banner blank for exactly the case
+  // the feature exists to cover.
+  function makeComposer(
+    lastProgressByTask: Map<string, ProgressEvent>,
+    sources: Map<string, SourceState>,
+    getSoftStopping: () => boolean = () => false,
+  ): { captured: string[]; composer: OverlayComposer } {
+    const captured: string[] = [];
+    const composer = new OverlayComposer({ setOverlay: (t) => captured.push(t) }, [
+      'thinking-live',
+      'markdown-pending',
+      'tool-lane',
+      'progress-banner',
+      'interrupt',
+    ]);
+    registerOverlaySlots(composer, {
+      stageTracker: undefined,
+      thinkingMode: 'summary',
+      thinkingLane: new ThinkingLane(),
+      streamingMarkdownRef: { current: null },
+      toolLane: { hasPending: () => false, getOverlay: () => '' },
+      lastProgressByTask,
+      getInterrupting: () => false,
+      getSoftStopping,
+      sources,
+      childActivity: new ChildActivityTracker(),
+    } as unknown as Parameters<typeof registerOverlaySlots>[1]);
+    return { captured, composer };
+  }
+
+  function liveChild(agentType: string): Map<string, SourceState> {
+    const source = freshSourceState(agentType);
+    source.lastProgressSummary = 'round 3: bash pnpm test';
+    source.stats.tokens = 2400;
+    source.stats.toolUses = 7;
+    return new Map([['child-1', source]]);
+  }
+
+  it('paints the child clause when lastProgressByTask is empty', () => {
+    const { captured, composer } = makeComposer(new Map(), liveChild('reviewer'));
+    composer.invalidate();
+    composer.flush();
+    const overlay = stripAnsi(captured.at(-1) ?? '');
+    expect(overlay).toContain('reviewer');
+    expect(overlay).toContain('round 3: bash pnpm test');
+  });
+
+  it('carries the child-scoped stats on that synthesized row', () => {
+    const { captured, composer } = makeComposer(new Map(), liveChild('reviewer'));
+    composer.invalidate();
+    composer.flush();
+    const overlay = stripAnsi(captured.at(-1) ?? '');
+    // 7 tool calls from the CHILD's SourceState — not the parent's counters,
+    // which is the contradiction the child-scoped stats exist to remove.
+    expect(overlay).toMatch(/7 tool calls/);
+  });
+
+  it('still yields the soft-stop banner when stopping, not the child clause', () => {
+    // Precedence: ESC feedback outranks the child fallback. Both branches fire
+    // only on an empty per-task loop, so this pins the order between them.
+    const { captured, composer } = makeComposer(new Map(), liveChild('reviewer'), () => true);
+    composer.invalidate();
+    composer.flush();
+    const overlay = stripAnsi(captured.at(-1) ?? '');
+    expect(overlay).toContain('stopping…');
+    expect(overlay).not.toContain('round 3: bash pnpm test');
+  });
+
+  it('leaves the banner blank when no child is live', () => {
+    const { captured, composer } = makeComposer(new Map(), new Map());
     composer.invalidate();
     composer.flush();
     expect(captured.at(-1)).toBe('');

@@ -26,6 +26,7 @@
 
 import { formatDuration, formatToolCallStat } from '../format-utils.js';
 import { ORCHESTRATOR_SOURCE_KEY, type SourceState } from './stream-renderer-source.js';
+import type { ProgressEvent } from '../../agent/types.js';
 
 /**
  * How long a selected child may stay quiet before the tracker is allowed to
@@ -221,5 +222,41 @@ export function deriveChildBanner(
       // turn's, so the number answers "how long has this agent been running".
       durationMs: Math.max(0, now - source.startedAt),
     },
+  };
+}
+
+/**
+ * Reserved task id for the synthetic banner event below. Mirrors the existing
+ * reserved ids (`__rate_limit__` in stream-renderer-orchestrator.ts,
+ * `__soft_stop__` in stream-renderer-lifecycle.ts). Never written INTO
+ * `lastProgressByTask` — it exists only to satisfy `ProgressEvent.taskId`.
+ */
+export const CHILD_BANNER_TASK_ID = '__child_activity__';
+
+/**
+ * Invariant: both provider loops emit the parent's `progress` event AFTER the
+ * round's tools have been dispatched and their results committed —
+ * anthropic-direct/loop/tool-round.ts dispatches at :66, commits results at
+ * :69, and only then yields `progress` at :101; openai-compatible/query.ts:651
+ * has the same ordering. A foreground subagent therefore runs to completion
+ * INSIDE a round whose `progress` has not been emitted yet, so on the parent's
+ * first tool round `lastProgressByTask` is empty for the child's entire
+ * lifetime and the banner's per-task render loop iterates zero times — the
+ * child banner is computed and then silently discarded.
+ *
+ * This synthesizes the missing carrier so a live child still paints a row.
+ * Stats are the child's own (see {@link deriveChildBanner}); `lastToolName`
+ * and `summary` are deliberately absent — the caller passes the child's clause
+ * as `activity`, which owns the detail slot, and a parent-scoped tool name
+ * beside a child clause is the exact contradiction this module exists to
+ * remove.
+ */
+export function childBannerEvent(stats: ChildBannerStats): ProgressEvent {
+  return {
+    taskId: CHILD_BANNER_TASK_ID,
+    description: 'Working',
+    totalTokens: stats.totalTokens,
+    toolUses: stats.toolUses,
+    durationMs: stats.durationMs,
   };
 }
