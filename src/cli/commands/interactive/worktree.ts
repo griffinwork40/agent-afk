@@ -20,6 +20,7 @@ import { randomBytes } from 'node:crypto';
 import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
 import { detectShellFromEnv } from '../shell-init.js';
 import { hasNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
+import { registerWorktreeRoot } from '../../../agent/worktree-root-registry.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -621,6 +622,15 @@ async function createWorktreeAt(
   } catch (err) {
     throw classifyAddError(err, branch, worktreePath);
   }
+
+  // The sweep is per-root, so a root the daemon never resolves is a root whose
+  // trees leak forever (#761). This launcher is a managed-create path in its
+  // own right — it writes the same `.afk-worktree-meta.json` protocol below —
+  // so it must register too. cleanup() and the REPL boot-prune do NOT cover
+  // this: cleanup() never runs for a kill -9'd session, and boot-prune only
+  // fires if the user later reopens a REPL in this same repo. Best-effort by
+  // contract (never throws), so it cannot fail a create that already succeeded.
+  await registerWorktreeRoot(repoRoot);
 
   // Constraint: cleanup() runs at session shutdown, potentially LONG after
   // the worktree was created. The closure reads `handle.path`/`handle.branch`
