@@ -47,13 +47,7 @@ import { resolveModelId } from './agent/session/model-resolution.js';
 import { getDefaultSubagentModel, getMaxOutputTokens, getMaxToolUseIterations, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from './agent/tools/top-level-allowlist.js';
 import type { AgentConfig, AgentModelInput } from './agent/types.js';
-import { SubagentManager } from './agent/subagent.js';
-import { SubagentExecutor } from './agent/tools/subagent-executor.js';
-import { SkillExecutor } from './agent/tools/skill-executor.js';
-import { ComposeExecutor } from './agent/tools/compose-executor.js';
-import { createChildProviderFactory, createChildSkillExecutorFactory } from './agent/tools/nesting.js';
-import { loadAgentRegistry } from './agent/agents/index.js';
-import { discoverPluginAgents } from './agent/tools/skill-bridge.js';
+import { wireExecutors } from './agent/session/wire-executors.js';
 import { attachMcpCleanup, loadTelegramMcpManager } from './telegram/mcp-session.js';
 
 // Capture version once at module load. Used by checkVersionDrift on each stats tick.
@@ -269,26 +263,8 @@ async function main() {
         // OpenAI-compatible endpoint (distinct from telegramBaseUrl, which is
         // Anthropic-only) — threaded for parity with chat.ts's cliConfig.openaiBaseUrl wiring.
         const telegramOpenaiBaseUrl = sessionConfig.openaiBaseUrl ?? config.openaiBaseUrl;
-        // Inherit configured-or-host cwd so forked subagents stay in the
-        // same working tree as the parent session — important when the
-        // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
-        const rootManager = new SubagentManager({
-          apiKey: telegramApiKey,
-          // Parent model → provider, so the fork-time credential fallback never
-          // crosses the provider boundary (see SubagentManager.parentProvider).
-          parentModel: sessionConfig.model,
-          ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
-          ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          // Witness layer: manager-level writer so `agent`-tool forks (which
-          // never set config.traceWriter) emit subagent_lifecycle events and
-          // hand the writer to their handles. Mirrors bootstrap.ts / chat.ts.
-          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
-          // Origin attribution: thread the surface so forked `agent`-tool
-          // children inherit origin 'telegram' (not 'unknown') via
-          // forkSubagent's parentSurface fill. Mirrors farm.ts.
-          surface: 'telegram',
-        });
-
+        // The session is constructed after the executors, so the parent view
+        // they fork from reads through `boundSession` lazily.
         const deferredParent = {
           get sessionId() { return boundSession?.sessionId; },
           getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
@@ -298,119 +274,36 @@ async function main() {
           get hookRegistry() { return boundSession?.hookRegistry; },
         };
 
-        // Pass openaiBaseUrl so OpenAI-routed children point at the configured
-        // local shim instead of the default api.openai.com (parity with chat.ts).
-        const childProviderFactory = createChildProviderFactory(
-          telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {},
-        );
-
-        // Named-agent registry: session-static scan enabling `agent_type`
-        // dispatch (builtin + user + project scopes, anchored at the bot cwd).
-        const agentRegistry = loadAgentRegistry({
-          ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          pluginAgents: discoverPluginAgents(),
-        });
-
-        // Shared child-skill-executor factory — both SubagentExecutor and
-        // SkillExecutor need it for plugin skill children to nest properly.
-        // See skill-executor.ts:buildForkedChildConfig for the wiring rationale.
-        const childSkillExecutorFactory = createChildSkillExecutorFactory(
-          sessionConfig.model,
-          telegramApiKey,
-          childProviderFactory,
-          telegramBaseUrl,
-          undefined,
-          undefined,
-          sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined,
-          // Per-model credential resolver — see bootstrap.ts for rationale.
-          getApiKeyForModel,
-          // Surface: Telegram skill executor children inherit origin 'telegram'.
-          'telegram',
-          // Resolved default-subagent model threaded into nested skill
-          // executors so skill→skill / skill→agent chains inherit the SAME
-          // policy as the top-level executors — closing the leak where a
-          // nested subagent silently defaulted to Anthropic `sonnet` under an
-          // OpenAI-routed parent.
-          getDefaultSubagentModel(sessionConfig.model),
-          // Named-agent registry propagates to nested skill executors.
-          agentRegistry,
-          // OpenAI endpoint → nested restricted/depth-cap provider builders.
-          telegramOpenaiBaseUrl,
-        );
-
-        // Pass `sessionConfig.model` to `getDefaultSubagentModel` for
-        // parity with the chat / interactive bootstraps. The current
-        // telegram wiring only reaches this branch for Anthropic parents
-        // (the `isCodex` gate above), so this is defensive — but it
-        // future-proofs the codex branch if/when it grows executor wiring.
-        const subagentExecutor = new SubagentExecutor({
-          subagentManager: rootManager,
-          parentSession: deferredParent,
-          // Session origin for routing-decision telemetry (Telegram → telegram).
+        // Invariant: ONE root manager per session, shared by all three
+        // executors. Inherit configured-or-host cwd so forked subagents stay
+        // in the same working tree as the parent session — important when the
+        // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
+        const { subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+          // Origin attribution: forked children inherit origin 'telegram'.
           surface: 'telegram',
-          defaultConfig: {
-            apiKey: telegramApiKey,
-            systemPrompt: layeredBasePrompt,
-            ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
-            ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
-          },
-          defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
-          childProviderFactory,
-          childSkillExecutorFactory,
-          // Per-model credential resolver — see bootstrap.ts for rationale.
-          resolveApiKeyForModel: getApiKeyForModel,
-          // Top-level Telegram wiring → explicit depth 0. See SubagentExecutorContext.depth.
-          depth: 0,
-          // Named-agent dispatch: registry + `inherit` anchor.
-          agentRegistry,
-          parentModel: sessionConfig.model,
-          // Witness layer: thread the writer so depth ≥ 2 `agent` forks stay
-          // visible in the trace. Mirrors bootstrap.ts / chat.ts.
-          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
-        });
-
-        const skillExecutor = new SkillExecutor({
           parentSession: deferredParent,
-          // Session origin for skill-invocation + routing telemetry (Telegram → telegram).
-          surface: 'telegram',
-          defaultModel: sessionConfig.model,
-          defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           apiKey: telegramApiKey,
-          childProviderFactory,
-          // Named-agent registry for skill-forked orchestrator children.
-          agentRegistry,
-          childSkillExecutorFactory,
-          // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
+          model: sessionConfig.model,
+          // The Telegram credential is resolved for the session model itself,
+          // so it is also the manager's credential-fallback anchor.
+          managerParentModel: sessionConfig.model,
+          defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           resolveApiKeyForModel: getApiKeyForModel,
+          // Framework base + operator overlay, but NOT ROUTING_DIRECTIVE /
+          // TOOL_SYSTEM_PROMPT — keeps children and DAG workers from recursing
+          // into skills or nested DAGs.
+          ...(layeredBasePrompt !== undefined ? { systemPrompt: layeredBasePrompt } : {}),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
-          // Read-scope inheritance (#547): skill-forked children inherit the
-          // parent session's read scope via the root manager. See bootstrap.ts.
-          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
-        });
-
-        // Compose subagents inherit the framework base + operator overlay
-        // (layeredBasePrompt) but NOT ROUTING_DIRECTIVE / TOOL_SYSTEM_PROMPT /
-        // end-of-turn — those are appended only by assembleSystemPrompt for the
-        // parent session. Keeps DAG workers from recursing into skills / nested DAGs.
-        const composeExecutor = new ComposeExecutor({
-          parentSession: deferredParent,
-          defaultModel: sessionConfig.model,
-          defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
-          apiKey: telegramApiKey,
-          // Per-model credential resolver — mirrors #640 for the compose fork-path.
-          resolveApiKeyForModel: getApiKeyForModel,
-          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
-          // read scope via the root manager. See bootstrap.ts.
-          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
-          ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
-          // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
+          // Behaviour-preserving asymmetry: cwd anchors the root manager, the
+          // named-agent scan and compose DAG nodes, but NOT the `agent`/`skill`
+          // executors (no `nestedCwd`) — matching the pre-refactor wiring.
+          // Widening it to nestedCwd would change depth ≥ 2 anchoring.
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          systemPrompt: layeredBasePrompt ?? '',
-          // Session identity for routing-decision rows (Telegram → telegram).
-          surface: 'telegram',
-          depth: 0,
-          // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+          // Behaviour-preserving asymmetry: the writer reaches the manager, the
+          // `agent` executor and compose nodes, but NOT the `skill` executor or
+          // the nested skill-executor factory (no `skillTraceWriter`) —
+          // matching the pre-refactor wiring.
           ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
