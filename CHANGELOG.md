@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.8] - 2026-08-01
+
+### Fixed
+- allow curated in-workspace rm -rf in AFK autonomous mode (#579 O3) (#806) (13403f2)
+
+### Changed
+- split anthropic-direct/index.ts behind characterization tests (#824) (#833) (3bd13ea)
+
 ## [5.84.7] - 2026-08-01
 
 ### Changed
