@@ -59,6 +59,15 @@ function worktreeBlock(opts: {
   return lines.join('\n');
 }
 
+/**
+ * Seed the per-root soft-launch marker with N prior sweeps of `root`.
+ * This, not the telemetry file, is what the valve consults for a root that
+ * has a `.afk-worktrees/` directory.
+ */
+async function writeRootMarker(root: string, count: number): Promise<void> {
+  await fs.writeFile(join(root, '.afk-worktrees', '.sweep-runs'), String(count), 'utf-8');
+}
+
 /** Write a telemetry JSONL file with N prior worktree-prune success records */
 function writeFakeTelemetry(path: string, count: number, status = 'success'): void {
   const lines: string[] = [];
@@ -98,8 +107,12 @@ beforeEach(async () => {
   // lock — the loser short-circuits with LockContestedError and returns an
   // empty result, which is the root cause this suite used to flake on.
   lockFile = join(repoRoot, 'sweep.lock');
-  // Write 3 prior runs so soft-launch valve is satisfied by default
+  // Write 3 prior runs so soft-launch valve is satisfied by default. The valve
+  // is now per-root (#771 review), so the root's own marker is what actually
+  // governs — the telemetry file remains seeded because it is still the
+  // fallback for a root with no usable marker.
   writeFakeTelemetry(telemetryFile, 3);
+  await writeRootMarker(repoRoot, 3);
 });
 
 afterEach(() => {
@@ -974,6 +987,7 @@ describe('soft-launch-valve', () => {
   it('forces dry-run when fewer than 3 prior successful runs (0 runs)', async () => {
     const emptyTelemetry = join(repoRoot, 'empty-telemetry.jsonl');
     writeFakeTelemetry(emptyTelemetry, 0);
+    await writeRootMarker(repoRoot, 0);
 
     const worktreePath = join(afkWorktreesDir, 'afk-valve-test');
     await fs.mkdir(worktreePath, { recursive: true });
@@ -1010,6 +1024,7 @@ describe('soft-launch-valve', () => {
   it('forces dry-run with 2 prior runs (below threshold)', async () => {
     const twoRunTelemetry = join(repoRoot, 'two-run-telemetry.jsonl');
     writeFakeTelemetry(twoRunTelemetry, 2);
+    await writeRootMarker(repoRoot, 2);
 
     const worktreePath = join(afkWorktreesDir, 'afk-valve-2');
     await fs.mkdir(worktreePath, { recursive: true });
@@ -1081,30 +1096,60 @@ describe('soft-launch-valve', () => {
     expect(result.dryRun).toBe(false); // valve satisfied — live run
   });
 
-  it('counts only worktree-prune success/error records, not skipped', async () => {
-    const mixedTelemetry = join(repoRoot, 'mixed-telemetry.jsonl');
-    // 2 success + 2 skipped — skipped should not count
+  it('falls back to the telemetry count when the root has no usable marker, counting only success/error', async () => {
+    // A root with no .afk-worktrees/ cannot hold a marker. Rather than pin it
+    // in dry-run forever (which would leak worktrees — the #761 bug), the
+    // valve falls back to the legacy machine-global telemetry count. This is
+    // the only path on which that count's filtering still matters.
+    const bareRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-sweep-bare-')));
+    const mixedTelemetry = join(bareRoot, 'mixed-telemetry.jsonl');
+    // 2 success + 2 skipped — skipped must not count, so this is below 3.
     const lines = [
       JSON.stringify({ taskId: 'worktree-prune', status: 'success', triggeredAt: new Date().toISOString() }),
       JSON.stringify({ taskId: 'worktree-prune', status: 'skipped', triggeredAt: new Date().toISOString() }),
       JSON.stringify({ taskId: 'worktree-prune', status: 'success', triggeredAt: new Date().toISOString() }),
       JSON.stringify({ taskId: 'worktree-prune', status: 'skipped', triggeredAt: new Date().toISOString() }),
-      // Other task — should not count
+      // Other task — must not count
       JSON.stringify({ taskId: 'other-task', status: 'success', triggeredAt: new Date().toISOString() }),
     ];
     writeFileSync(mixedTelemetry, lines.join('\n') + '\n');
 
-    const worktreePath = join(afkWorktreesDir, 'afk-valve-mixed');
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: bareRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    try {
+      const result = await runSweep({
+        execFile: mock as ExecFileFn,
+        repoRoot: bareRoot,
+        lockPath: lockFile,
+        dryRun: false,
+        telemetryPath: mixedTelemetry,
+      });
+      expect(result.dryRun).toBe(true);
+    } finally {
+      rmSync(bareRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('previews a freshly registered root even when the machine has swept for months', async () => {
+    // Regression for the multi-root valve bug: the counter used to be
+    // machine-global, so a root registered today inherited an exhausted
+    // counter and was swept DESTRUCTIVELY on first contact, never seeing the
+    // three previews the valve exists to provide.
+    writeFakeTelemetry(telemetryFile, 500); // months of ticks against other repos
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+
+    const worktreePath = join(afkWorktreesDir, 'afk-fresh-root');
     await fs.mkdir(worktreePath, { recursive: true });
     await fs.writeFile(
       join(worktreePath, '.afk-worktree-meta.json'),
       JSON.stringify({ owner: 'interactive', createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), baseSha: 'base123' }),
     );
-
-    const mainBlock = worktreeBlock({ path: repoRoot });
-    const wtBlock = worktreeBlock({ path: worktreePath, head: 'base123' });
-    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
-
+    const porcelainOut = `${worktreeBlock({ path: repoRoot })}\n\n${worktreeBlock({ path: worktreePath, head: 'base123' })}\n`;
     const mock = makeMock(async ({ args }) => {
       if (args.includes('list') && args.includes('--porcelain')) return { stdout: porcelainOut, stderr: '' };
       if (args.includes('status')) return { stdout: '', stderr: '' };
@@ -1112,16 +1157,38 @@ describe('soft-launch-valve', () => {
       return { stdout: '', stderr: '' };
     });
 
-    // 2 success records — below threshold of 3 → should still be dry-run
     const result = await runSweep({
       execFile: mock as ExecFileFn,
       repoRoot,
       lockPath: lockFile,
       dryRun: false,
-      telemetryPath: mixedTelemetry,
+      telemetryPath: telemetryFile,
     });
 
     expect(result.dryRun).toBe(true);
+    expect(result.removed).toHaveLength(0);
+  });
+
+  it('credits the root after each sweep, so the valve eventually opens', async () => {
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const call = async (): Promise<boolean> => (await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    })).dryRun;
+
+    expect(await call()).toBe(true);  // 0 prior
+    expect(await call()).toBe(true);  // 1
+    expect(await call()).toBe(true);  // 2
+    expect(await call()).toBe(false); // 3 → valve opens
   });
 });
 
