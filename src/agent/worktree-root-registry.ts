@@ -259,13 +259,18 @@ export async function readRegisteredWorktreeRoots(): Promise<string[]> {
     const dead = new Set(
       entries.map((e) => resolve(e.path)).filter((p) => !seen.has(p)),
     );
-    const kept = new Set<string>();
-    await mutateRegistry((current) => current.flatMap((entry) => {
-      const absolute = resolve(entry.path);
-      if (dead.has(absolute) || kept.has(absolute)) return [];
-      kept.add(absolute);
-      return [{ ...entry, path: absolute }];
-    }));
+    await mutateRegistry((current) => {
+      // Built fresh per invocation: a `kept` set closed over from outside would
+      // already be full if the transform were ever applied a second time, and
+      // would then drop every entry instead of de-duplicating them.
+      const kept = new Set<string>();
+      return current.flatMap((entry) => {
+        const absolute = resolve(entry.path);
+        if (dead.has(absolute) || kept.has(absolute)) return [];
+        kept.add(absolute);
+        return [{ ...entry, path: absolute }];
+      });
+    });
   }
   return alive.map((e) => e.path);
 }

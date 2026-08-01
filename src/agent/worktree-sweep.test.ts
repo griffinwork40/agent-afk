@@ -668,6 +668,47 @@ describe('locked-always-skipped', () => {
 // ---------------------------------------------------------------------------
 
 describe('orphaned-dir-cleanup', () => {
+  it('never touches a sibling directory whose name merely starts with .afk-worktrees', async () => {
+    // The containment test used to be a raw string prefix, so
+    // `<root>/.afk-worktrees-scratch` — a directory the engine does not own —
+    // satisfied the guard and could reach the removal verdicts. A path-boundary
+    // test rejects it. The registered worktree here lives in the LOOKALIKE
+    // directory, which is what a prefix test would wrongly accept.
+    const lookalike = join(repoRoot, '.afk-worktrees-scratch');
+    const intruder = join(lookalike, 'afk-not-ours');
+    await fs.mkdir(intruder, { recursive: true });
+    await fs.writeFile(
+      join(intruder, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 40).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot })}\n\n${worktreeBlock({ path: intruder, head: 'base123' })}\n`;
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) return { stdout: porcelainOut, stderr: '' };
+      if (args.includes('status')) return { stdout: '', stderr: '' };
+      if (args.includes('rev-list')) return { stdout: '0\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(intruder);
+    expect(result.candidates.map((c) => c.path)).not.toContain(intruder);
+    // And it is still on disk.
+    await expect(fs.stat(intruder)).resolves.toBeDefined();
+  });
+
   it('detects and removes directories in .afk-worktrees/ not registered in git', async () => {
     // Create an orphaned directory under .afk-worktrees/
     const orphanPath = join(afkWorktreesDir, 'afk-orphaned-dir');

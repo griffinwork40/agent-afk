@@ -205,6 +205,22 @@ describe('durability and concurrency', () => {
     },
   );
 
+  it('still records the root when the lock is held by a live foreign process', async () => {
+    // Contract: the advisory lock is DEGRADABLE. Registration runs inside
+    // worktree creation, so a contended lock must cost a rare lost update, not
+    // a blocked or failed create. A live holder that never releases must
+    // therefore not prevent the write — it only delays it to the timeout.
+    const repo = await mkRepo('contended');
+    await fs.mkdir(dirname(getWorktreeRootsRegistryPath()), { recursive: true });
+    // process.pid is alive by definition, so the stale-lock reclaim path cannot
+    // fire and the writer must fall through to its timeout instead.
+    await fs.writeFile(`${getWorktreeRootsRegistryPath()}.lock`, String(process.pid), 'utf-8');
+
+    await registerWorktreeRoot(repo);
+
+    expect(await readRegisteredWorktreeRoots()).toContain(repo);
+  }, 15_000);
+
   it('survives a torn registry left by an interrupted write', async () => {
     const repo = await mkRepo('after-tear');
     await fs.mkdir(dirname(getWorktreeRootsRegistryPath()), { recursive: true });
