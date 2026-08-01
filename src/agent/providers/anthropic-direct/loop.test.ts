@@ -16,7 +16,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import { runTurn, DEFAULT_MAX_TOOL_USE_ITERATIONS } from './loop.js';
+import { runTurn } from './loop.js';
+import { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
 import type { ProviderEvent } from '../../provider.js';
 import type { AnthropicClientLike, ToolCall, ToolResult } from './types.js';
 import {

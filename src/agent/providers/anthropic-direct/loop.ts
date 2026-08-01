@@ -1,26 +1,47 @@
 /**
  * Per-turn agentic loop for the `anthropic-direct` provider.
  *
- * Owns the **multi-step tool-use loop within a single user turn**: orchestrates
- * `client.messages.create({...stream: true})` calls, threads each call's raw
- * events through {@link translateMessageStream}, dispatches tool calls via the
- * pluggable {@link ToolDispatcherLike}, accumulates message history (assistant
- * turn + `tool_result` user turn) for the next iteration, sums usage across
- * iterations. Caps tool-use rounds only when `maxToolUseIterations` is
- * explicitly set to a positive value; the default ({@link
- * DEFAULT_MAX_TOOL_USE_ITERATIONS} = 0) means "no cap" — terminate naturally
- * when the model stops emitting tool_use blocks. Callers that want a hard
- * ceiling pass `maxToolUseIterations` per turn.
+ * Owns the **multi-step tool-use loop within a single user turn**. This file is
+ * the orchestrator only: it holds the round `while` loop and dispatches each
+ * phase to a module in `./loop/`. The caller (query.ts) owns the **multi-turn
+ * outer loop** across user inputs, the messages array's lifetime, and
+ * `session.init` synthesis.
  *
- * The caller (query.ts) owns the **multi-turn outer loop** across user inputs,
- * the messages array's lifetime, and `session.init` synthesis. This module is
- * a pure async generator over `ProviderEvent`s with no module-scope state.
+ * Round phases, in execution order:
+ *
+ * | Module                    | Responsibility                                  |
+ * |---------------------------|-------------------------------------------------|
+ * | `loop/round-request`      | params build, cache breakpoint, connection retry, watchdog arming |
+ * | `loop/throttle-signals`   | live `rate_limit` events while the create is parked |
+ * | `loop/stream-consumer`    | drive translate, yield events, classify the round end |
+ * | `loop/round-retry`        | backoff + signalling for a re-driven round      |
+ * | `loop/turn-terminal`      | the non-`tool_use` exit paths                   |
+ * | `loop/tool-round`         | tool dispatch, result commit, rollback, epilogue |
+ *
+ * State is held in three collaborators with three distinct lifetimes —
+ * `TurnAccumulator` (whole turn), `RoundRetryBudget` (released each clean
+ * round), `TurnTrace` (spans every phase, torn down in `finally`). Which state
+ * survives a `continue` is answerable by reading a type; see each class.
+ *
+ * Cap semantics: tool-use rounds are capped only when `maxToolUseIterations` is
+ * explicitly set to a positive value. The default (0) means "no cap" —
+ * terminate naturally when the model stops emitting tool_use blocks. On
+ * reaching the cap the loop runs ONE final wind-down round with tools stripped
+ * so the model produces a real answer instead of stopping silently.
  *
  * Mutation contract: `runTurn` mutates `input.messages` in place — appending
  * the assistant turn's content blocks and a follow-up user turn carrying
  * `tool_result` blocks for every tool-use round. Callers must read
  * `input.messages` AFTER the generator returns so the next user turn sees the
  * full history.
+ *
+ * Invariant: every phase that yields a TERMINAL event returns an outcome saying
+ * so, and this file returns without yielding again. Emitting a second terminal
+ * would strand a consumer that breaks on the first one.
+ *
+ * History: the retry-class rationale (mid-stream overload, clean-close
+ * re-drive, TTFB and stall bounds) and the decomposition record for this module
+ * live in docs/anthropic-direct-loop.md.
  *
  * @module agent/providers/anthropic-direct/loop
  */
@@ -41,11 +62,6 @@ import { runToolRound } from './loop/tool-round.js';
 import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from './loop/turn-trace.js';
-
-// Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
-// source of truth shared with openai-compatible). Kept exported here so
-// existing importers (loop.test.ts) resolve unchanged.
-export { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
