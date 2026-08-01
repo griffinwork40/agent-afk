@@ -36,7 +36,6 @@ import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './workt
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
-import { env } from '../config/env.js';
 import path from 'path';
 import { buildPhaseRestrictedProvider } from './tools/nesting.js';
 import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
@@ -401,7 +400,7 @@ export class SubagentManager {
         // Same guard as Gap A: this dir only, NEVER ~/.afk/config (credentials).
         ...(parentUnconfined
           ? {}
-          : { afkFrameworkRoot: env.AFK_FRAMEWORK_DIR ?? getAgentFrameworkDir() }),
+          : { afkFrameworkRoot: getAgentFrameworkDir() }),
       });
     }
 
