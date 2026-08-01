@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.13] - 2026-08-01
+
+### Changed
+- extract constants + fork types from subagent.ts (#829) (#838) (4e0af66)
+
 ## [5.84.12] - 2026-08-01
 
 ### Fixed
