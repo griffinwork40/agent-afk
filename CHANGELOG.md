@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.5] - 2026-08-01
+
+### Fixed
+- refuse a tool call that keeps failing identically (#723) (#814) (7807e67)
+
+### Changed
+- cover user-skills.ts fork path for skillDispatchName + anchor (closes #741) (#820) (3dfa4b4)
+
 ## [5.84.4] - 2026-08-01
 
 ### Changed
