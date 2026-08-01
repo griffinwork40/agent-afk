@@ -1339,3 +1339,185 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     expect(r2).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// credentialSnapshotStale — credential re-resolve after a usage-limit fail-fast
+// ---------------------------------------------------------------------------
+
+describe('AnthropicDirectProvider — credential re-resolve after a usage-limit fail-fast', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    anthropicCtorMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+  });
+
+  /** Read the RetryLayer's private staleness flag (same cast idiom as above). */
+  function staleFlag(query: unknown): boolean {
+    return (query as unknown as { retry: { credentialSnapshotStale: boolean } })
+      .retry.credentialSnapshotStale;
+  }
+
+  /**
+   * Contract: like `drainQuery`, but treats an `error` event as a turn
+   * boundary too. The fail-fast paths under test surface an error INSTEAD of
+   * a `turn.completed`, so a completion-only drive would leave
+   * `harness.fireTurn` awaiting a cue that never arrives.
+   */
+  function drainQueryAllowingErrors(
+    query: AsyncIterable<ProviderEvent>,
+    harness: MultiTurnHarness,
+  ): Promise<void> {
+    return (async (): Promise<void> => {
+      for await (const ev of query) {
+        if (ev.type === 'turn.completed' || ev.type === 'error') harness.onTurnCompleted();
+      }
+    })();
+  }
+
+  it('no-ts fail-fast (autoResume=false) marks the credential snapshot stale', async () => {
+    messagesCreateMock.mockImplementation(() => {
+      throw make429NoTsError();
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+    });
+
+    expect(staleFlag(query)).toBe(false);
+    const events = await collect(query);
+
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(staleFlag(query)).toBe(true);
+  });
+
+  it('has-resetsAt fail-fast (autoResume=false) marks the credential snapshot stale', async () => {
+    messagesCreateMock.mockImplementation(() => {
+      throw make429UsageLimitError(5 * 60 * 1_000);
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+    });
+
+    await collect(query);
+    expect(staleFlag(query)).toBe(true);
+  });
+
+  it('the >2h reset bail marks the credential snapshot stale', async () => {
+    // resetsAt beyond TWO_HOURS_MS: the layer surfaces the error without
+    // parking, so no hot-swap poller is alive to notice a `claude login`.
+    messagesCreateMock.mockImplementation(() => {
+      throw make429UsageLimitError(3 * 60 * 60 * 1_000);
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+    });
+
+    await collect(query);
+    expect(staleFlag(query)).toBe(true);
+  });
+
+  it('a normally-successful turn never marks the snapshot stale', async () => {
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('all good')));
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+    });
+
+    await collect(query);
+    expect(staleFlag(query)).toBe(false);
+  });
+
+  it('next turn force-refreshes EXACTLY ONCE, clears the flag, and does not refresh again', async () => {
+    const harness = makeMultiTurnHarness(3);
+
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make429NoTsError(); // turn 1: fail-fast
+      return fromArray(makeTextStream(`ok-${callIdx}`)); // turns 2 and 3 succeed
+    });
+
+    const mockRefresher = vi.fn(async (): Promise<Anthropic | null> => {
+      return new MockAnthropic({ authToken: 'sk-ant-oat01-switched' }) as unknown as Anthropic;
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: harness.prompt,
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = mockRefresher;
+
+    const drive = drainQueryAllowingErrors(query, harness);
+
+    // Turn 1: fail-fast. No refresh yet — the flag is only CONSUMED next turn.
+    await harness.fireTurn(0, 'input-1');
+    expect(mockRefresher).not.toHaveBeenCalled();
+    expect(staleFlag(query)).toBe(true);
+
+    // Turn 2: consumes the flag — exactly one refresh, then cleared.
+    await harness.fireTurn(1, 'input-2');
+    expect(mockRefresher).toHaveBeenCalledOnce();
+    expect(staleFlag(query)).toBe(false);
+
+    // Turn 3: flag already cleared — must NOT refresh again.
+    await harness.fireTurn(2, 'input-3');
+    expect(mockRefresher).toHaveBeenCalledOnce();
+    expect(staleFlag(query)).toBe(false);
+
+    harness.stop();
+    query.close();
+    await drive;
+  });
+
+  it('clears the flag even when the refresh resolves null (no refresh-every-turn wedge)', async () => {
+    const harness = makeMultiTurnHarness(3);
+
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make429NoTsError();
+      return fromArray(makeTextStream(`ok-${callIdx}`));
+    });
+
+    // api-key mode / failed refresh: resolves null. The flag must still clear,
+    // otherwise every later turn would re-attempt a refresh forever.
+    const nullRefresher = vi.fn(async (): Promise<Anthropic | null> => null);
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: harness.prompt,
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+    });
+    (query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } })
+      .retry.tokenRefresher = nullRefresher;
+
+    const drive = drainQueryAllowingErrors(query, harness);
+
+    await harness.fireTurn(0, 'input-1');
+    expect(staleFlag(query)).toBe(true);
+
+    await harness.fireTurn(1, 'input-2');
+    expect(nullRefresher).toHaveBeenCalledOnce();
+    expect(staleFlag(query)).toBe(false);
+
+    await harness.fireTurn(2, 'input-3');
+    expect(nullRefresher).toHaveBeenCalledOnce();
+
+    harness.stop();
+    query.close();
+    await drive;
+  });
+});
