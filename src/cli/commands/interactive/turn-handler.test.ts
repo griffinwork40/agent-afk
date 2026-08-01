@@ -14,7 +14,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as path from 'node:path';
-import { runTurn, formatContextUsage } from './turn-handler.js';
+import { runTurn, formatContextUsage, printTurnFooter } from './turn-handler.js';
+import { recordQuotaSnapshot, resetQuotaCacheForTests } from '../../../agent/quota-cache.js';
+
+// Only `resolveAutoResumeOnUsageLimit` is stubbed; every other config export
+// stays real. Defaults to `true` (the production default) so the ~70 other
+// tests in this file are unaffected — a case opts in by flipping the stub.
+const configStub = vi.hoisted(() => ({ autoResume: true }));
+vi.mock('../../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../config.js')>()),
+  resolveAutoResumeOnUsageLimit: () => configStub.autoResume,
+}));
 import { getCurrentSink } from '../../../agent/_lib/skill-sink-channel.js';
 import type { AgentSession } from '../../../agent/session.js';
 import type { OutputEvent } from '../../../agent/types.js';
@@ -124,6 +134,38 @@ describe('runTurn — happy path', () => {
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
     expect(onTurnComplete.mock.calls[0]).toEqual(['greet me', 'hello world']);
     expect(onAfterTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('separates round-boundary text so the text before a tool call does not fuse with the text after it', async () => {
+    // Regression: responseText accumulated EVERY round's text with '' between
+    // them, so the assistant text block before a tool call fused with the block
+    // after it and the paragraph break vanished. Persisted transcripts showed
+    // "…(build doesn't type/lint check).All lint errors are pre-existing" and
+    // "…the affected test suites.Diff is clean" — the reported missing-space
+    // artifacts. Verbatim '' joining is still correct WITHIN a round (deltas
+    // split mid-word), so only the round seam gets a separator.
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: "Now running lint (build doesn't type/lint check)." } },
+      { type: 'chunk', chunk: { type: 'tool_use_detail', toolName: 'bash', toolUseId: 'tu-1', toolInput: '{"command":"pnpm lint"}' } },
+      { type: 'chunk', chunk: { type: 'tool_result', toolUseId: 'tu-1', content: '6 problems' } },
+      // Two deltas of the NEXT round's text: they must fuse with each other
+      // (mid-word split) but not with the pre-tool-call text.
+      { type: 'chunk', chunk: { type: 'content', content: 'All lint errors are pre-' } },
+      { type: 'chunk', chunk: { type: 'content', content: 'existing.' } },
+      { type: 'done', metadata: { durationMs: 10 } },
+    ];
+
+    const session = streamFrom(events);
+    const { h, onTurnComplete } = makeHandles();
+    const stats = makeStats();
+
+    await runTurn({ text: 'run lint', attachments: [] }, session, stats, h);
+
+    const recorded = onTurnComplete.mock.calls[0]?.[1] as string;
+    expect(recorded).not.toContain('check).All');
+    expect(recorded).toBe(
+      "Now running lint (build doesn't type/lint check).\n\nAll lint errors are pre-existing.",
+    );
   });
 
   it('uses message event content when no content chunks streamed', async () => {
@@ -2315,5 +2357,94 @@ describe('formatContextUsage — proactive escalating context tiers', () => {
     expect(over.text).toContain('OVER');
     expect(over.text).toContain('silently truncated');
     expect(formatContextUsage(1.05, LIMIT).tier).toBe('over');
+  });
+});
+
+describe('printTurnFooter — subscription-quota line', () => {
+  // Invariant: the countdown floors `resetsAt - now` to whole minutes and
+  // re-reads `now` at render time (not at snapshot time), so on a real clock
+  // an exactly-12-minute deadline can degrade to 719_999ms elapsed and floor
+  // to `11m` — a flake that races the runner's speed. Freezing the clock
+  // makes the deadline arithmetic exact instead of racing the runner.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    resetQuotaCacheForTests();
+    configStub.autoResume = true;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    resetQuotaCacheForTests();
+    configStub.autoResume = true;
+  });
+
+  const footerLines = (): string[] => {
+    const written: string[] = [];
+    printTurnFooter({ durationMs: 1200, totalCostUsd: 0.01 }, makeStats(), (line) => written.push(line));
+    return written;
+  };
+
+  it('prints nothing quota-related when no headers have been observed (API-key auth)', () => {
+    expect(footerLines().join('\n')).not.toContain('quota');
+  });
+
+  it('prints nothing quota-related below the 80% caution bar', () => {
+    recordQuotaSnapshot({ fiveHourUtilization: 0.62, observedAt: new Date() });
+    expect(footerLines().join('\n')).not.toContain('quota');
+  });
+
+  it('prints the quota line with its deadline once the binding window is hot', () => {
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.94,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      sevenDayUtilization: 0.24,
+      observedAt: new Date(),
+    });
+    const out = footerLines().join('\n');
+    expect(out).toContain('5h quota 94% used');
+    expect(out).toContain('resets in 12m');
+  });
+
+  it('honours a config-set autoResumeOnUsageLimit=false through the real call path', () => {
+    // Covers the wiring, not just the pure formatter: the five quota-footer.ts
+    // unit tests pass `{ autoResume }` explicitly, so a DEAD read at this call
+    // site stayed invisible to them. That is exactly how the first cut of this
+    // shipped — the display and provider must resolve the same persisted flag,
+    // or the promise can contradict runtime behaviour.
+    configStub.autoResume = false;
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.97,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      observedAt: new Date(),
+    });
+    const out = footerLines().join('\n');
+    expect(out).toContain('5h quota 97% used');
+    expect(out).not.toContain('auto-resumes');
+    expect(out).toContain('auto-resume is off');
+  });
+
+  it('promises auto-resume through the real call path when the flag is on', () => {
+    configStub.autoResume = true;
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.97,
+      fiveHourResetsAt: new Date(Date.now() + 12 * 60_000),
+      observedAt: new Date(),
+    });
+    expect(footerLines().join('\n')).toContain('AFK pauses and auto-resumes at the cap');
+  });
+
+  it('orders the quota line AFTER the context line — nearest deadline reads first', () => {
+    // Context constrains THIS turn; quota constrains the next hour.
+    const stats = makeStats();
+    // `sonnet` reports a 1M context window, so this lands at ~90% — the context
+    // line's caution tier — rather than the quiet tier.
+    stats.turnTokens.push({ input: 900_000, output: 2_000, cache: 0 });
+    recordQuotaSnapshot({ fiveHourUtilization: 0.94, observedAt: new Date() });
+    const written: string[] = [];
+    printTurnFooter({ durationMs: 1200 }, stats, (line) => written.push(line));
+    const contextIdx = written.findIndex((l) => l.includes('context'));
+    const quotaIdx = written.findIndex((l) => l.includes('quota'));
+    expect(contextIdx).toBeGreaterThanOrEqual(0);
+    expect(quotaIdx).toBeGreaterThan(contextIdx);
   });
 });

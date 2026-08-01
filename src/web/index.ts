@@ -11,6 +11,14 @@ export { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 export { scrapeToMarkdown } from './scrape.js';
 export type { ScrapeOptions, ScrapeResult } from './scrape.js';
 export {
+  assertEgressAllowed,
+  checkEgressTarget,
+  guardedFetch,
+  privateHostsAllowed,
+  EgressBlockedError,
+} from './egress-guard.js';
+export type { EgressGuardOptions, EgressVerdict, GuardedFetchOptions } from './egress-guard.js';
+export {
   createExaSearchBackend,
   resolveSearchBackend,
   formatSearchResults,

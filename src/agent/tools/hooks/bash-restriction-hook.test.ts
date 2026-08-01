@@ -16,7 +16,7 @@
  *     test pins that behavior.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   builtinBashSensitiveRoots,
   createBashRestrictionHook,
@@ -24,10 +24,12 @@ import {
   SENSITIVE_PATH_SIGNAL,
 } from './bash-restriction-hook.js';
 import { _resetReadDenylistCacheForTests } from '../handlers/read-denylist.js';
+import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'fs';
 
 function mockGrants(): GrantManager {
   return {
@@ -589,6 +591,275 @@ describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () =>
     expect(
       hook(ctx('python -c "import json; json.load(open(\'~/.afk/config/mcp.json\'))"')).decision,
     ).not.toBe('block');
+  });
+
+  // PR #805 P1 — quote-concatenation bypass. Shell concatenates
+  // `~/.ssh/config".bak"` into `~/.ssh/config.bak`; before the second
+  // lookahead, `scrubAllowlistedRefs` treated the `"` as an exact-file
+  // boundary, blanked the `.ssh/config` span, and left nothing for the
+  // scanner to match → the hook returned allow for a denied sibling. The
+  // escalation is traversal: `cat ~/.ssh/config"/../github_key"` resolves to
+  // an ARBITRARILY-NAMED private key, defeating the whole-dir `~/.ssh` floor.
+  // The fix scrubs ONLY when the trailing quote is NOT followed by a path
+  // char, so a legitimately quoted whole exact ref (`"~/.ssh/config"`) still
+  // scrubs and stays allowed while a quote-concatenated suffix stays blocked.
+  // These exercise the mcp.json surface (pre-existing hole) and the ssh
+  // surface (the surface this PR extends the hole onto).
+  it('P1: mcp.json quote-concat suffix stays blocked (config".bak" analogue)', () => {
+    expect(hook(ctx(`cat ${mcp}".bak"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.afk/config/mcp.json"/../afk.env"`)).decision).toBe('block');
+  });
+
+  it('P1: mcp.json single-quote and backtick concat stay blocked (all shell quotes)', () => {
+    expect(hook(ctx(`cat ${mcp}'.bak'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.afk/config/mcp.json'/../afk.env'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${mcp}\`.bak\``)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.afk/config/mcp.json\`/../afk.env\``)).decision).toBe('block');
+  });
+
+  it('P1: a quoted whole exact ref still scrubs and stays allowed (no regression)', () => {
+    // The second lookahead rejects ONLY `" + path-char`; a closing quote
+    // followed by EOL/space must still match the carve-out and scrub.
+    expect(hook(ctx(`cat "${mcp}"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "~/.afk/config/mcp.json"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "${mcp}" 2>/dev/null`)).decision).not.toBe('block');
+  });
+});
+
+// PR #805 — ssh config / known_hosts carve-out parity on the bash surface.
+// `READ_ALLOWLIST_REL` is shared, so the carve-out propagates here structurally;
+// these pin that propagation so a future refactor of `allowlistedFileForms`
+// cannot silently invert the carve-out on the bash surface without a failing
+// test. Mirrors the mcp.json parity block above.
+describe('createBashRestrictionHook — ssh config / known_hosts carve-out parity (#579 O2)', () => {
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const home = homedir();
+  const sshConfig = `${home}/.ssh/config`;
+  const knownHosts = `${home}/.ssh/known_hosts`;
+
+  it('allows the ssh carve-outs in every home spelling', () => {
+    expect(hook(ctx(`cat ${sshConfig}`)).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/.ssh/config')).decision).not.toBe('block');
+    expect(hook(ctx('cat $HOME/.ssh/config')).decision).not.toBe('block');
+    expect(hook(ctx(`cat ${knownHosts}`)).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/.ssh/known_hosts')).decision).not.toBe('block');
+  });
+
+  it('is EXACT-file: backups, pseudo-children, and well-known keys stay blocked', () => {
+    expect(hook(ctx(`cat ${sshConfig}.bak`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}/child`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${knownHosts}.old`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}/../id_rsa`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}/../github_key`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${home}/.ssh/id_rsa`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${home}/.ssh/github_key`)).decision).toBe('block');
+  });
+
+  it('P1: quote-concatenated sibling/traversal stays blocked (the bypass this PR closes)', () => {
+    // Codex's exact example + the private-key traversal escalation.
+    expect(hook(ctx(`cat ${sshConfig}".bak"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config".bak"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config"/../github_key"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config"/../id_rsa"`)).decision).toBe('block');
+    expect(hook(ctx(`cat $HOME/.ssh/config"/../github_key"`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/known_hosts"/../github_key"`)).decision).toBe('block');
+  });
+
+  it('P1: single-quote and backtick concat stay blocked (all shell quotes)', () => {
+    expect(hook(ctx(`cat ${sshConfig}'.bak'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config'.bak'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config'/../github_key'`)).decision).toBe('block');
+    expect(hook(ctx(`cat $HOME/.ssh/config'/../github_key'`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${sshConfig}\`.bak\``)).decision).toBe('block');
+    expect(hook(ctx(`cat ~/.ssh/config\`/../github_key\``)).decision).toBe('block');
+  });
+
+  it('P1: a quoted whole ssh exact ref still scrubs and stays allowed (no regression)', () => {
+    expect(hook(ctx(`cat "${sshConfig}"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "~/.ssh/config"`)).decision).not.toBe('block');
+    expect(hook(ctx(`cat "$HOME/.ssh/known_hosts"`)).decision).not.toBe('block');
+  });
+
+  it('is EXACT-file: glob/brace-extended siblings stay blocked', () => {
+    expect(hook(ctx(`cat ${sshConfig}*`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${knownHosts}{,.old}`)).decision).toBe('block');
+  });
+
+  it('does not launder a key riding along in the same command', () => {
+    expect(hook(ctx(`cat ${sshConfig} ${home}/.ssh/id_rsa`)).decision).toBe('block');
+  });
+
+  it('extends the carve-out to the interpreter guard', () => {
+    expect(
+      hook(ctx('python -c "print(open(\'~/.ssh/config\').read())"')).decision,
+    ).not.toBe('block');
+    expect(
+      hook(ctx('python -c "print(open(\'~/.ssh/known_hosts\').read())"')).decision,
+    ).not.toBe('block');
+  });
+});
+
+describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
+  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const relocated = join(tmpdir(), 'agent-afk-relocated-home');
+
+  afterEach(() => {
+    delete process.env['AFK_HOME'];
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('blocks the configured absolute spelling and $AFK_HOME spelling', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx(`cat ${relocated}/config/afk.env`)).decision).toBe('block');
+    expect(hook(ctx('cat "$AFK_HOME/config/afk.env"')).decision).toBe('block');
+  });
+
+  it('keeps relocated mcp.json readable in both spellings', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx(`cat ${relocated}/config/mcp.json`)).decision).not.toBe('block');
+    expect(hook(ctx('cat "$AFK_HOME/config/mcp.json"')).decision).not.toBe('block');
+  });
+
+  it('keeps the relocated carve-out exact-file only', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx(`cat ${relocated}/config/mcp.json.bak`)).decision).toBe('block');
+    expect(hook(ctx('cat "$AFK_HOME/config/mcp.json/child"')).decision).toBe('block');
+  });
+
+  it('blocks the configured spelling when AFK_HOME is a symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'afk-home-symlink-'));
+    const target = join(root, 'target');
+    const link = join(root, 'configured');
+    mkdirSync(join(target, 'config'), { recursive: true });
+    symlinkSync(target, link, 'dir');
+    process.env['AFK_HOME'] = link;
+
+    try {
+      expect(hook(ctx(`cat ${link}/config/afk.env`)).decision).toBe('block');
+      expect(hook(ctx('cat "$AFK_HOME/config/afk.env"')).decision).toBe('block');
+      expect(hook(ctx(`cat ${link}/config/mcp.json`)).decision).not.toBe('block');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Regression: a TRAILING SEPARATOR on AFK_HOME used to fail OPEN here.
+  // `$AFK_HOME` was substituted into the command text verbatim, yielding an
+  // interior `//` (`/relocated//config/afk.env`), while the restricted needle
+  // was built with path.join, which collapses it (`/relocated/config`). The
+  // final match is a literal includes(), so the two spellings never met and
+  // the command opened the very file this hook exists to block. POSIX
+  // collapses interior separators, so the bypass was real, not cosmetic.
+  // Fixed by resolving once at the source in configuredAfkHome().
+  it('blocks a trailing-separator AFK_HOME in both spellings', () => {
+    process.env['AFK_HOME'] = `${relocated}/`;
+
+    expect(hook(ctx('cat "$AFK_HOME/config/afk.env"')).decision).toBe('block');
+    expect(hook(ctx(`cat ${relocated}//config/afk.env`)).decision).toBe('block');
+    expect(hook(ctx(`cat ${relocated}/config/afk.env`)).decision).toBe('block');
+  });
+
+  it('keeps the mcp.json carve-out working under a trailing-separator AFK_HOME', () => {
+    process.env['AFK_HOME'] = `${relocated}/`;
+
+    expect(hook(ctx('cat "$AFK_HOME/config/mcp.json"')).decision).not.toBe('block');
+    expect(hook(ctx(`cat ${relocated}/config/mcp.json`)).decision).not.toBe('block');
+  });
+
+  // Fail-safe: getAfkHome() throws on a non-absolute AFK_HOME. configuredAfkHome()
+  // must swallow it and fall back to the default floor rather than propagating.
+  //
+  // Test hygiene (#783 follow-up to #753): this trips the shared
+  // `warnAfkHomeRejectedOnce` once-latch. Reset it first and spy on
+  // console.warn so the expected warning is captured instead of leaking to
+  // stderr during the run, and restore both in `finally` so the latch does
+  // not stay silently consumed for the rest of this file's later tests.
+  it('stays fail-safe when AFK_HOME is relative (getAfkHome() throws)', () => {
+    resetAfkHomeWarnLatchForTests();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env['AFK_HOME'] = 'relative/not-absolute';
+
+      expect(() => hook(ctx('echo hi'))).not.toThrow();
+      expect(hook(ctx('echo hi')).decision).not.toBe('block');
+      // The default-home floor still applies.
+      expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'afk.env')}`)).decision).toBe(
+        'block',
+      );
+      // Discriminates the fail-safe from a silently-broken one: the warning
+      // must actually fire. `configuredAfkHome()` is called once per `hook()`
+      // invocation (3 calls above), but the shared latch caps it at 1 warn.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('[afk-home]');
+      expect(warn.mock.calls[0]?.[0]).toContain('relative/not-absolute');
+    } finally {
+      warn.mockRestore();
+      resetAfkHomeWarnLatchForTests();
+    }
+  });
+
+  // paths.ts treats '' as unset. Pin that the bash surface agrees, so an empty
+  // AFK_HOME can never widen the floor beyond the default-home coverage.
+  it('treats an empty AFK_HOME as unset', () => {
+    process.env['AFK_HOME'] = '';
+
+    expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'afk.env')}`)).decision).toBe(
+      'block',
+    );
+    expect(hook(ctx(`cat ${join(homedir(), '.afk', 'config', 'mcp.json')}`)).decision).not.toBe(
+      'block',
+    );
+  });
+
+  // The double-separator bypass was never AFK_HOME-specific: with NO AFK_HOME
+  // set at all, `~/.afk//config/afk.env` slipped past the default-home floor,
+  // because the `//` lands inside the span the needle covers. Pinned here so a
+  // future change to normalizeHomeRefs cannot silently reopen the class.
+  it('blocks a double separator against the DEFAULT home floor (no AFK_HOME)', () => {
+    delete process.env['AFK_HOME'];
+    const afkEnv = join(homedir(), '.afk', 'config', 'afk.env');
+
+    expect(hook(ctx(`cat ${afkEnv.replace('/.afk/config/', '/.afk//config/')}`)).decision).toBe(
+      'block',
+    );
+    expect(hook(ctx('cat ~/.afk//config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat "$HOME/.afk//config/afk.env"')).decision).toBe('block');
+  });
+
+  // The bypass is positional, not character-specific: any lexically-different
+  // but POSIX-equivalent spelling that SPLITS the span a needle covers defeats
+  // the literal includes(). `//`, `/./` and `/../` are the same defect. The
+  // same spellings AFTER the needle were always caught, which is why the class
+  // was easy to under-diagnose from the `//` report alone.
+  it('blocks dot and dot-dot segments that split the needle span', () => {
+    delete process.env['AFK_HOME'];
+
+    expect(hook(ctx('cat ~/.afk/./config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat ~/.afk/../.afk/config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat "$HOME/.afk/./config/afk.env"')).decision).toBe('block');
+  });
+
+  // Braced ${VAR} is the ordinary spelling a non-adversarial model emits, so it
+  // sits inside this hook's accidental-access threat model — unlike the runtime
+  // variable assembly (`H=$HOME; …$H/…`) the module header rules out and the
+  // "documented bypass" test pins.
+  it('blocks the braced ${AFK_HOME} spelling', () => {
+    process.env['AFK_HOME'] = relocated;
+
+    expect(hook(ctx('cat ${AFK_HOME}/config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat "${AFK_HOME}/config/afk.env"')).decision).toBe('block');
+    // Carve-out parity: the braced spelling of mcp.json stays readable.
+    expect(hook(ctx('cat ${AFK_HOME}/config/mcp.json')).decision).not.toBe('block');
+  });
+
+  it('blocks the braced ${HOME} spelling', () => {
+    delete process.env['AFK_HOME'];
+
+    expect(hook(ctx('cat ${HOME}/.afk/config/afk.env')).decision).toBe('block');
+    expect(hook(ctx('cat ${HOME}/.ssh/id_rsa')).decision).toBe('block');
   });
 });
 

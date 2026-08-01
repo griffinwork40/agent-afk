@@ -171,6 +171,29 @@ describe('loadAgentRegistry', () => {
       );
     });
 
+    it('emits no restriction suffix when the displaced builtin carries neither tools nor bashReadOnly', () => {
+      // general-purpose is the only builtin with no `tools` allowlist and no
+      // bashReadOnly gate, so it is the sole builtin that exercises the empty
+      // `restriction` branch (registry.ts:144-149) — every other builtin hits
+      // one of the two non-empty arms already covered above.
+      const warn = vi.fn();
+      const userDir = join(tmp, 'afk-home', 'agents');
+      writeAgent(userDir, 'gp.md', 'general-purpose');
+
+      loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+
+      const filePath = join(userDir, 'gp.md');
+      expect(warn).toHaveBeenCalledWith(
+        `[afk] agents: ${filePath} overrides built-in agent "general-purpose"`,
+      );
+      const shadowMessage = warn.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes('overrides built-in agent "general-purpose"'));
+      expect(shadowMessage).toContain('overrides built-in agent "general-purpose"');
+      expect(shadowMessage).not.toContain('restricts');
+      expect(shadowMessage).not.toContain('replaces');
+    });
+
     it('warns when the config tier displaces a builtin', () => {
       const warn = vi.fn();
       loadAgentRegistry({
@@ -241,7 +264,13 @@ describe('loadAgentRegistry', () => {
     writeAgent(join(proj, '.claude', 'agents'), 'cc.md', 'cc-only-agent');
     writeAgent(join(proj, '.afk', 'agents'), 'afk.md', 'afk-only-agent');
     loadAgentRegistry({ cwd: proj, warn });
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('overrides'));
+    // Narrowed to the cross-directory-distinct wording: the bare substring
+    // 'overrides' also matches the builtin-shadow message ("… overrides
+    // built-in agent …"), which carries no `scope — ` clause, so it no longer
+    // isolates the cross-dir path. The cross-dir duplicate message uniquely
+    // matches `scope — .* overrides ` (registry.ts:202-203); the same-dir
+    // duplicate message instead reads `scope — keeping` (no ` overrides `).
+    expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/scope — .* overrides /));
   });
 
   it('skips malformed files without failing the scan', () => {
@@ -311,9 +340,10 @@ describe('loadAgentRegistry', () => {
     });
 
     it('plugin agents shadow builtins by name (plugin > builtin)', () => {
+      const warn = vi.fn();
       const registry = loadAgentRegistry({
         cwd: join(tmp, 'proj'),
-        warn: () => {},
+        warn,
         pluginAgents: [
           {
             name: 'research-agent',
@@ -323,6 +353,16 @@ describe('loadAgentRegistry', () => {
         ],
       });
       expect(registry.get('research-agent')?.source).toBe('plugin:x');
+      // The plugin tier's shadow warning is a distinct call site (registry.ts:255)
+      // from the file-scope scan (registry.ts:209) — its origin is a
+      // `plugin agent (<source>)` label, not a file path. Assert both stable
+      // substrings land in the SAME message so this call site's coverage
+      // can't silently regress to only one half matching.
+      const shadowMessage = warn.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes('overrides built-in agent'));
+      expect(shadowMessage).toContain('plugin agent (');
+      expect(shadowMessage).toContain('overrides built-in agent');
     });
 
     it('user scope shadows a plugin agent of the same name (user > plugin)', () => {

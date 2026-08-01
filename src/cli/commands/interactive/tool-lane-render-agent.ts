@@ -1,16 +1,7 @@
 import { palette } from '../../palette.js';
-import { styleForToolName } from '../../tool-category.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { formatToolCallStat } from '../../format-utils.js';
-import {
-  MAX_VISIBLE_CHILDREN,
-  formatOutcome,
-  formatDiffBlock,
-  doneGlyph,
-  sanitizeLabel,
-  shortenPaths,
-  batchBadge,
-} from './tool-lane-format.js';
+import { MAX_VISIBLE_CHILDREN, batchBadge } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
 import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
@@ -132,17 +123,31 @@ function formatAgentSummary(
   const externalAncestors: readonly boolean[] = ancestorIsLast;
 
   const head = palette.dim(g.turnRoot);
-  const agentLine = stats.length > 0
-    ? ancestorPrefix + head + agent.prefix + palette.dim(' — ' + stats.join(' · '))
-    : ancestorPrefix + head + agent.prefix;
+  // Invariant: ONE width read per render frame, shared by the head row below
+  // and the recursive child frame. Two reads could straddle a resize and emit
+  // a head row clamped to the old width above children clamped to the new one.
+  const cols = getTerminalWidth();
+  // Clamped for the same reason every child row is: a root nesting entry
+  // arrives with an unbounded prefix (the root dispatch path passes no
+  // maxWidth), and the stats tail adds ~28 columns on top — a depth-0 `agent`
+  // frame with more than MAX_VISIBLE_CHILDREN children measures ~109 columns
+  // in an 88-column terminal. Plain clamp, not the grouped path's suffix
+  // reservation: identity leads the row and the stats tail is expendable,
+  // matching how the live overlay clamps the same row.
+  const agentLine = clampLineToTerminal(
+    stats.length > 0
+      ? ancestorPrefix + head + agent.prefix + palette.dim(' — ' + stats.join(' · '))
+      : ancestorPrefix + head + agent.prefix,
+    cols,
+  );
 
   // Pass agentResultSummary into renderFlushChildren so it is added as a
   // synthetic sibling BEFORE assignConnectors runs — ensuring the Done line
   // receives the correct LAST connector (not a hardcoded '⎿', which was Bug #5).
-  // Thread `g` so the head row and child rows share one glyph set. `cols` is
-  // read here at the head so the recursive flush frame uses the same width.
-  // `externalAncestors` extends the spine column-set leftward by `extraDepth`
-  // so descendant rows align under the head row's ancestor spines.
+  // Thread `g` so the head row and child rows share one glyph set, and `cols`
+  // (read once above) so the head row and the recursive flush frame agree on
+  // width. `externalAncestors` extends the spine column-set leftward by
+  // `extraDepth` so descendant rows align under the head row's ancestor spines.
   const childLines = renderFlushChildren(
     children,
     childMap,
@@ -150,7 +155,7 @@ function formatAgentSummary(
     // #532: badge the closer (Done line) when this NESTING root ran in a
     // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
     summaryWithBatchBadge(agent),
-    getTerminalWidth(),
+    cols,
     externalAncestors,
     g,
   );
@@ -181,6 +186,10 @@ function formatAgentSummary(
  * outermost ancestor floating without a spine that connects to its
  * children.
  *
+ * That shared encoding includes the terminal-width clamp: both paths clamp the
+ * head row to `getTerminalWidth()`, so a row that overflows is elided
+ * identically no matter which path committed it.
+ *
  * Width invariant matches formatAgentSummary: `g.spine` is 2 cells,
  * `g.turnRoot` is 2 cells, so the total head-row indent is
  * `2 * (ancestorIsLast.length + 1)` cells before `agent.prefix` — exactly the
@@ -196,7 +205,11 @@ function formatAgentHeader(agent: ToolEntry, ancestorIsLast: readonly boolean[] 
   const g = getGlyphs();
   const ancestorPrefix = palette.dim(g.spine.repeat(ancestorIsLast.length));
   const head = palette.dim(g.turnRoot);
-  return ancestorPrefix + head + agent.prefix;
+  // The terminal-width clamp is part of the shared head-row encoding — see the
+  // encoding constraint above. formatAgentSummary clamps its head row, so this
+  // one must too, or the same entry committed through the two paths would
+  // differ whenever the row exceeds the terminal width.
+  return clampLineToTerminal(ancestorPrefix + head + agent.prefix, getTerminalWidth());
 }
 
 /**
@@ -247,133 +260,5 @@ function formatAgentChildren(
   );
 }
 
-function renderGroupedRootTools(
-  groups: Map<string, ToolEntry[]>,
-  groupOrder: string[],
-  homeDir?: string,
-): string[] {
-  const lines: string[] = [];
-  // Read once per call: diff body lines below are clamped to this width so
-  // long file content never soft-wraps to column 0 in scrollback (orphaning
-  // its continuation past the indent). Mirrors the clamp on every other
-  // diff-emission path; see tool-lane-render-children.ts.
-  const cols = getTerminalWidth();
-  for (const toolName of groupOrder) {
-    const entries = groups.get(toolName)!;
-    if (entries.length === 1) {
-      const e = entries[0]!;
-      if (e.result) {
-        lines.push('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result));
-        if (e.diff && !e.result.isError) {
-          // Root-level scrollback diff: indent 4 spaces so it sits under
-          // the outcome line (2 for the row indent, 2 more to clear the
-          // tool-name column visually).
-          for (const line of formatDiffBlock(e.diff, 'flush', '    ')) {
-            lines.push(clampLineToTerminal(line, cols));
-          }
-        }
-      } else {
-        lines.push('  ' + e.prefix);
-      }
-    } else {
-      lines.push(formatGroupedToolResults(toolName, entries, homeDir));
-      // Emit per-entry diff blocks under the grouped header. Each diff hangs
-      // at the same 4-space indent as the single-entry path above, giving
-      // the grouped case the same visual treatment as individual entries.
-      // When multiple entries have diffs, emit a labeled `── filename ──`
-      // separator before each diff block so the reader can attribute hunks
-      // to specific files at a glance (e.g. write_file ×2 renders two diffs
-      // with "── globals.css ──" / "── layout.tsx ──" labels).
-      //
-      // External constraint (presentation invariant): when N>1 grouped entries
-      // each contribute a diff block, the blocks must be visually separated by
-      // a labeled divider so a reader can attribute hunks to specific files.
-      // Without the divider, two 62-line `write_file` diffs fuse into one
-      // 124-line block in the rendered transcript with no file boundary
-      // visible — see audit RC-3.
-      // `sanitizeLabel` wraps the user-controlled toolInput to prevent
-      // control-sequence injection into the dim separator line.
-      const entriesWithDiffs = entries.filter((e) => e.diff && e.result && !e.result.isError);
-      const needSeparators = entriesWithDiffs.length > 1;
-      for (const e of entriesWithDiffs) {
-        if (needSeparators) {
-          // Order is load-bearing: sanitizeLabel BEFORE shortenPaths.
-          // shortenPaths emits OSC 8 hyperlink escapes (the one sanctioned
-          // escape producer in the lane); sanitizeLabel strips ALL ANSI, so
-          // running it after would kill the link. Sanitizing first is
-          // equally safe — toolInput is the injection surface, and it is
-          // fully scrubbed before linkification adds our own escapes.
-          const sanitized = sanitizeLabel(e.toolInput);
-          const label = shortenPaths(sanitized).trim() || sanitized.trim();
-          lines.push('    ' + palette.dim(`── ${label} ──`));
-        }
-        for (const line of formatDiffBlock(e.diff!, 'flush', '    ')) {
-          lines.push(clampLineToTerminal(line, cols));
-        }
-      }
-    }
-  }
-  return lines;
-}
 
-function formatGroupedToolResults(
-  toolName: string,
-  entries: ToolEntry[],
-  homeDir?: string,
-): string {
-  const { color, glyph } = styleForToolName(toolName);
-  // sanitizeLabel before shortenPaths — same ordering rationale as the
-  // diff-separator labels above (shortenPaths emits OSC 8 hyperlinks that
-  // sanitizeLabel would strip).
-  const targets = entries.map((e) => shortenPaths(sanitizeLabel(e.toolInput)).trim());
-  const header =
-    color(glyph + ' ') +
-    color.bold(toolName) +
-    palette.dim(` ×${entries.length}`) +
-    ' ' +
-    palette.toolArg(targets.join(', '));
-
-  const completed = entries.filter((e) => e.result);
-  const errors = completed.filter((e) => e.result!.isError);
-
-  if (errors.length > 0) {
-    const successCount = completed.length - errors.length;
-    const lineCounts = completed
-      .filter((e) => !e.result!.isError)
-      .map((e) => e.result!.lineCount)
-      .filter((c): c is number => c !== undefined);
-    const totalLines = lineCounts.reduce((a, b) => a + b, 0);
-    const parts: string[] = [];
-    if (totalLines > 0) parts.push(`${totalLines} lines`);
-    if (successCount > 0) parts.push(`${successCount} ok`);
-    parts.push(palette.error(`${errors.length} error${errors.length > 1 ? 's' : ''}`));
-    return '  ' + header + palette.dim(' — ') + parts.join(palette.dim(', '));
-  }
-
-  const lineCounts = completed
-    .map((e) => e.result?.lineCount)
-    .filter((c): c is number => c !== undefined);
-  if (lineCounts.length === completed.length && lineCounts.length > 0) {
-    const allSame = lineCounts.every((c) => c === lineCounts[0]);
-    if (allSame) {
-      return '  ' + header + palette.dim(` — ${lineCounts[0]} lines each`);
-    }
-    const total = lineCounts.reduce((a, b) => a + b, 0);
-    return '  ' + header + palette.dim(` — ${total} lines total`);
-  }
-
-  if (completed.length > 0) {
-    const outcomes = completed.map((e) => formatOutcome(e.result!, homeDir, 60, e.toolName));
-    return '  ' + header + palette.dim(' — ') + outcomes.join(palette.dim(', '));
-  }
-
-  return '  ' + header;
-}
-
-export {
-  formatAgentSummary,
-  formatAgentHeader,
-  formatAgentChildren,
-  renderGroupedRootTools,
-  formatGroupedToolResults,
-};
+export { formatAgentSummary, formatAgentHeader, formatAgentChildren };

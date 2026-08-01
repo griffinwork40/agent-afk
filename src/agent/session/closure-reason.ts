@@ -37,6 +37,7 @@
  */
 
 import type { ClosureReason } from '../trace/index.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
 /**
  * Provider stop reasons that mean the response was cut off by the output-token
@@ -85,6 +86,11 @@ export function classifyClosureReason(i: ClosureReasonInputs): ClosureReason {
   if (i.dispatchReason === 'error') return 'abort';
   if (i.abort !== null) return i.abort;
   if (i.sawProviderError) return 'abort';
+  // Overload exhaustion (#762) commits its turn via a CLEAN `turn.completed` so
+  // the session stays resumable, so `sawProviderError` is deliberately false for
+  // it. Classify off the sentinel instead — the closure must still read `abort`,
+  // never `model_end_turn`: the turn did NOT end because the model was done.
+  if (i.lastStopReason === OVERLOAD_EXHAUSTED) return 'abort';
   if (i.lastStopReason === 'tool_use_loop_capped') return 'iteration_cap';
   if (isTruncationStopReason(i.lastStopReason)) return 'truncated';
   return 'model_end_turn';

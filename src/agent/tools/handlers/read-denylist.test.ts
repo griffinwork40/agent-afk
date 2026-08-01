@@ -26,7 +26,7 @@
  * @module agent/tools/handlers/read-denylist.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -36,11 +36,13 @@ import {
   getReadDenylist,
   BUILTIN_READ_DENYLIST,
   BUILTIN_READ_ALLOWLIST,
+  READ_ALLOWLIST_REL,
   resolveExceptionEntry,
   parseReadDenylistEntries,
   _resetReadDenylistCacheForTests,
 } from './read-denylist.js';
 import { safeRealpath } from './write-denylist.js';
+import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 
 let tmpDir: string;
 
@@ -52,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env['AFK_READ_DENYLIST'];
+  delete process.env['AFK_HOME'];
   _resetReadDenylistCacheForTests();
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -223,6 +226,50 @@ describe('isReadDenied — built-in exception for ~/.afk/config/mcp.json', () =>
   });
 });
 
+// Issue #579 O2 — `~/.ssh` stays whole-dir floored (SSH private keys have
+// arbitrary names like `github_key`, so a deny-glob would fail-open), but two
+// well-known NON-secret siblings are carved out as exact files so the agent can
+// do git/ssh host-alias work unconfined. Mirrors the mcp.json carve-out pattern.
+describe('isReadDenied — built-in exceptions for ~/.ssh/config and ~/.ssh/known_hosts', () => {
+  const sshConfig = join(homedir(), '.ssh', 'config');
+  const knownHosts = join(homedir(), '.ssh', 'known_hosts');
+
+  it('allows the carved-out non-secret siblings', () => {
+    expect(isReadDenied(sshConfig).denied).toBe(false);
+    expect(isReadDenied(knownHosts).denied).toBe(false);
+  });
+
+  it('is an EXACT-file carve-out — siblings and pseudo-children stay denied', () => {
+    // Private key material (arbitrary names) stays denied — the whole-dir floor.
+    expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'github_key')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'id_ed25519')).denied).toBe(true);
+    // Suffix/pseudo-child siblings stay denied (exact-match, not prefix).
+    expect(isReadDenied(sshConfig + '.bak').denied).toBe(true);
+    expect(isReadDenied(join(sshConfig, 'child')).denied).toBe(true);
+    expect(isReadDenied(knownHosts + '.old').denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh')).denied).toBe(true);
+  });
+
+  it('stays re-deniable via AFK_READ_DENYLIST (extras outrank the exception)', () => {
+    process.env['AFK_READ_DENYLIST'] = sshConfig;
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(sshConfig).denied).toBe(true);
+
+    delete process.env['AFK_READ_DENYLIST'];
+    _resetReadDenylistCacheForTests();
+    process.env['AFK_READ_DENYLIST'] = join(homedir(), '.ssh');
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(sshConfig).denied).toBe(true);
+    expect(isReadDenied(knownHosts).denied).toBe(true);
+  });
+
+  it('assertNotReadDenied does not throw for the carve-outs', () => {
+    expect(() => assertNotReadDenied(sshConfig)).not.toThrow();
+    expect(() => assertNotReadDenied(knownHosts)).not.toThrow();
+  });
+});
+
 // Regression guard for PR #728 review P1: the exception list must never be
 // expressed as the symlink TARGET of its own leaf. `safeRealpath` on the whole
 // entry would let a `mcp.json` symlinked at a protected file put THAT file in
@@ -264,21 +311,34 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     expect(basename(resolved)).toBe('mcp.json');
   });
 
-  it('keeps every built-in exception inside the resolved ~/.afk/config dir', () => {
+  it('keeps every built-in exception inside its expected resolved parent', () => {
+    // mcp.json lives inside ~/.afk/config; .ssh/config & known_hosts live
+    // inside ~/.ssh. Each entry must resolve into the dir that floors it.
+    const expected: Record<string, string> = {
+      '.afk/config/mcp.json': safeRealpath(join(homedir(), '.afk', 'config')),
+      '.ssh/config': safeRealpath(join(homedir(), '.ssh')),
+      '.ssh/known_hosts': safeRealpath(join(homedir(), '.ssh')),
+    };
     for (const entry of BUILTIN_READ_ALLOWLIST) {
       const resolved = resolveExceptionEntry(entry);
       expect(basename(resolved)).toBe(basename(entry));
-      expect(dirname(resolved)).toBe(safeRealpath(join(homedir(), '.afk', 'config')));
+      const rel = READ_ALLOWLIST_REL.find((r) => entry.endsWith(r));
+      expect(rel, `unmapped entry: ${entry}`).toBeDefined();
+      if (rel) expect(dirname(resolved)).toBe(expected[rel]!);
     }
   });
 
   it('a protected path is still denied when reached directly (the P1 regression)', () => {
     // Belt-and-braces on the real built-ins: whatever the exception list resolves
-    // to, a direct credential read must never be admitted by it.
+    // to, a direct credential read must never be admitted by it. The carve-out
+    // leaves are known non-secret names (mcp.json, config, known_hosts) — NEVER
+    // key material (id_rsa, etc.).
     for (const entry of BUILTIN_READ_ALLOWLIST) {
-      expect(resolveExceptionEntry(entry)).not.toMatch(/\/\.(ssh|aws|gnupg)\//);
+      const leaf = entry.split('/').pop();
+      expect(leaf).toMatch(/^(mcp\.json|config|known_hosts)$/);
     }
     expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.ssh', 'github_key')).denied).toBe(true);
     expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
   });
 });
@@ -366,6 +426,151 @@ describe('read-denylist — AFK_READ_DENYLIST extras', () => {
     // does NOT widen into the real ~/.ssh floor, which stands on its own.
     expect(getReadDenylist().some((p) => p.endsWith('~someone/.ssh'))).toBe(true);
     expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+  });
+});
+
+describe('read-denylist — AFK_HOME-relocated credential tree (#740)', () => {
+  it('denies afk.env under a relocated AFK_HOME config dir', () => {
+    const relocated = join(tmpDir, 'relocated-home');
+    mkdirSync(relocated, { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    _resetReadDenylistCacheForTests();
+
+    expect(isReadDenied(join(relocated, 'config', 'afk.env')).denied).toBe(true);
+  });
+
+  // The mcp.json carve-out MUST follow AFK_HOME whenever the denied parent dir
+  // does. Extending only the deny side inverts the carve-out: the registry
+  // becomes unreadable under a relocated home while the default-home spelling
+  // stays readable — invisible to the typed tools AND the bash surface for
+  // exactly the operators who relocated it. Caught by an empirical probe after
+  // the deny-side change looked complete in review.
+  it('keeps the mcp.json carve-out readable under a relocated AFK_HOME', () => {
+    const relocated = join(tmpDir, 'relocated-home-allow');
+    mkdirSync(join(relocated, 'config'), { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    _resetReadDenylistCacheForTests();
+
+    // The parent dir stays denied …
+    expect(isReadDenied(join(relocated, 'config', 'afk.env')).denied).toBe(true);
+    // … while the registry itself remains readable, exactly as it does at the
+    // default home location.
+    expect(isReadDenied(join(relocated, 'config', 'mcp.json')).denied).toBe(false);
+  });
+
+  it('keeps a relocated mcp.json re-deniable via AFK_READ_DENYLIST (precedence holds)', () => {
+    const relocated = join(tmpDir, 'relocated-home-redeny');
+    mkdirSync(join(relocated, 'config'), { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    process.env['AFK_READ_DENYLIST'] = join(relocated, 'config', 'mcp.json');
+    _resetReadDenylistCacheForTests();
+
+    // An explicit extra outranks the derived carve-out, same as it outranks the
+    // hardcoded one.
+    expect(isReadDenied(join(relocated, 'config', 'mcp.json')).denied).toBe(true);
+  });
+
+  it('still denies the real homedir() ~/.afk/config entry when AFK_HOME is relocated', () => {
+    // ADDITIVE, not a replacement: relocating AFK_HOME must not stop covering
+    // the default homedir()-based tree (an operator could have stale files
+    // there, or another process still reads the default location).
+    const relocated = join(tmpDir, 'relocated-home-2');
+    mkdirSync(relocated, { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    _resetReadDenylistCacheForTests();
+
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
+  });
+
+  it('does NOT deny the relocated AFK_HOME state dir (mirrors the default-home divergence)', () => {
+    const relocated = join(tmpDir, 'relocated-home-state');
+    mkdirSync(relocated, { recursive: true });
+    process.env['AFK_HOME'] = relocated;
+    _resetReadDenylistCacheForTests();
+
+    expect(
+      isReadDenied(join(relocated, 'state', 'todos', 'x.json')).denied,
+    ).toBe(false);
+  });
+
+  it('behavior is unchanged and the derived entry does not double up when AFK_HOME is unset', () => {
+    delete process.env['AFK_HOME'];
+    _resetReadDenylistCacheForTests();
+
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
+    const configEntryCount = getReadDenylist().filter(
+      (p) => p === safeRealpath(join(homedir(), '.afk', 'config')),
+    ).length;
+    expect(configEntryCount).toBe(1);
+  });
+
+  // Fail-safe: getAfkHome() throws when AFK_HOME is set but not absolute. The
+  // read denylist must not let that throw propagate and empty the floor —
+  // it must skip only the derived entry and keep the homedir()-based ones.
+  //
+  // Test hygiene (#783 follow-up to #753): this trips the shared
+  // `warnAfkHomeRejectedOnce` once-latch. Reset it first and spy on
+  // console.warn so the expected warning is captured instead of leaking to
+  // stderr during the run, and restore both in `finally` so the latch does
+  // not stay silently consumed for the rest of this file's later tests.
+  it('stays fail-safe when AFK_HOME is a relative path (getAfkHome() throws)', () => {
+    resetAfkHomeWarnLatchForTests();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env['AFK_HOME'] = 'relative/not-absolute';
+      _resetReadDenylistCacheForTests();
+
+      expect(() => isReadDenied(join(homedir(), '.afk', 'config', 'afk.env'))).not.toThrow();
+      expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
+      expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
+      // Discriminates the fail-safe from a silently-broken one: the warning
+      // must actually fire exactly once (memoized `resolveLists()` only
+      // recomputes — and thus only re-derives/re-warns — on a cache-key
+      // change, so 3 isReadDenied calls above still produce 1 warn call).
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('[afk-home]');
+      expect(warn.mock.calls[0]?.[0]).toContain('relative/not-absolute');
+    } finally {
+      warn.mockRestore();
+      resetAfkHomeWarnLatchForTests();
+    }
+  });
+
+  // Cache-invalidation: the memoization key must include AFK_HOME, not just
+  // AFK_READ_DENYLIST, or a runtime AFK_HOME change returns a STALE verdict.
+  // Invariant: deliberately NO `_resetReadDenylistCacheForTests()` call
+  // between the two queries below — that reset is what the memo key itself
+  // is supposed to make unnecessary. Calling it here would make this test
+  // pass even if AFK_HOME were dropped from the key entirely, defeating the
+  // point of the regression guard.
+  it('invalidates the memoized list when AFK_HOME changes, with no manual cache reset (cache-key regression guard)', () => {
+    // `beforeEach` already reset the cache and AFK_HOME is unset at test start.
+    const relocated = join(tmpDir, 'second-home');
+    mkdirSync(relocated, { recursive: true });
+    const target = join(relocated, 'config', 'afk.env');
+
+    // Query once with AFK_HOME unset: the relocated config dir is NOT covered.
+    expect(isReadDenied(target).denied).toBe(false);
+
+    // Change AFK_HOME and query again — WITHOUT resetting the cache by hand.
+    process.env['AFK_HOME'] = relocated;
+    expect(isReadDenied(target).denied).toBe(true);
+  });
+
+  // paths.ts treats '' as unset (`envVal !== undefined && envVal !== ''`).
+  // That branch was covered on no surface. Pin it: an empty AFK_HOME must
+  // behave exactly like an unset one, never widening or emptying the floor.
+  it('treats an empty AFK_HOME as unset', () => {
+    process.env['AFK_HOME'] = '';
+    _resetReadDenylistCacheForTests();
+
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'afk.env')).denied).toBe(true);
+    // The mcp.json carve-out still applies under the default home.
+    expect(isReadDenied(join(homedir(), '.afk', 'config', 'mcp.json')).denied).toBe(false);
+    const configEntryCount = getReadDenylist().filter(
+      (p) => p === safeRealpath(join(homedir(), '.afk', 'config')),
+    ).length;
+    expect(configEntryCount).toBe(1);
   });
 });
 

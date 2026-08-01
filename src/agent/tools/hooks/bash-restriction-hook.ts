@@ -85,6 +85,11 @@ import {
   parseReadDenylistEntries,
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
+import {
+  configuredAfkHome,
+  afkAllowlistFileForms,
+  relocatedAfkSensitiveRoots,
+} from './afk-home-refs.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -199,7 +204,8 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // is wired (headless), so check 2 fails open there and check 1 falls back to
     // the lexical signal.
     const home = homedir();
-    const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home), home);
+    const afkHome = configuredAfkHome();
+    const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home, afkHome), home, afkHome);
     const restrictedSubstrings = grantManager
       ? deriveRestrictedSubstrings(grantManager.getGrants())
       : [];
@@ -284,12 +290,50 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
  * the substring checks catch the non-adversarial accident case. NOT a parser —
  * variable-assembled paths (`H=$HOME; …$H/…`) are intentionally out of scope
  * (see module-header threat model). Shared by both checks.
+ *
+ * Invariant: every path-like span is lexically normalized LAST, after all
+ * substitutions, because the substitutions themselves create the mismatches —
+ * a trailing-separator `AFK_HOME` turns `$AFK_HOME/config` into
+ * `/relocated//config`. The restricted needles are built with `path.join` /
+ * `resolve`, which emit only the normal form, and the final match is a literal
+ * `includes()`. Any spelling that is POSIX-equivalent but lexically different
+ * therefore fails OPEN unless it is folded to the same normal form here.
+ *
+ * `path.posix.normalize` (not a bare `//` collapse) is what makes this a CLASS
+ * fix: `//`, `/./`, and `/../` all reduce. The distinguishing factor is not
+ * which character is used but WHERE it lands — a separator that splits the span
+ * the needle covers breaks the match, while the same characters after the
+ * needle are harmless. `~/.afk/./config/afk.env` and `~/.afk//config/afk.env`
+ * both defeated the default-home floor for exactly this reason; neither is
+ * `AFK_HOME`-specific.
+ *
+ * Braced `${VAR}` is substituted alongside bare `$VAR` because it is the
+ * ordinary spelling a non-adversarial model emits, not an evasion — it sits
+ * inside this hook's accidental-access threat model, unlike the runtime
+ * variable assembly (`H=$HOME; …$H/…`) the module header rules out.
+ *
+ * Safe for non-path text: the result is used ONLY for substring matching and is
+ * never executed, so mangling `https://x` to `https:/x` in this scanned copy
+ * cannot affect what runs, and no sensitive root resembles a mangled scheme.
  */
-function normalizeHomeRefs(command: string, home: string): string {
-  return command
-    .replace(/\$HOME/g, home)
-    .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
+function normalizeHomeRefs(command: string, home: string, afkHome: string | undefined): string {
+  const normalized =
+    afkHome === undefined ? command : command.replace(/\$\{AFK_HOME\}|\$AFK_HOME\b/g, afkHome);
+  return normalized
+    .replace(/\$\{HOME\}|\$HOME\b/g, home)
+    .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`)
+    .replace(PATH_LIKE_SPAN, (span) => path.posix.normalize(span));
 }
+
+/**
+ * An absolute-path-like run inside a command string: a `/` followed by
+ * everything up to the next shell metacharacter, quote, or whitespace.
+ *
+ * Contract: deliberately greedy on ordinary path characters and deliberately
+ * stops at `'"`;|&()<>` and whitespace so one span cannot swallow a following
+ * argument and drag unrelated text through `normalize`.
+ */
+const PATH_LIKE_SPAN = /\/[^\s'"`;|&()<>]*/g;
 
 /** Placeholder left behind by {@link scrubAllowlistedRefs}. Deliberately free of
  * any path characters so it can never itself satisfy a root or signal match. */
@@ -311,12 +355,21 @@ function escapeRegExp(literal: string): string {
  * alone (`expanduser('~/.afk/config/mcp.json')`). The `$HOME/` form is
  * unreachable while normalization runs first, and is kept as the one spelling
  * that would silently stop being carved out if that order ever changed.
+ *
+ * The AFK_HOME-relocated forms (the `$AFK_HOME/...` spellings and their
+ * resolved absolute twin) live in {@link afkAllowlistFileForms}; this function
+ * builds only the home-anchored forms and merges in the AFK-anchored set when
+ * AFK_HOME is configured, preserving the original deduped union.
  */
-function allowlistedFileForms(home: string): string[] {
-  return READ_ALLOWLIST_REL.flatMap((rel) => {
+function allowlistedFileForms(home: string, afkHome: string | undefined): string[] {
+  const homeForms = READ_ALLOWLIST_REL.flatMap((rel) => {
     if (isReadDenied(path.join(home, rel)).denied) return [];
     return [path.join(home, rel), `~/${rel}`, `$HOME/${rel}`];
   });
+  if (afkHome === undefined) return homeForms;
+
+  const afkForms = afkAllowlistFileForms(afkHome);
+  return [...new Set([...homeForms, ...afkForms])];
 }
 
 /**
@@ -333,11 +386,30 @@ function allowlistedFileForms(home: string): string[] {
  * siblings (`mcp.json.bak`) the carve-out was never meant to cover — dropping
  * the only text carrying the denied enclosing root. Dropping this guard
  * entirely would turn one readable file into a readable directory.
+ *
+ * A SECOND lookahead `(?!['"\`][\w./\\*?\[\]{}-])` closes the quote-concatenation
+ * bypass (PR #805 P1): shell concatenates `~/.ssh/config".bak"` into
+ * `~/.ssh/config.bak`, so a quote character immediately followed by a path
+ * character means the quote OPENS a suffix extending the path past the
+ * exact-file boundary — the span must NOT be scrubbed, leaving `.ssh`/
+ * `.afk/config` visible to the scanner. All three shell quote characters
+ * (`"`, `'`, `` ` ``) are covered — single-quote and backtick concatenation
+ * are equivalent bypasses. A CLOSING quote (`"~/.ssh/config"` with EOL/space
+ * after) is intentionally unaffected: the first lookahead already passes
+ * quote chars (they are not in the path-char class), and the second only
+ * rejects a quote + path-char. This is what lets a legitimately quoted whole
+ * exact reference stay scrubbed (and allowed) while a quote-concatenated
+ * sibling/traversal stays blocked. The same hole, prior to this PR, admitted
+ * the `mcp.json` carve-out too: `cat ~/.afk/config/mcp.json"/../afk.env"`
+ * would have laundered `.afk/config`.
  */
-function scrubAllowlistedRefs(text: string, home: string): string {
+function scrubAllowlistedRefs(text: string, home: string, afkHome: string | undefined): string {
   let out = text;
-  for (const form of allowlistedFileForms(home)) {
-    const exactRef = new RegExp(`${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])`, 'g');
+  for (const form of allowlistedFileForms(home, afkHome)) {
+    const exactRef = new RegExp(
+      `${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])(?!['"\`][\\w./\\\\*?\\[\\]{}-])`,
+      'g',
+    );
     out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);
   }
   return out;
@@ -476,6 +548,7 @@ export function deriveRestrictedSubstrings(grants: {
       ...builtinBashSensitiveRoots(),
       ...getReadDenylist(),
       ...readDenylistExtrasAsSpelled(),
+      ...relocatedAfkSensitiveRoots(),
     ]),
   ];
 

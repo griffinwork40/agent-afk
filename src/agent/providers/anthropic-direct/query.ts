@@ -57,6 +57,7 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
+import { refreshEnvironmentDate } from './query/date-rollover.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
@@ -160,6 +161,12 @@ export interface AnthropicDirectQueryOptions {
    * errors instead of surfacing them immediately.
    */
   autoResumeOnUsageLimit?: boolean;
+  /**
+   * User-facing surface (`AgentConfig.surface`) forwarded verbatim to
+   * {@link RetryLayer} so the overload-pause ceiling can differ for interactive
+   * vs. daemon sessions (#762). Undefined ⇒ treated as non-interactive.
+   */
+  surface?: string;
   /**
    * Factory for rebuilding the cwd-dependent pair (userSystem + dispatcher)
    * when `setCwd()` is called mid-session. When absent, `setCwd()` is a
@@ -307,6 +314,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
+      ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
     });
     this.state = createSessionState({
       model: opts.model,
@@ -589,6 +597,14 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * side has anything to contribute — the loop omits the field entirely.
    */
   private composeSystem(): ContentBlockParam[] | null {
+    // Date rollover: `userSystem` was assembled once at session start, so a
+    // session resident across local midnight would keep telling the model it
+    // is still yesterday. This re-renders that one line only when the rendered
+    // date actually changes, so same-day turns are byte-identical and the
+    // cache breakpoint below still hits. See query/date-rollover.ts.
+    if (this.state.userSystem) {
+      this.state.userSystem = refreshEnvironmentDate(this.state.userSystem);
+    }
     const prefix = this.systemPrefix;
     const userSys = this.state.userSystem;
     const blocks: ContentBlockParam[] = [];

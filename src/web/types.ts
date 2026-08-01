@@ -27,7 +27,12 @@ export type FetchFn = typeof fetch;
  */
 export type RenderFn = (
   url: string,
-  opts: { timeoutMs: number; signal: AbortSignal },
+  opts: {
+    timeoutMs: number;
+    signal: AbortSignal;
+    /** Rejects a browser request before Chromium sends it. */
+    requestGuard?: (url: string) => Promise<void>;
+  },
 ) => Promise<RenderedPage>;
 
 /** Output of a {@link RenderFn} — the rendered DOM plus navigation metadata. */

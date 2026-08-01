@@ -106,6 +106,22 @@ export function resolveCliPermissionMode(): PermissionMode {
   return loadJsonConfig().config.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE;
 }
 
+/**
+ * Whether a usage-limit pause will auto-resume, for display surfaces that
+ * *describe* that behaviour to the user (the quota footer, `quota-footer.ts`).
+ *
+ * Reads the memoized JSON tier directly, side-effect-free — same rationale as
+ * `loadTelegramConfig` / `resolveCliPermissionMode`, and deliberately NOT
+ * `loadConfig`, which re-installs process-global model-slot bindings on every
+ * call and enforces the `local-*` guard. A per-turn display read must do
+ * neither.
+ *
+ * Defaults to `true`, matching the provider's own default (`query.ts`).
+ */
+export function resolveAutoResumeOnUsageLimit(): boolean {
+  return loadJsonConfig().config.autoResumeOnUsageLimit ?? true;
+}
+
 export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
   const envConfig = loadEnvConfig();
   const { config: jsonConfig, sourcePath: jsonSourcePath, modelsPartial } = loadJsonConfig();
@@ -155,6 +171,9 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     // afk.config.json / env / override `permissionMode` still wins.
     permissionMode: merged.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE,
     ...(merged.autoRouting !== undefined ? { autoRouting: merged.autoRouting } : {}),
+    ...(merged.autoResumeOnUsageLimit !== undefined
+      ? { autoResumeOnUsageLimit: merged.autoResumeOnUsageLimit }
+      : {}),
     ...(merged.daemon !== undefined ? { daemon: merged.daemon } : {}),
     ...(merged.telegram !== undefined ? { telegram: merged.telegram } : {}),
     ...(merged.bgSummaries !== undefined ? { bgSummaries: merged.bgSummaries } : {}),

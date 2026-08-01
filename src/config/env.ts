@@ -288,7 +288,8 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
       'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
       '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
       'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
-      'the response runs unbounded, so a normal slow call (below the bound) and any actively-' +
+      'the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, ' +
+      'so a normal slow call (below the bound) and any actively-' +
       'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
       'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
       'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
@@ -298,6 +299,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     default: '180000',
     example: '120000',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MODEL_STALL_TIMEOUT_MS',
+    description:
+      'Progress-aware POST-first-byte stall window (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a stream that has ALREADY produced content may then go completely silent. ' +
+      'Every streamed output event resets the window, so this is NOT a total-round cap: a ' +
+      'legitimately long, actively-streaming round (large code emission, extended thinking) ' +
+      'survives indefinitely, while a stream wedged mid-flight is aborted and surfaces as a real ' +
+      'terminal error instead of hanging. Complements AFK_MODEL_TTFB_TIMEOUT_MS, which governs ' +
+      'only the window BEFORE the first token; this one takes over after it. Default 1200000 ' +
+      '(20min) — above the 18.5min maximum post-first-byte stream duration observed across 86,076 ' +
+      'rounds in 12,381 local traces (p99 122s, p99.9 234s), so no healthy round trips it. ' +
+      'Set to 0 to disable (issue #762).',
+    type: 'number',
+    required: false,
+    default: '1200000',
+    example: '600000',
     category: 'model',
   },
   {
@@ -444,6 +464,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     type: 'string',
     required: false,
     example: 'http://localhost:8080/v1',
+    category: 'model',
+  },
+  {
+    name: 'AFK_OVERLOAD_PAUSE_MS',
+    description: 'Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity.',
+    type: 'number',
+    required: false,
+    example: '600000',
     category: 'model',
   },
   {
@@ -702,7 +730,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'TELEGRAM_VERBOSE',
-    description: "Set to 'true' to log per-message details from the Telegram bot — chat IDs, message text, latency. (The code checks the literal string 'true'.)",
+    description: "Set to a truthy value ('1'/'true'/'yes'/'on', case-insensitive) to log per-message details from the Telegram bot — chat IDs, message text, latency.",
     type: 'boolean',
     required: false,
     example: 'true',
@@ -1255,6 +1283,24 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
 
+  // ── Web egress ────────────────────────────────────────────────────────────
+  {
+    name: 'AFK_WEB_ALLOW_PRIVATE_HOSTS',
+    description:
+      'Opt out of the web_scrape SSRF egress guard. When unset (default) the guard is ACTIVE: ' +
+      'the markdown, raw, and headless-render paths refuse loopback (127/8, ::1), link-local ' +
+      '(169.254/16 — including the 169.254.169.254 cloud instance-metadata endpoint), RFC1918 ' +
+      '(10/8, 172.16/12, 192.168/16), carrier-grade NAT (100.64/10), IPv6 unique-local (fc00::/7), ' +
+      '0.0.0.0/8, and the IPv4-mapped/compatible IPv6 forms of all of those. Hostnames are ' +
+      'resolved and the RESOLVED addresses are classified (DNS-rebinding guard), and the check is ' +
+      're-applied on every redirect hop. Set to 1/true to allow private-host access — needed only ' +
+      'to scrape a local dev server. Enabling it restores a model-reachable SSRF path (issue #575).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+
   // ── CLI / capture-mode ────────────────────────────────────────────────────
   {
     name: 'AFK_DEMO_CLEAN',
@@ -1388,6 +1434,7 @@ export const env = {
   get AFK_MICROCOMPACT_TOOL_RESULT_BYTES(): string | undefined { return process.env['AFK_MICROCOMPACT_TOOL_RESULT_BYTES']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
   get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
+  get AFK_MODEL_STALL_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_STALL_TIMEOUT_MS']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
   get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },
   get AFK_MODEL_LARGE_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LARGE_BASE_URL']; },
@@ -1401,6 +1448,7 @@ export const env = {
   get AFK_MODEL_SMALL_API_KEY(): string | undefined { return process.env['AFK_MODEL_SMALL_API_KEY']; },
   get AFK_MODEL_SMALL_BASE_URL(): string | undefined { return process.env['AFK_MODEL_SMALL_BASE_URL']; },
   get AFK_VISION_MODELS(): string | undefined { return process.env['AFK_VISION_MODELS']; },
+  get AFK_OVERLOAD_PAUSE_MS(): string | undefined { return process.env['AFK_OVERLOAD_PAUSE_MS']; },
   get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
@@ -1525,6 +1573,9 @@ export const env = {
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
   get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
+
+  // Web egress
+  get AFK_WEB_ALLOW_PRIVATE_HOSTS(): string | undefined { return process.env['AFK_WEB_ALLOW_PRIVATE_HOSTS']; },
 
   // CLI / capture-mode
   get AFK_DEMO_CLEAN(): string | undefined { return process.env['AFK_DEMO_CLEAN']; },

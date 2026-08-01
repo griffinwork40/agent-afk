@@ -134,9 +134,12 @@ export function formatEnvironmentFragment(args: {
   // (relative-date math, "latest"/"recent" reasoning, weekday-gated skills,
   // log interpretation). Date granularity (not clock time) keeps this block
   // stable across turns within a session, so the cached system-prompt
-  // breakpoint is not busted per turn (the block is built once per provider
-  // query()). `now`/`timeZone` are injectable for deterministic tests.
-  lines.push(`- Date: ${formatDateLine(args.now ?? new Date(), args.timeZone)}`);
+  // breakpoint is not busted per turn. The block is built once per provider
+  // query(), which alone would freeze the date for the life of a resident
+  // session; `query/date-rollover.ts` re-renders this one line when the local
+  // day actually changes, preserving the per-turn stability that motivates the
+  // date granularity. `now`/`timeZone` are injectable for deterministic tests.
+  lines.push(`- Date: ${formatEnvironmentDateLine(args.now ?? new Date(), args.timeZone)}`);
 
   const idShort =
     typeof args.sessionId === 'string' && args.sessionId.length > 0
@@ -197,8 +200,13 @@ export function formatEnvironmentFragment(args: {
  * try/catch because this runs inside system-prompt assembly on every query:
  * an invalid `timeZone` (only reachable via a bad caller-supplied value) must
  * never throw and abort the request — it falls back to a UTC ISO date.
+ *
+ * Exported so `query/date-rollover.ts` re-renders the line through the SAME
+ * formatter that produced it. Two renderers would drift, and a drifted render
+ * would look like a date rollover on every turn — busting the prompt cache
+ * continuously instead of once per midnight.
  */
-function formatDateLine(now: Date, timeZone?: string): string {
+export function formatEnvironmentDateLine(now: Date, timeZone?: string): string {
   try {
     const tz = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
     const parts = new Intl.DateTimeFormat('en-CA', {

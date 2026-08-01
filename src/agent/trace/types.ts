@@ -687,6 +687,15 @@ export type SessionPhaseName =
   // turns and on a session `close()` (only a user/turn interrupt qualifies).
   | 'interrupt_halt'
   | 'rate_limit'
+  // Client-side time-to-first-byte watchdog re-drive: OUR timer fired because no
+  // content token arrived within `AFK_MODEL_TTFB_TIMEOUT_MS` (default 180s), so
+  // the request was aborted and re-driven once. Deliberately NOT `rate_limit`:
+  // nothing throttled us and there is no server retry-after — conflating the two
+  // made a self-inflicted 3-minute stall read as provider throttling in every
+  // trace (5 such stalls in one `/ground-state` pre-flight were misattributed
+  // this way). `durationMs` is the dead wait before the abort; metadata keeps
+  // `reason: 'ttfb-timeout'` so pre-split analyses still match.
+  | 'ttfb_timeout'
   // OAuth subscription usage-limit park/unpark. Unlike `rate_limit` (a short,
   // bounded retry-after backoff), these bracket a potentially multi-HOUR pause
   // while the turn waits for the subscription window to reset (or a keychain
@@ -695,13 +704,41 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
-  // Progress-aware idle watchdog fired on a forked sub-agent turn: the child
-  // produced no observable OutputEvent for the idle window and its controller
-  // was aborted (see subagent/idle-watchdog.ts). A single event (no paired
-  // start); carries `idleTimeoutMs`, `elapsedSinceLastProgressMs`, and
-  // `lastEventType` in `metadata`. Distinct from `rate_limit`/`usage_limit_*`,
-  // which mark LEGITIMATE waits — this marks an unexplained stall that fired.
+  // Mid-stream overload (529) exhaustion park/unpark (#762). Distinct from
+  // `usage_limit_pause` — that brackets an OAuth subscription window with an
+  // authoritative reset deadline; a 529 carries NO reset timestamp, so this pair
+  // brackets a bounded PLAIN WALL-CLOCK park that re-probes upstream capacity on
+  // a jittered interval. `overload_resume` carries the parked `durationMs`.
+  // Emitted as a pair, but a pause may end without a resume (ceiling reached,
+  // abort, or the pause disabled for the surface) — a lone `overload_pause` is
+  // expected, and is always followed by a real `closure`.
+  | 'overload_pause'
+  | 'overload_resume'
+  // A progress-aware watchdog fired on unexplained silence. Two sources, told
+  // apart by `metadata.source`:
+  //   - absent → a forked sub-agent turn: the child produced no observable
+  //     OutputEvent for the idle window and its controller was aborted (see
+  //     subagent/idle-watchdog.ts). Carries `idleTimeoutMs`,
+  //     `elapsedSinceLastProgressMs`, and `lastEventType`.
+  //   - `'model-stream'` → a provider stream that had ALREADY produced a first
+  //     content token then went silent for the whole stall window, so the round
+  //     was aborted instead of hanging (see providers/shared/stream-stall-timeout.ts,
+  //     issue #762). Carries `stallTimeoutMs` + `elapsedSinceLastProgressMs`.
+  // A single event either way (no paired start). Distinct from
+  // `rate_limit`/`usage_limit_*`, which mark LEGITIMATE waits — this marks an
+  // unexplained stall that fired.
   | 'idle_watchdog_fired'
+  // A forked sub-agent turn's wall-clock ceiling granted a bounded extension
+  // because the provider reported being parked (`paused` w/ resetsAt or
+  // `rate_limit` w/ retryAfterMs). See subagent/pause-ceiling.ts. A single event
+  // per grant (no paired start), emitted fire-and-forget from the handle when
+  // `PauseAwareCeiling.onDeadline()` returns a positive grant. Carries, in
+  // `metadata`, the `subagentId`, `grantMs`, `totalGrantedMs`, `remainingCapMs`,
+  // `grantCount`, and (when known) the `pauseDescription`. PURE OBSERVABILITY:
+  // without it, a pause-driven extension is invisible until the eventual
+  // terminal timeout error — reconstructing "the child got N extensions
+  // totaling Xms across this park" required the error string alone.
+  | 'pause_extension_granted'
   // OBSERVE-ONLY loop telemetry (see tools/suspected-loop-detector.ts): a
   // FORKED sub-agent issued the same (tool, normalized-args) fingerprint
   // >= N times within the last M tool rounds on one dispatcher (per-turn).

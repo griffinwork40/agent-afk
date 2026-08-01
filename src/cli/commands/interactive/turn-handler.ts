@@ -13,6 +13,9 @@ import { usageLimitBox } from '../../render.js';
 import { runPicker } from '../../render/picker.js';
 import { classifyError, presentError } from '../../errors/index.js';
 import { contextLimitFor } from '../../model-limits.js';
+import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
+import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { formatQuotaUsage } from '../../quota-footer.js';
 import {
   contextRatio,
   type CompletionWriter,
@@ -29,9 +32,10 @@ import {
 } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
+import { joinAtRoundSeam } from './turn-text-seam.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
-import { loadTelegramConfig } from '../../config.js';
+import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -79,6 +83,11 @@ export async function runTurn(
   // the duplicated partial text. Prior rounds (before the checkpoint) are
   // untouched — the retry is per-round, not per-turn.
   let roundStartResponseLen = 0;
+  // Set when a tool_result closes a round, consumed by the next content chunk:
+  // that chunk opens a NEW assistant text block, so it joins across a round
+  // seam (paragraph break) rather than concatenating verbatim like an
+  // intra-round delta. See {@link joinAtRoundSeam}.
+  let pendingRoundSeam = false;
   let streamingStarted = false;
   let streamErrorRendered = false;
   let rendererDisposed = false;
@@ -396,7 +405,10 @@ export async function runTurn(
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'content') {
-          responseText += event.chunk.content;
+          responseText = pendingRoundSeam
+            ? joinAtRoundSeam(responseText, event.chunk.content)
+            : responseText + event.chunk.content;
+          pendingRoundSeam = false;
           streamingStarted = true;
         } else if (event.type === 'message' && !streamingStarted) {
           responseText = event.message.content;
@@ -409,6 +421,10 @@ export async function runTurn(
           // renderer.process(event) below, which resets the live display via
           // handleOrchestratorEvent's `stream_retry` case.
           responseText = responseText.slice(0, roundStartResponseLen);
+          // Truncating back to the round checkpoint also removes the seam break
+          // this round's first chunk inserted, so re-arm it: the re-streamed
+          // round is still a new text block after the prior round's text.
+          pendingRoundSeam = responseText.length > 0;
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
@@ -421,6 +437,9 @@ export async function runTurn(
           // Round boundary: the next round's text appends after this point.
           // Checkpoint so a `stream_retry` truncates back to here, not to 0.
           roundStartResponseLen = responseText.length;
+          // This tool_result closes a round: the next content chunk starts a new
+          // assistant text block and must join across the seam, not fuse.
+          pendingRoundSeam = true;
           const pending = pendingTools.get(c.toolUseId);
           if (pending) {
             pending.result = c.content;
@@ -583,6 +602,7 @@ export async function runTurn(
           // above the freshly-armed overlay, not the disposed one.
           responseText = '';
           roundStartResponseLen = 0;
+          pendingRoundSeam = false;
           streamingStarted = false;
           toolEvents.length = 0;
           pendingTools.clear();
@@ -937,6 +957,28 @@ export function printTurnFooter(
           ? palette.warning
           : palette.dim;
     write(colorFn(usage.text));
+  }
+  // Subscription quota, same cadence and tone mapping as the context line above.
+  // Ordered AFTER it deliberately: context is the constraint on THIS turn, quota
+  // is the constraint on the next hour — nearest deadline reads first. Silent
+  // below 80% (the status-line indicator covers that range ambiently) and silent
+  // forever under API-key auth, where the quota headers never arrive.
+  // The park-and-resume promise is conditional on the real retry configuration
+  // (see capNote, quota-footer.ts), so the flag is read rather than assumed.
+  // Via the memoized-tier resolver, NOT loadConfig(): the latter re-installs
+  // process-global slot bindings on every call, disqualifying it for a
+  // per-turn display read.
+  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
+    autoResume: resolveAutoResumeOnUsageLimit(),
+  });
+  if (quota.text !== null) {
+    const quotaColorFn =
+      quota.tier === 'over' || quota.tier === 'near'
+        ? palette.error
+        : quota.tier === 'caution'
+          ? palette.warning
+          : palette.dim;
+    write(quotaColorFn(quota.text));
   }
   write('');
 }

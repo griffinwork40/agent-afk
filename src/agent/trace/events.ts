@@ -408,9 +408,21 @@ export const SessionPhaseNameSchema = z.enum([
   // JSDoc in types.ts — carries the ESC→terminal wall-clock in durationMs.
   'interrupt_halt',
   'rate_limit',
+  // Client-side TTFB watchdog re-drive — distinct from `rate_limit` (no server
+  // throttle, no retry-after). See SessionPhaseName JSDoc in types.ts.
+  'ttfb_timeout',
   'usage_limit_pause',
   'usage_limit_resume',
+  // Mid-stream overload (529) exhaustion park/unpark. See SessionPhaseName
+  // JSDoc in types.ts — wall-clock bounded, no reset deadline to key on.
+  'overload_pause',
+  'overload_resume',
   'idle_watchdog_fired',
+  // A fork's wall-clock ceiling granted a bounded pause extension (see
+  // subagent/pause-ceiling.ts). Single event per grant; metadata carries
+  // subagentId, grantMs, totalGrantedMs, remainingCapMs, grantCount, and
+  // optionally pauseDescription.
+  'pause_extension_granted',
   'suspected_loop',
   // Per-session compaction disable (single event, at most once). See
   // SessionPhaseName JSDoc in types.ts — metadata names the wire and cause.

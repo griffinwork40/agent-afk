@@ -12,6 +12,7 @@ import {
   getModelId,
   _resetConfigCache,
   resolveCliPermissionMode,
+  resolveAutoResumeOnUsageLimit,
   DEFAULT_CLI_PERMISSION_MODE,
 } from './config.js';
 import {
@@ -1249,5 +1250,15 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     _resetConfigCache();
     mockConfig({ permissionMode: 'plan' });
     expect(resolveCliPermissionMode()).toBe('plan');
+  });
+
+  it('preserves autoResumeOnUsageLimit for both display and provider configuration', () => {
+    mockConfig({});
+    expect(resolveAutoResumeOnUsageLimit()).toBe(true);
+    expect(loadConfig().autoResumeOnUsageLimit).toBeUndefined();
+    _resetConfigCache();
+    mockConfig({ autoResumeOnUsageLimit: false });
+    expect(resolveAutoResumeOnUsageLimit()).toBe(false);
+    expect(loadConfig().autoResumeOnUsageLimit).toBe(false);
   });
 });

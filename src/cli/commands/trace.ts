@@ -457,6 +457,18 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const head = reason !== undefined ? String(reason) : 'throttled';
         return line('throttle', `${head}${statusBit}${wait}${srcBit}`);
       }
+      // `ttfb_timeout` is HIGH-signal for the same reason as `rate_limit` — it
+      // explains a multi-minute gap — but it is OUR watchdog, not a throttle:
+      // `durationMs` is dead wait we chose to spend, not a server retry-after.
+      // Rendered in the DEFAULT view with its own label so the two stop being
+      // read as one thing.
+      if (p.phase === 'ttfb_timeout') {
+        const src = p.metadata?.['source'];
+        const srcBit = src !== undefined ? `  (${String(src)})` : '';
+        const waited =
+          p.durationMs !== undefined ? ` after ${fmtDuration(p.durationMs)}` : '';
+        return line('ttfb-stall', `no first token${waited} — request re-driven once${srcBit}`);
+      }
       // Usage-limit park/unpark is the highest-signal stall of all — a
       // multi-hour subscription pause, not a per-minute backoff. Render in the
       // DEFAULT view (before the showAll gate) so the trace explains the gap.
@@ -471,6 +483,26 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const parked = p.durationMs !== undefined ? `  parked ${fmtDuration(p.durationMs)}` : '';
         const hotSwap = md['hotSwapped'] === true ? '  (hot-swap)' : '';
         return line('resumed', `usage-limit${parked}${hotSwap}`);
+      }
+      // Overload park/unpark (#762) is the same class of gap as the usage-limit
+      // park above — up to a 10-minute silence with no other trace signal — so it
+      // renders in the DEFAULT view too. A 529 carries no reset timestamp, so the
+      // ceiling is what bounds it; show that instead of a deadline.
+      if (p.phase === 'overload_pause') {
+        const md = p.metadata ?? {};
+        const ceiling = md['ceilingMs'];
+        const ceilBit =
+          typeof ceiling === 'number' ? `  ceiling ${fmtDuration(ceiling)}` : '  no ceiling';
+        const surface = md['surface'];
+        const surfaceBit = surface !== undefined ? `  ${String(surface)}` : '';
+        return line('paused', `overloaded (529)${ceilBit}${surfaceBit}`);
+      }
+      if (p.phase === 'overload_resume') {
+        const md = p.metadata ?? {};
+        const parked = p.durationMs !== undefined ? `  parked ${fmtDuration(p.durationMs)}` : '';
+        const outcome = md['outcome'];
+        const outcomeBit = outcome !== undefined ? `  ${String(outcome)}` : '';
+        return line('resumed', `overloaded${parked}${outcomeBit}`);
       }
       // A per-session compaction disable is high-signal for the same reason as
       // the stalls above: it explains an otherwise-invisible future failure (the
@@ -525,6 +557,8 @@ interface TraceSummary {
   blocks: number;
   /** Count of rate_limit events (429/503/529 backoff). */
   throttles: number;
+  /** Count of ttfb_timeout events (our client-side watchdog re-drove a stalled request). */
+  ttfbStalls: number;
   sealStatus: string | null;
   finalCostUsd: number | null;
   /** Operator-typed model for the root session (from session_init_start). */
@@ -540,6 +574,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let claims = 0;
   let blocks = 0;
   let throttles = 0;
+  let ttfbStalls = 0;
   let sealStatus: string | null = null;
   let finalCostUsd: number | null = null;
   let model: string | null = null;
@@ -555,6 +590,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
         break;
       case 'session_phase':
         if (e.payload.phase === 'rate_limit') throttles++;
+        if (e.payload.phase === 'ttfb_timeout') ttfbStalls++;
         // Root-session model provenance lives on session_init_start (the
         // earliest, always-emitted phase). First occurrence wins.
         if (e.payload.phase === 'session_init_start') {
@@ -593,6 +629,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
     claims,
     blocks,
     throttles,
+    ttfbStalls,
     sealStatus,
     finalCostUsd,
     model,
@@ -637,6 +674,9 @@ export function formatTrace(
       : 'unsealed (live or crashed)';
   const costPart = summary.finalCostUsd !== null ? ` · ${fmtUsd(summary.finalCostUsd)}` : '';
   const throttlePart = summary.throttles > 0 ? ` · ${summary.throttles} throttled` : '';
+  // Surfaced separately from `throttled`: a ttfb stall is dead wall-clock our own
+  // watchdog spent, and folding it into the throttle count is what hid it.
+  const ttfbPart = summary.ttfbStalls > 0 ? ` · ${summary.ttfbStalls} ttfb-stall` : '';
 
   const out: string[] = [];
   out.push(`Trace  ${sessionId}`);
@@ -651,7 +691,7 @@ export function formatTrace(
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
-      ` · ${summary.blocks} blocks${throttlePart}${costPart}`,
+      ` · ${summary.blocks} blocks${throttlePart}${ttfbPart}${costPart}`,
   );
   out.push('');
 

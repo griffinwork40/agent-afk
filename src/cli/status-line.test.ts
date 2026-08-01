@@ -728,10 +728,19 @@ describe('StatusLine with git branch + PR field', () => {
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start();
     stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', quota: '5h 62% · 7d 31%' });
+    status.repaint({
+      model: 'sonnet',
+      quotaWindows: {
+        fiveHour: { utilization: 0.62 },
+        sevenDay: { utilization: 0.31 },
+        observedAt: new Date(),
+      },
+    });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
-    expect(out).toContain('5h 62%');
-    expect(out).toContain('7d 31%');
+    expect(out).toContain('5h');
+    expect(out).toContain('62%');
+    expect(out).toContain('7d');
+    expect(out).toContain('31%');
     status.stop();
   });
 
@@ -750,7 +759,7 @@ describe('StatusLine with git branch + PR field', () => {
     status.stop();
   });
 
-  it('drops quota BEFORE the token count, and dropping quota does not also drop tokens', () => {
+  it('drops a calm quota BEFORE the token count, and dropping it does not also drop tokens', () => {
     // Regression guard for the droppablePriority allocation. The shed loop
     // removes EVERY part sharing the current maximum priority in one pass, so if
     // quota were given tokens' priority 4 instead of its own 5, both would vanish
@@ -759,10 +768,68 @@ describe('StatusLine with git branch + PR field', () => {
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start();
     stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', cost: 0.05, tokens: 1200, quota: '5h 62% · 7d 31%' });
+    status.repaint({
+      model: 'sonnet',
+      cost: 0.05,
+      tokens: 1200,
+      quotaWindows: {
+        fiveHour: { utilization: 0.42 },
+        sevenDay: { utilization: 0.31 },
+        observedAt: new Date(),
+      },
+    });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
-    expect(out).not.toContain('5h 62%'); // quota (priority 5) shed first
+    expect(out).not.toContain('42%'); // calm quota (priority 5) shed first
     expect(out).toContain('tok'); // tokens (priority 4) survived that step
+    status.stop();
+  });
+
+  it('keeps a CRITICAL quota on a narrow terminal, shedding tokens/cost/branch instead', () => {
+    // Severity-inverted droppability: at >80% the quota is the most consequential
+    // field on the row, so it must outlast every other droppable rather than
+    // being shed first as the calm case above is.
+    stream.columns = 40;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      branch: 'feat/x',
+      cost: 0.05,
+      tokens: 1200,
+      quotaWindows: {
+        fiveHour: { utilization: 0.94 },
+        sevenDay: { utilization: 0.24 },
+        observedAt: new Date(),
+      },
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('94%'); // critical quota survives
+    expect(out).not.toContain('tok'); // tokens shed
+    expect(out).toContain('sonnet'); // model still never-drop
+    status.stop();
+  });
+
+  it('does NOT promote a STALE critical quota above the identity fields', () => {
+    // A 40-minute-old 94% may already have drained (rolling window), so it keeps
+    // the peripheral priority instead of out-ranking the branch on an old number.
+    stream.columns = 40;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cost: 0.05,
+      tokens: 1200,
+      quotaWindows: {
+        fiveHour: { utilization: 0.94 },
+        sevenDay: { utilization: 0.24 },
+        observedAt: new Date(Date.now() - 40 * 60 * 1000),
+      },
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('94%'); // stale critical shed first, like a calm one
+    expect(out).toContain('tok');
     status.stop();
   });
 
@@ -1171,5 +1238,65 @@ describe('StatusLine — AFK_PLAIN_OUTPUT full render opt-out', () => {
     status.start();
     expect(lastJoined(nonTty)).toContain('\x1b[1;23r');
     status.stop();
+  });
+});
+
+describe('StatusLine clock ticker', () => {
+  let stream: MockStream;
+
+  beforeEach(() => {
+    stream = mockStream();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('arms no recurring timer by default', () => {
+    // The house rule the compositor states for caret blink: construction must
+    // stay free of an auto-started ticker, enablement is resolved caller-side.
+    vi.useFakeTimers();
+    const before = vi.getTimerCount();
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    expect(vi.getTimerCount()).toBe(before);
+    status.stop();
+  });
+
+  it('arms no ticker on a disabled (non-TTY) line', () => {
+    vi.useFakeTimers();
+    const dead = mockStream({ isTTY: false });
+    const before = vi.getTimerCount();
+    const status = new StatusLine({
+      stream: dead as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+      tickMs: 30_000,
+    });
+    status.start();
+    expect(vi.getTimerCount()).toBe(before);
+    status.stop();
+  });
+
+  it('re-paints on tick so clock-derived content recomputes, and stops at stop()', () => {
+    // Regression guard for the frozen quota countdown: the row renders a reset
+    // countdown and a `~` staleness marker against the paint-time clock, and
+    // every OTHER repaint here is event-driven — an idle session fires none of
+    // them, so without this ticker the countdown sat frozen indefinitely.
+    vi.useFakeTimers();
+    const status = new StatusLine({
+      stream: stream as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+      tickMs: 30_000,
+    });
+    status.start();
+    status.repaint({ model: 'sonnet' });
+    stream.writes.length = 0;
+
+    vi.advanceTimersByTime(30_000);
+    expect(stream.writes.length).toBeGreaterThan(0);
+
+    status.stop();
+    stream.writes.length = 0;
+    vi.advanceTimersByTime(120_000);
+    expect(stream.writes.length).toBe(0);
   });
 });
