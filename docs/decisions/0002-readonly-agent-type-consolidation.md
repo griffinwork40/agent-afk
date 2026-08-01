@@ -286,11 +286,15 @@ Ordered:
    - **It does not remove the duplication, it relocates it.** The publish-build
      prompt inliner (`scripts/esbuild-plugin-inline-prompts.mjs`) resolves only
      `readFileSync(join(__dirname, <string literals>), 'utf8')` — a
-     parameterized helper, the natural shape of the rewrite, silently stops
-     inlining and ships a bundle that reads a missing file. The failure passes
-     `lint`, `test`, and `build`, and surfaces only in the published npm
-     artifact. Keeping the bundler working requires one hardcoded literal read
-     per agent, which is structurally what the wrapper files already are.
+     parameterized helper, the natural shape of the rewrite, stops inlining. At
+     the time of the pass that was silent — it shipped a bundle reading a missing
+     file, past `lint`, `test`, and `build`.
+     [#816](https://github.com/griffinwork40/agent-afk/pull/816) has since made it
+     **fail `build:dist`** instead (the gap was
+     [#776](https://github.com/griffinwork40/agent-afk/issues/776), filed off the
+     pass). Either way, keeping the bundler working requires one hardcoded literal
+     read per agent, which is structurally what the wrapper files already are —
+     and that requirement is now build-enforced rather than conventional.
    - **`audit-fit` was the wrong reason to defer.** Telemetry shows one
      lifetime invocation (2026-05-03, 0 misfits found). It was the weakest item
      in the map; the real risks are the publish bundle, the eight bundled

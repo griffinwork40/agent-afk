@@ -43,6 +43,32 @@ The reasons item 2 actually warrants care — the `build:dist` bundle-orphan ris
 decision (C2) — are all ones the ADR never named. Item 2 was deferred for
 substantially the wrong reason.
 
+### Addendum, 2026-08-01 — the bundler trap this pass found is now fixed, and C3 hardens
+
+C3 below originally described the prompt inliner's parameterization sensitivity
+as a **silent** failure: an unresolvable path left the call untouched, `build:dist`
+**succeeded**, and the published bundle read a `.md` absent from the package. That
+was accurate at the target ref. It is **no longer accurate on `main`.**
+
+Filed off this pass as
+[#776](https://github.com/griffinwork40/agent-afk/issues/776) and fixed by
+[#816](https://github.com/griffinwork40/agent-afk/pull/816) (`548029c2`,
+2026-07-31), the resolver's `null` branch now **throws** for any prompt-*shaped*
+read it cannot resolve, naming the file and line
+([`:234-251`](../../scripts/esbuild-plugin-inline-prompts.mjs)). The file-level
+gate also accepts a backtick now, which is what actually made the trap reachable
+at all — a parameterized path ends in a template literal, so the old `/\.md['"]/`
+filter skipped the entire file and the resolver never ran.
+
+**This does not weaken C3 — it hardens it.** The string-literal requirement is
+unchanged (`:130-133`); only the failure mode moved, from silent-and-shipped to
+loud-at-build-time. So *"the replacement must hardcode one literal read per
+agent"* is now **mechanically enforced** rather than merely conventional, and the
+consequence C3 draws — that item 2 *relocates* the per-agent duplication instead
+of removing it — now rests on a build-time gate rather than on reviewer
+vigilance. The verdict is unchanged. C3's prose, the recommendation, and
+constraint 1 are corrected in place below.
+
 ---
 
 ## Verdict
@@ -55,9 +81,10 @@ The verdict moved twice as evidence came in, so the final position is stated
 first and the derivation follows: the wrapper layer is **smaller and more
 load-bearing** than ADR 0002 assumes. Deleting it relocates the duplication
 rather than removing it (C3), reverses three documented decisions (C1, C2, C4),
-and trades a typed dependency for an invisible coupling to a build-script regex.
-Its one genuine benefit — F4, `KNOWN_AFK_TOOL_NAMES` 3 → 2 — is separable and
-achievable without touching the wrappers at all.
+and trades a typed dependency for an untyped coupling to a build-script regex
+that only `build:dist` can see. Its one genuine benefit — F4,
+`KNOWN_AFK_TOOL_NAMES` 3 → 2 — is separable and achievable without touching the
+wrappers at all.
 
 The distinction is the whole finding, so it is stated precisely:
 
@@ -68,7 +95,7 @@ The pinned frontmatter carries exactly three keys (`name`, `description`,
 `tools`; [`research-agent.md:2-4`](../../src/skills/_agents/prompts/research-agent.md),
 [`git-investigator.md:2-4`](../../src/skills/_agents/prompts/git-investigator.md)),
 while today's definitions carry three more, and the SHA-256 byte-pin the ADR
-explicitly says to keep (line 293) forbids adding them.
+explicitly says to keep (*"Keep the SHA-256 byte-pin"*) forbids adding them.
 
 But **two of those three fields already live in `builtins.ts` as literals, not
 in the wrapper** — so they do not need frontmatter at all. They simply stay put.
@@ -120,8 +147,10 @@ measurement errors), the code wins.
 
 ### C1 — As the ADR scopes it, item 2 does **not** dissolve F4. Copies go 3 → 3.
 
-The ADR justifies item 2 as *"Dissolves F4 instead of violating it"* (line 271).
-It does not, as scoped. All three copies verified:
+The ADR justified item 2 as *"Dissolves F4 instead of violating it"* — the
+wording at `a25984a`, the ref this pass reviewed; the rejection commit that
+accompanies this document removes that sentence, so it is quoted here rather
+than line-cited. It does not dissolve F4, as scoped. All three copies verified:
 
 1. [`to-definition.ts:14-20`](../../src/skills/_agents/to-definition.ts)
 2. [`resolve.ts:43-49`](../../src/agent/agents/resolve.ts)
@@ -173,10 +202,11 @@ silently.
   prompts dir would break it (`readFileSync` throws at `:151`).
 - [`scripts/esbuild-plugin-inline-prompts.mjs`](../../scripts/esbuild-plugin-inline-prompts.mjs) —
   **`pnpm build:dist` still passes, but Pattern A becomes dead code, and this is
-  the real constraint on the implementation.** Pattern A (`:172-224`) exists
+  the real constraint on the implementation.** Pattern A (`:184-260`) exists
   specifically to rewrite the wrappers' `readFileSync(join(__dirname,
-  '<literal>.md'), 'utf8')` shape (`:112`), and those three wrappers are the only
-  production files using it. Pattern B (`buildPromptTable`, `:57-88`) skips
+  '<literal>.md'), 'utf8')` shape (scanned at `:207`, resolved at `:123-124`),
+  and those three wrappers are the only production files using it.
+  Pattern B (`buildPromptTable`, `:57-88`) skips
   `_`-prefixed directories (`:62`), so `_agents/prompts/` **never** enters the
   lookup table.
 
@@ -185,35 +215,41 @@ silently.
   inlines them, and the runtime `readFileSync` that used to reach them is gone.
 
   **And the constraint is sharper than "keep the same shape" — it is
-  parameterization-sensitivity.** `tryResolveReadFileSyncPath` (`:110-129`)
+  parameterization-sensitivity.** `tryResolveReadFileSyncPath` (`:122-141`)
   requires every argument after `__dirname`/`here` to be a **string literal**:
-  each part must match `^['"](.+)['"]$`, and the transform is skipped unless
-  `parts.every(p => p !== null)` (`:120`). Whitespace and newlines are tolerated
-  (`\s*` throughout `:112`), so formatting is safe — but a variable, a constant,
-  or a template literal is not.
+  each part must match `^['"](.+)['"]$` (`:130`), and the transform is skipped
+  unless `parts.every(p => p !== null)` (`:133`). Whitespace and newlines are
+  tolerated (`\s*` throughout the pattern), so formatting is safe — but a
+  variable, a constant, or a template literal is not.
 
   This is a trap, because the natural shape of "construct both builtins from
   markdown" is a parameterized helper:
 
   ```ts
-  // Looks obviously correct. Silently breaks the published bundle.
+  // Looks obviously correct. Inlines nothing.
   const loadVendored = (name: string) =>
     readFileSync(join(__dirname, '../../skills/_agents/prompts', `${name}.md`), 'utf8');
   ```
 
-  That yields a `null` part, no match, no inlining, and a published artifact
-  that reads a file which was never shipped. To keep Pattern A working, the
-  replacement must hardcode **one literal read per agent** — which is
-  structurally what the wrapper files already are.
+  That yields a `null` part and no inlining. **Since
+  [#816](https://github.com/griffinwork40/agent-afk/pull/816) this fails
+  `build:dist` loudly** — the resolver throws on any prompt-shaped read it cannot
+  resolve, naming the file and line (`:234-251`). At the time of this pass it was
+  silent: the call was left as-is, the build succeeded, and the published artifact
+  read a file that was never shipped (that gap is
+  [#776](https://github.com/griffinwork40/agent-afk/issues/776), filed off this
+  audit). The requirement is identical either way — to keep Pattern A working the
+  replacement must hardcode **one literal read per agent**, which is structurally
+  what the wrapper files already are.
 
   **Consequence for the whole refactor:** Stage 1 does not eliminate the
   per-agent duplication, it *relocates* it into `builtins.ts` in a form that
   must stay hardcoded-per-agent to keep the bundler working. The wrapper layer
   is not purely redundant scaffolding — it is, in part, the stable home for a
-  bundler-coupled literal read. `pnpm build` (non-dist) is unaffected —
-  `copy-prompts.js:17-32` copies all `src` `.md` unconditionally — so **this
-  failure is invisible to the default build and would only surface in the
-  published npm artifact.**
+  bundler-coupled literal read. `pnpm build` (non-dist) still cannot observe this
+  — `copy-prompts.js:17-32` copies all `src` `.md` unconditionally, masking it —
+  so **`build:dist` is the only gate that sees the constraint, and post-#816 it
+  enforces it rather than shipping past it.**
 
 ### C4 — Item 2 reverses commit `a34216f` (#625), which is 2 weeks old
 
@@ -420,15 +456,17 @@ C4's third reversal were established. What Stage 1 actually buys, net:
 - it **relocates** the per-agent duplication into `builtins.ts` rather than
   removing it (C3 — the bundler needs one literal read per agent);
 - it converts a **typed, type-checked** dependency into an **untyped coupling to
-  a build-script regex**, whose failure mode is invisible to `pnpm lint`,
-  `pnpm test`, and `pnpm build`, and surfaces only in the published npm artifact;
+  a build-script regex** — one that `pnpm lint`, `pnpm test`, and `pnpm build`
+  still cannot see, and that only `build:dist` gates (post-#816 it fails the
+  build rather than shipping past it, so the coupling is enforced but not typed);
 - it reverses three documented decisions (C1, C2, C4);
 - its headline benefit (F4, 3 → 2) comes from the `audit-fit` migration, which
   is separable and can be taken **without** deleting the wrappers.
 
 The honest summary: the wrapper layer is smaller and more load-bearing than ADR
-0002 assumes, and deleting it trades a visible duplication for an invisible one.
-**Take the F4 win separately (Stage 2′ below) and leave the wrappers alone.**
+0002 assumes, and deleting it trades a duplication the type checker can see for
+one only the bundler can. **Take the F4 win separately (Stage 2′ below) and leave
+the wrappers alone.**
 
 If it is implemented anyway, the steps and constraints are below and all six are
 load-bearing. In `builtins.ts`, source `name`,
@@ -439,9 +477,10 @@ load-bearing. In `builtins.ts`, source `name`,
 Constraints, all load-bearing:
 
 1. **Preserve the `readFileSync(join(__dirname, '<literal>.md'), 'utf8')`
-   syntactic shape** at the new read site, or `build:dist` ships a bundle that
-   reads a missing file (C3). Verify with `pnpm build:dist` plus an actual
-   run of the published entry point — **not** `pnpm build`, which masks it.
+   syntactic shape** at the new read site (C3). Post-#816 a parameterized read
+   **fails `build:dist`** with a message naming the file and line, so this
+   constraint is self-enforcing — but only under `build:dist`; `pnpm build` still
+   masks it, so do not read a green `pnpm build` as clearance.
 2. Do **not** touch the prompt `.md` files. Adding frontmatter breaks pins
    `80993a5f…` / `d1f186b8…` (`vendored.test.ts:13,15`).
 3. Reduce `vendored.test.ts` to the byte-equal snapshot block (`:34-52`) and
