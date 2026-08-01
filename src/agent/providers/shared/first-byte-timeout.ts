@@ -55,6 +55,80 @@ export function resolveTtfbTimeoutMs(): number {
 /** Marker error thrown/attached when a request is aborted for a TTFB stall. */
 export const TTFB_TIMEOUT_MESSAGE = 'model_ttfb_timeout';
 
+/**
+ * Slack added to a provider-communicated throttle window before the TTFB
+ * deadline is pushed out. Guards against the deadline firing the instant the
+ * provider says it will resume — the resumed request still needs a moment to
+ * reach its first token. 30s, deliberately the same value as
+ * `PAUSE_WINDOW_SLACK_MS` in `subagent/pause-window.ts`, which solves the
+ * identical problem for the forked-subagent idle watchdog. Not imported from
+ * there: `providers/` must not depend on `subagent/`.
+ */
+export const TTFB_THROTTLE_SLACK_MS = 30_000;
+
+/**
+ * Invariant: the SDK honors a `retry-after` hint ONLY when
+ * `0 <= ms < 60_000`; at or above that it discards the hint entirely.
+ * `@anthropic-ai/sdk` 0.74.0 `client.js:412`:
+ *
+ *     if (!(timeoutMillis && 0 <= timeoutMillis && timeoutMillis < 60 * 1000)) {
+ *         timeoutMillis = this.calculateDefaultRetryTimeoutMillis(...);
+ *     }
+ *
+ * Pinned to the locked SDK version. If that guard changes upstream, this
+ * constant and {@link SDK_MAX_DEFAULT_BACKOFF_MS} must be re-derived — the
+ * accompanying tests assert the arithmetic, not the SDK, so they will NOT catch
+ * an upstream drift on their own.
+ */
+export const SDK_HONORED_RETRY_AFTER_CEILING_MS = 60_000;
+
+/**
+ * Ceiling of the SDK's own fallback backoff, used whenever a `retry-after` is
+ * discarded per {@link SDK_HONORED_RETRY_AFTER_CEILING_MS}. `client.js:419-428`
+ * computes `min(0.5 * 2^n, 8.0)` seconds and then applies 0.75–1.0 jitter, so
+ * 8s is the hard maximum. Deliberately the un-jittered ceiling: over-granting by
+ * up to 2s is harmless, while under-granting would reintroduce the false
+ * positive this whole mechanism exists to remove.
+ */
+export const SDK_MAX_DEFAULT_BACKOFF_MS = 8_000;
+
+/**
+ * Contract: the TTFB extension owed for one provider-communicated throttle, or
+ * `undefined` when the provider gave no usable window.
+ *
+ * Mirrors `pauseWindowMs` semantics on purpose: a throttle WITHOUT a knowable
+ * `retry-after` yields `undefined` and the caller keeps its normal bound rather
+ * than extending by a guessed amount. The finiteness guard matters because a
+ * non-finite delay would re-arm a bogus timer (Node clamps it to 1ms with a
+ * TimeoutOverflowWarning), turning an extension into an immediate abort.
+ *
+ * The extension is derived from the wait the SDK will ACTUALLY take, not from
+ * the raw header. Granting the raw value would let a `retry-after: 3600` hint
+ * buy an hour of TTFB grace for a park the SDK caps at ~8s — reinstating the
+ * unbounded post-connect hang that #583/#762 exist to prevent. Because the
+ * honored window is bounded, so is every grant: at most `60s + 30s = 90s` per
+ * throttle.
+ *
+ * Invariant: the per-ROUND ceiling is the product of TWO nested retry layers,
+ * because the bound is armed once per round (`loop/round-request.ts`) and NOT
+ * per attempt. The SDK makes `1 + maxRetries(2) = 3` HTTP attempts per
+ * `messages.create` (`client.js:72`), and `createWithRetry` re-drives a
+ * transient 529/503 up to `OVERLOAD_MAX_RETRIES(3)` more times against the
+ * SAME handle — so up to 12 throttled responses, i.e. ~18min worst case, can
+ * land in one window. A pure 429 storm caps at 3 grants (~270s): our own loop
+ * does not re-drive it (`isTransientServerError` matches 529/503 only). Every
+ * grant still costs the provider a fresh `retry-after`, so the total stays
+ * finite — the watchdog can be deferred, never disabled.
+ */
+export function throttleExtensionMs(retryAfterMs: number | undefined): number | undefined {
+  if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+    return undefined;
+  }
+  const effectiveWaitMs =
+    retryAfterMs < SDK_HONORED_RETRY_AFTER_CEILING_MS ? retryAfterMs : SDK_MAX_DEFAULT_BACKOFF_MS;
+  return effectiveWaitMs + TTFB_THROTTLE_SLACK_MS;
+}
+
 /** Distinguish a TTFB-timeout abort from any other error (e.g. user interrupt). */
 export function isTtfbTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message === TTFB_TIMEOUT_MESSAGE;
@@ -68,6 +142,16 @@ export interface FirstByteTimeoutHandle {
   timedOut(): boolean;
   /** Call on the first streamed event: cancels the timer so the stream is unbounded thereafter. */
   firstByteSeen(): void;
+  /**
+   * Push the deadline out by `ms` because the provider told us it is parked.
+   *
+   * Only EXPLAINED waiting is forgiven: the caller passes a window derived from
+   * a provider-communicated `retry-after` (see {@link throttleExtensionMs}), so
+   * unexplained prefill silence still trips the bound on schedule. No-op once
+   * the timer has fired, been disposed, or when the bound is disabled — so a
+   * late-draining throttle signal can never resurrect a spent timer.
+   */
+  extend(ms: number): void;
   /** Release the timer + listeners. Idempotent; safe to call in a `finally`. */
   dispose(): void;
 }
@@ -92,6 +176,7 @@ export function armFirstByteTimeout(
       signal: baseSignal,
       timedOut: () => false,
       firstByteSeen: () => {},
+      extend: () => {},
       dispose: () => {},
     };
   }
@@ -100,12 +185,20 @@ export function armFirstByteTimeout(
   const linked = AbortSignal.any([baseSignal, controller.signal]);
   let didTimeout = false;
   let disposed = false;
+  // Absolute deadline, tracked separately from the live timer so `extend` adds
+  // to the ORIGINAL budget rather than restarting a full window from now — two
+  // throttles totalling 40s must cost 40s of grace, not two fresh bounds.
+  let deadline = Date.now() + timeoutMs;
+  let timer: ReturnType<typeof setTimeout>;
 
-  const timer = setTimeout(() => {
-    didTimeout = true;
-    controller.abort(new Error(TTFB_TIMEOUT_MESSAGE));
-  }, timeoutMs);
-  timer.unref();
+  const arm = (delayMs: number): void => {
+    timer = setTimeout(() => {
+      didTimeout = true;
+      controller.abort(new Error(TTFB_TIMEOUT_MESSAGE));
+    }, clampTimerDelayMs(delayMs));
+    timer.unref();
+  };
+  arm(timeoutMs);
 
   const dispose = (): void => {
     if (disposed) return;
@@ -113,10 +206,22 @@ export function armFirstByteTimeout(
     clearTimeout(timer);
   };
 
+  const extend = (ms: number): void => {
+    if (disposed || didTimeout) return;
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return;
+    deadline += ms;
+    clearTimeout(timer);
+    // Floor at 1ms: a deadline already in the past (a throttle drained after a
+    // long park) must still re-arm rather than pass a negative delay, which
+    // Node coerces to 1 anyway — being explicit keeps the intent readable.
+    arm(Math.max(1, deadline - Date.now()));
+  };
+
   return {
     signal: linked,
     timedOut: () => didTimeout,
     firstByteSeen: dispose,
+    extend,
     dispose,
   };
 }

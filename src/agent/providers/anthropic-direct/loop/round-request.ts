@@ -24,7 +24,11 @@ import type {
 import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
-import { armFirstByteTimeout, type FirstByteTimeoutHandle } from '../../shared/first-byte-timeout.js';
+import {
+  armFirstByteTimeout,
+  throttleExtensionMs,
+  type FirstByteTimeoutHandle,
+} from '../../shared/first-byte-timeout.js';
 import { armStreamStallWatchdog, type StreamStallHandle } from '../../shared/stream-stall-timeout.js';
 import { jitterBackoff } from '../overload-pause.js';
 import {
@@ -221,6 +225,21 @@ export async function* openRound({
         input.signal,
       ),
       input,
+      // Invariant: the TTFB bound is armed ABOVE this call, so its window spans
+      // connect + every 429/503/529 backoff the SDK sleeps out INSIDE
+      // messages.create + prefill — not prefill alone. Under sustained
+      // throttling the backoff alone can consume most of the default 180s
+      // (throttle-signals.ts documents ~140s for two retries), so the bound
+      // fires on a request that was never given a chance to stream and the
+      // failure is reported as a first-byte stall. Forgive only EXPLAINED
+      // waiting: extend by the provider's own retry-after (plus slack), and
+      // leave the bound untouched when no window was communicated, so
+      // unexplained silence still trips on schedule. Same policy the forked
+      // subagent idle watchdog applies via pause-window.ts.
+      (retryAfterMs) => {
+        const extension = throttleExtensionMs(retryAfterMs);
+        if (extension !== undefined) ttfb.extend(extension);
+      },
     );
     return { kind: 'opened', events, ttfb, stall, requestStartedAt };
   } catch (err) {
