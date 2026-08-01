@@ -172,23 +172,54 @@ export function formatChildActivity(activity: ChildActivity): string {
   return `${activity.label} · ${activity.clause}`;
 }
 
+/** Stats slice the banner reads off a {@link ProgressEvent}. */
+export interface ChildBannerStats {
+  toolUses: number;
+  totalTokens: number;
+  durationMs: number;
+}
+
 /**
- * Banner-slot adapter: resolve the detail clause for a composed overlay, or
- * `undefined` when there is nothing live to report.
+ * Invariant: the banner's stats tail must describe the SAME actor its detail
+ * clause names.
  *
- * Lives here rather than in stream-renderer-orchestrator.ts so that file (already
- * past the 350-line ceiling) gains a call site and no new concern. Tolerates both
- * fields being absent so non-TTY surfaces and existing tests keep their previous
- * behaviour with no ctx changes.
+ * The banner is fed from `lastProgressByTask`, which is parent-scoped and — while
+ * the parent turn is parked awaiting `handle.runToResult` — frozen at the values
+ * it held before the dispatch. Rendering the live child clause next to those
+ * numbers puts two contradictory statements on one row: `pr796-fix · round 34`
+ * beside `7 tool calls · 2m` after twenty-three minutes. That is worse than the
+ * blank slot this feature replaced, because a live-looking clause invites the
+ * operator to trust the counters beside it.
+ *
+ * So when the clause comes from a child, the stats come from the same child's
+ * `SourceState`. `lastToolName` is deliberately dropped rather than inherited:
+ * the parent's last tool is `agent`, and the spinner verb already names the
+ * child's in-flight tool via `work-derived-verb.ts`, so `via <tool>` here would
+ * be either wrong or redundant.
+ *
+ * Returns `undefined` when no child is worth naming, so the caller keeps the
+ * parent's own event untouched.
  */
-export function deriveChildActivity(
+export function deriveChildBanner(
   ctx: {
     sources?: ReadonlyMap<string, SourceState>;
     childActivity?: ChildActivityTracker;
   },
   now: number = Date.now(),
-): string | undefined {
+): { activity: string; stats: ChildBannerStats } | undefined {
   if (!ctx.sources || !ctx.childActivity) return undefined;
-  const activity = ctx.childActivity.select(ctx.sources, now);
-  return activity ? formatChildActivity(activity) : undefined;
+  const picked = ctx.childActivity.select(ctx.sources, now);
+  if (!picked) return undefined;
+  const source = ctx.sources.get(picked.sourceId);
+  if (!source) return undefined;
+  return {
+    activity: formatChildActivity(picked),
+    stats: {
+      toolUses: source.stats.toolUses,
+      totalTokens: source.stats.tokens,
+      // Child-scoped elapsed: measured from the child's own start, not the
+      // turn's, so the number answers "how long has this agent been running".
+      durationMs: Math.max(0, now - source.startedAt),
+    },
+  };
 }

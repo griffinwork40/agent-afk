@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ChildActivityTracker,
-  deriveChildActivity,
+  deriveChildBanner,
   formatChildActivity,
   CHILD_QUIET_MS,
   STICKY_HOLD_MS,
@@ -223,30 +223,47 @@ describe('ChildActivityTracker.select', () => {
   });
 });
 
-describe('deriveChildActivity', () => {
+describe('deriveChildBanner', () => {
+  const wired = () => ({
+    sources: new Map<string, SourceState>([['a', activeChild('sees')]]),
+    childActivity: new ChildActivityTracker(),
+  });
+
   it('returns undefined when the ctx omits the live wiring', () => {
     // Non-TTY surfaces and existing tests must keep their prior behaviour.
-    expect(deriveChildActivity({})).toBeUndefined();
-    expect(deriveChildActivity({ sources: new Map() })).toBeUndefined();
-    expect(
-      deriveChildActivity({ childActivity: new ChildActivityTracker() }),
-    ).toBeUndefined();
+    expect(deriveChildBanner({})).toBeUndefined();
+    expect(deriveChildBanner({ sources: new Map() })).toBeUndefined();
+    expect(deriveChildBanner({ childActivity: new ChildActivityTracker() })).toBeUndefined();
   });
 
   it('composes the label and clause into one plain-text line', () => {
-    const sources = new Map<string, SourceState>([['a', activeChild('sees')]]);
-    expect(
-      deriveChildActivity({ sources, childActivity: new ChildActivityTracker() }, NOW),
-    ).toBe('sees · round 2: Read sees.ts');
+    expect(deriveChildBanner(wired(), NOW)?.activity).toBe('sees · round 2: Read sees.ts');
   });
 
   it('emits no ANSI — the banner owns dimming and width math', () => {
-    const sources = new Map<string, SourceState>([['a', activeChild('sees')]]);
-    const line = deriveChildActivity(
-      { sources, childActivity: new ChildActivityTracker() },
-      NOW,
-    );
     // eslint-disable-next-line no-control-regex
-    expect(line).not.toMatch(/\u001b\[/);
+    expect(deriveChildBanner(wired(), NOW)?.activity).not.toMatch(/\u001b\[/);
+  });
+
+  it('reports stats scoped to the SAME child it names, not the parent', () => {
+    const sources = new Map<string, SourceState>([['a', activeChild('sees')]]);
+    const child = sources.get('a')!;
+    child.stats.toolUses = 52;
+    child.stats.tokens = 47_000;
+    child.startedAt = NOW - 1_400_000; // 23m20s ago
+
+    const banner = deriveChildBanner({ sources, childActivity: new ChildActivityTracker() }, NOW);
+    expect(banner?.stats).toEqual({
+      toolUses: 52,
+      totalTokens: 47_000,
+      durationMs: 1_400_000,
+    });
+  });
+
+  it('never reports a negative elapsed when the clock skews backwards', () => {
+    const sources = new Map<string, SourceState>([['a', activeChild('sees')]]);
+    sources.get('a')!.startedAt = NOW + 5_000;
+    const banner = deriveChildBanner({ sources, childActivity: new ChildActivityTracker() }, NOW);
+    expect(banner?.stats.durationMs).toBe(0);
   });
 });

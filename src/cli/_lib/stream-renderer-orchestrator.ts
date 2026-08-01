@@ -15,7 +15,7 @@ import type { OutputEvent, ProgressEvent } from '../../agent/types.js';
 // stream-renderer-subagent.ts for the companion rationale.
 import type { SourceState } from './stream-renderer-source.js';
 import {
-  deriveChildActivity,
+  deriveChildBanner,
   type ChildActivityTracker,
 } from './child-activity-select.js';
 import type { Writer } from '../slash/types.js';
@@ -511,10 +511,17 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   // is sealed at the agent tool_use_detail boundary). Naming the busiest child
   // there keeps the line moving with real work instead of going blank — which
   // is what made a working fan-out read as a hung session.
-  const activity =
-    deriveProgressActivity(ctx.thinkingLane.peekPhase()) ?? deriveChildActivity(ctx);
+  const modelActivity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
+  // Stats are re-scoped with the clause: lastProgressByTask is parent-scoped and
+  // frozen for the duration of the dispatch, so the parent's counters beside a
+  // live child clause would contradict it. See deriveChildBanner.
+  const childBanner = modelActivity ? undefined : deriveChildBanner(ctx);
+  const activity = modelActivity ?? childBanner?.activity;
   for (const progress of ctx.lastProgressByTask.values()) {
-    bannerLines.push(...formatProgressBanner(progress, undefined, activity));
+    const event = childBanner
+      ? { ...progress, ...childBanner.stats, lastToolName: undefined }
+      : progress;
+    bannerLines.push(...formatProgressBanner(event, undefined, activity));
   }
   if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
   ctx.compositor.setOverlay(parts.join('\n'));

@@ -60,13 +60,13 @@ describe('live-progress modules introduce no autonomous timer', () => {
   });
 
   it('the banner fallback is reached by pull, not by push', () => {
-    // deriveChildActivity must be invoked from render paths only. If it ever
+    // deriveChildBanner must be invoked from render paths only. If it ever
     // gains its own scheduling, the guard above catches it; here we assert the
     // two known call sites are the render composers.
     const orchestrator = read('src/cli/_lib/stream-renderer-orchestrator.ts');
     const lifecycle = read('src/cli/_lib/stream-renderer-lifecycle.ts');
-    expect(orchestrator).toContain('deriveChildActivity(ctx)');
-    expect(lifecycle).toContain('deriveChildActivity(ctx)');
+    expect(orchestrator).toContain('deriveChildBanner(ctx)');
+    expect(lifecycle).toContain('deriveChildBanner(ctx)');
   });
 
   it('the compositor tool-name setter does not repaint', () => {
