@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.2] - 2026-08-01
+
+### Fixed
+- credit provider-paused time against the wall-clock ceiling (#797) (f6b33cf)
+
 ## [5.84.1] - 2026-08-01
 
 ### Fixed
