@@ -56,6 +56,7 @@ import { OVERLOAD_MAX_RETRIES, RoundRetryBudget } from './loop/retry-budget.js';
 import { handleRoundRetry, type RoundRetryContext } from './loop/round-retry.js';
 import { openRound } from './loop/round-request.js';
 import { consumeRoundStream } from './loop/stream-consumer.js';
+import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from './loop/turn-trace.js';
 
@@ -258,103 +259,17 @@ export async function* runTurn(
       return;
     }
 
-    const roundUsage = toProviderUsage(turnResult.usage, turnResult.stopReason, input.model);
-    turn.addRoundUsage(roundUsage);
-    // Context-window footprint = THIS round's full input occupancy. Anthropic's
-    // `input_tokens` excludes cache (docs: "tokens which were not read from or
-    // used to create a cache"), so the window total is
-    // input + cache_read + cache_creation + output for the latest call.
-    // Computed from the single round (not `turn.usage`): cumulative
-    // `inputTokens` would double-count tokens already present in the latest
-    // `cache_read`. `sumProviderUsage` discards this field (it builds a fresh
-    // object), so it is re-stamped every round and reflects only the last one.
-    turn.usage.contextWindowTokens =
-      (roundUsage.inputTokens ?? 0) +
-      (roundUsage.outputTokens ?? 0) +
-      (roundUsage.cachedInputTokens ?? 0) +
-      (roundUsage.cacheCreationTokens ?? 0);
-    // Surface per-round cumulative usage so getContextUsage() reflects
-    // mid-turn growth on the status line. Fires on every round including
-    // the terminal end_turn; the authoritative duration-stamped value is
-    // still set on turn.completed immediately after. Synchronous, never awaited.
+    turn.addRoundUsage(
+      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model),
+    );
+    // Surface per-round cumulative usage so getContextUsage() reflects mid-turn
+    // growth on the status line. Fires on every round including the terminal
+    // end_turn; the authoritative duration-stamped value is still set on
+    // turn.completed immediately after. Synchronous, never awaited.
     input.onUsageProgress?.(turn.usage);
 
     if (turnResult.stopReason !== 'tool_use') {
-      // Invariant: stop_reason 'refusal' is Anthropic's content-safety stop —
-      // the model declined and the API returns an assistant turn with (almost
-      // always) NO content. The generic empty-completion path below would emit
-      // nothing and end the turn SILENTLY, indistinguishable from a hang: the
-      // operator sees a turn that "stopped" with no answer and no reason. Worse,
-      // the flagged content stays in the conversation, so every later turn
-      // refuses identically — the reported "it stopped and I can't send
-      // anything else". Surface an explicit, display-only notice (NOT pushed to
-      // history — it is operator-facing, not model context) so the refusal is
-      // legible and the operator can rephrase or start a fresh session.
-      if (turnResult.stopReason === 'refusal') {
-        yield {
-          type: 'assistant.message',
-          text:
-            turnResult.text.length > 0
-              ? turnResult.text
-              : 'The model stopped with a content-safety refusal (stop_reason: "refusal") and returned no output. ' +
-                "This is Anthropic's safety system declining the request — not an afk error. " +
-                'Because the flagged context stays in the conversation, follow-up messages will likely be refused the same way; ' +
-                'rephrase the request or start a fresh session to continue.',
-          sessionId: input.ctx.sessionId,
-        };
-        yield {
-          type: 'turn.completed',
-          usage: turn.terminalUsage(),
-          sessionId: input.ctx.sessionId,
-        };
-        return;
-      }
-      if (turnResult.text.length > 0) {
-        yield {
-          type: 'assistant.message',
-          text: turnResult.text,
-          sessionId: input.ctx.sessionId,
-        };
-        const SUGGESTION_MAX_LENGTH = 200;
-        if (turnResult.text.length <= SUGGESTION_MAX_LENGTH) {
-          yield {
-            type: 'suggestion',
-            suggestion: turnResult.text,
-            sessionId: input.ctx.sessionId,
-          };
-        }
-      }
-      // Anthropic API contract: every `tool_use` block in assistant content
-      // MUST be followed by a matching `tool_result` block in the next user
-      // message. When stopReason !== 'tool_use', we are exiting the turn
-      // WITHOUT dispatching tools — any tool_use blocks the translator
-      // collected (e.g. a tool_use truncated by `max_tokens`, or one paired
-      // with a `pause_turn` stop) would become orphans the moment they hit
-      // history. Strip them before pushing so the next user turn cannot
-      // 400 with "tool_use ids were found without tool_result blocks
-      // immediately after".
-      const safeAssistantBlocks = turnResult.assistantBlocks.filter(
-        (b) => b.type !== 'tool_use',
-      );
-      if (safeAssistantBlocks.length > 0) {
-        input.messages.push({
-          role: 'assistant',
-          content: safeAssistantBlocks,
-        });
-      }
-      yield {
-        type: 'turn.completed',
-        // On the wind-down round (cap reached) the model ends naturally with
-        // `end_turn`, but the turn as a whole WAS cut short by the tool-use cap
-        // — preserve that signal for closure classification + telemetry while
-        // still delivering the model's synthesized final message above.
-        usage: turn.withDuration(
-          turn.capReached
-            ? { ...turn.usage, stopReason: TOOL_USE_LOOP_CAPPED }
-            : turn.usage,
-        ),
-        sessionId: input.ctx.sessionId,
-      };
+      yield* emitNonToolUseTerminal(turnResult, input, turn);
       return;
     }
 

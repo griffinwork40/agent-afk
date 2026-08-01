@@ -81,8 +81,25 @@ export class TurnAccumulator {
     return this.withDuration(this.usage);
   }
 
-  /** Fold one round's usage into the turn total. */
+  /**
+   * Fold one round's usage into the turn total and re-stamp the context-window
+   * footprint.
+   *
+   * Contract: `contextWindowTokens` is THIS round's full input occupancy, not a
+   * cumulative sum. Anthropic's `input_tokens` excludes cache (docs: "tokens
+   * which were not read from or used to create a cache"), so the window total
+   * is input + cache_read + cache_creation + output for the latest call.
+   * Computed from the single round because cumulative `inputTokens` would
+   * double-count tokens already present in the latest `cache_read`.
+   * `sumProviderUsage` discards the field (it builds a fresh object), so it is
+   * re-stamped every round and reflects only the last one.
+   */
   addRoundUsage(roundUsage: ProviderUsage): void {
     this.usage = sumProviderUsage(this.usage, roundUsage);
+    this.usage.contextWindowTokens =
+      (roundUsage.inputTokens ?? 0) +
+      (roundUsage.outputTokens ?? 0) +
+      (roundUsage.cachedInputTokens ?? 0) +
+      (roundUsage.cacheCreationTokens ?? 0);
   }
 }
