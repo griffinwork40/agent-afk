@@ -183,19 +183,23 @@ export function isSensitiveLeaf(relPath: string): boolean {
  * over every rebuildable pattern, and anything unrecognised falls through to
  * `protected` so the default answer is always "leave it alone".
  *
- * Contract: the file table is tested against the LEAF and the two directory
- * tables against the WHOLE path. That split is load-bearing in both directions.
- * A machine-generated filename is rebuildable wherever it sits, so matching it
- * on the full path made depth decide the verdict. A directory name is only
- * meaningful as a prefix, so leaf-matching those would classify a bare file
- * named `dist` as build output — and would collapse the deliberate `logs/`
- * asymmetry documented above.
+ * Contract: entries ending in `/` are directories and cannot match the file
+ * table. For files, that table is tested against the LEAF; the two directory
+ * tables are always tested against the WHOLE path. That split is load-bearing
+ * in both directions. A machine-generated filename is rebuildable wherever it
+ * sits, so matching it on the full path made depth decide the verdict. A
+ * directory name is only meaningful as a prefix, so leaf-matching those would
+ * classify a bare file named `dist` as build output — and would collapse the
+ * deliberate `logs/` asymmetry documented above.
  */
 export function classifyIgnoredEntry(relPath: string): IgnoredEntryClass {
   const normalized = normalizeIgnoredPath(relPath);
   if (normalized === '') return 'protected';
   if (isSensitiveLeaf(normalized)) return 'protected';
-  if (REBUILDABLE_FILE_PATTERNS.some((re) => re.test(leafOf(normalized)))) return 'opaque';
+  const isDirectory = normalized.endsWith('/');
+  if (!isDirectory && REBUILDABLE_FILE_PATTERNS.some((re) => re.test(leafOf(normalized)))) {
+    return 'opaque';
+  }
   if (OPAQUE_REBUILDABLE_DIRS.some((re) => re.test(normalized))) return 'opaque';
   if (INSPECTABLE_REBUILDABLE_DIRS.some((re) => re.test(normalized))) return 'inspectable';
   return 'protected';

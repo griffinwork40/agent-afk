@@ -126,6 +126,17 @@ describe('classifyIgnoredEntry — directory tables stay path-matched', () => {
   it('still prefers a known emitter over the containing directory', () => {
     expect(classifyIgnoredEntry('logs/debug.log')).toBe('opaque');
   });
+
+  it('does not classify directories named like generated files as opaque files', () => {
+    for (const entry of ['.DS_Store/', 'src/.eslintcache/', 'deep/.stylelintcache/', 'src/debug.log/']) {
+      expect(classifyIgnoredEntry(entry)).toBe('protected');
+    }
+  });
+
+  it('still applies a containing directory policy to directories named like generated files', () => {
+    expect(classifyIgnoredEntry('dist/.DS_Store/')).toBe('inspectable');
+    expect(classifyIgnoredEntry('node_modules/.eslintcache/')).toBe('opaque');
+  });
 });
 
 describe('classifyIgnoredEntry — degenerate input fails safe', () => {
