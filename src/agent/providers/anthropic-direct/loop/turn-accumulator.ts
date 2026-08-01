@@ -1,0 +1,88 @@
+/**
+ * Turn-scoped accumulators for the anthropic-direct loop.
+ *
+ * Contract: everything here lives for the WHOLE turn and is never reset
+ * between tool-use rounds — the deliberate contrast with
+ * {@link ../loop/retry-budget.RoundRetryBudget}, whose every field is released
+ * at each clean round boundary. Keeping the two lifetimes in separate objects
+ * is what makes "which state survives a `continue`?" answerable by reading a
+ * type instead of tracing a thousand-line function.
+ *
+ * @module agent/providers/anthropic-direct/loop/turn-accumulator
+ */
+
+import { randomUUID } from 'node:crypto';
+import type { ProviderUsage } from '../../../provider.js';
+import { sumProviderUsage } from '../types.js';
+
+/**
+ * Mutable per-turn tallies plus the wall-clock origin every terminal event is
+ * measured against.
+ */
+export class TurnAccumulator {
+  /** Usage summed across every round of this turn. */
+  usage: ProviderUsage = { stopReason: null };
+
+  /** Completed tool-use ROUNDS. Compared against the iteration cap. */
+  iterations = 0;
+
+  /**
+   * Cumulative count of tool CALLS dispatched across the whole turn — distinct
+   * from {@link iterations}. A single round can batch several parallel
+   * `tool_use` blocks, so rounds ≠ calls. Surfaced as the progress event's
+   * `toolUses` so the CLI's `formatToolCallStat` renders a truthful
+   * "N tool calls" even when a round runs several at once (PR 508 review, P2).
+   */
+  toolCallCount = 0;
+
+  /**
+   * Set once the tool-use iteration cap is reached. The loop then runs ONE
+   * final "wind-down" round with tools stripped, so the model produces a real
+   * answer from what it gathered instead of being cut off mid-round — a silent
+   * stop with no final message is indistinguishable from a hang (the same
+   * failure mode the `refusal` branch guards against).
+   *
+   * Invariant: written at the END of round N and read at the START of round
+   * N+1, so it must outlive a `continue`.
+   */
+  capReached = false;
+
+  /** Correlation id for this turn's trace events. */
+  readonly taskId: string = randomUUID();
+
+  /** Wall-clock origin for `durationMs` on every terminal event. */
+  readonly startedAt: number = Date.now();
+
+  /** Milliseconds elapsed since the turn began. */
+  elapsedMs(): number {
+    return Date.now() - this.startedAt;
+  }
+
+  /**
+   * Stamp `durationMs` onto a usage payload.
+   *
+   * Single point of truth for the turn-end wall-clock measurement that lands in
+   * the REPL footer's `◦ Xs · $cost · N tok` line via
+   * `ResponseMetadata.durationMs` → `printTurnFooter`. Before this existed the
+   * terminal yield sites all passed bare accumulated usage, and neither
+   * `toProviderUsage` nor `sumProviderUsage` ever wrote `durationMs` — so the
+   * footer rendered as just `◦ N tok` for every anthropic-direct turn.
+   */
+  withDuration(usage: ProviderUsage): ProviderUsage {
+    return { ...usage, durationMs: this.elapsedMs() };
+  }
+
+  /**
+   * The common terminal payload: accumulated usage stamped with the turn
+   * duration. Use {@link withDuration} directly at the few sites that override
+   * `stopReason` (overload-exhausted, tool-use-capped).
+   */
+  terminalUsage(): ProviderUsage {
+    return this.withDuration(this.usage);
+  }
+
+  /** Fold one round's usage into the turn total. */
+  addRoundUsage(roundUsage: ProviderUsage): void {
+    this.usage = sumProviderUsage(this.usage, roundUsage);
+  }
+}

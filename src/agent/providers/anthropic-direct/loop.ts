@@ -25,13 +25,12 @@
  * @module agent/providers/anthropic-direct/loop
  */
 
-import { randomUUID } from 'node:crypto';
 import type {
   ContentBlockParam,
   MessageParam,
   ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources';
-import type { ProviderEvent, ProviderUsage } from '../../provider.js';
+import type { ProviderEvent } from '../../provider.js';
 import type {
   AnthropicMessagesCreateParams,
   RunTurnInput,
@@ -39,7 +38,7 @@ import type {
   ToolResult,
   TurnResult,
 } from './types.js';
-import { sumProviderUsage, toProviderUsage } from './types.js';
+import { toProviderUsage } from './types.js';
 import {
   getCacheTtl,
   isCacheEnabled,
@@ -83,12 +82,15 @@ import {
 import {
   OVERLOAD_BASE_DELAY_MS,
   OVERLOAD_MAX_RETRIES,
+  RoundRetryBudget,
   STREAM_INCOMPLETE_BASE_DELAY_MS,
   STREAM_INCOMPLETE_MAX_RETRIES,
   isOverloadedErrorEvent,
   isTransientServerError,
 } from './loop/retry-budget.js';
 import { toWireTool } from './loop/round-request.js';
+import { TurnAccumulator } from './loop/turn-accumulator.js';
+import { TurnTrace } from './loop/turn-trace.js';
 import { dumpThinkingDiagnostic } from './loop/thinking-diagnostic.js';
 
 // Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
@@ -138,7 +140,7 @@ async function createWithRetry(
  * dedicated `ttfb_timeout` trace phase (so the re-drive is legible in
  * `afk trace show`) plus a `stream.retry` event so surfaces discard any partial
  * paint. No backoff sleep — the point is to fail-fast off a stalled endpoint,
- * and the single retry is gated by the per-round `ttfbRetried` flag so it
+ * and the single retry is gated by the per-round `retry.ttfbRetried` flag so it
  * cannot stack.
  *
  * The phase is NOT `rate_limit`: this timer is ours, fires with no server
@@ -253,31 +255,14 @@ export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
-  let accumulatedUsage: ProviderUsage = { stopReason: null };
-  let iterations = 0;
-  // Cumulative count of tool CALLS dispatched across the whole turn — distinct
-  // from `iterations` (the round counter). A single round can batch several
-  // parallel tool_use blocks (turnResult.toolUseBlocks is an array, dispatched
-  // at ~line 547), so rounds ≠ calls. Emitted as the progress event's
-  // `toolUses` so the CLI's formatToolCallStat renders a truthful "N tool calls"
-  // even when a round runs multiple calls (PR 508 codex review, P2).
-  let toolCallCount = 0;
-  // Set once the tool-use iteration cap is reached. The loop then runs ONE
-  // final "wind-down" round with tools stripped (see the params build and the
-  // cap-exit block below) so the model produces a real answer from what it
-  // gathered instead of being cut off mid-round — a silent stop with no final
-  // message is indistinguishable from a hang (same failure mode the `refusal`
-  // branch guards against).
-  let capReached = false;
-  // Mid-stream overload retry budget. Spent as a 529/overloaded_error is
-  // observed *during* stream consumption (where createWithRetry can't reach),
-  // and reset to 0 after every clean round so each tool-use round gets its own
-  // allowance — mirroring createWithRetry's per-call (not per-turn) scope.
-  let overloadRetries = 0;
-  // Same per-round scope for the mid-stream clean-close (StreamIncompleteError)
-  // re-drive budget — see STREAM_INCOMPLETE_MAX_RETRIES. Accumulates across the
-  // retries of ONE round; reset to 0 once the round resolves.
-  let streamIncompleteRetries = 0;
+
+  // Three collaborators, three lifetimes — see each class for its reset
+  // discipline. `turn` survives the whole turn, `retry` is released at every
+  // clean round boundary, `trace` outlives both because its abort listener can
+  // fire during any phase.
+  const turn = new TurnAccumulator();
+  const retry = new RoundRetryBudget();
+
   // Per-round time-to-first-token stall bound (issue #583). A degrading upstream
   // call that never streams a first CONTENT token (text/thinking delta or
   // tool_use — message_start + pings do NOT count) is aborted at this bound and
@@ -286,7 +271,6 @@ export async function* runTurn(
   // The single retry reuses the createWithRetry attempt budget model so it
   // cannot stack on top of the overload backoff into a longer worst case.
   const ttfbTimeoutMs = resolveTtfbTimeoutMs();
-  let ttfbRetried = false;
   // Per-round POST-first-byte stall bound (issue #762). The TTFB bound above is
   // cleared by the first content token, so before this a stream that stalled
   // mid-flight had NO bound of any kind: two real sessions hung 38.9 and 63.5
@@ -297,52 +281,19 @@ export async function* runTurn(
   // while a round that goes silent for the whole window dies loudly with a real
   // terminal error. `0` (or AFK_MODEL_STALL_TIMEOUT_MS=0) disables it.
   const stallTimeoutMs = resolveStallTimeoutMs();
-  const taskId = randomUUID();
-  const loopStartTime = Date.now();
 
-  // Single point of truth for the turn-end wall-clock measurement that lands
-  // in the REPL footer's `◦ Xs · $cost · N tok` line via
-  // ResponseMetadata.durationMs → printTurnFooter. Pre-fix the eight
-  // `turn.completed` yield sites below all passed bare `accumulatedUsage`,
-  // and neither `toProviderUsage` nor `sumProviderUsage` ever wrote
-  // `durationMs` — so the footer rendered as just `◦ N tok` for every
-  // anthropic-direct turn. Factored as a closure so the eight call sites
-  // can't drift apart silently — grep for `withTurnDuration` to audit.
-  const withTurnDuration = (usage: ProviderUsage): ProviderUsage => ({
-    ...usage,
-    durationMs: Date.now() - loopStartTime,
-  });
+  // Witness layer: brackets the turn with loop_start / loop_end and owns the
+  // interrupt→halt latency stamp. loop_end fires from the generator's finally
+  // block so all exit paths — abort, error, clean end-of-turn, capped — are
+  // covered without per-site annotation.
+  const trace = new TurnTrace(input.signal, input.traceWriter);
 
-  // Witness layer: mark loop entry once for this turn. Fire-and-forget —
-  // a broken trace writer must never stall tool dispatch.
-  void emitSessionPhase(input.traceWriter, { phase: 'loop_start' });
-
-  // Interrupt→halt latency instrumentation. Stamp the instant the turn signal
-  // fires so the `finally` below can report ESC→terminal wall-clock in the
-  // `interrupt_halt` phase — the field-visible proof the ESC-lag fix keeps the
-  // halt within an event-loop turn. A single long-lived listener (not per-event)
-  // records the time at most once; `{ once: true }` + the null-guard make it
-  // idempotent. Registered only when a writer is present so a no-trace session
-  // pays nothing. `close()` also aborts this signal but with reason `'closed'`;
-  // the emit gate below fires ONLY for reason `'interrupted'`.
-  let interruptedAt: number | null = input.signal.aborted ? Date.now() : null;
-  const onInterruptForTrace = (): void => {
-    if (interruptedAt === null) interruptedAt = Date.now();
-  };
-  if (input.traceWriter && !input.signal.aborted) {
-    input.signal.addEventListener('abort', onInterruptForTrace, { once: true });
-  }
-
-  // Witness layer: loop_end fires from the generator's finally block so
-  // all eight return paths — abort, error, clean end-of-turn, capped —
-  // are covered without per-site annotation. Fire-and-forget; trace
-  // latency must never stall an already-returning turn.
   try {
   while (true) {
     if (input.signal.aborted) {
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
+        usage: turn.terminalUsage(),
         sessionId: input.ctx.sessionId,
       };
       return;
@@ -364,10 +315,10 @@ export async function* runTurn(
       messages: messagesForRequest,
       stream: true,
       ...(input.system !== null ? { system: input.system } : {}),
-      // Wind-down round (capReached): omit tools so the model MUST answer in
+      // Wind-down round (cap reached): omit tools so the model MUST answer in
       // text — with no tools advertised it cannot emit another tool_use — which
       // turns a capped turn into a final summary rather than a silent stop.
-      ...(input.tools !== null && input.tools.length > 0 && !capReached
+      ...(input.tools !== null && input.tools.length > 0 && !turn.capReached
         ? { tools: input.tools.map(toWireTool) }
         : {}),
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
@@ -446,7 +397,7 @@ export async function* runTurn(
       // A TTFB timeout aborts before the first byte (connection-phase stall).
       // Distinguish it from a user interrupt (input.signal) and, on the first
       // occurrence this round, re-drive the request once instead of erroring.
-      if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried) {
+      if (ttfb.timedOut() && !input.signal.aborted && !retry.ttfbRetried) {
         ttfb.dispose();
         stall.dispose();
         retryTtfb = true;
@@ -456,7 +407,7 @@ export async function* runTurn(
         if (input.signal.aborted) {
           yield {
             type: 'turn.completed',
-            usage: withTurnDuration(accumulatedUsage),
+            usage: turn.terminalUsage(),
             sessionId: input.ctx.sessionId,
           };
           return;
@@ -473,7 +424,7 @@ export async function* runTurn(
       // Connection-phase TTFB timeout: re-drive once (handled below the stream
       // consumption block, shared with the mid-stream TTFB path).
       yield* emitTtfbRetry(input, requestStartedAt);
-      ttfbRetried = true;
+      retry.ttfbRetried = true;
       continue;
     }
 
@@ -565,7 +516,7 @@ export async function* runTurn(
             // is true only while the timer is live (firstByteSeen clears it), and
             // ttfbEmitted is still false here (no content byte arrived) — so this
             // is unambiguously a first-byte stall. Re-drive once, then fail fast.
-            if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
+            if (ttfb.timedOut() && !input.signal.aborted && !retry.ttfbRetried && !ttfbEmitted) {
               retryTtfb = true;
               break;
             }
@@ -601,7 +552,7 @@ export async function* runTurn(
             // the whole turn on a transient server hiccup.
             if (
               isOverloadedErrorEvent(out.event.error) &&
-              overloadRetries < OVERLOAD_MAX_RETRIES &&
+              retry.overloadRetries < OVERLOAD_MAX_RETRIES &&
               !input.signal.aborted
             ) {
               retryOverload = true;
@@ -663,7 +614,7 @@ export async function* runTurn(
             // (already-streamed text may re-emit — reset via stream.retry below).
             if (
               out.event.error instanceof StreamIncompleteError &&
-              streamIncompleteRetries < STREAM_INCOMPLETE_MAX_RETRIES &&
+              retry.streamIncompleteRetries < STREAM_INCOMPLETE_MAX_RETRIES &&
               !input.signal.aborted
             ) {
               retryStreamIncomplete = true;
@@ -685,7 +636,7 @@ export async function* runTurn(
       // streamed event aborts the stream iterator here. `ttfb.timedOut()` is
       // only true while the timer is live — firstByteSeen() above clears it, so
       // this branch is unreachable once any event has streamed. Re-drive once.
-      if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
+      if (ttfb.timedOut() && !input.signal.aborted && !retry.ttfbRetried && !ttfbEmitted) {
         ttfb.dispose();
         stall.dispose();
         retryTtfb = true;
@@ -695,7 +646,7 @@ export async function* runTurn(
         if (input.signal.aborted) {
           yield {
             type: 'turn.completed',
-            usage: withTurnDuration(accumulatedUsage),
+            usage: turn.terminalUsage(),
             sessionId: input.ctx.sessionId,
           };
           return;
@@ -715,7 +666,7 @@ export async function* runTurn(
         // Defensive: a mid-stream overload normally reaches us as an in-band
         // error event (handled in the loop above), but if translate.ts ever
         // re-throws one, route it into the same retry path rather than crashing.
-        if (isOverloadedErrorEvent(e) && overloadRetries < OVERLOAD_MAX_RETRIES && !input.signal.aborted) {
+        if (isOverloadedErrorEvent(e) && retry.overloadRetries < OVERLOAD_MAX_RETRIES && !input.signal.aborted) {
           retryOverload = true;
         } else if (isOverloadedErrorEvent(e) && !input.signal.aborted) {
           // Budget exhausted on the re-thrown path: same non-lossy terminal as
@@ -735,14 +686,14 @@ export async function* runTurn(
 
     if (retryTtfb) {
       // Mid-stream TTFB timeout: re-drive the round once, mirroring the
-      // connection-phase path above. Shares the once-per-round ttfbRetried flag.
+      // connection-phase path above. Shares the once-per-round retry.ttfbRetried flag.
       yield* emitTtfbRetry(input, requestStartedAt);
-      ttfbRetried = true;
+      retry.ttfbRetried = true;
       continue;
     }
 
     if (retryOverload) {
-      overloadRetries += 1;
+      retry.overloadRetries += 1;
       // Witness layer: record the mid-stream overload backoff so a re-driven
       // round is legible in the trace. The tracing-fetch wrapper cannot see
       // this one — a mid-stream `overloaded_error` arrives in the SSE body of
@@ -750,7 +701,7 @@ export async function* runTurn(
       // Fire-and-forget; trace latency must never stall the retry.
       void emitSessionPhase(input.traceWriter, {
         phase: 'rate_limit',
-        metadata: { reason: 'overloaded', source: 'mid-stream', attempt: overloadRetries },
+        metadata: { reason: 'overloaded', source: 'mid-stream', attempt: retry.overloadRetries },
       });
       // Tell surfaces to discard the current round's already-streamed text:
       // the re-driven request below re-streams the round from scratch, so
@@ -763,13 +714,13 @@ export async function* runTurn(
       // overloaded upstream in lockstep. Mirrors the transient-429 jitter at
       // retry-layer.ts.
       await sleepWithAbort(
-        jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadRetries - 1)),
+        jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, retry.overloadRetries - 1)),
         input.signal,
       );
       if (input.signal.aborted) {
         yield {
           type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
+          usage: turn.terminalUsage(),
           sessionId: input.ctx.sessionId,
         };
         return;
@@ -778,7 +729,7 @@ export async function* runTurn(
     }
 
     if (retryStreamIncomplete) {
-      streamIncompleteRetries += 1;
+      retry.streamIncompleteRetries += 1;
       // Witness layer: log the mid-stream-cut re-drive so it is legible in
       // `afk trace show`. Reuse the `rate_limit` phase as the generic
       // retry/backoff marker (the TTFB and overload re-drives do the same) with
@@ -789,7 +740,7 @@ export async function* runTurn(
         metadata: {
           reason: 'stream-incomplete',
           source: 'mid-stream',
-          attempt: streamIncompleteRetries,
+          attempt: retry.streamIncompleteRetries,
         },
       });
       // Tell surfaces to discard the current round's already-streamed text: the
@@ -801,13 +752,13 @@ export async function* runTurn(
       // connection is not a server-overload signal, so reconnect promptly while
       // still avoiding a tight hammer loop against a flapping intermediary.
       await sleepWithAbort(
-        STREAM_INCOMPLETE_BASE_DELAY_MS * Math.pow(2, streamIncompleteRetries - 1),
+        STREAM_INCOMPLETE_BASE_DELAY_MS * Math.pow(2, retry.streamIncompleteRetries - 1),
         input.signal,
       );
       if (input.signal.aborted) {
         yield {
           type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
+          usage: turn.terminalUsage(),
           sessionId: input.ctx.sessionId,
         };
         return;
@@ -815,22 +766,17 @@ export async function* runTurn(
       continue;
     }
 
-    // Past the overload-retry decision for this round (retryOverload is
-    // false), so this round's mid-stream overload budget is spent — restore
-    // the full allowance for the next tool-use round. Reset here, ABOVE the
-    // terminal `return` paths below, so the "each tool-use round starts with a
-    // fresh budget" invariant holds uniformly. The translator-error and
-    // null-result paths return (so the reset is moot for them today), but
-    // placing it above them makes the invariant unconditional and survives a
-    // future refactor that turns a terminal path into a `continue`.
-    overloadRetries = 0;
-    // Same per-round scope for the mid-stream clean-close re-drive budget.
-    streamIncompleteRetries = 0;
-    // Same per-round scope for the TTFB single-retry allowance: a round that
-    // streamed a first byte spends its budget, so the next tool-use round gets a
-    // fresh one. A round only reaches here after a clean first byte, so this
-    // never runs on the failing (retry) attempt of the same round.
-    ttfbRetried = false;
+    // Invariant: this round is past every retry decision, so all three budgets
+    // are spent — restore the full allowance for the next tool-use round.
+    // Reset here, ABOVE the terminal `return` paths below, so the "each
+    // tool-use round starts with a fresh budget" rule holds uniformly. The
+    // translator-error and null-result paths return (so the reset is moot for
+    // them today), but placing it above them makes the invariant unconditional
+    // and survives a future refactor that turns a terminal path into a
+    // `continue`. A round only reaches here after a clean first byte, so the
+    // TTFB allowance is never released on the failing attempt of the same
+    // round. See RoundRetryBudget.reset for the per-field contract.
+    retry.reset();
 
     // Invariant: this branch must come BEFORE the `translatorErrored` /
     // `turnResult === null` terminals below, and must emit exactly ONE terminal
@@ -874,7 +820,7 @@ export async function* runTurn(
       };
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration({ ...accumulatedUsage, stopReason: OVERLOAD_EXHAUSTED }),
+        usage: turn.withDuration({ ...turn.usage, stopReason: OVERLOAD_EXHAUSTED }),
         sessionId: input.ctx.sessionId,
       };
       return;
@@ -888,7 +834,7 @@ export async function* runTurn(
       if (input.signal.aborted) {
         yield {
           type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
+          usage: turn.terminalUsage(),
           sessionId: input.ctx.sessionId,
         };
       }
@@ -899,23 +845,23 @@ export async function* runTurn(
       // with the usage we already have.
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
+        usage: turn.terminalUsage(),
         sessionId: input.ctx.sessionId,
       };
       return;
     }
 
     const roundUsage = toProviderUsage(turnResult.usage, turnResult.stopReason, input.model);
-    accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
+    turn.addRoundUsage(roundUsage);
     // Context-window footprint = THIS round's full input occupancy. Anthropic's
     // `input_tokens` excludes cache (docs: "tokens which were not read from or
     // used to create a cache"), so the window total is
     // input + cache_read + cache_creation + output for the latest call.
-    // Computed from the single round (not `accumulatedUsage`): cumulative
+    // Computed from the single round (not `turn.usage`): cumulative
     // `inputTokens` would double-count tokens already present in the latest
     // `cache_read`. `sumProviderUsage` discards this field (it builds a fresh
     // object), so it is re-stamped every round and reflects only the last one.
-    accumulatedUsage.contextWindowTokens =
+    turn.usage.contextWindowTokens =
       (roundUsage.inputTokens ?? 0) +
       (roundUsage.outputTokens ?? 0) +
       (roundUsage.cachedInputTokens ?? 0) +
@@ -924,7 +870,7 @@ export async function* runTurn(
     // mid-turn growth on the status line. Fires on every round including
     // the terminal end_turn; the authoritative duration-stamped value is
     // still set on turn.completed immediately after. Synchronous, never awaited.
-    input.onUsageProgress?.(accumulatedUsage);
+    input.onUsageProgress?.(turn.usage);
 
     if (turnResult.stopReason !== 'tool_use') {
       // Invariant: stop_reason 'refusal' is Anthropic's content-safety stop —
@@ -951,7 +897,7 @@ export async function* runTurn(
         };
         yield {
           type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
+          usage: turn.terminalUsage(),
           sessionId: input.ctx.sessionId,
         };
         return;
@@ -991,14 +937,14 @@ export async function* runTurn(
       }
       yield {
         type: 'turn.completed',
-        // On the wind-down round (capReached) the model ends naturally with
+        // On the wind-down round (cap reached) the model ends naturally with
         // `end_turn`, but the turn as a whole WAS cut short by the tool-use cap
         // — preserve that signal for closure classification + telemetry while
         // still delivering the model's synthesized final message above.
-        usage: withTurnDuration(
-          capReached
-            ? { ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }
-            : accumulatedUsage,
+        usage: turn.withDuration(
+          turn.capReached
+            ? { ...turn.usage, stopReason: TOOL_USE_LOOP_CAPPED }
+            : turn.usage,
         ),
         sessionId: input.ctx.sessionId,
       };
@@ -1025,7 +971,7 @@ export async function* runTurn(
     // emit below reports calls-so-far including this round's batch. One round
     // can carry N parallel tool_use blocks, so this advances by the block count,
     // not by 1.
-    toolCallCount += turnResult.toolUseBlocks.length;
+    turn.toolCallCount += turnResult.toolUseBlocks.length;
 
     // Build all tool calls and emit start events upfront.
     const calls: ToolCall[] = [];
@@ -1074,7 +1020,7 @@ export async function* runTurn(
       input.messages.push({ role: 'user', content: abortedResults as ContentBlockParam[] });
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
+        usage: turn.terminalUsage(),
         sessionId: input.ctx.sessionId,
       };
       return;
@@ -1234,14 +1180,14 @@ export async function* runTurn(
       throw err;
     }
 
-    iterations += 1;
+    turn.iterations += 1;
 
     const lastTool = turnResult.toolUseBlocks[turnResult.toolUseBlocks.length - 1];
     // Semantic summary: name the tool AND its most informative argument
     // (path / command / query via summarizeToolInput) so the progress banner
     // carries real signal — `bash git show f7f0a37…` instead of the old
     // `Iteration 11: used bash`, which conveyed nothing after round 2.
-    // `description` stays STABLE across ticks for this taskId (the banner
+    // `description` stays STABLE across ticks for this task id (the banner
     // dedupes line 0 on commit); the per-tick signal lives in `summary`.
     const lastToolHeadline = lastTool
       ? `${lastTool.name}${summarizeToolInput(lastTool.name, lastTool.input)}`
@@ -1249,68 +1195,48 @@ export async function* runTurn(
     yield {
       type: 'progress',
       progress: {
-        taskId,
+        taskId: turn.taskId,
         description: 'Working',
-        summary: `round ${iterations}: ${lastToolHeadline}`,
+        summary: `round ${turn.iterations}: ${lastToolHeadline}`,
         lastToolName: lastTool?.name,
-        totalTokens: accumulatedUsage.totalTokens ?? 0,
+        totalTokens: turn.usage.totalTokens ?? 0,
         // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far in
         // this turn (not the round number), so downstream formatToolCallStat
         // renders "N tool calls" truthfully even when a round batched parallel
         // calls. The `summary` above legitimately names the ROUND — leave it.
-        toolUses: toolCallCount,
-        durationMs: Date.now() - loopStartTime,
+        toolUses: turn.toolCallCount,
+        durationMs: Date.now() - turn.startedAt,
       },
       sessionId: input.ctx.sessionId,
     };
-    if (capReached) {
+    if (turn.capReached) {
       // The wind-down round (tools stripped) still came back as `tool_use` —
       // only reachable if the model emits a tool call against an empty toolset.
       // Honor the cap with a hard stop rather than looping unbounded.
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration({ ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }),
+        usage: turn.withDuration({ ...turn.usage, stopReason: TOOL_USE_LOOP_CAPPED }),
         sessionId: input.ctx.sessionId,
       };
       return;
     }
-    if (shouldWindDown(iterations, maxIterations)) {
+    if (shouldWindDown(turn.iterations, maxIterations)) {
       // Cap reached. Instead of cutting the turn off HERE — which ends it with
       // no final assistant message and reads as a silent hang — run ONE more
       // round with tools stripped (params build above) so the model can
       // synthesize a final answer from what it gathered. Append a brief note to
       // the tool_result turn just pushed so the model knows why its tools are
-      // gone. `capReached` guarantees this fires at most once; the guard above
+      // gone. `turn.capReached` guarantees this fires at most once; the guard above
       // hard-stops if the wind-down round pathologically emits another tool_use.
       const lastMsg = input.messages[input.messages.length - 1];
       if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
         lastMsg.content.push({ type: 'text', text: WIND_DOWN_NOTE });
       }
-      capReached = true;
+      turn.capReached = true;
       continue;
     }
   }
   } finally {
-    input.signal.removeEventListener('abort', onInterruptForTrace);
-    // Interrupt→halt latency: emit ONLY when THIS turn ended because of an ESC
-    // soft-stop (`interrupt()` aborts with reason `'interrupted'`). Every abort
-    // exit above yields its terminal `turn.completed` immediately before the
-    // generator returns into this finally, so `Date.now()` here is that terminal
-    // instant; `interruptedAt` is when the signal fired. A session `close()`
-    // (reason `'closed'`) and a clean/error/capped end are all excluded — the
-    // former is not a halt-latency event, the latter never aborted the signal.
-    // Fire-and-forget; trace latency must never stall an already-returning turn.
-    if (interruptedAt !== null && input.signal.reason === 'interrupted') {
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'interrupt_halt',
-        durationMs: Date.now() - interruptedAt,
-        metadata: { provider: 'anthropic-direct' },
-      });
-    }
-    // Emit loop_end regardless of which exit path above fired.
-    void emitSessionPhase(input.traceWriter, {
-      phase: 'loop_end',
-      durationMs: Date.now() - loopStartTime,
-    });
+    trace.finish(turn.elapsedMs());
   }
 }
