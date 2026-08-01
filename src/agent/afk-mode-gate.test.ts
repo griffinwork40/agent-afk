@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import type { PermissionMode, ElicitationResult, ElicitationRequest } from './types/sdk-types.js';
 import type { TraceWriter } from './trace/index.js';
@@ -89,6 +92,102 @@ describe('createAfkModeGate', () => {
     const { gate } = makeGate('autonomous');
     const result = await gate({ event: 'PreToolUse', toolName: 'bash', input: { command } });
     expect(result.decision).toBe('block');
+  });
+
+  // ---- PR #806 review: metacharacters hidden in FLAG-shaped tokens -----------
+  // The flag-skip branch used to discard dash-prefixed tokens before the
+  // per-target metachar check could see them, so a command substitution smuggled
+  // into a `-v...` token was evaluated by the shell while the gate only ever
+  // inspected `node_modules`. `${IFS}` dodges a space/`;&|` filter.
+  it.each([
+    ['rm -rf node_modules -v$(rm${IFS}-rf${IFS}/tmp/victim)', 'command sub in flag token'],
+    ['rm -rf node_modules --exclude=`whoami`', 'backtick sub in long flag'],
+    ['rm -rf -v$(id) node_modules', 'command sub in flag before target'],
+    ['rm -rf node_modules -v${HOME}', 'var expansion in flag token'],
+  ])('blocks shell metacharacters smuggled into flag tokens (%s)', async (command) => {
+    const { gate } = makeGate('autonomous');
+    const result = await gate({ event: 'PreToolUse', toolName: 'bash', input: { command } });
+    expect(result.decision).toBe('block');
+  });
+
+  // ---- PR #806 review: carve-out is recursive DIRECTORY deletes only ---------
+  // Without a recursive flag the target is a regular file — a tracked script
+  // named `build` is not a generated artifact and must still require approval.
+  it.each([
+    ['rm build', 'no flags'],
+    ['rm -f build', 'force but not recursive'],
+    ['rm -v dist', 'verbose but not recursive'],
+    ['rm -- node_modules', 'separator but not recursive'],
+  ])('blocks a non-recursive rm of an allowlisted basename (%s)', async (command) => {
+    const { gate } = makeGate('autonomous');
+    const result = await gate({ event: 'PreToolUse', toolName: 'bash', input: { command } });
+    expect(result.decision).toBe('block');
+  });
+
+  it.each([
+    ['rm -rfv node_modules', 'clustered short flags'],
+    ['rm -R dist', 'capital R'],
+    ['rm -fr build', 'reversed cluster'],
+    ['rm --recursive --force dist', 'long flags'],
+  ])('allows recursive spelling variants of a curated leaf-dir (%s)', async (command) => {
+    const { gate } = makeGate('autonomous');
+    const result = await gate({ event: 'PreToolUse', toolName: 'bash', input: { command } });
+    expect(result.decision).toBeUndefined();
+  });
+
+  // ---- PR #806 review: target must be a generated DIRECTORY (or absent) ------
+  describe('generated-directory target check', () => {
+    function withTempWorkspace(fn: (root: string) => Promise<void>) {
+      return async () => {
+        const root = mkdtempSync(join(tmpdir(), 'afk-rm-gate-'));
+        try {
+          await fn(realpathSync(root));
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      };
+    }
+
+    it(
+      'blocks rm -rf of an allowlisted basename that is an existing FILE',
+      withTempWorkspace(async (root) => {
+        writeFileSync(join(root, 'build'), '#!/bin/sh\necho tracked script\n');
+        const { gate } = makeGate('autonomous', root);
+        const result = await gate({
+          event: 'PreToolUse',
+          toolName: 'bash',
+          input: { command: 'rm -rf build' },
+        });
+        expect(result.decision).toBe('block');
+      }),
+    );
+
+    it(
+      'allows rm -rf of an allowlisted basename that is a real directory',
+      withTempWorkspace(async (root) => {
+        mkdirSync(join(root, 'build'));
+        const { gate } = makeGate('autonomous', root);
+        const result = await gate({
+          event: 'PreToolUse',
+          toolName: 'bash',
+          input: { command: 'rm -rf build' },
+        });
+        expect(result.decision).toBeUndefined();
+      }),
+    );
+
+    it(
+      'allows rm -rf of an absent allowlisted dir (clean-tree no-op stays permitted)',
+      withTempWorkspace(async (root) => {
+        const { gate } = makeGate('autonomous', root);
+        const result = await gate({
+          event: 'PreToolUse',
+          toolName: 'bash',
+          input: { command: 'rm -rf node_modules' },
+        });
+        expect(result.decision).toBeUndefined();
+      }),
+    );
   });
 
   // ---- medium-risk ops are ALLOWED (autonomous work must be useful) ----------
