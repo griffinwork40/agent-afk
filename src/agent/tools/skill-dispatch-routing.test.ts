@@ -28,6 +28,7 @@ import type {
 } from '@anthropic-ai/sdk/resources';
 import type OpenAI from 'openai';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AnthropicDirectProvider,
@@ -641,7 +642,7 @@ describe('OpenAICompatibleProvider — cwd forwarding for project skills', () =>
     openaiCreateCalls = [];
     __setOpenAIClientFactory(null);
     installOpenAIMockClient();
-    tmpCwd = mkdtempSync('/tmp/openai-cwd-fwd-test-');
+    tmpCwd = mkdtempSync(join(tmpdir(), 'openai-cwd-fwd-test-'));
     const skillDir = join(tmpCwd, '.afk', 'skills', projectSkillName);
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(
