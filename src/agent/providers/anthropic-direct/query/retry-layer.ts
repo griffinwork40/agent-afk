@@ -124,6 +124,17 @@ export class RetryLayer {
 
   private refreshPromise: Promise<Anthropic | null> | null = null;
   private usageLimitWaitPromise: Promise<'aborted' | 'timer' | 'hot-swap'> | null = null;
+  /**
+   * Contract: set on the three paths where an OAuth usage-limit error
+   * (`oauth-limit` / `oauth-limit-no-ts`) is surfaced to the caller WITHOUT a
+   * replay — fail-fast (autoResumeOnUsageLimit=false) or the >2h reset bail —
+   * so the credential snapshot this session holds may be stale by the time
+   * the operator retries (e.g. they ran `claude login` to switch accounts
+   * while the dead turn was failing). Consumed once at the top of the next
+   * `turnWithRetries` call, which force-refreshes the client and clears the
+   * flag unconditionally — see that method for why "unconditionally" matters.
+   */
+  private credentialSnapshotStale = false;
 
   constructor(opts: RetryLayerOptions) {
     this._client = opts.client;
@@ -233,11 +244,28 @@ export class RetryLayer {
    * `AbortCoordinator.begin()`); on a successful 401 refresh the layer
    * mutates `runInput.client` and `runInput.headers` in place before
    * replaying, so the second pass sees the new client.
+   *
+   * Contract: if the PREVIOUS turn ended by surfacing a usage-limit error
+   * without a replay (`credentialSnapshotStale`), force one credential
+   * re-resolve before this turn runs — the operator's fix (`claude login` to
+   * a different account) may have landed while no poller was alive to pick it
+   * up (fail-fast paths, e.g. subagent forks, don't wait/poll at all). Clears
+   * the flag UNCONDITIONALLY, even when the refresh returns `null` (api-key
+   * mode, or the refresh attempt itself failed) — leaving it set would force
+   * a refresh on every subsequent turn forever.
    */
   async *turnWithRetries(
     runInput: RunTurnInput,
     isClosed: () => boolean,
   ): AsyncGenerator<ProviderEvent, void, void> {
+    if (this.credentialSnapshotStale) {
+      const refreshed = await this.forceClientRefresh();
+      if (refreshed) {
+        runInput.client = this._client as unknown as AnthropicClientLike;
+        runInput.headers = this.rotateHeaders();
+      }
+      this.credentialSnapshotStale = false;
+    }
     yield* this.turnWithOverloadPause(runInput, isClosed);
   }
 
@@ -494,6 +522,11 @@ export class RetryLayer {
       });
 
       if (!this.autoResumeOnUsageLimit) {
+        // Fail-fast (autoResumeOnUsageLimit=false, e.g. a subagent fork): no
+        // replay follows, so the operator's fix — logging into a different
+        // account — needs the NEXT turn to pick up the new credential
+        // without a manual `/reauth`. See `credentialSnapshotStale` above.
+        this.credentialSnapshotStale = true;
         yield pendingErrorEvent;
         return;
       }
@@ -580,6 +613,9 @@ export class RetryLayer {
 
     if (resetsAt.getTime() - Date.now() > TWO_HOURS_MS) {
       // Reset too far in the future — surface the error without waiting.
+      // No replay follows this bail either, so mark the snapshot stale (see
+      // `credentialSnapshotStale`) — same reasoning as the no-ts fail-fast.
+      this.credentialSnapshotStale = true;
       yield pendingErrorEvent;
       return;
     }
@@ -612,6 +648,10 @@ export class RetryLayer {
     });
 
     if (!this.autoResumeOnUsageLimit) {
+      // Fail-fast, has-resetsAt variant — same reasoning as the no-ts branch
+      // above: no replay follows, so the next turn must force a credential
+      // re-resolve instead of waiting on `/reauth`.
+      this.credentialSnapshotStale = true;
       yield pendingErrorEvent;
       return;
     }
