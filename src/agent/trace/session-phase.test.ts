@@ -188,6 +188,35 @@ describe('session_phase payload schema — acceptance', () => {
     expect(() => SessionPhaseNameSchema.parse('usage_limit_resume')).not.toThrow();
   });
 
+  it('accepts the overload_pause / overload_resume phases', () => {
+    // Pause: no durationMs. Unlike usage_limit_pause there is NO reset
+    // timestamp to carry (a 529 has none), so the park is bounded by a plain
+    // wall-clock `ceilingMs` instead. See issue #762.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'overload_pause',
+        metadata: {
+          reason: 'overloaded',
+          source: 'retry-layer',
+          hasResetTimestamp: false,
+          ceilingMs: 600_000,
+          surface: 'cli',
+        },
+      }),
+    ).not.toThrow();
+    // Resume: carries the parked durationMs + the outcome that ended the park.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'overload_resume',
+        durationMs: 180_000,
+        metadata: { source: 'retry-layer', outcome: 'recovered' },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance so readers of older/newer JSONL don't reject it.
+    expect(() => SessionPhaseNameSchema.parse('overload_pause')).not.toThrow();
+    expect(() => SessionPhaseNameSchema.parse('overload_resume')).not.toThrow();
+  });
+
   it('accepts the idle_watchdog_fired phase with its watchdog metadata', () => {
     // Emitted by SubagentHandleImpl on an idle-watchdog fire. Single event (no
     // paired *_start); carries the watchdog diagnostics as metadata.
@@ -260,7 +289,10 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     ttfb_timeout: true,
     usage_limit_pause: true,
     usage_limit_resume: true,
+    overload_pause: true,
+    overload_resume: true,
     idle_watchdog_fired: true,
+    pause_extension_granted: true,
     suspected_loop: true,
     compaction_disabled: true,
   };

@@ -258,9 +258,19 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
             // (maxTableWidth - prefixWidth) so prefix + content == maxTableWidth
             // == the outer wrap width; the outer pass then never re-splits these
             // lines. Mirrors the blockquote branch below.
+            //
+            // breakLongWords is load-bearing, not cosmetic: word-wrap alone
+            // (hard:false) leaves a token WIDER than innerWidth unbroken — a
+            // bare path/URL/`file.ts:12-34` codespan, which afk emits
+            // constantly — so the line escapes this branch over budget and the
+            // indent-blind commit pass breaks it at column 0, dropping the
+            // hanging indent. That is precisely the dissolution the invariant
+            // above forbids; enforcing the width here is what makes it true.
             const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixWidth) : undefined;
             for (const srcLine of itemText.trim().split('\n')) {
-              const wrapped = innerWidth ? wrapToWidth(srcLine, innerWidth) : srcLine;
+              const wrapped = innerWidth
+                ? wrapToWidth(srcLine, innerWidth, { breakLongWords: true })
+                : srcLine;
               const segs = wrapped.split('\n');
               for (let s = 0; s < segs.length; s++) {
                 // wrapToWidth runs wrap-ansi with trim:false, so a wrap at a
@@ -309,7 +319,14 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixCols) : undefined;
           const lines: string[] = [];
           for (const para of inner.split('\n')) {
-            const wrapped = innerWidth ? wrapToWidth(para, innerWidth) : para;
+            // breakLongWords: same contract as the list branch above — an
+            // unbreakable token wider than innerWidth would otherwise leave
+            // here over budget, and the indent-blind commit-time wrap would
+            // re-split it at column 0, orphaning the continuation outside the
+            // `│ ` gutter.
+            const wrapped = innerWidth
+              ? wrapToWidth(para, innerWidth, { breakLongWords: true })
+              : para;
             for (const line of wrapped.split('\n')) {
               // Only stamp the prefix on non-empty lines; empty lines (produced
               // by trailing \n\n on the inner paragraph token) must not become

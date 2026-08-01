@@ -413,7 +413,16 @@ export const SessionPhaseNameSchema = z.enum([
   'ttfb_timeout',
   'usage_limit_pause',
   'usage_limit_resume',
+  // Mid-stream overload (529) exhaustion park/unpark. See SessionPhaseName
+  // JSDoc in types.ts — wall-clock bounded, no reset deadline to key on.
+  'overload_pause',
+  'overload_resume',
   'idle_watchdog_fired',
+  // A fork's wall-clock ceiling granted a bounded pause extension (see
+  // subagent/pause-ceiling.ts). Single event per grant; metadata carries
+  // subagentId, grantMs, totalGrantedMs, remainingCapMs, grantCount, and
+  // optionally pauseDescription.
+  'pause_extension_granted',
   'suspected_loop',
   // Per-session compaction disable (single event, at most once). See
   // SessionPhaseName JSDoc in types.ts — metadata names the wire and cause.

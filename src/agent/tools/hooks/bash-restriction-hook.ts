@@ -85,8 +85,11 @@ import {
   parseReadDenylistEntries,
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
-import { getAfkHome } from '../../../paths.js';
-import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+import {
+  configuredAfkHome,
+  afkAllowlistFileForms,
+  relocatedAfkSensitiveRoots,
+} from './afk-home-refs.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -332,36 +335,6 @@ function normalizeHomeRefs(command: string, home: string, afkHome: string | unde
  */
 const PATH_LIKE_SPAN = /\/[^\s'"`;|&()<>]*/g;
 
-/**
- * Return AFK_HOME's configured absolute spelling, or nothing when malformed.
- *
- * Invariant: `path.resolve` here — NOT the raw `getAfkHome()` string — is what
- * keeps this spelling and the `path.join`-built needles
- * ({@link relocatedAfkSensitiveRoots}, {@link allowlistedFileForms}) in the
- * same normal form. `getAfkHome()` only rejects non-absolute paths and `/`
- * (`src/paths.ts`); it does NOT collapse a trailing separator. With
- * `AFK_HOME=/opt/my-afk/`, substituting the raw string into the command text
- * produced `/opt/my-afk//config/afk.env` (interior `//`), while
- * `path.join(afkHome, 'config')` collapses to `/opt/my-afk/config` — a literal
- * `includes()` between the two then misses, and the command that opens the
- * very file the guard exists to block sails through. Resolving once, here at
- * the source, means every downstream consumer of this function's return value
- * shares one spelling and the mismatch cannot recur.
- */
-function configuredAfkHome(): string | undefined {
-  try {
-    return path.resolve(getAfkHome());
-  } catch (err) {
-    warnAfkHomeRejectedOnce(err);
-    return undefined;
-  }
-}
-
-function relocatedAfkSensitiveRoots(): string[] {
-  const afkHome = configuredAfkHome();
-  return afkHome === undefined ? [] : [path.join(afkHome, 'config')];
-}
-
 /** Placeholder left behind by {@link scrubAllowlistedRefs}. Deliberately free of
  * any path characters so it can never itself satisfy a root or signal match. */
 const ALLOWLISTED_PLACEHOLDER = '<allowlisted-file>';
@@ -382,6 +355,11 @@ function escapeRegExp(literal: string): string {
  * alone (`expanduser('~/.afk/config/mcp.json')`). The `$HOME/` form is
  * unreachable while normalization runs first, and is kept as the one spelling
  * that would silently stop being carved out if that order ever changed.
+ *
+ * The AFK_HOME-relocated forms (the `$AFK_HOME/...` spellings and their
+ * resolved absolute twin) live in {@link afkAllowlistFileForms}; this function
+ * builds only the home-anchored forms and merges in the AFK-anchored set when
+ * AFK_HOME is configured, preserving the original deduped union.
  */
 function allowlistedFileForms(home: string, afkHome: string | undefined): string[] {
   const homeForms = READ_ALLOWLIST_REL.flatMap((rel) => {
@@ -390,12 +368,7 @@ function allowlistedFileForms(home: string, afkHome: string | undefined): string
   });
   if (afkHome === undefined) return homeForms;
 
-  const afkForms = READ_ALLOWLIST_REL.flatMap((rel) => {
-    if (!rel.startsWith('.afk/')) return [];
-    const relocated = path.join(afkHome, rel.slice('.afk/'.length));
-    if (isReadDenied(relocated).denied) return [];
-    return [relocated, `$AFK_HOME/${rel.slice('.afk/'.length)}`];
-  });
+  const afkForms = afkAllowlistFileForms(afkHome);
   return [...new Set([...homeForms, ...afkForms])];
 }
 
@@ -413,11 +386,30 @@ function allowlistedFileForms(home: string, afkHome: string | undefined): string
  * siblings (`mcp.json.bak`) the carve-out was never meant to cover — dropping
  * the only text carrying the denied enclosing root. Dropping this guard
  * entirely would turn one readable file into a readable directory.
+ *
+ * A SECOND lookahead `(?!['"\`][\w./\\*?\[\]{}-])` closes the quote-concatenation
+ * bypass (PR #805 P1): shell concatenates `~/.ssh/config".bak"` into
+ * `~/.ssh/config.bak`, so a quote character immediately followed by a path
+ * character means the quote OPENS a suffix extending the path past the
+ * exact-file boundary — the span must NOT be scrubbed, leaving `.ssh`/
+ * `.afk/config` visible to the scanner. All three shell quote characters
+ * (`"`, `'`, `` ` ``) are covered — single-quote and backtick concatenation
+ * are equivalent bypasses. A CLOSING quote (`"~/.ssh/config"` with EOL/space
+ * after) is intentionally unaffected: the first lookahead already passes
+ * quote chars (they are not in the path-char class), and the second only
+ * rejects a quote + path-char. This is what lets a legitimately quoted whole
+ * exact reference stay scrubbed (and allowed) while a quote-concatenated
+ * sibling/traversal stays blocked. The same hole, prior to this PR, admitted
+ * the `mcp.json` carve-out too: `cat ~/.afk/config/mcp.json"/../afk.env"`
+ * would have laundered `.afk/config`.
  */
 function scrubAllowlistedRefs(text: string, home: string, afkHome: string | undefined): string {
   let out = text;
   for (const form of allowlistedFileForms(home, afkHome)) {
-    const exactRef = new RegExp(`${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])`, 'g');
+    const exactRef = new RegExp(
+      `${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])(?!['"\`][\\w./\\\\*?\\[\\]{}-])`,
+      'g',
+    );
     out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);
   }
   return out;

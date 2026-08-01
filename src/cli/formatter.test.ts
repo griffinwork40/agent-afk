@@ -339,6 +339,74 @@ describe('renderMarkdownToTerminal', () => {
     });
   });
 
+  describe('lists — unbreakable tokens wider than the item budget', () => {
+    // Regression (observed in a real REPL transcript): the two tests above use
+    // word-wrappable prose, so the list branch's word-wrap (hard:false) always
+    // found a space to break at and the width invariant held by accident. A
+    // single token WIDER than (maxWidth - prefixWidth) — a bare path, URL, or
+    // `file.ts:12-34` codespan, which afk emits constantly — was left unbroken,
+    // so the item escaped the branch OVER budget and the production commit pass
+    // (markdown-stream-format.ts, wrapToWidth with breakLongWords:true) split it
+    // at column 0. On screen: `1. src/cli/…/tool-lane-format-` / `args.ts:77-81`
+    // flush-left, the list dissolved.
+    //
+    // The `{ breakLongWords: true }` argument below is load-bearing: it mirrors
+    // what the commit pipeline actually does. Re-wrapping without it (as the
+    // sibling test above does) cannot observe this failure at all.
+    const longToken = 'src/cli/commands/interactive/tool-lane-format-args.ts:77-81';
+    const COMMIT = { breakLongWords: true } as const;
+
+    it('ordered item: an over-wide token is broken WITH the hanging indent, not at column 0', () => {
+      const md = `1. \`${longToken}\` deletes the wrapper at render time.`;
+      const rendered = renderMarkdownToTerminal(md, { maxWidth: 56 });
+      const lines = stripAnsi(wrapToWidth(rendered, 56, COMMIT))
+        .split('\n')
+        .filter((l) => l.length > 0);
+
+      expect(lines.length).toBeGreaterThan(1); // it actually broke the token
+      expect(lines[0]).toMatch(/^  1\. \S/); // marker row carries content, not a bare "1."
+      // Every continuation sits at the ordered marker's content column ("  1. "
+      // = 5), never flush-left.
+      for (const line of lines.slice(1)) {
+        expect(line).toMatch(/^ {5}\S/);
+      }
+      for (const line of lines) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(56);
+      }
+    });
+
+    it('bullet item: an over-wide token is broken WITH the hanging indent', () => {
+      const md = `- \`${longToken}\` deletes the wrapper.`;
+      const rendered = renderMarkdownToTerminal(md, { maxWidth: 48 });
+      const lines = stripAnsi(wrapToWidth(rendered, 48, COMMIT))
+        .split('\n')
+        .filter((l) => l.length > 0);
+
+      expect(lines.length).toBeGreaterThan(1);
+      expect(lines[0]).toMatch(/^  • \S/);
+      for (const line of lines.slice(1)) {
+        expect(line).toMatch(/^ {4}\S/);
+      }
+      for (const line of lines) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(48);
+      }
+    });
+
+    it('blockquote: an over-wide token keeps the │ gutter on every row', () => {
+      const md = `> see \`${longToken}\` for the strip`;
+      const rendered = renderMarkdownToTerminal(md, { maxWidth: 48 });
+      const lines = stripAnsi(wrapToWidth(rendered, 48, COMMIT))
+        .split('\n')
+        .filter((l) => l.trim().length > 0);
+
+      expect(lines.length).toBeGreaterThan(1);
+      for (const line of lines) {
+        expect(line).toMatch(/^ {2}│ \S/);
+        expect(stringWidth(line)).toBeLessThanOrEqual(48);
+      }
+    });
+  });
+
   describe('renderCardLine', () => {
     it('renders bold markdown as ANSI bold', () => {
       const out = renderCardLine('**PR #163 opened**: https://example.com');

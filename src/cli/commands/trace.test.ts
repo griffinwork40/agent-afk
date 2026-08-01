@@ -537,3 +537,31 @@ describe('loadTrace ledger fallback', () => {
     await expect(loadTrace('sess-legacy')).rejects.toThrow(/No trace found/);
   });
 });
+
+describe('formatTrace — overload pause/resume is high-signal (shown by default)', () => {
+  // An overload park (#762) is the same class of gap as the usage-limit park: up
+  // to 10 minutes of silence with no other trace signal. It must render WITHOUT
+  // --all, or the operator debugging a 529 stall sees an unexplained hole. A 529
+  // carries no reset timestamp, so the ceiling is what bounds it.
+  const events: EventObj[] = [
+    { ts: '2026-07-31T12:30:00.000Z', seq: 0, kind: 'session_phase', payload: { phase: 'overload_pause', metadata: { reason: 'overloaded', source: 'retry-layer', hasResetTimestamp: false, ceilingMs: 600_000, surface: 'cli' } } },
+    { ts: '2026-07-31T12:38:20.000Z', seq: 1, kind: 'session_phase', payload: { phase: 'overload_resume', durationMs: 500_000, metadata: { source: 'retry-layer', outcome: 'ceiling-reached' } } },
+    { ts: '2026-07-31T12:38:25.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'failed', finalCostUsd: 0.02, finalTurnCount: 3, closedAt: '2026-07-31T12:38:25.000Z' } },
+  ];
+  const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+
+  it('renders the pause in the DEFAULT view with its ceiling', () => {
+    expect(out).toContain('paused');
+    expect(out).toContain('overloaded (529)');
+    expect(out).toContain('ceiling');
+  });
+
+  it('renders the resume in the DEFAULT view with duration and outcome', () => {
+    expect(out).toContain('resumed');
+    expect(out).toContain('ceiling-reached');
+  });
+
+  it('distinguishes an overload park from a usage-limit park', () => {
+    expect(out).not.toContain('usage-limit');
+  });
+});

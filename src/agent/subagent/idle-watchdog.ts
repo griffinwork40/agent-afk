@@ -54,6 +54,7 @@
 
 import { IdleWatchdogError } from '../../utils/errors.js';
 import type { OutputEvent } from '../types/session-types.js';
+import { PAUSE_WINDOW_SLACK_MS, pauseWindowMs } from './pause-window.js';
 
 /**
  * Slack added to a recognized pause window (OAuth `paused` / `rate_limit`
@@ -61,8 +62,12 @@ import type { OutputEvent } from '../types/session-types.js';
  * the instant a provider says it will resume — the resume + first replayed
  * token needs a moment to actually stream. 30s, matching the spec's proposed
  * OAuth-pause slack (Open Q4) and the order of the Telegram streaming precedent.
+ *
+ * Alias of {@link PAUSE_WINDOW_SLACK_MS}, which is now shared with the
+ * pause-aware wall-clock ceiling so the two bounds cannot drift apart. Retained
+ * as a named export for existing importers.
  */
-export const IDLE_WATCHDOG_PAUSE_SLACK_MS = 30_000;
+export const IDLE_WATCHDOG_PAUSE_SLACK_MS = PAUSE_WINDOW_SLACK_MS;
 
 /**
  * Progress-aware idle watchdog over one forked sub-agent turn.
@@ -177,12 +182,13 @@ export class IdleWatchdog {
     if (this.inFlightTools.size > 0) return;
 
     if (event.type === 'paused') {
-      this.arm(this.pausedWindowMs(event.resetsAt), event.type);
+      this.arm(this.pausedWindowMs(event), event.type);
       return;
     }
     if (event.type === 'rate_limit') {
-      if (typeof event.retryAfterMs === 'number' && event.retryAfterMs > 0) {
-        this.arm(event.retryAfterMs + IDLE_WATCHDOG_PAUSE_SLACK_MS, event.type);
+      const windowMs = pauseWindowMs(event);
+      if (windowMs !== undefined && windowMs > 0) {
+        this.arm(windowMs, event.type);
         return;
       }
       // A rate_limit with no retryAfterMs is still a live-stream signal; fall
@@ -202,11 +208,15 @@ export class IdleWatchdog {
    * with normal cadence rather than parking blind for hours; a genuinely long
    * park will re-arm on the eventual `resumed`/next event, and a wedged one
    * still fires.
+   *
+   * The `resetsAt + slack` arithmetic itself lives in {@link pauseWindowMs},
+   * shared with the pause-aware wall-clock ceiling; the idle-window FLOOR below
+   * is this watchdog's own policy and stays here.
    */
-  private pausedWindowMs(resetsAt: Date | undefined): number {
-    if (resetsAt === undefined) return this.idleTimeoutMs;
-    const untilResetMs = resetsAt.getTime() - Date.now();
-    return Math.max(this.idleTimeoutMs, untilResetMs + IDLE_WATCHDOG_PAUSE_SLACK_MS);
+  private pausedWindowMs(event: OutputEvent): number {
+    const windowMs = pauseWindowMs(event);
+    if (windowMs === undefined) return this.idleTimeoutMs;
+    return Math.max(this.idleTimeoutMs, windowMs);
   }
 
   /**
