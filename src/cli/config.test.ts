@@ -467,22 +467,53 @@ describe('Config Loader', () => {
       expect(config.systemPromptSource).toBe(`afk-md:${homeAfkMd}`);
     });
 
-    it('prefers cwd/AFK.md over ~/.afk/AFK.md when both exist', () => {
+    it('combines ~/.afk/AFK.md and cwd/AFK.md when both exist, user-scope first and project-scope marked as the conflict winner', () => {
       const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
       mockedExistsSync().mockImplementation((p) => {
         if (String(p).endsWith('AFK.md')) return true; // both exist
         return realFsModule.__realExistsSync(p as fs.PathLike);
       });
       mockedReadFileSync().mockImplementation((p, ...args) => {
         if (String(p).endsWith('AFK.md')) {
-          return String(p) === cwdAfkMd ? 'cwd content wins' : 'user-scope content';
+          return String(p) === cwdAfkMd ? 'project content' : 'personal content';
         }
         return (realFsModule.__realReadFileSync as Function)(p, ...args);
       });
 
       const config = loadConfig();
-      expect(config.systemPrompt).toBe('cwd content wins');
-      expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
+      expect(config.systemPrompt).toBe(
+        `## Personal configuration (${homeAfkMd})\n\npersonal content\n\n` +
+          `## Project configuration (${cwdAfkMd}) — takes precedence on conflict\n\nproject content`,
+      );
+      expect(config.systemPromptSource).toBe(`afk-md:${homeAfkMd}+afk-md:${cwdAfkMd}`);
+    });
+
+    it('does not duplicate content when $AFK_HOME/AFK.md and cwd/AFK.md resolve to the same file', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const prevAfkHome = process.env['AFK_HOME'];
+      process.env['AFK_HOME'] = process.cwd(); // AFK_HOME relocated onto cwd — same file both ways
+      try {
+        mockedExistsSync().mockImplementation((p) => {
+          if (String(p).endsWith('AFK.md')) return String(p) === cwdAfkMd;
+          return realFsModule.__realExistsSync(p as fs.PathLike);
+        });
+        mockedReadFileSync().mockImplementation((p, ...args) => {
+          if (String(p) === cwdAfkMd) return 'single shared file';
+          return (realFsModule.__realReadFileSync as Function)(p, ...args);
+        });
+
+        const config = loadConfig();
+        expect(config.systemPrompt).toBe('single shared file');
+        expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
+      } finally {
+        if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
+        else process.env['AFK_HOME'] = prevAfkHome;
+      }
     });
 
     it('ignores AFK.md when AFK_SYSTEM_PROMPT env is set', () => {
