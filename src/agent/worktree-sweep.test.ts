@@ -655,12 +655,13 @@ describe('locked-always-skipped', () => {
 // ---------------------------------------------------------------------------
 
 describe('orphaned-dir-cleanup', () => {
-  // Invariant: an unregistered directory is still DETECTED as `orphaned-dir`,
-  // but detection no longer authorises removal. The orphan path has no git
-  // information (git does not list the directory, so `status` cannot classify
-  // it), so removal is gated on the filesystem guard instead — age first, then
-  // content. A directory created seconds ago is almost always an in-flight
-  // `git worktree add`, and deleting it destroys work no branch ref holds (#794).
+  // Invariant: an unregistered directory is detected, but only receives the
+  // prunable `orphaned-dir` verdict after the guard authorises removal. The
+  // orphan path has no git information (git does not list the directory, so
+  // `status` cannot classify it), so removal is gated on the filesystem guard
+  // instead — age first, then content. A directory created seconds ago is
+  // almost always an in-flight `git worktree add`, and deleting it destroys
+  // work no branch ref holds (#794).
   it('detects but PRESERVES a freshly-created unregistered directory', async () => {
     const orphanPath = join(afkWorktreesDir, 'afk-orphaned-dir');
     await fs.mkdir(orphanPath, { recursive: true });
@@ -687,10 +688,49 @@ describe('orphaned-dir-cleanup', () => {
       telemetryPath: telemetryFile,
     });
 
-    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir')).toBe(true);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir-preserved')).toBe(true);
     expect(result.removed).not.toContain(orphanPath);
     expect(fsSpy).not.toHaveBeenCalledWith(orphanPath, { recursive: true, force: true });
     expect(result.warnings.some((w) => w.includes('orphaned dir preserved') && w.includes(orphanPath))).toBe(true);
+  });
+
+  it('PRESERVES an orphan when the filesystem reports no birth time', async () => {
+    const orphanPath = join(afkWorktreesDir, 'afk-orphaned-no-birthtime');
+    await fs.mkdir(orphanPath, { recursive: true });
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const realStat = fs.stat.bind(fs);
+    vi.spyOn(fs, 'stat').mockImplementation(async (target: Parameters<typeof fs.stat>[0]) => {
+      const stat = await realStat(target);
+      if (String(target) === orphanPath) {
+        Object.defineProperty(stat, 'birthtimeMs', { value: 0, configurable: true });
+      }
+      return stat;
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates).toContainEqual({
+      path: orphanPath,
+      verdict: 'orphaned-dir-preserved',
+      owner: 'interactive',
+      ageMs: 0,
+    });
+    expect(result.removed).not.toContain(orphanPath);
+    await expect(fs.stat(orphanPath)).resolves.toBeDefined();
   });
 
   it('removes an AGED unregistered directory holding only rebuildable content', async () => {
@@ -734,6 +774,7 @@ describe('orphaned-dir-cleanup', () => {
     });
 
     expect(result.removed).toContain(orphanPath);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir')).toBe(true);
     expect(fsSpy).toHaveBeenCalledWith(orphanPath, { recursive: true, force: true });
   });
 
@@ -773,6 +814,7 @@ describe('orphaned-dir-cleanup', () => {
     });
 
     expect(result.removed).not.toContain(orphanPath);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir-preserved')).toBe(true);
     expect(
       result.warnings.some((w) => w.includes('non-rebuildable-content') && w.includes(orphanPath)),
     ).toBe(true);
@@ -800,7 +842,7 @@ describe('orphaned-dir-cleanup', () => {
       telemetryPath: telemetryFile,
     });
 
-    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir')).toBe(true);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir-preserved')).toBe(true);
     expect(result.removed).not.toContain(orphanPath);
     // Directory should still exist
     const exists = await fs.stat(orphanPath).then(() => true).catch(() => false);

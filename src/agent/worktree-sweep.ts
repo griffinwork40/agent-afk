@@ -120,6 +120,8 @@ type WorktreeVerdict =
   | 'locked'
   | 'active'
   | 'orphaned-dir'
+  /** An unregistered directory that the orphan guard could not prove safe to remove. */
+  | 'orphaned-dir-preserved'
   | 'orphaned-registration'
   /**
    * The owning process recorded in `.afk-worktree-meta.json` is gone, the
@@ -537,20 +539,25 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         let orphanAgeMs = 0;
         try {
           const stat = await fs.stat(orphanPath);
-          orphanAgeMs = Date.now() - stat.birthtimeMs;
+          // Some filesystems report a zero/invalid birth time when creation
+          // time is unavailable. Treat that as unknown (age 0), not as an
+          // epoch-old directory eligible for immediate removal.
+          if (Number.isFinite(stat.birthtimeMs) && stat.birthtimeMs > 0) {
+            orphanAgeMs = Math.max(0, Date.now() - stat.birthtimeMs);
+          }
         } catch { /* use 0 */ }
-        result.candidates.push({
-          path: orphanPath,
-          verdict: 'orphaned-dir',
-          owner: 'interactive',
-          ageMs: orphanAgeMs,
-        });
         // Invariant: the orphan path has no git information — the directory is
         // absent from `git worktree list`, so `git status` cannot classify it
         // and none of the registered-candidate protections apply. The guard is
         // the substitute floor and it runs in dry-run too, so `list` reports the
         // preservation instead of implying the next tick will delete (#794).
         const guard = await classifyOrphanDir(orphanPath, orphanAgeMs, MIN_EMPTY_AGE_MS);
+        result.candidates.push({
+          path: orphanPath,
+          verdict: guard.remove ? 'orphaned-dir' : 'orphaned-dir-preserved',
+          owner: 'interactive',
+          ageMs: orphanAgeMs,
+        });
         if (!guard.remove) {
           result.warnings.push(
             `[WARN] orphaned dir preserved (${guard.because}` +
