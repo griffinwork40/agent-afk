@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.1] - 2026-08-01
+
+### Fixed
+- fail the bundle build when a prompt read cannot be inlined (#776) (#816) (548029c)
+
 ## [5.84.0] - 2026-08-01
 
 ### Added
