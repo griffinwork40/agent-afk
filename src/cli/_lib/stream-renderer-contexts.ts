@@ -20,6 +20,7 @@ import type { Writer } from '../slash/types.js';
 import type { StageTrackerState } from '../commands/interactive/loop-stage.js';
 import type { CommitCoordinator } from './commit-coordinator.js';
 import type { SourceState } from './stream-renderer-source.js';
+import type { ChildActivityTracker } from './child-activity-select.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 
 /**
@@ -38,6 +39,8 @@ export function makeOrchestratorCtx(args: {
   stageTracker?: StageTrackerState;
   activeSkillName?: string;
   lastProgressByTask: Map<string, ProgressEvent>;
+  sources?: ReadonlyMap<string, SourceState>;
+  childActivity?: ChildActivityTracker;
 }): OrchestratorCtx {
   return {
     out: args.out,
@@ -50,6 +53,11 @@ export function makeOrchestratorCtx(args: {
     streamingMarkdown: args.streamingMarkdown,
     coordinator: args.coordinator,
     lastProgressByTask: args.lastProgressByTask,
+    // Live child-activity inputs for the banner detail slot. Spread-guarded
+    // (not passed as `undefined`) so exactOptionalPropertyTypes stays satisfied
+    // and omitting them is indistinguishable from the pre-change ctx shape.
+    ...(args.sources ? { sources: args.sources } : {}),
+    ...(args.childActivity ? { childActivity: args.childActivity } : {}),
     // Hand the tracker only when we have a TTY compositor — non-TTY
     // surfaces (Telegram, daemon, tests) never call setComposedOverlay
     // anyway, and propagating a tracker through them would just be

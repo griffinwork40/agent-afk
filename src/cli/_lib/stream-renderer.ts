@@ -44,6 +44,8 @@ import {
   type SourceState,
   freshSourceState,
 } from './stream-renderer-source.js';
+import { ChildActivityTracker } from './child-activity-select.js';
+import { InFlightToolTracker, noteToolEvent } from '../input/work-derived-verb.js';
 import {
   handleOrchestratorEvent,
   setComposedOverlay,
@@ -275,6 +277,21 @@ export class StreamRenderer {
   /** Last progress event per task — emitted on stream end as a one-line summary. */
   private lastProgressByTask = new Map<string, ProgressEvent>();
 
+  /**
+   * Sticky selector for the subagent named in the progress banner's detail slot.
+   * Held here (not on the ctx) because `buildOrchestratorCtx` allocates a fresh
+   * ctx object per call, which would reset the stickiness on every repaint and
+   * reintroduce the child-to-child thrash the hold exists to prevent.
+   */
+  private childActivity = new ChildActivityTracker();
+
+  /**
+   * In-flight tool set backing the spinner's work-derived verb. Spans the
+   * orchestrator and all subagents — the verb describes the session, not one
+   * source, so a single tracker is correct here.
+   */
+  private inFlightTools = new InFlightToolTracker();
+
   private disposed = false;
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
   /**
@@ -456,6 +473,8 @@ export class StreamRenderer {
       streamingMarkdownRef: this.streamingMarkdownRef,
       toolLane: this.toolLane,
       lastProgressByTask: this.lastProgressByTask,
+      sources: this.sources,
+      childActivity: this.childActivity,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
     });
@@ -552,6 +571,8 @@ export class StreamRenderer {
       streamingMarkdown: this.streamingMarkdownRef,
       coordinator: this.coordinator,
       lastProgressByTask: this.lastProgressByTask,
+      sources: this.sources,
+      childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
       ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
     });
@@ -560,6 +581,11 @@ export class StreamRenderer {
   process(event: OutputEvent, meta?: SubagentProgressMeta): void {
     if (this.disposed) return;
 
+    // Feed the spinner's work-derived verb. Done here — before delegation —
+    // because `process` is the one choke point that sees tool events from BOTH
+    // the orchestrator and every subagent, so neither handler needs its own
+    // call site. Pure bookkeeping plus one setter; fires no repaint of its own.
+    noteToolEvent(event, this.inFlightTools, this.compositor);
     const sourceId = meta?.subagentId ?? ORCHESTRATOR_SOURCE_KEY;
     const isOrchestrator = sourceId === ORCHESTRATOR_SOURCE_KEY;
     let source = this.sources.get(sourceId);
