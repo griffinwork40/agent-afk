@@ -292,6 +292,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     overload_pause: true,
     overload_resume: true,
     idle_watchdog_fired: true,
+    pause_extension_granted: true,
     suspected_loop: true,
     compaction_disabled: true,
   };

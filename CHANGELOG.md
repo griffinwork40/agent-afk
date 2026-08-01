@@ -11,6 +11,24 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.2] - 2026-08-01
+
+### Fixed
+- credit provider-paused time against the wall-clock ceiling (#797) (f6b33cf)
+
+## [5.84.1] - 2026-08-01
+
+### Fixed
+- fail the bundle build when a prompt read cannot be inlined (#776) (#816) (548029c)
+
+## [5.84.0] - 2026-08-01
+
+### Added
+- fold the fragment-goal signal class into intent-lock (#793) (c791d8e)
+
+### Changed
+- migrate hash-pin history blocks to docs/bundled-plugins.md (#790) (#809) (5ea1493)
+
 ## [5.83.9] - 2026-07-31
 
 ### Fixed

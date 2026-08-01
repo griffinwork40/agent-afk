@@ -163,9 +163,9 @@ These skills fire automatically at lifecycle points in multi-step work. You can 
 /intent-lock
 ```
 
-**Purpose:** Resolve ambiguous referents and unverified characterizations before multi-step work begins.
+**Purpose:** Resolve ambiguous inputs and reconstruct missing task statements before multi-step work begins.
 
-**What it does:** Scans the request for ambiguous referents ("the text", "her draft"), unverified status claims ("the PR is approved"), identity assumptions, and code-vs-runtime dual referents (terms like "session" or "hooks" that name both a project concept and an agent runtime concept). Emits a one-sentence interpretation lock per finding and proceeds — escalating to a blocking question only when the ambiguity gates an irreversible action with multiple plausible reads.
+**What it does:** Scans the request for ambiguous referents ("the text", "her draft"), unverified status claims ("the PR is approved"), identity assumptions, code-vs-runtime dual referents (terms like "session" or "hooks" that name both a project concept and an agent runtime concept), and requests with no task statement (a bare path, URL, noun phrase, or pasted trace). It emits a one-sentence interpretation lock per finding and proceeds — escalating when multiple plausible reads gate an irreversible action, or stopping Blocked without acting when an answer cannot be received.
 
 **When to use:** Fires automatically before any multi-step task with ambiguous inputs. Invoke manually when you want to surface and lock interpretations before a complex operation.
 
