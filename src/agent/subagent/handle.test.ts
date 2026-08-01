@@ -197,3 +197,136 @@ describe('R1 — runInBackground unhandled-rejection safety', () => {
     expect(unhandledErrors).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pause-aware wall-clock ceiling — end-to-end wiring through the handle.
+//
+// The unit behaviour of the extension policy lives in `pause-ceiling.test.ts`.
+// These tests prove the policy is actually WIRED: that the handle feeds streamed
+// pause events to the ceiling attached to its own `withTimeout` call, so a fork
+// parked by the provider is no longer guaranteed to die at its wall-clock
+// budget. Regression target: a `/forge` fork lost 1h49m of work this way.
+// ---------------------------------------------------------------------------
+
+describe('pause-aware wall-clock ceiling (handle wiring)', () => {
+  let abortGraph: AbortGraph;
+  let controller: AbortController;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    abortGraph = new AbortGraph();
+    controller = new AbortController();
+    abortGraph.register('root', controller);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** A session that emits `events`, then stalls forever (never completes). */
+  function makeStallingSession(events: OutputEvent[]): IAgentSession {
+    return makeMinimalSession({
+      async *sendMessageStream(): AsyncIterable<OutputEvent> {
+        for (const event of events) yield event;
+        // Park indefinitely: only a timeout can end this turn.
+        await new Promise<never>(() => {});
+      },
+    });
+  }
+
+  function makeHandle(session: IAgentSession, timeoutMs: number): SubagentHandleImpl<unknown> {
+    return new SubagentHandleImpl(
+      'forge-rework-2',
+      session,
+      controller,
+      abortGraph,
+      undefined, // outputSchema
+      timeoutMs,
+      undefined, // hookRegistry
+      vi.fn(), // onTerminal
+    );
+  }
+
+  it('still fires at the wall-clock budget when no pause event arrives', async () => {
+    const BUDGET = 60_000;
+    const handle = makeHandle(makeStallingSession([]), BUDGET);
+
+    const settled = handle.run('prompt').then(
+      () => 'resolved',
+      (err: unknown) => err,
+    );
+
+    await vi.advanceTimersByTimeAsync(BUDGET - 1);
+    // Nothing has fired yet: the budget is intact.
+    await vi.advanceTimersByTimeAsync(1);
+
+    const outcome = await settled;
+    expect(outcome).toBeInstanceOf(Error);
+    // Unchanged message shape for the no-pause path.
+    expect((outcome as Error).message).toBe(
+      'Operation timed out after 60000ms (forge-rework-2)',
+    );
+  });
+
+  it('extends past the budget when the child streams a provider `paused` event', async () => {
+    const BUDGET = 60_000;
+    const parkMs = 10 * 60_000; // park far longer than the budget
+    const handle = makeHandle(
+      makeStallingSession([
+        {
+          type: 'paused',
+          reason: 'usage-limit',
+          resetsAt: new Date(Date.now() + parkMs),
+        },
+      ]),
+      BUDGET,
+    );
+
+    let settled = false;
+    const outcome = handle.run('prompt').then(
+      () => 'resolved',
+      (err: unknown) => {
+        settled = true;
+        return err;
+      },
+    );
+
+    // Pre-fix the turn died exactly here. Post-fix the parked time is credited.
+    await vi.advanceTimersByTimeAsync(BUDGET + 1);
+    expect(settled).toBe(false);
+
+    // Finite: it still dies once the credited park is consumed.
+    await vi.advanceTimersByTimeAsync(parkMs + 60_000);
+    const err = await outcome;
+    expect(err).toBeInstanceOf(Error);
+    // And the failure now names the pause context instead of a bare timeout.
+    expect((err as Error).message).toContain('pause-aware ceiling');
+    expect((err as Error).message).toContain('last provider pause: paused (usage-limit');
+  });
+
+  it('does NOT extend when the child only streams ordinary content', async () => {
+    const BUDGET = 60_000;
+    const handle = makeHandle(
+      makeStallingSession([
+        { type: 'chunk', chunk: { type: 'content', content: 'working hard' } },
+        { type: 'chunk', chunk: { type: 'thinking', thinking: 'still working' } },
+      ]),
+      BUDGET,
+    );
+
+    const settled = handle.run('prompt').then(
+      () => 'resolved',
+      (err: unknown) => err,
+    );
+
+    await vi.advanceTimersByTimeAsync(BUDGET + 1);
+
+    const outcome = await settled;
+    expect(outcome).toBeInstanceOf(Error);
+    // Anti-gaming: child output buys no extension, so the message is the plain one.
+    expect((outcome as Error).message).toBe(
+      'Operation timed out after 60000ms (forge-rework-2)',
+    );
+  });
+});

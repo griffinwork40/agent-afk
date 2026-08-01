@@ -12,6 +12,12 @@ import { join, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import { getWorktreeSweepLockPath, getTelemetryPath } from '../paths.js';
 import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js';
+// Runtime value import. Safe despite the mutual reference: the only import
+// going the other way (worktree-ignored-probe.ts importing ExecFileFn from
+// THIS file) is `import type`, which TypeScript erases at compile time — so
+// no runtime require()/import cycle exists between the two modules.
+import { probeNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
+import { classifyOrphanDir } from './worktree-orphan-guard.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,8 +31,32 @@ import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js'
 export type ExecFileFn = (
   file: string,
   args: string[],
-  opts?: { cwd?: string },
+  opts?: {
+    cwd?: string;
+    /**
+     * Contract: callers that can produce large output MUST set this. Node's
+     * default `execFile` maxBuffer is 1MB and an overflow REJECTS the promise
+     * rather than truncating, so an unbounded call silently converts "lots of
+     * output" into "git failed" — and every failure path in the ignored probe
+     * fails safe by protecting, which quietly makes the worktree immortal.
+     */
+    maxBuffer?: number;
+    timeout?: number;
+  },
 ) => Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * Why a candidate reads dirty. Carried so a preservation warning can name the
+ * actual cause: an ignored-state protect is NOT "uncommitted changes" — git
+ * status calls that tree clean — and reporting it as such sends the reader
+ * looking for a diff that does not exist.
+ */
+type DirtyReason =
+  | 'clean'
+  | 'uncommitted changes'
+  | 'git status failed'
+  | 'non-rebuildable ignored files'
+  | 'ignored-file probe failed';
 
 interface WorktreeMeta {
   owner: 'interactive' | 'diagnose' | string;
@@ -55,6 +85,8 @@ interface WorktreeCandidate {
   meta?: WorktreeMeta;
   ageMs: number;
   isDirty: boolean;
+  /** Populated whenever `isDirty` is true; `'clean'` otherwise. */
+  dirtyReason: DirtyReason;
   commitsAhead: number;
   /**
    * Commits on this worktree's HEAD that exist NOWHERE but this checkout —
@@ -88,6 +120,8 @@ type WorktreeVerdict =
   | 'locked'
   | 'active'
   | 'orphaned-dir'
+  /** An unregistered directory that the orphan guard could not prove safe to remove. */
+  | 'orphaned-dir-preserved'
   | 'orphaned-registration'
   /**
    * The owning process recorded in `.afk-worktree-meta.json` is gone, the
@@ -161,8 +195,13 @@ export interface SweepResult {
  * same tick. One hour is generous enough to cover any human-paced workflow
  * while still letting `empty` survive a sweep when the user has had time to
  * commit.
+ *
+ * Exported so `worktree-occupancy.ts`'s `DEFAULT_HEARTBEAT_INTERVAL_MS` can be
+ * checked against it directly instead of via a prose comment linking two
+ * private constants in different files — raising the heartbeat interval above
+ * this gate would silently re-break #759 with no test failures otherwise.
  */
-const MIN_EMPTY_AGE_MS = 3_600_000; // 1 hour
+export const MIN_EMPTY_AGE_MS = 3_600_000; // 1 hour
 
 /**
  * Maximum age of a `.afk-worktree-meta.json` whose `pid` field we still
@@ -500,14 +539,32 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         let orphanAgeMs = 0;
         try {
           const stat = await fs.stat(orphanPath);
-          orphanAgeMs = Date.now() - stat.birthtimeMs;
+          // Some filesystems report a zero/invalid birth time when creation
+          // time is unavailable. Treat that as unknown (age 0), not as an
+          // epoch-old directory eligible for immediate removal.
+          if (Number.isFinite(stat.birthtimeMs) && stat.birthtimeMs > 0) {
+            orphanAgeMs = Math.max(0, Date.now() - stat.birthtimeMs);
+          }
         } catch { /* use 0 */ }
+        // Invariant: the orphan path has no git information — the directory is
+        // absent from `git worktree list`, so `git status` cannot classify it
+        // and none of the registered-candidate protections apply. The guard is
+        // the substitute floor and it runs in dry-run too, so `list` reports the
+        // preservation instead of implying the next tick will delete (#794).
+        const guard = await classifyOrphanDir(orphanPath, orphanAgeMs, MIN_EMPTY_AGE_MS);
         result.candidates.push({
           path: orphanPath,
-          verdict: 'orphaned-dir',
+          verdict: guard.remove ? 'orphaned-dir' : 'orphaned-dir-preserved',
           owner: 'interactive',
           ageMs: orphanAgeMs,
         });
+        if (!guard.remove) {
+          result.warnings.push(
+            `[WARN] orphaned dir preserved (${guard.because}` +
+              `${guard.detail === undefined ? '' : `: ${guard.detail}`}): ${orphanPath}`,
+          );
+          continue;
+        }
         if (!effectiveDryRun) {
           try {
             await fs.rm(orphanPath, { recursive: true, force: true });
@@ -597,11 +654,43 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
 
       // Check dirty status
       let isDirty = false;
+      let dirtyReason: DirtyReason = 'clean';
       let commitsAhead = 0;
       try {
         const statusResult = await execFile('git', ['-C', entry.path, 'status', '--porcelain']);
         isDirty = statusResult.stdout.trim().length > 0;
-      } catch { isDirty = true; /* treat as dirty — safe fallback */ }
+        if (isDirty) dirtyReason = 'uncommitted changes';
+      } catch {
+        isDirty = true; /* treat as dirty — safe fallback */
+        dirtyReason = 'git status failed';
+      }
+
+      // Invariant: bare `--porcelain` reports untracked files but NEVER ignored
+      // ones, so a tree holding only ignored content reads clean here and every
+      // removal path below runs `remove --force`, deleting it. Committed work
+      // survives (branch refs live in the shared .git), but a worktree-local
+      // `.env` or scratch file does not (#759). Probe for ignored content a
+      // rebuild could NOT restore and treat it as dirty. Rebuildable output
+      // (node_modules/, dist/, caches) is deliberately NOT protective — that
+      // would make every worktree immortal and defeat the sweep.
+      if (!isDirty) {
+        const probe = await probeNonRebuildableIgnoredFiles(execFile, entry.path);
+        isDirty = probe.protect;
+        if (probe.protect) {
+          dirtyReason =
+            probe.because === 'git-failed'
+              ? 'ignored-file probe failed'
+              : 'non-rebuildable ignored files';
+        }
+        // A protect-on-failure is indistinguishable from a real find at the
+        // verdict level, so surface it: otherwise a worktree that git can no
+        // longer read stays preserved forever with no trace of why.
+        if (probe.protect && probe.because === 'git-failed') {
+          result.warnings.push(
+            `[WARN] ignored-file probe failed for ${entry.path} — preserving (${probe.detail})`,
+          );
+        }
+      }
 
       if (!isDirty && entry.head) {
         // Contract: `commitsAhead > 0` marks a worktree as holding unmerged
@@ -687,6 +776,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         meta,
         ageMs,
         isDirty,
+        dirtyReason,
         commitsAhead,
         commitsUnpushed,
         ownerLiveness,
@@ -755,7 +845,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           );
         } else if (verdict === 'stale-dirty') {
           result.warnings.push(
-            `[WARN] stale-dirty worktree preserved (uncommitted changes): ${entry.path}`,
+            `[WARN] stale-dirty worktree preserved (${candidate.dirtyReason}): ${entry.path}`,
           );
         }
         // 'locked', 'active' → no-op

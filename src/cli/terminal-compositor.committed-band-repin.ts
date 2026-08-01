@@ -6,7 +6,7 @@
  */
 
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
-import { eraseAndPaintRow } from './terminal-compositor.types.js';
+import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 
 /**

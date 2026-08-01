@@ -20,7 +20,7 @@ import {
   scrollbackFlushLines,
   buildScrollbackArchiveEscape,
   snapFlushCountToLogicalBoundary,
-} from './terminal-compositor.types.js';
+} from './terminal-compositor.scrollback.js';
 import { hardWrapToWidth } from './wrap.js';
 import { decideCommitMode } from './commit-mode.js';
 import {

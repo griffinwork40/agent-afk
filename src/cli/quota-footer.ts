@@ -66,6 +66,40 @@ function labelledWindows(windows: QuotaWindows): LabelledWindow[] {
   return out;
 }
 
+/**
+ * Contract: the runtime only actually parks and resumes when BOTH conditions
+ * hold — `autoResumeOnUsageLimit` is on (default true, see `query.ts`), and the
+ * reset lands within the retry layer's wait ceiling. Past that ceiling the
+ * layer surfaces the error instead of waiting (`retry-layer.ts`), which a hot
+ * 7d window routinely trips. Promising auto-resume outside those conditions
+ * tells an AFK user to walk away from a turn that is going to terminate.
+ *
+ * Held as a local copy rather than a runtime import: `retry-layer.ts` sits
+ * behind the provider boundary, and importing a value from it here would drag
+ * the provider graph into the REPL's render path. `quota-footer.test.ts`
+ * imports the real constant and asserts the two agree, so drift fails a test
+ * instead of silently re-breaking this copy.
+ */
+const AUTO_RESUME_MAX_LEAD_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * What actually happens when the window caps — the promise, or the truth.
+ *
+ * An unknown deadline keeps the promise: with no `resetsAt` the retry layer
+ * polls within its own budget rather than bailing early, so parking is still
+ * the real behaviour.
+ */
+function capNote(state: QuotaWindowState, now: Date, autoResume: boolean): string {
+  if (!autoResume) return 'turns stop at the cap — auto-resume is off';
+  if (
+    state.resetsAt !== undefined &&
+    state.resetsAt.getTime() - now.getTime() > AUTO_RESUME_MAX_LEAD_MS
+  ) {
+    return 'turns stop at the cap — the reset is too far out to wait';
+  }
+  return 'AFK pauses and auto-resumes at the cap';
+}
+
 /** `resets in 1h20m`, or undefined when no usable deadline is known. */
 function resetClause(state: QuotaWindowState, now: Date): string | undefined {
   if (state.resetsAt === undefined) return undefined;
@@ -93,6 +127,7 @@ function resetClause(state: QuotaWindowState, now: Date): string | undefined {
 export function formatQuotaUsage(
   windows: QuotaWindows | undefined,
   now: Date = new Date(),
+  opts: { autoResume?: boolean } = {},
 ): { tier: QuotaUsageTier; text: string | null } {
   if (windows === undefined) return { tier: 'quiet', text: null };
   const all = labelledWindows(windows);
@@ -114,9 +149,10 @@ export function formatQuotaUsage(
   const suffix = alsoHot.length > 0 ? ` (also ${alsoHot.join(', ')})` : '';
   // Grounded in the runtime's actual behaviour: a usage-limit 429 parks the turn
   // and resumes it after the reset (see usage-limit.ts), emitting
-  // usage_limit_pause / usage_limit_resume phases. Saying so turns an alarming
-  // line into an actionable one — the session is parked, not lost.
-  const parkNote = 'AFK pauses and auto-resumes at the cap';
+  // usage_limit_pause / usage_limit_resume phases — but ONLY within the bounds
+  // capNote checks. Saying so turns an alarming line into an actionable one;
+  // saying so when it is false walks the user away from a turn that will die.
+  const parkNote = capNote(binding.state, now, opts.autoResume ?? true);
 
   if (tier === 'over') {
     const head = `  ${binding.label} quota exhausted`;

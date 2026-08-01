@@ -322,8 +322,8 @@ export interface AnthropicClientLike {
  * classification metadata that must NEVER cross the wire boundary.
  *
  * If you find yourself widening this type, you almost certainly want to
- * widen `AnthropicToolDef` instead and add a new field to the projection
- * in `loop.ts` only after confirming the SDK accepts it.
+ * widen `AnthropicToolDef` instead and add a new field to `toWireTool`
+ * in `loop/round-request.ts` only after confirming the SDK accepts it.
  */
 export interface WireToolDef {
   name: string;

@@ -11,6 +11,164 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.16] - 2026-08-01
+
+### Fixed
+- make a running subagent legible instead of decorative (#840) (582b5a2)
+
+## [5.84.15] - 2026-08-01
+
+### Fixed
+- stop pixel art sharing rows with text so resize can't tear it (#842) (062a15a)
+
+## [5.84.14] - 2026-08-01
+
+### Fixed
+- stop the TTFB bound firing on throttle backoff, and stop guessing why a stream ended (#839) (ad7c976)
+
+### Changed
+- impact map for ADR 0002 item 2, and mark it rejected (#774) (f59e6bf)
+
+## [5.84.13] - 2026-08-01
+
+### Changed
+- extract constants + fork types from subagent.ts (#829) (#838) (4e0af66)
+
+## [5.84.12] - 2026-08-01
+
+### Fixed
+- reject newline/CR in rm-allowlist carve-out (#806 follow-up) (#835) (ee01384)
+
+## [5.84.11] - 2026-08-01
+
+### Fixed
+- alias /add-dir to /allow-dir (#837) (4e74dc6)
+
+## [5.84.10] - 2026-08-01
+
+### Changed
+- split scrollback logic out of terminal-compositor.types.ts (#826) (#836) (7347dae)
+
+## [5.84.9] - 2026-08-01
+
+### Fixed
+- gate orphaned-dir removal on age and content (#794) (#813) (27060bc)
+
+## [5.84.8] - 2026-08-01
+
+### Fixed
+- allow curated in-workspace rm -rf in AFK autonomous mode (#579 O3) (#806) (13403f2)
+
+### Changed
+- split anthropic-direct/index.ts behind characterization tests (#824) (#833) (3bd13ea)
+
+## [5.84.7] - 2026-08-01
+
+### Changed
+- extract a shared wireExecutors() factory (#822) (#834) (6ed0186)
+
+## [5.84.6] - 2026-08-01
+
+### Fixed
+- re-render the # Environment date line per turn in openai-compatible (#785) (#804) (f7665d1)
+
+### Changed
+- cover openai-compatible manifest forwarding (closes #742) (#821) (4610e25)
+
+## [5.84.5] - 2026-08-01
+
+### Fixed
+- refuse a tool call that keeps failing identically (#723) (#814) (7807e67)
+
+### Changed
+- cover user-skills.ts fork path for skillDispatchName + anchor (closes #741) (#820) (3dfa4b4)
+
+## [5.84.4] - 2026-08-01
+
+### Changed
+- split loop.ts into a modular loop/ subdirectory (#818) (8d11048)
+
+## [5.84.3] - 2026-08-01
+
+### Fixed
+- stop making the operator hand-recover from a usage-limit death (auto re-resolve credentials + /retry) (#811) (b017bc6)
+
+### Changed
+- run the vendored/bundled hash-pin gate on every PR (#775) (#817) (d4d5706)
+
+## [5.84.2] - 2026-08-01
+
+### Fixed
+- credit provider-paused time against the wall-clock ceiling (#797) (f6b33cf)
+
+## [5.84.1] - 2026-08-01
+
+### Fixed
+- fail the bundle build when a prompt read cannot be inlined (#776) (#816) (548029c)
+
+## [5.84.0] - 2026-08-01
+
+### Added
+- fold the fragment-goal signal class into intent-lock (#793) (c791d8e)
+
+### Changed
+- migrate hash-pin history blocks to docs/bundled-plugins.md (#790) (#809) (5ea1493)
+
+## [5.83.9] - 2026-07-31
+
+### Fixed
+- preserve the turn and bound a pause when mid-stream overload retries exhaust (#762) (#764) (7f5083c)
+- stop annihilating whitespace-only text deltas and fusing round-boundary prose (#810) (9db7413)
+
+### Changed
+- close breadth-guard and warn-latch coverage gaps from #753 (#783) (#812) (a0be547)
+
+## [5.83.8] - 2026-07-31
+
+### Fixed
+- carve ssh config + known_hosts out of read-denylist (#579 O2) (#805) (badd34a)
+
+### Changed
+- fix dangling @link and restate ~60% orphan figure (#730) (#807) (73e8577)
+- close three builtin-shadow warning coverage gaps (#746) (#808) (dcf22ba)
+
+## [5.83.7] - 2026-07-31
+
+### Fixed
+- accept common truthy values for TELEGRAM_VERBOSE (#683) (#802) (29b0903)
+
+### Changed
+- extract two named concerns over the 350-LOC ceiling (#782) (#801) (d7df7ea)
+- add anthropic-direct query.test.ts for subagentId threading (#634) (#803) (49b8afd)
+
+## [5.83.6] - 2026-07-31
+
+### Fixed
+- stop a blank environment variable from permanently shadowing the real value in `afk.env` — a shell profile with `export OPENAI_API_KEY=""` masked the key in `~/.afk/config/afk.env` (dotenv's `override: false` skip is presence-based, not value-based), so an OpenAI-compatible-only operator was told to "set OPENAI_API_KEY" for a key they had already set, after the auth chain fell through to `~/.codex/auth.json`
+
+### Fixed
+- stop a blank env var from shadowing the real value in afk.env (#800) (91c80ce)
+
+## [5.83.5] - 2026-07-31
+
+### Fixed
+- keep the hanging indent when a list or blockquote token exceeds the wrap budget (#798) (532f78d)
+
+## [5.83.4] - 2026-07-31
+
+### Fixed
+- tick the status line on a 30s timer so the quota reset countdown and the stale-reading marker stay true on an idle session instead of freezing at their last event-driven paint
+- stop the turn footer promising pause-and-auto-resume when the runtime will not deliver it — the promise is now conditional on `autoResumeOnUsageLimit` and on the reset landing inside the retry layer's two-hour wait ceiling
+
+### Fixed
+- schedule clock-derived quota repaints and condition the auto-resume promise (#791) (53c90e6)
+
+## [5.83.3] - 2026-07-31
+
+### Fixed
+- stop the sweep reaping live trees and discarding ignored files (#759) (#770) (16c4cd9)
+- enforce the per-node tool budget by wind-down, not by killing the node (#772) (71e6560)
+
 ## [5.83.2] - 2026-07-31
 
 ### Fixed

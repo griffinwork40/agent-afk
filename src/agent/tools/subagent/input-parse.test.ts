@@ -393,6 +393,41 @@ describe('parseAgentInput', () => {
       );
     });
 
+    // --- Hardening: breadth rejection resolves symlinks (#664 Codex P1) ---
+    // `isTooBroadRoot` runs on BOTH the lexical AND the symlink-resolved form at
+    // every call site (#783 follow-up to #753): the readRoots block below
+    // already covers this leg, but `cwd` has its own separate `isTooBroadRoot`
+    // call on `realResolvedCwd` (input-parse.ts) that was previously
+    // unexercised. A symlink whose target is `/` or the home dir is not itself
+    // broad lexically, but the containment layer realpaths granted roots, so it
+    // becomes a broad real root at read time — same rationale as readRoots.
+    it('throws when cwd is a symlink pointing at the filesystem root (#664)', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cwd-sym-'));
+      const link = path.join(dir, 'broad-link');
+      const fsRoot = path.parse(dir).root || path.sep;
+      try {
+        fs.symlinkSync(fsRoot, link, 'dir');
+        expect(() => parseAgentInput({ prompt: 'p', cwd: link })).toThrow(
+          /must not be a filesystem root, your home directory, or an ancestor/,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('throws when cwd is a symlink pointing at the home directory (#664)', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cwd-sym-'));
+      const link = path.join(dir, 'home-link');
+      try {
+        fs.symlinkSync(os.homedir(), link, 'dir');
+        expect(() => parseAgentInput({ prompt: 'p', cwd: link })).toThrow(
+          /must not be a filesystem root, your home directory, or an ancestor/,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     // A relocated AFK_HOME is neither the home dir nor an ancestor of it, so
     // the home-only targets did not catch it — yet granting it as `cwd` empties
     // that child's AFK-anchored credential floor by exactly the route `$HOME`
@@ -496,6 +531,47 @@ describe('parseAgentInput', () => {
       expect(() => parseAgentInput({ prompt: 'p', writeRoots: [os.homedir()] })).toThrow(
         /must not be a filesystem root, your home directory, or an ancestor/,
       );
+    });
+
+    // #783 follow-up to #753/#740: `cwd` already had a filesystem-root
+    // rejection case; `writeRoots` did not, despite sharing the same
+    // `isTooBroadRoot` call.
+    it('throws when a writeRoots entry is a filesystem root', () => {
+      const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [FS_ROOT] })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    // --- Hardening: breadth rejection resolves symlinks (#664 Codex P1) ---
+    // Same rationale as the `cwd` symlink cases above: `isTooBroadRoot` runs on
+    // both the lexical AND symlink-resolved form of each writeRoots entry
+    // (input-parse.ts), and that realpath leg was previously unexercised here.
+    it('throws when a writeRoots entry is a symlink pointing at the filesystem root (#664)', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-sym-'));
+      const link = path.join(dir, 'broad-link');
+      const fsRoot = path.parse(dir).root || path.sep;
+      try {
+        fs.symlinkSync(fsRoot, link, 'dir');
+        expect(() => parseAgentInput({ prompt: 'p', writeRoots: [link] })).toThrow(
+          /must not be a filesystem root, your home directory, or an ancestor/,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('throws when a writeRoots entry is a symlink pointing at the home directory (#664)', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-sym-'));
+      const link = path.join(dir, 'home-link');
+      try {
+        fs.symlinkSync(os.homedir(), link, 'dir');
+        expect(() => parseAgentInput({ prompt: 'p', writeRoots: [link] })).toThrow(
+          /must not be a filesystem root, your home directory, or an ancestor/,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('still accepts a normal absolute subdir entry (not broad)', () => {

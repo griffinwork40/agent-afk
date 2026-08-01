@@ -11,6 +11,8 @@ import { mkdtempSync, mkdirSync, rmdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { setAllowDirDispatcher, allowDirCmd, type GrantManager } from './allow-dir.js';
+import { register, resetRegistry, lookup, suggest } from '../registry.js';
+import { filterSlashCandidates } from '../../input/trigger.js';
 import type { SlashContext } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -220,5 +222,52 @@ describe('/allow-dir', () => {
     mgr.revokeRoot(base, 'slash');
     expect(mgr._readRoots).not.toContain(base); // mock has no non-revocable logic
     // (The dispatcher unit tests verify the actual non-revocability)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /add-dir alias — discoverability regression guard
+// ---------------------------------------------------------------------------
+
+describe('/add-dir alias', () => {
+  beforeEach(() => {
+    resetRegistry();
+    register(allowDirCmd);
+  });
+  afterEach(() => {
+    resetRegistry();
+  });
+
+  it('declares /add-dir as an alias', () => {
+    expect(allowDirCmd.aliases).toContain('/add-dir');
+  });
+
+  it('resolves /add-dir to the /allow-dir command (dispatch path)', () => {
+    expect(lookup('/add-dir')).toBe(allowDirCmd);
+    expect(lookup('/allow-dir')).toBe(allowDirCmd);
+  });
+
+  it('surfaces /add-dir in the autocomplete dropdown (discovery path)', () => {
+    // Before the alias, typing `add-dir` returned zero candidates: the dropdown
+    // filters prefix-then-subsequence, and `add-dir` is neither for `allow-dir`
+    // (the subsequence check needs three `d`s; `allow-dir` has one).
+    const values = filterSlashCandidates('add-dir').map((c) => c.value);
+    expect(values).toContain('/add-dir');
+  });
+
+  it('surfaces /add-dir for the bare `add` prefix too', () => {
+    const values = filterSlashCandidates('add').map((c) => c.value);
+    expect(values).toContain('/add-dir');
+  });
+
+  // Invariant: this test pins WHY the fix is an alias rather than a wider
+  // Levenshtein threshold. `suggest()` compares only canonical names, and
+  // editDistance('/add-dir', '/allow-dir') is exactly 4 — one past the default
+  // maxDistance of 3 — so the "did you mean?" rescue could never have fired.
+  // Raising the threshold to 4 to catch this one case would loosen suggestions
+  // for all 90+ other commands; keep the alias and leave the threshold alone.
+  it('documents that the did-you-mean hint cannot rescue /add-dir on its own', () => {
+    expect(suggest('/add-dir')).toBeUndefined();
+    expect(suggest('/add-dir', 4)).toBe('/allow-dir');
   });
 });

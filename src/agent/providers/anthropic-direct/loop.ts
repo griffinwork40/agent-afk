@@ -1,20 +1,33 @@
 /**
  * Per-turn agentic loop for the `anthropic-direct` provider.
  *
- * Owns the **multi-step tool-use loop within a single user turn**: orchestrates
- * `client.messages.create({...stream: true})` calls, threads each call's raw
- * events through {@link translateMessageStream}, dispatches tool calls via the
- * pluggable {@link ToolDispatcherLike}, accumulates message history (assistant
- * turn + `tool_result` user turn) for the next iteration, sums usage across
- * iterations. Caps tool-use rounds only when `maxToolUseIterations` is
- * explicitly set to a positive value; the default ({@link
- * DEFAULT_MAX_TOOL_USE_ITERATIONS} = 0) means "no cap" — terminate naturally
- * when the model stops emitting tool_use blocks. Callers that want a hard
- * ceiling pass `maxToolUseIterations` per turn.
+ * Owns the **multi-step tool-use loop within a single user turn**. This file is
+ * the orchestrator only: it holds the round `while` loop and dispatches each
+ * phase to a module in `./loop/`. The caller (query.ts) owns the **multi-turn
+ * outer loop** across user inputs, the messages array's lifetime, and
+ * `session.init` synthesis.
  *
- * The caller (query.ts) owns the **multi-turn outer loop** across user inputs,
- * the messages array's lifetime, and `session.init` synthesis. This module is
- * a pure async generator over `ProviderEvent`s with no module-scope state.
+ * Round phases, in execution order:
+ *
+ * | Module                    | Responsibility                                  |
+ * |---------------------------|-------------------------------------------------|
+ * | `loop/round-request`      | params build, cache breakpoint, connection retry, watchdog arming |
+ * | `loop/throttle-signals`   | live `rate_limit` events while the create is parked |
+ * | `loop/stream-consumer`    | drive translate, yield events, classify the round end |
+ * | `loop/round-retry`        | backoff + signalling for a re-driven round      |
+ * | `loop/turn-terminal`      | the non-`tool_use` exit paths                   |
+ * | `loop/tool-round`         | tool dispatch, result commit, rollback, epilogue |
+ *
+ * State is held in three collaborators with three distinct lifetimes —
+ * `TurnAccumulator` (whole turn), `RoundRetryBudget` (released each clean
+ * round), `TurnTrace` (spans every phase, torn down in `finally`). Which state
+ * survives a `continue` is answerable by reading a type; see each class.
+ *
+ * Cap semantics: tool-use rounds are capped only when `maxToolUseIterations` is
+ * explicitly set to a positive value. The default (0) means "no cap" —
+ * terminate naturally when the model stops emitting tool_use blocks. On
+ * reaching the cap the loop runs ONE final wind-down round with tools stripped
+ * so the model produces a real answer instead of stopping silently.
  *
  * Mutation contract: `runTurn` mutates `input.messages` in place — appending
  * the assistant turn's content blocks and a follow-up user turn carrying
@@ -22,275 +35,33 @@
  * `input.messages` AFTER the generator returns so the next user turn sees the
  * full history.
  *
+ * Invariant: every phase that yields a TERMINAL event returns an outcome saying
+ * so, and this file returns without yielding again. Emitting a second terminal
+ * would strand a consumer that breaks on the first one.
+ *
+ * History: the retry-class rationale (mid-stream overload, clean-close
+ * re-drive, TTFB and stall bounds) and the decomposition record for this module
+ * live in docs/anthropic-direct-loop.md.
+ *
  * @module agent/providers/anthropic-direct/loop
  */
 
-import { randomUUID } from 'node:crypto';
-import type {
-  ContentBlockParam,
-  MessageParam,
-  ToolResultBlockParam,
-} from '@anthropic-ai/sdk/resources';
-import type { ProviderEvent, ProviderUsage } from '../../provider.js';
-import type {
-  AnthropicMessagesCreateParams,
-  AnthropicToolDef,
-  RunTurnInput,
-  ToolCall,
-  ToolResult,
-  TurnResult,
-  WireToolDef,
-} from './types.js';
-import { sumProviderUsage, toProviderUsage } from './types.js';
-import {
-  getCacheTtl,
-  isCacheEnabled,
-  withMessagesBreakpoint,
-} from './cache-policy.js';
-import { translateMessageStream } from './translate.js';
-import { StreamIncompleteError } from '../../../utils/errors.js';
-import { abortableStream } from '../shared/abortable-stream.js';
-import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
-import { extractRawToolInput } from '../../facets/raw-input.js';
-import { env } from '../../../config/env.js';
-import { sleepWithAbort } from '../shared/sleep-with-abort.js';
-import {
-  armFirstByteTimeout,
-  resolveTtfbTimeoutMs,
-} from '../shared/first-byte-timeout.js';
-import {
-  armStreamStallWatchdog,
-  isStallTimeoutError,
-  resolveStallTimeoutMs,
-  stallTimeoutError,
-} from '../shared/stream-stall-timeout.js';
-import { summarizeToolInput } from '../shared/tool-input-summary.js';
-import {
-  TOOL_USE_LOOP_CAPPED,
-  WIND_DOWN_NOTE,
-  resolveMaxToolIterations,
-  shouldWindDown,
-} from '../shared/tool-loop-cap.js';
-import {
-  buildToolCallCompletedPayload,
-  buildToolCallStartedPayload,
-} from '../shared/tool-call-trace.js';
-import { DENIAL_BREAKER_FAILURE_CLASS } from '../../tools/denial-circuit-breaker.js';
-import { DenialCircuitBreakerError } from '../../../utils/errors.js';
-
-// Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
-// source of truth shared with openai-compatible). Kept exported here so
-// existing importers (loop.test.ts) resolve unchanged.
-export { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
-
-/**
- * Project an internal {@link AnthropicToolDef} to the wire-safe shape the
- * Anthropic Messages API actually accepts. Strips internal classification
- * metadata (`category`, `concurrencySafe`, `riskClass`) that would otherwise
- * trip a 400 `tools.0.custom.<field>: Extra inputs are not permitted` on
- * `messages.create`.
- *
- * The wire boundary type (`AnthropicMessagesCreateParams.tools: WireToolDef[]`)
- * forces every call site to go through a projection like this one — keep it
- * that way.
- */
-export function toWireTool(tool: AnthropicToolDef): WireToolDef {
-  const { name, description, input_schema } = tool;
-  return {
-    name,
-    ...(description !== undefined ? { description } : {}),
-    input_schema,
-  };
-}
-
-export const OVERLOAD_MAX_RETRIES = 3;
-const OVERLOAD_BASE_DELAY_MS = 5_000;
-
-// Bounded re-drive for a mid-stream CLEAN close — a `StreamIncompleteError`
-// that translate.ts surfaces as an in-band error event when the SSE stream
-// ended with NEITHER a `message_stop` NOR a `stop_reason` AFTER content had
-// already streamed (an intermediary proxy/gateway/LB dropped the connection
-// mid-generation; the raw SDK stream ends without throwing). This is distinct
-// from both existing retry classes: not a TTFB stall (a first byte WAS seen,
-// so the stall timer never fires) and not an overload (no `overloaded_error`
-// / 529), so without this branch it falls straight through to the fatal path.
-//
-// Kept LOW (below OVERLOAD_MAX_RETRIES = 3): each failed attempt burns a
-// partial — often long — generation before the cut, so a retry costs far more
-// here than a fast 529 rejection. Two attempts rescue the common transient
-// blip while capping wasted token/latency spend on a deterministic
-// (too-long-for-the-proxy) cut; the companion default-subagent contract (write
-// bulk output to files, keep the final message short) shrinks the generation
-// so these retries stay cheap. The delay is short (1s → 2s, not overload's
-// 5s/10s/20s): a dropped connection is not a server-overload signal, so we
-// reconnect promptly while still avoiding a tight loop against a flapping
-// intermediary.
-export const STREAM_INCOMPLETE_MAX_RETRIES = 2;
-const STREAM_INCOMPLETE_BASE_DELAY_MS = 1_000;
-
-export function isTransientServerError(err: Error): boolean {
-  if (!('status' in err)) return false;
-  const status = (err as Error & { status: number }).status;
-  return status === 529 || status === 503;
-}
-
-/**
- * Detect a transient Anthropic *overload* delivered as a **mid-stream** SSE
- * `error` event. A connection-phase 529 carries a real HTTP `status` (handled
- * by {@link isTransientServerError} inside {@link createWithRetry}); a
- * mid-stream overload is different — the SDK throws it from inside the stream
- * iterator as `new APIError(undefined, <parsed SSE body>, …)`, so `status` is
- * `undefined` and the only signal is the parsed body's nested
- * `error.type === 'overloaded_error'`. translate.ts converts that throw into an
- * in-band `{type:'error', error}` event whose `error` IS the APIError, so this
- * predicate inspects the (usually absent) status AND the nested SSE body in
- * both its double-nested (`{type:'error', error:{type:'overloaded_error'}}`)
- * and flat (`{type:'overloaded_error'}`) shapes.
- */
-export function isOverloadedErrorEvent(err: unknown): boolean {
-  if (err === null || typeof err !== 'object') return false;
-  const e = err as { status?: unknown; error?: unknown };
-  if (e.status === 529 || e.status === 503) return true;
-  const body = e.error;
-  if (body === null || typeof body !== 'object') return false;
-  const b = body as { type?: unknown; error?: { type?: unknown } | null };
-  const innerType = (b.error !== null && typeof b.error === 'object' ? b.error.type : undefined) ?? b.type;
-  return innerType === 'overloaded_error';
-}
-
-// `requestSignal` is passed to `messages.create` — it is the caller's turn
-// signal chained with the per-request TTFB stall timer (see armFirstByteTimeout),
-// so aborting it covers BOTH a user interrupt and a first-byte timeout. The
-// 529/503 connection-phase backoff sleeps still gate on the caller's `turnSignal`
-// so a persistent overload wakes on interrupt but not on the TTFB timer alone.
-async function createWithRetry(
-  client: { messages: { create(params: unknown, opts: unknown): unknown } },
-  params: AnthropicMessagesCreateParams,
-  headers: Record<string, string>,
-  requestSignal: AbortSignal,
-  turnSignal: AbortSignal,
-): Promise<AsyncIterable<unknown>> {
-  for (let attempt = 0; ; attempt++) {
-    if (attempt > 0) {
-      const delay = OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-      await sleepWithAbort(delay, turnSignal);
-      if (turnSignal.aborted) throw new Error('aborted');
-    }
-    try {
-      return (await Promise.resolve(
-        client.messages.create(params, { headers, signal: requestSignal }),
-      )) as AsyncIterable<unknown>;
-    } catch (err) {
-      if (requestSignal.aborted) throw err;
-      const e = err instanceof Error ? err : new Error(String(err));
-      if (isTransientServerError(e) && attempt < OVERLOAD_MAX_RETRIES) {
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
-/**
- * Emit the trace + surface events for a single time-to-first-byte-timeout
- * re-drive, then return so the caller can `continue` the round with a fresh
- * `messages.create`. Mirrors the mid-stream overload retry's signalling: a
- * dedicated `ttfb_timeout` trace phase (so the re-drive is legible in
- * `afk trace show`) plus a `stream.retry` event so surfaces discard any partial
- * paint. No backoff sleep — the point is to fail-fast off a stalled endpoint,
- * and the single retry is gated by the per-round `ttfbRetried` flag so it
- * cannot stack.
- *
- * The phase is NOT `rate_limit`: this timer is ours, fires with no server
- * throttle and no retry-after, and the two are otherwise indistinguishable in a
- * trace — which made every self-inflicted 180s stall read as provider
- * throttling. `metadata.reason` stays `'ttfb-timeout'` so analyses written
- * against the pre-split shape keep matching.
- */
-async function* emitTtfbRetry(
-  input: RunTurnInput,
-  requestStartedAt: number,
-): AsyncGenerator<ProviderEvent, void, void> {
-  void emitSessionPhase(input.traceWriter, {
-    phase: 'ttfb_timeout',
-    durationMs: Date.now() - requestStartedAt,
-    metadata: { reason: 'ttfb-timeout', source: 'first-byte', resolvedModel: input.model },
-  });
-  yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
-}
-
-/**
- * Await `createWithRetry` while surfacing LIVE throttle (rate-limit/backoff)
- * signals from the out-of-band {@link RunTurnInput.throttleQueue}.
- *
- * Invariant: the SDK retries 429/503/529 responses INSIDE the single
- * `messages.create` promise `createWithRetry` returns, sleeping out
- * `retry-after` between attempts. During that sleep the loop is parked on this
- * await and can `yield` nothing — so a healthy session waiting ~70s (retried
- * twice ≈ 140s) looks frozen. The wrapped `fetch` pushes a `ThrottleSignal`
- * onto the queue as each throttled response lands; here we race the create
- * promise against `queue.waitForItem()` and yield a `rate_limit` ProviderEvent
- * for every drained signal, so the banner updates DURING the wait. When the
- * create promise finally settles we yield any last-drained signals, then RETURN
- * the resolved events iterable (or re-throw the create error) via the
- * generator's return value.
- *
- * When `throttleQueue` is absent this degrades to a bare `await` (one extra
- * microtask), so non-throttling paths and unit tests are unaffected.
- */
-async function* awaitCreateWithThrottleSignals(
-  createPromise: Promise<AsyncIterable<unknown>>,
-  input: RunTurnInput,
-): AsyncGenerator<ProviderEvent, AsyncIterable<unknown>, void> {
-  const queue = input.throttleQueue;
-  if (!queue) {
-    // No live seam wired — plain await. `createPromise` rejection propagates to
-    // the caller's try/catch exactly as a direct `await createWithRetry` would.
-    return await createPromise;
-  }
-  // Reset the per-call attempt counter so `attempt` numbers reflect throttles
-  // within THIS messages.create (mirrors the SDK's per-call retry budget).
-  queue.resetAttempts();
-
-  // Sentinel so `Promise.race` can tell "create settled" apart from "a throttle
-  // signal arrived" without leaking the create result into the race's value.
-  const CREATE_DONE = Symbol('create-done');
-  // Track settlement so a throttle wake after the create resolves doesn't loop.
-  let settled = false;
-  const guarded = createPromise.then(
-    (v) => { settled = true; return v; },
-    (e) => { settled = true; throw e; },
-  );
-
-  for (;;) {
-    // Drain and surface anything already queued before parking again.
-    for (const sig of queue.takeAll()) {
-      yield {
-        type: 'rate_limit',
-        sessionId: input.ctx.sessionId,
-        status: sig.status,
-        attempt: sig.attempt,
-        ...(sig.retryAfterMs !== undefined ? { retryAfterMs: sig.retryAfterMs } : {}),
-      };
-    }
-    if (settled) {
-      // Return the resolved iterable (or re-throw the create rejection). A
-      // final drain above already surfaced any late signals.
-      return await guarded;
-    }
-    // Park until EITHER the create settles OR a new throttle signal lands.
-    const outcome = await Promise.race([
-      guarded.then(() => CREATE_DONE, () => CREATE_DONE),
-      queue.waitForItem().then(() => undefined),
-    ]);
-    if (outcome === CREATE_DONE) {
-      // Loop once more to drain any signals pushed right before settlement,
-      // then the `settled` branch returns/throws.
-      continue;
-    }
-    // A throttle signal woke us — loop to drain it.
-  }
-}
+import type { ProviderEvent } from '../../provider.js';
+import type { RunTurnInput } from './types.js';
+import { toProviderUsage } from './types.js';
+import { emitSessionPhase } from '../../trace/emit.js';
+import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
+import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
+import { resolveMaxToolIterations } from '../shared/tool-loop-cap.js';
+import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from './overload-pause.js';
+import { OVERLOAD_MAX_RETRIES, RoundRetryBudget } from './loop/retry-budget.js';
+import { handleRoundRetry, type RoundRetryContext } from './loop/round-retry.js';
+import { openRound } from './loop/round-request.js';
+import { consumeRoundStream } from './loop/stream-consumer.js';
+import { runToolRound } from './loop/tool-round.js';
+import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
+import { TurnAccumulator } from './loop/turn-accumulator.js';
+import { TurnTrace } from './loop/turn-trace.js';
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
@@ -313,31 +84,22 @@ export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
-  let accumulatedUsage: ProviderUsage = { stopReason: null };
-  let iterations = 0;
-  // Cumulative count of tool CALLS dispatched across the whole turn — distinct
-  // from `iterations` (the round counter). A single round can batch several
-  // parallel tool_use blocks (turnResult.toolUseBlocks is an array, dispatched
-  // at ~line 547), so rounds ≠ calls. Emitted as the progress event's
-  // `toolUses` so the CLI's formatToolCallStat renders a truthful "N tool calls"
-  // even when a round runs multiple calls (PR 508 codex review, P2).
-  let toolCallCount = 0;
-  // Set once the tool-use iteration cap is reached. The loop then runs ONE
-  // final "wind-down" round with tools stripped (see the params build and the
-  // cap-exit block below) so the model produces a real answer from what it
-  // gathered instead of being cut off mid-round — a silent stop with no final
-  // message is indistinguishable from a hang (same failure mode the `refusal`
-  // branch guards against).
-  let capReached = false;
-  // Mid-stream overload retry budget. Spent as a 529/overloaded_error is
-  // observed *during* stream consumption (where createWithRetry can't reach),
-  // and reset to 0 after every clean round so each tool-use round gets its own
-  // allowance — mirroring createWithRetry's per-call (not per-turn) scope.
-  let overloadRetries = 0;
-  // Same per-round scope for the mid-stream clean-close (StreamIncompleteError)
-  // re-drive budget — see STREAM_INCOMPLETE_MAX_RETRIES. Accumulates across the
-  // retries of ONE round; reset to 0 once the round resolves.
-  let streamIncompleteRetries = 0;
+
+  // Three collaborators, three lifetimes — see each class for its reset
+  // discipline. `turn` survives the whole turn, `retry` is released at every
+  // clean round boundary, `trace` outlives both because its abort listener can
+  // fire during any phase.
+  const turn = new TurnAccumulator();
+  const retry = new RoundRetryBudget();
+  // Both TTFB re-drive sites (connection-phase and mid-stream) and both backoff
+  // classes share one budget instance — see RoundRetryBudget's contract.
+  const retryContext = (requestStartedAt: number): RoundRetryContext => ({
+    input,
+    turn,
+    retry,
+    requestStartedAt,
+  });
+
   // Per-round time-to-first-token stall bound (issue #583). A degrading upstream
   // call that never streams a first CONTENT token (text/thinking delta or
   // tool_use — message_start + pings do NOT count) is aborted at this bound and
@@ -346,7 +108,6 @@ export async function* runTurn(
   // The single retry reuses the createWithRetry attempt budget model so it
   // cannot stack on top of the overload backoff into a longer worst case.
   const ttfbTimeoutMs = resolveTtfbTimeoutMs();
-  let ttfbRetried = false;
   // Per-round POST-first-byte stall bound (issue #762). The TTFB bound above is
   // cleared by the first content token, so before this a stream that stalled
   // mid-flight had NO bound of any kind: two real sessions hung 38.9 and 63.5
@@ -357,507 +118,120 @@ export async function* runTurn(
   // while a round that goes silent for the whole window dies loudly with a real
   // terminal error. `0` (or AFK_MODEL_STALL_TIMEOUT_MS=0) disables it.
   const stallTimeoutMs = resolveStallTimeoutMs();
-  const taskId = randomUUID();
-  const loopStartTime = Date.now();
 
-  // Single point of truth for the turn-end wall-clock measurement that lands
-  // in the REPL footer's `◦ Xs · $cost · N tok` line via
-  // ResponseMetadata.durationMs → printTurnFooter. Pre-fix the eight
-  // `turn.completed` yield sites below all passed bare `accumulatedUsage`,
-  // and neither `toProviderUsage` nor `sumProviderUsage` ever wrote
-  // `durationMs` — so the footer rendered as just `◦ N tok` for every
-  // anthropic-direct turn. Factored as a closure so the eight call sites
-  // can't drift apart silently — grep for `withTurnDuration` to audit.
-  const withTurnDuration = (usage: ProviderUsage): ProviderUsage => ({
-    ...usage,
-    durationMs: Date.now() - loopStartTime,
-  });
+  // Witness layer: brackets the turn with loop_start / loop_end and owns the
+  // interrupt→halt latency stamp. loop_end fires from the generator's finally
+  // block so all exit paths — abort, error, clean end-of-turn, capped — are
+  // covered without per-site annotation.
+  const trace = new TurnTrace(input.signal, input.traceWriter);
 
-  // Witness layer: mark loop entry once for this turn. Fire-and-forget —
-  // a broken trace writer must never stall tool dispatch.
-  void emitSessionPhase(input.traceWriter, { phase: 'loop_start' });
-
-  // Interrupt→halt latency instrumentation. Stamp the instant the turn signal
-  // fires so the `finally` below can report ESC→terminal wall-clock in the
-  // `interrupt_halt` phase — the field-visible proof the ESC-lag fix keeps the
-  // halt within an event-loop turn. A single long-lived listener (not per-event)
-  // records the time at most once; `{ once: true }` + the null-guard make it
-  // idempotent. Registered only when a writer is present so a no-trace session
-  // pays nothing. `close()` also aborts this signal but with reason `'closed'`;
-  // the emit gate below fires ONLY for reason `'interrupted'`.
-  let interruptedAt: number | null = input.signal.aborted ? Date.now() : null;
-  const onInterruptForTrace = (): void => {
-    if (interruptedAt === null) interruptedAt = Date.now();
-  };
-  if (input.traceWriter && !input.signal.aborted) {
-    input.signal.addEventListener('abort', onInterruptForTrace, { once: true });
-  }
-
-  // Witness layer: loop_end fires from the generator's finally block so
-  // all eight return paths — abort, error, clean end-of-turn, capped —
-  // are covered without per-site annotation. Fire-and-forget; trace
-  // latency must never stall an already-returning turn.
   try {
   while (true) {
     if (input.signal.aborted) {
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
+        usage: turn.terminalUsage(),
         sessionId: input.ctx.sessionId,
       };
       return;
     }
 
-    // Stamp a prompt-cache breakpoint on the last content block of the
-    // last message before sending — non-mutating clone-and-stamp so the
-    // marker never accumulates back into stored history. Cache lookup
-    // walks back over prefix-hash matches up to a 20-block window, so the
-    // moving marker still hits prior writes within the tool-use loop and
-    // across consecutive turns.
-    const messagesForRequest = isCacheEnabled({ baseUrl: input.baseUrl })
-      ? withMessagesBreakpoint(input.messages, getCacheTtl())
-      : input.messages;
+    const opened = yield* openRound({ input, turn, retry, ttfbTimeoutMs, stallTimeoutMs });
 
-    const params: AnthropicMessagesCreateParams = {
-      model: input.model,
-      max_tokens: input.maxTokens,
-      messages: messagesForRequest,
-      stream: true,
-      ...(input.system !== null ? { system: input.system } : {}),
-      // Wind-down round (capReached): omit tools so the model MUST answer in
-      // text — with no tools advertised it cannot emit another tool_use — which
-      // turns a capped turn into a final summary rather than a silent stop.
-      ...(input.tools !== null && input.tools.length > 0 && !capReached
-        ? { tools: input.tools.map(toWireTool) }
-        : {}),
-      ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
-      ...(input.effort !== undefined
-        ? { output_config: { effort: input.effort } }
-        : {}),
-    };
+    // The connection phase already yielded this turn's terminal event.
+    if (opened.kind === 'terminated') return;
 
-    // Witness layer: stamp request-initiation time so the model_ttfb phase
-    // below can report time-to-first-byte for THIS model API call.
-    const requestStartedAt = Date.now();
-    // Arm the TTFB stall timer for THIS round. `ttfb.signal` is the request
-    // signal (caller's turn signal chained with the stall timer). We cancel the
-    // timer the instant the first CONTENT token arrives (ttfbEmitted below), so a
-    // stream that is producing content is never aborted; only a call that fails
-    // to stream any content token (text/thinking delta, tool_use, or the
-    // end-of-stream turn-result) within the bound trips it. message_start and
-    // keep-alive pings yield no translated output, so they do NOT count — a call
-    // whose FIRST token is slower than the bound is treated as a stall. Disposed
-    // in the retry/error paths below and again defensively per round.
-    const ttfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
-    // Arm the POST-first-byte stall watchdog for THIS round, CHAINED onto
-    // `ttfb.signal` so the request signal carries all three abort sources (user
-    // interrupt → TTFB stall → mid-stream stall) in one linked signal. It stays
-    // DORMANT until the first translated event calls `stall.progress()` below,
-    // so the pre-first-byte window remains governed solely by the TTFB bound and
-    // the two can never both be pending. Every subsequent event re-arms it, so
-    // only genuine silence — not slowness — can fire it. Disposed alongside
-    // `ttfb` on every exit path below.
-    const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, (info) => {
-      // Witness layer: reuse the `idle_watchdog_fired` phase — the established
-      // vocabulary for "a progress-aware watchdog fired on unexplained silence"
-      // (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
-      // fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
-      // never delay the abort.
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'idle_watchdog_fired',
-        durationMs: info.elapsedSinceLastProgressMs,
-        resolvedModel: input.model,
-        metadata: {
-          source: 'model-stream',
-          stallTimeoutMs: info.stallTimeoutMs,
-          elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
-        },
-      });
+    if (opened.kind === 'retry-ttfb') {
+      // Connection-phase TTFB timeout: re-drive once. Shares the once-per-round
+      // allowance with the mid-stream TTFB path via the same retry handler.
+      const redrive = yield* handleRoundRetry('ttfb', retryContext(opened.requestStartedAt));
+      if (redrive === 'terminated') return;
+      continue;
+    }
+
+    const { events, ttfb, stall, requestStartedAt } = opened;
+
+    const outcome = yield* consumeRoundStream({
+      events,
+      input,
+      turn,
+      retry,
+      ttfb,
+      stall,
+      stallTimeoutMs,
+      requestStartedAt,
     });
-    let retryTtfb = false;
-    // Definite-assignment: `events` is read only past the `if (retryTtfb)`
-    // guard below. Every path that leaves it unassigned either `return`s (the
-    // non-retry catch branch) or sets `retryTtfb` and `continue`s — so by the
-    // consumption point it is always assigned. TS cannot prove this across the
-    // try/catch + continue, hence the assertion.
-    let events!: AsyncIterable<unknown>;
-    try {
-      // Race the create await against the out-of-band throttle queue so a
-      // 429/503/529 backoff the SDK sleeps out INSIDE this call surfaces as a
-      // LIVE `rate_limit` event (see awaitCreateWithThrottleSignals). Without
-      // the queue this is a plain `await createWithRetry(...)`. The generator's
-      // return value is the resolved stream iterable; a create rejection
-      // propagates here exactly as a direct await would.
-      events = yield* awaitCreateWithThrottleSignals(
-        createWithRetry(
-          input.client,
-          params,
-          input.headers,
-          // `stall.signal` is `ttfb.signal` chained with the mid-stream stall
-          // watchdog, so the one request signal covers user interrupt + TTFB
-          // stall + post-first-byte stall. When either watchdog is disabled its
-          // arm() returns the base signal unchanged, so this degrades cleanly.
-          stall.signal,
-          input.signal,
-        ),
-        input,
-      );
-    } catch (err) {
-      // A TTFB timeout aborts before the first byte (connection-phase stall).
-      // Distinguish it from a user interrupt (input.signal) and, on the first
-      // occurrence this round, re-drive the request once instead of erroring.
-      if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried) {
-        ttfb.dispose();
-        stall.dispose();
-        retryTtfb = true;
-      } else {
-        ttfb.dispose();
-        stall.dispose();
-        if (input.signal.aborted) {
-          yield {
-            type: 'turn.completed',
-            usage: withTurnDuration(accumulatedUsage),
-            sessionId: input.ctx.sessionId,
-          };
-          return;
-        }
-        const e = err instanceof Error ? err : new Error(String(err));
-        if (e.message.includes('thinking')) {
-          dumpThinkingDiagnostic(input.messages, e);
-        }
-        yield { type: 'error', error: e };
-        return;
-      }
-    }
-    if (retryTtfb) {
-      // Connection-phase TTFB timeout: re-drive once (handled below the stream
-      // consumption block, shared with the mid-stream TTFB path).
-      yield* emitTtfbRetry(input, requestStartedAt);
-      ttfbRetried = true;
+
+    // The stream phase already yielded this turn's terminal event.
+    if (outcome.kind === 'terminated') return;
+
+    if (outcome.kind === 'retry') {
+      const redrive = yield* handleRoundRetry(outcome.reason, retryContext(requestStartedAt));
+      if (redrive === 'terminated') return;
       continue;
     }
 
-    // Translate the raw SDK events into ProviderEvents and capture the
-    // digested TurnResult emitted at end-of-stream.
-    let turnResult: TurnResult | null = null;
-    let translatorErrored = false;
-    let retryOverload = false;
-    let retryStreamIncomplete = false;
-    // Witness layer: emit model_ttfb exactly once for this API call, on the
-    // first translated stream event. Reset per while-iteration so each model
-    // call reports its own time-to-first-byte.
-    let ttfbEmitted = false;
-    try {
-      if (env.AFK_TELEGRAM_TRACE) console.log('[loop] awaiting translateMessageStream events');
-      // Race every SSE pull against the turn signal so an ESC interrupt halts
-      // the stream PROMPTLY (same event-loop turn) instead of waiting for the
-      // SDK's parked read to settle — which for a mid-stream Opus thinking
-      // response lags seconds behind the keypress (there is no per-delta abort
-      // check downstream). On abort the wrapper throws an AbortError, which
-      // `translateMessageStream`'s catch converts to an in-band `error` event;
-      // the error branch below then sees `input.signal.aborted` and breaks
-      // WITHOUT yielding, so the post-loop `turnResult === null` path emits a
-      // single clean `turn.completed`. Uses `input.signal` (the user/turn
-      // interrupt), NOT `ttfb.signal`, so the TTFB stall-timer path is untouched.
-      for await (const out of translateMessageStream(
-        abortableStream(events, input.signal) as Parameters<typeof translateMessageStream>[0],
-        input.ctx,
-        // Second reset source for the stall watchdog: content deltas the
-        // translator consumes WITHOUT yielding (a tool call's streaming
-        // argument payload, a thinking signature). Those are real output, so
-        // they must re-arm the window — without this, a long `input_json_delta`
-        // run looks identical to a wedged socket and gets killed as a stall.
-        // Pings deliberately do not reach here (see translate.ts), so a
-        // keep-alive-only stream still fires.
-        () => stall.progress(),
-      )) {
-        // First-byte boundary = the first NON-error translated output (a real
-        // content/tool event, or the end-of-stream turn-result). An in-band
-        // error event is NOT a first byte — a TTFB timeout surfaces here as
-        // exactly that (translate.ts converts the abort throw into an error
-        // event), so gating on non-error keeps `ttfb.timedOut()` meaningful in
-        // the error branch below and avoids cancelling the timer on a stall.
-        const isFirstByte =
-          !ttfbEmitted &&
-          (out.kind === 'turn-result' || out.event.type !== 'error');
-        if (isFirstByte) {
-          ttfbEmitted = true;
-          // First CONTENT token arrived: cancel the stall timer so the rest of
-          // this (now demonstrably progressing) stream runs unbounded — an
-          // actively-streaming extended-thinking response, or any long stream
-          // after its first token, is never cut off. (The bound still governs
-          // the pre-first-token window, so a prefill slower than the bound is
-          // treated as a stall before we ever reach here.)
-          ttfb.firstByteSeen();
-          // Time-to-first-byte: request initiation (incl. any auth retries
-          // inside createWithRetry) → first translated stream event.
-          // Fire-and-forget; trace latency must never stall the stream.
-          void emitSessionPhase(input.traceWriter, {
-            phase: 'model_ttfb',
-            durationMs: Date.now() - requestStartedAt,
-            // Resolved wire id for THIS call — captures mid-session model
-            // overrides/switches that differ from the session default recorded
-            // on session_init_start. `input.model` is already the resolved id
-            // passed to the Messages API (see params.model above).
-            resolvedModel: input.model,
-          });
-        }
-        // Observable progress for the post-first-byte stall watchdog (#762).
-        // EVERY translated output re-arms the window, so "slow but streaming"
-        // survives indefinitely while genuine silence fires. This is one of two
-        // reset sources; the other is the `onRawProgress` callback passed above,
-        // which covers content deltas that yield nothing. The first call from
-        // either source ARMS the (until-now dormant) watchdog, which is why the
-        // pre-first-byte window stays governed by the TTFB bound above: a
-        // non-yielding delta can only precede the first translated event in
-        // pathological orderings, and even then the far tighter TTFB bound
-        // fires first.
-        stall.progress();
-        if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate yielded:', out.kind, out.kind === 'event' ? out.event.type : '');
-        if (out.kind === 'event') {
-          if (out.event.type === 'error') {
-            // A TTFB timeout that fires after response headers but before the
-            // first content event aborts the stream iterator; translate.ts
-            // converts that throw into this in-band error event. `ttfb.timedOut()`
-            // is true only while the timer is live (firstByteSeen clears it), and
-            // ttfbEmitted is still false here (no content byte arrived) — so this
-            // is unambiguously a first-byte stall. Re-drive once, then fail fast.
-            if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
-              retryTtfb = true;
-              break;
-            }
-            // Post-first-byte STALL (#762): the watchdog aborted the per-request
-            // controller after a full window with no translated output, and
-            // translate.ts surfaced that abort as this in-band error event.
-            // `input.signal.aborted` is false (we never touch the caller's
-            // signal), so this is unambiguously a stall and NOT a user
-            // interrupt. Deliberately NOT retried: unlike a TTFB stall (which
-            // costs only a prefill) a mid-stream stall has already burned a
-            // partial generation, and the pre-fix behaviour was an invisible
-            // 38–63-minute hang — terminating loudly is the fix. Swap in the
-            // operator-facing message so the surface shows a real diagnosis
-            // instead of a bare `model_stream_stall_timeout`, then fall into the
-            // same fatal lane (`translatorErrored`) that yields a terminal
-            // `error` event → real `closure` → a seal that is NOT
-            // `incomplete: true`.
-            if (stall.timedOut() && !input.signal.aborted) {
-              yield { type: 'error', error: stallTimeoutError(stallTimeoutMs) };
-              translatorErrored = true;
-              break;
-            }
-            // Mid-stream transient overload (529 / overloaded_error): the SDK
-            // throws it from inside the stream iterator with NO HTTP status,
-            // so createWithRetry — status-based and connection-phase only —
-            // never sees it. translate.ts has already converted that throw
-            // into this in-band error event. Re-drive the request after
-            // backoff instead of surfacing a fatal error: input.messages is
-            // unmutated for this round (the assistant turn and usage are
-            // committed only on clean completion below), so the retry re-sends
-            // identical history. Any text already streamed for this round may
-            // re-emit on the retry — an accepted cosmetic cost vs. crashing
-            // the whole turn on a transient server hiccup.
-            if (
-              isOverloadedErrorEvent(out.event.error) &&
-              overloadRetries < OVERLOAD_MAX_RETRIES &&
-              !input.signal.aborted
-            ) {
-              retryOverload = true;
-              break;
-            }
-            // User interrupt (ESC soft-stop): translate.ts converted the abort
-            // throw into this in-band `error` event, but on an interrupt the
-            // "error" IS the abort — not a real failure. Do NOT yield it. If we
-            // did, the turn would emit TWO terminal events (this error AND the
-            // `turn.completed` from the `turnResult === null` path below), and a
-            // consumer that breaks on the FIRST terminal (AgentSession's
-            // sendMessageStreamInternal breaks on `done`|`error`) would strand
-            // the trailing turn.completed — the NEXT turn's first pull then eats
-            // it as a no-op `done`, so the user's next message runs a full turn
-            // late (the "type after ESC → nothing happens → poke '.' to start it"
-            // bug). Break WITHOUT yielding + WITHOUT setting translatorErrored so
-            // the post-loop `turnResult === null` branch emits exactly ONE
-            // terminal turn.completed. `sawProviderError` correctly stays false —
-            // an interrupt seals as cancelled, not failed. Real (non-abort)
-            // errors fall through to the yield below unchanged. Checked before
-            // the StreamIncomplete re-drive below so an abort always wins over a
-            // retry (that branch also self-guards with `!input.signal.aborted`).
-            if (input.signal.aborted) {
-              break;
-            }
-            // Mid-stream CLEAN close (StreamIncompleteError): the stream ended
-            // with no message_stop and no stop_reason AFTER content streamed —
-            // an intermediary dropped the connection mid-generation. translate.ts
-            // surfaces it as this in-band error event (it is constructed and
-            // yielded, never thrown, so it cannot reach the catch below). Neither
-            // the TTFB branch (a first byte was seen) nor the overload branch
-            // (not an overloaded_error) matches it, so without this it would fall
-            // through to the fatal path. Re-drive like overload: input.messages
-            // is unmutated for the round, so the retry re-sends identical history
-            // (already-streamed text may re-emit — reset via stream.retry below).
-            if (
-              out.event.error instanceof StreamIncompleteError &&
-              streamIncompleteRetries < STREAM_INCOMPLETE_MAX_RETRIES &&
-              !input.signal.aborted
-            ) {
-              retryStreamIncomplete = true;
-              break;
-            }
-            yield out.event;
-            translatorErrored = true;
-            break;
-          }
-          yield out.event;
-        } else {
-          turnResult = out.result;
-          break;
-        }
-      }
-      if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate loop exited, turnResult=', turnResult ? 'set' : 'null');
-    } catch (err) {
-      // A TTFB timeout that fires AFTER response headers but BEFORE the first
-      // streamed event aborts the stream iterator here. `ttfb.timedOut()` is
-      // only true while the timer is live — firstByteSeen() above clears it, so
-      // this branch is unreachable once any event has streamed. Re-drive once.
-      if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
-        ttfb.dispose();
-        stall.dispose();
-        retryTtfb = true;
-      } else {
-        ttfb.dispose();
-        stall.dispose();
-        if (input.signal.aborted) {
-          yield {
-            type: 'turn.completed',
-            usage: withTurnDuration(accumulatedUsage),
-            sessionId: input.ctx.sessionId,
-          };
-          return;
-        }
-        const e = err instanceof Error ? err : new Error(String(err));
-        // Post-first-byte STALL (#762) reaching us as a THROW rather than an
-        // in-band error event (abortableStream re-raises the linked signal's
-        // abort reason, which for a stall is the STALL_TIMEOUT_MESSAGE marker).
-        // Same terminal treatment as the in-band branch above: surface the
-        // operator-facing message and return, never hang. Checked BEFORE the
-        // overload re-drive so a stall can never be mistaken for a retryable
-        // overload.
-        if ((stall.timedOut() || isStallTimeoutError(e)) && !input.signal.aborted) {
-          yield { type: 'error', error: stallTimeoutError(stallTimeoutMs) };
-          return;
-        }
-        // Defensive: a mid-stream overload normally reaches us as an in-band
-        // error event (handled in the loop above), but if translate.ts ever
-        // re-throws one, route it into the same retry path rather than crashing.
-        if (isOverloadedErrorEvent(e) && overloadRetries < OVERLOAD_MAX_RETRIES && !input.signal.aborted) {
-          retryOverload = true;
-        } else {
-          yield { type: 'error', error: e };
-          return;
-        }
-      }
-    }
-    // Dispose both stall timers for this round once stream consumption is done
-    // (clean end, turn-result, or a retry decision) — idempotent, so the
-    // firstByteSeen() / catch-path disposes above are harmless duplicates.
-    ttfb.dispose();
-    stall.dispose();
+    // Invariant: this round is past every retry decision, so all three budgets
+    // are spent — restore the full allowance for the next tool-use round.
+    // Reset here, ABOVE the terminal paths below, so the "each tool-use round
+    // starts with a fresh budget" rule holds uniformly. The translator-error
+    // and null-result paths return (so the reset is moot for them today), but
+    // placing it above them makes the invariant unconditional and survives a
+    // future refactor that turns a terminal path into a `continue`. A round
+    // only reaches here after a clean first byte, so the TTFB allowance is
+    // never released on the failing attempt of the same round. See
+    // RoundRetryBudget.reset for the per-field contract.
+    retry.reset();
 
-    if (retryTtfb) {
-      // Mid-stream TTFB timeout: re-drive the round once, mirroring the
-      // connection-phase path above. Shares the once-per-round ttfbRetried flag.
-      yield* emitTtfbRetry(input, requestStartedAt);
-      ttfbRetried = true;
-      continue;
-    }
-
-    if (retryOverload) {
-      overloadRetries += 1;
-      // Witness layer: record the mid-stream overload backoff so a re-driven
-      // round is legible in the trace. The tracing-fetch wrapper cannot see
-      // this one — a mid-stream `overloaded_error` arrives in the SSE body of
-      // an HTTP 200 response, so it never trips the wrapper's status check.
-      // Fire-and-forget; trace latency must never stall the retry.
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'rate_limit',
-        metadata: { reason: 'overloaded', source: 'mid-stream', attempt: overloadRetries },
-      });
-      // Tell surfaces to discard the current round's already-streamed text:
-      // the re-driven request below re-streams the round from scratch, so
-      // without a reset the partial text visibly duplicates. Emitted before
-      // the backoff so the UI clears immediately rather than after the wait.
-      yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
-      // Exponential backoff matching createWithRetry: 5s → 10s → 20s.
-      await sleepWithAbort(
-        OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadRetries - 1),
-        input.signal,
-      );
-      if (input.signal.aborted) {
-        yield {
-          type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
-          sessionId: input.ctx.sessionId,
-        };
-        return;
-      }
-      continue;
-    }
-
-    if (retryStreamIncomplete) {
-      streamIncompleteRetries += 1;
-      // Witness layer: log the mid-stream-cut re-drive so it is legible in
-      // `afk trace show`. Reuse the `rate_limit` phase as the generic
-      // retry/backoff marker (the TTFB and overload re-drives do the same) with
-      // a distinct `reason`. Fire-and-forget; trace latency must never stall
-      // the retry.
+    // Invariant: this branch must come BEFORE the `translatorErrored` /
+    // `turnResult === null` terminals below, and must emit exactly ONE terminal
+    // event. Ordering is load-bearing in both directions: it sits below the
+    // retry `continue`s (an exhausted round is never also a retried round) and
+    // above the generic terminals (which would otherwise re-classify it).
+    //
+    // Turn preservation (#762): emit a CLEAN `turn.completed` so the session's
+    // stream consumer maps it to `done` → `turnCount++`, committing the turn and
+    // leaving the accumulated history in `input.messages` resumable via
+    // `afk --resume <sessionId>`. Previously this path yielded a raw `error`,
+    // which set `sawProviderError` and sealed the session `failed` with
+    // `finalTurnCount: 0` — every prior turn discarded.
+    //
+    // The failure is still surfaced, twice over: the OVERLOAD_EXHAUSTED
+    // stopReason drives an `abort` closure + `failed` seal downstream, and the
+    // notice replaces the raw `{"type":"overloaded_error"}` SSE envelope
+    // operators were misreading as a TypeScript error.
+    //
+    // Contract: the notice is NOT appended to THIS turn's `input.messages`, so
+    // it never re-enters the request that is failing. It is NOT invisible to the
+    // model, though — `session/stream-consumer.ts` materializes every non-empty
+    // `assistant.message` into `conversationHistory`, which threads back as
+    // model context on the next turn and on `--resume`. Same shape as the
+    // `stop_reason: 'refusal'` notice below. Read as "not retried into the dead
+    // request", not "operator-only".
+    if (outcome.kind === 'overload-exhausted') {
       void emitSessionPhase(input.traceWriter, {
         phase: 'rate_limit',
         metadata: {
-          reason: 'stream-incomplete',
+          reason: 'overloaded',
           source: 'mid-stream',
-          attempt: streamIncompleteRetries,
+          attempt: OVERLOAD_MAX_RETRIES,
+          exhausted: true,
         },
       });
-      // Tell surfaces to discard the current round's already-streamed text: the
-      // re-driven request re-streams the round from scratch, so without a reset
-      // any partial text visibly duplicates. Emitted before the delay so the UI
-      // clears immediately rather than after the wait.
-      yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
-      // Short settle delay (1s → 2s), NOT overload's 5s/10s/20s: a dropped
-      // connection is not a server-overload signal, so reconnect promptly while
-      // still avoiding a tight hammer loop against a flapping intermediary.
-      await sleepWithAbort(
-        STREAM_INCOMPLETE_BASE_DELAY_MS * Math.pow(2, streamIncompleteRetries - 1),
-        input.signal,
-      );
-      if (input.signal.aborted) {
-        yield {
-          type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
-          sessionId: input.ctx.sessionId,
-        };
-        return;
-      }
-      continue;
+      yield {
+        type: 'assistant.message',
+        text: OVERLOAD_EXHAUSTED_NOTICE,
+        sessionId: input.ctx.sessionId,
+      };
+      yield {
+        type: 'turn.completed',
+        usage: turn.withDuration({ ...turn.usage, stopReason: OVERLOAD_EXHAUSTED }),
+        sessionId: input.ctx.sessionId,
+      };
+      return;
     }
 
-    // Past the overload-retry decision for this round (retryOverload is
-    // false), so this round's mid-stream overload budget is spent — restore
-    // the full allowance for the next tool-use round. Reset here, ABOVE the
-    // terminal `return` paths below, so the "each tool-use round starts with a
-    // fresh budget" invariant holds uniformly. The translator-error and
-    // null-result paths return (so the reset is moot for them today), but
-    // placing it above them makes the invariant unconditional and survives a
-    // future refactor that turns a terminal path into a `continue`.
-    overloadRetries = 0;
-    // Same per-round scope for the mid-stream clean-close re-drive budget.
-    streamIncompleteRetries = 0;
-    // Same per-round scope for the TTFB single-retry allowance: a round that
-    // streamed a first byte spends its budget, so the next tool-use round gets a
-    // fresh one. A round only reaches here after a clean first byte, so this
-    // never runs on the failing (retry) attempt of the same round.
-    ttfbRetried = false;
-
-    if (translatorErrored) {
+    if (outcome.kind === 'translator-errored') {
       // Error event was already yielded. On an abort (interrupt/close), emit
       // turn.completed with accumulated usage so callers can account for
       // partial costs. On a real stream error, skip turn.completed so cost
@@ -865,464 +239,45 @@ export async function* runTurn(
       if (input.signal.aborted) {
         yield {
           type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
+          usage: turn.terminalUsage(),
           sessionId: input.ctx.sessionId,
         };
       }
       return;
     }
+    const turnResult = outcome.turnResult;
     if (turnResult === null) {
       // Stream ended without a turn-result; treat as a clean end-of-turn
       // with the usage we already have.
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
+        usage: turn.terminalUsage(),
         sessionId: input.ctx.sessionId,
       };
       return;
     }
 
-    const roundUsage = toProviderUsage(turnResult.usage, turnResult.stopReason, input.model);
-    accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-    // Context-window footprint = THIS round's full input occupancy. Anthropic's
-    // `input_tokens` excludes cache (docs: "tokens which were not read from or
-    // used to create a cache"), so the window total is
-    // input + cache_read + cache_creation + output for the latest call.
-    // Computed from the single round (not `accumulatedUsage`): cumulative
-    // `inputTokens` would double-count tokens already present in the latest
-    // `cache_read`. `sumProviderUsage` discards this field (it builds a fresh
-    // object), so it is re-stamped every round and reflects only the last one.
-    accumulatedUsage.contextWindowTokens =
-      (roundUsage.inputTokens ?? 0) +
-      (roundUsage.outputTokens ?? 0) +
-      (roundUsage.cachedInputTokens ?? 0) +
-      (roundUsage.cacheCreationTokens ?? 0);
-    // Surface per-round cumulative usage so getContextUsage() reflects
-    // mid-turn growth on the status line. Fires on every round including
-    // the terminal end_turn; the authoritative duration-stamped value is
-    // still set on turn.completed immediately after. Synchronous, never awaited.
-    input.onUsageProgress?.(accumulatedUsage);
+    turn.addRoundUsage(
+      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model),
+    );
+    // Surface per-round cumulative usage so getContextUsage() reflects mid-turn
+    // growth on the status line. Fires on every round including the terminal
+    // end_turn; the authoritative duration-stamped value is still set on
+    // turn.completed immediately after. Synchronous, never awaited.
+    input.onUsageProgress?.(turn.usage);
 
     if (turnResult.stopReason !== 'tool_use') {
-      // Invariant: stop_reason 'refusal' is Anthropic's content-safety stop —
-      // the model declined and the API returns an assistant turn with (almost
-      // always) NO content. The generic empty-completion path below would emit
-      // nothing and end the turn SILENTLY, indistinguishable from a hang: the
-      // operator sees a turn that "stopped" with no answer and no reason. Worse,
-      // the flagged content stays in the conversation, so every later turn
-      // refuses identically — the reported "it stopped and I can't send
-      // anything else". Surface an explicit, display-only notice (NOT pushed to
-      // history — it is operator-facing, not model context) so the refusal is
-      // legible and the operator can rephrase or start a fresh session.
-      if (turnResult.stopReason === 'refusal') {
-        yield {
-          type: 'assistant.message',
-          text:
-            turnResult.text.length > 0
-              ? turnResult.text
-              : 'The model stopped with a content-safety refusal (stop_reason: "refusal") and returned no output. ' +
-                "This is Anthropic's safety system declining the request — not an afk error. " +
-                'Because the flagged context stays in the conversation, follow-up messages will likely be refused the same way; ' +
-                'rephrase the request or start a fresh session to continue.',
-          sessionId: input.ctx.sessionId,
-        };
-        yield {
-          type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
-          sessionId: input.ctx.sessionId,
-        };
-        return;
-      }
-      if (turnResult.text.length > 0) {
-        yield {
-          type: 'assistant.message',
-          text: turnResult.text,
-          sessionId: input.ctx.sessionId,
-        };
-        const SUGGESTION_MAX_LENGTH = 200;
-        if (turnResult.text.length <= SUGGESTION_MAX_LENGTH) {
-          yield {
-            type: 'suggestion',
-            suggestion: turnResult.text,
-            sessionId: input.ctx.sessionId,
-          };
-        }
-      }
-      // Anthropic API contract: every `tool_use` block in assistant content
-      // MUST be followed by a matching `tool_result` block in the next user
-      // message. When stopReason !== 'tool_use', we are exiting the turn
-      // WITHOUT dispatching tools — any tool_use blocks the translator
-      // collected (e.g. a tool_use truncated by `max_tokens`, or one paired
-      // with a `pause_turn` stop) would become orphans the moment they hit
-      // history. Strip them before pushing so the next user turn cannot
-      // 400 with "tool_use ids were found without tool_result blocks
-      // immediately after".
-      const safeAssistantBlocks = turnResult.assistantBlocks.filter(
-        (b) => b.type !== 'tool_use',
-      );
-      if (safeAssistantBlocks.length > 0) {
-        input.messages.push({
-          role: 'assistant',
-          content: safeAssistantBlocks,
-        });
-      }
-      yield {
-        type: 'turn.completed',
-        // On the wind-down round (capReached) the model ends naturally with
-        // `end_turn`, but the turn as a whole WAS cut short by the tool-use cap
-        // — preserve that signal for closure classification + telemetry while
-        // still delivering the model's synthesized final message above.
-        usage: withTurnDuration(
-          capReached
-            ? { ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }
-            : accumulatedUsage,
-        ),
-        sessionId: input.ctx.sessionId,
-      };
+      yield* emitNonToolUseTerminal(turnResult, input, turn);
       return;
     }
 
-    // stopReason === 'tool_use' — push the assistant turn into history,
-    // dispatch every tool_use block, then assemble the tool_result user turn.
-    //
-    // Rollback contract: capture the pre-push length so any throw between
-    // here and the final `input.messages.push(toolResultTurn)` below can
-    // splice the orphaned assistant message back out. Without this, an
-    // unexpected throw inside `executeBatch` / `execute` (one not absorbed
-    // into an `is_error: true` ToolResult) would leave history terminating
-    // in an unmatched `tool_use` — every subsequent API call would 400.
-    const messagesRollbackIdx = input.messages.length;
-    input.messages.push({
-      role: 'assistant',
-      content: turnResult.assistantBlocks,
-    });
-    try {
-
-    // Accumulate the cumulative tool-call tally BEFORE dispatch so the progress
-    // emit below reports calls-so-far including this round's batch. One round
-    // can carry N parallel tool_use blocks, so this advances by the block count,
-    // not by 1.
-    toolCallCount += turnResult.toolUseBlocks.length;
-
-    // Build all tool calls and emit start events upfront.
-    const calls: ToolCall[] = [];
-    // Per-call start timestamps keyed by toolUseId so the completed
-    // trace event can carry an accurate `durationMs`. Lives within this
-    // loop iteration only — the next iteration starts fresh.
-    const startTimes = new Map<string, number>();
-    for (const block of turnResult.toolUseBlocks) {
-      calls.push({
-        id: block.id,
-        name: block.name,
-        input: block.input,
-        signal: input.signal,
-      });
-      const now = Date.now();
-      startTimes.set(block.id, now);
-      // Witness layer: tool_call.started fires BEFORE dispatch so even a
-      // crashing tool leaves evidence that it was attempted. Fire-and-
-      // forget — emitToolCall swallows writer errors internally.
-      void emitToolCall(
-        input.traceWriter,
-        buildToolCallStartedPayload({
-          toolUseId: block.id,
-          name: block.name,
-          input: block.input,
-          subagentId: input.subagentId,
-        }),
-      );
-      yield {
-        type: 'tool.use.start',
-        toolUseId: block.id,
-        toolName: block.name,
-        toolInput: summarizeToolInput(block.name, block.input),
-        toolInputRaw: extractRawToolInput(block.input),
-        sessionId: input.ctx.sessionId,
-      };
-    }
-
-    if (input.signal.aborted) {
-      const abortedResults: ToolResultBlockParam[] = calls.map((call) => ({
-        type: 'tool_result' as const,
-        tool_use_id: call.id,
-        content: 'Tool call aborted',
-        is_error: true,
-      }));
-      input.messages.push({ role: 'user', content: abortedResults as ContentBlockParam[] });
-      yield {
-        type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
-        sessionId: input.ctx.sessionId,
-      };
-      return;
-    }
-
-    // Dispatch: batch (parallel for safe tools) or sequential fallback.
-    let results: ToolResult[];
-    if (input.toolDispatcher.executeBatch) {
-      try {
-        results = await input.toolDispatcher.executeBatch(calls);
-      } catch (err) {
-        results = calls.map(() => ({
-          content: `Tool batch execution failed: ${err instanceof Error ? err.message : String(err)}`,
-          isError: true as const,
-        }));
-      }
-    } else {
-      results = [];
-      for (const call of calls) {
-        if (input.signal.aborted) {
-          results.push({ content: 'Tool call aborted', isError: true });
-          continue;
-        }
-        try {
-          results.push(await input.toolDispatcher.execute(call));
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          results.push({ content: `Tool execution threw: ${message}`, isError: true });
-        }
-      }
-    }
-
-    // Yield results and build tool_result blocks in original order.
-    const toolResultBlocks: ToolResultBlockParam[] = [];
-    for (let i = 0; i < calls.length; i++) {
-      const call = calls[i]!;
-      const result = results[i]!;
-
-      // Witness layer: tool_call.completed pairs with the .started event
-      // emitted above. `truncated` is now sourced from the handler's
-      // structured `ToolResult.truncated` flag — set by `handlers/bash.ts`
-      // and `handlers/grep.ts` whenever their byte cap is hit. The
-      // sentinel-substring fallback survives for third-party tool handlers
-      // that emit the `[output truncated …]` sentinel without setting the
-      // structured flag (back-compat). Fire-and-forget to keep the loop
-      // iteration cheap.
-      const startedAt = startTimes.get(call.id);
-      const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
-      const truncated = result.truncated === true || result.content.includes('[output truncated');
-      void emitToolCall(
-        input.traceWriter,
-        buildToolCallCompletedPayload({
-          toolUseId: call.id,
-          name: call.name,
-          result,
-          truncated,
-          durationMs,
-          subagentId: input.subagentId,
-        }),
-      );
-
-      yield {
-        type: 'tool.output',
-        toolUseId: call.id,
-        toolName: call.name,
-        content: result.content,
-        ...(result.isError === true ? { isError: true } : {}),
-        ...(truncated ? { truncated: true } : {}),
-        ...(result.incomplete === true ? { incomplete: true } : {}),
-        ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
-        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
-          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
-          : {}),
-        sessionId: input.ctx.sessionId,
-      };
-
-      // Sidecar render-only event for file-mutation tools. Travels on a
-      // separate event variant — the `toolResultBlocks.push()` call below
-      // cannot reference `result.render` (it's not in scope), so a future
-      // refactor cannot accidentally leak diff payloads into the model's
-      // `tool_result` content. This is the structural correctness invariant
-      // for the diff render channel.
-      if (result.render?.diff) {
-        yield {
-          type: 'tool.diff',
-          toolUseId: call.id,
-          diff: result.render.diff,
-          sessionId: input.ctx.sessionId,
-        };
-      }
-
-      // Destructure only the model-facing fields so `result.render` is
-      // structurally unreachable at this call site — not merely excluded by
-      // convention. This makes the isolation load-bearing rather than
-      // documentation-only. `image` is the ONE structured field that IS
-      // model-facing: when set it becomes an `image` content block alongside
-      // the text. `render` remains excluded.
-      const { content: resultContent, isError: resultIsError, image: resultImage } = result;
-      // When a tool returns an image (e.g. browser_screenshot), emit it as an
-      // image block followed by the text summary. The handler keeps the text
-      // non-empty so providers that drop the image still see useful context.
-      const toolResultContent: ToolResultBlockParam['content'] =
-        resultImage !== undefined
-          ? [
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: resultImage.mediaType,
-                  data: resultImage.data,
-                },
-              },
-              ...(resultContent.length > 0
-                ? [{ type: 'text' as const, text: resultContent }]
-                : []),
-            ]
-          : resultContent;
-      toolResultBlocks.push({
-        type: 'tool_result',
-        tool_use_id: call.id,
-        content: toolResultContent,
-        ...(resultIsError === true ? { is_error: true } : {}),
-      });
-    }
-
-    const toolResultTurn: MessageParam = {
-      role: 'user',
-      content: toolResultBlocks as ContentBlockParam[],
-    };
-    input.messages.push(toolResultTurn);
-
-    // Denial circuit breaker (#546): the dispatcher tagged a result
-    // `denial-breaker` after a forked child hit N consecutive path-approval
-    // read denials with no progress. Surface it as a LOUD `error` event — never
-    // a silent partial — so the shared subagent handle rethrows it into a
-    // structured `buildResultFromError` failure the parent can act on (mirrors
-    // the TimeoutError teardown). History is already consistent here (assistant
-    // `tool_use` + matching `tool_result` blocks both pushed above), so
-    // returning is safe; the fork is done. A dispatcher throw would instead be
-    // swallowed by the executeBatch/execute catch above and the loop would keep
-    // spinning — which is the exact failure this breaker exists to prevent.
-    const denialTrip = results.find((r) => r.failureClass === DENIAL_BREAKER_FAILURE_CLASS);
-    if (denialTrip) {
-      yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
-      return;
-    }
-    } catch (err) {
-      // Rollback the orphaned assistant `tool_use` push above so the next
-      // turn's API call does not 400 with "tool_use ids were found without
-      // tool_result blocks immediately after". Any path that reached the
-      // matching `input.messages.push(toolResultTurn)` above (or the
-      // earlier aborted-results push at the signal-aborted gate) returned
-      // from inside the try with history already consistent, so they do
-      // not enter this catch. Re-throw so the outer query-level handler
-      // still surfaces the error.
-      input.messages.splice(messagesRollbackIdx);
-      throw err;
-    }
-
-    iterations += 1;
-
-    const lastTool = turnResult.toolUseBlocks[turnResult.toolUseBlocks.length - 1];
-    // Semantic summary: name the tool AND its most informative argument
-    // (path / command / query via summarizeToolInput) so the progress banner
-    // carries real signal — `bash git show f7f0a37…` instead of the old
-    // `Iteration 11: used bash`, which conveyed nothing after round 2.
-    // `description` stays STABLE across ticks for this taskId (the banner
-    // dedupes line 0 on commit); the per-tick signal lives in `summary`.
-    const lastToolHeadline = lastTool
-      ? `${lastTool.name}${summarizeToolInput(lastTool.name, lastTool.input)}`
-      : 'unknown';
-    yield {
-      type: 'progress',
-      progress: {
-        taskId,
-        description: 'Working',
-        summary: `round ${iterations}: ${lastToolHeadline}`,
-        lastToolName: lastTool?.name,
-        totalTokens: accumulatedUsage.totalTokens ?? 0,
-        // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far in
-        // this turn (not the round number), so downstream formatToolCallStat
-        // renders "N tool calls" truthfully even when a round batched parallel
-        // calls. The `summary` above legitimately names the ROUND — leave it.
-        toolUses: toolCallCount,
-        durationMs: Date.now() - loopStartTime,
-      },
-      sessionId: input.ctx.sessionId,
-    };
-    if (capReached) {
-      // The wind-down round (tools stripped) still came back as `tool_use` —
-      // only reachable if the model emits a tool call against an empty toolset.
-      // Honor the cap with a hard stop rather than looping unbounded.
-      yield {
-        type: 'turn.completed',
-        usage: withTurnDuration({ ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }),
-        sessionId: input.ctx.sessionId,
-      };
-      return;
-    }
-    if (shouldWindDown(iterations, maxIterations)) {
-      // Cap reached. Instead of cutting the turn off HERE — which ends it with
-      // no final assistant message and reads as a silent hang — run ONE more
-      // round with tools stripped (params build above) so the model can
-      // synthesize a final answer from what it gathered. Append a brief note to
-      // the tool_result turn just pushed so the model knows why its tools are
-      // gone. `capReached` guarantees this fires at most once; the guard above
-      // hard-stops if the wind-down round pathologically emits another tool_use.
-      const lastMsg = input.messages[input.messages.length - 1];
-      if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
-        lastMsg.content.push({ type: 'text', text: WIND_DOWN_NOTE });
-      }
-      capReached = true;
-      continue;
-    }
+    // stopReason === 'tool_use' — dispatch the tools, commit the results, and
+    // decide whether the turn keeps going. The whole history mutation contract
+    // (assistant push, rollback on throw, tool_result commit) lives inside.
+    const round = yield* runToolRound(turnResult, input, turn, maxIterations);
+    if (round === 'terminated') return;
   }
   } finally {
-    input.signal.removeEventListener('abort', onInterruptForTrace);
-    // Interrupt→halt latency: emit ONLY when THIS turn ended because of an ESC
-    // soft-stop (`interrupt()` aborts with reason `'interrupted'`). Every abort
-    // exit above yields its terminal `turn.completed` immediately before the
-    // generator returns into this finally, so `Date.now()` here is that terminal
-    // instant; `interruptedAt` is when the signal fired. A session `close()`
-    // (reason `'closed'`) and a clean/error/capped end are all excluded — the
-    // former is not a halt-latency event, the latter never aborted the signal.
-    // Fire-and-forget; trace latency must never stall an already-returning turn.
-    if (interruptedAt !== null && input.signal.reason === 'interrupted') {
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'interrupt_halt',
-        durationMs: Date.now() - interruptedAt,
-        metadata: { provider: 'anthropic-direct' },
-      });
-    }
-    // Emit loop_end regardless of which exit path above fired.
-    void emitSessionPhase(input.traceWriter, {
-      phase: 'loop_end',
-      durationMs: Date.now() - loopStartTime,
-    });
-  }
-}
-
-function dumpThinkingDiagnostic(messages: MessageParam[], error: Error): void {
-  try {
-    const offending: Array<{ msgIdx: number; blockIdx: number; thinking: string; sigLen: number }> = [];
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]!;
-      if (msg.role !== 'assistant' || typeof msg.content === 'string') continue;
-      const blocks = msg.content as ContentBlockParam[];
-      for (let j = 0; j < blocks.length; j++) {
-        const b = blocks[j]!;
-        if ((b as { type: string }).type === 'thinking') {
-          const tb = b as { thinking?: string; signature?: string };
-          if (!tb.thinking || !tb.signature) {
-            offending.push({
-              msgIdx: i,
-              blockIdx: j,
-              thinking: tb.thinking ? `(${tb.thinking.length} chars)` : '(empty)',
-              sigLen: tb.signature?.length ?? 0,
-            });
-          }
-        }
-      }
-    }
-    console.error(
-      '[afk] thinking-block diagnostic — API rejected request with:',
-      error.message,
-    );
-    console.error(
-      `[afk]   messages.length=${messages.length}, invalid thinking blocks:`,
-      offending.length > 0 ? JSON.stringify(offending) : 'none found (cause may be elsewhere)',
-    );
-  } catch {
-    // diagnostic must never throw
+    trace.finish(turn.elapsedMs());
   }
 }

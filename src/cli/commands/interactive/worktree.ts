@@ -19,6 +19,7 @@ import { randomBytes } from 'node:crypto';
 
 import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
 import { detectShellFromEnv } from '../shell-init.js';
+import { hasNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -638,6 +639,8 @@ async function createWorktreeAt(
 
       if (opts?.force === true) {
         // Zero-turn session: no work was done, so skip the dirty-state check
+        // AND the ignored-state probe below — nothing can have been written in
+        // a session that took zero turns, so there is nothing to preserve.
         // and remove unconditionally. Log before the git call so the user sees
         // confirmation even if the removal fails.
         // eslint-disable-next-line no-console
@@ -674,10 +677,10 @@ async function createWorktreeAt(
         return;
       }
 
-      if (status.stdout.trim().length > 0) {
+      const preserveWorktree = (reason: string): void => {
         // eslint-disable-next-line no-console
         console.log(
-          `Worktree preserved at ${currentPath} (branch: ${currentBranch}) — uncommitted changes.`,
+          `Worktree preserved at ${currentPath} (branch: ${currentBranch}) — ${reason}.`,
         );
         // Record the worktree as the parent shell's desired cwd. The
         // optional `afk` shell wrapper (installed via `afk shell-init`)
@@ -697,6 +700,27 @@ async function createWorktreeAt(
           // eslint-disable-next-line no-console
           console.log(`  → cd ${currentPath}\n  → Or install one-time:  ${installHint}`);
         }
+      };
+
+      if (status.stdout.trim().length > 0) {
+        preserveWorktree('uncommitted changes');
+        return;
+      }
+
+      // Invariant: the `git status --porcelain` above reports untracked files
+      // but NEVER ignored ones, so a tree whose only content is ignored reads
+      // clean here and falls straight through to `remove --force` below. That
+      // deletes a worktree-local `.env` or gitignored scratch file with no
+      // warning and no recovery (#759) — this is the same defect the sweep
+      // engine and the `worktree` tool's remove path already guard against, and
+      // it is the most frequently executed removal path of the three.
+      // Rebuildable output (node_modules/, dist/) stays non-protective on
+      // purpose: treating it as protective would strand every worktree the
+      // user ever finished with.
+      if (await hasNonRebuildableIgnoredFiles(execFile, currentPath)) {
+        preserveWorktree(
+          'non-rebuildable ignored files (e.g. .env) that `git status` cannot see',
+        );
         return;
       }
 

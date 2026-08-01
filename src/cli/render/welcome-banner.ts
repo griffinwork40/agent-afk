@@ -253,90 +253,130 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   const LEFT_PAD = '  ';
   const GUTTER = '  ';
 
+  // Invariant (last-column safety): every composed banner row ends at column
+  // `cols - 1` at most — never the terminal's final column. Matches the reserve
+  // in render/card.ts (`rightEdge = cols - 1`) and input/echo.ts. Use `cols - 1`
+  // directly — NOT `Math.max(n, cols - 1)`: a floor would push the edge back UP
+  // into the physical last column on a 1–3 column terminal.
+  //
+  // Do NOT read this as a fix for "the goblin gets mangled on resize". That
+  // symptom is ordinary overflow reflow, measured in welcome-banner.resize.test.ts:
+  // the banner is printed ONCE into scrollback before the compositor arms
+  // (commands/interactive.ts) and never re-derived, so on a SHRINK the emulator
+  // hard-splits every stored row wider than the new width. Only the rows where
+  // right-column text rides beside the sprite are that wide, so they split while
+  // the sprite-only rows do not — the 13-row grid gains rows and text fragments
+  // land inside the art. Reserving one column makes a 1-column shrink safe and
+  // nothing more; a shrink of ≥2 columns below the widest row still mangles and
+  // is NOT addressed here. (The deferred-wrap/DECAWM hazard that motivates the
+  // card.ts and echo.ts reserves does not reach these rows: each is terminated
+  // by CR/LF, which resets the last-column flag per DEC STD-070. It applies to
+  // compositor-written rows, which are followed by a CUP instead.)
+  const usableCols = cols - 1;
+
   // Below this width the 27-col sprite would crush the right column into a
   // sliver; drop the mascot and stack the column full-width instead so the
   // banner stays legible at any narrow window size.
   const MIN_INFO_COLS = 24;
-  const spriteBudget = cols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length;
+  const spriteBudget = usableCols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length;
   const showMascot = spriteBudget >= MIN_INFO_COLS;
 
   // Right-column width: beside the sprite when shown, else the full terminal
-  // width (minus the left pad) in the compact, mascot-less fallback.
-  const headerMaxW = Math.max(1, cols - LEFT_PAD.length);
+  // width (minus the left pad and the reserved final column) in the compact,
+  // mascot-less fallback.
+  const headerMaxW = Math.max(1, usableCols - LEFT_PAD.length);
   const colMaxW = showMascot ? spriteBudget : headerMaxW;
 
   const versionText = opts.version !== undefined ? formatVersion(opts.version) : undefined;
 
-  // ── Right column, composed top → bottom. ──
-  const col: string[] = [];
+  // ── Art column beside the sprite. ──
+  // Invariant (no row mixes pixel art with text): the ONLY thing allowed to
+  // share a terminal row with the goblin is more art — the block-art hero. Every
+  // readable string (caption, model/mode, branch, cwd, metaLine) is emitted as a
+  // full-width row BELOW the composition instead.
+  //
+  // Why this is structural and not cosmetic: the banner is written once into
+  // scrollback and never re-derived, so on a SHRINK the emulator hard-splits any
+  // stored row wider than the new width. When text rode beside the sprite those
+  // rows were up to `cols` wide while sprite-only rows were 29, so a shrink split
+  // *some* rows of a fixed 13-row grid and injected text fragments into the
+  // goblin's face. With text moved off, the widest art row is
+  // LEFT_PAD + MASCOT_WIDTH + GUTTER + hero = 2+27+2+14 = 45 cols, so the whole
+  // sprite survives any resize down to 45 columns intact — and the mascot is
+  // already dropped below 56 (MIN_INFO_COLS), so the art is effectively
+  // resize-safe across its entire live range. Text rows below still reflow on a
+  // shrink, which is fine: wrapped prose degrades gracefully, torn pixel art does
+  // not. Measured in welcome-banner.resize.test.ts.
+  const artCol: string[] = [];
 
   // Hero: the gradient-shaded block-art "AFK" logo. Defensive text fallback
   // only on a pathologically narrow terminal that can't hold the 14-col mark.
   if (asciiWordmarkWidth(HERO_TEXT) <= colMaxW) {
-    col.push(...shadeWordmark(renderAsciiWordmark(HERO_TEXT)));
+    artCol.push(...shadeWordmark(renderAsciiWordmark(HERO_TEXT)));
   } else {
-    col.push(palette.brand('Agent ') + palette.bold(palette.brand('AFK')));
+    artCol.push(palette.brand('Agent ') + palette.bold(palette.brand('AFK')));
   }
 
-  // Readable name + version caption: keeps the full "Agent AFK" greppable and
-  // screen-reader-visible beneath the block-art acronym (tests assert this).
-  // The bold title anchors identity; the version rides dim beside it, sharing
-  // the same single-middot ( · ) rhythm as the mode/hint rows below rather than
-  // the airier double-middot it used to carry. The product tagline is NOT pushed
-  // here — it is emitted full-width below the whole composition (see the tagline
-  // row just above the footer) so the 42-col thesis can never truncate mid-word
-  // in the narrow ~(cols−31) column beside the 27-col sprite.
-  const nameChip =
-    palette.heading('Agent AFK') +
-    (versionText !== undefined ? palette.dim(' · ' + versionText) : '');
-  col.push('');
-  col.push(truncateDisplay(nameChip, colMaxW));
-
-  // Session-identity facts, each truncated to the column width.
-  const factRows: string[] = [];
-  const pushFact = (row: string): void => {
-    factRows.push(truncateDisplay(row, colMaxW));
-  };
-  const modeBits: string[] = [];
-  if (opts.model !== undefined) modeBits.push(palette.heading(opts.model));
-  if (opts.mode.length > 0) modeBits.push(palette.dim(opts.mode));
-  if (modeBits.length > 0) pushFact(modeBits.join(palette.dim(' · ')));
+  // ── Text block: full-width rows, emitted below the art. ──
+  // The caption folds identity + version + model + mode onto ONE row. Moving
+  // text off the sprite rows costs vertical space (the goblin's lower rows no
+  // longer carry facts for free), so the rows that CAN merge do, keeping the
+  // banner close to its previous height. "Agent AFK" stays a literal substring —
+  // greppable and screen-reader-visible beneath the block-art acronym, which
+  // render.test.ts asserts.
+  const infoRows: string[] = [];
+  const captionBits: string[] = [palette.heading('Agent AFK')];
+  if (versionText !== undefined) captionBits.push(palette.dim(versionText));
+  if (opts.model !== undefined) captionBits.push(palette.heading(opts.model));
+  if (opts.mode.length > 0) captionBits.push(palette.dim(opts.mode));
+  infoRows.push(truncateDisplay(captionBits.join(palette.dim(' · ')), headerMaxW));
   // worktree (only in a worktree session — an AFK-native signal).
-  if (opts.worktree !== undefined) pushFact(palette.dim('branch  ') + palette.goblin(opts.worktree));
+  if (opts.worktree !== undefined) {
+    infoRows.push(
+      truncateDisplay(palette.dim('branch  ') + palette.goblin(opts.worktree), headerMaxW),
+    );
+  }
   // cwd (home-tilde'd + middle-truncated to fit).
-  if (opts.cwd !== undefined) pushFact(palette.dim(truncateMiddle(tildifyHome(opts.cwd), colMaxW)));
+  if (opts.cwd !== undefined) {
+    infoRows.push(palette.dim(truncateMiddle(tildifyHome(opts.cwd), headerMaxW)));
+  }
   // metaLine (caller-supplied, e.g. a /resume "Resuming <id>" cue).
-  if (opts.metaLine !== undefined) pushFact(palette.dim(opts.metaLine));
-  if (factRows.length > 0) {
-    col.push('');
-    col.push(...factRows);
+  if (opts.metaLine !== undefined) {
+    infoRows.push(truncateDisplay(palette.dim(opts.metaLine), headerMaxW));
   }
 
   const lines: string[] = [];
 
   if (showMascot) {
-    // Compose sprite (left) + right column, the column vertically centered onto
-    // the goblin's widest rows. ROUND (not floor) the top pad so a column
-    // shorter than the 13-row sprite biases DOWN onto the ear/eye band. When
-    // the column is taller (e.g. a /resume metaLine) the pad collapses to 0 and
-    // the tail flows below the sprite.
+    // Compose sprite (left) + hero (right), the hero vertically centered onto the
+    // goblin's widest rows. ROUND (not floor) the top pad so the 5-row hero
+    // biases DOWN onto the ear/eye band rather than the narrow cap tip. The hero
+    // is now the ONLY right-column content, so this pad no longer varies with the
+    // session facts — the art block is geometrically identical every run.
     const sprite = renderMascotLines('idle');
-    const colTopPad = Math.max(0, Math.round((sprite.length - col.length) / 2));
-    const totalRows = Math.max(sprite.length, colTopPad + col.length);
+    const colTopPad = Math.max(0, Math.round((sprite.length - artCol.length) / 2));
+    const totalRows = Math.max(sprite.length, colTopPad + artCol.length);
     for (let i = 0; i < totalRows; i++) {
       const left = sprite[i] ?? ' '.repeat(MASCOT_WIDTH);
       const idx = i - colTopPad;
-      const right = idx >= 0 ? (col[idx] ?? '') : '';
+      const right = idx >= 0 ? (artCol[idx] ?? '') : '';
       // trimEnd drops the trailing gutter + transparent sprite columns on rows
-      // with no right-column text, leaving no selectable trailing whitespace.
+      // with no hero glyphs, leaving no selectable trailing whitespace.
       lines.push((LEFT_PAD + left + GUTTER + right).trimEnd());
     }
   } else {
-    // Compact fallback (terminal too narrow for the sprite): stack the column
+    // Compact fallback (terminal too narrow for the sprite): stack the hero
     // flush-left with no mascot. Rows are pre-truncated so nothing overflows.
-    for (const row of col) {
+    for (const row of artCol) {
       lines.push((LEFT_PAD + row).trimEnd());
     }
+  }
+
+  // Session identity, full-width below the art. Blank spacer keeps the art block
+  // reading as a distinct hero rather than crowding the caption.
+  lines.push('');
+  for (const row of infoRows) {
+    lines.push((LEFT_PAD + row).trimEnd());
   }
 
   // Blank spacer between the composition (goblin + info stack) and the tagline
@@ -364,10 +404,16 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL} · ${REPO_URL}`), headerMaxW),
   );
 
-  // Hint line sits flush-left below the whole composition.
+  // Hint line sits flush-left below the whole composition. Wrapped to
+  // `usableCols`, not `cols`: a wrap that lands exactly on the terminal width
+  // would put a glyph in the reserved final column and re-open the
+  // deferred-wrap hazard documented at the top of this function.
   if (opts.hintLine !== undefined) {
     lines.push(
-      ...wrapToWidth(palette.dim(LEFT_PAD + normalizeHintLine(opts.hintLine)), cols).split('\n'),
+      ...wrapToWidth(
+        palette.dim(LEFT_PAD + normalizeHintLine(opts.hintLine)),
+        usableCols,
+      ).split('\n'),
     );
   }
 
