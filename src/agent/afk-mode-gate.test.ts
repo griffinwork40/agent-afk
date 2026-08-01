@@ -111,6 +111,23 @@ describe('createAfkModeGate', () => {
     expect(result.decision).toBe('block');
   });
 
+  // ---- PR #806 follow-up review: embedded newline is a statement separator ---
+  // `spawn(cmd, { shell: true })` runs the command through a real `/bin/sh -c`,
+  // where a literal newline separates statements exactly like `;`. The
+  // tokenizer's `\s+` split treats `\n`/`\r` as ordinary whitespace, so without
+  // rejecting them at the metachar-check stage a command like
+  // `rm -rf node_modules\ndist` would flatten into a single token stream
+  // (`targets: ["node_modules", "dist"]`) instead of being recognized as two
+  // separate shell statements.
+  it.each([
+    ['rm -rf node_modules\ndist', 'embedded LF'],
+    ['rm -rf node_modules\r\ndist', 'embedded CRLF'],
+  ])('blocks rm -rf with an embedded newline statement separator (%s)', async (command) => {
+    const { gate } = makeGate('autonomous');
+    const result = await gate({ event: 'PreToolUse', toolName: 'bash', input: { command } });
+    expect(result.decision).toBe('block');
+  });
+
   // ---- PR #806 review: carve-out is recursive DIRECTORY deletes only ---------
   // Without a recursive flag the target is a regular file — a tracked script
   // named `build` is not a generated artifact and must still require approval.
