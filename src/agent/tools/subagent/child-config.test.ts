@@ -227,6 +227,43 @@ describe('buildChildConfig', () => {
       expect(buildChildConfig(baseArgs({ namedAgent: realResearchAgent })).childSideEffectFree)
         .toBe(true);
     });
+
+    // Invariant: `agent` is the one member of STREAM_CUT_RETRY_SAFE_TOOLS whose
+    // reach is transitive, so membership alone must never authorize a replay.
+    // A bare `Agent` token resolves to `nestedAgentTypes: undefined` =
+    // UNRESTRICTED nesting (agents/resolve.ts extractNestedAgentScope), which
+    // leaves `nestedAgentAllowlist` unset and lets the executor dispatch
+    // `general-purpose` — inherit-all, write_file/edit_file/bash — as a
+    // grandchild. Replaying the prompt would re-fire those writes.
+    it('is false for an UNSCOPED nested-agent grant (bare Agent token)', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent'] }) }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('is false when a cage grants nested dispatch with no scoping resolvable', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'agent'] }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('stays true for a SCOPED nested-agent grant (Agent(type))', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent(git-investigator)'] }) }),
+      );
+      expect(childSideEffectFree).toBe(true);
+    });
+
+    it('stays true for an explicit deny-all nested grant (Agent())', () => {
+      // `Agent()` → nestedAgentTypes: [] — dispatch tool granted, zero types
+      // permitted, so no grandchild is reachable and replay stays safe.
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent()'] }) }),
+      );
+      expect(childSideEffectFree).toBe(true);
+    });
   });
 
   describe('systemPrompt selection', () => {

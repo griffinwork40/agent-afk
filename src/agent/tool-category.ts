@@ -224,6 +224,11 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
  *
  * `bash` is intentionally absent. Its read-only classifier is best-effort and
  * therefore cannot prove that replaying a command is free of side effects.
+ *
+ * Membership is NECESSARY BUT NOT SUFFICIENT. `agent` is admitted here on the
+ * strength of scoped grants only; the scoping itself is enforced by
+ * `isChildReplaySafe` (`tools/subagent/retry-safety.ts`), which rejects an
+ * unscoped grant. Never authorize a replay from this set alone.
  */
 export const STREAM_CUT_RETRY_SAFE_TOOLS: readonly string[] = [
   ...READ_ONLY_PHASE_TOOLS,

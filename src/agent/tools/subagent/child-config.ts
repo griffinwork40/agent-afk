@@ -42,9 +42,7 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
-import { STREAM_CUT_RETRY_SAFE_TOOLS } from '../../tool-category.js';
-
-const STREAM_CUT_RETRY_SAFE_TOOL_SET = new Set(STREAM_CUT_RETRY_SAFE_TOOLS);
+import { isChildReplaySafe } from './retry-safety.js';
 
 /** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
@@ -207,12 +205,15 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
     effectiveReadOnlyBash !== true;
   const childWriteCapable = canWriteFiles || canMutateViaBash;
-  // Retry safety is stricter than filesystem write capability. Fail closed for
-  // unrestricted/unknown surfaces and prove every tool against the audited
-  // pure-read contract; non-file tools can mutate remote or persistent state.
-  const childSideEffectFree =
-    effectiveAllowedTools !== undefined &&
-    effectiveAllowedTools.every((tool) => STREAM_CUT_RETRY_SAFE_TOOL_SET.has(tool));
+  // Retry safety is stricter than filesystem write capability: it proves the
+  // TRANSITIVE reach of a replayed prompt, not just this child's own tool
+  // names. Fail closed for unrestricted surfaces, for non-file tools that can
+  // mutate remote or persistent state, and for an unscoped nested-dispatch
+  // grant that could re-fire a write-capable grandchild. See `retry-safety.ts`.
+  const childSideEffectFree = isChildReplaySafe({
+    effectiveAllowedTools,
+    nestedAgentTypes: resolvedAccess?.nestedAgentTypes,
+  });
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under
