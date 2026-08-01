@@ -286,7 +286,11 @@ export function prepareSources() {
       stats.inlinedFiles++;
       stats.replacedCalls++;
     } else {
-      console.log(`  [inline-prompts] WARNING: Could not find loadSystemPrompt() in shared-helpers.ts`);
+      throw new Error(
+        '[inline-prompts] Could not find loadSystemPrompt() in shared-helpers.ts\n' +
+        '  Pattern C replacement failed. The function body may have changed.\n' +
+        '  Update the oldFn string in prepareSources() to match the current code.'
+      );
     }
   }
 

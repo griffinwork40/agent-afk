@@ -82,13 +82,13 @@ mkdirSync(distDir, { recursive: true });
 // Step 1: pre-transform sources
 const { tmpSrc, tmpBase } = prepareSources();
 
-// Step 1b: fail CLOSED before bundling if any prompt read survived inlining
-// (#776). Checked on the prepared tree rather than dist/ — see the module
-// docblock for why the bundle is the wrong layer to grep.
-const scannedForPromptReads = assertNoRemainingPromptReads(tmpSrc);
-console.log(`  [assert-inlined-prompts] ${scannedForPromptReads} files verified: no runtime .md reads`);
-
 try {
+  // Step 1b: fail CLOSED before bundling if any prompt read survived inlining
+  // (#776). Checked on the prepared tree rather than dist/ — see the module
+  // docblock for why the bundle is the wrong layer to grep.
+  const scannedForPromptReads = assertNoRemainingPromptReads(tmpSrc);
+  console.log(`  [assert-inlined-prompts] ${scannedForPromptReads} files verified: no runtime .md reads`);
+
   // Step 2: bundle from transformed sources
   await build({
     entryPoints: {
