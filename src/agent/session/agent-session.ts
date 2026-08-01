@@ -13,6 +13,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
+import { captureSubagentPrompt } from './subagent-prompt-capture.js';
 import { AbortError } from '../../utils/errors.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/writer.js';
@@ -672,6 +673,19 @@ export class AgentSession implements IAgentSession {
     // `session.init` — which `initPromise` above has just drained.
     this.ensureLedger();
     this.ledger.recordUser(historySummary);
+    // Opt-in forensics: a fork records its OWN inbound prompt here, which is the
+    // one place every dispatch path converges with the composed text in hand.
+    // The ledger above is deliberately gated OFF for forks (LedgerLifecycle.ensure),
+    // so this fills that hole rather than duplicating it. Fire-and-forget by
+    // contract — it can never reject (see captureSubagentPrompt).
+    void captureSubagentPrompt({
+      sessionId: this.sessionId,
+      subagentId: this.config.subagentId,
+      isSubagentFork: this.config.isSubagentFork === true,
+      model: this.config.model === undefined ? undefined : String(this.config.model),
+      turn: this.turnCount + 1,
+      prompt: historySummary,
+    });
 
     const deps = this.buildTransformDeps();
 

@@ -314,6 +314,19 @@ export function getTraceDir(sessionId: string): string {
 }
 
 /**
+ * Directory for opt-in captured subagent dispatch prompts, keyed by the same
+ * witness `sessionLabel` as {@link getTraceDir}.
+ *
+ * A forked child resumes its parent's sessionId, so a child writing here lands
+ * in its PARENT's directory — which is what makes "every prompt this session
+ * dispatched" a single-directory read. Pure path helper: the caller owns `mkdir`
+ * (see `agent/session/subagent-prompt-capture.ts`).
+ */
+export function getPromptsDir(sessionId: string): string {
+  return join(getTraceDir(sessionId), 'prompts');
+}
+
+/**
  * Inverse of {@link getTraceDir}: recover the witness `sessionLabel` from a
  * trace-file path (`.../witness/<label>/trace.jsonl`).
  *
