@@ -20,17 +20,26 @@
  * @see src/agent/tools/skill-executor.ts  — isSkillDispatch set on childConfig
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type {
   ContentBlockParam,
   RawMessageStreamEvent,
 } from '@anthropic-ai/sdk/resources';
+import type OpenAI from 'openai';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   AnthropicDirectProvider,
   __setAnthropicClientFactory,
 } from '../providers/anthropic-direct/index.js';
+import {
+  OpenAICompatibleProvider,
+  __setOpenAIClientFactory,
+} from '../providers/openai-compatible/index.js';
 import { buildMessages } from '../providers/openai-compatible/messages.js';
+import type { OpenAIChunk } from '../providers/openai-compatible/translate.js';
 import { SLASH_COMMAND_ROUTING_PROMPT, TOOL_SYSTEM_PROMPT_BASE } from './system-prompt.js';
 import { registerSkill } from '../../skills/index.js';
 
@@ -515,5 +524,156 @@ describe('openai-compatible messages.ts — routing instruction never injected',
     expect(sysMsg!.content).not.toContain(SLASH_COMMAND_ROUTING_PROMPT);
     // SKILL.md body is present.
     expect(sysMsg!.content).toContain('SKILL_BODY_FOR_OPENAI');
+  });
+});
+
+// --------------------------------------------------------------------------
+// OpenAI-compatible mock plumbing (mirrors query.test.ts pattern)
+// --------------------------------------------------------------------------
+
+let openaiCreateCalls: Array<{ args: unknown }> = [];
+
+function installOpenAIMockClient(): void {
+  const factory = () =>
+    ({
+      chat: {
+        completions: {
+          create: async (args: { stream?: boolean }) => {
+            openaiCreateCalls.push({ args });
+            if (!args.stream) throw new Error('mock only supports streaming');
+            const chunks: OpenAIChunk[] = [
+              {
+                choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+              },
+            ];
+            return (async function* () {
+              for (const c of chunks) yield c;
+            })();
+          },
+        },
+      },
+    }) as unknown as OpenAI;
+  __setOpenAIClientFactory(factory);
+}
+
+function extractOpenAISystemText(args: unknown): string {
+  const messages = (args as { messages?: Array<{ role: string; content: string }> }).messages;
+  if (!messages) return '';
+  const sysMsg = messages.find((m) => m.role === 'system');
+  return typeof sysMsg?.content === 'string' ? sysMsg.content : '';
+}
+
+// --------------------------------------------------------------------------
+// OpenAICompatibleProvider — skill-dispatch self-entry suppression
+// --------------------------------------------------------------------------
+// Mirrors the AnthropicDirectProvider block above. PR #737 added excludeName
+// forwarding from config.skillDispatchName to buildSkillManifest on the
+// OpenAI-compatible side; these tests verify the fix holds.
+
+describe('OpenAICompatibleProvider — skill-dispatch self-entry suppression', () => {
+  const probeName = 'openai-manifest-probe';
+
+  beforeEach(() => {
+    openaiCreateCalls = [];
+    __setOpenAIClientFactory(null);
+    installOpenAIMockClient();
+    registerSkill({
+      name: probeName,
+      description: 'Probe skill for OpenAI self-suppression',
+      handler: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+  });
+
+  async function systemTextFor(config: Record<string, unknown>): Promise<string> {
+    const provider = new OpenAICompatibleProvider({
+      skillExecutor: { execute: vi.fn() } as unknown as ConstructorParameters<
+        typeof OpenAICompatibleProvider
+      >[0]['skillExecutor'],
+    });
+    await drainQuery(
+      provider.query({
+        prompt: singleInput('hello'),
+        config: { model: 'gpt-4o-mini', apiKey: 'sk-test-key', ...config },
+      } as Parameters<typeof provider.query>[0]),
+    );
+    const firstCall = openaiCreateCalls[0]!;
+    return extractOpenAISystemText(firstCall.args);
+  }
+
+  it('main session: the manifest lists the skill', async () => {
+    const text = await systemTextFor({});
+    expect(text).toContain(probeName);
+  });
+
+  it('skill-dispatch fork: its OWN entry is absent from the manifest', async () => {
+    const text = await systemTextFor({
+      isSkillDispatch: true,
+      skillDispatchName: probeName,
+    });
+    expect(text).not.toContain(probeName);
+  });
+
+  it('skill-dispatch fork of a DIFFERENT skill: the entry remains', async () => {
+    const text = await systemTextFor({
+      isSkillDispatch: true,
+      skillDispatchName: 'some-other-skill',
+    });
+    expect(text).toContain(probeName);
+  });
+});
+
+// --------------------------------------------------------------------------
+// OpenAICompatibleProvider — cwd forwarding for project skills
+// --------------------------------------------------------------------------
+// PR #737 also added cwd forwarding to buildSkillManifest on the OpenAI side.
+// Without it, <cwd>/.afk/skills/ resolves against the host process dir instead
+// of the session's dir, so project skills vanish on long-lived hosts.
+
+describe('OpenAICompatibleProvider — cwd forwarding for project skills', () => {
+  const projectSkillName = 'openai-cwd-probe';
+  let tmpCwd: string;
+
+  beforeEach(() => {
+    openaiCreateCalls = [];
+    __setOpenAIClientFactory(null);
+    installOpenAIMockClient();
+    tmpCwd = mkdtempSync(join(tmpdir(), 'openai-cwd-fwd-test-'));
+    const skillDir = join(tmpCwd, '.afk', 'skills', projectSkillName);
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---\nname: ${projectSkillName}\ndescription: Project skill for cwd forwarding test\n---\n# Body\n`,
+    );
+  });
+
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    try { rmSync(tmpCwd, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  it('project skill under config.cwd reaches the manifest', async () => {
+    const provider = new OpenAICompatibleProvider({
+      skillExecutor: { execute: vi.fn() } as unknown as ConstructorParameters<
+        typeof OpenAICompatibleProvider
+      >[0]['skillExecutor'],
+    });
+    await drainQuery(
+      provider.query({
+        prompt: singleInput('hello'),
+        config: {
+          model: 'gpt-4o-mini',
+          apiKey: 'sk-test-key',
+          cwd: tmpCwd,
+        },
+      } as Parameters<typeof provider.query>[0]),
+    );
+    const firstCall = openaiCreateCalls[0]!;
+    const text = extractOpenAISystemText(firstCall.args);
+    expect(text).toContain(projectSkillName);
   });
 });
