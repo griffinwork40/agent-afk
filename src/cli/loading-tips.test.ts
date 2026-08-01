@@ -23,7 +23,7 @@ import {
   _resetSeenTipsForTesting,
   type LoadingTip,
 } from './loading-tips.js';
-import { formatTipRow } from './terminal-compositor.types.js';
+import { formatTipRow } from './terminal-compositor.scrollback.js';
 
 // Harvest stubs — vi.mock has to be hoisted, so use the standard pattern.
 vi.mock('./slash/registry.js', () => ({

@@ -29,7 +29,7 @@ import {
   buildScrollbackArchiveEscape,
   eraseAndPaintRow,
   scrollbackFlushLines,
-} from './terminal-compositor.types.js';
+} from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 
 /**

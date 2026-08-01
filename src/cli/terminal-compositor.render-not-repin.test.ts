@@ -28,7 +28,7 @@ import { PassThrough } from 'node:stream';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { repositionCommittedBand } from './terminal-compositor.committed-band-repin.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
-import { eraseAndPaintRow } from './terminal-compositor.types.js';
+import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 
 const COLS = 80;
 const ROWS = 24;
