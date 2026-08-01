@@ -323,6 +323,20 @@ describe('buildDispatcher characterization (#824) — MCP merge', () => {
     expect(handlerCalls).toBe(2);
   });
 
+  it('propagates a nullish handler map instead of silently registering nothing', () => {
+    // The original iterated `this._mcpHandlersCache` directly, so a manager
+    // returning a nullish map threw. Pinned because the obvious "hardening"
+    // (`?? []`) converts a loud failure into a silent zero-handler dispatcher
+    // — the model would just quietly lose every MCP tool.
+    const mgr: any = {
+      getMcpTools: () => [mcpTool],
+      getMcpHandlers: () => null,
+      getMcpToolWireNames: () => [mcpTool.name],
+      onToolsRefreshed: undefined,
+    };
+    expect(() => build(new AnthropicDirectProvider({ mcpManager: mgr }))).toThrow();
+  });
+
   it('chains through a pre-existing onToolsRefreshed observer', () => {
     let seen: string | undefined;
     const mgr: any = {

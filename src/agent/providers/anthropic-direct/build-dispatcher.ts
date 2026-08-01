@@ -181,7 +181,11 @@ export function buildDispatcher(
     if (!deps.getMcpHandlersCache()) {
       deps.setMcpHandlersCache(deps.mcpManager.getMcpHandlers());
     }
-    for (const [name, handler] of deps.getMcpHandlersCache() ?? []) {
+    // Non-null assertion rather than `?? []`: the original iterated the cache
+    // field directly, so a manager returning a nullish handler map threw here.
+    // A `?? []` fallback would convert that loud failure into a silent
+    // zero-handler registration — a behavior change, not a hardening.
+    for (const [name, handler] of deps.getMcpHandlersCache()!) {
       handlers.set(name, handler);
     }
   }

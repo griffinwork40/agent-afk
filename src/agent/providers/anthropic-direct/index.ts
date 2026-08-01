@@ -482,7 +482,11 @@ export class AnthropicDirectProvider implements ModelProvider {
       cwd,
       surface: this.surface,
       readOnlyMemory: this.readOnlyMemory,
-      hasSkillExecutor: this.skillExecutor !== undefined,
+      // Truthiness, NOT `!== undefined`: this must stay in lockstep with the
+      // constructor's `if (opts.skillExecutor) schemas.push(skillTool)` gate.
+      // Splitting them would let a falsy-but-defined executor inject a skill
+      // manifest into the system prompt with no `skill` tool registered.
+      hasSkillExecutor: Boolean(this.skillExecutor),
       runtimeStateSource,
       userSystem,
     });

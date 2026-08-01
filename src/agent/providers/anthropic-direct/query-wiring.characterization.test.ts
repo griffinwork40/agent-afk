@@ -368,6 +368,52 @@ describe('query() characterization (#824) — tool-def filtering', () => {
   });
 });
 
+describe('query() characterization (#824) — skill manifest / skill-tool lockstep', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+  });
+
+  afterEach(() => {
+    __setAnthropicClientFactory(null);
+  });
+
+  // Invariant: the constructor gates the `skill` TOOL on `if (opts.skillExecutor)`
+  // (truthiness) and query() gates the skill MANIFEST on the same executor.
+  // The two gates must agree, or the system prompt advertises skills the model
+  // has no tool to invoke. Pinned with a falsy-but-present value because that
+  // is the only input that can separate `Boolean(x)` from `x !== undefined`.
+  it('advertises neither the skill tool nor a manifest when no executor is wired', async () => {
+    const provider = new AnthropicDirectProvider();
+    await collect(provider.query({ prompt: singleInput('hi'), config: { ...BASE_CONFIG } }));
+
+    const sent = messagesCreateMock.mock.calls[0]?.[0] as {
+      tools: { name: string }[];
+      system: { text: string }[];
+    };
+    expect(sent.tools.map((t) => t.name)).not.toContain('skill');
+    expect(sent.system.map((s) => s.text).join('\n')).not.toContain('Available skills');
+  });
+
+  it('keeps manifest and skill-tool gates in lockstep for a falsy executor', async () => {
+    // `null` is falsy but NOT undefined: the constructor skips the skill tool,
+    // so query() must also skip the manifest.
+    const provider = new AnthropicDirectProvider({ skillExecutor: null as never });
+    await collect(provider.query({ prompt: singleInput('hi'), config: { ...BASE_CONFIG } }));
+
+    const sent = messagesCreateMock.mock.calls[0]?.[0] as {
+      tools: { name: string }[];
+      system: { text: string }[];
+    };
+    const hasSkillTool = sent.tools.some((t) => t.name === 'skill');
+    const hasManifest = sent.system.map((s) => s.text).join('\n').includes('Available skills');
+    expect(hasSkillTool).toBe(false);
+    expect(hasManifest).toBe(hasSkillTool);
+  });
+});
+
 describe('query() characterization (#824) — token + client construction', () => {
   beforeEach(() => {
     messagesCreateMock.mockReset();
