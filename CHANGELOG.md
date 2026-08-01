@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.7] - 2026-08-01
+
+### Changed
+- extract a shared wireExecutors() factory (#822) (#834) (6ed0186)
+
 ## [5.84.6] - 2026-08-01
 
 ### Fixed
