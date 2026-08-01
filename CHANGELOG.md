@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.14] - 2026-08-01
+
+### Fixed
+- stop the TTFB bound firing on throttle backoff, and stop guessing why a stream ended (#839) (ad7c976)
+
+### Changed
+- impact map for ADR 0002 item 2, and mark it rejected (#774) (f59e6bf)
+
 ## [5.84.13] - 2026-08-01
 
 ### Changed
