@@ -18,6 +18,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { ImageAttachment } from '../../input/attachments.js';
+import { registerInboundImageBlocks } from '../../../agent/content/attachment-registry.js';
 import { appendImageBlocks } from '../../../agent/content/image-blocks.js';
 
 /**
@@ -38,12 +39,13 @@ import { appendImageBlocks } from '../../../agent/content/image-blocks.js';
  *                     from `expandAtFileTokens`) inserted after the manifest and
  *                     before the user text. Empty / absent → no-op.
  */
-export function buildUserPayload(
+export async function buildUserPayload(
   text: string,
   attachments: readonly ImageAttachment[],
   manifestBlock?: string,
   fileBlocks?: readonly ContentBlockParam[],
-): ContentBlockParam[] {
+  sessionId?: string,
+): Promise<ContentBlockParam[]> {
   const blocks: ContentBlockParam[] = [];
 
   if (manifestBlock && manifestBlock.trim().length > 0) {
@@ -58,7 +60,14 @@ export function buildUserPayload(
     blocks.push({ type: 'text', text });
   }
 
-  appendImageBlocks(blocks, attachments);
+  if (attachments.length > 0 && sessionId !== undefined) {
+    // ImageAttachment.id remains the random REPL-local UI key. The model-facing
+    // id coexists and is content-derived so duplicate bytes deduplicate safely.
+    await registerInboundImageBlocks(blocks, sessionId, attachments);
+  } else {
+    // Compatibility for non-ingress helpers/tests that do not own a session.
+    appendImageBlocks(blocks, attachments);
+  }
 
   return blocks;
 }

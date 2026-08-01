@@ -349,9 +349,13 @@ export async function runTurn(
     for (const w of atFileWarnings) {
       (completionWriter ?? { fn: console.log }).fn(palette.dim(`  @-file: ${w}`));
     }
+    if (input.attachments.length > 0) {
+      await session.waitForInitialization();
+      if (session.sessionId === undefined) throw new Error('CLI session initialized without a session id');
+    }
     const payload =
       fileBlocks.length > 0 || input.attachments.length > 0
-        ? buildUserPayload(input.text, input.attachments, undefined, fileBlocks)
+        ? await buildUserPayload(input.text, input.attachments, undefined, fileBlocks, session.sessionId)
         : input.text;
     const stream = session.sendMessageStream(payload);
 

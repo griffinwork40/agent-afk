@@ -45,6 +45,7 @@ import { MessageHandler } from './message.js';
 function makeSession(state: 'idle' | 'processing' = 'idle'): IAgentSession {
   return {
     state,
+    sessionId: 'telegram-test-session',
     sendMessage: vi.fn(),
     sendMessageStream: vi.fn(async function* (): AsyncGenerator<OutputEvent> {
       yield { type: 'done' as const, metadata: undefined };
@@ -164,14 +165,15 @@ describe('handlePhoto: photo with caption', () => {
     const [, , content] = mockStreamResponse.mock.calls[0]!;
     expect(Array.isArray(content)).toBe(true);
     const blocks = content as ContentBlockParam[];
-    expect(blocks).toHaveLength(2);
+    expect(blocks).toHaveLength(3);
     expect(blocks[0]).toMatchObject({ type: 'text', text: '[User caption]: What is this?' });
-    expect(blocks[1]).toMatchObject({
+    expect(blocks[1]).toEqual({ type: 'text', text: '[image img_374ffe · image/jpeg · 1 KB]' });
+    expect(blocks[2]).toMatchObject({
       type: 'image',
       source: { type: 'base64', media_type: 'image/jpeg' },
     });
     // Verify the base64 data is non-empty
-    const imageBlock = blocks[1] as Extract<ContentBlockParam, { type: 'image' }>;
+    const imageBlock = blocks[2] as Extract<ContentBlockParam, { type: 'image' }>;
     expect(typeof (imageBlock.source as { data: string }).data).toBe('string');
     expect((imageBlock.source as { data: string }).data.length).toBeGreaterThan(0);
   });
@@ -188,8 +190,9 @@ describe('handlePhoto: photo without caption', () => {
     expect(mockStreamResponse).toHaveBeenCalledTimes(1);
     const [, , content] = mockStreamResponse.mock.calls[0]!;
     const blocks = content as ContentBlockParam[];
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ type: 'image' });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({ type: 'text', text: '[image img_374ffe · image/jpeg · 1 KB]' });
+    expect(blocks[1]).toMatchObject({ type: 'image' });
   });
 });
 

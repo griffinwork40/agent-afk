@@ -359,8 +359,8 @@ export const agentTool: AnthropicToolDef = {
         type: 'array',
         items: { type: 'string' },
         description:
-          'Optional absolute paths to image files to attach. Bytes are resolved by ' +
-          'the runtime — NEVER paste base64 into the tool call.',
+          'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. ' +
+          'Bytes are resolved by the runtime — NEVER paste base64 into the tool call.',
       },
       model: {
         type: 'string',

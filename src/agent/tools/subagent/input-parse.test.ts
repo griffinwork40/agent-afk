@@ -98,9 +98,11 @@ describe('parseAgentInput', () => {
       );
     });
 
-    it('rejects relative paths', () => {
+    it('accepts inbound image ids and rejects other relative strings', () => {
+      expect(parseAgentInput({ prompt: 'p', attachments: ['img_a1b2c3'] }).attachments)
+        .toEqual(['img_a1b2c3']);
       expect(() => parseAgentInput({ prompt: 'p', attachments: ['a.png'] })).toThrow(
-        /must be absolute paths/,
+        /absolute image paths or inbound image ids/,
       );
     });
 
