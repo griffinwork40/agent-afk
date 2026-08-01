@@ -257,6 +257,61 @@ describe('progress-banner — terminal width clamping', () => {
     });
   });
 
+  describe('formatProgressBanner — path elision on the detail line', () => {
+    // The provider's per-round headline embeds raw absolute paths
+    // (`summarizeToolInput` preserves them verbatim). Un-elided, a worktree path
+    // consumed the whole row and clipped away the part that says what the command
+    // actually DOES — the operator watched `cd /Users/…/pr796-review-fix && git
+    // rev-…` for minutes without ever seeing the verb. `shortenPaths` collapses
+    // absolute paths to their basename, which the tool lane already did but the
+    // banner did not.
+    const LONG =
+      'round 7: bash cd /Users/griffinlong/Projects/open_source/agent-afk/.afk-worktrees/pr796-review-fix && git rev-parse HEAD';
+
+    it('collapses an absolute path in the summary to its basename', () => {
+      const lines = formatProgressBanner(mkEvent({ description: 'task', summary: LONG }), Infinity);
+      const detail = stripAnsi(lines[1]!);
+      expect(detail).toContain('pr796-review-fix');
+      expect(detail).not.toContain('/Users/griffinlong/Projects');
+    });
+
+    it('keeps the informative tail visible at a realistic terminal width', () => {
+      // At 100 columns the un-elided form (4 indent + 122 chars) overflows and the
+      // trailing verb is the first thing truncated away. Elided, it fits.
+      const lines = formatProgressBanner(mkEvent({ description: 'task', summary: LONG }), 100);
+      expect(stripAnsi(lines[1]!)).toContain('git rev-parse HEAD');
+    });
+
+    it('elides the activity clause too, not just the summary', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'unused' }),
+        Infinity,
+        'worker · round 2: Read /Users/griffinlong/Projects/open_source/agent-afk/src/cli/palette.ts',
+      );
+      const detail = stripAnsi(lines[1]!);
+      expect(detail).toContain('palette.ts');
+      expect(detail).not.toContain('/Users/griffinlong');
+    });
+
+    it('leaves URLs intact — only filesystem paths collapse', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 1: web_scrape https://example.com/a/b/c/d' }),
+        Infinity,
+      );
+      expect(stripAnsi(lines[1]!)).toContain('https://example.com/a/b/c/d');
+    });
+
+    it('still sanitizes control bytes before eliding', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 1: bash\u0007 cat /a/b/c/secrets.txt' }),
+        Infinity,
+      );
+      const detail = stripAnsi(lines[1]!);
+      expect(detail).not.toContain('\u0007');
+      expect(detail).toContain('secrets.txt');
+    });
+  });
+
   describe('deriveProgressActivity', () => {
     it('returns undefined for an empty buffer', () => {
       expect(deriveProgressActivity('', 80)).toBeUndefined();
