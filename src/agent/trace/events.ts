@@ -99,7 +99,7 @@ export const HookDecisionPayloadSchema = z.object({
   durationMs: z.number().nonnegative().optional(),
   /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
   approvalOutcome: z
-    .enum(['approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel', 'hard-block'])
+    .enum(['carve-out', 'approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel', 'hard-block'])
     .optional(),
 });
 

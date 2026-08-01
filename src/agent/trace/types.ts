@@ -177,6 +177,7 @@ export type HookEventName =
  * automatic ceiling refusal.
  */
 export type AfkApprovalOutcome =
+  | 'carve-out'
   | 'approved'
   | 'denied'
   | 'unrecognised'

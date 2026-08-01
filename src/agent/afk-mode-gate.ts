@@ -87,6 +87,7 @@ import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
 import { redactInlineSecrets } from './session/prompt-dump.js';
 import { worktreeRootFor } from './worktree-occupancy.js';
+import { isSafeInWorkspaceRm } from './afk-mode-rm-allowlist.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
@@ -330,6 +331,33 @@ export function createAfkModeGate(
       cwd: resolveBase,
       workspaceRoot,
     });
+
+    // Issue #579 O3 — a `rm -rf <leaf-dir>` inside the workspace is a routine
+    // clean-rebuild step (node_modules, dist, build, …), not the destructive
+    // operation the blanket `BASH_HIGH` substring list assumes. Downgrade it
+    // BEFORE the high-risk gate fires. Compound commands remain blocked: a
+    // caller must issue `rm -rf node_modules` and `pnpm install` as separate
+    // bash calls. `isSafeInWorkspaceRm` (afk-mode-rm-allowlist.ts) fails CLOSED:
+    // anything it cannot confidently classify as a curated, recursive,
+    // in-workspace generated-directory delete stays `high` and is gated as
+    // before.
+    if (risk === 'high' && toolName === 'bash') {
+      const cmd =
+        typeof context.input === 'object' &&
+        context.input !== null &&
+        'command' in context.input
+          ? String((context.input as Record<string, unknown>)['command'] ?? '')
+          : '';
+      if (cmd && isSafeInWorkspaceRm(cmd, resolveBase, workspaceRoot)) {
+        void emitHookDecision(traceWriter, {
+          hookEvent: 'PreToolUse',
+          blockedTool: toolName,
+          durationMs: Date.now() - start,
+          approvalOutcome: 'carve-out',
+        });
+        return {};
+      }
+    }
 
     if (risk !== 'high') return {};
 
