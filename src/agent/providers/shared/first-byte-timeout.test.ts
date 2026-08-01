@@ -157,14 +157,20 @@ describe('throttleExtensionMs', () => {
   });
 
   it('bounds total grace: a throttle can defer the watchdog, never disable it', () => {
-    // Worst honoured case per throttle, and the whole-round ceiling given the
-    // SDK's default maxRetries: 2 (client.js:72). If this ever stops holding, an
-    // endpoint could park a dead request indefinitely.
+    // Worst honoured case per throttle. If this ever stops holding, an endpoint
+    // could park a dead request indefinitely.
     const worstPerThrottle = SDK_HONORED_RETRY_AFTER_CEILING_MS - 1 + TTFB_THROTTLE_SLACK_MS;
     for (const ms of [1, 59_999, 60_000, 3_600_000, Number.MAX_SAFE_INTEGER]) {
       expect(throttleExtensionMs(ms)!).toBeLessThanOrEqual(worstPerThrottle);
     }
-    expect(worstPerThrottle * 2).toBeLessThan(200_000);
+    // Whole-round ceiling. The bound is armed once per ROUND, not per attempt,
+    // and TWO retry layers nest inside that one window: the SDK's 1+maxRetries(2)
+    // = 3 HTTP attempts per messages.create, times the up-to-4 create calls
+    // anthropic-direct's own createWithRetry makes for a transient 529/503
+    // (OVERLOAD_MAX_RETRIES = 3). Not imported — shared/ must not depend on a
+    // provider — so this mirrors the count the docblock derives.
+    const MAX_GRANTS_PER_ROUND = 3 * 4;
+    expect(worstPerThrottle * MAX_GRANTS_PER_ROUND).toBeLessThan(20 * 60_000);
   });
 });
 

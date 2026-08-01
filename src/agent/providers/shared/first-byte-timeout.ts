@@ -106,10 +106,19 @@ export const SDK_MAX_DEFAULT_BACKOFF_MS = 8_000;
  * the raw header. Granting the raw value would let a `retry-after: 3600` hint
  * buy an hour of TTFB grace for a park the SDK caps at ~8s — reinstating the
  * unbounded post-connect hang that #583/#762 exist to prevent. Because the
- * honored window is bounded, so is the grace: at most
- * `60s + 30s = 90s` per throttle, and with the SDK's default `maxRetries: 2`
- * (`client.js:72`) at most ~180s per round. The watchdog can be deferred, never
- * disabled.
+ * honored window is bounded, so is every grant: at most `60s + 30s = 90s` per
+ * throttle.
+ *
+ * Invariant: the per-ROUND ceiling is the product of TWO nested retry layers,
+ * because the bound is armed once per round (`loop/round-request.ts`) and NOT
+ * per attempt. The SDK makes `1 + maxRetries(2) = 3` HTTP attempts per
+ * `messages.create` (`client.js:72`), and `createWithRetry` re-drives a
+ * transient 529/503 up to `OVERLOAD_MAX_RETRIES(3)` more times against the
+ * SAME handle — so up to 12 throttled responses, i.e. ~18min worst case, can
+ * land in one window. A pure 429 storm caps at 3 grants (~270s): our own loop
+ * does not re-drive it (`isTransientServerError` matches 529/503 only). Every
+ * grant still costs the provider a fresh `retry-after`, so the total stays
+ * finite — the watchdog can be deferred, never disabled.
  */
 export function throttleExtensionMs(retryAfterMs: number | undefined): number | undefined {
   if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
