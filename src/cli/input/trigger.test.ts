@@ -22,6 +22,7 @@ import {
   filterFileCandidatesAsync,
   filterFileCandidatesCached,
   filterSlashCandidates,
+  filterFlagCandidates,
   buildFileCandidates,
   invalidateFileScanCache,
   __fileScanCacheSize,
@@ -175,6 +176,57 @@ describe('filterSlashCandidates', () => {
     const vals = filterSlashCandidates('').map((c) => c.value);
     expect(vals.length).toBeGreaterThan(0);
     expect(vals).toContain('/config');
+  });
+});
+
+describe('detectTrigger — flag completion for aliases', () => {
+  it('fires flag completion for a canonical command name', () => {
+    const buf = '/allow-dir --rw';
+    const trigger = detectTrigger(buf, buf.length);
+    expect(trigger).not.toBeNull();
+    expect(trigger!.kind).toBe('flag');
+    if (trigger!.kind === 'flag') {
+      expect(trigger!.command).toBe('allow-dir');
+    }
+  });
+
+  it('fires flag completion for an alias (regression: /add-dir --)', () => {
+    // Before the fix, detectTrigger searched by canonical name only, so the
+    // alias /add-dir never matched and flag completion silently dropped.
+    const buf = '/add-dir --rw';
+    const trigger = detectTrigger(buf, buf.length);
+    expect(trigger).not.toBeNull();
+    expect(trigger!.kind).toBe('flag');
+    if (trigger!.kind === 'flag') {
+      expect(trigger!.command).toBe('add-dir');
+    }
+  });
+
+  it('does not fire flag completion for a command without flags', () => {
+    const buf = '/config --xyz';
+    const trigger = detectTrigger(buf, buf.length);
+    // /config has no flags, so detectTrigger returns null for the flag path
+    // (it falls through to null rather than a slash trigger because of the
+    // trailing whitespace + -- token).
+    expect(trigger).toBeNull();
+  });
+});
+
+describe('filterFlagCandidates — alias-aware', () => {
+  it('returns flags for a canonical command name', () => {
+    const flags = filterFlagCandidates('allow-dir', '--r').map((c) => c.value);
+    expect(flags).toContain('--rw');
+    expect(flags).toContain('--revoke');
+  });
+
+  it('returns flags for an alias (regression: add-dir → allow-dir flags)', () => {
+    const flags = filterFlagCandidates('add-dir', '--r').map((c) => c.value);
+    expect(flags).toContain('--rw');
+    expect(flags).toContain('--revoke');
+  });
+
+  it('returns [] for an unknown command', () => {
+    expect(filterFlagCandidates('nonexistent', '--x')).toEqual([]);
   });
 });
 
