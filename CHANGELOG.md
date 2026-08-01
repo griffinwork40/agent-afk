@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.12] - 2026-08-01
+
+### Fixed
+- reject newline/CR in rm-allowlist carve-out (#806 follow-up) (#835) (ee01384)
+
 ## [5.84.11] - 2026-08-01
 
 ### Fixed
