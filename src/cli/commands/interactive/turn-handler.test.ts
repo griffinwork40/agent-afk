@@ -2361,11 +2361,19 @@ describe('formatContextUsage — proactive escalating context tiers', () => {
 });
 
 describe('printTurnFooter — subscription-quota line', () => {
+  // Invariant: the countdown floors `resetsAt - now` to whole minutes and
+  // re-reads `now` at render time (not at snapshot time), so on a real clock
+  // an exactly-12-minute deadline can degrade to 719_999ms elapsed and floor
+  // to `11m` — a flake that races the runner's speed. Freezing the clock
+  // makes the deadline arithmetic exact instead of racing the runner.
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     resetQuotaCacheForTests();
     configStub.autoResume = true;
   });
   afterEach(() => {
+    vi.useRealTimers();
     resetQuotaCacheForTests();
     configStub.autoResume = true;
   });
