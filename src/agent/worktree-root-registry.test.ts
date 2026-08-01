@@ -5,7 +5,7 @@
  * the developer's real ~/.afk state.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -111,6 +111,39 @@ describe('readRegisteredWorktreeRoots', () => {
     await fs.writeFile(notADir, 'x', 'utf-8');
     await registerWorktreeRoot(notADir);
     expect(await readRegisteredWorktreeRoots()).toEqual([]);
+  });
+
+  it('retains (does not prune) a root on a transient EACCES, and it reappears once the error clears', async () => {
+    // Regression for review item 2: every stat rejection used to be read as
+    // "directory gone" and pruned+persisted. A transient EACCES (unmounted
+    // volume, an ancestor that lost +x) must NOT drop a live root — the entry
+    // stays absent from THIS pass' result but stays IN THE FILE, and a later
+    // read (once the error clears) returns it again with no re-registration.
+    const flaky = await mkRepo('flaky');
+    await registerWorktreeRoot(flaky);
+
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+      if (String(target) === flaky) {
+        const err = new Error('permission denied') as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      }
+      return realStat(target as Parameters<typeof fs.stat>[0]);
+    });
+
+    expect(await readRegisteredWorktreeRoots()).toEqual([]);
+
+    // Still on disk — a real ENOENT/ENOTDIR prune would have dropped it here.
+    const onDisk = JSON.parse(
+      await fs.readFile(getWorktreeRootsRegistryPath(), 'utf-8'),
+    ) as { roots: Array<{ path: string }> };
+    expect(onDisk.roots.map((r) => r.path)).toEqual([flaky]);
+
+    statSpy.mockRestore();
+
+    // Error cleared — the root reappears with no re-registration required.
+    expect(await readRegisteredWorktreeRoots()).toEqual([flaky]);
   });
 });
 

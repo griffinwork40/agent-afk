@@ -557,12 +557,34 @@ export class CronScheduler {
         ? `🔍 worktree-prune (dry-run): would remove ${result.candidates.filter((c) => prunableVerdicts.has(c.verdict)).length} worktree(s) across ${rootsLabel}`
         : `✂️ worktree-prune: removed ${result.removed.length}, warned ${result.warnings.length} across ${rootsLabel}`;
 
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'success',
-        responseExcerpt: summary,
-      };
+      // Invariant: a tick where EVERY root rejected must report `status:
+      // 'error'`, not 'success' — src/insights/aggregators/daemon.ts tallies
+      // `errorCount` / `recentErrors` only off `status === 'error'`, so a
+      // permanently broken prune (every root rejecting on every tick, e.g. a
+      // stale AFK_WORKTREE_SWEEP_ROOT or a registry full of dead repos) would
+      // otherwise report as healthy forever. `results.length === 0` with
+      // `roots.length > 0` is exactly that case: every iteration of the loop
+      // above hit the `catch` and pushed to `rootFailures` instead of
+      // `results`. A tick where SOME roots succeeded (`results.length > 0`)
+      // stays `success` — that is a partial failure, already visible via the
+      // per-root `[ERROR]` warnings, not a systemic one.
+      const record: TelemetryRecord =
+        results.length === 0 && roots.length > 0
+          ? {
+              ...baseRecord,
+              durationMs: this.now() - startTimeMs,
+              status: 'error',
+              // rootFailures entries are already redacted at push time (line
+              // ~529) — redacting again would be a no-op at best.
+              errorMessage: rootFailures.join('; '),
+              responseExcerpt: summary,
+            }
+          : {
+              ...baseRecord,
+              durationMs: this.now() - startTimeMs,
+              status: 'success',
+              responseExcerpt: summary,
+            };
       this.writeTelemetry(record, task);
       return record;
     } catch (err) {

@@ -885,7 +885,17 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   // actually in play — a bypassing caller never consumed a preview, so it must
   // not spend one on the daemon's behalf. Best-effort: failing to record costs
   // at most one extra dry-run.
-  if (options.bypassSoftLaunch !== true) await recordRootSweep(repoRoot);
+  //
+  // Keyed on `options.dryRun` (what the CALLER asked for), never on
+  // `effectiveDryRun` (which is also true when the valve itself forced the
+  // preview). A valve-forced preview MUST still credit the counter — that is
+  // the only thing that ever advances it towards SOFT_LAUNCH_RUNS. An
+  // explicit caller-requested dry-run (`list`, `prune` without `--apply`, the
+  // agent-facing `list` action) never touched anything, so it must not spend
+  // one of the root's previews — three such calls would otherwise exhaust the
+  // budget with no daemon preview ever having run, and the daemon's FIRST
+  // sweep of that root would then be destructive.
+  if (options.bypassSoftLaunch !== true && options.dryRun !== true) await recordRootSweep(repoRoot);
 
   return result;
 }

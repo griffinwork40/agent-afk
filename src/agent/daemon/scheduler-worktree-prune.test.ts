@@ -66,7 +66,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-async function tickPrune(): Promise<{ status: string; excerpt: string }> {
+async function tickPrune(): Promise<{ status: string; excerpt: string; errorMessage: string }> {
   const scheduler = new CronScheduler({ telemetryPath });
   scheduler.register({
     taskId: 'worktree-prune',
@@ -76,7 +76,11 @@ async function tickPrune(): Promise<{ status: string; excerpt: string }> {
   });
   const record = await scheduler.tick('worktree-prune');
   await scheduler.stop();
-  return { status: record.status, excerpt: record.responseExcerpt ?? '' };
+  return {
+    status: record.status,
+    excerpt: record.responseExcerpt ?? '',
+    errorMessage: record.errorMessage ?? '',
+  };
 }
 
 describe('builtin worktree-prune across multiple roots', () => {
@@ -145,11 +149,16 @@ describe('builtin worktree-prune across multiple roots', () => {
     mockSweepRootSet.mockResolvedValue(['/repo/a', '/repo/b']);
     mockRunSweep.mockRejectedValue(new Error('boom'));
 
-    const { status, excerpt } = await tickPrune();
+    const { status, excerpt, errorMessage } = await tickPrune();
 
-    // Not an error record — the tick completed, it just reclaimed nothing.
-    // Both failures are visible as warnings against 0 swept roots.
-    expect(status).toBe('success');
+    // An error record — every root rejected, so the tick reclaimed nothing
+    // and must not report as healthy (src/insights/aggregators/daemon.ts only
+    // tallies errorCount/recentErrors off status === 'error').
+    expect(status).toBe('error');
+    expect(errorMessage).toContain('/repo/a');
+    expect(errorMessage).toContain('/repo/b');
+    // The excerpt (candidate/removal summary) is unchanged by this fix — both
+    // failures are still visible as warnings against 0 swept roots.
     expect(excerpt).toContain('warned 2');
     expect(excerpt).toContain('0/2 root(s)');
   });

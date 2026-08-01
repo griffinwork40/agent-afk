@@ -16,13 +16,30 @@
  * the sweep engine, and the orphan scan only ever considers DIRECTORY entries,
  * so a marker file there is inert.
  *
- * Contract: `readRootSweepCount` returns `null` — never 0 — when the marker
- * cannot be used (missing `.afk-worktrees/`, read-only checkout, permissions).
- * That distinction is load-bearing. Reporting 0 for an unusable marker would
- * pin such a root in dry-run FOREVER, so its worktrees would accumulate and
- * never be reclaimed, which is precisely the #761 leak this whole change set
- * exists to close. `null` means "no per-root signal", and the caller falls
- * back to the legacy machine-global telemetry count.
+ * Contract: `readRootSweepCount` returns `null` only when `.afk-worktrees/`
+ * itself does not exist (the write fails `ENOENT`) — this root has nothing
+ * for the sweep to do, so the caller falls back to the legacy machine-global
+ * telemetry count exactly as before. Any OTHER write failure (the directory
+ * exists but the marker is unusable — wrong-owner file, a directory sitting
+ * where the marker should be, a permissions error) returns `0`, FORCING
+ * previews, rather than `null`.
+ *
+ * History: an earlier version of this contract returned
+ * `null` for every unusable marker, reasoning that reporting 0 would pin such
+ * a root in dry-run forever. That reasoning held only for the
+ * directory-missing case. Once `.afk-worktrees/` exists, a `null` here falls
+ * through to `countPriorSuccessfulRuns` — the machine-global count — which on
+ * any long-lived machine is already ≥ `SOFT_LAUNCH_RUNS`, so a root with a
+ * merely-unwritable marker (e.g. a `.sweep-runs` created once under `sudo`,
+ * left mode 0644 and owned by another uid, inside an otherwise fully-writable
+ * `.afk-worktrees/`) got a LIVE destructive sweep with zero previews ever
+ * having run against it — silently, since worktree removal itself still
+ * succeeds. Forcing 0 instead trades that silent destructive sweep for a root
+ * pinned in dry-run, and the pin is NOT permanent: the REPL boot-prune path
+ * passes `bypassSoftLaunch: true` and reaps regardless of marker state, and
+ * repairing the marker's permissions restores the normal daemon path. `null`
+ * remains reserved for "no per-root signal at all" — the directory-missing
+ * case, where the legacy fallback is the correct and only sane behaviour.
  *
  * @module agent/worktree-sweep-valve
  */
@@ -40,8 +57,8 @@ function markerPath(repoRoot: string): string {
 }
 
 /**
- * Sweeps previously recorded against `repoRoot`, or `null` when this root
- * carries no usable marker (see the module Contract — `null` is not 0).
+ * Sweeps previously recorded against `repoRoot`, or `null` only when
+ * `.afk-worktrees/` itself does not exist (see the module Contract).
  *
  * Deliberately does NOT create `.afk-worktrees/`: a repo without that
  * directory has no managed worktrees to reclaim, and materialising it would
@@ -56,13 +73,18 @@ export async function readRootSweepCount(repoRoot: string): Promise<number | nul
     /* absent or unreadable → fall through and try to initialise */
   }
   try {
-    // Plain 'w': also repairs a corrupt marker by resetting it to 0. Fails
-    // with ENOENT when .afk-worktrees/ does not exist, which is the signal
-    // that this root has nothing for the sweep to do.
+    // Plain 'w': also repairs a corrupt marker by resetting it to 0.
     await fs.writeFile(target, '0', 'utf-8');
     return 0;
-  } catch {
-    return null;
+  } catch (err) {
+    // ENOENT here means .afk-worktrees/ does not exist — this root has
+    // nothing for the sweep to do, so fall back to the legacy machine-global
+    // count exactly as before. Any OTHER errno means the directory exists but
+    // the marker itself is unusable (wrong owner, permissions, a directory
+    // where the file should be) — force previews rather than silently
+    // inheriting an already-exhausted global count (see module Contract).
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    return 0;
   }
 }
 

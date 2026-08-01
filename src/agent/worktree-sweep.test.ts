@@ -1364,6 +1364,66 @@ describe('soft-launch-valve', () => {
     expect(await call()).toBe(true);  // 2
     expect(await call()).toBe(false); // 3 → valve opens
   });
+
+  it('does NOT credit the counter for an explicitly requested dry-run (review item 1)', async () => {
+    // Three explicit-preview callers (agent-facing `list`, CLI `list`, CLI
+    // `prune` without --apply) must not spend the root's soft-launch budget —
+    // only a caller that actually asked to sweep live may advance the
+    // counter. Keyed on `dryRun: true` at the call site, not on the valve's
+    // own effectiveDryRun (see the next test for that half).
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+    const marker = join(repoRoot, '.afk-worktrees', '.sweep-runs');
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const callExplicitDryRun = async (): Promise<boolean> => (await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: true,
+      telemetryPath: telemetryFile,
+    })).dryRun;
+
+    expect(await callExplicitDryRun()).toBe(true);
+    expect(await callExplicitDryRun()).toBe(true);
+    expect(await callExplicitDryRun()).toBe(true);
+    // Three previews later, the marker must still read 0 — none advanced it.
+    expect((await fs.readFile(marker, 'utf-8')).trim()).toBe('0');
+    // A follow-up sweep is STILL valve-forced to dry-run: the counter never
+    // moved, so the daemon's first live sweep of this root has not happened.
+    expect(await callExplicitDryRun()).toBe(true);
+  });
+
+  it('DOES credit the counter for a valve-forced preview (review item 1 critical subtlety)', async () => {
+    // The converse of the test above: a caller that did NOT ask for dry-run
+    // (dryRun omitted/false) but gets forced into one anyway because the
+    // counter is below SOFT_LAUNCH_RUNS must still advance the counter — that
+    // is the only mechanism that ever lets the valve open. Keying the credit
+    // gate on `effectiveDryRun` instead of `options.dryRun` would pin this
+    // root in dry-run forever.
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+    const marker = join(repoRoot, '.afk-worktrees', '.sweep-runs');
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false, // caller asked for live — the valve is what forces the preview
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.dryRun).toBe(true); // valve-forced (0 prior runs < SOFT_LAUNCH_RUNS)
+    expect((await fs.readFile(marker, 'utf-8')).trim()).toBe('1'); // credited anyway
+  });
 });
 
 // ---------------------------------------------------------------------------

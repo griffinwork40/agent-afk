@@ -25,6 +25,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { getWorktreeRootsRegistryPath } from '../paths.js';
 import { debugLog } from '../utils/debug.js';
+import { classifyRootLiveness } from './worktree-root-registry-liveness.js';
 
 /** Current on-disk schema version. Bump only on a breaking shape change. */
 const REGISTRY_VERSION = 1;
@@ -179,7 +180,18 @@ async function writeRegistry(entries: RootEntry[]): Promise<void> {
 /** Apply `transform` to the current entries and persist the result. Never throws. */
 async function mutateRegistry(transform: (entries: RootEntry[]) => RootEntry[]): Promise<void> {
   await enqueueWrite(async () => {
-    const release = await acquireRegistryLock(`${getWorktreeRootsRegistryPath()}.lock`);
+    const registryPath = getWorktreeRootsRegistryPath();
+    // Invariant: the lock must be acquired against a directory that already
+    // exists. `acquireRegistryLock` opens `${registryPath}.lock` with 'wx',
+    // and on a fresh install (or after the state dir is removed) that parent
+    // is absent, so the open fails ENOENT rather than EEXIST — indistinguishable
+    // from "no lock held" to acquireRegistryLock, which returns null and lets
+    // the write proceed unlocked. writeRegistry() does its own mkdir, but only
+    // AFTER the lock would have been taken, which is too late. Best-effort:
+    // a failure here just means the lock (and the write after it) degrade to
+    // the pre-existing unlocked/failed path, never worse.
+    await fs.mkdir(dirname(registryPath), { recursive: true, mode: DIR_MODE }).catch(() => undefined);
+    const release = await acquireRegistryLock(`${registryPath}.lock`);
     try {
       await writeRegistry(transform(await readEntries()));
     } catch {
@@ -228,37 +240,29 @@ export async function registerWorktreeRoot(repoRoot: string): Promise<void> {
 /**
  * Every registered root that still exists on disk, de-duplicated.
  *
- * Prunes vanished roots as a side effect so the file self-heals. Returns an
- * empty array on any failure, which makes callers fall back to their own
- * single-root resolution — i.e. exactly the pre-#761 behaviour.
+ * Prunes CONFIRMED-dead roots as a side effect so the file self-heals.
+ * Returns an empty array on any failure, which makes callers fall back to
+ * their own single-root resolution — i.e. exactly the pre-#761 behaviour.
+ *
+ * Contract: a root whose liveness cannot be determined this pass (a `stat`
+ * errno other than `ENOENT`/`ENOTDIR` — see {@link classifyRootLiveness}) is
+ * excluded from the returned list but LEFT IN THE FILE, so a transient
+ * permission error never permanently drops a live root. It reappears once
+ * the error clears on a later read.
  */
 export async function readRegisteredWorktreeRoots(): Promise<string[]> {
   const entries = await readEntries();
   if (entries.length === 0) return [];
 
-  const alive: RootEntry[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    const absolute = resolve(entry.path);
-    if (seen.has(absolute)) continue;
-    try {
-      const stat = await fs.stat(absolute);
-      if (!stat.isDirectory()) continue;
-    } catch {
-      continue; // gone → prune
-    }
-    seen.add(absolute);
-    alive.push({ ...entry, path: absolute });
-  }
+  const { alive, dead } = await classifyRootLiveness(entries);
 
-  if (alive.length !== entries.length) {
+  if (dead.size > 0) {
     // Self-heal, expressed as "drop exactly these dead paths" rather than
-    // "overwrite with the list I just computed". The stat loop above is not
-    // inside the lock, so a concurrent registerWorktreeRoot may have added a
-    // root since; a wholesale overwrite would silently discard it.
-    const dead = new Set(
-      entries.map((e) => resolve(e.path)).filter((p) => !seen.has(p)),
-    );
+    // "overwrite with the list I just computed". The classify pass above is
+    // not inside the lock, so a concurrent registerWorktreeRoot may have
+    // added a root since; a wholesale overwrite would silently discard it.
+    // `dead` holds only CONFIRMED-dead paths (never the retained-unknown
+    // class), so this transform cannot delete a retained-unknown entry.
     await mutateRegistry((current) => {
       // Built fresh per invocation: a `kept` set closed over from outside would
       // already be full if the transform were ever applied a second time, and
