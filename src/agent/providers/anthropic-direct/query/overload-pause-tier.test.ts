@@ -84,6 +84,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  // Drops any `Math.random` pin a jitter-sensitive test installed, so the probe
+  // band stays random for every other test in this file.
+  vi.restoreAllMocks();
   delete process.env['AFK_OVERLOAD_PAUSE_MS'];
 });
 
@@ -145,26 +148,43 @@ describe('overload pause tier — interactive pause + ceiling', () => {
     expect(events.at(-1)?.type).toBe('turn.completed');
   });
 
-  it('surfaces a real terminal at the wall-clock ceiling instead of parking forever', async () => {
-    process.env['AFK_OVERLOAD_PAUSE_MS'] = '150000'; // 2.5min ceiling
-    scriptTurns([exhausted]); // never recovers
-    const promise = drain(
-      makeLayer('cli').turnWithRetries(makeInput(new AbortController().signal), () => false),
-    );
-    await vi.advanceTimersByTimeAsync(600_000);
-    const events = await promise;
+  // Invariant: the probe interval is JITTERED — `nextProbeDelayMs` draws
+  // uniformly from [60s, 120s) off `Math.random` — so the probe count under a
+  // fixed ceiling is a range, not a constant, and the RNG must be pinned for
+  // the bound to be assertable at all. Arithmetic for the 150s ceiling, where
+  // each sleep is clamped to the remaining budget:
+  //   shortest draws (60s): probes land at 60s, 120s, 150s -> 4 runTurn calls
+  //   longest  draws (~120s): probes land at 120s, 150s    -> 3 runTurn calls
+  // Both extremes are pinned below so a ceiling regression breaks the count in
+  // whichever direction it drifts. The previous unpinned `<= 3` asserted a max
+  // that was simply wrong (4, not 3) and so failed on the ~12.5% of CI runs
+  // that drew d1 + d2 < 150s — red on PRs #811 and #817 from the same seedless
+  // draw, not from either PR's diff.
+  it.each([
+    { label: 'shortest probe draws', random: 0, expectedCalls: 4 },
+    { label: 'longest probe draws', random: 0.999999, expectedCalls: 3 },
+  ])(
+    'surfaces a real terminal at the wall-clock ceiling instead of parking forever ($label)',
+    async ({ random, expectedCalls }) => {
+      vi.spyOn(Math, 'random').mockReturnValue(random);
+      process.env['AFK_OVERLOAD_PAUSE_MS'] = '150000'; // 2.5min ceiling
+      scriptTurns([exhausted]); // never recovers
+      const promise = drain(
+        makeLayer('cli').turnWithRetries(makeInput(new AbortController().signal), () => false),
+      );
+      await vi.advanceTimersByTimeAsync(600_000);
+      const events = await promise;
 
-    // Bounded: it stopped probing rather than looping forever...
-    // Mathematical max for a 150s ceiling on a 60-120s probe band is 3. The
-    // old bound (< 6) tolerated a ceiling regression of ~5 probes (~10 min).
-    expect(runTurnMock.mock.calls.length).toBeLessThanOrEqual(3);
-    // ...and the LAST thing it did was emit a real terminal, never silence.
-    expect(events.at(-1)?.type).toBe('turn.completed');
-    const last = events.at(-1);
-    if (last?.type === 'turn.completed') {
-      expect(last.usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
-    }
-  });
+      // Bounded: it stopped probing rather than looping forever...
+      expect(runTurnMock.mock.calls.length).toBe(expectedCalls);
+      // ...and the LAST thing it did was emit a real terminal, never silence.
+      expect(events.at(-1)?.type).toBe('turn.completed');
+      const last = events.at(-1);
+      if (last?.type === 'turn.completed') {
+        expect(last.usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
+      }
+    },
+  );
 
   // AbortGraph precedence: abort beats hook decisions and retries, so it must
   // also beat a pause. A caller interrupt during the park must halt promptly.
