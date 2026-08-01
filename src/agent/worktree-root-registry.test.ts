@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   registerWorktreeRoot,
@@ -141,5 +141,77 @@ describe('sweepRootSet', () => {
 
   it('is empty when there is neither a primary nor a registry', async () => {
     expect(await sweepRootSet(null)).toEqual([]);
+  });
+});
+
+describe('durability and concurrency', () => {
+  it('keeps every root when many are registered in parallel', async () => {
+    // Regression: the read-modify-write used to be unserialized, so concurrent
+    // registrations each read the same snapshot and the last write won —
+    // a 20-root parallel registration retained exactly one. Every dropped root
+    // is a root whose managed worktrees leak forever (#761).
+    const repos = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => mkRepo(`par-${String(i)}`)),
+    );
+    await Promise.all(repos.map((r) => registerWorktreeRoot(r)));
+
+    const roots = await readRegisteredWorktreeRoots();
+    expect(roots).toHaveLength(repos.length);
+    expect(roots).toEqual(expect.arrayContaining(repos));
+  });
+
+  it('caps retention at 64 roots, evicting the least-recently-seen first', async () => {
+    const repos: string[] = [];
+    for (let i = 0; i < 65; i++) {
+      // Sequential, so "first registered" is unambiguously the oldest-seen.
+      const repo = await mkRepo(`cap-${String(i).padStart(3, '0')}`);
+      repos.push(repo);
+      await registerWorktreeRoot(repo);
+    }
+
+    const roots = await readRegisteredWorktreeRoots();
+    expect(roots).toHaveLength(64);
+    expect(roots).not.toContain(repos[0]);
+    expect(roots).toContain(repos[64]);
+  });
+
+  it('refreshing an existing root does not evict a different live root', async () => {
+    const a = await mkRepo('keep-a');
+    const b = await mkRepo('keep-b');
+    await registerWorktreeRoot(a);
+    await registerWorktreeRoot(b);
+    await registerWorktreeRoot(a); // re-registration reorders, must not drop b
+
+    expect(await readRegisteredWorktreeRoots()).toEqual(expect.arrayContaining([a, b]));
+  });
+
+  it('leaves no temp or lock files behind after a write', async () => {
+    const repo = await mkRepo('tidy');
+    await registerWorktreeRoot(repo);
+
+    const siblings = await fs.readdir(dirname(getWorktreeRootsRegistryPath()));
+    expect(siblings.filter((f) => f.includes('.tmp-'))).toEqual([]);
+    expect(siblings.filter((f) => f.endsWith('.lock'))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'writes the registry 0o600 — it lists every repo the user works in',
+    async () => {
+      const repo = await mkRepo('perms');
+      await registerWorktreeRoot(repo);
+
+      const stat = await fs.stat(getWorktreeRootsRegistryPath());
+      expect(stat.mode & 0o777).toBe(0o600);
+    },
+  );
+
+  it('survives a torn registry left by an interrupted write', async () => {
+    const repo = await mkRepo('after-tear');
+    await fs.mkdir(dirname(getWorktreeRootsRegistryPath()), { recursive: true });
+    // A truncated JSON body is what a non-atomic writer leaves on a crash.
+    await fs.writeFile(getWorktreeRootsRegistryPath(), '{"version":1,"roots":[{"pa', 'utf-8');
+
+    await registerWorktreeRoot(repo);
+    expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
   });
 });

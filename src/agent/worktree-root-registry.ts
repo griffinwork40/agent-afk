@@ -21,8 +21,10 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, resolve } from 'node:path';
 import { getWorktreeRootsRegistryPath } from '../paths.js';
+import { debugLog } from '../utils/debug.js';
 
 /** Current on-disk schema version. Bump only on a breaking shape change. */
 const REGISTRY_VERSION = 1;
@@ -33,6 +35,22 @@ const REGISTRY_VERSION = 1;
  * Oldest-seen entries are dropped first.
  */
 const MAX_ROOTS = 64;
+
+/**
+ * The registry records the absolute path of every repo the user works in, so a
+ * default umask would leave that list world-readable. `awareness/presence.ts`
+ * treats the same data class as 0o600 for the same reason.
+ */
+const FILE_MODE = 0o600;
+const DIR_MODE = 0o700;
+
+/**
+ * Ceiling on how long a write will wait for the cross-process lock before
+ * giving up and writing anyway. Registration runs inside worktree creation, so
+ * blocking a create is strictly worse than a rare lost update.
+ */
+const LOCK_TIMEOUT_MS = 2_000;
+const LOCK_POLL_MS = 25;
 
 interface RootEntry {
   path: string;
@@ -67,6 +85,130 @@ async function readEntries(): Promise<RootEntry[]> {
   }
 }
 
+// Invariant: every write to the registry file goes through `mutateRegistry`,
+// and therefore through all three of the guards below, in this order:
+//
+//   1. `writeQueue` — an in-process promise chain. This is the guard that
+//      matters most, because the reachable race is in-process: the tool
+//      dispatcher runs agent forks concurrently, and every `isolation:
+//      "worktree"` child calls registerWorktreeRoot() independently. Without
+//      it, two forks read the same snapshot and the later write drops the
+//      earlier one's root — and a dropped root is a root whose trees leak,
+//      which is the very bug (#761) this module exists to fix.
+//   2. an advisory lock file — covers the cross-process case (two afk
+//      processes creating worktrees at once). Deliberately degradable: see
+//      LOCK_TIMEOUT_MS. Never blocks a create.
+//   3. temp-file + rename — makes a torn write impossible. A half-written
+//      file parses as `[]`, which would silently discard every known root.
+//
+// The read-modify-write is re-read INSIDE the critical section; callers pass a
+// pure transform, never a precomputed entry list, so nothing clobbers an entry
+// that landed while they were deciding what to write.
+
+let writeQueue: Promise<void> = Promise.resolve();
+
+/** Chain `task` after any in-flight write. Never rejects, so the chain cannot break. */
+function enqueueWrite(task: () => Promise<void>): Promise<void> {
+  const next = writeQueue.then(task, task).catch(() => undefined);
+  writeQueue = next;
+  return next;
+}
+
+/** Drop a lock whose owning process is gone (or whose pid is unreadable). */
+async function clearStaleLock(lockPath: string): Promise<void> {
+  try {
+    const pid = Number.parseInt((await fs.readFile(lockPath, 'utf-8')).trim(), 10);
+    if (Number.isInteger(pid) && pid > 0) {
+      process.kill(pid, 0); // throws when the holder is gone
+      return; // holder alive — leave it alone
+    }
+  } catch {
+    /* unreadable pid, or holder dead → fall through and reclaim */
+  }
+  await fs.unlink(lockPath).catch(() => undefined);
+}
+
+/**
+ * Best-effort cross-process lock. Resolves to a release fn, or `null` when the
+ * lock could not be taken within {@link LOCK_TIMEOUT_MS} — in which case the
+ * caller writes anyway. Returning `null` rather than throwing is the whole
+ * point: bookkeeping must never fail or stall a worktree create.
+ */
+async function acquireRegistryLock(lockPath: string): Promise<(() => Promise<void>) | null> {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      const handle = await fs.open(lockPath, 'wx', FILE_MODE);
+      await handle.writeFile(String(process.pid), 'utf-8');
+      await handle.close();
+      return async () => { await fs.unlink(lockPath).catch(() => undefined); };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
+      if (Date.now() >= deadline) return null;
+      await clearStaleLock(lockPath);
+      await sleep(LOCK_POLL_MS);
+    }
+  }
+}
+
+/**
+ * Replace the registry with `entries`, atomically.
+ *
+ * External constraint: `rename(2)` is atomic only within one filesystem, so the
+ * temp file is written as a SIBLING of the target rather than in a tmpdir.
+ */
+async function writeRegistry(entries: RootEntry[]): Promise<void> {
+  const target = getWorktreeRootsRegistryPath();
+  await fs.mkdir(dirname(target), { recursive: true, mode: DIR_MODE });
+  const payload: RegistryFile = { version: REGISTRY_VERSION, roots: entries };
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    // mode on the TEMP file, before the rename — writing the real path first
+    // and chmod-ing after would leave a world-readable window.
+    await fs.writeFile(tmp, JSON.stringify(payload, null, 2), {
+      encoding: 'utf-8',
+      mode: FILE_MODE,
+    });
+    await fs.rename(tmp, target);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** Apply `transform` to the current entries and persist the result. Never throws. */
+async function mutateRegistry(transform: (entries: RootEntry[]) => RootEntry[]): Promise<void> {
+  await enqueueWrite(async () => {
+    const release = await acquireRegistryLock(`${getWorktreeRootsRegistryPath()}.lock`);
+    try {
+      await writeRegistry(transform(await readEntries()));
+    } catch {
+      /* best-effort — never fail a worktree create over bookkeeping */
+    } finally {
+      if (release !== null) await release();
+    }
+  });
+}
+
+/**
+ * Enforce {@link MAX_ROOTS}, newest-last so the oldest-seen entries drop first.
+ *
+ * Eviction is reported because it is otherwise invisible: re-registering moves
+ * an entry to the end, so a cold-but-live root holding worktrees can be pushed
+ * past the cap by busier repos and then silently vanish from every future
+ * sweep. A debug line makes that diagnosable instead of a mystery leak.
+ */
+function capRoots(entries: RootEntry[]): RootEntry[] {
+  if (entries.length <= MAX_ROOTS) return entries;
+  const evicted = entries.slice(0, entries.length - MAX_ROOTS);
+  debugLog(
+    `[worktree-root-registry] cap ${MAX_ROOTS} reached — evicting ${evicted.length} ` +
+    `least-recently-seen root(s); their managed worktrees will no longer be swept: ` +
+    evicted.map((e) => e.path).join(', '),
+  );
+  return entries.slice(-MAX_ROOTS);
+}
+
 /**
  * Record `repoRoot` as containing managed worktrees. Idempotent: an existing
  * entry has its `lastSeenAt` refreshed rather than duplicated.
@@ -76,19 +218,11 @@ async function readEntries(): Promise<RootEntry[]> {
 export async function registerWorktreeRoot(repoRoot: string): Promise<void> {
   if (repoRoot === '') return;
   const absolute = resolve(repoRoot);
-  try {
-    const entries = await readEntries();
-    const now = new Date().toISOString();
+  const now = new Date().toISOString();
+  await mutateRegistry((entries) => {
     const others = entries.filter((e) => resolve(e.path) !== absolute);
-    // Newest last, so the oldest-seen entries are the ones the cap drops.
-    const next = [...others, { path: absolute, lastSeenAt: now }].slice(-MAX_ROOTS);
-    const payload: RegistryFile = { version: REGISTRY_VERSION, roots: next };
-    const target = getWorktreeRootsRegistryPath();
-    await fs.mkdir(dirname(target), { recursive: true });
-    await fs.writeFile(target, JSON.stringify(payload, null, 2), 'utf-8');
-  } catch {
-    /* best-effort — never fail a worktree create over bookkeeping */
-  }
+    return capRoots([...others, { path: absolute, lastSeenAt: now }]);
+  });
 }
 
 /**
@@ -118,15 +252,20 @@ export async function readRegisteredWorktreeRoots(): Promise<string[]> {
   }
 
   if (alive.length !== entries.length) {
-    // Self-heal: rewrite without the vanished roots. Still best-effort.
-    try {
-      const payload: RegistryFile = { version: REGISTRY_VERSION, roots: alive };
-      await fs.writeFile(
-        getWorktreeRootsRegistryPath(),
-        JSON.stringify(payload, null, 2),
-        'utf-8',
-      );
-    } catch { /* ignore */ }
+    // Self-heal, expressed as "drop exactly these dead paths" rather than
+    // "overwrite with the list I just computed". The stat loop above is not
+    // inside the lock, so a concurrent registerWorktreeRoot may have added a
+    // root since; a wholesale overwrite would silently discard it.
+    const dead = new Set(
+      entries.map((e) => resolve(e.path)).filter((p) => !seen.has(p)),
+    );
+    const kept = new Set<string>();
+    await mutateRegistry((current) => current.flatMap((entry) => {
+      const absolute = resolve(entry.path);
+      if (dead.has(absolute) || kept.has(absolute)) return [];
+      kept.add(absolute);
+      return [{ ...entry, path: absolute }];
+    }));
   }
   return alive.map((e) => e.path);
 }
