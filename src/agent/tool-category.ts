@@ -215,6 +215,22 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   ...AWARENESS_TOOL_NAMES,
 ];
 
+/**
+ * Tool surface for which a zero-output stream cut may safely re-run the full
+ * child prompt. This is deliberately separate from READ_ONLY_PHASE_TOOLS:
+ * retry authorization permits read-only network fetches and a mechanically
+ * scoped nested-agent dispatch, while the pre-approval phase gate excludes
+ * both capabilities for its stricter exfiltration/delegation contract.
+ *
+ * `bash` is intentionally absent. Its read-only classifier is best-effort and
+ * therefore cannot prove that replaying a command is free of side effects.
+ */
+export const STREAM_CUT_RETRY_SAFE_TOOLS: readonly string[] = [
+  ...READ_ONLY_PHASE_TOOLS,
+  'web_scrape',
+  'agent',
+];
+
 export function categorizeTool(name: string): ToolCategory {
   if (name.startsWith('mcp__') || name.startsWith('MCP__')) return 'mcp';
   if (hasCI(READ_TOOLS, name)) return 'read';

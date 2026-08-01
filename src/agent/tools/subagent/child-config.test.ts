@@ -36,6 +36,7 @@ import { DEFAULT_CLI_PERMISSION_MODE } from '../../../cli/config/types.js';
 import type { RegisteredAgent } from '../../agents/index.js';
 import type { ModelProvider } from '../../provider.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
+import { builtinAgents } from '../../agents/builtins.js';
 
 /** A parsed AgentInput with the fields buildChildConfig reads. */
 function parsed(overrides?: Partial<AgentInput>): AgentInput {
@@ -204,7 +205,7 @@ describe('buildChildConfig', () => {
       expect(childSideEffectFree).toBe(true);
     });
 
-    it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'agent'])(
+    it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'bash'])(
       'is false when the cage grants side-effecting tool %s',
       (tool) => {
         const { childSideEffectFree } = buildChildConfig(
@@ -214,13 +215,17 @@ describe('buildChildConfig', () => {
       },
     );
 
-    it('allows bash only when the read-only command gate is enforced', () => {
+    it('never treats best-effort read-only bash as replay-safe', () => {
       expect(buildChildConfig(
         baseArgs({ allowedTools: ['read_file', 'bash'], readOnlyBash: true }),
-      ).childSideEffectFree).toBe(true);
-      expect(buildChildConfig(
-        baseArgs({ allowedTools: ['read_file', 'bash'] }),
       ).childSideEffectFree).toBe(false);
+    });
+
+    it('treats the real research-agent surface as replay-safe', () => {
+      const realResearchAgent = builtinAgents().get('research-agent');
+      expect(realResearchAgent).toBeDefined();
+      expect(buildChildConfig(baseArgs({ namedAgent: realResearchAgent })).childSideEffectFree)
+        .toBe(true);
     });
   });
 

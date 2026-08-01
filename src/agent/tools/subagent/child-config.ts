@@ -42,9 +42,9 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
-import { READ_ONLY_PHASE_TOOLS } from '../../tool-category.js';
+import { STREAM_CUT_RETRY_SAFE_TOOLS } from '../../tool-category.js';
 
-const SIDE_EFFECT_FREE_TOOLS = new Set(READ_ONLY_PHASE_TOOLS);
+const STREAM_CUT_RETRY_SAFE_TOOL_SET = new Set(STREAM_CUT_RETRY_SAFE_TOOLS);
 
 /** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
@@ -212,10 +212,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // pure-read contract; non-file tools can mutate remote or persistent state.
   const childSideEffectFree =
     effectiveAllowedTools !== undefined &&
-    effectiveAllowedTools.every(
-      (tool) =>
-        SIDE_EFFECT_FREE_TOOLS.has(tool) || (tool === 'bash' && effectiveReadOnlyBash === true),
-    );
+    effectiveAllowedTools.every((tool) => STREAM_CUT_RETRY_SAFE_TOOL_SET.has(tool));
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under

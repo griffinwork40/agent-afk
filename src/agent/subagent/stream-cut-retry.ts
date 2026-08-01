@@ -147,11 +147,11 @@ export async function runWithStreamCutRetry(opts: StreamCutRetryOptions): Promis
     // the delay too: both facts it asserts can change while we wait.
     if (opts.canRedispatch !== undefined && !opts.canRedispatch()) return result;
 
-    opts.onRedispatch?.(attempt);
     if (delayMs > 0) await sleepWithAbort(delayMs, opts.signal);
     if (opts.signal.aborted) return result;
     if (opts.canRedispatch !== undefined && !opts.canRedispatch()) return result;
 
+    opts.onRedispatch?.(attempt);
     result = await opts.dispatch(attempt);
   }
 

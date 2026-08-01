@@ -134,11 +134,11 @@ describe('runWithStreamCutRetry', () => {
     const controller = new AbortController();
     const dispatch = vi.fn(async () => zeroOutputCut());
 
+    setTimeout(() => controller.abort(), 5);
     const promise = runWithStreamCutRetry({
       dispatch,
       signal: controller.signal,
       delayMs: 50,
-      onRedispatch: () => controller.abort(),
     });
 
     const result = await promise;
@@ -191,13 +191,12 @@ describe('runWithStreamCutRetry', () => {
       let allowed = true;
       const dispatch = vi.fn(async () => zeroOutputCut());
 
+      setTimeout(() => { allowed = false; }, 5);
       await runWithStreamCutRetry({
         dispatch,
         signal: notAborted,
         delayMs: 20,
         canRedispatch: () => allowed,
-        // Flip the gate during the settle wait.
-        onRedispatch: () => { allowed = false; },
       });
 
       expect(dispatch).toHaveBeenCalledTimes(1);

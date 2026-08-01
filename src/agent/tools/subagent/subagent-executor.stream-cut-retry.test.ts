@@ -166,7 +166,7 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
     expect(result).toEqual(ZERO_OUTPUT_CUT);
   });
 
-  it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'agent'])(
+  it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'bash'])(
     'refuses to retry a child with non-file side-effecting tool %s',
     async (tool) => {
       runForegroundWithPromotion.mockResolvedValue(ZERO_OUTPUT_CUT);
