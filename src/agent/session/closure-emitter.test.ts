@@ -128,6 +128,29 @@ describe('deriveSealStatus', () => {
     expect(deriveSealStatus({ ...baseSignals, sawProviderError: true })).toBe('failed');
   });
 
+  // #762: the clean-terminal turn preservation must not seal `succeeded`.
+  it('seals failed on overload exhaustion (clean terminal, still a failure)', () => {
+    expect(
+      deriveSealStatus({
+        ...baseSignals,
+        sawProviderError: false,
+        lastStopReason: 'overload_exhausted',
+      }),
+    ).toBe('failed');
+  });
+
+  // Abort precedence: a user cancel during the bounded pause keeps the more
+  // specific `cancelled` status rather than being flattened to `failed`.
+  it('prefers cancelled over overload exhaustion (abort wins)', () => {
+    expect(
+      deriveSealStatus({
+        ...baseSignals,
+        signal: abortedSignal('user'),
+        lastStopReason: 'overload_exhausted',
+      }),
+    ).toBe('cancelled');
+  });
+
   it('maps an otherwise-clean close to succeeded', () => {
     expect(deriveSealStatus(baseSignals)).toBe('succeeded');
   });

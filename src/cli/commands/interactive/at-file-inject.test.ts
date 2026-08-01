@@ -277,6 +277,69 @@ describe('expandAtFileTokens — hardened guards (review #688)', () => {
     expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
   });
 
+  // PR #805 — ssh config / known_hosts carve-out parity on the @-inject surface.
+  // READ_ALLOWLIST_REL is shared, so the carve-out propagates structurally;
+  // these pin that propagation so a future refactor cannot silently drop it.
+  it('injects ~/.ssh/config (shared exact-file carve-out)', () => {
+    mkdirSync(join(tmpRoot, '.ssh'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.ssh', 'config'), 'Host github\n  IdentityFile ~/.ssh/github_key\n');
+    const r = expandAtFileTokens('@~/.ssh/config', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.warnings).toEqual([]);
+    expect(r.fileBlocks).toHaveLength(1);
+    expect(r.fileBlocks[0]!.text).toContain('IdentityFile');
+  });
+
+  it('injects ~/.ssh/known_hosts (shared exact-file carve-out)', () => {
+    mkdirSync(join(tmpRoot, '.ssh'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.ssh', 'known_hosts'), 'github.com ssh-ed25519 AAAA...\n');
+    const r = expandAtFileTokens('@~/.ssh/known_hosts', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.warnings).toEqual([]);
+    expect(r.fileBlocks).toHaveLength(1);
+    expect(r.fileBlocks[0]!.text).toContain('github.com');
+  });
+
+  it('blocks ~/.ssh/config BACKUP sibling (exact-file, not prefix)', () => {
+    mkdirSync(join(tmpRoot, '.ssh'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.ssh', 'config.bak'), 'Host old\n');
+    const r = expandAtFileTokens('@~/.ssh/config.bak', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.fileBlocks).toEqual([]);
+    expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
+  });
+
+  it('honors an AFK_READ_DENYLIST re-deny of the ssh carve-out', () => {
+    mkdirSync(join(tmpRoot, '.ssh'), { recursive: true });
+    const sshConf = join(tmpRoot, '.ssh', 'config');
+    writeFileSync(sshConf, 'Host github\n  IdentityFile ~/.ssh/github_key\n');
+    const prior = process.env['AFK_READ_DENYLIST'];
+    process.env['AFK_READ_DENYLIST'] = sshConf;
+    _resetReadDenylistCacheForTests();
+    try {
+      const r = expandAtFileTokens('@~/.ssh/config', {
+        rootDir: '/nonexistent-cwd',
+        homeDir: tmpRoot,
+        ...ON,
+      });
+      expect(r.fileBlocks).toEqual([]);
+      expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env['AFK_READ_DENYLIST'];
+      else process.env['AFK_READ_DENYLIST'] = prior;
+      _resetReadDenylistCacheForTests();
+    }
+  });
+
   it('still injects an innocuous absolute path like a temp file (not over-blocked)', () => {
     const r = expandAtFileTokens(`@${tmpRoot}/code.ts`, { rootDir: '/nonexistent-cwd', ...ON });
     expect(r.fileBlocks).toHaveLength(1);

@@ -77,6 +77,11 @@ import {
 } from '../shared/tool-call-trace.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../tools/denial-circuit-breaker.js';
 import { DenialCircuitBreakerError } from '../../../utils/errors.js';
+import {
+  OVERLOAD_EXHAUSTED,
+  OVERLOAD_EXHAUSTED_NOTICE,
+  jitterBackoff,
+} from './overload-pause.js';
 
 // Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
 // source of truth shared with openai-compatible). Kept exported here so
@@ -172,7 +177,9 @@ async function createWithRetry(
 ): Promise<AsyncIterable<unknown>> {
   for (let attempt = 0; ; attempt++) {
     if (attempt > 0) {
-      const delay = OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      // Jittered (#762): concurrent sessions hitting the same 529 must not
+      // retry in lockstep. Additive, so the documented minimum still holds.
+      const delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1));
       await sleepWithAbort(delay, turnSignal);
       if (turnSignal.aborted) throw new Error('aborted');
     }
@@ -543,6 +550,9 @@ export async function* runTurn(
     let translatorErrored = false;
     let retryOverload = false;
     let retryStreamIncomplete = false;
+    // Mid-stream overload budget exhausted for this round: routes to the clean
+    // OVERLOAD_EXHAUSTED terminal below instead of the fatal tail (#762).
+    let overloadExhausted = false;
     // Witness layer: emit model_ttfb exactly once for this API call, on the
     // first translated stream event. Reset per while-iteration so each model
     // call reports its own time-to-first-byte.
@@ -664,6 +674,30 @@ export async function* runTurn(
               retryOverload = true;
               break;
             }
+            // Invariant: mid-stream overload budget EXHAUSTED must not reach the
+            // fatal tail below. Before #762 it did — the guard above went false
+            // on the 4th hit and control fell past the interrupt check and the
+            // StreamIncomplete branch into `yield out.event; translatorErrored =
+            // true`, i.e. the same lane as an auth failure. That set
+            // `sawProviderError` (agent-session.ts) → `closure {reason:'abort'}`
+            // → seal `failed` with `finalTurnCount: 0`, discarding every
+            // accumulated turn of the session (a real incident lost 9 turns /
+            // ~2.02M cache-read tokens across five failed resumes).
+            //
+            // Route it to a CLEAN terminal instead: set the exhaustion flag and
+            // break, so the post-loop handler commits the accumulated assistant
+            // turn and emits `turn.completed` stamped with OVERLOAD_EXHAUSTED.
+            // The turn then counts (`turnCount++`), so `afk --resume` restarts
+            // from saved state. The failure stays LOUD — the sentinel maps to an
+            // `abort` closure and a `failed` seal, exactly like the
+            // `tool_use_loop_capped` precedent — it simply stops being lossy.
+            // Checked immediately after the retry guard so no other branch can
+            // claim the event, and `isOverloadedErrorEvent` is re-tested rather
+            // than inferred so a non-overload error still falls through.
+            if (isOverloadedErrorEvent(out.event.error) && !input.signal.aborted) {
+              overloadExhausted = true;
+              break;
+            }
             // User interrupt (ESC soft-stop): translate.ts converted the abort
             // throw into this in-band `error` event, but on an interrupt the
             // "error" IS the abort — not a real failure. Do NOT yield it. If we
@@ -750,6 +784,10 @@ export async function* runTurn(
         // re-throws one, route it into the same retry path rather than crashing.
         if (isOverloadedErrorEvent(e) && overloadRetries < OVERLOAD_MAX_RETRIES && !input.signal.aborted) {
           retryOverload = true;
+        } else if (isOverloadedErrorEvent(e) && !input.signal.aborted) {
+          // Budget exhausted on the re-thrown path: same non-lossy terminal as
+          // the in-band branch above (see the Invariant comment there).
+          overloadExhausted = true;
         } else {
           yield { type: 'error', error: e };
           return;
@@ -786,9 +824,13 @@ export async function* runTurn(
       // without a reset the partial text visibly duplicates. Emitted before
       // the backoff so the UI clears immediately rather than after the wait.
       yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
-      // Exponential backoff matching createWithRetry: 5s → 10s → 20s.
+      // Exponential backoff matching createWithRetry: 5s → 10s → 20s, plus
+      // additive jitter (#762) so parallel sessions/subagents that all hit the
+      // same capacity event de-synchronize instead of re-hammering an already-
+      // overloaded upstream in lockstep. Mirrors the transient-429 jitter at
+      // retry-layer.ts.
       await sleepWithAbort(
-        OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadRetries - 1),
+        jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadRetries - 1)),
         input.signal,
       );
       if (input.signal.aborted) {
@@ -856,6 +898,54 @@ export async function* runTurn(
     // fresh one. A round only reaches here after a clean first byte, so this
     // never runs on the failing (retry) attempt of the same round.
     ttfbRetried = false;
+
+    // Invariant: this branch must come BEFORE the `translatorErrored` /
+    // `turnResult === null` terminals below, and must emit exactly ONE terminal
+    // event. Ordering is load-bearing in both directions: it sits below the
+    // retry `continue`s (an exhausted round is never also a retried round) and
+    // above the generic terminals (which would otherwise re-classify it).
+    //
+    // Turn preservation (#762): emit a CLEAN `turn.completed` so the session's
+    // stream consumer maps it to `done` → `turnCount++`, committing the turn and
+    // leaving the accumulated history in `input.messages` resumable via
+    // `afk --resume <sessionId>`. Previously this path yielded a raw `error`,
+    // which set `sawProviderError` and sealed the session `failed` with
+    // `finalTurnCount: 0` — every prior turn discarded.
+    //
+    // The failure is still surfaced, twice over: the OVERLOAD_EXHAUSTED
+    // stopReason drives an `abort` closure + `failed` seal downstream, and the
+    // notice replaces the raw `{"type":"overloaded_error"}` SSE envelope
+    // operators were misreading as a TypeScript error.
+    //
+    // Contract: the notice is NOT appended to THIS turn's `input.messages`, so
+    // it never re-enters the request that is failing. It is NOT invisible to the
+    // model, though — `session/stream-consumer.ts` materializes every non-empty
+    // `assistant.message` into `conversationHistory`, which threads back as
+    // model context on the next turn and on `--resume`. Same shape as the
+    // `stop_reason: 'refusal'` notice below. Read as "not retried into the dead
+    // request", not "operator-only".
+    if (overloadExhausted) {
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'rate_limit',
+        metadata: {
+          reason: 'overloaded',
+          source: 'mid-stream',
+          attempt: OVERLOAD_MAX_RETRIES,
+          exhausted: true,
+        },
+      });
+      yield {
+        type: 'assistant.message',
+        text: OVERLOAD_EXHAUSTED_NOTICE,
+        sessionId: input.ctx.sessionId,
+      };
+      yield {
+        type: 'turn.completed',
+        usage: withTurnDuration({ ...accumulatedUsage, stopReason: OVERLOAD_EXHAUSTED }),
+        sessionId: input.ctx.sessionId,
+      };
+      return;
+    }
 
     if (translatorErrored) {
       // Error event was already yielded. On an abort (interrupt/close), emit

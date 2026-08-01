@@ -704,6 +704,16 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
+  // Mid-stream overload (529) exhaustion park/unpark (#762). Distinct from
+  // `usage_limit_pause` — that brackets an OAuth subscription window with an
+  // authoritative reset deadline; a 529 carries NO reset timestamp, so this pair
+  // brackets a bounded PLAIN WALL-CLOCK park that re-probes upstream capacity on
+  // a jittered interval. `overload_resume` carries the parked `durationMs`.
+  // Emitted as a pair, but a pause may end without a resume (ceiling reached,
+  // abort, or the pause disabled for the surface) — a lone `overload_pause` is
+  // expected, and is always followed by a real `closure`.
+  | 'overload_pause'
+  | 'overload_resume'
   // A progress-aware watchdog fired on unexplained silence. Two sources, told
   // apart by `metadata.source`:
   //   - absent → a forked sub-agent turn: the child produced no observable

@@ -11,6 +11,54 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.1] - 2026-08-01
+
+### Fixed
+- fail the bundle build when a prompt read cannot be inlined (#776) (#816) (548029c)
+
+## [5.84.0] - 2026-08-01
+
+### Added
+- fold the fragment-goal signal class into intent-lock (#793) (c791d8e)
+
+### Changed
+- migrate hash-pin history blocks to docs/bundled-plugins.md (#790) (#809) (5ea1493)
+
+## [5.83.9] - 2026-07-31
+
+### Fixed
+- preserve the turn and bound a pause when mid-stream overload retries exhaust (#762) (#764) (7f5083c)
+- stop annihilating whitespace-only text deltas and fusing round-boundary prose (#810) (9db7413)
+
+### Changed
+- close breadth-guard and warn-latch coverage gaps from #753 (#783) (#812) (a0be547)
+
+## [5.83.8] - 2026-07-31
+
+### Fixed
+- carve ssh config + known_hosts out of read-denylist (#579 O2) (#805) (badd34a)
+
+### Changed
+- fix dangling @link and restate ~60% orphan figure (#730) (#807) (73e8577)
+- close three builtin-shadow warning coverage gaps (#746) (#808) (dcf22ba)
+
+## [5.83.7] - 2026-07-31
+
+### Fixed
+- accept common truthy values for TELEGRAM_VERBOSE (#683) (#802) (29b0903)
+
+### Changed
+- extract two named concerns over the 350-LOC ceiling (#782) (#801) (d7df7ea)
+- add anthropic-direct query.test.ts for subagentId threading (#634) (#803) (49b8afd)
+
+## [5.83.6] - 2026-07-31
+
+### Fixed
+- stop a blank environment variable from permanently shadowing the real value in `afk.env` — a shell profile with `export OPENAI_API_KEY=""` masked the key in `~/.afk/config/afk.env` (dotenv's `override: false` skip is presence-based, not value-based), so an OpenAI-compatible-only operator was told to "set OPENAI_API_KEY" for a key they had already set, after the auth chain fell through to `~/.codex/auth.json`
+
+### Fixed
+- stop a blank env var from shadowing the real value in afk.env (#800) (91c80ce)
+
 ## [5.83.5] - 2026-07-31
 
 ### Fixed
