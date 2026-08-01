@@ -28,16 +28,8 @@ import type {
   ProviderQueryArgs,
   ProviderCompleteArgs,
 } from '../../provider.js';
-import {
-  buildClientOptions,
-  buildSystemPrefix,
-  detectAuthMode,
-} from './auth.js';
+import { detectAuthMode } from './auth.js';
 import { oneShotCompletion, type OneShotInput } from './oneshot.js';
-import { makeTracingFetch } from './tracing-fetch.js';
-import { ThrottleQueue } from './throttle-queue.js';
-import { parseQuotaHeaders, recordQuotaSnapshot } from '../../quota-cache.js';
-import { refreshClaudeCodeOauthToken } from '../../auth/keychain.js';
 import { AnthropicDirectQuery } from './query.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import {
@@ -71,24 +63,18 @@ export {
   type AnthropicDirectProviderOptions,
 } from './provider-options.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
-import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { resolveModelId } from '../../session/model-resolution.js';
-import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import { MemoryStore, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import { env } from '../../../config/env.js';
 import { resolveQueryToken } from './query/token-resolution.js';
-import {
-  getRuntimeStateTool,
-  wrapDispatcherWithRuntimeState,
-  buildRuntimeStateSource,
-  type RuntimeStateSource,
-} from '../../awareness/index.js';
-import { registerPresenceLifecycle, resolveTopLevelSessionId } from './query/presence-lifecycle.js';
+import { getRuntimeStateTool } from '../../awareness/index.js';
 import { createCwdDependentsFactory } from './query/cwd-dependents.js';
-import { assembleSystemPrompt, buildStableSystemPrefix } from './query/system-prompt.js';
+import { wireQueryDispatcher } from './query/dispatcher-wiring.js';
+import { setUpQueryClient } from './query/client-setup.js';
+import { assembleQueryPrompt } from './query/prompt-assembly.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
 const DEFAULT_MODEL = 'claude-sonnet-5';
@@ -414,57 +400,18 @@ export class AnthropicDirectProvider implements ModelProvider {
       );
     }
     const authMode = detectAuthMode(token);
-    // Live-throttle mailbox: the wrapped fetch pushes a signal onto this queue
-    // for every 429/503/529 the SDK sleep-and-retries INSIDE a single
-    // `messages.create`; the per-turn loop drains it to surface a `rate_limit`
-    // ProviderEvent LIVE (the loop is otherwise parked awaiting the SDK and
-    // cannot yield during the backoff). Installed only when the tracing fetch
-    // is (non-local-shim + a trace writer OR a live surface would consume it) —
-    // here it rides alongside the existing trace-writer gate so the queue and
-    // the wrapper share the same lifetime. The SAME instance is handed to the
-    // query below so the fetch producer and the loop consumer meet.
-    const throttleQueue =
-      !localMode && config.traceWriter ? new ThrottleQueue() : undefined;
-    // Invariant: quota capture is gated on `!localMode` ALONE — deliberately not
-    // on `config.traceWriter`. The `anthropic-ratelimit-unified-*` headers ride
-    // on every response and feed the CLI status line, which must stay live even
-    // when tracing is off (`AFK_TRACE_DISABLED=1`); tying it to the trace writer
-    // would silently blank the indicator in that configuration. localMode is
-    // still excluded: a local shim is not Anthropic and emits no quota headers.
-    const quotaObserver = localMode
-      ? undefined
-      : (headers: Headers): void => {
-          const snapshot = parseQuotaHeaders(headers);
-          if (snapshot !== undefined) recordQuotaSnapshot(snapshot);
-        };
-    const clientOpts = buildClientOptions(
+
+    // Client + observability wiring (throttle mailbox, quota capture, tracing
+    // fetch) and the OAuth token refresher that must reuse all three.
+    const { client, throttleQueue, systemPrefix, tokenRefresher } = setUpQueryClient({
+      config,
       token,
       authMode,
-      config.baseUrl,
-      // Observability: route SDK HTTP through a wrapper that (1) records
-      // 429/503/529 throttling into the witness trace so the SDK's
-      // otherwise-silent retry-after backoff is legible in `afk trace show`,
-      // (2) pushes a live signal onto `throttleQueue` so the progress banner can
-      // show the backoff as it happens, and (3) captures subscription-quota
-      // headers into the quota cache for the status line. Skipped entirely in
-      // local-shim mode (not Anthropic's billing surface). Note the wrapper is
-      // installed whenever ANY of the three observers is live — a trace writer
-      // is no longer required, since (3) must work with tracing disabled.
-      !localMode
-        ? makeTracingFetch(
-            config.traceWriter,
-            undefined,
-            throttleQueue ? (info) => throttleQueue.push(info) : undefined,
-            quotaObserver,
-          )
-        : undefined,
-    );
-    const factory = this.providerFactory ?? getClientFactory();
-    const client = factory ? factory(clientOpts) : new Anthropic(clientOpts);
-    // In local-server mode, suppress the OAuth CLI-mimicry system-prefix
-    // regardless of token shape: the shim is not Anthropic's billing surface
-    // and should not receive Claude-Code identity headers in the system prompt.
-    const systemPrefix = localMode ? null : buildSystemPrefix(authMode);
+      localMode,
+      factory: this.providerFactory ?? getClientFactory(),
+      createClient: (opts) => new Anthropic(opts),
+    });
+
     const userSystem = resolveUserSystem(config.systemPrompt);
 
     const model =
@@ -502,176 +449,43 @@ export class AnthropicDirectProvider implements ModelProvider {
       this._sharedWriteRoots.push(...config.writeRoots);
     }
 
-    // Awareness layer source: declared as a `let` because the dispatcher and
-    // the source have a benign cycle — `getEnabledToolNames` resolves through
-    // a closure that reads `queryDispatcher` lazily at handler-call time, so
-    // the assignment-before-use ordering below is safe.
-    let queryDispatcher: import('./tool-dispatcher.js').ToolDispatcher;
-
-    const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
-      surface: this.surface,
-      cwd: config.cwd ?? process.cwd(),
-      modelName: model,
-      providerName: PROVIDER_NAME,
-      permissionMode,
-      ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
-      ...(config.parentSessionId !== undefined
-        ? { parentSessionId: config.parentSessionId }
-        : {}),
-      ...(config.depth !== undefined ? { depth: config.depth } : {}),
-      ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-      ...(config.phaseRole !== undefined ? { phaseRole: config.phaseRole } : {}),
-      getEnabledToolNames: () =>
-        queryDispatcher instanceof SessionToolDispatcher
-          ? queryDispatcher.toolDefs.map((t) => t.name)
-          : [],
-      getMcpTools: () => this.mcpManager?.getMcpTools() ?? [],
-      getSubagents: () =>
-        this.subagentExecutor
-          ? this.subagentExecutor.getSubagentsLite()
-          : { active: [], backgroundJobs: [] },
-    });
-
-    // Invariant: presence and query construction MUST use the same session id,
-    // because the Telegram watcher resolves a session's ledger path from the id
-    // in its presence file. Resolve once here — BEFORE the presence write — and
-    // reuse the result for `new AnthropicDirectQuery` below, so the presence
-    // file, the `session.init` event, and the ledger directory cannot diverge.
-    // Reading `config.sessionId` alone is what broke this: it is set only under
-    // --resume, so fresh sessions advertised nothing at all.
-    const resolvedSession = resolveTopLevelSessionId({
-      sessionId: config.sessionId,
-      resume: config.resume,
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      surface: this.surface,
-      memoized: this._mintedSessionId,
-    });
-    this._mintedSessionId = resolvedSession.memoized;
-
-    this._presenceSessionId = registerPresenceLifecycle({
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      sessionId: resolvedSession.id,
-      currentPresenceSessionId: this._presenceSessionId,
-      runtimeStateSource,
-      surface: this.surface,
-      cwd: config.cwd,
-      providerName: PROVIDER_NAME,
-      model,
-    });
-
-    queryDispatcher = this.externalTools
-      ? wrapDispatcherWithRuntimeState(this.externalTools, runtimeStateSource)
-      : this.buildDispatcher(permissionMode, {
-          cwd: config.cwd,
-          readRoots: this._sharedReadRoots,
-          writeRoots: this._sharedWriteRoots,
-          ...(config.env !== undefined ? { env: config.env } : {}),
-          sessionId: config.sessionId,
-          parentSessionId: config.parentSessionId,
-          ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
-          // Fork-scoped central output cap (#661): forwarded from the child
-          // config that forkSubagent stamped, arming maxOutputBytes for forks
-          // only (top-level leaves it unset).
-          ...(config.subagentToolOutputCapBytes !== undefined
-            ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
-            : {}),
-          traceWriter: config.traceWriter,
-          runtimeStateSource,
-          hookRegistry: config.hookRegistry,
-          planExitControls: config.planExitControls,
-        });
-
-    // External-dispatcher branch: the caller owns routing for whatever tools
-    // it cares about, but we still offer `get_runtime_state` because the
-    // wrapper above intercepts it before it ever reaches the inner dispatcher.
-    // Without adding the schema here the model has no way to know the tool
-    // exists — leaving the awareness layer reachable only via the
-    // `SessionToolDispatcher` path.
-    const baseToolDefs = queryDispatcher instanceof SessionToolDispatcher
-      ? [...queryDispatcher.toolDefs]
-      : [...builtinToolSchemas, getRuntimeStateTool];
-    // Invariant: skill-dispatch sub-agents are dispatched AS a specific skill, so
-    // they must neither (a) pause to ask the operator "which skill?" nor (b) mutate
-    // the operator's environment. Strip `ask_question` (the operator-prompt escape
-    // hatch) and `terminal_font_size` (an environment tool with no role in skill
-    // work — a bare numeric skill arg such as a PR number can otherwise lure a
-    // confused model into calling terminal_font_size(<n>) instead of running the
-    // skill). Gated on isSkillDispatch; pairs with the SLASH_COMMAND_ROUTING_PROMPT
-    // omission below. Verified safe: no bundled/registry/user skill calls either tool.
-    // Non-interactive surfaces (daemon, scheduler/cron, one-shot `afk chat`)
-    // install no elicitation handler, so `ask_question` can only auto-decline
-    // (elicitation-router.ts). Strip it so the model proceeds on an assumption
-    // or emits Blocked rather than burning a turn on an unanswerable prompt.
-    // Narrower than the skill-dispatch strip: `terminal_font_size` is retained.
-    const toolDefs = config.isSkillDispatch
-      ? baseToolDefs.filter(
-          (t) => t.name !== 'ask_question' && t.name !== 'terminal_font_size',
-        )
-      : config.isNonInteractive
-        ? baseToolDefs.filter((t) => t.name !== 'ask_question')
-        : baseToolDefs;
+    // Dispatcher + awareness source + presence, in that order. The
+    // declare/capture/assign sequence for `queryDispatcher` lives entirely
+    // inside this helper — see its module header; splitting it reintroduces
+    // the stale-tool-list hazard (#824).
+    const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId } =
+      wireQueryDispatcher({
+        config,
+        model,
+        permissionMode,
+        surface: this.surface,
+        providerName: PROVIDER_NAME,
+        externalTools: this.externalTools,
+        sharedReadRoots: this._sharedReadRoots,
+        sharedWriteRoots: this._sharedWriteRoots,
+        getMcpTools: () => this.mcpManager?.getMcpTools() ?? [],
+        getSubagents: () =>
+          this.subagentExecutor
+            ? this.subagentExecutor.getSubagentsLite()
+            : { active: [], backgroundJobs: [] },
+        getMintedSessionId: () => this._mintedSessionId,
+        setMintedSessionId: (v) => { this._mintedSessionId = v; },
+        getPresenceSessionId: () => this._presenceSessionId,
+        setPresenceSessionId: (v) => { this._presenceSessionId = v; },
+        buildDispatcher: (mode, opts) => this.buildDispatcher(mode, opts),
+      });
 
     const cwd = config.cwd || process.cwd();
 
-    // Build skill manifest for system prompt injection. The manifest lists
-    // available skills so the model knows what the `skill` tool can invoke.
-    // Let collectSkillEntries() own the full scan (project + user + bundled).
-    // Pass the session cwd so project skills (<cwd>/.afk/skills/) resolve
-    // against the session's working directory, not the host process's —
-    // they diverge on long-lived hosts (daemon, Telegram bot).
-    // `excludeName` omits the executing skill's own entry for a skill-dispatch
-    // fork (see AgentConfig.skillDispatchName). Must stay in lockstep with the
-    // openai-compatible call site — a per-provider divergence here is how a
-    // fork on one provider silently keeps the self-entry.
-    const manifest = this.skillExecutor
-      ? buildSkillManifest(undefined, {
-          cwd,
-          ...(typeof config.skillDispatchName === 'string' &&
-          config.skillDispatchName.length > 0
-            ? { excludeName: config.skillDispatchName }
-            : {}),
-        })
-      : '';
-    // Invariant: SLASH_COMMAND_ROUTING_PROMPT is omitted for skill-dispatch
-    // sub-agents. Those sessions receive a "Run the <name> skill" directive
-    // with no <command-name> tag, so the routing instruction (which keys off
-    // that tag) would push them to ask "which skill?" instead of engaging with
-    // their SKILL.md body. The ask_question strip above is the structural
-    // backstop for the same failure mode.
-    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    // Read-only memory child sessions get a slimmed prompt that omits write
-    // instructions for memory_update / procedure_write — keeps the model from
-    // being told about tools it does not have.
-    const memoryPrompt = resolveMemorySystemPrompt(this.readOnlyMemory);
-
-    // Awareness identity fields interleaved into the `# Environment` fragment
-    // (Phase 1 + 2). Stable across cwd swaps — only `cwd` changes on setCwd().
-    const environmentIdentity = {
+    const { stableSystemPrefix, toolSystemAppend } = assembleQueryPrompt({
+      config,
+      cwd,
       surface: this.surface,
-      sessionId: config.sessionId,
-      depth: config.depth,
-      maxDepth: config.maxDepth,
-      workspace: runtimeStateSource.getWorkspace(),
-    };
-
-    // Stable (cwd-independent) parts of the system prompt. The cwd-dependent
-    // `# Environment` fragment is spliced in by assembleSystemPrompt — the same
-    // helper the cwdDependentsFactory below uses on a cwd change, so the
-    // first-turn and rebuilt prompts can never drift.
-    const stableSystemPrefix = buildStableSystemPrefix({
-      toolBase,
-      memoryPrompt,
-      // Hot memory (HOT.md) rides its own config field, NOT prepended into
-      // systemPrompt, so the assembler can place it after the memory
-      // instructions rather than ahead of the # Agent AFK doctrine. Unset for
-      // child sessions (subagents never inject hot memory) → treated as absent.
-      hotMemory: config.hotMemory ?? '',
-      manifest,
+      readOnlyMemory: this.readOnlyMemory,
+      hasSkillExecutor: this.skillExecutor !== undefined,
+      runtimeStateSource,
       userSystem,
     });
-    const toolSystemAppend = assembleSystemPrompt(stableSystemPrefix, cwd, environmentIdentity);
 
     // Dump prompt debug info if AFK_DUMP_PROMPT is set (wired via --dump-prompt CLI flag).
     dumpIfEnabled({
@@ -695,47 +509,15 @@ export class AnthropicDirectProvider implements ModelProvider {
       },
     });
 
-    let tokenRefresher: (() => Promise<Anthropic | null>) | undefined;
-    // In local-server mode, never refresh the keychain OAuth token: a 401 from
-    // the local shim must not cause the SDK to fetch and forward a real
-    // Anthropic credential to a self-hosted endpoint. The placeholder token
-    // path above already prevents this on the initial request; this guard
-    // closes the 401-retry hole.
-    if (authMode === 'oauth' && !localMode) {
-      const factory = this.providerFactory ?? getClientFactory();
-      tokenRefresher = async (): Promise<Anthropic | null> => {
-        const freshToken = await refreshClaudeCodeOauthToken();
-        if (!freshToken) return null;
-        const opts = buildClientOptions(
-          freshToken,
-          'oauth',
-          config.baseUrl,
-          // Preserve throttle observability, the live-banner signal AND quota
-          // capture across an OAuth account swap — the rebuilt client must keep
-          // the same tracing-fetch wrapper wired to the same `throttleQueue` and
-          // the same quota observer. localMode is false in this branch (see the
-          // guard above), so `quotaObserver` is always defined here and the
-          // wrapper installs unconditionally — no trace-writer gate, matching
-          // the primary install site above.
-          makeTracingFetch(
-            config.traceWriter,
-            undefined,
-            throttleQueue ? (info) => throttleQueue.push(info) : undefined,
-            quotaObserver,
-          ),
-        );
-        return factory ? factory(opts) : new Anthropic(opts);
-      };
-    }
-
     // Invariant: this MUST be the same id the presence file advertises, so the
     // Telegram watcher tails the ledger this session actually writes. Sourced
-    // from the single resolution performed above (explicit --resume id wins;
-    // top-level sessions get a memoized mint; forks stay undefined so the query
-    // keeps minting its own id per call). `opts.sessionId` feeds only
-    // `initSessionId` in query.ts — it gates no resume behavior — so supplying
-    // a minted id here is inert apart from making the id known earlier.
-    const resumedSessionId = resolvedSession.id;
+    // from the single resolution performed inside wireQueryDispatcher (explicit
+    // --resume id wins; top-level sessions get a memoized mint; forks stay
+    // undefined so the query keeps minting its own id per call).
+    // `opts.sessionId` feeds only `initSessionId` in query.ts — it gates no
+    // resume behavior — so supplying a minted id here is inert apart from
+    // making the id known earlier.
+    const resumedSessionId = resolvedSessionId;
     const initialMessages = resumeHistoryToMessages(config.resumeHistory);
 
     const cwdDependentsFactory = this.externalTools
