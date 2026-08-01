@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.16] - 2026-08-01
+
+### Fixed
+- make a running subagent legible instead of decorative (#840) (582b5a2)
+
 ## [5.84.15] - 2026-08-01
 
 ### Fixed
