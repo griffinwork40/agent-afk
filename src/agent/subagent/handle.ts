@@ -20,6 +20,7 @@ import { dispatchSubagentStop } from '../subagent-hooks.js';
 import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { IdleWatchdog } from './idle-watchdog.js';
+import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
 import {
   buildResultFromMessage,
   buildResultFromError,
@@ -127,6 +128,15 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    */
   private lastStreamedContent: string = '';
   /**
+   * Pause-aware extension policy for the CURRENT run's wall-clock ceiling.
+   * Created in `run()` (which owns `withTimeout`) but fed from the stream loop
+   * in `streamToFinalMessage`, so — like `lastStreamedContent` — it lives as an
+   * instance field to bridge those two scopes. `undefined` between runs and
+   * whenever no wall-clock budget applies (`timeoutMs <= 0`), in which case
+   * there is no ceiling to extend.
+   */
+  private pauseCeiling: PauseAwareCeiling | undefined;
+  /**
    * The provider's terminal stop reason captured from the most recent run's
    * `done` event (e.g. `'end_turn'`, `'tool_use_loop_capped'`). Persisted as
    * an instance field so `runToResult` can attach it to the built
@@ -197,9 +207,41 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
     this.currentStatus = 'running';
     const startTime = Date.now();
+    // Pause-aware wall-clock ceiling. The ceiling is still un-resettable BY THE
+    // CHILD — only a provider-reported pause (`paused` w/ resetsAt, `rate_limit`
+    // w/ retryAfterMs) can move it, each grant is bounded by that reported
+    // window, and total accumulated extension is capped by
+    // SUBAGENT_MAX_PAUSE_EXTENSION_MS, so worst-case lifetime stays finite and
+    // predictable. Without pause events the extender grants nothing and
+    // withTimeout behaves exactly as before. Skipped entirely when no budget
+    // applies (`timeoutMs <= 0`): there is no ceiling to extend.
+    const pauseCeiling =
+      Number.isFinite(this.timeoutMs) && this.timeoutMs > 0
+        ? new PauseAwareCeiling(this.timeoutMs, SUBAGENT_MAX_PAUSE_EXTENSION_MS, (info) => {
+            // Witness-layer: each non-zero pause extension is now observable in
+            // the trace, not just in the eventual terminal timeout error. Fire-
+            // and-forget so a slow trace write can never delay the deadline
+            // re-arm (mirrors the `idle_watchdog_fired` emit a few lines down).
+            void emitSessionPhase(this.traceWriter, {
+              phase: 'pause_extension_granted',
+              metadata: {
+                subagentId: this.id,
+                grantMs: info.grantMs,
+                totalGrantedMs: info.totalGrantedMs,
+                remainingCapMs: info.remainingCapMs,
+                grantCount: info.grantCount,
+                ...(info.pauseDescription !== undefined && {
+                  pauseDescription: info.pauseDescription,
+                }),
+              },
+            });
+          })
+        : undefined;
+    this.pauseCeiling = pauseCeiling;
     const p = withTimeout(this.streamToFinalMessage(prompt, sinkOverride), this.timeoutMs, {
       controller: this.controller,
       label: this.id,
+      ...(pauseCeiling !== undefined && { extender: pauseCeiling }),
     });
     this.inFlight = p;
     try {
@@ -406,6 +448,11 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // streamed event. This is the ONLY progress signal — a real OutputEvent
         // from the provider loop, never a caller-facing heartbeat.
         idleWatchdog.onEvent(event);
+        // Feed the SAME stream to the wall-clock ceiling's extension policy.
+        // Unlike the idle watchdog it ignores everything except provider pause
+        // signals (`paused`/`rate_limit`/`resumed`), so child output and tool
+        // activity cannot move the ceiling — see PauseAwareCeiling.
+        this.pauseCeiling?.onEvent(event);
 
         if (event.type === 'chunk') {
           const chunk = event.chunk;

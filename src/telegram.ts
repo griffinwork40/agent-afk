@@ -209,7 +209,7 @@ async function main() {
     apiKey: config.apiKey ?? '',
     dataDir: env.TELEGRAM_DATA_DIR || './data/telegram-sessions',
     defaultModel: config.model as AgentModelInput,
-    verbose: env.TELEGRAM_VERBOSE === 'true',
+    verbose: ['1', 'true', 'yes', 'on'].includes((env.TELEGRAM_VERBOSE ?? '').trim().toLowerCase()),
     allowedChatIds,
     tagOnlyChats,
     // Only meaningful for the Anthropic provider — the Codex adapter

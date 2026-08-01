@@ -497,6 +497,30 @@ describe('write-denylist — AFK_HOME-relocated credential tree (#740)', () => {
     );
   });
 
+  // Converse of the case above (#783 follow-up to #753): a malformed AFK_HOME
+  // must not discard the AFK_STATE_DIR entry either. The two `try` blocks in
+  // `derivedAfkHomeWriteEntries` are independent, but only ONE direction was
+  // pinned before this test — an AFK_HOME regression that started throwing
+  // BEFORE the AFK_STATE_DIR derivation (e.g. a shared helper refactor that
+  // merged the two `try`s back into one) would have passed the whole suite
+  // undetected.
+  it('keeps the AFK_STATE_DIR entry when AFK_HOME alone is malformed', () => {
+    const stateDir = join(tmpDir, 'state-d');
+    mkdirSync(stateDir, { recursive: true });
+    vi.stubEnv('AFK_HOME', 'relative/not-absolute');
+    vi.stubEnv('AFK_STATE_DIR', stateDir);
+
+    expect(() => getWriteDenylist()).not.toThrow();
+    // The valid, independently-relocated state dir is still denied…
+    expect(() =>
+      assertNotDenylisted(join(stateDir, 'sessions', 's.json'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+    // …and the hardcoded floor is untouched.
+    expect(() => assertNotDenylisted(sshPath, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
+  });
+
   it('treats an empty AFK_HOME as unset', () => {
     vi.stubEnv('AFK_HOME', '');
 

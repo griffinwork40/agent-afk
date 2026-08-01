@@ -423,7 +423,7 @@ export interface AgentConfig {
    *
    * Writing is the only capability a session needs here. Ending the shared
    * file's life is a separate, non-inherited capability — see
-   * {@link AgentConfig.traceSealOwner}.
+   * {@link AgentConfig.isSubagentFork}.
    */
   traceWriter?: TraceWriter;
 

@@ -200,6 +200,18 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly subagentExecutor: import('../../tools/subagent-executor.js').SubagentExecutor | undefined;
   private readonly composeExecutor: import('../../tools/compose-executor.js').ComposeExecutor | undefined;
   private readonly surface: string;
+  /**
+   * Contract: the surface as DECLARED by the constructor caller — `undefined`
+   * when none was passed. Distinct from {@link surface}, which defaults to
+   * 'cli' because presence advertising mints only for 'cli' and a
+   * default-constructed provider must still advertise (pinned by
+   * `presence-advertise.test.ts` / `presence-lifecycle.test.ts`). Consumers
+   * that must NOT read an unstated surface as interactive use this instead.
+   * The overload pause is one (#762/#764): every forked child is constructed
+   * with no surface, so the 'cli' default would hand headless children the
+   * 10-minute interactive park that fix exists to deny them.
+   */
+  private readonly declaredSurface: string | undefined;
   private readonly readOnlyMemory: boolean;
   /** When true, the per-query dispatcher blocks mutating bash (read-only skill child). */
   private readonly readOnlyBash: boolean;
@@ -312,7 +324,17 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.canUseTool = opts.canUseTool;
     this.subagentExecutor = opts.subagentExecutor;
     this.composeExecutor = opts.composeExecutor;
+    // Invariant: the default must be a NON-interactive surface. Every forked
+    // child's provider is constructed without `surface` (tools/nesting.ts and
+    // providers/index.ts pass only permissions/executors), and this value is
+    // what gates the overload pause (`resolveOverloadPauseCeilingMs` via
+    // index.ts → query.ts → retry-layer.ts). Defaulting to 'cli' gave headless
+    // children the 10-minute interactive park the #762 fix exists to deny them.
+    // Top-level entrypoints all pass `surface` explicitly (chat/bootstrap
+    // 'cli', daemon 'daemon', telegram 'telegram'), so only fork paths and the
+    // unused module singleton observe this default.
     this.surface = opts.surface ?? 'cli';
+    this.declaredSurface = opts.surface;
     this.readOnlyMemory = opts.readOnlyMemory === true;
     this.readOnlyBash = opts.readOnlyBash === true;
     this.customTools = opts.customTools ?? [];
@@ -1024,6 +1046,17 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(config.autoResumeOnUsageLimit !== undefined
         ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
         : {}),
+      // Overload-pause surface gate (#762): reuse the EXISTING surface signal
+      // (the same value stamped as `origin` on session_init_start) rather than
+      // inventing a new one, so a daemon session fails fast on upstream capacity
+      // while an interactive one may park briefly.
+      //
+      // Invariant: this reads `declaredSurface`, NEVER `surface`. `surface`
+      // defaults to 'cli' for presence advertising, and every forked child is
+      // constructed with no surface at all — so reading it would grant headless
+      // children the interactive park this gate exists to deny them (#764).
+      // `resolveOverloadPauseCeilingMs(undefined)` already means "fail fast".
+      surface: this.declaredSurface,
       ...(config.maxToolUseIterations !== undefined
         ? { maxToolUseIterations: config.maxToolUseIterations }
         : {}),
