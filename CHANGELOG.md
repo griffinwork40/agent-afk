@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.9] - 2026-08-01
+
+### Fixed
+- gate orphaned-dir removal on age and content (#794) (#813) (27060bc)
+
 ## [5.84.8] - 2026-08-01
 
 ### Fixed
