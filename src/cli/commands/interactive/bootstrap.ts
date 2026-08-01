@@ -42,20 +42,15 @@ import { formatTrustedSkillCompletion, formatTrustedSkillInFlight } from '../../
 import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js';
 import { emitSubagentCompletion } from './progress-banner.js';
 import { ContextSampler } from '../../context-sampler.js';
-import { SubagentManager } from '../../../agent/subagent.js';
-import { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
+import { wireExecutors } from '../../../agent/session/wire-executors.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub.js';
-import { SkillExecutor } from '../../../agent/tools/skill-executor.js';
-import { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
-import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../../agent/tools/nesting.js';
-import { loadAgentRegistry } from '../../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-direct/index.js';
 import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
-import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
 import { env } from '../../../config/env.js';
@@ -225,32 +220,6 @@ export async function bootstrapSession(
   );
 
   const apiKey = getApiKey();
-  const rootManager = new SubagentManager({
-    apiKey,
-    // Provider source of truth for the fork-time credential fallback: `apiKey`
-    // is `getApiKey()`, which keys off `getModel()` (AFK_MODEL), so the parent
-    // key's provider is `providerForModel(getModel())`. Passing that keeps the
-    // fallback from crossing the provider boundary (see parentProvider).
-    parentModel: getModel(),
-    ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-    // Propagate the worktree cwd (when `afk i --worktree` set it) into every
-    // forked subagent so their tool handlers' resolveBase + readRoots anchor
-    // to the worktree, not the Node host's process.cwd(). Without this,
-    // subagents resolve relative paths like `src/foo.ts` against the parent
-    // repo and the `read_file` handler returns parent-repo contents instead
-    // of the worktree's. Mirrors `chat.ts:163` for the one-shot path.
-    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-    // Witness layer: manager-level writer so `agent`-tool forks (which never
-    // set config.traceWriter) still emit subagent_lifecycle events and hand
-    // the writer to their handles. Skill forks already thread it via
-    // SkillExecutorContext; this closes the same gap for raw agent dispatch.
-    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-    // Origin attribution: the REPL is a `cli` entrypoint. Threading the surface
-    // into the manager makes forked `agent`-tool children inherit origin 'cli'
-    // (not 'unknown') via forkSubagent's parentSurface fill — mirrors the
-    // traceWriter/cwd inheritance above and farm.ts. See session-identity.ts.
-    surface: 'cli',
-  });
   // Witness layer: trace writer is now live — emit the bootstrap_start marker.
   // (Total bootstrap span is reported by bootstrap_done, measured from the
   // function-entry timestamp captured above.)
@@ -278,16 +247,6 @@ export async function bootstrapSession(
   bgSummarizer?.start();
   setBgsubSummarizer(bgSummarizer);
 
-  // Pass openaiBaseUrl so OpenAI-routed children point at the configured
-  // local shim (mlx_lm.server, Ollama, vLLM, llama.cpp, LM Studio) instead
-  // of api.openai.com. The factory itself routes per-call between
-  // AnthropicDirect / OpenAICompatible by `providerForModel(model)`.
-  const childProviderFactory = createChildProviderFactory(
-    cliConfig.openaiBaseUrl !== undefined
-      ? { openaiBaseUrl: cliConfig.openaiBaseUrl }
-      : {},
-  );
-
   // External constraint: deferredParent reads through sessionRef.current so
   // a mid-session swap (mutating sessionRef.current) is transparent to all
   // child executors — they hold a reference to this proxy object, which
@@ -306,19 +265,6 @@ export async function bootstrapSession(
     get hookRegistry() { return sessionRef.current?.hookRegistry; },
   };
 
-  // Shared child-skill-executor factory — both SubagentExecutor and
-  // SkillExecutor need it for plugin skill children to nest properly.
-  // See skill-executor.ts:buildForkedChildConfig for the wiring rationale.
-  // traceWriter propagates so depth>0 skill forks remain visible in the
-  // witness trace (otherwise nested skill→skill chains go invisible after
-  // the first hop).
-  // backgroundRegistry propagates so a plugin/registry skill whose subagent
-  // calls `agent` with `mode:"background"` (the SKILL.md "Dispatch N
-  // sub-agents in parallel" idiom) reaches the registry through every
-  // depth — root → skill-forked child → skill-forked grandchild. Without
-  // this, the dispatch fast-fails with a 163-byte "BackgroundAgentRegistry
-  // is not wired" error after ~24ms (no model call).
-
   // Bootstrap warnings that must outlive the startup screen clear. Everything
   // written to stdout/stderr from here until `interactive.ts` finishes clearing
   // is destroyed — `\x1b[3J` erases scrollback, not just the viewport — so
@@ -333,154 +279,48 @@ export async function bootstrapSession(
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
-  // Named-agent registry: session-static scan (builtin + user ~/.afk/agents
-  // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch
-  // on the `agent` tool at every depth of this REPL session.
-  //
-  // `warn` is routed into bootWarnings rather than left to default: the
-  // built-in-shadow warning (an agent file replacing a tool-restricted builtin
-  // like `research-agent`) is a safety signal, and the default writer prints
-  // straight to stderr where the clear eats it.
-  const agentRegistry = loadAgentRegistry({
-    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-    pluginAgents: discoverPluginAgents(),
-    warn: (message: string) => bootWarnings.push(message),
-  });
-
-  const childSkillExecutorFactory = createChildSkillExecutorFactory(
-    sessionModel,
-    apiKey,
-    childProviderFactory,
-    cliConfig.baseUrl,
-    trace?.writer,
-    backgroundRegistry,
-    // Worktree cwd propagates into every depth of the skill-executor chain
-    // (grandchild SkillExecutor → its per-call SubagentManager → forked
-    // subagent config). Without this, depth ≥ 1 skill children silently
-    // lose worktree isolation. `effectiveCwd` also carries a resumed
-    // session's restored cwd (see resolveResumeCwd above).
-    effectiveCwd,
-    // Per-model credential resolver: resolves credentials by child model
-    // rather than forwarding the parent's captured apiKey — fixes Anthropic
-    // children starving when the main model is OpenAI-routed.
-    getApiKeyForModel,
-    // Surface: REPL skill executor children inherit origin 'cli'.
-    'cli',
-    // Resolved default-subagent model threaded into nested skill executors so
-    // skill→skill / skill→agent chains inherit the SAME policy as the top-level
-    // executors below — closing the leak where a nested subagent silently
-    // defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
-    getDefaultSubagentModel(sessionModel),
-    // Named-agent registry propagates to nested skill executors.
-    agentRegistry,
-    // OpenAI endpoint → nested restricted/depth-cap provider builders.
-    cliConfig.openaiBaseUrl,
-  );
-
-  // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
-  // parents (gpt-*, o*, codex-*, HF-style `org/model`) default to the
-  // parent model for dispatched subagents — preventing the legacy
-  // `'sonnet'` literal from silently routing local-only sessions to
-  // api.anthropic.com. Claude parents still default to 'sonnet'.
-  const subagentExecutor = new SubagentExecutor({
-    subagentManager: rootManager,
-    parentSession: deferredParent,
-    // Session origin for routing-decision telemetry (REPL → cli).
+  // Invariant: ONE root manager per session, shared by all three executors.
+  // Constructed here (not earlier) so it can be created together with the
+  // executors that close over it; the SubagentManager constructor is pure —
+  // it emits no trace events — so this placement does not reorder the
+  // witness trace relative to `bootstrap_start` above.
+  const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+    // Origin attribution: the REPL is a `cli` entrypoint, so forked children
+    // inherit origin 'cli' (not 'unknown'). See session-identity.ts.
     surface: 'cli',
-    defaultConfig: {
-      apiKey,
-      systemPrompt: basePrompt,
-      ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-      ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
-    },
+    parentSession: deferredParent,
+    apiKey,
+    model: sessionModel,
+    // `apiKey` is getApiKey(), which keys off getModel() (AFK_MODEL), so the
+    // manager's credential-fallback provider must be derived from THAT model —
+    // not the possibly-resumed session model — or the fallback can cross the
+    // provider boundary.
+    managerParentModel: getModel(),
+    // OpenAI-routed parents default dispatched subagents to the parent model
+    // rather than the legacy `'sonnet'` literal, which would silently route
+    // local-only sessions to api.anthropic.com. Claude parents still get 'sonnet'.
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
-    childProviderFactory,
-    childSkillExecutorFactory,
-    backgroundRegistry,
-    // Per-model credential resolver: resolves credentials by child model
-    // at fork time — fixes Anthropic children starving when main is OpenAI.
     resolveApiKeyForModel: getApiKeyForModel,
-    // Top-level CLI wiring → explicit depth 0. See SubagentExecutorContext.depth
-    // jsdoc for why this is required rather than defaulted.
-    depth: 0,
-    // Worktree isolation for depth ≥ 2 `agent` dispatch — `rootManager`
-    // already carries cwd for depth-1, but the per-call childManager
-    // constructed inside SubagentExecutor.execute() needs cwd too.
-    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-    // Named-agent dispatch: registry + the session model as the `inherit`
-    // anchor for named-agent model resolution.
-    agentRegistry,
-    parentModel: sessionModel,
-    // Witness layer: thread the writer so depth ≥ 2 `agent` forks (nested
-    // child managers built inside execute()) stay visible in the trace.
-    // Depth-1 forks are covered by rootManager's traceWriter above.
-    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-  });
-
-  const skillExecutor = new SkillExecutor({
-    parentSession: deferredParent,
-    // Session origin for skill-invocation + routing telemetry (REPL → cli).
-    surface: 'cli',
-    defaultModel: sessionModel,
-    defaultSubagentModel: getDefaultSubagentModel(sessionModel),
-    apiKey,
-    childProviderFactory,
-    childSkillExecutorFactory,
-    // Named-agent registry for skill-forked orchestrator children.
-    agentRegistry,
-    // Background dispatch: a plugin skill's subagent calling `agent` with
-    // `mode:"background"` is the SKILL.md "Dispatch N sub-agents in parallel"
-    // idiom — `/research`, `/diagnose`, `/shadow-verify`, etc. The registry
-    // must be forwarded into every SubagentExecutor in the chain (root
-    // executor → forked child → forked grandchild) via
-    // SkillExecutorContext.backgroundRegistry → buildForkedChildConfig.
-    // Sibling to the SubagentExecutor wiring above.
-    backgroundRegistry,
+    // Raw base prompt (pre-assembly): children and compose nodes stay task
+    // workers, without ROUTING_DIRECTIVE / TOOL_SYSTEM_PROMPT.
+    ...(basePrompt !== undefined ? { systemPrompt: basePrompt } : {}),
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
-    // Per-model credential resolver — mirrors SubagentExecutor wiring above.
-    resolveApiKeyForModel: getApiKeyForModel,
-    // Witness layer: without this, skill-forked subagents (every /review,
-    // /diagnose, /shadow-verify, etc.) emit zero trace events, making
-    // subagent failures undebuggable from disk.
-    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-    // Worktree isolation: skills invoked via the `skill` tool spawn their
-    // subagents through a per-call SubagentManager constructed inside the
-    // executor. Without forwarding cwd here, every `/diagnose`, `/mint`,
-    // etc. runs its first-tier subagents against the host repo even when
-    // `--worktree` was set.
-    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-    // Read-scope inheritance (#547): skill-forked children inherit the parent
-    // session's read scope via the root manager — symmetric with the `agent`
-    // tool (subagentManager: rootManager above). Read fresh so mid-session
-    // setCwd re-anchors are reflected.
-    getReadScopeInputs: () => rootManager.getReadScopeInputs(),
+    // Worktree cwd (`afk i --worktree`, or a resumed session's restored cwd)
+    // propagates to every depth so subagents' resolveBase + readRoots anchor
+    // to the worktree, not the Node host's process.cwd().
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd, nestedCwd: effectiveCwd } : {}),
+    ...(trace?.writer !== undefined
+      ? { traceWriter: trace.writer, skillTraceWriter: trace.writer }
+      : {}),
+    // Background dispatch (`agent` with mode:"background") is REPL-only; the
+    // registry must reach every depth of the skill/agent fork chain.
+    backgroundRegistry,
+    // `warn` routes into bootWarnings rather than stderr: the built-in-shadow
+    // warning is a safety signal and the startup screen clear eats stderr.
+    agentRegistryWarn: (message: string) => bootWarnings.push(message),
   });
 
-  // Pass the raw base prompt (pre-assembly) so compose subagents do not
-  // inherit ROUTING_DIRECTIVE or TOOL_SYSTEM_PROMPT — keeping them as
-  // task workers that cannot spawn nested DAGs or recurse into skills.
-  // Mirrors the SubagentExecutor defaultConfig.systemPrompt convention.
-  const composeExecutor = new ComposeExecutor({
-    parentSession: deferredParent,
-    defaultModel: sessionModel,
-    defaultSubagentModel: getDefaultSubagentModel(sessionModel),
-    apiKey,
-    // Per-model credential resolver — mirrors #640 for the compose fork-path.
-    resolveApiKeyForModel: getApiKeyForModel,
-    // Read-scope inheritance (#547): DAG nodes inherit the parent session's
-    // read scope via the root manager, symmetric with the `agent`/`skill` tools.
-    getReadScopeInputs: () => rootManager.getReadScopeInputs(),
-    ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-    // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
-    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-    systemPrompt: basePrompt ?? '',
-    // Session identity for routing-decision rows (REPL → cli).
-    surface: 'cli',
-    depth: 0,
-    // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
-    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-  });
 
   const sharedMemoryStore = new MemoryStore();
 
