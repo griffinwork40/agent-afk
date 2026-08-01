@@ -4,13 +4,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam } from '@anthropic-ai/sdk/resources';
+import { runTurn } from './loop.js';
 import {
-  runTurn,
   isTransientServerError,
   isOverloadedErrorEvent,
   OVERLOAD_MAX_RETRIES,
   STREAM_INCOMPLETE_MAX_RETRIES,
-} from './loop.js';
+} from './loop/retry-budget.js';
 import { OVERLOAD_EXHAUSTED } from './overload-pause.js';
 import type { AnthropicClientLike } from './types.js';
 import {

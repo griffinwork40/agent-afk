@@ -34,12 +34,10 @@ import type {
 import type { ProviderEvent, ProviderUsage } from '../../provider.js';
 import type {
   AnthropicMessagesCreateParams,
-  AnthropicToolDef,
   RunTurnInput,
   ToolCall,
   ToolResult,
   TurnResult,
-  WireToolDef,
 } from './types.js';
 import { sumProviderUsage, toProviderUsage } from './types.js';
 import {
@@ -82,86 +80,21 @@ import {
   OVERLOAD_EXHAUSTED_NOTICE,
   jitterBackoff,
 } from './overload-pause.js';
+import {
+  OVERLOAD_BASE_DELAY_MS,
+  OVERLOAD_MAX_RETRIES,
+  STREAM_INCOMPLETE_BASE_DELAY_MS,
+  STREAM_INCOMPLETE_MAX_RETRIES,
+  isOverloadedErrorEvent,
+  isTransientServerError,
+} from './loop/retry-budget.js';
+import { toWireTool } from './loop/round-request.js';
+import { dumpThinkingDiagnostic } from './loop/thinking-diagnostic.js';
 
 // Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
 // source of truth shared with openai-compatible). Kept exported here so
 // existing importers (loop.test.ts) resolve unchanged.
 export { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
-
-/**
- * Project an internal {@link AnthropicToolDef} to the wire-safe shape the
- * Anthropic Messages API actually accepts. Strips internal classification
- * metadata (`category`, `concurrencySafe`, `riskClass`) that would otherwise
- * trip a 400 `tools.0.custom.<field>: Extra inputs are not permitted` on
- * `messages.create`.
- *
- * The wire boundary type (`AnthropicMessagesCreateParams.tools: WireToolDef[]`)
- * forces every call site to go through a projection like this one — keep it
- * that way.
- */
-export function toWireTool(tool: AnthropicToolDef): WireToolDef {
-  const { name, description, input_schema } = tool;
-  return {
-    name,
-    ...(description !== undefined ? { description } : {}),
-    input_schema,
-  };
-}
-
-export const OVERLOAD_MAX_RETRIES = 3;
-const OVERLOAD_BASE_DELAY_MS = 5_000;
-
-// Bounded re-drive for a mid-stream CLEAN close — a `StreamIncompleteError`
-// that translate.ts surfaces as an in-band error event when the SSE stream
-// ended with NEITHER a `message_stop` NOR a `stop_reason` AFTER content had
-// already streamed (an intermediary proxy/gateway/LB dropped the connection
-// mid-generation; the raw SDK stream ends without throwing). This is distinct
-// from both existing retry classes: not a TTFB stall (a first byte WAS seen,
-// so the stall timer never fires) and not an overload (no `overloaded_error`
-// / 529), so without this branch it falls straight through to the fatal path.
-//
-// Kept LOW (below OVERLOAD_MAX_RETRIES = 3): each failed attempt burns a
-// partial — often long — generation before the cut, so a retry costs far more
-// here than a fast 529 rejection. Two attempts rescue the common transient
-// blip while capping wasted token/latency spend on a deterministic
-// (too-long-for-the-proxy) cut; the companion default-subagent contract (write
-// bulk output to files, keep the final message short) shrinks the generation
-// so these retries stay cheap. The delay is short (1s → 2s, not overload's
-// 5s/10s/20s): a dropped connection is not a server-overload signal, so we
-// reconnect promptly while still avoiding a tight loop against a flapping
-// intermediary.
-export const STREAM_INCOMPLETE_MAX_RETRIES = 2;
-const STREAM_INCOMPLETE_BASE_DELAY_MS = 1_000;
-
-export function isTransientServerError(err: Error): boolean {
-  if (!('status' in err)) return false;
-  const status = (err as Error & { status: number }).status;
-  return status === 529 || status === 503;
-}
-
-/**
- * Detect a transient Anthropic *overload* delivered as a **mid-stream** SSE
- * `error` event. A connection-phase 529 carries a real HTTP `status` (handled
- * by {@link isTransientServerError} inside {@link createWithRetry}); a
- * mid-stream overload is different — the SDK throws it from inside the stream
- * iterator as `new APIError(undefined, <parsed SSE body>, …)`, so `status` is
- * `undefined` and the only signal is the parsed body's nested
- * `error.type === 'overloaded_error'`. translate.ts converts that throw into an
- * in-band `{type:'error', error}` event whose `error` IS the APIError, so this
- * predicate inspects the (usually absent) status AND the nested SSE body in
- * both its double-nested (`{type:'error', error:{type:'overloaded_error'}}`)
- * and flat (`{type:'overloaded_error'}`) shapes.
- */
-export function isOverloadedErrorEvent(err: unknown): boolean {
-  if (err === null || typeof err !== 'object') return false;
-  const e = err as { status?: unknown; error?: unknown };
-  if (e.status === 529 || e.status === 503) return true;
-  const body = e.error;
-  if (body === null || typeof body !== 'object') return false;
-  const b = body as { type?: unknown; error?: { type?: unknown } | null };
-  const innerType = (b.error !== null && typeof b.error === 'object' ? b.error.type : undefined) ?? b.type;
-  return innerType === 'overloaded_error';
-}
 
 // `requestSignal` is passed to `messages.create` — it is the caller's turn
 // signal chained with the per-request TTFB stall timer (see armFirstByteTimeout),
@@ -1379,40 +1312,5 @@ export async function* runTurn(
       phase: 'loop_end',
       durationMs: Date.now() - loopStartTime,
     });
-  }
-}
-
-function dumpThinkingDiagnostic(messages: MessageParam[], error: Error): void {
-  try {
-    const offending: Array<{ msgIdx: number; blockIdx: number; thinking: string; sigLen: number }> = [];
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]!;
-      if (msg.role !== 'assistant' || typeof msg.content === 'string') continue;
-      const blocks = msg.content as ContentBlockParam[];
-      for (let j = 0; j < blocks.length; j++) {
-        const b = blocks[j]!;
-        if ((b as { type: string }).type === 'thinking') {
-          const tb = b as { thinking?: string; signature?: string };
-          if (!tb.thinking || !tb.signature) {
-            offending.push({
-              msgIdx: i,
-              blockIdx: j,
-              thinking: tb.thinking ? `(${tb.thinking.length} chars)` : '(empty)',
-              sigLen: tb.signature?.length ?? 0,
-            });
-          }
-        }
-      }
-    }
-    console.error(
-      '[afk] thinking-block diagnostic — API rejected request with:',
-      error.message,
-    );
-    console.error(
-      `[afk]   messages.length=${messages.length}, invalid thinking blocks:`,
-      offending.length > 0 ? JSON.stringify(offending) : 'none found (cause may be elsewhere)',
-    );
-  } catch {
-    // diagnostic must never throw
   }
 }
