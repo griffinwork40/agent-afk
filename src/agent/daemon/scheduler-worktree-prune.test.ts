@@ -139,10 +139,15 @@ describe('builtin worktree-prune across multiple roots', () => {
       .mockRejectedValueOnce(new Error('fatal: not a git repository'))
       .mockResolvedValueOnce(sweepResult());
 
-    const { excerpt } = await tickPrune();
+    const { excerpt, errorMessage } = await tickPrune();
 
     // One warning, and it is the synthesized [ERROR] line for the bad root.
     expect(excerpt).toContain('warned 1');
+    // A PARTIAL failure stays `success` and carries no errorMessage — only a
+    // tick where every root failed is a systemic one. Without this, an
+    // over-broad gate on the error branch would go unnoticed. (`tickPrune`
+    // normalizes an absent field to '', so that is the assertion here.)
+    expect(errorMessage).toBe('');
   });
 
   it('still errors the tick if every root fails', async () => {
@@ -155,8 +160,16 @@ describe('builtin worktree-prune across multiple roots', () => {
     // and must not report as healthy (src/insights/aggregators/daemon.ts only
     // tallies errorCount/recentErrors off status === 'error').
     expect(status).toBe('error');
-    expect(errorMessage).toContain('/repo/a');
-    expect(errorMessage).toContain('/repo/b');
+    expect(errorMessage).toContain('2 root(s) failed sweep');
+    // Basenames only. errorMessage is PERSISTED to a telemetry file written
+    // with a bare appendFileSync (umask ⇒ world-readable) and is forwarded
+    // into a Telegram push body, so it must never enumerate the absolute path
+    // of every repo the operator works in — the registry file is 0o600 for
+    // exactly that reason. Full paths stay in the unpersisted warnings.
+    expect(errorMessage).toContain('a: ');
+    expect(errorMessage).toContain('b: ');
+    expect(errorMessage).not.toContain('/repo/a');
+    expect(errorMessage).not.toContain('/repo/b');
     // The excerpt (candidate/removal summary) is unchanged by this fix — both
     // failures are still visible as warnings against 0 swept roots.
     expect(excerpt).toContain('warned 2');

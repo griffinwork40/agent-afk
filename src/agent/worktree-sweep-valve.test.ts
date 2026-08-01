@@ -33,6 +33,19 @@ describe('readRootSweepCount', () => {
     });
   });
 
+  it('returns null when .afk-worktrees exists as a FILE, not a directory', async () => {
+    await withTempRepo(async (root) => {
+      // ENOTDIR, not ENOENT — but semantically identical to "absent": there is
+      // no directory for managed worktrees to live in, so this root has
+      // nothing for the sweep to do and the legacy fallback is correct.
+      // Forcing previews here would pin a root that can never have work.
+      await fs.writeFile(join(root, '.afk-worktrees'), 'not a directory', 'utf-8');
+
+      const result = await readRootSweepCount(root);
+      expect(result).toBeNull();
+    });
+  });
+
   it('forces a preview (returns 0) when .afk-worktrees/ exists but the marker is a directory, not a file', async () => {
     await withTempRepo(async (root) => {
       // A directory at the marker's path makes both the read AND the write

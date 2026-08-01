@@ -254,15 +254,26 @@ export async function readRegisteredWorktreeRoots(): Promise<string[]> {
   const entries = await readEntries();
   if (entries.length === 0) return [];
 
-  const { alive, dead } = await classifyRootLiveness(entries);
+  const { alive, dead, duplicates } = await classifyRootLiveness(entries);
 
-  if (dead.size > 0) {
-    // Self-heal, expressed as "drop exactly these dead paths" rather than
-    // "overwrite with the list I just computed". The classify pass above is
-    // not inside the lock, so a concurrent registerWorktreeRoot may have
-    // added a root since; a wholesale overwrite would silently discard it.
-    // `dead` holds only CONFIRMED-dead paths (never the retained-unknown
-    // class), so this transform cannot delete a retained-unknown entry.
+  // Invariant: two independent reasons fire this write, and both must gate it.
+  // `dead.size > 0` drops confirmed-dead paths. `duplicates` covers a registry
+  // holding duplicate-but-LIVE entries (one path registered twice, e.g. once
+  // with a trailing slash): nothing to prune, but something to collapse —
+  // without it such a file never self-heals, the duplicates persist forever,
+  // and they count twice against `MAX_ROOTS` in `capRoots`, so a duplicate can
+  // evict a live root. `alive.length !== entries.length` must NOT be used as
+  // the second clause: it is also true whenever an entry lands in the
+  // retained-unknown class, which would rewrite the file on every read for as
+  // long as a root stays unreadable.
+  if (dead.size > 0 || duplicates) {
+    // Self-heal, expressed as "drop exactly these dead paths, then
+    // de-duplicate" rather than "overwrite with the list I just computed".
+    // The classify pass above is not inside the lock, so a concurrent
+    // registerWorktreeRoot may have added a root since; a wholesale overwrite
+    // would silently discard it. `dead` holds only CONFIRMED-dead paths
+    // (never the retained-unknown class), so this transform cannot delete a
+    // retained-unknown entry.
     await mutateRegistry((current) => {
       // Built fresh per invocation: a `kept` set closed over from outside would
       // already be full if the transform were ever applied a second time, and

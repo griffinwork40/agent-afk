@@ -45,6 +45,7 @@ import {
   type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
+import { summarizeRootFailures } from './root-failure-summary.js';
 
 // Promisified once at module scope — the daemon's builtin worktree-prune task
 // reuses the same node:child_process exec function on every tick; there is no
@@ -512,6 +513,12 @@ export class CronScheduler {
       // lock, so parallel roots would just contend and the losers short-circuit.
       const results: SweepResult[] = [];
       const rootFailures: string[] = [];
+      // Parallel to rootFailures, but holding the structured (repoRoot, reason)
+      // pair instead of a pre-joined string — the compact errorMessage below
+      // needs `basename(repoRoot)` alone, not the full path baked into the
+      // rootFailures line. `reason` is redacted exactly once, here, and reused
+      // for both channels below.
+      const rootFailureDetails: Array<{ repoRoot: string; reason: string }> = [];
       for (const repoRoot of roots) {
         try {
           results.push(await runSweep({
@@ -524,10 +531,9 @@ export class CronScheduler {
             telemetryPath: this.telemetryPath(),
           }));
         } catch (err) {
-          rootFailures.push(
-            `[ERROR] sweep failed for ${repoRoot}: ` +
-            redactInlineSecrets(err instanceof Error ? err.message : String(err)),
-          );
+          const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+          rootFailures.push(`[ERROR] sweep failed for ${repoRoot}: ${reason}`);
+          rootFailureDetails.push({ repoRoot, reason });
         }
       }
       const result = {
@@ -574,9 +580,12 @@ export class CronScheduler {
               ...baseRecord,
               durationMs: this.now() - startTimeMs,
               status: 'error',
-              // rootFailures entries are already redacted at push time (line
-              // ~529) — redacting again would be a no-op at best.
-              errorMessage: rootFailures.join('; '),
+              // Compact + non-enumerating — see summarizeRootFailures' own
+              // doc comment for why this must never be rootFailures.join(),
+              // which embeds every failing root's absolute path.
+              // rootFailureDetails' `reason` is already redacted at push time
+              // (in the loop above) — redacting again would be a no-op.
+              errorMessage: summarizeRootFailures(rootFailureDetails),
               responseExcerpt: summary,
             }
           : {

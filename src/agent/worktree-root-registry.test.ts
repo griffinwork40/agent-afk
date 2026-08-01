@@ -145,6 +145,36 @@ describe('readRegisteredWorktreeRoots', () => {
     // Error cleared — the root reappears with no re-registration required.
     expect(await readRegisteredWorktreeRoots()).toEqual([flaky]);
   });
+
+  it('collapses duplicate-but-live entries on read, with nothing dead to prune', async () => {
+    // The self-heal write must fire for TWO reasons, not one. Gating it on
+    // "something is dead" alone leaves a file holding the same path twice
+    // (e.g. an entry stored with a trailing slash) un-healed forever, and
+    // duplicates count twice against MAX_ROOTS in capRoots — so a duplicate
+    // can evict a live root. Written directly to disk because
+    // registerWorktreeRoot() de-duplicates on the way in.
+    const repo = await mkRepo('dup');
+    const now = new Date().toISOString();
+    await fs.mkdir(dirname(getWorktreeRootsRegistryPath()), { recursive: true });
+    await fs.writeFile(
+      getWorktreeRootsRegistryPath(),
+      JSON.stringify({
+        version: 1,
+        roots: [
+          { path: `${repo}/`, lastSeenAt: now },
+          { path: repo, lastSeenAt: now },
+        ],
+      }),
+      'utf-8',
+    );
+
+    expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
+
+    const onDisk = JSON.parse(
+      await fs.readFile(getWorktreeRootsRegistryPath(), 'utf-8'),
+    ) as { roots: Array<{ path: string }> };
+    expect(onDisk.roots.map((r) => r.path)).toEqual([repo]);
+  });
 });
 
 describe('sweepRootSet', () => {
