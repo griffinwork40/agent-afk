@@ -7,7 +7,7 @@
  */
 
 import { readdirSync, promises as fsp, type Dirent } from 'fs';
-import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
+import { list as listSlashCommands, aliasEntries, lookup } from '../slash/registry.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import type { Candidate, Trigger } from './types.js';
 import type { SlashCommand } from '../slash/types.js';
@@ -57,7 +57,10 @@ export function detectTrigger(buffer: string, cursorCol: number): Trigger | null
   if (flagMatch) {
     const commandName = flagMatch[1]!;
     const query = flagMatch[2]!;
-    const cmd = listSlashCommands().find((c) => c.name === `/${commandName}`);
+    // Resolve via the alias-aware registry lookup so that aliased commands
+    // (e.g. /add-dir → /allow-dir) also trigger flag completion when the user
+    // types the alias followed by `--`.
+    const cmd = lookup(`/${commandName}`);
     if (cmd?.flags && cmd.flags.length > 0) {
       return { kind: 'flag', command: commandName, query };
     }
@@ -315,7 +318,9 @@ export function filterFileCandidates(
  * the raw token also work.
  */
 export function filterFlagCandidates(command: string, query: string): Candidate[] {
-  const cmd = listSlashCommands().find((c) => c.name === `/${command}`);
+  // Resolve through the alias-aware lookup so flag completion works when the
+  // caller passes an alias (e.g. `add-dir`) rather than the canonical name.
+  const cmd = lookup(`/${command}`);
   if (!cmd?.flags || cmd.flags.length === 0) return [];
   const needle = query.startsWith('--') ? query.slice(2) : query;
   const matches = cmd.flags
