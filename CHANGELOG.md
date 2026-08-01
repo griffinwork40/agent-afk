@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.10] - 2026-08-01
+
+### Changed
+- split scrollback logic out of terminal-compositor.types.ts (#826) (#836) (7347dae)
+
 ## [5.84.9] - 2026-08-01
 
 ### Fixed
