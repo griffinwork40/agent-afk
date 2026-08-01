@@ -1,12 +1,8 @@
 import { palette } from '../palette.js';
 import { pickRandomVerb, pickRandomGoblinVerb } from '../constants.js';
 import { buildTipPool, selectTip } from '../loading-tips.js';
-import {
-  SPINNER_FRAMES,
-  formatElapsed,
-  formatTipRow,
-  type SpinnerState,
-} from '../terminal-compositor.types.js';
+import { SPINNER_FRAMES, type SpinnerState } from '../terminal-compositor.types.js';
+import { formatElapsed, formatTipRow } from '../terminal-compositor.scrollback.js';
 
 export interface SpinnerControllerOptions {
   /**

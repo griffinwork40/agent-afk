@@ -20,7 +20,7 @@ import type {
   KeyInfo,
   LogUpdateFn,
 } from './terminal-compositor.types.js';
-import { scrollbackFlushLines, buildScrollbackArchiveEscape } from './terminal-compositor.types.js';
+import { scrollbackFlushLines, buildScrollbackArchiveEscape } from './terminal-compositor.scrollback.js';
 import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import type { KeyDispatchHost } from './terminal-compositor.input-dispatch.js';
 
