@@ -62,6 +62,21 @@ jobs:
       - name: Audit chalk discipline (no raw chalk styling outside the palette)
         run: pnpm audit:chalk:check
 
+      - name: Audit vendored/bundled hash pins are unstale (#775)
+        # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
+        # vendored/bundled files on disk and independently re-derives, via its
+        # own regex parser, whether the pin recorded in vendored.test.ts /
+        # bundled.test.ts still matches — deterministic, no network. This is a
+        # second implementation of the same local-drift check vendored.test.ts /
+        # bundled.test.ts already assert in the `test` job below, so it does not
+        # add new local-drift detection power; it closes the narrower literal
+        # defect #775 reported: the script self-documented as "CI gate" (see its
+        # own header) yet ran in no workflow. It does NOT verify the vendored
+        # files are still byte-equal to the *upstream* private plugin repo —
+        # that needs network + a read-only credential and is out of scope here
+        # (see #775 for the scheduled-workflow option that would close it).
+        run: pnpm fix:pins:check
+
       - name: Audit dependency CVEs (critical severity in prod deps)
         # Gates on critical-severity CVEs in production dependencies only, via
         # `scripts/audit-deps.ts` (wraps `pnpm audit --audit-level=critical --prod`).

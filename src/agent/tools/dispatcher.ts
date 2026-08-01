@@ -47,6 +47,11 @@ import {
   SUSPECTED_LOOP_WINDOW_SIZE,
   type SuspectedLoopWindow,
 } from './suspected-loop-detector.js';
+import {
+  REPEAT_FAILURE_REFUSAL_THRESHOLD,
+  RepeatFailureGuard,
+  repeatFailureFingerprint,
+} from './repeat-failure-guard.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -275,6 +280,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * dispatcher reconstruction. See {@link checkRepeatCircuitBreaker}.
    */
   private repeatBreaker: { fingerprint: string; count: number } | null = null;
+
+  /**
+   * Enforcing failure-streak guard (#723). Separate from `repeatBreaker` above:
+   * that one nudges on byte-identical calls regardless of outcome, this one
+   * refuses execution after consecutive FAILURES of the same normalized call.
+   */
+  private readonly repeatFailureGuard = new RepeatFailureGuard();
 
   /**
    * Denial circuit breaker state (#546). Counts CONSECUTIVE path-approval READ
@@ -627,6 +639,30 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
+   * Enforcing repeat-FAILURE guard (#723). Returns a refusal — and emits the
+   * telemetry the issue requires — when this exact call has already failed
+   * REPEAT_FAILURE_REFUSAL_THRESHOLD times in a row. Honours the same
+   * exempt-tool list as the advisory breaker, so a tool whose repeated identical
+   * calls are legitimate is never refused either.
+   */
+  private checkRepeatFailureGuard(call: ToolCall): ToolResult | null {
+    if (REPEAT_BREAKER_EXEMPT_TOOLS.has(call.name)) return null;
+    const verdict = this.repeatFailureGuard.check(call);
+    if (verdict === null) return null;
+    // Measurement (#723 requires the behaviour be observable) rides the
+    // EXISTING per-call `tool_call` trace event via `failureClass:
+    // 'repeat-failure'`, which `src/improve/scan/detectors/tool-failure-density.ts`
+    // already consumes. Deliberately no new `session_phase` name: that union is
+    // closed in two places (trace/types.ts + the hand-listed zod enum in
+    // trace/events.ts), and this file's own output-cap comment records the
+    // precedent that widening it for a diagnostic is out of scope.
+    debugLog(
+      `[repeat-failure-guard #723] refused ${verdict.tool} after ${verdict.count} identical failures`,
+    );
+    return verdict.result;
+  }
+
+  /**
    * OBSERVE-ONLY suspected-loop telemetry (see
    * {@link import('./suspected-loop-detector.js')}). Pushes this call's
    * normalized fingerprint into the per-dispatcher sliding window and, on the
@@ -835,6 +871,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const repeatBlock = this.checkRepeatCircuitBreaker(call);
     if (repeatBlock) return repeatBlock;
 
+    // 2c-bis. Enforcing repeat-FAILURE guard (#723). Unlike the advisory
+    // breaker above, this one stops execution: a call that has already failed
+    // identically N times is refused with the prior error quoted back.
+    const failureRefusal = this.checkRepeatFailureGuard(call);
+    if (failureRefusal) return failureRefusal;
+
     // 2d. OBSERVE-ONLY suspected-loop telemetry (forked children only). Records
     // the fingerprint and emits a `suspected_loop` trace signal on first
     // recurrence past threshold. Pure observability — never blocks, never
@@ -849,6 +891,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // PostToolUse firing); the duplicate only added drift risk with no
     // behavioral difference, so the single-call path now delegates too.
     const coreResult = await this.executeCore(call);
+    this.repeatFailureGuard.note(call, coreResult);
     // Reset-on-success: a completed (non-error) tool call is progress, so the
     // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
     if (coreResult.isError !== true) this.resetDenialBreaker();
@@ -956,6 +999,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
         continue;
       }
 
+      // Enforcing repeat-FAILURE guard (#723). Same placement rationale as
+      // execute() step 2c-bis, on the sequential phase-1 path so the streak
+      // reflects real call order.
+      const batchFailureRefusal = this.checkRepeatFailureGuard(call);
+      if (batchFailureRefusal) {
+        results[i] = batchFailureRefusal;
+        blocked.add(i);
+        continue;
+      }
+
       // OBSERVE-ONLY suspected-loop telemetry (forked children only). Same
       // placement as execute() step 2d — after the repeat breaker, on the
       // sequential phase-1 path so the fingerprint window sees every
@@ -987,52 +1040,82 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // when call[0] is stale, and falsely dispatching aborted calls when
       // call[0] is fresh. See the parallel-branch parity below.
       if (batch.isConcurrencySafe) {
-        // Bounded concurrency: at most `this.maxConcurrentSafeCalls` of these
-        // safe calls (which include agent/skill/compose subagent forks) run at
-        // once, so a wide fan-out cannot exhaust memory or storm the provider
-        // rate limit. Within the cap this is identical to Promise.allSettled;
-        // results stay keyed by originalIndex, so ordering is completion-order
-        // independent exactly as before. Abort is checked at DISPATCH time (in
-        // the worker), not at admission — a call cleared in phase 1 can abort
-        // while queued behind the cap.
-        const settled = await settleWithConcurrencyLimit(
-          batch.indices,
-          this.maxConcurrentSafeCalls,
-          async (batchIdx) => {
+        // Admit calls in waves. Each normalized fingerprint gets only enough
+        // slots to reach the threshold, so a duplicate fan-out cannot run past
+        // the guard before its earlier results are known. Independent calls
+        // retain the existing bounded concurrency.
+        let pending = [...batch.indices];
+        while (pending.length > 0) {
+          const admittedByFingerprint = new Map<string, number>();
+          const wave: number[] = [];
+          const deferred: number[] = [];
+          for (const batchIdx of pending) {
             const { call, originalIndex } = executableCalls[batchIdx]!;
-            if (call.signal.aborted) {
-              return {
-                result: { content: 'Tool call aborted', isError: true, failureClass: 'abort' } as ToolResult,
-                originalIndex,
+            const refusal = this.checkRepeatFailureGuard(call);
+            if (refusal) {
+              results[originalIndex] = refusal;
+              continue;
+            }
+            if (REPEAT_BREAKER_EXEMPT_TOOLS.has(call.name)) {
+              wave.push(batchIdx);
+              continue;
+            }
+            const fingerprint = repeatFailureFingerprint(call);
+            const capacity =
+              REPEAT_FAILURE_REFUSAL_THRESHOLD - this.repeatFailureGuard.streakFor(call);
+            const admitted = admittedByFingerprint.get(fingerprint) ?? 0;
+            if (admitted < capacity) {
+              admittedByFingerprint.set(fingerprint, admitted + 1);
+              wave.push(batchIdx);
+            } else {
+              deferred.push(batchIdx);
+            }
+          }
+          pending = deferred;
+
+          // Bounded concurrency remains in force within each admission wave.
+          const settled = await settleWithConcurrencyLimit(
+            wave,
+            this.maxConcurrentSafeCalls,
+            async (batchIdx) => {
+              const { call, originalIndex } = executableCalls[batchIdx]!;
+              if (call.signal.aborted) {
+                return {
+                  result: {
+                    content: 'Tool call aborted',
+                    isError: true,
+                    failureClass: 'abort',
+                  } as ToolResult,
+                  originalIndex,
+                };
+              }
+              const result = await this.executeCore(call);
+              return { result, originalIndex };
+            },
+          );
+          for (const outcome of settled) {
+            if (outcome.status === 'fulfilled') {
+              results[outcome.value.originalIndex] = outcome.value.result;
+            } else {
+              // Invariant: executeCore catches today; retain this safety net
+              // for a future refactor that permits a rejection to escape.
+              const msg =
+                outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+              const batchIdx = wave[settled.indexOf(outcome)]!;
+              results[executableCalls[batchIdx]!.originalIndex] = {
+                content: `Tool execution error: ${msg}`,
+                isError: true,
               };
             }
-            const result = await this.executeCore(call);
-            return { result, originalIndex };
-          },
-        );
-        for (const outcome of settled) {
-          if (outcome.status === 'fulfilled') {
-            results[outcome.value.originalIndex] = outcome.value.result;
-          } else {
-            // Invariant: this branch is unreachable today. `executeCore` wraps
-          // its entire body in try/catch and returns an isError ToolResult
-          // rather than propagating — so the Promise passed to
-          // settleWithConcurrencyLimit always fulfills. The rejection path
-          // exists as a latent safety net
-          // for future refactors that might let executeCore propagate. If that
-          // happens, `firePostToolUseFailure` must be called here to preserve
-          // the "exactly one of PostToolUse/PostToolUseFailure fires per call"
-          // invariant documented at the executeCore dispatch site below.
-          const msg = outcome.reason instanceof Error
-              ? outcome.reason.message
-              : String(outcome.reason);
-            // Find the original index from the batch — the pool returns
-            // results in items (batch.indices) order, so indexOf maps back.
-            const batchIdx = batch.indices[settled.indexOf(outcome)]!;
-            results[executableCalls[batchIdx]!.originalIndex] = {
-              content: `Tool execution error: ${msg}`,
-              isError: true,
-            };
+          }
+          // Apply observations only after every handler settles, and in the
+          // batch's original call order rather than completion order.
+          for (const batchIdx of wave) {
+            const { call, originalIndex } = executableCalls[batchIdx]!;
+            const result = results[originalIndex];
+            if (result !== undefined && result.failureClass !== 'abort') {
+              this.repeatFailureGuard.note(call, result);
+            }
           }
         }
       } else {
@@ -1042,7 +1125,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
             results[originalIndex] = { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
             continue;
           }
-          results[originalIndex] = await this.executeCore(call);
+          const refusal = this.checkRepeatFailureGuard(call);
+          if (refusal) {
+            results[originalIndex] = refusal;
+            continue;
+          }
+          const result = await this.executeCore(call);
+          results[originalIndex] = result;
+          this.repeatFailureGuard.note(call, result);
         }
       }
 

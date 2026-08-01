@@ -173,11 +173,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       schemas.push(...memoryToolSchemas);
     }
     // Awareness layer (Phase 1) — parity with anthropic-direct. The
-    // system-prompt identity fragment is NOT added here because the
-    // openai-compatible message builder (messages.ts) does not currently
-    // emit a `# Environment` block at all — extending it is Phase 2 work.
-    // The `get_runtime_state` tool remains available so the model can
-    // pull identity on demand.
+    // system-prompt identity fragment is NOT built here: it's assembled
+    // per-query below (`envFragment`, Phase 2, ~line 325) once `config.cwd`
+    // and `runtimeStateSource` are available, then re-rendered per turn by
+    // `refreshEnvironmentDate()` in messages.ts so a resident session's
+    // `# Environment` block never goes stale across a local midnight. The
+    // `get_runtime_state` tool remains available so the model can also pull
+    // identity on demand.
     schemas.push(getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name

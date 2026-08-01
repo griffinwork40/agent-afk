@@ -18,6 +18,7 @@ import {
   STREAM_INCOMPLETE,
 } from './result.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -232,5 +233,31 @@ describe('incompleteToolResultFields — structured ToolResult counterpart', () 
 
   it('returns {} when the stop reason is undefined', () => {
     expect(incompleteToolResultFields(undefined)).toEqual({});
+  });
+});
+
+// Invariant: an exhausted mid-stream 529 (#762) ends the child's turn CLEANLY,
+// so `handle.ts`'s `if (finalMessage) return finalMessage` short-circuits every
+// salvage guard and the run resolves `succeeded` carrying only the
+// operator-facing overload notice. Unless OVERLOAD_EXHAUSTED is classified
+// incomplete here, mint's phase guards accept that notice as a real
+// spec/plan/research artifact (#764 review).
+describe('OVERLOAD_EXHAUSTED — overload-killed fork is not a clean answer', () => {
+  it('classifies an exhausted overload as incomplete', () => {
+    expect(isIncompleteStopReason(OVERLOAD_EXHAUSTED)).toBe(true);
+  });
+
+  it('names the overload cause in the parent-visible banner', () => {
+    const out = annotateIfIncomplete('partial findings', OVERLOAD_EXHAUSTED);
+    expect(out).toContain('529');
+    expect(out).toContain('PARTIAL RESULT');
+    expect(out).toContain('partial findings');
+  });
+
+  it('sets the structured ToolResult fields', () => {
+    expect(incompleteToolResultFields(OVERLOAD_EXHAUSTED)).toEqual({
+      incomplete: true,
+      incompleteReason: OVERLOAD_EXHAUSTED,
+    });
   });
 });
