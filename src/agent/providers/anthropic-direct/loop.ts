@@ -31,30 +31,13 @@ import type {
   ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent } from '../../provider.js';
-import type {
-  AnthropicMessagesCreateParams,
-  RunTurnInput,
-  ToolCall,
-  ToolResult,
-} from './types.js';
+import type { RunTurnInput, ToolCall, ToolResult } from './types.js';
 import { toProviderUsage } from './types.js';
-import {
-  getCacheTtl,
-  isCacheEnabled,
-  withMessagesBreakpoint,
-} from './cache-policy.js';
 import { translateMessageStream } from './translate.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
-import { sleepWithAbort } from '../shared/sleep-with-abort.js';
-import {
-  armFirstByteTimeout,
-  resolveTtfbTimeoutMs,
-} from '../shared/first-byte-timeout.js';
-import {
-  armStreamStallWatchdog,
-  resolveStallTimeoutMs,
-} from '../shared/stream-stall-timeout.js';
+import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
+import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 import {
   TOOL_USE_LOOP_CAPPED,
@@ -68,136 +51,18 @@ import {
 } from '../shared/tool-call-trace.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../tools/denial-circuit-breaker.js';
 import { DenialCircuitBreakerError } from '../../../utils/errors.js';
-import {
-  OVERLOAD_EXHAUSTED,
-  OVERLOAD_EXHAUSTED_NOTICE,
-  jitterBackoff,
-} from './overload-pause.js';
-import {
-  OVERLOAD_BASE_DELAY_MS,
-  OVERLOAD_MAX_RETRIES,
-  RoundRetryBudget,
-  isTransientServerError,
-} from './loop/retry-budget.js';
+import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from './overload-pause.js';
+import { OVERLOAD_MAX_RETRIES, RoundRetryBudget } from './loop/retry-budget.js';
 import { handleRoundRetry, type RoundRetryContext } from './loop/round-retry.js';
-import { toWireTool } from './loop/round-request.js';
+import { openRound } from './loop/round-request.js';
 import { consumeRoundStream } from './loop/stream-consumer.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from './loop/turn-trace.js';
-import { dumpThinkingDiagnostic } from './loop/thinking-diagnostic.js';
 
 // Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
 // source of truth shared with openai-compatible). Kept exported here so
 // existing importers (loop.test.ts) resolve unchanged.
 export { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
-
-// `requestSignal` is passed to `messages.create` — it is the caller's turn
-// signal chained with the per-request TTFB stall timer (see armFirstByteTimeout),
-// so aborting it covers BOTH a user interrupt and a first-byte timeout. The
-// 529/503 connection-phase backoff sleeps still gate on the caller's `turnSignal`
-// so a persistent overload wakes on interrupt but not on the TTFB timer alone.
-async function createWithRetry(
-  client: { messages: { create(params: unknown, opts: unknown): unknown } },
-  params: AnthropicMessagesCreateParams,
-  headers: Record<string, string>,
-  requestSignal: AbortSignal,
-  turnSignal: AbortSignal,
-): Promise<AsyncIterable<unknown>> {
-  for (let attempt = 0; ; attempt++) {
-    if (attempt > 0) {
-      // Jittered (#762): concurrent sessions hitting the same 529 must not
-      // retry in lockstep. Additive, so the documented minimum still holds.
-      const delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1));
-      await sleepWithAbort(delay, turnSignal);
-      if (turnSignal.aborted) throw new Error('aborted');
-    }
-    try {
-      return (await Promise.resolve(
-        client.messages.create(params, { headers, signal: requestSignal }),
-      )) as AsyncIterable<unknown>;
-    } catch (err) {
-      if (requestSignal.aborted) throw err;
-      const e = err instanceof Error ? err : new Error(String(err));
-      if (isTransientServerError(e) && attempt < OVERLOAD_MAX_RETRIES) {
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
-/**
- * Await `createWithRetry` while surfacing LIVE throttle (rate-limit/backoff)
- * signals from the out-of-band {@link RunTurnInput.throttleQueue}.
- *
- * Invariant: the SDK retries 429/503/529 responses INSIDE the single
- * `messages.create` promise `createWithRetry` returns, sleeping out
- * `retry-after` between attempts. During that sleep the loop is parked on this
- * await and can `yield` nothing — so a healthy session waiting ~70s (retried
- * twice ≈ 140s) looks frozen. The wrapped `fetch` pushes a `ThrottleSignal`
- * onto the queue as each throttled response lands; here we race the create
- * promise against `queue.waitForItem()` and yield a `rate_limit` ProviderEvent
- * for every drained signal, so the banner updates DURING the wait. When the
- * create promise finally settles we yield any last-drained signals, then RETURN
- * the resolved events iterable (or re-throw the create error) via the
- * generator's return value.
- *
- * When `throttleQueue` is absent this degrades to a bare `await` (one extra
- * microtask), so non-throttling paths and unit tests are unaffected.
- */
-async function* awaitCreateWithThrottleSignals(
-  createPromise: Promise<AsyncIterable<unknown>>,
-  input: RunTurnInput,
-): AsyncGenerator<ProviderEvent, AsyncIterable<unknown>, void> {
-  const queue = input.throttleQueue;
-  if (!queue) {
-    // No live seam wired — plain await. `createPromise` rejection propagates to
-    // the caller's try/catch exactly as a direct `await createWithRetry` would.
-    return await createPromise;
-  }
-  // Reset the per-call attempt counter so `attempt` numbers reflect throttles
-  // within THIS messages.create (mirrors the SDK's per-call retry budget).
-  queue.resetAttempts();
-
-  // Sentinel so `Promise.race` can tell "create settled" apart from "a throttle
-  // signal arrived" without leaking the create result into the race's value.
-  const CREATE_DONE = Symbol('create-done');
-  // Track settlement so a throttle wake after the create resolves doesn't loop.
-  let settled = false;
-  const guarded = createPromise.then(
-    (v) => { settled = true; return v; },
-    (e) => { settled = true; throw e; },
-  );
-
-  for (;;) {
-    // Drain and surface anything already queued before parking again.
-    for (const sig of queue.takeAll()) {
-      yield {
-        type: 'rate_limit',
-        sessionId: input.ctx.sessionId,
-        status: sig.status,
-        attempt: sig.attempt,
-        ...(sig.retryAfterMs !== undefined ? { retryAfterMs: sig.retryAfterMs } : {}),
-      };
-    }
-    if (settled) {
-      // Return the resolved iterable (or re-throw the create rejection). A
-      // final drain above already surfaced any late signals.
-      return await guarded;
-    }
-    // Park until EITHER the create settles OR a new throttle signal lands.
-    const outcome = await Promise.race([
-      guarded.then(() => CREATE_DONE, () => CREATE_DONE),
-      queue.waitForItem().then(() => undefined),
-    ]);
-    if (outcome === CREATE_DONE) {
-      // Loop once more to drain any signals pushed right before settlement,
-      // then the `settled` branch returns/throws.
-      continue;
-    }
-    // A throttle signal woke us — loop to drain it.
-  }
-}
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
@@ -272,134 +137,20 @@ export async function* runTurn(
       return;
     }
 
-    // Stamp a prompt-cache breakpoint on the last content block of the
-    // last message before sending — non-mutating clone-and-stamp so the
-    // marker never accumulates back into stored history. Cache lookup
-    // walks back over prefix-hash matches up to a 20-block window, so the
-    // moving marker still hits prior writes within the tool-use loop and
-    // across consecutive turns.
-    const messagesForRequest = isCacheEnabled({ baseUrl: input.baseUrl })
-      ? withMessagesBreakpoint(input.messages, getCacheTtl())
-      : input.messages;
+    const opened = yield* openRound({ input, turn, retry, ttfbTimeoutMs, stallTimeoutMs });
 
-    const params: AnthropicMessagesCreateParams = {
-      model: input.model,
-      max_tokens: input.maxTokens,
-      messages: messagesForRequest,
-      stream: true,
-      ...(input.system !== null ? { system: input.system } : {}),
-      // Wind-down round (cap reached): omit tools so the model MUST answer in
-      // text — with no tools advertised it cannot emit another tool_use — which
-      // turns a capped turn into a final summary rather than a silent stop.
-      ...(input.tools !== null && input.tools.length > 0 && !turn.capReached
-        ? { tools: input.tools.map(toWireTool) }
-        : {}),
-      ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
-      ...(input.effort !== undefined
-        ? { output_config: { effort: input.effort } }
-        : {}),
-    };
+    // The connection phase already yielded this turn's terminal event.
+    if (opened.kind === 'terminated') return;
 
-    // Witness layer: stamp request-initiation time so the model_ttfb phase
-    // below can report time-to-first-byte for THIS model API call.
-    const requestStartedAt = Date.now();
-    // Arm the TTFB stall timer for THIS round. `ttfb.signal` is the request
-    // signal (caller's turn signal chained with the stall timer). We cancel the
-    // timer the instant the first CONTENT token arrives (ttfbEmitted below), so a
-    // stream that is producing content is never aborted; only a call that fails
-    // to stream any content token (text/thinking delta, tool_use, or the
-    // end-of-stream turn-result) within the bound trips it. message_start and
-    // keep-alive pings yield no translated output, so they do NOT count — a call
-    // whose FIRST token is slower than the bound is treated as a stall. Disposed
-    // in the retry/error paths below and again defensively per round.
-    const ttfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
-    // Arm the POST-first-byte stall watchdog for THIS round, CHAINED onto
-    // `ttfb.signal` so the request signal carries all three abort sources (user
-    // interrupt → TTFB stall → mid-stream stall) in one linked signal. It stays
-    // DORMANT until the first translated event calls `stall.progress()` below,
-    // so the pre-first-byte window remains governed solely by the TTFB bound and
-    // the two can never both be pending. Every subsequent event re-arms it, so
-    // only genuine silence — not slowness — can fire it. Disposed alongside
-    // `ttfb` on every exit path below.
-    const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, (info) => {
-      // Witness layer: reuse the `idle_watchdog_fired` phase — the established
-      // vocabulary for "a progress-aware watchdog fired on unexplained silence"
-      // (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
-      // fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
-      // never delay the abort.
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'idle_watchdog_fired',
-        durationMs: info.elapsedSinceLastProgressMs,
-        resolvedModel: input.model,
-        metadata: {
-          source: 'model-stream',
-          stallTimeoutMs: info.stallTimeoutMs,
-          elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
-        },
-      });
-    });
-    let retryTtfb = false;
-    // Definite-assignment: `events` is read only past the `if (retryTtfb)`
-    // guard below. Every path that leaves it unassigned either `return`s (the
-    // non-retry catch branch) or sets `retryTtfb` and `continue`s — so by the
-    // consumption point it is always assigned. TS cannot prove this across the
-    // try/catch + continue, hence the assertion.
-    let events!: AsyncIterable<unknown>;
-    try {
-      // Race the create await against the out-of-band throttle queue so a
-      // 429/503/529 backoff the SDK sleeps out INSIDE this call surfaces as a
-      // LIVE `rate_limit` event (see awaitCreateWithThrottleSignals). Without
-      // the queue this is a plain `await createWithRetry(...)`. The generator's
-      // return value is the resolved stream iterable; a create rejection
-      // propagates here exactly as a direct await would.
-      events = yield* awaitCreateWithThrottleSignals(
-        createWithRetry(
-          input.client,
-          params,
-          input.headers,
-          // `stall.signal` is `ttfb.signal` chained with the mid-stream stall
-          // watchdog, so the one request signal covers user interrupt + TTFB
-          // stall + post-first-byte stall. When either watchdog is disabled its
-          // arm() returns the base signal unchanged, so this degrades cleanly.
-          stall.signal,
-          input.signal,
-        ),
-        input,
-      );
-    } catch (err) {
-      // A TTFB timeout aborts before the first byte (connection-phase stall).
-      // Distinguish it from a user interrupt (input.signal) and, on the first
-      // occurrence this round, re-drive the request once instead of erroring.
-      if (ttfb.timedOut() && !input.signal.aborted && !retry.ttfbRetried) {
-        ttfb.dispose();
-        stall.dispose();
-        retryTtfb = true;
-      } else {
-        ttfb.dispose();
-        stall.dispose();
-        if (input.signal.aborted) {
-          yield {
-            type: 'turn.completed',
-            usage: turn.terminalUsage(),
-            sessionId: input.ctx.sessionId,
-          };
-          return;
-        }
-        const e = err instanceof Error ? err : new Error(String(err));
-        if (e.message.includes('thinking')) {
-          dumpThinkingDiagnostic(input.messages, e);
-        }
-        yield { type: 'error', error: e };
-        return;
-      }
-    }
-    if (retryTtfb) {
+    if (opened.kind === 'retry-ttfb') {
       // Connection-phase TTFB timeout: re-drive once. Shares the once-per-round
       // allowance with the mid-stream TTFB path via the same retry handler.
-      const redrive = yield* handleRoundRetry('ttfb', retryContext(requestStartedAt));
+      const redrive = yield* handleRoundRetry('ttfb', retryContext(opened.requestStartedAt));
       if (redrive === 'terminated') return;
       continue;
     }
+
+    const { events, ttfb, stall, requestStartedAt } = opened;
 
     const outcome = yield* consumeRoundStream({
       events,
