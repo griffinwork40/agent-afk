@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.3] - 2026-08-02
+
+### Fixed
+- render round denominator in progress banner (#857) (#858) (5bc00a8)
+
 ## [5.85.2] - 2026-08-02
 
 ### Fixed
