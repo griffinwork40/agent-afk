@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.9] - 2026-08-02
+
+### Fixed
+- close the case-variant bypass of the credential floor (#736) (#819) (de0f295)
+
 ## [5.85.8] - 2026-08-02
 
 ### Fixed
