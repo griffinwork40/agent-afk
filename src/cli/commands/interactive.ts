@@ -30,6 +30,11 @@ import { REPL_SPINNER_OPTIONS, printResumeBanner } from './interactive/shared.js
 import { handleCommandError } from '../errors/index.js';
 import { type UpdateInfo, printUpdateBanner } from '../update-checker.js';
 import { getVersion } from '../version.js';
+import { runPicker } from '../render/picker.js';
+import {
+  resolveWorktreeDisposition,
+  resolveWorktreeExitPolicy,
+} from './interactive/worktree-disposition.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
@@ -208,7 +213,11 @@ export function registerInteractiveCommand(program: Command): void {
     .option('--debug', 'Show SDK init metadata on startup; enables /debug command', false)
     .option(
       '-w, --worktree [branch]',
-      'Create a git worktree for an isolated session. Optional value sets the branch name; otherwise auto-named. On clean exit (no uncommitted changes) the worktree and branch are auto-removed; on dirty exit the worktree is preserved.',
+      'Create a git worktree for an isolated session. Optional value sets the branch name; otherwise auto-named. On clean interactive exit, choose whether to keep or delete it; dirty worktrees are always preserved.',
+    )
+    .option(
+      '--worktree-on-exit <ask|keep|remove>',
+      'Clean-worktree quit policy. Default: ask on TTY, remove otherwise. Also: AFK_WORKTREE_ON_EXIT, or interactive.worktreeOnExit in afk.config.json.',
     )
     .option(
       '--no-worktree-autoname',
@@ -310,6 +319,13 @@ export function registerInteractiveCommand(program: Command): void {
       // and (later) the first-turn rename use the same value. Env wins
       // over config; both yield to an explicit CLI string in `--worktree`.
       const cliConfig = loadConfig();
+      const worktreeExitPolicy = resolveWorktreeExitPolicy({
+        cli: options.worktreeOnExit,
+        env: env.AFK_WORKTREE_ON_EXIT,
+        config: cliConfig.interactive?.worktreeOnExit,
+        isTTY: Boolean(process.stdout.isTTY),
+        console,
+      });
       // Resolve the thinking-display mode (--thinking-ui flag > AFK_THINKING_UI
       // env > interactive.thinkingUi config > 'live') and assign it back onto
       // options so the downstream bootstrap seeding (stats.thinkingUi =
@@ -499,10 +515,32 @@ export function registerInteractiveCommand(program: Command): void {
           }
         };
       }
+      let dispositionResolution: Promise<void> | undefined;
+      ctx.resolveWorktreeDisposition = (canPrompt: boolean): Promise<void> => {
+        if (dispositionResolution !== undefined) return dispositionResolution;
+        const compositor = canPrompt ? ctx.slashCtx.getCompositor?.() ?? null : null;
+        dispositionResolution = resolveWorktreeDisposition({
+          ...(compositor !== null
+            ? { picker: (pickerOpts) => runPicker(compositor, pickerOpts) }
+            : {}),
+          isTTY: canPrompt && Boolean(process.stdout.isTTY),
+          policy: worktreeExitPolicy,
+          turnCount: ctx.stats.totalTurns,
+          hasWorktree: worktreeHandle !== undefined,
+          console,
+        }).then((disposition) => {
+          ctx.worktreeDisposition = disposition;
+        });
+        return dispositionResolution;
+      };
+
       // Ordering matters: shut the SDK subprocess down BEFORE removing the
       // worktree directory. Cleanups run via `Promise.all`, so we sequence
       // session close → worktree cleanup inside a single registered cleanup.
       registerCleanup(async () => {
+        // Signal-driven shutdown cannot prompt, but explicit keep/remove policy
+        // still resolves before cleanup; the single-flight guard avoids repeats.
+        await ctx.resolveWorktreeDisposition?.(false);
         ctx.teardownTrustedSkillEvents?.();
         // Uninstall the elicitation handler so in-flight ask_question calls
         // auto-decline rather than routing to a closed readline interface.
@@ -527,7 +565,10 @@ export function registerInteractiveCommand(program: Command): void {
         }
         ctx.memoryStore.close();
         if (worktreeHandle !== undefined) {
-          await worktreeHandle.cleanup({ force: ctx.stats.totalTurns === 0 });
+          await worktreeHandle.cleanup({
+            force: ctx.stats.totalTurns === 0,
+            disposition: ctx.worktreeDisposition,
+          });
         }
       });
 

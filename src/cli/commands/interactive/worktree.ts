@@ -21,6 +21,7 @@ import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js
 import { detectShellFromEnv } from '../shell-init.js';
 import { hasNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
 import { registerWorktreeRoot } from '../../../agent/worktree-root-registry.js';
+import type { WorktreeDisposition } from './worktree-disposition.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -59,7 +60,7 @@ export interface WorktreeHandle {
    *   worktree unconditionally. Use when the session ended with zero turns —
    *   no work was done so there is nothing to preserve.
    */
-  cleanup: (opts?: { force?: boolean }) => Promise<void>;
+  cleanup: (opts?: { force?: boolean; disposition?: WorktreeDisposition }) => Promise<void>;
 }
 
 /**
@@ -640,7 +641,7 @@ async function createWorktreeAt(
   const handle: WorktreeHandle = {
     path: worktreePath,
     branch,
-    cleanup: async (opts?: { force?: boolean }): Promise<void> => {
+    cleanup: async (opts?: { force?: boolean; disposition?: WorktreeDisposition }): Promise<void> => {
       // Best-effort: every git invocation below is guarded so a failure during
       // shutdown (e.g. worktree dir manually deleted, transient git lock) cannot
       // surface as an unhandled rejection from `rl.on('close', ...)`.
@@ -731,6 +732,26 @@ async function createWorktreeAt(
         preserveWorktree(
           'non-rebuildable ignored files (e.g. .env) that `git status` cannot see',
         );
+        return;
+      }
+
+      if ((opts?.disposition ?? 'remove') === 'keep') {
+        // External sweep constraint: lock BEFORE advertising preservation; a clean
+        // dead-owner worktree without this lock may be reclaimed at the next sweep.
+        try {
+          await execFile('git', [
+            '-C', repoRoot, 'worktree', 'lock',
+            '--reason', `afk: kept on exit ${new Date().toISOString()}`,
+            currentPath,
+          ]);
+        } catch (err) {
+          const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Worktree cleanup: could not lock ${currentPath} (${message}). It is preserved now, but a later sweep may reclaim it.`,
+          );
+        }
+        preserveWorktree('kept on exit');
         return;
       }
 

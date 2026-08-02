@@ -117,6 +117,8 @@ export async function runReplLoop(
       footer,
       history,
     );
+    // Input must remain armed until the quit-time choice has resolved.
+    await ctx.resolveWorktreeDisposition?.(true);
   } finally {
     // Drain ShellPassthrough — kills every `!&cmd` background shell that
     // is still running. Same lifecycle rationale as bgManager above: the
