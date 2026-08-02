@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.84.17] - 2026-08-02
+
+### Fixed
+- grant confined forks read access to the agent-framework dir (#841) (fa271ee)
+
 ## [5.84.16] - 2026-08-01
 
 ### Fixed
