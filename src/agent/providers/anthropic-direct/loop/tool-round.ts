@@ -24,6 +24,7 @@ import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import {
   TOOL_USE_LOOP_CAPPED,
   WIND_DOWN_NOTE,
+  formatRoundLabel,
   shouldWindDown,
 } from '../../shared/tool-loop-cap.js';
 import { dispatchToolCalls } from './tool-dispatch.js';
@@ -102,7 +103,7 @@ export async function* runToolRound(
     progress: {
       taskId: turn.taskId,
       description: 'Working',
-      summary: `round ${turn.iterations}: ${lastToolHeadline}`,
+      summary: `${formatRoundLabel(turn.iterations, maxIterations)}: ${lastToolHeadline}`,
       lastToolName: lastTool?.name,
       totalTokens: turn.usage.totalTokens ?? 0,
       // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far in
