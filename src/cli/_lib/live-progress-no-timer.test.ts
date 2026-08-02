@@ -47,10 +47,13 @@ describe('live-progress modules introduce no autonomous timer', () => {
   for (const relPath of TIMER_FREE_MODULES) {
     it(`${relPath} schedules nothing`, () => {
       const code = stripComments(read(relPath));
-      expect(code).not.toMatch(/\bsetInterval\b/);
-      expect(code).not.toMatch(/\bsetTimeout\b/);
-      expect(code).not.toMatch(/\bsetImmediate\b/);
-      expect(code).not.toMatch(/requestAnimationFrame/);
+      // Call-form regexes (not bare-word) so type annotations like
+      // `ReturnType<typeof setInterval>` do not false-positive — a real
+      // timer call always has parens. Matches the spinner test's approach.
+      expect(code).not.toMatch(/\bsetInterval\s*\(/);
+      expect(code).not.toMatch(/\bsetTimeout\s*\(/);
+      expect(code).not.toMatch(/\bsetImmediate\s*\(/);
+      expect(code).not.toMatch(/requestAnimationFrame\s*\(/);
     });
   }
 
