@@ -1884,3 +1884,42 @@ describe('ToolLane.getOverlay — last-child connector closes its column (severe
       `grandchild col-0 not closed below the last-child ╰─; got: ${JSON.stringify(toolRow)}`).toBe(true);
   });
 });
+
+// ─── Benign rejection glyph on an ungrouped child row (#75) ───────────────────
+//
+// The literal scenario from issue #75: during a long skill run the agent probes
+// a gated tool, and the row `✗ Tool "bash" is not in the configured allowlist`
+// reads as a failure. Grouped rows are covered in tool-lane-grouped-errors;
+// this pins the SINGLE-child path (tool-lane-render-children), which is what the
+// operator actually screenshotted.
+describe('benign rejection rendering (#75)', () => {
+  function laneWithOneRejectedChild(failureClass?: ToolResultChunk['failureClass']): string {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('agent', 'Agent', '(mint-research)', undefined);
+    lane.addStartWithAgentContext('b0', 'bash', '("git status")', 'agent');
+    lane.addResult('b0', {
+      type: 'tool_result',
+      toolUseId: 'unused',
+      content: 'Tool "bash" is not in the configured allowlist',
+      isError: true,
+      ...(failureClass ? { failureClass } : {}),
+    });
+    const row = stripAnsi(lane.getOverlay())
+      .split('\n')
+      .find((l) => l.includes('bash'));
+    if (!row) throw new Error('no bash row');
+    return row;
+  }
+
+  it('renders a permission-denied probe with the neutral glyph, not the error glyph', () => {
+    const row = laneWithOneRejectedChild('permission-denied');
+    expect(row).toContain('⊘');
+    expect(row).not.toContain('✗');
+  });
+
+  it('still renders an unclassified failure with the error glyph', () => {
+    const row = laneWithOneRejectedChild(undefined);
+    expect(row).toContain('✗');
+    expect(row).not.toContain('⊘');
+  });
+});

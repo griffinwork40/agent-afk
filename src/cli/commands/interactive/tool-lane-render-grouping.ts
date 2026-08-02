@@ -6,6 +6,7 @@ import {
   GROUP_THRESHOLD_DISPATCH,
   GROUP_THRESHOLD_LEAF,
   formatToolLine,
+  isBenignFailure,
 } from './tool-lane-format.js';
 import { shortenPaths } from './tool-lane-format-args.js';
 import { sanitizeLabel } from './tool-lane-format-sanitize.js';
@@ -177,12 +178,21 @@ function formatGroupErrorPreview(entry: ToolEntry): string {
  * `×50 — 48 ok, 2 errors` and stopped: the failure text was retained on
  * `ToolEntry.result` but had no render path, so a subagent silently looping on
  * the same broken command was indistinguishable from one making progress.
+ *
+ * Failures are further split by `failureClass`: deliberate refusals tally as
+ * `blocked` in the warning tone, real faults stay `errors` in the error tone
+ * (`48 ok, 1 error, 1 blocked`). A group whose only failures were the system
+ * saying no carries no red at all — that is the point of #75.
  */
 function formatGroupedSibling(group: GroupedSibling): string {
   const total = group.entries.length;
   const completed = group.entries.filter((e) => e.result);
   const errors = completed.filter((e) => e.result!.isError);
   const done = completed.length;
+  // A deliberate refusal is still isError, so it belongs to `errors` for
+  // branch-selection purposes; only its TONE and noun differ.
+  const blocked = errors.filter((e) => isBenignFailure(e.result!.failureClass));
+  const faults = errors.filter((e) => !isBenignFailure(e.result!.failureClass));
 
   // Invariant: the errored branch returns a PRE-STYLED status (each span carries
   // its own tone) while the healthy branches return plain text the caller wraps in
@@ -196,12 +206,19 @@ function formatGroupedSibling(group: GroupedSibling): string {
     const ok = done - errors.length;
     const parts: string[] = [];
     if (ok > 0) parts.push(palette.dim(`${ok} ok`));
-    parts.push(palette.error(`${errors.length} error${errors.length === 1 ? '' : 's'}`));
+    if (faults.length > 0) {
+      parts.push(palette.error(`${faults.length} error${faults.length === 1 ? '' : 's'}`));
+    }
+    if (blocked.length > 0) parts.push(palette.warning(`${blocked.length} blocked`));
     status = parts.join(palette.dim(', '));
     // Most recent failure: entries are appended in dispatch order, so the last
     // errored entry answers "is it still failing?" rather than "did it ever".
-    const preview = formatGroupErrorPreview(errors[errors.length - 1]!);
-    if (preview) errorTail = palette.dim(' · last: ') + palette.error(preview);
+    // A real fault outranks a more-recent refusal — otherwise a broken command
+    // would be hidden by a benign allowlist rejection that happened to land after it.
+    const source = faults.length > 0 ? faults : blocked;
+    const tone = faults.length > 0 ? palette.error : palette.warning;
+    const preview = formatGroupErrorPreview(source[source.length - 1]!);
+    if (preview) errorTail = palette.dim(' · last: ') + tone(preview);
   } else if (done === total) {
     status = `${total} done`;
   } else if (done === 0) {

@@ -558,6 +558,12 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     if (out?.type === 'tool.output') {
       expect(out.isError).toBe(true);
       expect(out.content).toMatch(/not permitted|not allowed|permission|allowlist/i);
+      // The gate's refusal must be CLASSIFIED on the render-facing event, not
+      // just worded in the content. The tool-lane keys its neutral ⊘ glyph off
+      // this field (#75); without it a gated probe renders as a red ✗ on every
+      // openai-compatible session, and no renderer test would catch it because
+      // the renderer is correct — the event is just missing the field.
+      expect(out.failureClass).toBe('permission-denied');
     }
   });
 

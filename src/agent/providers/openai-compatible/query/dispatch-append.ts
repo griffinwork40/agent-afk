@@ -218,6 +218,11 @@ export async function* dispatchAndAppendToolCalls({
         ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
           ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
           : {}),
+        // Carry WHY the call failed so the tool-lane can render a deliberate
+        // refusal neutrally instead of as a red ✗. Parity with
+        // anthropic-direct/loop/tool-results.ts — omitting it silently drops
+        // the benign-rejection glyph for every openai-compatible session.
+        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
         sessionId,
       };
       if (result.render?.diff) {
