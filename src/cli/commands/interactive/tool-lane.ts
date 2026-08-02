@@ -496,7 +496,7 @@ export class ToolLane {
         // never carries a `diff` payload (diffs originate from edit/write
         // tool_diff chunks), so no diff block is rendered here.
         if (entry.result) {
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
         } else {
           lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …')));
         }
@@ -509,7 +509,7 @@ export class ToolLane {
         }
       } else {
         if (entry.result) {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
           if (entry.diff && !entry.result.isError) {
             // Diff hangs under the outcome line, indented one level deeper
             // (4 spaces) so it visually attaches to this tool entry.

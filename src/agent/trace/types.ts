@@ -100,9 +100,38 @@ export const TOOL_FAILURE_CLASSES = [
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
  * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
  * excluded from failure stats entirely — while `timeout`, `denial-breaker`, and
- * unclassified failures still count.
+ * unclassified failures still count. That split is `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
+
+/**
+ * The failure classes that mean "the system correctly said no", as opposed to
+ * "the tool broke". Every member returns `isError: true` so the model sees the
+ * outcome and can adapt — but none of them is a fault worth alarming a human
+ * about.
+ *
+ * Single source of truth for two consumers that must not drift apart:
+ *   - `src/improve/scan/detectors/tool-failure-density.ts` excludes these from
+ *     failure-rate stats, so a `browser_open` that refused half its navigations
+ *     on domain policy does not look 50% broken.
+ *   - `src/cli/commands/interactive/tool-lane-format.ts` renders these with a
+ *     neutral `⊘` instead of a red `✗`, so an agent probing a gated tool during
+ *     a long run does not read as something going wrong (#75).
+ *
+ * Membership is deliberately narrower than "not the tool's fault". `timeout` is
+ * excluded because a high timeout rate is a real problem (too tight a deadline,
+ * a systematically slow target), and `denial-breaker` is excluded because a fork
+ * torn down for spinning is review-worthy — see the per-class notes above. An
+ * unclassified failure (no `failureClass`) is never benign: pre-classification
+ * traces and genuine handler bugs share that shape, so it must stay alarming.
+ */
+export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
+  'policy-refusal',
+  'permission-denied',
+  'hook-block',
+  'abort',
+  'elicitation-declined',
+]);
 
 export interface ToolCallCompletedPayload {
   phase: 'completed';
