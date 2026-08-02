@@ -58,7 +58,7 @@ import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker, type StageTrackerState } from '../commands/interactive/loop-stage.js';
 import { detectCaptureMode, detectReducedMotion, detectGoblinSpinner } from './capture-mode.js';
 import { makeDedupingLineWriter, type DedupingLineWriter } from './dedup-line-writer.js';
-import { registerOverlaySlots, checkPauseAnnotations, subscribeToResize } from './stream-renderer-lifecycle.js';
+import { registerOverlaySlots, checkPauseAnnotations, checkProgressBannerStaleness, subscribeToResize } from './stream-renderer-lifecycle.js';
 import { makeOrchestratorCtx, makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
 
 export interface StreamRendererOptions {
@@ -948,10 +948,13 @@ export class StreamRenderer {
 
   /**
    * Bounded stalled-entry lifecycle checker. Called every 80ms by the pause tick interval.
-   * Delegates to the lifecycle module to keep core class compact.
+   * Delegates to the lifecycle module — checkProgressBannerStaleness closes the
+   * 1.5s–30s dead zone by marking the progress-banner slot dirty when a child
+   * goes quiet, then checkPauseAnnotations handles the post-30s stall state
+   * machine. Both ride the same tick; neither adds a new timer.
    */
   private checkPauseAnnotations(): void {
-    checkPauseAnnotations({
+    const lifecycleCtx = {
       compositor: this.compositor,
       disposed: this.disposed,
       sources: this.sources,
@@ -966,7 +969,9 @@ export class StreamRenderer {
       out: this.out,
       pauseTickInterval: this.pauseTickInterval,
       resizeUnsub: this.resizeUnsub,
-    });
+    };
+    checkProgressBannerStaleness(lifecycleCtx);
+    checkPauseAnnotations(lifecycleCtx);
   }
 
 }

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatInterruptAffordance, registerOverlaySlots } from './stream-renderer-lifecycle.js';
+import { formatInterruptAffordance, registerOverlaySlots, checkProgressBannerStaleness } from './stream-renderer-lifecycle.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { stripAnsi } from '../display.js';
@@ -250,5 +250,121 @@ describe('registerOverlaySlots — child banner without a parent progress row', 
     composer.invalidate();
     composer.flush();
     expect(captured.at(-1)).toBe('');
+  });
+});
+
+describe('checkProgressBannerStaleness', () => {
+  function makeCtx(over: Partial<Parameters<typeof checkProgressBannerStaleness>[0]> = {}) {
+    const marks: string[] = [];
+    const flushes: number[] = [];
+    const overlayComposer = {
+      markDirty: (key: string) => marks.push(key),
+      flush: () => flushes.push(flushes.length),
+    };
+    return {
+      ctx: {
+        disposed: false,
+        isTTY: true,
+        sources: new Map<string, SourceState>(),
+        overlayComposer,
+        compositor: null,
+        stageTracker: undefined,
+        thinkingLane: new ThinkingLane(),
+        toolLane: { hasPending: () => false, getOverlay: () => '' },
+        streamingMarkdownRef: { current: null },
+        lastProgressByTask: new Map(),
+        thinkingMode: 'summary' as const,
+        out: { write: () => {} },
+        pauseTickInterval: null,
+        resizeUnsub: null,
+        ...over,
+      },
+      marks,
+      flushes,
+    };
+  }
+
+  it('marks progress-banner dirty when a running child is silent past CHILD_QUIET_MS', () => {
+    const { ctx, marks, flushes } = makeCtx({
+      sources: new Map([
+        ['child-1', freshSourceState('reviewer')],
+      ]),
+    });
+    // Set child to be silent for 10s (> CHILD_QUIET_MS = 8s)
+    ctx.sources.get('child-1')!.lastEventAt = Date.now() - 10_000;
+    const changed = checkProgressBannerStaleness(ctx);
+    expect(changed).toBe(true);
+    expect(marks).toContain('progress-banner');
+    expect(flushes.length).toBe(1);
+  });
+
+  it('does NOT mark dirty when all children are fresh (under CHILD_QUIET_MS)', () => {
+    const { ctx, marks, flushes } = makeCtx({
+      sources: new Map([
+        ['child-1', freshSourceState('reviewer')],
+      ]),
+    });
+    ctx.sources.get('child-1')!.lastEventAt = Date.now() - 3_000;
+    const changed = checkProgressBannerStaleness(ctx);
+    expect(changed).toBe(false);
+    expect(marks.length).toBe(0);
+    expect(flushes.length).toBe(0);
+  });
+
+  it('skips the orchestrator source', () => {
+    const { ctx, marks } = makeCtx({
+      sources: new Map([
+        ['__main__', freshSourceState(undefined)],
+      ]),
+    });
+    ctx.sources.get('__main__')!.lastEventAt = Date.now() - 50_000;
+    const changed = checkProgressBannerStaleness(ctx);
+    expect(changed).toBe(false);
+    expect(marks.length).toBe(0);
+  });
+
+  it('skips done and errored sources', () => {
+    const { ctx, marks } = makeCtx({
+      sources: new Map([
+        ['child-1', { ...freshSourceState('reviewer'), done: true }],
+        ['child-2', { ...freshSourceState('reviewer'), errored: true }],
+      ]),
+    });
+    ctx.sources.get('child-1')!.lastEventAt = Date.now() - 50_000;
+    ctx.sources.get('child-2')!.lastEventAt = Date.now() - 50_000;
+    const changed = checkProgressBannerStaleness(ctx);
+    expect(changed).toBe(false);
+    expect(marks.length).toBe(0);
+  });
+
+  it('returns false when disposed', () => {
+    const { ctx, marks } = makeCtx({ disposed: true });
+    ctx.sources.set('child-1', freshSourceState('reviewer'));
+    ctx.sources.get('child-1')!.lastEventAt = Date.now() - 50_000;
+    expect(checkProgressBannerStaleness(ctx)).toBe(false);
+    expect(marks.length).toBe(0);
+  });
+
+  it('returns false on non-TTY surfaces', () => {
+    const { ctx, marks } = makeCtx({ isTTY: false });
+    ctx.sources.set('child-1', freshSourceState('reviewer'));
+    ctx.sources.get('child-1')!.lastEventAt = Date.now() - 50_000;
+    expect(checkProgressBannerStaleness(ctx)).toBe(false);
+    expect(marks.length).toBe(0);
+  });
+
+  it('marks dirty for ANY silent child in a multi-child fleet', () => {
+    const { ctx, marks } = makeCtx({
+      sources: new Map([
+        ['child-1', freshSourceState('reviewer')],
+        ['child-2', freshSourceState('pragmatist')],
+      ]),
+    });
+    // child-1 is fresh, child-2 is silent
+    ctx.sources.get('child-1')!.lastEventAt = Date.now() - 1_000;
+    ctx.sources.get('child-2')!.lastEventAt = Date.now() - 12_000;
+    const changed = checkProgressBannerStaleness(ctx);
+    expect(changed).toBe(true);
+    expect(marks).toContain('progress-banner');
   });
 });
