@@ -87,7 +87,9 @@ The system prompt is always composed of two parts:
    priority order:
    - `AFK_SYSTEM_PROMPT` env var (highest)
    - `afk.config.json` (`systemPrompt` field)
-   - `AFK.md` at the project root (lowest)
+   - `AFK.md` (lowest) — additive across two locations: `~/.afk/AFK.md`
+     (user-scope) and `<cwd>/AFK.md` (project-scope), both loaded and
+     concatenated when both exist
 
 An absent overlay means the model gets the framework base alone. Overlays append — they never
 replace the base. Use `--dump-prompt` to inspect the fully composed prompt and provenance.
