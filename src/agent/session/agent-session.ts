@@ -13,6 +13,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
+import { captureSubagentPrompt } from './subagent-prompt-capture.js';
 import { AbortError } from '../../utils/errors.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/writer.js';
@@ -74,7 +75,7 @@ import {
 } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
-import { getSessionGrantsPath } from '../../paths.js';
+import { getSessionGrantsPath, sessionLabelFromTracePath } from '../../paths.js';
 import {
   capJsonlBySize,
   SESSION_GRANTS_MAX_BYTES,
@@ -101,6 +102,9 @@ export class AgentSession implements IAgentSession {
   private providerIterator!: AsyncIterator<ProviderEvent>;
   private conversationHistory: Message[] = [];
   private turnCount = 0;
+  /** Number of inbound messages submitted, including attempts that end in a
+   * provider error and therefore never increment `turnCount`. */
+  private inboundMessageCount = 0;
   /**
    * Hook-generated context (e.g. SubagentStop `injectContext`) waiting to be
    * prepended to the next outbound user message. Never delivered as its own
@@ -672,6 +676,21 @@ export class AgentSession implements IAgentSession {
     // `session.init` — which `initPromise` above has just drained.
     this.ensureLedger();
     this.ledger.recordUser(historySummary);
+    // Opt-in forensics: a fork records its OWN inbound prompt here, which is the
+    // one place every dispatch path converges with the composed text in hand.
+    // The ledger above is deliberately gated OFF for forks (LedgerLifecycle.ensure),
+    // so this fills that hole rather than duplicating it. Fire-and-forget by
+    // contract — it can never reject (see captureSubagentPrompt).
+    const inboundMessageIndex = ++this.inboundMessageCount;
+    void captureSubagentPrompt({
+      sessionId:
+        sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? this.sessionId,
+      subagentId: this.config.subagentId,
+      isSubagentFork: this.config.isSubagentFork === true,
+      model: this.config.model === undefined ? undefined : String(this.config.model),
+      turn: inboundMessageIndex,
+      prompt: historySummary,
+    });
 
     const deps = this.buildTransformDeps();
 

@@ -1118,6 +1118,18 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_CAPTURE_SUBAGENT_PROMPTS',
+    description:
+      'Opt-in: when set to 1, every prompt a parent session sends to a subagent is written ' +
+      'as a redacted markdown file under state/witness/<label>/prompts/. Off by default ' +
+      'because nothing prunes the witness tree and prompts may carry secrets the regex ' +
+      'redactor cannot catch (connection strings, PEM blocks, PII).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
     name: 'DEBUG',
     description: 'Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.',
     type: 'string',
@@ -1547,6 +1559,7 @@ export const env = {
   get AFK_TRACE_DISABLED(): string | undefined { return process.env['AFK_TRACE_DISABLED']; },
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
+  get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 
