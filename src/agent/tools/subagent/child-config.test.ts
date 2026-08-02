@@ -284,14 +284,30 @@ describe('buildChildConfig', () => {
       expect(childConfig.model).toBe('haiku');
     });
 
-    it('treats an omitted named model as inherit (uses parentModel)', () => {
+    // An omitted model resolves to the POLICY default, not the parent's model.
+    // Inheritance is opt-in via an explicit `model: 'inherit'` (covered above).
+    // Guards the cost contract of `AFK_DEFAULT_SUBAGENT_MODEL`: a high-tier
+    // parent must not silently auto-spawn high-tier named children.
+    it('resolves an omitted named model to the policy default, NOT parentModel', () => {
       const { childConfig } = buildChildConfig(
         baseArgs({
           namedAgent: namedAgent({}), // no model field
           parentModel: 'opus',
+          defaultSubagentModel: 'sonnet',
         }),
       );
-      expect(childConfig.model).toBe('opus');
+      expect(childConfig.model).toBe('sonnet');
+    });
+
+    it('resolves an omitted named model to sonnet when no policy default is wired', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({}), // no model field
+          parentModel: 'opus',
+          defaultSubagentModel: undefined,
+        }),
+      );
+      expect(childConfig.model).toBe('sonnet');
     });
   });
 
