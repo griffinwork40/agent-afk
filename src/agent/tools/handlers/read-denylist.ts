@@ -382,11 +382,14 @@ export function getReadDenylistDescendants(root: string): string[] {
     )
     .map((blocked) => {
       // `path.relative` is case-sensitive even when the filesystem is not.
-      // Containment above established that a folded spelling is equivalent;
-      // slicing preserves the denylist entry's glob-ready descendant suffix.
+      // On a folded match, count path segments instead of string offsets:
+      // lowercasing can change a segment's UTF-16 length (for example, İ).
       const rel = blocked.startsWith(realRoot + sep)
         ? relative(realRoot, blocked)
-        : blocked.slice(realRoot.length + 1);
+        : blocked
+            .split(sep)
+            .slice(realRoot.split(sep).length)
+            .join(sep);
       return rel.split(sep).join('/');
     });
 }

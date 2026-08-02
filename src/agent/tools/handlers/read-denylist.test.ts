@@ -627,4 +627,14 @@ describe('isReadDenied — case-variant spellings (#736)', () => {
     const caseVariantParent = join(homedir(), 'READABLE');
     expect(getReadDenylistDescendants(caseVariantParent)).toContain('.ssh');
   });
+
+  it('derives exclusions when Unicode folding changes the root length', () => {
+    _resetFsCaseCacheForTests(true);
+    // U+0130 lowercases to two UTF-16 code units ("i" + combining dot), so
+    // string-offset slicing would leave the combining dot in the exclusion.
+    process.env['AFK_READ_DENYLIST'] = join(tmpDir, 'i\u0307readable', '.sec');
+    _resetReadDenylistCacheForTests();
+
+    expect(getReadDenylistDescendants(join(tmpDir, '\u0130READABLE'))).toContain('.sec');
+  });
 });
