@@ -71,7 +71,8 @@ interface Internals {
 /** The sentence from the live symptom report, with the witness pair in it. */
 const SENTENCE = 'I edited the relevant tests and ran the tests again to confirm';
 /** Every fusion witness: the two words with their separating space removed. */
-const FUSIONS = ['Iedited', 'thetests', 'relevanttests', 'andran', 'theirrelevant'] as const;
+const SENTENCE_WORDS = SENTENCE.split(' ');
+const FUSIONS = SENTENCE_WORDS.slice(1).map((word, i) => SENTENCE_WORDS[i] + word);
 
 /** Column widths that place a hard-wrap boundary EXACTLY on each space. */
 function widthsBreakingOnEachSpace(s: string): number[] {
@@ -223,8 +224,8 @@ describe('paint layer — word/space fusion under width-change reflow', () => {
       // The in-memory band model must also stay unfused and space-preserving.
       expect(findFusedLine(internals.committedBand), `W1=${w1}->W2=${w2} band fused`).toBeNull();
       const bandText = internals.committedBand.map((l) => stripAnsi(l)).join('');
-      expect(bandText.replace(/\s+/g, ' ').trim(), `W1=${w1}->W2=${w2} band lost content`).toContain(
-        'relevant tests',
+      expect(bandText.replace(/\s+/g, ' ').trim(), `W1=${w1}->W2=${w2} band lost content`).toBe(
+        SENTENCE,
       );
 
       c.disarm();

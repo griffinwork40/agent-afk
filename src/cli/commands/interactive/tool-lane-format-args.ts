@@ -56,10 +56,11 @@ export function shortenPaths(text: string): string {
  */
 function collapseFsPaths(text: string): string {
   const linkify = hyperlinksEnabled();
-  // Invariant: the leading `/` must OPEN an absolute path — it may not be an
-  // interior separator of a longer token. The lookbehind rejects a preceding
-  // path-ish character (word char, `.`, `~`, `-`, `/`), which is what confines
-  // this to absolute paths as documented.
+  // Invariant: the leading `/` must OPEN an absolute-path token — it may not be
+  // an interior separator of a longer token. Match the token boundary itself
+  // instead of trying to enumerate every character that a relative path may
+  // contain. Besides the start of the string, accepted boundaries are shell /
+  // prose whitespace, assignment (`=`), quotes, and opening delimiters.
   //
   // Without it the regex matched from the FIRST interior slash of a relative
   // path and spliced the surviving head onto the basename, fabricating a path
@@ -70,8 +71,10 @@ function collapseFsPaths(text: string): string {
   // tell the shown path from a real sibling file. Relative and `~/`-rooted
   // paths are therefore left intact; the lane's own width truncation shortens
   // them honestly with a trailing ellipsis.
-  return text.replace(/(?<![\w./~-])\/(?:[^/\s,)]+\/){2,}([^/\s,)]+)/g, (fullPath, basename: string) =>
-    linkify ? fileHyperlink(basename, fullPath) : basename,
+  return text.replace(
+    /(^|[\s='"([{])(\/(?:[^/\s,)]+\/){2,}([^/\s,)]+))/g,
+    (_match, boundary: string, fullPath: string, basename: string) =>
+      boundary + (linkify ? fileHyperlink(basename, fullPath) : basename),
   );
 }
 

@@ -747,6 +747,8 @@ describe('shortenPaths — URL-safety + fs-path collapsing', () => {
   it('does not fabricate a basename from a relative path head', () => {
     expect(shortenPaths('src/a/b/c.ts')).toBe('src/a/b/c.ts');
     expect(shortenPaths('a/b/c/d.ts')).toBe('a/b/c/d.ts');
+    expect(shortenPaths('資料/src/cli/x.ts')).toBe('資料/src/cli/x.ts');
+    expect(shortenPaths('foo@/src/cli/x.ts')).toBe('foo@/src/cli/x.ts');
   });
 
   it('leaves a dot-relative path intact (regression: ./src/cli/_lib/x.ts was .x.ts)', () => {
