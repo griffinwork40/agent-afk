@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.4] - 2026-08-02
+
+### Fixed
+- make the pipeline's own instruments tell the truth (#847) (4cb26bc)
+
 ## [5.85.3] - 2026-08-02
 
 ### Fixed
