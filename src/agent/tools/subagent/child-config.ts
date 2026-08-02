@@ -148,20 +148,27 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // `resolveOpenAIAuth()` to return the Anthropic key as if it were a config
   // OpenAI key (tier 1 wins) — the OpenAI API then 401s. Clearing them lets
   // the OpenAI auth resolver walk its env / codex precedence cleanly.
-  // Model resolution.
-  //   Unnamed dispatch (legacy, unchanged): call-site > policy default > 'sonnet'.
-  //   Named dispatch (Claude Code parity): call-site > definition model
-  //   ('inherit' → dispatching session's model) > inherit-by-default
-  //   (omitted model also means inherit) > policy default > 'sonnet'.
-  // `parentModel` is optional ctx wiring; when absent, inherit falls
-  // through to the policy chain rather than guessing.
+  // Invariant: an OMITTED definition model means "policy default", never
+  // "inherit the parent". Both dispatch shapes therefore share one chain:
+  //   call-site > definition model > policy default (`defaultSubagentModel`) > 'sonnet'
+  // with exactly one escape hatch: an explicit `model: 'inherit'` resolves to
+  // the dispatching session's model.
+  //
+  // This is load-bearing for cost. `AFK_DEFAULT_SUBAGENT_MODEL` is documented
+  // (src/config/env.ts) as "the default model used when a subagent is
+  // dispatched without an explicit model", and `getDefaultSubagentModel`
+  // (src/cli/shared-helpers.ts) exists so a high-tier parent does not
+  // auto-spawn high-tier children. Treating an omitted model as inherit
+  // silently voided both for every NAMED dispatch — i.e. nearly all of them,
+  // since `agent_type` is the common call shape. An agent that genuinely needs
+  // parent-tier capability must now say so with `model: 'inherit'`.
+  //
+  // `parentModel` is optional ctx wiring; when absent, an explicit 'inherit'
+  // falls through to the policy chain rather than guessing.
   let namedDefaultModel: string | undefined;
   if (namedAgent !== undefined) {
     const defModel = namedAgent.definition.model;
-    namedDefaultModel =
-      defModel !== undefined && defModel !== 'inherit'
-        ? defModel
-        : args.parentModel;
+    namedDefaultModel = defModel === 'inherit' ? args.parentModel : defModel;
   }
   const childModel: string =
     parsed.model ?? namedDefaultModel ?? args.defaultSubagentModel ?? 'sonnet';
