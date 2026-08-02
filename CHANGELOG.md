@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.8] - 2026-08-02
+
+### Fixed
+- close the 1.5s–30s live-progress dead zone (#857) (#867) (399e8fa)
+- match rebuildable ignored FILES on the leaf, not the whole path (#799) (1362fab)
+
 ## [5.85.7] - 2026-08-02
 
 ### Fixed
