@@ -396,7 +396,11 @@ export class SubagentManager {
         // cards/proposals/eval-cases, forge telemetry, pattern-cards, briefs),
         // so children dispatched by /orient, /harvest, /forge, /distill and the
         // improve pipeline were hard-denied the one tree their task requires —
-        // 46 denials across 15 sessions (card subagent-read-denial-ab89c2bd6a6f).
+        // 46 denials across 15 sessions (card subagent-read-denial-ab89c2bd6a6f,
+        // now HISTORICAL: that slug is a hash of the denial reason string, which
+        // was reworded when the read remedy moved to
+        // `tools/hooks/fork-denial-remedy.ts`. Post-rewording denials accumulate
+        // under a new slug; this card no longer accrues sightings).
         // Same guard as Gap A: this dir only, NEVER ~/.afk/config (credentials).
         ...(parentUnconfined
           ? {}

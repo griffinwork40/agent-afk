@@ -36,6 +36,7 @@ import { DEFAULT_CLI_PERMISSION_MODE } from '../../../cli/config/types.js';
 import type { RegisteredAgent } from '../../agents/index.js';
 import type { ModelProvider } from '../../provider.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
+import { builtinAgents } from '../../agents/builtins.js';
 
 /** A parsed AgentInput with the fields buildChildConfig reads. */
 function parsed(overrides?: Partial<AgentInput>): AgentInput {
@@ -196,6 +197,115 @@ describe('buildChildConfig', () => {
     });
   });
 
+  describe('childSideEffectFree (stream-cut retry gating)', () => {
+    it('is true only for an explicitly pure-read cage', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'grep', 'config_get'] }),
+      );
+      expect(childSideEffectFree).toBe(true);
+    });
+
+    it.each(['send_telegram', 'config_set', 'create_schedule', 'browser_act', 'bash'])(
+      'is false when the cage grants side-effecting tool %s',
+      (tool) => {
+        const { childSideEffectFree } = buildChildConfig(
+          baseArgs({ allowedTools: ['read_file', tool] }),
+        );
+        expect(childSideEffectFree).toBe(false);
+      },
+    );
+
+    it('never treats best-effort read-only bash as replay-safe', () => {
+      expect(buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'bash'], readOnlyBash: true }),
+      ).childSideEffectFree).toBe(false);
+    });
+
+    it('treats the real research-agent surface as replay-safe', () => {
+      const realResearchAgent = builtinAgents().get('research-agent');
+      expect(realResearchAgent).toBeDefined();
+      // Registry required: research-agent's `Agent(git-investigator)` scope is
+      // now RESOLVED, not merely counted, so the leaf's own surface is checked.
+      expect(
+        buildChildConfig(
+          baseArgs({ namedAgent: realResearchAgent, agentRegistry: builtinAgents() }),
+        ).childSideEffectFree,
+      ).toBe(true);
+    });
+
+    // Invariant: scoping alone must never authorize a replay. `general-purpose`
+    // is inherit-all (write_file/edit_file/bash) and, at top level, the
+    // grandchild is UNCAGED — child-config forwards the absent cage and
+    // nesting.ts falls back to CHILD_ALLOWED_TOOLS. A scoped grant naming it
+    // therefore has to fail closed exactly like a bare `Agent` token does.
+    it('is false for a SCOPED grant naming a write-capable type (Agent(general-purpose))', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'Agent(general-purpose)'] }),
+          agentRegistry: builtinAgents(),
+        }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('is false for a scoped grant naming an unresolvable type', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'Agent(no-such-agent)'] }),
+          agentRegistry: builtinAgents(),
+        }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('is false for a scoped grant when no registry is wired to resolve it', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent(git-investigator)'] }) }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    // Invariant: `agent` is the one member of STREAM_CUT_RETRY_SAFE_TOOLS whose
+    // reach is transitive, so membership alone must never authorize a replay.
+    // A bare `Agent` token resolves to `nestedAgentTypes: undefined` =
+    // UNRESTRICTED nesting (agents/resolve.ts extractNestedAgentScope), which
+    // leaves `nestedAgentAllowlist` unset and lets the executor dispatch
+    // `general-purpose` — inherit-all, write_file/edit_file/bash — as a
+    // grandchild. Replaying the prompt would re-fire those writes.
+    it('is false for an UNSCOPED nested-agent grant (bare Agent token)', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent'] }) }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('is false when a cage grants nested dispatch with no scoping resolvable', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'agent'] }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('stays true for a SCOPED nested-agent grant naming a read-only leaf', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'Agent(git-investigator)'] }),
+          agentRegistry: builtinAgents(),
+        }),
+      );
+      expect(childSideEffectFree).toBe(true);
+    });
+
+    it('stays true for an explicit deny-all nested grant (Agent())', () => {
+      // `Agent()` → nestedAgentTypes: [] — dispatch tool granted, zero types
+      // permitted, so no grandchild is reachable and replay stays safe.
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent()'] }) }),
+      );
+      expect(childSideEffectFree).toBe(true);
+    });
+  });
+
   describe('systemPrompt selection', () => {
     it('appends the handoff contract to the parent base prompt for an unnamed dispatch', () => {
       const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));
@@ -284,14 +394,30 @@ describe('buildChildConfig', () => {
       expect(childConfig.model).toBe('haiku');
     });
 
-    it('treats an omitted named model as inherit (uses parentModel)', () => {
+    // An omitted model resolves to the POLICY default, not the parent's model.
+    // Inheritance is opt-in via an explicit `model: 'inherit'` (covered above).
+    // Guards the cost contract of `AFK_DEFAULT_SUBAGENT_MODEL`: a high-tier
+    // parent must not silently auto-spawn high-tier named children.
+    it('resolves an omitted named model to the policy default, NOT parentModel', () => {
       const { childConfig } = buildChildConfig(
         baseArgs({
           namedAgent: namedAgent({}), // no model field
           parentModel: 'opus',
+          defaultSubagentModel: 'sonnet',
         }),
       );
-      expect(childConfig.model).toBe('opus');
+      expect(childConfig.model).toBe('sonnet');
+    });
+
+    it('resolves an omitted named model to sonnet when no policy default is wired', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({}), // no model field
+          parentModel: 'opus',
+          defaultSubagentModel: undefined,
+        }),
+      );
+      expect(childConfig.model).toBe('sonnet');
     });
   });
 

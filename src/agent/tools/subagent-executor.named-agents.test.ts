@@ -237,10 +237,16 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('opus');
   });
 
-  it('named dispatch with omitted model inherits the parent model (CC parity)', async () => {
+  // `research-agent` declares no model, so it takes the policy default rather
+  // than the dispatching session's model. Regression guard: this previously
+  // resolved to 'opus' (parent), which silently voided
+  // `AFK_DEFAULT_SUBAGENT_MODEL` for every named dispatch and let a high-tier
+  // parent auto-spawn high-tier read-only children. Inheritance is now opt-in
+  // via `model: 'inherit'` — see the 'inheritor' case above.
+  it('named dispatch with omitted model takes the policy default, not the parent model', async () => {
     const executor = makeExecutor({ defaultSubagentModel: 'haiku' });
     await executor.execute(makeCall({ prompt: 'go', agent_type: 'research-agent' }));
-    expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('opus');
+    expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('haiku');
   });
 
   it('unnamed dispatch keeps the policy default chain', async () => {

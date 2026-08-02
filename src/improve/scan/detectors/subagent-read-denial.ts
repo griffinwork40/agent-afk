@@ -60,6 +60,68 @@ const READ_TOOL_NAMES: ReadonlySet<string> = new Set([
   'NotebookRead',
 ]);
 
+/**
+ * Invariant: several DIFFERENT mechanisms surface as `PreToolUse` read blocks,
+ * and only one of them is ever a defect.
+ *
+ *   - `read-root-containment` — the resolved path fell outside the fork's
+ *     granted read roots. A fork cannot prompt a human, so the hook hard-blocks
+ *     (`path-approval-hook.ts`, the confinement branch). This CAN be a real
+ *     scope gap worth a card.
+ *   - `credential-floor` — the unconditional read-denylist floor refusing a
+ *     credential path (`~/.afk/config/afk.env`, `mcp.json`, `~/.ssh`, …) via
+ *     `isReadDenied` / `BUILTIN_READ_DENYLIST`. This is the guardrail working
+ *     exactly as designed and no read-scope widening should ever make it stop
+ *     firing.
+ *   - `unclassified` — a real PreToolUse/block on a read-family tool whose
+ *     reason matches neither positive marker below. A human declining an
+ *     interactive prompt (`path-approval-hook.ts`'s `User denied access to
+ *     <path>`) and a tool-allowlist refusal (`permissions.ts`'s `Tool "<x>" is
+ *     not in the configured allowlist`) both land here — neither's remedy is
+ *     "widen read roots", so mislabeling either as containment sends a triager
+ *     toward a fix that cannot work.
+ *
+ * Conflating the floor with containment manufactured a card
+ * (`subagent-read-denial-cf21041f85be`, open/high, N=9) whose every evidence
+ * row was the credential floor doing its job — and, worse, made that noise
+ * indistinguishable from the genuine agent-framework scope gap it sat next to.
+ * Floor denials are therefore dropped before fingerprinting: they never reach
+ * a bucket, so they can never merge into or inflate a containment card.
+ * `unclassified` denials are NOT dropped — they still fingerprint and count
+ * exactly as containment did before this split; only the label changes, from
+ * a false positive assertion to an honest "don't know".
+ */
+export type DenialMechanism = 'read-root-containment' | 'credential-floor' | 'unclassified';
+
+/**
+ * Contract: classify from the deny reason alone — the trace carries no explicit
+ * mechanism field. Detection is POSITIVE for both non-default outcomes; a
+ * reason matching neither marker is `unclassified` rather than assumed to be
+ * containment.
+ *
+ * The floor's message is machine-generated in one place and embeds the literal
+ * marker `read-denylist entry:` plus a protected-path phrase. Containment is
+ * matched on two wordings: `Sub-agent path access denied:` — the current
+ * prefix, documented load-bearing at `path-approval-hook.ts:301` — and the
+ * legacy `Sub-agents cannot access paths outside the session's granted roots`,
+ * which still appears on cards written before the reword. Matching markers is
+ * stable against the path itself varying (and against path normalization,
+ * which rewrites paths but not this prose).
+ */
+export function classifyDenialMechanism(reason: string): DenialMechanism {
+  const isFloor =
+    reason.includes('read-denylist entry:') ||
+    reason.includes('is a protected credential/secret path');
+  if (isFloor) return 'credential-floor';
+
+  const isContainment =
+    reason.includes('Sub-agent path access denied:') ||
+    reason.includes("Sub-agents cannot access paths outside the session's granted roots");
+  if (isContainment) return 'read-root-containment';
+
+  return 'unclassified';
+}
+
 export interface SubagentReadDenialOptions {
   minOccurrences?: number;
 }
@@ -72,6 +134,7 @@ interface DenialSighting {
   reason: string;
   normalizedReason: string;
   blockedTool: string;
+  mechanism: DenialMechanism;
 }
 
 /**
@@ -111,6 +174,11 @@ export function detectSubagentReadDenial(
       if (blockedTool === undefined || !READ_TOOL_NAMES.has(blockedTool)) continue;
 
       const reason = ev.payload.reason ?? '';
+      // The credential floor is by-design, never a defect — drop it before it
+      // can reach a fingerprint bucket. See DenialMechanism. Every other
+      // mechanism, `unclassified` included, is kept and labelled honestly.
+      const mechanism = classifyDenialMechanism(reason);
+      if (mechanism === 'credential-floor') continue;
       const normalizedReason = normalizeReason(reason);
       const fingerprint = computeFingerprint({ hookEvent: ev.payload.hookEvent, normalizedReason });
 
@@ -122,6 +190,7 @@ export function detectSubagentReadDenial(
         reason,
         normalizedReason,
         blockedTool,
+        mechanism,
       };
 
       const bucket = byFingerprint.get(fingerprint);
@@ -183,10 +252,23 @@ function buildResult(fingerprint: string, sightings: DenialSighting[]): Detector
     observedAt,
     evidence,
     detail: {
-      detector: 'subagent-read-denial@v1',
+      // @v2: credential-floor denials are dropped before fingerprinting, so
+      // `denialCount` / `distinctSessions` no longer include them, and
+      // `denialMechanism` is now observed per sighting rather than assumed. The
+      // version bump lets `reconcileSeverity` re-derive a card whose v1 severity
+      // was computed from floor-inflated counts — under escalate-only it could
+      // never come back down.
+      detector: 'subagent-read-denial@v2',
       fingerprintAlgorithm: FINGERPRINT_ALGORITHM,
       fingerprint,
       hookEvent: 'PreToolUse',
+      // Contract: read from the first sighting, not asserted as a literal. The
+      // fingerprint tuple is (hookEvent, normalizedReason) and the mechanism is
+      // a pure function of the reason, so every sighting in this bucket
+      // classifies identically — the first is representative of all of them.
+      // The tuple itself is unchanged, so pre-existing containment card slugs
+      // keep their identity across this change.
+      denialMechanism: first.mechanism,
       normalizedReason: first.normalizedReason,
       reason: first.reason,
       blockedTools,
