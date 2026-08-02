@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.10] - 2026-08-02
+
+### Changed
+- split bootstrap.ts into 9 phase modules (#823) (#873) (8f28491)
+
 ## [5.85.9] - 2026-08-02
 
 ### Fixed
