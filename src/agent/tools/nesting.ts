@@ -60,8 +60,8 @@ export const MAX_NESTING_DEPTH_CEILING = 6;
 export function resolveMaxNestingDepth(): number {
   const raw = env.AFK_MAX_NESTING_DEPTH;
   if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_NESTING_DEPTH;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0 || n > MAX_NESTING_DEPTH_CEILING) {
+  const n = Number(raw.trim());
+  if (!Number.isInteger(n) || n < 0 || n > MAX_NESTING_DEPTH_CEILING) {
     return DEFAULT_MAX_NESTING_DEPTH;
   }
   return n;
