@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.1] - 2026-08-02
+
+### Fixed
+- sweep every repo root known to hold managed trees (#761) (#771) (f237057)
+
+### Changed
+- bump @types/node from 26.1.1 to 26.1.2 in /website (#855) (c62558c)
+- bump the fumadocs group in /website with 2 updates (#854) (9477a77)
+
 ## [5.85.0] - 2026-08-02
 
 ### Added
