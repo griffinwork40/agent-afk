@@ -22,9 +22,9 @@ describe('resolveWorktreeExitPolicy', () => {
 });
 
 describe('resolveWorktreeDisposition', () => {
-  it('skips the picker on non-TTY', async () => {
+  it('resolves to keep on non-TTY ask (reversible default when no picker can be shown)', async () => {
     const picker = vi.fn();
-    await expect(resolveWorktreeDisposition({ picker, isTTY: false, policy: 'ask', turnCount: 1, hasWorktree: true, console: quietConsole })).resolves.toBe('remove');
+    await expect(resolveWorktreeDisposition({ picker, isTTY: false, policy: 'ask', turnCount: 1, hasWorktree: true, console: quietConsole })).resolves.toBe('keep');
     expect(picker).not.toHaveBeenCalled();
   });
 

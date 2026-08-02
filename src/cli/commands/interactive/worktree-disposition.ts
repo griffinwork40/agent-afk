@@ -43,14 +43,25 @@ const REMOVE_OPTION = 'Delete worktree and branch';
 export async function resolveWorktreeDisposition(
   deps: WorktreeDispositionDeps,
 ): Promise<WorktreeDisposition> {
+  // Zero-turn or no worktree: nothing to preserve, so remove unconditionally.
+  // (The `force: true` flag at interactive.ts independently short-circuits
+  // zero-turn sessions; disposition is moot here, but 'remove' is semantically
+  // correct so the resolved value never contradicts the force override.)
+  if (deps.turnCount <= 0 || !deps.hasWorktree) {
+    return 'remove';
+  }
+  // Explicit keep/remove is honoured regardless of TTY or picker availability.
+  // An unpromptable 'ask' resolves to the reversible disposition (keep),
+  // matching the picker-cancel (Esc) and picker-error paths below — ambiguity
+  // picks the reversible option, not the destructive one. This covers the
+  // signal-driven and double-Ctrl+C/D exit routes where the input surface is
+  // already closed by the time cleanup runs and no picker can be shown.
   if (
     deps.policy !== 'ask' ||
     !deps.isTTY ||
-    deps.picker === undefined ||
-    deps.turnCount <= 0 ||
-    !deps.hasWorktree
+    deps.picker === undefined
   ) {
-    return deps.policy === 'keep' ? 'keep' : 'remove';
+    return deps.policy === 'remove' ? 'remove' : 'keep';
   }
 
   try {

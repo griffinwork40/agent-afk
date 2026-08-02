@@ -902,8 +902,8 @@ describe('interactive worktree flag', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(worktreeCleanup).toHaveBeenCalledTimes(1);
-    // Non-TTY harness ⇒ no picker ⇒ policy falls back to 'remove', which is the
-    // exact pre-picker behaviour this test has always asserted.
+    // Non-TTY harness ⇒ resolveWorktreeExitPolicy returns 'remove' (the non-TTY
+    // fallback), so disposition is 'remove' regardless of the ask-keep fix.
     expect(worktreeCleanup).toHaveBeenCalledWith({ force: false, disposition: 'remove' });
   });
 });
