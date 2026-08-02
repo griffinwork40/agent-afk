@@ -20,6 +20,7 @@ import { dirname, resolve, join } from 'path';
 import { homedir } from 'os';
 import { getAfkHome, getAfkStateDir } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+import { pathIsWithin } from '../fs-case.js';
 
 /**
  * Paths that write_file / edit_file must never touch — credential stores,
@@ -178,7 +179,7 @@ export function safeRealpath(p: string): string {
 export function assertNotDenylisted(filePath: string, handlerName = 'write_file'): void {
   const real = safeRealpath(resolve(filePath));
   for (const blocked of getWriteDenylist()) {
-    if (real === blocked || real.startsWith(blocked + '/')) {
+    if (pathIsWithin(real, blocked)) {
       throw new Error(
         `${handlerName}: refusing to write to protected path: ${real}` +
           ` (matches denylist entry: ${blocked})`,
