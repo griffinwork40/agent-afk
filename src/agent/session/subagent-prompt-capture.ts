@@ -2,8 +2,10 @@
  * Opt-in capture of the prompts a parent session sends to its subagents.
  *
  * Writes one markdown file per inbound child message (YAML frontmatter for
- * attribution + the verbatim prompt body) under
- * `state/witness/<sessionLabel>/prompts/`. The directory IS the index — no trace
+ * attribution + the prompt body) under `state/witness/<sessionLabel>/prompts/`.
+ * The body is verbatim for string prompts; a content-block prompt arrives
+ * already summarized by the caller, which is deliberate — it keeps base64 image
+ * data off disk. The directory IS the index — no trace
  * event references these files, so capture works whether or not a `TraceWriter`
  * is wired.
  *
@@ -20,6 +22,7 @@
  * @module agent/session/subagent-prompt-capture
  */
 
+import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -50,7 +53,11 @@ export interface CaptureSubagentPromptInput {
   model: string | undefined;
   /** 1-based index of this inbound message on the child (multi-turn safe). */
   turn: number;
-  /** The composed prompt the child actually received. */
+  /**
+   * The composed prompt the child actually received — verbatim for string
+   * prompts. A `ContentBlockParam[]` prompt arrives already summarized by the
+   * caller (deliberate: it keeps base64 image data off disk).
+   */
   prompt: string;
 }
 
@@ -113,7 +120,11 @@ export function buildPromptDocument(
     `sessionLabel: ${yamlString(input.sessionId ?? 'unknown')}`,
     `turn: ${input.turn}`,
     `capturedAt: ${yamlString(new Date().toISOString())}`,
-    `promptBytes: ${input.prompt.length > 0 ? capture.originalBytes : 0}`,
+    // `promptBytes` is the original inbound size; `bodyBytes` is what was
+    // actually written after truncation and redaction. They differ whenever
+    // either step altered the text.
+    `promptBytes: ${capture.originalBytes}`,
+    `bodyBytes: ${Buffer.byteLength(capture.text, 'utf8')}`,
     `truncated: ${capture.truncated}`,
     'redaction: best-effort',
   ];
@@ -134,19 +145,31 @@ export function buildPromptDocument(
 export async function captureSubagentPrompt(input: CaptureSubagentPromptInput): Promise<void> {
   try {
     if (!shouldCaptureSubagentPrompt(input)) return;
-    // Invariant: truncate before redacting (see truncateToBytes).
     const capped = truncateToBytes(input.prompt, MAX_CAPTURED_PROMPT_BYTES);
-    const body = redactInlineSecrets(capped.text);
+    // Invariant: truncate before redacting (see truncateToBytes), but a byte-cut
+    // can split a secret into a prefix shorter than the redactor's minimum
+    // quantifier (e.g. `([^\s]{16,})`), leaving partial key material unredacted.
+    // Drop the trailing partial token first.
+    const safeText = capped.truncated ? capped.text.replace(/\S+$/, '') : capped.text;
+    const body = redactInlineSecrets(safeText);
     const doc = buildPromptDocument(input, { ...capped, text: body });
 
     // sessionId/subagentId are non-empty here — shouldCapture guarantees it.
     const dir = getPromptsDir(input.sessionId as string);
-    await mkdir(dir, { recursive: true });
+    await mkdir(dir, { recursive: true, mode: 0o700 });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const file = join(dir, `${stamp}-${safeSlug(input.subagentId as string)}-t${input.turn}.md`);
+    // Nonce disambiguates same-millisecond sibling forks whose slugged ids
+    // collide after safeSlug's 60-char truncation. Without it, 'wx' below would
+    // drop the LATER prompt on a collision instead of the earlier one.
+    const nonce = randomBytes(3).toString('hex');
+    const file = join(
+      dir,
+      `${stamp}-${safeSlug(input.subagentId as string)}-t${input.turn}-${nonce}.md`,
+    );
     // mode at creation, not a later chmod — no TOCTOU window on a file that may
-    // hold secrets (same idiom as the transcript writer).
-    await writeFile(file, doc, { encoding: 'utf8', mode: 0o600, flag: 'w' });
+    // hold secrets (same idiom as the transcript writer). 'wx' refuses to follow
+    // a pre-planted symlink at the target path.
+    await writeFile(file, doc, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   } catch (err) {
     debugLog(`subagent-prompt-capture failed: ${String(err)}`);
   }

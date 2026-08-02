@@ -49,6 +49,19 @@ async function waitForPromptFiles(sessionId: string, count: number): Promise<str
   }
 }
 
+/** Poll a short window and fail if ANY prompt file appears. Guards against a
+ *  negative assertion that passes only because capture had not run yet. */
+async function expectNoPromptFiles(sessionId: string, windowMs = 250): Promise<void> {
+  const deadline = Date.now() + windowMs;
+  for (;;) {
+    if (promptFiles(sessionId).length > 0) {
+      throw new Error(`expected no prompt files for ${sessionId}, found some`);
+    }
+    if (Date.now() > deadline) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 describe('subagent prompt capture wiring', () => {
   beforeEach(() => {
     process.env['AFK_CAPTURE_SUBAGENT_PROMPTS'] = '1';
@@ -114,7 +127,7 @@ describe('subagent prompt capture wiring', () => {
     const session = new AgentSession({ model: 'sonnet', provider });
     try {
       await drainTurn(session, 'this is the operator talking, not a dispatch');
-      expect(promptFiles(sessionId)).toHaveLength(0);
+      await expectNoPromptFiles(sessionId);
     } finally {
       await session.close();
     }
@@ -133,7 +146,7 @@ describe('subagent prompt capture wiring', () => {
     });
     try {
       await drainTurn(session, 'should not be recorded');
-      expect(promptFiles(sessionId)).toHaveLength(0);
+      await expectNoPromptFiles(sessionId);
     } finally {
       await session.close();
     }
@@ -154,8 +167,8 @@ describe('subagent prompt capture wiring', () => {
       await drainTurn(session, 'second dispatch');
       const files = await waitForPromptFiles(sessionId, 2);
       expect(files).toHaveLength(2);
-      expect(files.some((f) => f.endsWith('-t1.md'))).toBe(true);
-      expect(files.some((f) => f.endsWith('-t2.md'))).toBe(true);
+      expect(files.some((f) => /-t1-[0-9a-f]{6}\.md$/.test(f))).toBe(true);
+      expect(files.some((f) => /-t2-[0-9a-f]{6}\.md$/.test(f))).toBe(true);
     } finally {
       await session.close();
       fs.rmSync(getPromptsDir(sessionId), { recursive: true, force: true });
@@ -176,8 +189,8 @@ describe('subagent prompt capture wiring', () => {
       await drainTurn(session, 'retry succeeds');
       const files = await waitForPromptFiles(sessionId, 2);
       expect(files).toHaveLength(2);
-      expect(files.some((f) => f.endsWith('-t1.md'))).toBe(true);
-      expect(files.some((f) => f.endsWith('-t2.md'))).toBe(true);
+      expect(files.some((f) => /-t1-[0-9a-f]{6}\.md$/.test(f))).toBe(true);
+      expect(files.some((f) => /-t2-[0-9a-f]{6}\.md$/.test(f))).toBe(true);
     } finally {
       await session.close();
       fs.rmSync(getPromptsDir(sessionId), { recursive: true, force: true });

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Import after AFK_HOME is set so path helpers resolve into the temp dir.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-prompt-capture-home-'));
@@ -11,6 +11,7 @@ process.env['AFK_HOME'] = tmpHome;
 const { getPromptsDir } = await import('../../paths.js');
 const {
   MAX_CAPTURED_PROMPT_BYTES,
+  PROMPT_CAPTURE_BANNER,
   buildPromptDocument,
   captureSubagentPrompt,
   shouldCaptureSubagentPrompt,
@@ -132,6 +133,9 @@ describe('buildPromptDocument', () => {
     });
     expect(doc).toContain('truncated: true');
     expect(doc).toContain(`TRUNCATED at ${MAX_CAPTURED_PROMPT_BYTES} bytes of 99999`);
+    // promptBytes describes the inbound prompt, bodyBytes the retained text.
+    expect(doc).toContain('promptBytes: 99999');
+    expect(doc).toContain(`bodyBytes: ${Buffer.byteLength('kept', 'utf8')}`);
   });
 
   it('omits the model line when the model is unknown', () => {
@@ -158,7 +162,8 @@ describe('captureSubagentPrompt', () => {
     const dir = getPromptsDir(SESSION);
     const files = fs.readdirSync(dir);
     expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/^.+-research-agent-1-t1\.md$/);
+    // `-<6 hex>` is the collision nonce appended after the turn marker.
+    expect(files[0]).toMatch(/^.+-research-agent-1-t1-[0-9a-f]{6}\.md$/);
     const body = fs.readFileSync(path.join(dir, files[0] as string), 'utf8');
     expect(body).toContain('map the module');
   });
@@ -184,8 +189,8 @@ describe('captureSubagentPrompt', () => {
     await captureSubagentPrompt(baseInput({ turn: 2, prompt: 'second' }));
     const files = fs.readdirSync(getPromptsDir(SESSION));
     expect(files).toHaveLength(2);
-    expect(files.some((f) => f.endsWith('-t1.md'))).toBe(true);
-    expect(files.some((f) => f.endsWith('-t2.md'))).toBe(true);
+    expect(files.some((f) => /-t1-[0-9a-f]{6}\.md$/.test(f))).toBe(true);
+    expect(files.some((f) => /-t2-[0-9a-f]{6}\.md$/.test(f))).toBe(true);
   });
 
   it('writes nothing when disabled', async () => {
@@ -198,5 +203,67 @@ describe('captureSubagentPrompt', () => {
     await expect(
       captureSubagentPrompt(baseInput({ sessionId: '../escape' })),
     ).resolves.toBeUndefined();
+  });
+
+  it('creates the prompts dir owner-only — filenames leak subagent ids', async () => {
+    await captureSubagentPrompt(baseInput());
+    expect(fs.statSync(getPromptsDir(SESSION)).mode & 0o777).toBe(0o700);
+  });
+
+  it('keeps same-millisecond captures of the same id and turn as distinct files', async () => {
+    // Freeze the clock so both writes derive an IDENTICAL timestamp stamp: only
+    // the nonce can separate them. Without it the second write is lost.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    try {
+      await captureSubagentPrompt(baseInput({ turn: 3, prompt: 'sibling fork A' }));
+      await captureSubagentPrompt(baseInput({ turn: 3, prompt: 'sibling fork B' }));
+    } finally {
+      vi.useRealTimers();
+    }
+    const dir = getPromptsDir(SESSION);
+    const files = fs.readdirSync(dir).sort();
+    expect(files).toHaveLength(2);
+    expect(new Set(files).size).toBe(2);
+    const bodies = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8'));
+    expect(bodies.some((b) => b.includes('sibling fork A'))).toBe(true);
+    expect(bodies.some((b) => b.includes('sibling fork B'))).toBe(true);
+  });
+
+  it('leaves no partial key material when a secret straddles the byte cut', async () => {
+    // Position `SOME_TOKEN=` so exactly 8 chars of its value survive the cut —
+    // below the redactor's `([^\s]{16,})` minimum, so redaction alone misses it.
+    const value = 'QWERTYUIOPASDFGHJKLZXCVBNM1234567890';
+    const survivingValueChars = 8;
+    const assign = 'SOME_TOKEN=';
+    const padding = `${'a'.repeat(
+      MAX_CAPTURED_PROMPT_BYTES - assign.length - survivingValueChars - 1,
+    )} `;
+    const prompt = `${padding}${assign}${value} trailing text`;
+    expect(Buffer.byteLength(`${padding}${assign}${value.slice(0, survivingValueChars)}`)).toBe(
+      MAX_CAPTURED_PROMPT_BYTES,
+    );
+
+    await captureSubagentPrompt(baseInput({ prompt }));
+    const dir = getPromptsDir(SESSION);
+    const body = fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0] as string), 'utf8');
+    expect(body).toContain('truncated: true');
+    // No prefix of the value — however short — may reach disk.
+    expect(body).not.toContain(value.slice(0, 4));
+    expect(body).not.toContain(assign);
+  });
+
+  it('reports promptBytes (inbound) and bodyBytes (written) separately', async () => {
+    const prompt = 'z'.repeat(MAX_CAPTURED_PROMPT_BYTES * 2);
+    await captureSubagentPrompt(baseInput({ prompt }));
+    const dir = getPromptsDir(SESSION);
+    const body = fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0] as string), 'utf8');
+    const promptBytes = Number(/^promptBytes: (\d+)$/m.exec(body)?.[1]);
+    const bodyBytes = Number(/^bodyBytes: (\d+)$/m.exec(body)?.[1]);
+    expect(promptBytes).toBe(MAX_CAPTURED_PROMPT_BYTES * 2);
+    expect(bodyBytes).toBeLessThan(promptBytes);
+    // bodyBytes must describe the text actually on disk, not the budget.
+    const written = body.slice(body.indexOf(PROMPT_CAPTURE_BANNER) + PROMPT_CAPTURE_BANNER.length);
+    expect(written).toContain('z'.repeat(bodyBytes));
   });
 });
