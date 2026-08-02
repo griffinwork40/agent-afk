@@ -37,11 +37,15 @@
  *   - A single anomalous closure is meaningful but noisy. Default
  *     threshold is 1 — every anomalous closure is flagged — but
  *     `minOccurrences` lifts the bar when desired.
- *   - Every count and cost in `detail` is PER SESSION, not per closure event.
- *     One parent timeout cascade-cancels its children and each writes its own
- *     `closure` event into the same trace, so an event-keyed rollup reported a
- *     single session as several and multi-counted its cumulative cost. The raw
- *     event total survives as `detail.closureEventCount`.
+ *   - `detail` reports TWO granularities on purpose, because a witness trace
+ *     file is not one agent. `affectedSessions` / `sessionIds` count WITNESS
+ *     TRACE FILES (`SessionRead.sessionId`, the witness directory name);
+ *     `closureEventCount`, `totalCostUsd`, `maxCostUsd` and `avgTurnCount`
+ *     aggregate every closure EVENT, i.e. every AgentSession instance. A
+ *     parent and each child it forked write into the SAME trace file and each
+ *     owns a DISJOINT cost accumulator, so summing events recovers that trace
+ *     file's true spend while counting them would invent phantom sessions —
+ *     see {@link distinctSessionIds}.
  *
  * @module improve/scan/detectors/closure-anomaly
  */
@@ -118,66 +122,74 @@ export function detectClosureAnomaly(
 
   const results: DetectorResult[] = [];
   for (const [reason, sightings] of byReason.entries()) {
-    // Contract: the threshold, the rollup arithmetic, and the evidence rows all
-    // count SESSIONS, not closure events. See collapseBySession.
-    const perSession = collapseBySession(sightings);
-    if (perSession.length < minOccurrences) continue;
-    results.push(buildResult(reason, perSession, sightings.length));
+    // Contract: the THRESHOLD counts sessions — one noisy trace file must not
+    // clear a multi-session bar — while the cost/turn aggregates and the
+    // evidence rows count EVENTS. See distinctSessionIds and buildResult.
+    const sessionIds = distinctSessionIds(sightings);
+    if (sessionIds.length < minOccurrences) continue;
+    results.push(buildResult(reason, sessionIds, sightings));
   }
   return results;
 }
 
 /**
- * Invariant: one row per session per reason — a session that emitted N closure
- * events sharing a reason contributes exactly ONE sighting downstream.
+ * Invariant: one entry per WITNESS TRACE FILE per reason — a `sessionId` that
+ * emitted N closure events sharing a reason contributes exactly ONE id here.
  *
- * A single parent timeout cascade-cancels every in-flight child, and each
- * cancellation writes its own `closure{reason:'timeout'}` event into the SAME
- * trace. Rolling those up per-event made one parent look like N independent
- * sessions: `affectedSessions` counted events, `sessionIds` carried duplicate
- * ids, and `finalCostUsd` — a CUMULATIVE figure, not an increment — was summed
- * once per child, inflating reported spend severalfold.
+ * `sessionId` is the witness trace file's directory name (`reader.ts`'s
+ * `parseTraceContent` stamps it onto every event parsed from that one
+ * `trace.jsonl`), NOT a per-`AgentSession`-instance identity. A parent timeout
+ * cascade-cancels every in-flight child and each cancellation writes its own
+ * `closure{reason}` event into the SAME trace, because forked subagents share
+ * the parent's `TraceWriter` by reference (`subagent.ts`'s
+ * `effectiveTraceWriter` resolution). Counting those events as sessions made
+ * one trace look like N independent ones and emitted duplicate ids; counting
+ * distinct ids fixes that.
  *
- * The survivor is the highest-cost sighting: `finalCostUsd` is monotonically
- * non-decreasing across a session's life, so the maximum is that session's true
- * final cost. `seq` breaks ties toward the later event. Map insertion order is
- * preserved on overwrite, so first-seen session ordering is stable.
+ * This governs the session COUNT ONLY. Cost and turn aggregates deliberately do
+ * NOT collapse: each instance owns a DISJOINT accumulator, so summing events is
+ * the trace file's true spend. `sessionRunningCostUsd` is written in exactly
+ * two places (re-zeroed in `initSdkLifecycle()`, and `+= m.totalCostUsd` from
+ * that instance's OWN response metadata); a child's spend lands in a SEPARATE
+ * accumulator via `recordSubagentCompletion` (`subagentRunningTokens`) and
+ * never reaches the parent's. An earlier revision kept only the highest-cost
+ * sighting per session, which discarded every other instance's spend and
+ * under-reported the card (codex review, PR #847).
+ *
+ * Returned in first-seen order; `Set` preserves insertion order, so ordering is
+ * stable across runs.
  */
-function collapseBySession(sightings: ClosureSighting[]): ClosureSighting[] {
-  const bySession = new Map<string, ClosureSighting>();
-  for (const s of sightings) {
-    const incumbent = bySession.get(s.sessionId);
-    if (
-      incumbent === undefined ||
-      s.finalCostUsd > incumbent.finalCostUsd ||
-      (s.finalCostUsd === incumbent.finalCostUsd && s.seq > incumbent.seq)
-    ) {
-      bySession.set(s.sessionId, s);
-    }
-  }
-  return [...bySession.values()];
+function distinctSessionIds(sightings: ClosureSighting[]): string[] {
+  return [...new Set(sightings.map((s) => s.sessionId))];
 }
 
 /** Hard cap on evidence rows per card. Same convention as repeated-tool-use. */
 const MAX_EVIDENCE_PER_CARD = 8;
 
 /**
- * Contract: `sightings` MUST already be collapsed to one entry per session
- * (see {@link collapseBySession}); every figure in `detail` is per-session.
- * `closureEventCount` is the RAW pre-collapse event total, preserved because a
- * session emitting many closures for one reason is itself real signal (cascade
- * fan-out width) that the collapse would otherwise discard.
+ * Contract: `sessionIds` is the deduped id list — one entry per witness trace
+ * file (see {@link distinctSessionIds}) — and drives the SESSION-scoped
+ * figures: `affectedSessions`, `sessionIds`, the title, and the severity
+ * ladder. `allSightings` is the raw event list and drives the
+ * INSTANCE-scoped figures: `closureEventCount`, `totalCostUsd`, `maxCostUsd`,
+ * `avgTurnCount`, and the evidence rows.
+ *
+ * The two granularities are reported side by side rather than folded together,
+ * because a trace file is not one agent: collapsing events would under-report
+ * spend and hide a cascade's fan-out, while counting them as sessions would
+ * invent sessions that never existed.
  */
 function buildResult(
   reason: string,
-  sightings: ClosureSighting[],
-  closureEventCount: number,
+  sessionIds: string[],
+  allSightings: ClosureSighting[],
 ): DetectorResult {
   const slug = makeSlug(reason);
   const observedAt = new Date().toISOString();
 
-  // One evidence row per session, capped.
-  const capped = sightings.slice(0, MAX_EVIDENCE_PER_CARD);
+  // One evidence row per closure EVENT, capped — a cascade's distinct child
+  // closures ARE the evidence, so collapsing them here would hide the fan-out.
+  const capped = allSightings.slice(0, MAX_EVIDENCE_PER_CARD);
   const evidence: FailureEvidence[] = capped.map((s) => ({
     sessionId: s.sessionId,
     tracePath: s.relativeTracePath,
@@ -186,26 +198,30 @@ function buildResult(
     annotation: `closure.reason='${s.reason}' · cost=${formatUsd(s.finalCostUsd)} · turns=${s.finalTurnCount}`,
   }));
 
-  const totalCost = sightings.reduce((acc, s) => acc + s.finalCostUsd, 0);
-  const avgTurns = sightings.reduce((acc, s) => acc + s.finalTurnCount, 0) / sightings.length;
+  const totalCost = allSightings.reduce((acc, s) => acc + s.finalCostUsd, 0);
+  const avgTurns =
+    allSightings.reduce((acc, s) => acc + s.finalTurnCount, 0) / allSightings.length;
 
   return {
     slug,
-    title: `Session closure reason '${reason}' across ${sightings.length} session${sightings.length === 1 ? '' : 's'}`,
+    title: `Session closure reason '${reason}' across ${sessionIds.length} session${sessionIds.length === 1 ? '' : 's'}`,
     pattern: 'closure-anomaly',
-    severity: severityFor(reason, sightings.length),
+    severity: severityFor(reason, sessionIds.length),
     observedAt,
     evidence,
     detail: {
-      detector: 'closure-anomaly@v1',
+      // @v2: cost/turn aggregates moved from per-session-survivor to per-event
+      // after the accumulators were confirmed disjoint. The version bump lets a
+      // consumer tell v1's under-reported figures from v2's true totals.
+      detector: 'closure-anomaly@v2',
       closureReason: reason,
-      affectedSessions: sightings.length,
-      closureEventCount,
+      affectedSessions: sessionIds.length,
+      closureEventCount: allSightings.length,
       totalCostUsd: round4(totalCost),
       avgTurnCount: round2(avgTurns),
-      maxCostUsd: round4(Math.max(...sightings.map((s) => s.finalCostUsd))),
-      sessionIds: sightings.map((s) => s.sessionId),
-      seqs: sightings.map((s) => s.seq),
+      maxCostUsd: round4(Math.max(...allSightings.map((s) => s.finalCostUsd))),
+      sessionIds,
+      seqs: allSightings.map((s) => s.seq),
     },
   };
 }

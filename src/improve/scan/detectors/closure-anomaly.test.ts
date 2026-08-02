@@ -276,17 +276,23 @@ describe('detectClosureAnomaly — cascade dedupe (per-session rollup)', () => {
     // One session, not four.
     expect(r.detail['affectedSessions']).toBe(1);
     expect(r.detail['sessionIds']).toEqual(['parent-1']);
-    expect(r.evidence).toHaveLength(1);
 
-    // Cost is the session's true final figure, NOT 10+20+30+40=100.
-    expect(r.detail['totalCostUsd']).toBe(40);
+    // Evidence is per EVENT: a cascade's distinct child closures are the
+    // evidence, so all four survive (codex review, PR #847).
+    expect(r.evidence).toHaveLength(4);
+
+    // Cost sums across instances. The four accumulators are disjoint — a
+    // child's spend never reaches the parent's `sessionRunningCostUsd` — so
+    // 10+20+30+40 IS this trace file's true spend, and the old max-based 40
+    // under-reported it.
+    expect(r.detail['totalCostUsd']).toBe(100);
     expect(r.detail['maxCostUsd']).toBe(40);
 
     // The raw event count survives as its own signal.
     expect(r.detail['closureEventCount']).toBe(4);
 
-    // Turn count comes from the surviving (highest-cost) sighting.
-    expect(r.detail['avgTurnCount']).toBe(6);
+    // Turns average over every instance: (3+4+5+6)/4.
+    expect(r.detail['avgTurnCount']).toBe(4.5);
   });
 
   it('never emits duplicate session ids', () => {
@@ -299,8 +305,9 @@ describe('detectClosureAnomaly — cascade dedupe (per-session rollup)', () => {
     const ids = r.detail['sessionIds'] as string[];
     expect(ids).toEqual(['a', 'b']);
     expect(new Set(ids).size).toBe(ids.length);
-    // Per-session maxima summed: 9 + 7, not 5+9+7.
-    expect(r.detail['totalCostUsd']).toBe(16);
+    // Every instance's disjoint segment summed: 5+9+7, not the per-session
+    // maxima 9+7 — session ids stay deduped, cost does not.
+    expect(r.detail['totalCostUsd']).toBe(21);
     expect(r.detail['closureEventCount']).toBe(3);
   });
 
@@ -328,15 +335,32 @@ describe('detectClosureAnomaly — cascade dedupe (per-session rollup)', () => {
     expect(r.title).not.toContain('2 sessions');
   });
 
-  it('keeps the highest-cost sighting regardless of event order', () => {
+  it('aggregates every instance regardless of event order', () => {
     resetSeq();
-    // Descending cost order — the survivor is still the max, not the last seen.
+    // Descending cost order — nothing is discarded, so the totals are
+    // order-independent and no sighting "wins".
     const sessions = [
       makeSession('p', [closureLine('timeout', 99, 12), closureLine('timeout', 4, 2)]),
     ];
     const r = detectClosureAnomaly(sessions)[0]!;
-    expect(r.detail['totalCostUsd']).toBe(99);
-    expect(r.detail['avgTurnCount']).toBe(12);
+    expect(r.detail['totalCostUsd']).toBe(103);
+    expect(r.detail['maxCostUsd']).toBe(99);
+    expect(r.detail['avgTurnCount']).toBe(7);
+    expect(r.detail['affectedSessions']).toBe(1);
+  });
+
+  it('is order-independent: reversed input yields identical aggregates', () => {
+    resetSeq();
+    const ascending = detectClosureAnomaly([
+      makeSession('p', [closureLine('timeout', 4, 2), closureLine('timeout', 99, 12)]),
+    ])[0]!;
+    resetSeq();
+    const descending = detectClosureAnomaly([
+      makeSession('p', [closureLine('timeout', 99, 12), closureLine('timeout', 4, 2)]),
+    ])[0]!;
+    expect(ascending.detail['totalCostUsd']).toBe(descending.detail['totalCostUsd']);
+    expect(ascending.detail['avgTurnCount']).toBe(descending.detail['avgTurnCount']);
+    expect(ascending.detail['maxCostUsd']).toBe(descending.detail['maxCostUsd']);
   });
 
   it('still parses against DetectorResultSchema after dedupe', () => {
