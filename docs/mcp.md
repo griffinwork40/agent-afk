@@ -155,6 +155,28 @@ than crashing.
 - **No shell in `${VAR}` expansion.** Expansion reads `process.env` directly;
   it never invokes a shell or evaluates expressions.
 
+## Worked example: Parallel Search MCP over HTTP
+
+Parallel Search MCP adds current web search and clean page fetching as optional
+companion tools. Its default endpoint requires no account, API key, or OAuth.
+Add it to your user-global config:
+
+```json
+{
+  "mcpServers": {
+    "parallel-search": {
+      "type": "streamable-http",
+      "url": "https://search.parallel.ai/mcp"
+    }
+  }
+}
+```
+
+Start a new AFK session and run `/mcp` to confirm the server is connected. Its
+tools appear as `mcp__parallel-search__web_search` and
+`mcp__parallel-search__web_fetch`. These are separate MCP tools; this config
+does not replace or reconfigure AFK's built-in Exa-backed web search.
+
 ## Worked example: Brave Search over stdio
 
 ```jsonc
