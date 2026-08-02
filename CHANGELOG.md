@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.5] - 2026-08-02
+
+### Fixed
+- tell a denied fork the remedy that actually works (#851) (1e885fe)
+
 ## [5.85.4] - 2026-08-02
 
 ### Fixed
