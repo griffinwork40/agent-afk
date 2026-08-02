@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.0] - 2026-08-02
+
+### Added
+- opt-in capture of parent→subagent dispatch prompts (#844) (c4b7696)
+
 ## [5.84.17] - 2026-08-02
 
 ### Fixed
