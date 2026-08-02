@@ -42,6 +42,7 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
+import { isChildReplaySafe } from './retry-safety.js';
 
 /** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
@@ -122,6 +123,8 @@ export interface BuildChildConfigResult {
    * isolate, so its worktree is skipped with a debug note.
    */
   childWriteCapable: boolean;
+  /** True only when every granted tool is proven free of persistent side effects. */
+  childSideEffectFree: boolean;
 }
 
 /**
@@ -209,6 +212,33 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
     effectiveReadOnlyBash !== true;
   const childWriteCapable = canWriteFiles || canMutateViaBash;
+  // Retry safety is stricter than filesystem write capability: it covers the
+  // reach of a replayed prompt, not just this child's own tool names. Fail
+  // closed for unrestricted surfaces, for non-file tools that can mutate remote
+  // or persistent state, and for a nested-dispatch grant — whether unscoped, or
+  // scoped to a type that is not itself a replay-safe terminal leaf. Scoping
+  // alone is not enough: `Agent(general-purpose)` is scoped and still reaches an
+  // uncaged write-capable grandchild. See `retry-safety.ts`.
+  const childSideEffectFree = isChildReplaySafe({
+    effectiveAllowedTools,
+    nestedAgentTypes: resolvedAccess?.nestedAgentTypes,
+    // Resolve each scoped grandchild type to its own surface. Omitted when no
+    // registry is wired, which fails closed for any non-empty scope.
+    ...(args.agentRegistry !== undefined
+      ? {
+          resolveNestedAgent: (name: string) => {
+            const leaf = args.agentRegistry?.get(name);
+            if (leaf === undefined) return undefined;
+            const leafAccess = resolveAgentToolAccess(leaf, CHILD_ALLOWED_TOOLS);
+            return {
+              allowedTools: leafAccess.allowedTools,
+              bashReadOnly: leafAccess.bashReadOnly,
+              nestedAgentTypes: leafAccess.nestedAgentTypes,
+            };
+          },
+        }
+      : {}),
+  });
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under
@@ -440,5 +470,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager, childWriteCapable };
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree };
 }
