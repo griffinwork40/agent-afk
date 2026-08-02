@@ -109,7 +109,15 @@ export function formatOutcome(
   maxPreview = 60,
   toolName?: string,
 ): string {
-  const resultColor = chunk.isError ? palette.error : palette.dim;
+  // Three-tone split mirrors doneGlyph()/formatGroupedSibling(): a benign
+  // refusal (isError with a class in BENIGN_FAILURE_CLASSES) tones its body
+  // palette.warning to match the neutral ⊘ glyph beside it, so the row never
+  // reads `⊘ <red text>`. An unclassified failure stays palette.error — byte-
+  // for-byte identical to pre-#75 behavior — since absence of a class means
+  // we do not know it was benign.
+  const resultColor = chunk.isError
+    ? (isBenignFailure(chunk.failureClass) ? palette.warning : palette.error)
+    : palette.dim;
   const effectiveHomeDir = homeDir ?? env.HOME ?? '___NOHOME___';
 
   // Handler-supplied display string wins over every other branch. The tool

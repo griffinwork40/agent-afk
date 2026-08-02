@@ -115,6 +115,12 @@ export async function* dispatchToolCalls(
   } else {
     results = [];
     for (const call of calls) {
+      // `abort` here covers ANY signal-fired teardown — deliberate user
+      // cancel, session timeout, or budget exhaustion all funnel through the
+      // same AbortSignal (requestAbort() only tracks 'interrupted' | 'closed',
+      // see abort-coordinator.ts:56), so the original cause is lost by the
+      // time this dispatch site sees `signal.aborted`. Widening AbortReason
+      // to carry the origin is the real fix; out of scope here.
       if (input.signal.aborted) {
         results.push({
           content: 'Tool call aborted',

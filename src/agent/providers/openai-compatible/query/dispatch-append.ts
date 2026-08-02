@@ -123,6 +123,13 @@ export async function* dispatchAndAppendToolCalls({
 
   if (signal.aborted) {
     // Aborted before dispatch — synthesize aborted results and emit outputs.
+    // `abort` here (both the pushed result and the yielded event below) covers
+    // ANY signal-fired teardown — deliberate user cancel, session timeout, or
+    // budget exhaustion all funnel through the same AbortSignal
+    // (requestAbort() only tracks 'interrupted' | 'closed', see
+    // abort-coordinator.ts:56), so the original cause is lost by the time this
+    // dispatch site sees `signal.aborted`. Widening AbortReason to carry the
+    // origin is the real fix; out of scope here.
     for (const call of calls) {
       const result: ToolResult = {
         content: 'Tool call aborted',
@@ -149,6 +156,8 @@ export async function* dispatchAndAppendToolCalls({
       } else {
         dispatcherResults = [];
         for (const call of calls) {
+          // Same abort-origin caveat as the pre-dispatch branch above:
+          // `signal.aborted` cannot distinguish cancel/timeout/budget here either.
           if (signal.aborted) {
             dispatcherResults.push({
               content: 'Tool call aborted',
