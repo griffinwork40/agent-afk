@@ -60,6 +60,7 @@ import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import { wouldBeRestricted, realpathSafe } from '../handlers/_cwd-utils.js';
 import { isReadDenied } from '../handlers/read-denylist.js';
 import { appendGrant } from '../../permissions-store.js';
+import { buildForkDenialRemedy } from './fork-denial-remedy.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 
 /** Tools subject to per-call path approval. Bash is gated separately. */
@@ -286,18 +287,10 @@ async function preToolUseImpl(
     );
     // #435: name the concrete remedy rather than implying a grant mechanism the
     // fork does not have. A fork cannot elicit, so the recovery actor is always
-    // the PARENT: for writes it can re-dispatch with an explicit writeRoots
-    // grant on the `agent` tool (or do the write itself); for reads it owns the
-    // operator surface and can widen readRoots or re-dispatch with the path in cwd.
-    const remedy =
-      mode === 'write'
-        ? `Writes are confined to this fork's granted write roots by design ` +
-          `(worktree isolation). To allow it, the parent must re-dispatch you via ` +
-          `the \`agent\` tool with \`writeRoots: [${JSON.stringify(result.resolved)}]\`, ` +
-          `or perform the write itself. Return this exact path requirement to your parent.`
-        : `Reads are confined to this fork's granted read roots. Return this exact ` +
-          `path requirement to your parent, which owns the operator surface and can ` +
-          `grant access (widen readRoots or re-dispatch with the path inside cwd).`;
+    // the PARENT — and because a fork's roots are fixed at dispatch, the only
+    // remedy that reaches an in-flight fork is a re-dispatch. Wording + the
+    // downstream byte/fingerprint contracts live in `./fork-denial-remedy.ts`.
+    const remedy = buildForkDenialRemedy({ mode, resolvedPath: result.resolved });
     // Contract: the "Sub-agent path access denied:" prefix is load-bearing —
     // the `subagent-read-denial` telemetry detector (improve/scan/detectors)
     // and the denial circuit breaker (tools/denial-circuit-breaker.ts,

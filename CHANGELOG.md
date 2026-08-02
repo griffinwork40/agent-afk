@@ -11,6 +11,36 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.6] - 2026-08-02
+
+### Changed
+- a named subagent dispatched without an explicit model now resolves to the
+  policy default (`AFK_DEFAULT_SUBAGENT_MODEL`, else the `medium` tier) instead
+  of silently inheriting the dispatching session's model. Inheritance is now
+  opt-in via `model: inherit` in the agent definition. Behaviour change on
+  upgrade: named agents that declare no model — including the built-in
+  `research-agent` — drop from the parent's tier to the policy default under a
+  high-tier parent (e.g. `opus`). Pin `model: inherit` to restore the old
+  behaviour per agent.
+
+### Fixed
+- resolve an omitted named-agent model to the policy default (#868) (99294da)
+
+## [5.85.5] - 2026-08-02
+
+### Fixed
+- tell a denied fork the remedy that actually works (#851) (1e885fe)
+
+## [5.85.4] - 2026-08-02
+
+### Fixed
+- make the pipeline's own instruments tell the truth (#847) (4cb26bc)
+
+## [5.85.3] - 2026-08-02
+
+### Fixed
+- render round denominator in progress banner (#857) (#858) (5bc00a8)
+
 ## [5.85.2] - 2026-08-02
 
 ### Fixed
