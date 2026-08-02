@@ -7,6 +7,7 @@ import {
   doneGlyph,
   formatDiffBlock,
   formatOutcome,
+  isBenignFailure,
   sanitizeLabel,
   shortenPaths,
 } from './tool-lane-format.js';
@@ -19,6 +20,8 @@ function groupedResultSuffix(
 ): string {
   const completed = entries.filter((entry) => entry.result);
   const errors = completed.filter((entry) => entry.result!.isError);
+  const blocked = errors.filter((entry) => isBenignFailure(entry.result!.failureClass));
+  const faults = errors.filter((entry) => !isBenignFailure(entry.result!.failureClass));
 
   if (errors.length > 0) {
     const successCount = completed.length - errors.length;
@@ -30,7 +33,10 @@ function groupedResultSuffix(
     const parts: string[] = [];
     if (totalLines > 0) parts.push(`${totalLines} lines`);
     if (successCount > 0) parts.push(`${successCount} ok`);
-    parts.push(palette.error(`${errors.length} error${errors.length > 1 ? 's' : ''}`));
+    if (faults.length > 0) {
+      parts.push(palette.error(`${faults.length} error${faults.length > 1 ? 's' : ''}`));
+    }
+    if (blocked.length > 0) parts.push(palette.warning(`${blocked.length} blocked`));
     return palette.dim(' — ') + parts.join(palette.dim(', '));
   }
 

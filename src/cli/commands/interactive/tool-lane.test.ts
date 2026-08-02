@@ -680,6 +680,22 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
       }
     });
 
+    it('preserves blocked outcomes when grouped roots are flushed', () => {
+      const lane = new ToolLane();
+      for (let index = 0; index < 2; index++) {
+        const id = `blocked-root-${index}`;
+        lane.addStart(id, 'bash', ` denied ${index}`);
+        lane.addResult(id, {
+          ...makeResult('Tool is not allowed', true),
+          failureClass: 'permission-denied',
+        });
+      }
+
+      const rendered = stripAnsi(lane.flush().join('\n'));
+      expect(rendered).toContain('2 blocked');
+      expect(rendered).not.toContain('error');
+    });
+
     /**
      * Regression for the styling half of the width fix: bounding the grouped
      * row must not cost it the `palette.toolArg` dim wrapper that the

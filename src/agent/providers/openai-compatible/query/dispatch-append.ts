@@ -124,7 +124,11 @@ export async function* dispatchAndAppendToolCalls({
   if (signal.aborted) {
     // Aborted before dispatch — synthesize aborted results and emit outputs.
     for (const call of calls) {
-      const result: ToolResult = { content: 'Tool call aborted', isError: true };
+      const result: ToolResult = {
+        content: 'Tool call aborted',
+        isError: true,
+        failureClass: 'abort',
+      };
       results.push({ call, result });
       yield {
         type: 'tool.output',
@@ -132,6 +136,7 @@ export async function* dispatchAndAppendToolCalls({
         toolName: call.name,
         content: result.content,
         isError: true,
+        failureClass: 'abort',
         sessionId,
       };
     }
@@ -145,7 +150,11 @@ export async function* dispatchAndAppendToolCalls({
         dispatcherResults = [];
         for (const call of calls) {
           if (signal.aborted) {
-            dispatcherResults.push({ content: 'Tool call aborted', isError: true });
+            dispatcherResults.push({
+              content: 'Tool call aborted',
+              isError: true,
+              failureClass: 'abort',
+            });
             continue;
           }
           try {

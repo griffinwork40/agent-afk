@@ -116,7 +116,11 @@ export async function* dispatchToolCalls(
     results = [];
     for (const call of calls) {
       if (input.signal.aborted) {
-        results.push({ content: 'Tool call aborted', isError: true });
+        results.push({
+          content: 'Tool call aborted',
+          isError: true,
+          failureClass: 'abort',
+        });
         continue;
       }
       try {
