@@ -326,7 +326,8 @@ export const agentTool: AnthropicToolDef = {
     'research-shaped investigation.\n\n' +
     'Parallelize: dispatch multiple `agent` calls in a single tool-use turn to run ' +
     'independent investigations concurrently.\n\n' +
-    'Nest: a subagent may itself dispatch further subagents (depth limit 3) when it ' +
+    'Nest: a subagent may itself dispatch further subagents (depth limit 3 by default — ' +
+    '`get_runtime_state` reports the live cap) when it ' +
     'discovers a separable sub-investigation.\n\n' +
     'Subagents return their final assistant message verbatim — instruct them ' +
     'explicitly to compress their findings into: answer, evidence with file:line ' +

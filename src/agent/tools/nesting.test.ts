@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CHILD_ALLOWED_TOOLS,
   RECON_ALLOWED_TOOLS,
+  DEFAULT_MAX_NESTING_DEPTH,
   DEFAULT_READ_ONLY_SKILLS,
+  MAX_NESTING_DEPTH_CEILING,
   buildReadOnlyReconProvider,
   buildSkillRestrictedProvider,
+  resolveMaxNestingDepth,
 } from './nesting.js';
+import { ENV_REGISTRY } from '../../config/env.js';
 import { checkToolPermission } from './permissions.js';
 
 describe('CHILD_ALLOWED_TOOLS', () => {
@@ -254,5 +258,75 @@ describe('restricted builders thread openaiBaseUrl into the OpenAI client baseUR
   it('buildSkillRestrictedProvider leaves baseURL unset when no openaiBaseUrl is given', () => {
     const provider = buildSkillRestrictedProvider(['read_file'], 'gpt-4o');
     expect(bakedBaseURL(provider)).toBeUndefined();
+  });
+});
+
+// resolveMaxNestingDepth is the DEFAULT resolver consulted at the three
+// `ctx.maxDepth ?? resolveMaxNestingDepth()` sites (subagent-executor,
+// skill-executor, skill-executor/fork-child-config). Pure-function contract,
+// mirroring resolveSubagentTimeoutMs: unset/empty/invalid → default, valid int
+// within [0, MAX_NESTING_DEPTH_CEILING] → that value, 0 → 0 (nesting disabled).
+describe('resolveMaxNestingDepth (AFK_MAX_NESTING_DEPTH)', () => {
+  const KEY = 'AFK_MAX_NESTING_DEPTH';
+  let original: string | undefined;
+  beforeEach(() => {
+    original = process.env[KEY];
+    delete process.env[KEY];
+  });
+  afterEach(() => {
+    if (original !== undefined) process.env[KEY] = original;
+    else delete process.env[KEY];
+  });
+
+  it('returns DEFAULT_MAX_NESTING_DEPTH when unset', () => {
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+  });
+
+  it('returns DEFAULT_MAX_NESTING_DEPTH when empty / whitespace', () => {
+    process.env[KEY] = '';
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+    process.env[KEY] = '   ';
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+  });
+
+  it('parses a valid integer below the default', () => {
+    process.env[KEY] = '1';
+    expect(resolveMaxNestingDepth()).toBe(1);
+  });
+
+  it('parses a valid integer above the default, up to the ceiling', () => {
+    process.env[KEY] = String(MAX_NESTING_DEPTH_CEILING);
+    expect(resolveMaxNestingDepth()).toBe(MAX_NESTING_DEPTH_CEILING);
+  });
+
+  it('treats 0 as the explicit "disable nested delegation" escape hatch', () => {
+    process.env[KEY] = '0';
+    expect(resolveMaxNestingDepth()).toBe(0);
+  });
+
+  it('falls back to the default on a negative value', () => {
+    process.env[KEY] = '-1';
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+  });
+
+  it('falls back to the default above the ceiling', () => {
+    // The typo case the ceiling exists for: `30` for `3` would turn one
+    // dispatch into an unbounded fan-out tree against a shared rate limit.
+    process.env[KEY] = String(MAX_NESTING_DEPTH_CEILING + 1);
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+    process.env[KEY] = '30';
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+  });
+
+  it('falls back to the default on unparseable garbage', () => {
+    process.env[KEY] = 'not-a-number';
+    expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+  });
+
+  it('keeps the ENV_REGISTRY documented default in lockstep with the constant', () => {
+    // Guards against DEFAULT_MAX_NESTING_DEPTH drifting from the registry
+    // `default` string that feeds docs/env-registry.{json,md}.
+    const entry = ENV_REGISTRY.find((e) => e.name === KEY);
+    expect(entry?.default).toBe(String(DEFAULT_MAX_NESTING_DEPTH));
   });
 });

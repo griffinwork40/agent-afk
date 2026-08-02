@@ -309,6 +309,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // dispatch Agent and Skill tool calls. Skip when at maxDepth or no
   // factory — child gracefully loses both tools.
   //
+  // Invariant: the `depth < maxDepth` disjunct is no longer reachable from
+  // SubagentExecutor.execute(), which refuses at `depth >= maxDepth` before
+  // calling this. It is retained as defense-in-depth for direct callers (and
+  // is exercised as such by child-config.test.ts); the live production trigger
+  // is the `!childProviderFactory` half.
+  //
   // childParentSession is a mutable stub: sessionId starts undefined and is
   // backfilled to handle.id once forkSubagent resolves. This ensures depth-2
   // forks (dispatched by childExecutor) see a real parentId rather than
