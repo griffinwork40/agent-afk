@@ -220,8 +220,14 @@ function buildResult(
       totalCostUsd: round4(totalCost),
       avgTurnCount: round2(avgTurns),
       maxCostUsd: round4(Math.max(...allSightings.map((s) => s.finalCostUsd))),
+      // Contract: `sessionIds` is deliberately UNCAPPED — its length IS
+      // `affectedSessions`, so truncating it would break that equality. `seqs`
+      // carries no such invariant: it indexes the evidence rows, so it is
+      // capped to the same slice. A wide cascade emits one closure event per
+      // cancelled child and would otherwise write an unbounded array into the
+      // persisted card (a live card on disk already carries 386 entries).
       sessionIds,
-      seqs: allSightings.map((s) => s.seq),
+      seqs: capped.map((s) => s.seq),
     },
   };
 }

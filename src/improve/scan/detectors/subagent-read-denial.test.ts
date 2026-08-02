@@ -322,6 +322,14 @@ function floorDenial(path: string, matched = '~/.afk/config'): string {
 
 const CRED_PATH = '/Users/x/.afk/config/afk.env';
 
+/**
+ * A THIRD mechanism, neither floor nor containment: the tool-allowlist refusal
+ * `permissions.ts` emits, which reaches this detector because `list_directory`
+ * is in READ_TOOL_NAMES. A live open card on disk
+ * (`subagent-read-denial-62cbd769c977`) carries exactly this reason.
+ */
+const TOOL_ALLOWLIST_DENIAL = 'Tool "list_directory" is not in the configured allowlist';
+
 describe('classifyDenialMechanism', () => {
   it('classifies the credential-floor message as credential-floor', () => {
     expect(classifyDenialMechanism(floorDenial(CRED_PATH))).toBe('credential-floor');
@@ -337,8 +345,32 @@ describe('classifyDenialMechanism', () => {
     );
   });
 
-  it('treats an empty reason as containment (fail-open to the real signal)', () => {
-    expect(classifyDenialMechanism('')).toBe('read-root-containment');
+  it('treats an empty reason as unclassified, never as containment', () => {
+    // Fail-open to the real signal — the denial is still kept and counted —
+    // but "we could not tell" is recorded as itself, not as a containment gap
+    // the classifier never actually observed.
+    expect(classifyDenialMechanism('')).toBe('unclassified');
+  });
+
+  it('classifies the legacy containment wording as read-root-containment', () => {
+    expect(
+      classifyDenialMechanism(
+        "Sub-agents cannot access paths outside the session's granted roots (/x/y)",
+      ),
+    ).toBe('read-root-containment');
+  });
+
+  // A denial that is neither the floor nor a read-root gap must NOT be
+  // asserted as containment: its remedy is not "widen read roots", so the
+  // label would send a triager toward a fix that cannot work.
+  it('classifies a tool-allowlist refusal as unclassified', () => {
+    expect(classifyDenialMechanism(TOOL_ALLOWLIST_DENIAL)).toBe('unclassified');
+  });
+
+  it('classifies a human prompt-denial as unclassified', () => {
+    expect(classifyDenialMechanism('User denied access to /Users/x/proj/src/a.ts')).toBe(
+      'unclassified',
+    );
   });
 });
 
@@ -389,7 +421,7 @@ describe('detectSubagentReadDenial — credential floor produces no card', () =>
     expect(detectSubagentReadDenial(sessions, { minOccurrences: 2 })).toHaveLength(0);
   });
 
-  it('labels every emitted card as a containment gap', () => {
+  it('labels a genuine containment card as a containment gap', () => {
     resetSeq();
     const sessions = [
       makeSession('s1', [
@@ -398,6 +430,37 @@ describe('detectSubagentReadDenial — credential floor produces no card', () =>
     ];
     const r = detectSubagentReadDenial(sessions, { minOccurrences: 1 })[0]!;
     expect(r.detail['denialMechanism']).toBe('read-root-containment');
+    expect(r.detail['detector']).toBe('subagent-read-denial@v2');
+  });
+
+  it('does NOT label a tool-allowlist card as a containment gap', () => {
+    resetSeq();
+    // The regression this fix exists for: pre-fix this card asserted
+    // denialMechanism='read-root-containment', sending a triager to widen read
+    // roots for a block that widening read roots cannot possibly fix.
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: TOOL_ALLOWLIST_DENIAL, blockedTool: 'list_directory' }),
+      ]),
+    ];
+    const r = detectSubagentReadDenial(sessions, { minOccurrences: 1 })[0]!;
+    expect(r.detail['denialMechanism']).toBe('unclassified');
+  });
+
+  it('still emits and counts unclassified denials — only the label changed', () => {
+    resetSeq();
+    // Dropping is reserved for the credential floor. An unrecognised mechanism
+    // is still a real block worth surfacing; it just is not asserted to be
+    // something the classifier never observed.
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: TOOL_ALLOWLIST_DENIAL, blockedTool: 'list_directory' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: TOOL_ALLOWLIST_DENIAL, blockedTool: 'list_directory' }),
+      ]),
+    ];
+    const r = detectSubagentReadDenial(sessions, { minOccurrences: 2 })[0]!;
+    expect(r.detail['denialCount']).toBe(2);
+    expect(r.evidence).toHaveLength(2);
   });
 
   it('keeps containment fingerprints stable across the split', () => {

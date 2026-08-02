@@ -371,4 +371,36 @@ describe('detectClosureAnomaly — cascade dedupe (per-session rollup)', () => {
     const r = detectClosureAnomaly(sessions)[0]!;
     expect(DetectorResultSchema.safeParse(r).success).toBe(true);
   });
+
+  it('caps seqs with evidence but leaves sessionIds whole', () => {
+    resetSeq();
+    // A wide cascade: 20 children killed by one parent timeout. Evidence and
+    // seqs index each other, so both cap at 8; the aggregates and sessionIds
+    // must still describe every event/session, uncapped.
+    const sessions = [
+      makeSession('wide', Array.from({ length: 20 }, () => closureLine('timeout', 1, 2))),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(r.evidence).toHaveLength(8);
+    expect((r.detail['seqs'] as number[]).length).toBe(8);
+    // Uncapped: the honest event count, the true summed spend, and the session
+    // list whose length IS affectedSessions.
+    expect(r.detail['closureEventCount']).toBe(20);
+    expect(r.detail['totalCostUsd']).toBe(20);
+    expect(r.detail['sessionIds']).toEqual(['wide']);
+    expect(r.detail['affectedSessions']).toBe(1);
+  });
+
+  it('caps seqs across many sessions without truncating sessionIds', () => {
+    resetSeq();
+    // 12 distinct sessions — sessionIds.length must stay equal to
+    // affectedSessions even though seqs is clamped to the evidence cap.
+    const sessions = Array.from({ length: 12 }, (_, i) =>
+      makeSession(`s${i}`, [closureLine('timeout', 1, 2)]),
+    );
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect((r.detail['seqs'] as number[]).length).toBe(8);
+    expect((r.detail['sessionIds'] as string[]).length).toBe(12);
+    expect(r.detail['affectedSessions']).toBe(12);
+  });
 });
