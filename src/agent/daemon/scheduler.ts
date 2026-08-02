@@ -20,7 +20,8 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import * as cron from 'node-cron';
 import { runSweep } from '../worktree-sweep.js';
-import type { ExecFileFn } from '../worktree-sweep.js';
+import type { ExecFileFn, SweepResult } from '../worktree-sweep.js';
+import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext } from './queue-store.js';
 import { getQueueDir } from '../../paths.js';
@@ -44,11 +45,38 @@ import {
   type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
+import { summarizeRootFailures } from './root-failure-summary.js';
+import { countPrunable, formatWorktreePruneSummary } from './worktree-prune-summary.js';
+import { debugLog } from '../../utils/debug.js';
+
+/**
+ * Wall-clock ceiling on a single `git` invocation inside the sweep.
+ *
+ * External constraint: git can block indefinitely on things that are not
+ * errors — a credential prompt on a repo with an https remote, a stale NFS or
+ * SMB handle, a network-mounted worktree whose server went away. The prune
+ * tick's per-root loop is deliberately serial (one machine-global advisory
+ * lock), so a single blocked child does not fail that root: it hangs the whole
+ * tick forever and strands every root ordered behind it, which is precisely
+ * the starvation the per-root try/catch was added to prevent. A timeout turns
+ * that silent hang into a rejection the existing catch already handles.
+ * Generous by design — a slow `git status` on a large worktree is normal.
+ */
+const PRUNE_GIT_TIMEOUT_MS = 120_000;
 
 // Promisified once at module scope — the daemon's builtin worktree-prune task
 // reuses the same node:child_process exec function on every tick; there is no
 // reason to re-resolve it dynamically inside the handler.
-const builtinPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
+const promisifiedPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
+
+/**
+ * `promisifiedPruneExecFile` with a timeout merged into every call. Wrapping
+ * here rather than at each `git` call site inside the sweep engine keeps the
+ * engine's own signature untouched and applies the ceiling uniformly, including
+ * to call sites added later.
+ */
+const builtinPruneExecFile: ExecFileFn = (file, args, options) =>
+  promisifiedPruneExecFile(file, args, { timeout: PRUNE_GIT_TIMEOUT_MS, ...options });
 
 /**
  * Resolve the repo root for the builtin worktree-prune sweep. An explicit
@@ -462,21 +490,29 @@ export class CronScheduler {
     };
 
     try {
-      const repoRoot = await resolveWorktreePruneRoot(
+      const primaryRoot = await resolveWorktreePruneRoot(
         builtinPruneExecFile,
         process.cwd(),
         env.AFK_WORKTREE_SWEEP_ROOT,
       );
-      if (repoRoot === null) {
-        // Daemon cwd is not inside a git repo (commonly $HOME under launchd).
-        // Skip rather than erroring on every tick; the per-repo REPL boot-prune
-        // still handles cleanup for repos the user actually works in.
+      // The sweep is per-root, so the daemon's own cwd used to bound what could
+      // ever be reclaimed. Visit every root known to hold managed trees (#761).
+      const roots = await sweepRootSet(primaryRoot);
+      if (roots.length === 0) {
+        // An empty set means BOTH causes hold at once: sweepRootSet always
+        // yields at least the primary when one resolved, so no primary (daemon
+        // cwd outside a git repo, commonly $HOME under launchd) AND nothing
+        // registered. Name both — reporting only the cwd half sent operators
+        // looking for a daemon misconfiguration when the registry was simply
+        // empty. Skip rather than error on every tick; the per-repo REPL
+        // boot-prune still covers repos the user actually works in.
         const skipped: TelemetryRecord = {
           ...baseRecord,
           durationMs: this.now() - startTimeMs,
           status: 'skipped',
           responseExcerpt:
-            'worktree-prune skipped: daemon cwd is not inside a git repository ' +
+            'worktree-prune skipped: no roots to sweep — daemon cwd is not inside a ' +
+            'git repository and no managed worktree roots are registered ' +
             '(set AFK_WORKTREE_SWEEP_ROOT to target a repo)',
         };
         this.writeTelemetry(skipped, task);
@@ -488,34 +524,109 @@ export class CronScheduler {
       const maxAgeDaysDirty =
         parseInt(env.AFK_WORKTREE_MAX_AGE_DIRTY ?? '', 10) || 30;
 
-      const result = await runSweep({
-        execFile: builtinPruneExecFile,
-        repoRoot,
-        dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
-        maxAgeDaysClean,
-        maxAgeDaysDirty,
-        scope: 'all',
-        telemetryPath: this.telemetryPath(),
+      // Invariant: one unusable root must never starve the roots after it.
+      // runSweep does not catch a failure of its own opening `git worktree
+      // list`, and builtinPruneExecFile is a bare promisify(execFile), so a
+      // nonzero git exit REJECTS. A registered directory whose .git was
+      // deleted survives the registry's liveness gate (a bare isDirectory()
+      // check), so such a root is sticky, not transient — uncaught, it would
+      // abort the loop on every tick and permanently strand every root ordered
+      // behind it, recreating the #761 leak this fan-out exists to close.
+      // Failures are demoted to warnings so the tick still reports the
+      // removals that already hit disk.
+      //
+      // Sequential on purpose: runSweep takes a single machine-global advisory
+      // lock, so parallel roots would just contend and the losers short-circuit.
+      const results: SweepResult[] = [];
+      const rootFailures: string[] = [];
+      // Parallel to rootFailures, but holding the structured (repoRoot, reason)
+      // pair instead of a pre-joined string — the compact errorMessage below
+      // needs `basename(repoRoot)` alone, not the full path baked into the
+      // rootFailures line. `reason` is redacted exactly once, here, and reused
+      // for both channels below.
+      const rootFailureDetails: Array<{ repoRoot: string; reason: string }> = [];
+      for (const repoRoot of roots) {
+        try {
+          results.push(await runSweep({
+            execFile: builtinPruneExecFile,
+            repoRoot,
+            dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
+            maxAgeDaysClean,
+            maxAgeDaysDirty,
+            scope: 'all',
+            telemetryPath: this.telemetryPath(),
+          }));
+        } catch (err) {
+          const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+          rootFailures.push(`[ERROR] sweep failed for ${repoRoot}: ${reason}`);
+          rootFailureDetails.push({ repoRoot, reason });
+          // The full path exists nowhere else on a PARTIAL failure: `warnings`
+          // is not a field of TelemetryRecord (the scheduler consumes only its
+          // .length, for the summary), and `errorMessage` — which carries
+          // basenames only, by design — is written just when EVERY root fails.
+          // Without this line an operator seeing "1 failed" has no way to learn
+          // WHICH root failed, contradicting root-failure-summary.ts's own
+          // contract that `warnings` is the detailed channel.
+          debugLog(`[worktree-prune] sweep failed for ${repoRoot}: ${reason}`);
+        }
+      }
+      const result = {
+        // Retained for the record's own shape only. The SUMMARY no longer
+        // branches on this: with a per-root valve a tick can mix live and
+        // previewing roots, and choosing one of two exclusive sentences dropped
+        // the removal count on exactly those ticks (see
+        // daemon/worktree-prune-summary.ts).
+        dryRun: results.some((r) => r.dryRun),
+        removed: results.flatMap((r) => r.removed),
+        warnings: [...rootFailures, ...results.flatMap((r) => r.warnings)],
+        candidates: results.flatMap((r) => r.candidates),
+      };
+
+      const contestedResults = results.filter((r) => r.contested === true);
+      const previewResults = results.filter((r) => r.dryRun && r.contested !== true);
+      const liveResults = results.filter((r) => !r.dryRun && r.contested !== true);
+      const summary = formatWorktreePruneSummary({
+        removed: result.removed.length,
+        warnings: result.warnings.length,
+        wouldRemove: countPrunable(previewResults.flatMap((r) => r.candidates)),
+        liveRoots: liveResults.length,
+        previewRoots: previewResults.length,
+        contestedRoots: contestedResults.length,
+        failedRoots: rootFailureDetails.length,
+        totalRoots: roots.length,
       });
 
-      // 'stale-clean' is intentionally absent: the sweep engine preserves +
-      // warns on stale-clean (commits ahead of base) rather than removing.
-      const prunableVerdicts = new Set([
-        'empty',
-        'orphaned-dir',
-        'orphaned-registration',
-        'dead-owner',
-      ]);
-      const summary = result.dryRun
-        ? `🔍 worktree-prune (dry-run): would remove ${result.candidates.filter((c) => prunableVerdicts.has(c.verdict)).length} worktree(s)`
-        : `✂️ worktree-prune: removed ${result.removed.length}, warned ${result.warnings.length}`;
-
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'success',
-        responseExcerpt: summary,
-      };
+      // Invariant: a tick where EVERY root rejected must report `status:
+      // 'error'`, not 'success' — src/insights/aggregators/daemon.ts tallies
+      // `errorCount` / `recentErrors` only off `status === 'error'`, so a
+      // permanently broken prune (every root rejecting on every tick, e.g. a
+      // stale AFK_WORKTREE_SWEEP_ROOT or a registry full of dead repos) would
+      // otherwise report as healthy forever. `results.length === 0` with
+      // `roots.length > 0` is exactly that case: every iteration of the loop
+      // above hit the `catch` and pushed to `rootFailures` instead of
+      // `results`. A tick where SOME roots succeeded (`results.length > 0`)
+      // stays `success` — that is a partial failure, already visible via the
+      // per-root `[ERROR]` warnings, not a systemic one.
+      const record: TelemetryRecord =
+        results.length === 0 && roots.length > 0
+          ? {
+              ...baseRecord,
+              durationMs: this.now() - startTimeMs,
+              status: 'error',
+              // Compact + non-enumerating — see summarizeRootFailures' own
+              // doc comment for why this must never be rootFailures.join(),
+              // which embeds every failing root's absolute path.
+              // rootFailureDetails' `reason` is already redacted at push time
+              // (in the loop above) — redacting again would be a no-op.
+              errorMessage: summarizeRootFailures(rootFailureDetails),
+              responseExcerpt: summary,
+            }
+          : {
+              ...baseRecord,
+              durationMs: this.now() - startTimeMs,
+              status: 'success',
+              responseExcerpt: summary,
+            };
       this.writeTelemetry(record, task);
       return record;
     } catch (err) {

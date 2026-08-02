@@ -35,7 +35,7 @@ import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
-import { getAfkStateDir } from '../paths.js';
+import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
 import path from 'path';
 import { buildPhaseRestrictedProvider } from './tools/nesting.js';
 import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
@@ -389,6 +389,22 @@ export class SubagentManager {
         // dir only — NEVER ~/.afk/config (credentials). Unconfined forks are
         // already read-open, so this is a confined-parent-only grant.
         ...(parentUnconfined ? {} : { afkStateRoot: getAfkStateDir() }),
+        // Gap C (the agent-framework read grant — distinct from Gap A/Gap B
+        // above): ~/.afk/agent-framework is a SIBLING of ~/.afk/state under the
+        // same AFK home, and a confined fork's cwd+repo roots do not lexically
+        // contain it either. It holds the framework's own artifacts (improve
+        // cards/proposals/eval-cases, forge telemetry, pattern-cards, briefs),
+        // so children dispatched by /orient, /harvest, /forge, /distill and the
+        // improve pipeline were hard-denied the one tree their task requires —
+        // 46 denials across 15 sessions (card subagent-read-denial-ab89c2bd6a6f,
+        // now HISTORICAL: that slug is a hash of the denial reason string, which
+        // was reworded when the read remedy moved to
+        // `tools/hooks/fork-denial-remedy.ts`. Post-rewording denials accumulate
+        // under a new slug; this card no longer accrues sightings).
+        // Same guard as Gap A: this dir only, NEVER ~/.afk/config (credentials).
+        ...(parentUnconfined
+          ? {}
+          : { afkFrameworkRoot: getAgentFrameworkDir() }),
       });
     }
 

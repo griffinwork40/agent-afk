@@ -199,6 +199,103 @@ describe('computeInheritedReadRoots', () => {
       ).toBe(true);
     });
   });
+
+  // Gap C — the agent-framework read grant. Sibling of the afkStateRoot grant
+  // above (Gap A): ~/.afk/agent-framework is NOT lexically contained by a
+  // confined fork's cwd+repo roots, so children dispatched by /orient,
+  // /harvest, /forge, /distill and the improve pipeline were hard-denied the one
+  // tree their task requires (46 denials / 15 sessions, card
+  // subagent-read-denial-ab89c2bd6a6f).
+  describe('afkFrameworkRoot grant (confined forks reach ~/.afk/agent-framework — Gap C)', () => {
+    const FRAMEWORK = '/Users/me/.afk/agent-framework';
+    const STATE = '/Users/me/.afk/state';
+
+    it('folds the agent-framework dir into a confined worktree fork union', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo/.afk-worktrees/wt',
+        childCwd: '/repo/.afk-worktrees/wt',
+        worktreeMainRoot: '/repo',
+        afkFrameworkRoot: FRAMEWORK,
+      })!;
+      expect(new Set(roots)).toEqual(
+        new Set(['/repo/.afk-worktrees/wt', '/repo', FRAMEWORK]),
+      );
+      // An improve-pipeline failure card is now admitted (containment is
+      // lexical: path.relative does not escape the root).
+      expect(
+        path
+          .relative(FRAMEWORK, `${FRAMEWORK}/improve/failure-cards/some-card.json`)
+          .startsWith('..'),
+      ).toBe(false);
+    });
+
+    it('is granted ALONGSIDE the state root, not instead of it (siblings, both needed)', () => {
+      // The two grants are independent: a /harvest fork reads session ledgers
+      // under state AND pattern-cards under agent-framework in the same task.
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo/.afk-worktrees/wt',
+        childCwd: '/repo/.afk-worktrees/wt',
+        worktreeMainRoot: '/repo',
+        afkStateRoot: STATE,
+        afkFrameworkRoot: FRAMEWORK,
+      })!;
+      expect(new Set(roots)).toEqual(
+        new Set(['/repo/.afk-worktrees/wt', '/repo', STATE, FRAMEWORK]),
+      );
+    });
+
+    it('grants [cwd, framework] even with no worktree main root (lifts the fork out of the [cwd] default)', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/plain/repo',
+        childCwd: '/plain/repo',
+        worktreeMainRoot: undefined,
+        afkFrameworkRoot: FRAMEWORK,
+      });
+      // Without afkFrameworkRoot this is the "only root is cwd" case → undefined.
+      expect(new Set(roots)).toEqual(new Set(['/plain/repo', FRAMEWORK]));
+    });
+
+    it('is ignored for an unconfined (read-open) parent — read-open already covers it', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: undefined,
+        childCwd: '/repo/.afk-worktrees/wt',
+        afkFrameworkRoot: FRAMEWORK,
+      });
+      expect(roots).toEqual([FS_ROOT]); // read-open, not [.., FRAMEWORK]
+    });
+
+    it('omitting afkFrameworkRoot preserves the pre-fix behaviour (back-compat)', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo',
+        childCwd: '/repo',
+        worktreeMainRoot: undefined,
+      });
+      expect(roots).toBeUndefined();
+    });
+
+    it('never derives ~/.afk/config — only the exact framework root passed', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo/.afk-worktrees/wt',
+        childCwd: '/repo/.afk-worktrees/wt',
+        worktreeMainRoot: '/repo',
+        afkStateRoot: STATE,
+        afkFrameworkRoot: FRAMEWORK,
+      })!;
+      const CONFIG = '/Users/me/.afk/config';
+      // agent-framework, state and config are all siblings under ~/.afk. Granting
+      // two of them must never lexically admit the credential dir.
+      expect(roots.some((r) => path.resolve(r) === CONFIG)).toBe(false);
+      expect(
+        roots.every((r) => path.relative(r, `${CONFIG}/afk.env`).startsWith('..')),
+      ).toBe(true);
+    });
+  });
 });
 
 // #547: the choke point skill / inline-skill / compose managers use to derive

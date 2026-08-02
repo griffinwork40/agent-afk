@@ -21,6 +21,7 @@
  */
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
+import type { ToolFailureClass } from './trace/types.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -184,6 +185,20 @@ export type ProviderEvent =
        * `incomplete: true`; absent otherwise.
        */
       incompleteReason?: string;
+      /**
+       * Plumbed from `ToolResult.failureClass` — WHY this call returned
+       * `isError: true`. Present only alongside `isError: true`; an absent
+       * class on an errored result means "unclassified failure", which is the
+       * pre-classification default and is never treated as benign.
+       *
+       * The interactive tool-lane reads this to render a rejection the system
+       * issued on purpose (permission gate, hook block, domain policy) with a
+       * neutral glyph instead of a red `✗`, so an agent probing a gated tool
+       * mid-run does not look like a fault (#75). Non-render consumers
+       * (`receipt.ts`, the trace writer) already read the same field off the
+       * dispatcher result directly.
+       */
+      failureClass?: ToolFailureClass;
     }
   | {
       /**

@@ -7,6 +7,7 @@ import {
   doneGlyph,
   formatDiffBlock,
   formatOutcome,
+  isBenignFailure,
   sanitizeLabel,
   shortenPaths,
 } from './tool-lane-format.js';
@@ -19,6 +20,8 @@ function groupedResultSuffix(
 ): string {
   const completed = entries.filter((entry) => entry.result);
   const errors = completed.filter((entry) => entry.result!.isError);
+  const blocked = errors.filter((entry) => isBenignFailure(entry.result!.failureClass));
+  const faults = errors.filter((entry) => !isBenignFailure(entry.result!.failureClass));
 
   if (errors.length > 0) {
     const successCount = completed.length - errors.length;
@@ -30,7 +33,10 @@ function groupedResultSuffix(
     const parts: string[] = [];
     if (totalLines > 0) parts.push(`${totalLines} lines`);
     if (successCount > 0) parts.push(`${successCount} ok`);
-    parts.push(palette.error(`${errors.length} error${errors.length > 1 ? 's' : ''}`));
+    if (faults.length > 0) {
+      parts.push(palette.error(`${faults.length} error${faults.length > 1 ? 's' : ''}`));
+    }
+    if (blocked.length > 0) parts.push(palette.warning(`${blocked.length} blocked`));
     return palette.dim(' — ') + parts.join(palette.dim(', '));
   }
 
@@ -120,7 +126,7 @@ export function renderGroupedRootTools(
         // expendable tail, which is exactly how the overlay clamps the same
         // row ("clamping should elide the outcome tail, not the leading
         // prefix that carries the tool identity" — tool-lane.test.ts).
-        lines.push(clampLineToTerminal('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
+        lines.push(clampLineToTerminal('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (2 for the row indent, 2 more to clear the

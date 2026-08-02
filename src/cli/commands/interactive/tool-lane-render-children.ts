@@ -257,7 +257,7 @@ function renderOverlayChildren(
         // child will draw its own connector row from the current parent's
         // indented spine column — exactly what the caller renders next.
       } else if (child.result) {
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError) + ' ' + formatOutcome(child.result, undefined, 60, child.toolName), cols));
+        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ' + formatOutcome(child.result, undefined, 60, child.toolName), cols));
         if (child.diff && !child.result.isError) {
           // Diff sits under the child entry. Indent = current row's indent
           // + 1 spine slot (continuing this child's column iff it's not the
@@ -433,7 +433,7 @@ function renderFlushChildren(
         const parentSlot = parentIsLast ?? isLast;
         lines.push(...renderFlushChildren(grandchildren, childMap, homeDir, undefined, cols, [...ancestorIsLast, parentSlot], g, isLast));
       } else if (child.result) {
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError) + ' ' + formatOutcome(child.result, homeDir, 60, child.toolName), cols));
+        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ' + formatOutcome(child.result, homeDir, 60, child.toolName), cols));
         if (child.diff && !child.result.isError) {
           // Scrollback renders the full diff (no overlay cap). Indent matches
           // the overlay path: continue (or close) this child's spine column,

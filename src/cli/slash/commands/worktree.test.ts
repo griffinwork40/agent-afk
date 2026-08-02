@@ -201,6 +201,31 @@ describe('/worktree slash command', () => {
     expect(lines.some((l) => l.includes('SUCCESS:Removed 1'))).toBe(true);
   });
 
+  it('F-A1: an explicit --apply bypasses the soft-launch valve', async () => {
+    // Since the valve became per-root (#771), its counter starts at 0 for every
+    // repo predating the marker file, so the first three `prune --apply` runs
+    // against any existing repo were silently downgraded to previews and
+    // removed nothing. The valve guards the UNATTENDED daemon tick; it must not
+    // override a human who typed --apply.
+    mockRunSweep.mockResolvedValue({
+      candidates: [], removed: [], warnings: [], dryRun: false,
+    });
+    const { ctx } = makeCtx();
+    await worktreeCmd.handler(ctx, 'prune --apply');
+    expect(mockRunSweep.mock.calls[0]?.[0]?.bypassSoftLaunch).toBe(true);
+  });
+
+  it('F-A1: a preview (no --apply) does NOT bypass the valve', async () => {
+    // The other half of the contract: a brand-new repo must still preview
+    // before it is reaped, which is the whole reason the valve is per-root.
+    mockRunSweep.mockResolvedValue({
+      candidates: [], removed: [], warnings: [], dryRun: true,
+    });
+    const { ctx } = makeCtx();
+    await worktreeCmd.handler(ctx, 'prune');
+    expect(mockRunSweep.mock.calls[0]?.[0]?.bypassSoftLaunch).toBeUndefined();
+  });
+
   it('passes --scope through to runSweep', async () => {
     mockRunSweep.mockResolvedValue({
       candidates: [],

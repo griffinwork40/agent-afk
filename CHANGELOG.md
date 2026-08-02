@@ -11,6 +11,40 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.4] - 2026-08-02
+
+### Fixed
+- make the pipeline's own instruments tell the truth (#847) (4cb26bc)
+
+## [5.85.3] - 2026-08-02
+
+### Fixed
+- render round denominator in progress banner (#857) (#858) (5bc00a8)
+
+## [5.85.2] - 2026-08-02
+
+### Fixed
+- render a deliberate tool refusal as blocked, not failed (#75) (#848) (e3f73e1)
+
+## [5.85.1] - 2026-08-02
+
+### Fixed
+- sweep every repo root known to hold managed trees (#761) (#771) (f237057)
+
+### Changed
+- bump @types/node from 26.1.1 to 26.1.2 in /website (#855) (c62558c)
+- bump the fumadocs group in /website with 2 updates (#854) (9477a77)
+
+## [5.85.0] - 2026-08-02
+
+### Added
+- opt-in capture of parent→subagent dispatch prompts (#844) (c4b7696)
+
+## [5.84.17] - 2026-08-02
+
+### Fixed
+- grant confined forks read access to the agent-framework dir (#841) (fa271ee)
+
 ## [5.84.16] - 2026-08-01
 
 ### Fixed

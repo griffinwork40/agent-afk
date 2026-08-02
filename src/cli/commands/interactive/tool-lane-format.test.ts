@@ -19,9 +19,14 @@ import {
   shortenPaths,
   batchBadge,
   doneGlyph,
+  isBenignFailure,
   MAX_OVERLAY_DIFF_LINES,
   FLUSH_DIFF_LINES_DEFAULT,
 } from './tool-lane-format.js';
+import {
+  BENIGN_FAILURE_CLASSES,
+  TOOL_FAILURE_CLASSES,
+} from '../../../agent/trace/types.js';
 import { resetHyperlinksEnabledForTest } from '../../hyperlink.js';
 import { stripAnsi, displayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
@@ -116,6 +121,63 @@ describe('doneGlyph — theme-live glyph resolution', () => {
     } finally {
       palette.success = savedSuccess;
       palette.error = savedError;
+    }
+  });
+});
+
+describe('doneGlyph — benign rejection vs real fault (#75)', () => {
+  it.each([...BENIGN_FAILURE_CLASSES])(
+    'renders the neutral glyph for a deliberate `%s` refusal',
+    (cls) => {
+      expect(stripAnsi(doneGlyph(true, cls))).toBe('⊘');
+    },
+  );
+
+  it.each(['timeout', 'denial-breaker', 'repeat-failure'] as const)(
+    'keeps the error glyph for `%s`, which is a real fault',
+    (cls) => {
+      expect(stripAnsi(doneGlyph(true, cls))).toBe('✗');
+    },
+  );
+
+  it('keeps the error glyph for an UNCLASSIFIED failure', () => {
+    // Absence of a class is the pre-classification default and also what a
+    // genuine handler bug looks like. Guessing "benign" here would hide real
+    // breakage, so the omitted-argument call must stay byte-identical to the
+    // pre-#75 behaviour every existing caller and snapshot depends on.
+    expect(stripAnsi(doneGlyph(true, undefined))).toBe('✗');
+    expect(doneGlyph(true, undefined)).toBe(doneGlyph(true));
+  });
+
+  it('never renders a failure glyph for a successful result, even if a class leaks through', () => {
+    expect(stripAnsi(doneGlyph(false, 'permission-denied'))).toBe('✓');
+  });
+
+  it('classifies every known failure class as exactly benign or real', () => {
+    // Exhaustiveness guard: adding a value to TOOL_FAILURE_CLASSES without
+    // deciding whether it is "the system said no" silently defaults it to
+    // alarming red. This test does not assert WHICH bucket — it asserts the
+    // decision was made deliberately, by pinning the current partition.
+    const benign = TOOL_FAILURE_CLASSES.filter((c) => isBenignFailure(c));
+    const real = TOOL_FAILURE_CLASSES.filter((c) => !isBenignFailure(c));
+    expect(benign.length + real.length).toBe(TOOL_FAILURE_CLASSES.length);
+    expect([...benign].sort()).toEqual(
+      ['abort', 'elicitation-declined', 'hook-block', 'permission-denied', 'policy-refusal'].sort(),
+    );
+    expect([...real].sort()).toEqual(['denial-breaker', 'repeat-failure', 'timeout'].sort());
+  });
+
+  it('resolves the benign glyph tone from `palette` at call time (no theme-swap freeze)', () => {
+    // Same invariant the ✓/✗ pair is pinned for above: `palette.warning` must
+    // be read per call, or a light-theme swap leaves a stale dark-theme glyph.
+    const savedWarning = palette.warning;
+    try {
+      palette.warning = sentinelChalk('WARN-A');
+      expect(doneGlyph(true, 'hook-block')).toBe('WARN-A:⊘');
+      palette.warning = sentinelChalk('WARN-B');
+      expect(doneGlyph(true, 'hook-block')).toBe('WARN-B:⊘');
+    } finally {
+      palette.warning = savedWarning;
     }
   });
 });

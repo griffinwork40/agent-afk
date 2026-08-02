@@ -85,6 +85,11 @@ export async function* emitAndCommitToolResults(
       ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
         ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
         : {}),
+      // Carry WHY the call failed to the render-facing event, not just the
+      // trace event above. Without this the tool-lane cannot tell a permission
+      // gate saying no from a tool that broke, and renders both as a red ✗.
+      // Parity with dispatch-append.ts's tool.output yield.
+      ...(result.failureClass ? { failureClass: result.failureClass } : {}),
       sessionId: input.ctx.sessionId,
     };
 

@@ -248,11 +248,15 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
 
   let result;
   try {
+    // An explicit `--apply` bypasses the soft-launch valve — see the same
+    // guard in src/cli/commands/worktree.ts for why. The `list` path above
+    // deliberately does not set it.
     const options: SweepOptions = {
       execFile,
       repoRoot,
       dryRun: !parsed.apply,
       scope: parsed.scope,
+      ...(parsed.apply === true ? { bypassSoftLaunch: true } : {}),
     };
     result = await runSweep(options);
   } catch (err) {
