@@ -61,6 +61,19 @@ export function getSdkHomeDir(): string {
 }
 
 export function getAgentFrameworkDir(): string {
+  const envVal = env.AFK_FRAMEWORK_DIR;
+  if (envVal !== undefined && envVal !== '') {
+    // External constraint: AFK_FRAMEWORK_DIR governs the agent-framework tier
+    // (telemetry, briefs, improve artifacts). Mirror the getAfkStateDir() guard
+    // since this value is load-bearing for read-scope grants (subagent.ts) and
+    // write paths alike — both must resolve to the same directory.
+    if (!isAbsolute(envVal) || envVal === '/') {
+      throw new Error(
+        `AFK_FRAMEWORK_DIR must be an absolute path that is not /, got: ${envVal}`,
+      );
+    }
+    return envVal;
+  }
   return join(getAfkHome(), 'agent-framework');
 }
 
