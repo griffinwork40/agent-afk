@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.2] - 2026-08-02
+
+### Fixed
+- render a deliberate tool refusal as blocked, not failed (#75) (#848) (e3f73e1)
+
 ## [5.85.1] - 2026-08-02
 
 ### Fixed
