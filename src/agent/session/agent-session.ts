@@ -75,7 +75,7 @@ import {
 } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
-import { getSessionGrantsPath } from '../../paths.js';
+import { getSessionGrantsPath, sessionLabelFromTracePath } from '../../paths.js';
 import {
   capJsonlBySize,
   SESSION_GRANTS_MAX_BYTES,
@@ -102,6 +102,9 @@ export class AgentSession implements IAgentSession {
   private providerIterator!: AsyncIterator<ProviderEvent>;
   private conversationHistory: Message[] = [];
   private turnCount = 0;
+  /** Number of inbound messages submitted, including attempts that end in a
+   * provider error and therefore never increment `turnCount`. */
+  private inboundMessageCount = 0;
   /**
    * Hook-generated context (e.g. SubagentStop `injectContext`) waiting to be
    * prepended to the next outbound user message. Never delivered as its own
@@ -678,12 +681,14 @@ export class AgentSession implements IAgentSession {
     // The ledger above is deliberately gated OFF for forks (LedgerLifecycle.ensure),
     // so this fills that hole rather than duplicating it. Fire-and-forget by
     // contract — it can never reject (see captureSubagentPrompt).
+    const inboundMessageIndex = ++this.inboundMessageCount;
     void captureSubagentPrompt({
-      sessionId: this.sessionId,
+      sessionId:
+        sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? this.sessionId,
       subagentId: this.config.subagentId,
       isSubagentFork: this.config.isSubagentFork === true,
       model: this.config.model === undefined ? undefined : String(this.config.model),
-      turn: this.turnCount + 1,
+      turn: inboundMessageIndex,
       prompt: historySummary,
     });
 

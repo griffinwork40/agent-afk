@@ -20,7 +20,7 @@ process.env['AFK_HOME'] = tmpHome;
 
 const { AgentSession } = await import('./agent-session.js');
 const { createMockProvider } = await import('../__fixtures__/mock-provider.js');
-const { getPromptsDir } = await import('../../paths.js');
+const { getPromptsDir, getTraceDir } = await import('../../paths.js');
 
 async function drainTurn(session: InstanceType<typeof AgentSession>, text: string): Promise<void> {
   for await (const event of session.sendMessageStream(text)) {
@@ -81,6 +81,33 @@ describe('subagent prompt capture wiring', () => {
     }
   });
 
+  it('uses the shared trace writer’s witness label instead of the provider session id', async () => {
+    const sessionId = `wiring-provider-${Date.now()}`;
+    const sessionLabel = `wiring-witness-${Date.now()}`;
+    const traceWriter = {
+      write: async () => {},
+      getTracePath: () => path.join(getTraceDir(sessionLabel), 'trace.jsonl'),
+      seal: async () => {},
+      close: async () => {},
+    };
+    const session = new AgentSession({
+      model: 'sonnet',
+      provider: createMockProvider({ sessionId }),
+      depth: 1,
+      isSubagentFork: true,
+      subagentId: 'trace-labelled-child',
+      traceWriter,
+    });
+    try {
+      await drainTurn(session, 'land beside the shared witness trace');
+      expect(await waitForPromptFiles(sessionLabel, 1)).toHaveLength(1);
+      expect(promptFiles(sessionId)).toHaveLength(0);
+    } finally {
+      await session.close();
+      fs.rmSync(getPromptsDir(sessionLabel), { recursive: true, force: true });
+    }
+  });
+
   it('captures nothing for a top-level session — operator turns are not dispatches', async () => {
     const sessionId = `wiring-top-${Date.now()}`;
     const provider = createMockProvider({ sessionId });
@@ -125,6 +152,28 @@ describe('subagent prompt capture wiring', () => {
     try {
       await drainTurn(session, 'first dispatch');
       await drainTurn(session, 'second dispatch');
+      const files = await waitForPromptFiles(sessionId, 2);
+      expect(files).toHaveLength(2);
+      expect(files.some((f) => f.endsWith('-t1.md'))).toBe(true);
+      expect(files.some((f) => f.endsWith('-t2.md'))).toBe(true);
+    } finally {
+      await session.close();
+      fs.rmSync(getPromptsDir(sessionId), { recursive: true, force: true });
+    }
+  });
+
+  it('advances the inbound index when a provider error leaves turnCount unchanged', async () => {
+    const sessionId = `wiring-error-retry-${Date.now()}`;
+    const session = new AgentSession({
+      model: 'sonnet',
+      provider: createMockProvider({ sessionId }),
+      depth: 1,
+      isSubagentFork: true,
+      subagentId: 'retrying-child',
+    });
+    try {
+      await drainTurn(session, 'provider-error on first attempt');
+      await drainTurn(session, 'retry succeeds');
       const files = await waitForPromptFiles(sessionId, 2);
       expect(files).toHaveLength(2);
       expect(files.some((f) => f.endsWith('-t1.md'))).toBe(true);
