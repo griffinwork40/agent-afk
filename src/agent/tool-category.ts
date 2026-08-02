@@ -225,6 +225,11 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
  * `bash` is intentionally absent. Its read-only classifier is best-effort and
  * therefore cannot prove that replaying a command is free of side effects.
  *
+ * `web_scrape` is admitted with one accepted cost: its `search` mode POSTs to a
+ * metered third-party API on a keyed account (`web/search.ts`), so a replay
+ * double-charges that quota. Accepted — a bounded second query, not persistent
+ * state. Its `raw`/`markdown` modes are plain GETs and carry no such cost.
+ *
  * Membership is NECESSARY BUT NOT SUFFICIENT. `agent` is admitted here on the
  * strength of scoped grants only; the scoping itself is enforced by
  * `isChildReplaySafe` (`tools/subagent/retry-safety.ts`), which rejects an

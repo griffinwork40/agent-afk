@@ -224,8 +224,45 @@ describe('buildChildConfig', () => {
     it('treats the real research-agent surface as replay-safe', () => {
       const realResearchAgent = builtinAgents().get('research-agent');
       expect(realResearchAgent).toBeDefined();
-      expect(buildChildConfig(baseArgs({ namedAgent: realResearchAgent })).childSideEffectFree)
-        .toBe(true);
+      // Registry required: research-agent's `Agent(git-investigator)` scope is
+      // now RESOLVED, not merely counted, so the leaf's own surface is checked.
+      expect(
+        buildChildConfig(
+          baseArgs({ namedAgent: realResearchAgent, agentRegistry: builtinAgents() }),
+        ).childSideEffectFree,
+      ).toBe(true);
+    });
+
+    // Invariant: scoping alone must never authorize a replay. `general-purpose`
+    // is inherit-all (write_file/edit_file/bash) and, at top level, the
+    // grandchild is UNCAGED — child-config forwards the absent cage and
+    // nesting.ts falls back to CHILD_ALLOWED_TOOLS. A scoped grant naming it
+    // therefore has to fail closed exactly like a bare `Agent` token does.
+    it('is false for a SCOPED grant naming a write-capable type (Agent(general-purpose))', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'Agent(general-purpose)'] }),
+          agentRegistry: builtinAgents(),
+        }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('is false for a scoped grant naming an unresolvable type', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'Agent(no-such-agent)'] }),
+          agentRegistry: builtinAgents(),
+        }),
+      );
+      expect(childSideEffectFree).toBe(false);
+    });
+
+    it('is false for a scoped grant when no registry is wired to resolve it', () => {
+      const { childSideEffectFree } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent(git-investigator)'] }) }),
+      );
+      expect(childSideEffectFree).toBe(false);
     });
 
     // Invariant: `agent` is the one member of STREAM_CUT_RETRY_SAFE_TOOLS whose
@@ -249,9 +286,12 @@ describe('buildChildConfig', () => {
       expect(childSideEffectFree).toBe(false);
     });
 
-    it('stays true for a SCOPED nested-agent grant (Agent(type))', () => {
+    it('stays true for a SCOPED nested-agent grant naming a read-only leaf', () => {
       const { childSideEffectFree } = buildChildConfig(
-        baseArgs({ namedAgent: namedAgent({ tools: ['read_file', 'Agent(git-investigator)'] }) }),
+        baseArgs({
+          namedAgent: namedAgent({ tools: ['read_file', 'Agent(git-investigator)'] }),
+          agentRegistry: builtinAgents(),
+        }),
       );
       expect(childSideEffectFree).toBe(true);
     });

@@ -194,7 +194,7 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
     expect(result).toEqual(ZERO_OUTPUT_CUT);
   });
 
-  it('tears down a fresh retry fork when cancellation lands while forkSubagent awaits', async () => {
+  it('cancels a fresh retry fork when cancellation lands while forkSubagent awaits', async () => {
     const executor = makeExecutor({ readOnly: true });
     const secondHandle = mockHandle('retry-handle');
     runForegroundWithPromotion.mockResolvedValueOnce(ZERO_OUTPUT_CUT);
@@ -209,7 +209,11 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
 
     expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledTimes(2);
     expect(runForegroundWithPromotion).toHaveBeenCalledTimes(1);
-    expect(secondHandle.teardown).toHaveBeenCalledTimes(1);
+    // cancel(), not teardown(): only cancel() emits the terminal
+    // subagent_lifecycle row that closes the 'started' forkSubagent wrote, so a
+    // teardown here would leave an unmatched 'started' in the witness trace.
+    expect(secondHandle.cancel).toHaveBeenCalledTimes(1);
+    expect(secondHandle.teardown).not.toHaveBeenCalled();
     expect(result).toEqual({ content: 'Agent tool call aborted', isError: true });
   });
 

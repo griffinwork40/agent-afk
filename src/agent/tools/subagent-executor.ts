@@ -704,7 +704,22 @@ export class SubagentExecutor implements SubagentControl {
       // scope resolution, before either foreground map contains the handle.
       if (retryCancelGeneration !== undefined && this.cancelGeneration !== retryCancelGeneration) {
         await childManager?.teardownAll();
-        await handle.teardown();
+        // Trace integrity: forkSubagent has ALREADY emitted a
+        // subagent_lifecycle 'started' row for this handle, so this path must
+        // close it with a terminal row or the trace carries an unmatched
+        // 'started'. cancel() — not teardown(): teardown() fires the stop hook
+        // but emits NO lifecycle transition.
+        //
+        // External constraint governing the write order: the 'cancelled' row
+        // must land BEFORE the abort-graph cascade, so cascade aborts read as
+        // descending from this cancel and a child's own 'failed' emit cannot
+        // race ahead of it. That ordering is implemented and justified once
+        // inside cancel(); delegating to it keeps this call site from drifting
+        // out of sync. cancel() also writes through the same resolved trace
+        // writer that produced 'started', which an emit from here could not
+        // reach. Safe on a never-run handle: inFlight is null, so cancel()
+        // skips session.interrupt().
+        await handle.cancel();
         return { content: 'Agent tool call aborted', isError: true };
       }
     } catch (err) {

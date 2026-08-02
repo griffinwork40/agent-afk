@@ -205,14 +205,32 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
     effectiveReadOnlyBash !== true;
   const childWriteCapable = canWriteFiles || canMutateViaBash;
-  // Retry safety is stricter than filesystem write capability: it proves the
-  // TRANSITIVE reach of a replayed prompt, not just this child's own tool
-  // names. Fail closed for unrestricted surfaces, for non-file tools that can
-  // mutate remote or persistent state, and for an unscoped nested-dispatch
-  // grant that could re-fire a write-capable grandchild. See `retry-safety.ts`.
+  // Retry safety is stricter than filesystem write capability: it covers the
+  // reach of a replayed prompt, not just this child's own tool names. Fail
+  // closed for unrestricted surfaces, for non-file tools that can mutate remote
+  // or persistent state, and for a nested-dispatch grant — whether unscoped, or
+  // scoped to a type that is not itself a replay-safe terminal leaf. Scoping
+  // alone is not enough: `Agent(general-purpose)` is scoped and still reaches an
+  // uncaged write-capable grandchild. See `retry-safety.ts`.
   const childSideEffectFree = isChildReplaySafe({
     effectiveAllowedTools,
     nestedAgentTypes: resolvedAccess?.nestedAgentTypes,
+    // Resolve each scoped grandchild type to its own surface. Omitted when no
+    // registry is wired, which fails closed for any non-empty scope.
+    ...(args.agentRegistry !== undefined
+      ? {
+          resolveNestedAgent: (name: string) => {
+            const leaf = args.agentRegistry?.get(name);
+            if (leaf === undefined) return undefined;
+            const leafAccess = resolveAgentToolAccess(leaf, CHILD_ALLOWED_TOOLS);
+            return {
+              allowedTools: leafAccess.allowedTools,
+              bashReadOnly: leafAccess.bashReadOnly,
+              nestedAgentTypes: leafAccess.nestedAgentTypes,
+            };
+          },
+        }
+      : {}),
   });
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a

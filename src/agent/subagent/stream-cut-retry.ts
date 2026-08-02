@@ -57,10 +57,12 @@ export const STREAM_CUT_REDISPATCH_DELAY_MS = 1_000;
  *     delivered as `isError` with `incompleteReason: 'stream_incomplete'`.
  *     Nothing was produced, so re-running is strictly non-destructive.
  *
- * `tool_use_loop_capped` is the OTHER value `incompleteReason` can hold and is
- * deliberately excluded: that is a budget ceiling the caller asked for, not a
- * transport failure, and retrying it would burn a second full tool budget to
- * hit the same wall.
+ * `incompleteReason` can hold two OTHER sentinels (`isIncompleteStopReason` in
+ * `result.ts`); neither is matched. `tool_use_loop_capped` is a budget ceiling
+ * the caller asked for, not a transport failure — retrying would burn a second
+ * full tool budget to hit the same wall. `overload_exhausted` cannot reach here
+ * at all: its notice text lands as a terminal message, so `handle.ts` resolves
+ * it `status: 'succeeded'`, never as the `isError` this predicate requires.
  */
 export function isZeroOutputStreamCut(result: ToolResult): boolean {
   return result.isError === true && result.incompleteReason === STREAM_INCOMPLETE;
