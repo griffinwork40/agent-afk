@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.7] - 2026-08-02
+
+### Fixed
+- re-dispatch a read-only child once when its stream is cut with zero output (#796) (542464e)
+
 ## [5.85.6] - 2026-08-02
 
 ### Changed
