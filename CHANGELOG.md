@@ -11,6 +11,8 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.6] - 2026-08-02
+
 ### Changed
 - a named subagent dispatched without an explicit model now resolves to the
   policy default (`AFK_DEFAULT_SUBAGENT_MODEL`, else the `medium` tier) instead
@@ -20,6 +22,9 @@ auto-release workflow to deduplicate commits across successive runs.
   `research-agent` — drop from the parent's tier to the policy default under a
   high-tier parent (e.g. `opus`). Pin `model: inherit` to restore the old
   behaviour per agent.
+
+### Fixed
+- resolve an omitted named-agent model to the policy default (#868) (99294da)
 
 ## [5.85.5] - 2026-08-02
 
