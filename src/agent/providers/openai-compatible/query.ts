@@ -116,6 +116,7 @@ import { dispatchAndAppendToolCalls } from './query/dispatch-append.js';
 import {
   TOOL_USE_LOOP_CAPPED,
   WIND_DOWN_NOTE,
+  formatRoundLabel,
   resolveMaxToolIterations,
   shouldWindDown,
 } from '../shared/tool-loop-cap.js';
@@ -652,7 +653,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           progress: {
             taskId,
             description: 'Working',
-            summary: `round ${round}: ${lastToolHeadline}`,
+            summary: `${formatRoundLabel(round, maxIterations)}: ${lastToolHeadline}`,
             lastToolName,
             totalTokens: accumulatedUsage.totalTokens ?? 0,
             // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far
