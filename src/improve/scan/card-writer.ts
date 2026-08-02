@@ -50,6 +50,7 @@ import {
   FailureCardSchema,
   type FailureEvidence,
 } from '../schemas.js';
+import { reconcileSeverity } from './severity-merge.js';
 import {
   getFailureCardJsonPath,
   getFailureCardMarkdownPath,
@@ -174,7 +175,10 @@ export function mergeCard(
   const mergedEvidence = mergeEvidence(existing.evidence, detection.evidence);
   const firstSeen = minIso(existing.firstSeen, detection.observedAt);
   const lastSeen = maxIso(existing.lastSeen, detection.observedAt);
-  const severity = maxSeverity(existing.severity, detection.severity);
+  // Escalate-only, EXCEPT across a detector version change — see
+  // reconcileSeverity. A v1 card's severity was computed by different
+  // arithmetic and must not pin the v2 detection's verdict.
+  const severity = reconcileSeverity(existing, detection);
 
   return {
     schemaVersion: 1,
@@ -317,16 +321,6 @@ function minIso(a: string, b: string): string {
 
 function maxIso(a: string, b: string): string {
   return a >= b ? a : b;
-}
-
-const SEVERITY_RANK: Record<FailureCard['severity'], number> = {
-  low: 0,
-  medium: 1,
-  high: 2,
-};
-
-function maxSeverity(a: FailureCard['severity'], b: FailureCard['severity']): FailureCard['severity'] {
-  return SEVERITY_RANK[a] >= SEVERITY_RANK[b] ? a : b;
 }
 
 // ---------------------------------------------------------------------------

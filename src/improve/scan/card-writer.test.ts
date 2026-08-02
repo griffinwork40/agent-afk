@@ -156,6 +156,56 @@ describe('mergeCard (pure)', () => {
     expect(escalated.severity).toBe('medium');
   });
 
+  // Integration counterpart to severity-merge.test.ts: those tests exercise
+  // reconcileSeverity directly, these prove mergeCard actually routes through
+  // it — the wiring that makes de-escalation reachable at all.
+  it('de-escalates through mergeCard across a detector version change', () => {
+    const v1Card = mergeCard(
+      undefined,
+      makeDetection({ severity: 'high', detail: { detector: 'closure-anomaly@v1' } }),
+    );
+    expect(v1Card.severity).toBe('high');
+
+    const merged = mergeCard(
+      v1Card,
+      makeDetection({ severity: 'low', detail: { detector: 'closure-anomaly@v2' } }),
+    );
+    // A v1 `high` computed by superseded arithmetic must yield to v2's verdict.
+    expect(merged.severity).toBe('low');
+    // …and the merged card carries the new tag, so the next merge is
+    // escalate-only again rather than re-firing the version-change path.
+    expect(merged.detail['detector']).toBe('closure-anomaly@v2');
+  });
+
+  it('stays escalate-only through mergeCard when the detector tag matches', () => {
+    const existing = mergeCard(
+      undefined,
+      makeDetection({ severity: 'high', detail: { detector: 'closure-anomaly@v2' } }),
+    );
+    const merged = mergeCard(
+      existing,
+      makeDetection({ severity: 'low', detail: { detector: 'closure-anomaly@v2' } }),
+    );
+    expect(merged.severity).toBe('high');
+  });
+
+  it('replaces detail wholesale on merge, including closureEventCount', () => {
+    // Contract pinned deliberately: `detail` is REPLACED, not merged, so a
+    // narrower scan window lowers closureEventCount rather than accumulating
+    // it. Reads as "this window saw 2 events", never as "the cascade shrank".
+    const existing = mergeCard(
+      undefined,
+      makeDetection({ detail: { detector: 'closure-anomaly@v2', closureEventCount: 9 } }),
+    );
+    expect(existing.detail['closureEventCount']).toBe(9);
+
+    const merged = mergeCard(
+      existing,
+      makeDetection({ detail: { detector: 'closure-anomaly@v2', closureEventCount: 2 } }),
+    );
+    expect(merged.detail['closureEventCount']).toBe(2);
+  });
+
   it('dedupes evidence by (sessionId, first event seq)', () => {
     const first = mergeCard(undefined, makeDetection());
     const merged = mergeCard(first, makeDetection()); // identical evidence
