@@ -375,6 +375,15 @@ export function getWorktreeSweepLockPath(): string {
   return join(getAfkStateDir(), 'worktree-sweep.lock');
 }
 
+/**
+ * Registry of repo roots known to contain afk-managed worktrees. The sweep is
+ * per-root, so without this the daemon only ever reclaims the ONE repo its cwd
+ * happens to resolve to and trees under every other repo leak forever (#761).
+ */
+export function getWorktreeRootsRegistryPath(): string {
+  return join(getAfkStateDir(), 'worktree-roots.json');
+}
+
 export function getEnvConfigPath(): string {
   return join(getAfkConfigDir(), 'afk.env');
 }
