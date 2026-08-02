@@ -46,11 +46,37 @@ import {
   type SessionStartSkipReason,
 } from './gates.js';
 import { summarizeRootFailures } from './root-failure-summary.js';
+import { countPrunable, formatWorktreePruneSummary } from './worktree-prune-summary.js';
+import { debugLog } from '../../utils/debug.js';
+
+/**
+ * Wall-clock ceiling on a single `git` invocation inside the sweep.
+ *
+ * External constraint: git can block indefinitely on things that are not
+ * errors — a credential prompt on a repo with an https remote, a stale NFS or
+ * SMB handle, a network-mounted worktree whose server went away. The prune
+ * tick's per-root loop is deliberately serial (one machine-global advisory
+ * lock), so a single blocked child does not fail that root: it hangs the whole
+ * tick forever and strands every root ordered behind it, which is precisely
+ * the starvation the per-root try/catch was added to prevent. A timeout turns
+ * that silent hang into a rejection the existing catch already handles.
+ * Generous by design — a slow `git status` on a large worktree is normal.
+ */
+const PRUNE_GIT_TIMEOUT_MS = 120_000;
 
 // Promisified once at module scope — the daemon's builtin worktree-prune task
 // reuses the same node:child_process exec function on every tick; there is no
 // reason to re-resolve it dynamically inside the handler.
-const builtinPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
+const promisifiedPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
+
+/**
+ * `promisifiedPruneExecFile` with a timeout merged into every call. Wrapping
+ * here rather than at each `git` call site inside the sweep engine keeps the
+ * engine's own signature untouched and applies the ceiling uniformly, including
+ * to call sites added later.
+ */
+const builtinPruneExecFile: ExecFileFn = (file, args, options) =>
+  promisifiedPruneExecFile(file, args, { timeout: PRUNE_GIT_TIMEOUT_MS, ...options });
 
 /**
  * Resolve the repo root for the builtin worktree-prune sweep. An explicit
@@ -534,34 +560,41 @@ export class CronScheduler {
           const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
           rootFailures.push(`[ERROR] sweep failed for ${repoRoot}: ${reason}`);
           rootFailureDetails.push({ repoRoot, reason });
+          // The full path exists nowhere else on a PARTIAL failure: `warnings`
+          // is not a field of TelemetryRecord (the scheduler consumes only its
+          // .length, for the summary), and `errorMessage` — which carries
+          // basenames only, by design — is written just when EVERY root fails.
+          // Without this line an operator seeing "1 failed" has no way to learn
+          // WHICH root failed, contradicting root-failure-summary.ts's own
+          // contract that `warnings` is the detailed channel.
+          debugLog(`[worktree-prune] sweep failed for ${repoRoot}: ${reason}`);
         }
       }
       const result = {
-        // `some`, not `every`: a tick where any root only previewed must not
-        // claim it removed everything. Mixed values are unreachable while the
-        // soft-launch valve resolves uniformly per tick, but the conservative
-        // reading is the safe one if it ever becomes per-root.
+        // Retained for the record's own shape only. The SUMMARY no longer
+        // branches on this: with a per-root valve a tick can mix live and
+        // previewing roots, and choosing one of two exclusive sentences dropped
+        // the removal count on exactly those ticks (see
+        // daemon/worktree-prune-summary.ts).
         dryRun: results.some((r) => r.dryRun),
         removed: results.flatMap((r) => r.removed),
         warnings: [...rootFailures, ...results.flatMap((r) => r.warnings)],
         candidates: results.flatMap((r) => r.candidates),
       };
 
-      // 'stale-clean' is intentionally absent: the sweep engine preserves +
-      // warns on stale-clean (commits ahead of base) rather than removing.
-      const prunableVerdicts = new Set([
-        'empty',
-        'orphaned-dir',
-        'orphaned-registration',
-        'dead-owner',
-      ]);
-      // Bare cross-root totals cannot be attributed to a root, so name the
-      // fan-out width. swept/attempted also surfaces per-root failures, which
-      // are otherwise only visible in the (unpersisted) warnings.
-      const rootsLabel = `${String(results.length)}/${String(roots.length)} root(s)`;
-      const summary = result.dryRun
-        ? `🔍 worktree-prune (dry-run): would remove ${result.candidates.filter((c) => prunableVerdicts.has(c.verdict)).length} worktree(s) across ${rootsLabel}`
-        : `✂️ worktree-prune: removed ${result.removed.length}, warned ${result.warnings.length} across ${rootsLabel}`;
+      const contestedResults = results.filter((r) => r.contested === true);
+      const previewResults = results.filter((r) => r.dryRun && r.contested !== true);
+      const liveResults = results.filter((r) => !r.dryRun && r.contested !== true);
+      const summary = formatWorktreePruneSummary({
+        removed: result.removed.length,
+        warnings: result.warnings.length,
+        wouldRemove: countPrunable(previewResults.flatMap((r) => r.candidates)),
+        liveRoots: liveResults.length,
+        previewRoots: previewResults.length,
+        contestedRoots: contestedResults.length,
+        failedRoots: rootFailureDetails.length,
+        totalRoots: roots.length,
+      });
 
       // Invariant: a tick where EVERY root rejected must report `status:
       // 'error'`, not 'success' — src/insights/aggregators/daemon.ts tallies

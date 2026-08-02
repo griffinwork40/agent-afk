@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { promises as fs, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRootSweepCount } from './worktree-sweep-valve.js';
+import { readRootSweepCount, recordRootSweep } from './worktree-sweep-valve.js';
 
 let repoRoot: string;
 
@@ -71,14 +71,57 @@ describe('readRootSweepCount', () => {
     });
   });
 
-  it('initializes a fresh marker to 0 when .afk-worktrees/ exists and no marker is present yet', async () => {
+  it('reports 0 for a fresh root WITHOUT creating the marker (the read is pure)', async () => {
+    // Regression (#771 review, F-A2): this read used to probe-WRITE the marker
+    // to distinguish its outcomes by errno, so `afk worktree list` and every
+    // `dryRun: true` sweep silently materialised `.sweep-runs` inside the
+    // user's repo. The outcomes are now derived from stat/lstat; only
+    // recordRootSweep writes.
     await withTempRepo(async (root) => {
       const afkWorktreesDir = join(root, '.afk-worktrees');
       await fs.mkdir(afkWorktreesDir, { recursive: true });
 
       const result = await readRootSweepCount(root);
       expect(result).toBe(0);
-      expect((await fs.readFile(join(afkWorktreesDir, '.sweep-runs'), 'utf-8')).trim()).toBe('0');
+      await expect(fs.stat(join(afkWorktreesDir, '.sweep-runs'))).rejects.toThrow(/ENOENT/);
+    });
+  });
+
+  it('refuses a symlinked marker instead of following it, and never writes through it', async () => {
+    // Regression (#771 review, F-S1): the marker was written with a plain
+    // writeFile (O_TRUNC, follows symlinks), so a symlink at `.sweep-runs`
+    // made the unattended daemon tick truncate the LINK TARGET — a file
+    // OUTSIDE the repo — and write "0" into it.
+    await withTempRepo(async (root) => {
+      const afkWorktreesDir = join(root, '.afk-worktrees');
+      await fs.mkdir(afkWorktreesDir, { recursive: true });
+      const outsideVictim = join(root, 'outside-the-sweep.conf');
+      await fs.writeFile(outsideVictim, 'precious contents', 'utf-8');
+      await fs.symlink(outsideVictim, join(afkWorktreesDir, '.sweep-runs'));
+
+      // Read classifies it as unusable → forces previews, follows nothing.
+      expect(await readRootSweepCount(root)).toBe(0);
+
+      // The only writer must fail closed rather than truncate the target.
+      await recordRootSweep(root);
+      expect(await fs.readFile(outsideVictim, 'utf-8')).toBe('precious contents');
+    });
+  });
+
+  it('creates the marker at 0o600 on the credit path and increments it', async () => {
+    await withTempRepo(async (root) => {
+      const afkWorktreesDir = join(root, '.afk-worktrees');
+      await fs.mkdir(afkWorktreesDir, { recursive: true });
+
+      await recordRootSweep(root);
+      const marker = join(afkWorktreesDir, '.sweep-runs');
+      expect((await fs.readFile(marker, 'utf-8')).trim()).toBe('1');
+      if (process.platform !== 'win32') {
+        expect((await fs.stat(marker)).mode & 0o777).toBe(0o600);
+      }
+
+      await recordRootSweep(root);
+      expect((await fs.readFile(marker, 'utf-8')).trim()).toBe('2');
     });
   });
 });

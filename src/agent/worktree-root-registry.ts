@@ -22,10 +22,11 @@
 
 import { promises as fs } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { getWorktreeRootsRegistryPath } from '../paths.js';
 import { debugLog } from '../utils/debug.js';
 import { classifyRootLiveness } from './worktree-root-registry-liveness.js';
+import { normalizeRootPath } from './worktree-root-path.js';
 
 /** Current on-disk schema version. Bump only on a breaking shape change. */
 const REGISTRY_VERSION = 1;
@@ -66,12 +67,24 @@ interface RegistryFile {
 function parseRegistry(raw: string): RootEntry[] {
   try {
     const parsed = JSON.parse(raw) as Partial<RegistryFile>;
+    // Contract: the version is written on every save, so a file whose version
+    // is absent or unrecognised was not produced by this schema. Reading it
+    // under v1 rules would feed entries of an unknown shape to a sweep that
+    // DELETES DIRECTORIES, so an unknown version reads as empty — callers then
+    // fall back to their own single-root resolution, which is the safe
+    // degradation this module already promises everywhere else.
+    if (parsed.version !== REGISTRY_VERSION) return [];
     if (!Array.isArray(parsed.roots)) return [];
     return parsed.roots.filter(
       (e): e is RootEntry =>
         typeof e === 'object' && e !== null &&
         typeof (e as RootEntry).path === 'string' &&
-        (e as RootEntry).path.length > 0,
+        (e as RootEntry).path.length > 0 &&
+        // A relative entry is resolved against the READING process's cwd, so
+        // the same file would select a different sweep anchor in the daemon
+        // (commonly $HOME under launchd) than in the REPL. Only this module
+        // writes absolute paths; anything else came from a foreign writer.
+        isAbsolute((e as RootEntry).path),
     );
   } catch {
     return []; // unreadable/corrupt → start clean rather than throw
@@ -212,6 +225,15 @@ async function mutateRegistry(transform: (entries: RootEntry[]) => RootEntry[]):
  */
 function capRoots(entries: RootEntry[]): RootEntry[] {
   if (entries.length <= MAX_ROOTS) return entries;
+  // Order by the field that defines the policy. Eviction used to rely on array
+  // POSITION, which matches "least-recently-seen" only because
+  // registerWorktreeRoot happens to append — any externally written or
+  // out-of-order file evicted by insertion order while `lastSeenAt` (the field
+  // this module records for exactly this purpose, and the wording of the
+  // contract below) said otherwise. Sorting here makes the stated policy the
+  // implemented one. Stable ties keep insertion order, so same-timestamp
+  // entries behave as before.
+  entries = [...entries].sort((a, b) => a.lastSeenAt.localeCompare(b.lastSeenAt));
   const evicted = entries.slice(0, entries.length - MAX_ROOTS);
   debugLog(
     `[worktree-root-registry] cap ${MAX_ROOTS} reached — evicting ${evicted.length} ` +
@@ -229,7 +251,10 @@ function capRoots(entries: RootEntry[]): RootEntry[] {
  */
 export async function registerWorktreeRoot(repoRoot: string): Promise<void> {
   if (repoRoot === '') return;
-  const absolute = resolve(repoRoot);
+  // Canonical (symlink- and case-resolved), not merely absolute: see
+  // agent/worktree-root-path.ts for why `resolve()` alone lets one repo occupy
+  // two entries and get swept twice per tick.
+  const absolute = await normalizeRootPath(repoRoot);
   const now = new Date().toISOString();
   await mutateRegistry((entries) => {
     const others = entries.filter((e) => resolve(e.path) !== absolute);
@@ -301,11 +326,17 @@ export async function readRegisteredWorktreeRoots(): Promise<string[]> {
  */
 export async function sweepRootSet(primary: string | null): Promise<string[]> {
   const registered = await readRegisteredWorktreeRoots();
-  const ordered = primary !== null && primary !== '' ? [resolve(primary), ...registered] : registered;
+  const ordered = primary !== null && primary !== '' ? [primary, ...registered] : registered;
   const seen = new Set<string>();
   const roots: string[] = [];
   for (const root of ordered) {
-    const absolute = resolve(root);
+    // Canonicalize before the de-duplication test, not just `resolve()`. The
+    // primary arrives from `git rev-parse --show-toplevel` (already realpath'd)
+    // or verbatim from AFK_WORKTREE_SWEEP_ROOT (not resolved at all), while
+    // registered entries arrive as stored — so `/var/x` and `/private/var/x`,
+    // or two case variants of one path on a case-insensitive filesystem, would
+    // both survive as "distinct" roots and the same repo would be swept twice.
+    const absolute = await normalizeRootPath(root);
     if (seen.has(absolute)) continue;
     seen.add(absolute);
     roots.push(absolute);

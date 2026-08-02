@@ -95,6 +95,41 @@ describe('builtin worktree-prune across multiple roots', () => {
     expect(mockRunSweep.mock.calls.map((c) => c[0]?.repoRoot)).toEqual(['/repo/a', '/repo/b']);
   });
 
+  it('F-T2: a MIXED live/preview tick still reports the real removal count', async () => {
+    // Reachable since the soft-launch valve became per-root: an established
+    // root sweeps live while a freshly registered one is held in preview. The
+    // old summary folded dryRun with some() and printed only the preview
+    // sentence, so the live root's removals never appeared in the record — and
+    // that record is what cli/commands/daemon.ts pushes to the operator.
+    mockSweepRootSet.mockResolvedValue(['/repo/established', '/repo/fresh']);
+    mockRunSweep
+      .mockResolvedValueOnce(sweepResult({ removed: ['gone-1', 'gone-2'], dryRun: false }))
+      .mockResolvedValueOnce(sweepResult({
+        dryRun: true,
+        candidates: [
+          { path: '/repo/fresh/.afk-worktrees/x', verdict: 'empty', owner: 'interactive', ageMs: 0 },
+        ],
+      }));
+
+    const { status, excerpt } = await tickPrune();
+
+    expect(status).toBe('success');
+    expect(excerpt).toContain('removed 2');
+    expect(excerpt).toContain('would remove 1 on 1 preview root(s)');
+  });
+
+  it('F-O2: a contested root is not counted as swept', async () => {
+    mockSweepRootSet.mockResolvedValue(['/repo/a', '/repo/b']);
+    mockRunSweep
+      .mockResolvedValueOnce(sweepResult({ removed: ['gone'] }))
+      .mockResolvedValueOnce(sweepResult({ contested: true, warnings: ['[WARN] lock held'] }));
+
+    const { excerpt } = await tickPrune();
+
+    expect(excerpt).toContain('across 1/2 root(s)');
+    expect(excerpt).toContain('1 contested');
+  });
+
   it('concatenates removals and warnings across roots', async () => {
     mockSweepRootSet.mockResolvedValue(['/repo/a', '/repo/b']);
     mockRunSweep

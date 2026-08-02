@@ -576,6 +576,45 @@ describe('stale-dirty-never-removes', () => {
     expect(warning).not.toContain('uncommitted changes');
   });
 
+  it('F-S4: skips the orphan scan when .afk-worktrees is a symlink', async () => {
+    // The orphan scan is the one path that recursively deletes a directory
+    // chosen by disk listing rather than by git. readdir follows symlinks, so a
+    // `.afk-worktrees` symlink had the scan enumerate — and fs.rm delete —
+    // entries living entirely outside the repo. Sweeping every registered root
+    // (#761) multiplies that from one window to every repo the daemon visits.
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'afk-sweep-outside-')));
+    const victim = join(elsewhere, 'not-ours');
+    await fs.mkdir(victim, { recursive: true });
+    await fs.writeFile(join(victim, 'keep-me.txt'), 'precious', 'utf-8');
+    // The shared setup materialises a real .afk-worktrees/; replace it with the
+    // symlink this case is about.
+    await fs.rm(join(repoRoot, '.afk-worktrees'), { recursive: true, force: true });
+    await fs.symlink(elsewhere, join(repoRoot, '.afk-worktrees'));
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      bypassSoftLaunch: true,
+      telemetryPath: telemetryFile,
+    });
+
+    // Nothing beyond the link was touched, and the skip is reported.
+    expect(await fs.readFile(join(victim, 'keep-me.txt'), 'utf-8')).toBe('precious');
+    expect(result.removed).toEqual([]);
+    expect(result.warnings.some((w) => w.includes('.afk-worktrees is a symlink'))).toBe(true);
+
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+
   // A probe that protects because git FAILED must say so; otherwise the tree is
   // preserved forever with no trace of why.
   it('warns distinctly when the ignored probe itself fails', async () => {
@@ -1390,8 +1429,12 @@ describe('soft-launch-valve', () => {
     expect(await callExplicitDryRun()).toBe(true);
     expect(await callExplicitDryRun()).toBe(true);
     expect(await callExplicitDryRun()).toBe(true);
-    // Three previews later, the marker must still read 0 — none advanced it.
-    expect((await fs.readFile(marker, 'utf-8')).trim()).toBe('0');
+    // Three previews later the marker must still not exist at all. It used to
+    // read '0' here because the valve's READ probe-wrote it; that write is gone
+    // (#771 review, F-A2 — a documented preview must not mutate the repo), so
+    // the assertion is now the stronger one: an explicit dry-run leaves no
+    // trace whatsoever, rather than leaving an uncredited marker.
+    await expect(fs.stat(marker)).rejects.toThrow(/ENOENT/);
     // A follow-up sweep is STILL valve-forced to dry-run: the counter never
     // moved, so the daemon's first live sweep of this root has not happened.
     expect(await callExplicitDryRun()).toBe(true);

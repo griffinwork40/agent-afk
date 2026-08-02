@@ -187,6 +187,13 @@ export interface SweepResult {
   warnings: string[];
   dryRun: boolean;
   candidates: SweepCandidateSummary[];
+  /**
+   * Set only when the run returned early because another process held the
+   * machine-global sweep lock, so nothing was inspected. Additive and optional:
+   * a caller that ignores it behaves exactly as before. The daemon's multi-root
+   * tick needs it to avoid counting an untouched root as swept.
+   */
+  contested?: boolean;
 }
 
 /**
@@ -511,6 +518,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   } catch (err) {
     if (err instanceof LockContestedError) {
       result.warnings.push(`[WARN] ${err.message}`);
+      result.contested = true;
       return result;
     }
     throw err;
@@ -527,12 +535,32 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     // Detect orphaned directories (exist on disk, not in git list)
     const registeredPaths = new Set(parsed.map((p) => p.path));
     let diskEntries: string[] = [];
+    // Invariant: the orphan scan is the one path that recursively DELETES a
+    // directory chosen by disk listing rather than by git, so its root must be
+    // a real directory in this repo. `readdir` follows a symlink, so a
+    // `.afk-worktrees` symlink would have the scan enumerate — and `fs.rm`
+    // recursively delete — entries that live somewhere else entirely. One
+    // daemon-resolved root made that a narrow window; sweeping every registered
+    // root (#761) multiplies it by every repo the daemon has ever visited.
+    // Skip such a root instead of resolving through the link: nothing legitimate
+    // in this engine ever creates `.afk-worktrees` as a symlink.
+    let orphanScanRoot: string | null = afkWorktreesRoot;
     try {
-      const entries = await fs.readdir(afkWorktreesRoot, { withFileTypes: true });
-      diskEntries = entries
-        .filter((e) => e.isDirectory())
-        .map((e) => join(afkWorktreesRoot, e.name));
-    } catch { /* .afk-worktrees doesn't exist yet — no orphaned dirs */ }
+      if ((await fs.lstat(afkWorktreesRoot)).isSymbolicLink()) {
+        result.warnings.push(
+          `[WARN] skipping orphan scan: .afk-worktrees is a symlink, not a directory: ${afkWorktreesRoot}`,
+        );
+        orphanScanRoot = null;
+      }
+    } catch { /* absent — handled by the readdir below */ }
+    if (orphanScanRoot !== null) {
+      try {
+        const entries = await fs.readdir(orphanScanRoot, { withFileTypes: true });
+        diskEntries = entries
+          .filter((e) => e.isDirectory())
+          .map((e) => join(afkWorktreesRoot, e.name));
+      } catch { /* .afk-worktrees doesn't exist yet — no orphaned dirs */ }
+    }
 
     const orphanedDirs = diskEntries.filter((d) => !registeredPaths.has(d));
 

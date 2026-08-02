@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
+import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -20,7 +20,14 @@ let stateDir: string;
 let prevStateDir: string | undefined;
 
 beforeEach(() => {
-  stateDir = mkdtempSync(join(tmpdir(), 'wt-roots-'));
+  // realpathSync so the registry's canonicalization cannot differ from these
+  // fixtures by a /tmp -> /private/tmp symlink on macOS. The registry stores
+  // realpath'd roots on purpose (#771 review, F-C3: without it one repo reached
+  // through a symlinked parent occupies two entries and is swept twice per
+  // tick), so a raw mkdtemp path here would compare a canonical value against
+  // a non-canonical fixture. worktree-root-registration.test.ts already does
+  // this for the same reason.
+  stateDir = realpathSync(mkdtempSync(join(tmpdir(), 'wt-roots-')));
   prevStateDir = process.env['AFK_STATE_DIR'];
   process.env['AFK_STATE_DIR'] = stateDir;
 });
@@ -292,5 +299,81 @@ describe('durability and concurrency', () => {
 
     await registerWorktreeRoot(repo);
     expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hardening added by the #771 review pass. Each case pins one finding.
+// ---------------------------------------------------------------------------
+describe('registry hardening (#771 review)', () => {
+  async function writeRegistryFile(body: unknown): Promise<void> {
+    await fs.mkdir(dirname(getWorktreeRootsRegistryPath()), { recursive: true });
+    await fs.writeFile(getWorktreeRootsRegistryPath(), JSON.stringify(body), 'utf-8');
+  }
+
+  it('F-C3: one repo reached through a symlinked parent registers exactly once', async () => {
+    const repo = await mkRepo('canonical');
+    const link = join(stateDir, 'link-to-canonical');
+    await fs.symlink(repo, link);
+
+    await registerWorktreeRoot(repo);
+    await registerWorktreeRoot(link); // same repo, non-canonical spelling
+
+    // One entry, stored canonically — not two roots swept twice per tick.
+    expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
+    expect(await sweepRootSet(link)).toEqual([repo]);
+  });
+
+  it('F-S3: rejects a relative entry, which would resolve against each reader cwd', async () => {
+    const repo = await mkRepo('abs-only');
+    await writeRegistryFile({
+      version: 1,
+      roots: [
+        { path: 'relative/not/absolute', lastSeenAt: new Date().toISOString() },
+        { path: repo, lastSeenAt: new Date().toISOString() },
+      ],
+    });
+
+    expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
+  });
+
+  it('F-S5: an unrecognised schema version reads as empty rather than under v1 rules', async () => {
+    const repo = await mkRepo('versioned');
+    await writeRegistryFile({
+      version: 99,
+      roots: [{ path: repo, lastSeenAt: new Date().toISOString() }],
+    });
+
+    expect(await readRegisteredWorktreeRoots()).toEqual([]);
+  });
+
+  it('F-C4: eviction at the cap drops the least-recently-SEEN, not the first in the array', async () => {
+    // Written out of order on purpose: position and lastSeenAt disagree, so a
+    // positional slice would evict the wrong entry.
+    const oldest = await mkRepo('oldest');
+    const newest = await mkRepo('newest');
+    const filler = await Promise.all(
+      Array.from({ length: 63 }, (_, i) => mkRepo(`filler-${String(i).padStart(3, '0')}`)),
+    );
+    await writeRegistryFile({
+      version: 1,
+      roots: [
+        { path: newest, lastSeenAt: '2030-01-01T00:00:00.000Z' },
+        { path: oldest, lastSeenAt: '2000-01-01T00:00:00.000Z' },
+        ...filler.map((p, i) => ({
+          path: p,
+          lastSeenAt: `2020-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+        })),
+      ],
+    });
+
+    // 65 entries against MAX_ROOTS = 64 → exactly one eviction.
+    const trigger = await mkRepo('trigger');
+    await registerWorktreeRoot(trigger);
+
+    const roots = await readRegisteredWorktreeRoots();
+    expect(roots).toContain(newest);
+    expect(roots).toContain(trigger);
+    expect(roots).not.toContain(oldest);
   });
 });

@@ -17,12 +17,14 @@
  * so a marker file there is inert.
  *
  * Contract: `readRootSweepCount` returns `null` only when `.afk-worktrees/`
- * is absent OR is not a directory (the write fails `ENOENT` / `ENOTDIR`) —
- * this root has nothing for the sweep to do at all, so the caller falls back
- * to the legacy machine-global telemetry count exactly as before. Any OTHER
- * write failure (the directory exists but the marker itself is unusable —
- * wrong-owner file, a directory sitting where the marker should be, a
- * permissions error) returns `0`, FORCING previews, rather than `null`.
+ * is absent OR is not a directory — this root has nothing for the sweep to do
+ * at all, so the caller falls back to the legacy machine-global telemetry
+ * count exactly as before. Once that directory exists, an unusable marker (a
+ * symlink, a directory sitting where the marker should be, a wrong-owner or
+ * unreadable file) returns `0`, FORCING previews, rather than `null`. A marker
+ * that is absent returns `0` too: a fresh root previews before it reaps.
+ * The read is pure — only `recordRootSweep` writes, and it opens the marker
+ * with `O_NOFOLLOW` so a symlink there can never redirect the write.
  *
  * History: an earlier version of this contract returned
  * `null` for every unusable marker, reasoning that reporting 0 would pin such
@@ -32,11 +34,11 @@
  * any long-lived machine is already ≥ `SOFT_LAUNCH_RUNS`, so a root whose
  * marker is unusable got a LIVE destructive sweep with zero previews ever
  * having run against it — silently, since worktree removal itself still
- * succeeds. Reaching that branch takes a marker that is BOTH unreadable and
- * unwritable (the read above returns early whenever the content parses), e.g.
- * a `.sweep-runs` created once under `sudo` and left mode 0600 owned by
- * another uid inside an otherwise fully-writable `.afk-worktrees/`, or a
- * directory sitting at the marker path (`EISDIR`). Forcing 0 instead trades
+ * succeeds. Reaching that branch takes a marker that exists but is not a
+ * readable regular file (the read returns early whenever the content parses),
+ * e.g. a `.sweep-runs` created once under `sudo` and left mode 0600 owned by
+ * another uid inside an otherwise fully-writable `.afk-worktrees/`, a
+ * directory sitting at the marker path, or a symlink. Forcing 0 instead trades
  * that silent destructive sweep for a root pinned in dry-run, and the pin is
  * NOT permanent: the REPL boot-prune path passes `bypassSoftLaunch: true` and
  * reaps regardless of marker state, and repairing the marker's permissions
@@ -47,51 +49,73 @@
  * @module agent/worktree-sweep-valve
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, type Stats } from 'node:fs';
+import { O_WRONLY, O_CREAT, O_TRUNC, O_NOFOLLOW } from 'node:constants';
 import { join } from 'node:path';
 
 /** Previews a root must accumulate before the sweep may remove anything. */
 export const SOFT_LAUNCH_RUNS = 3;
 
 const MARKER_NAME = '.sweep-runs';
+const MARKER_MODE = 0o600;
 
 function markerPath(repoRoot: string): string {
   return join(repoRoot, '.afk-worktrees', MARKER_NAME);
+}
+
+function afkWorktreesDir(repoRoot: string): string {
+  return join(repoRoot, '.afk-worktrees');
 }
 
 /**
  * Sweeps previously recorded against `repoRoot`, or `null` only when
  * `.afk-worktrees/` is absent or is not a directory (see the module Contract).
  *
- * Deliberately does NOT create `.afk-worktrees/`: a repo without that
- * directory has no managed worktrees to reclaim, and materialising it would
- * litter every repo the daemon merely visits.
+ * Invariant: this read is PURE — it never creates, truncates, or repairs the
+ * marker. It is reached from callers that are documented as read-only (`afk
+ * worktree list`, `/worktree list`, every `dryRun: true` sweep), and the
+ * previous probe-write meant those callers materialised `.sweep-runs` inside
+ * the user's repo. Two consequences made that unacceptable rather than merely
+ * untidy: a documented preview mutated the working tree, and the write was the
+ * symlink-following one guarded below in `recordRootSweep`. Every outcome the
+ * probe-write used to distinguish by errno is now derived from `stat`/`lstat`
+ * instead, so the four-way contract is unchanged while the read stays inert.
+ * `recordRootSweep` is the only writer.
  */
 export async function readRootSweepCount(repoRoot: string): Promise<number | null> {
-  const target = markerPath(repoRoot);
+  // `.afk-worktrees/` absent, or present but not a directory → no per-root
+  // signal exists at all; the caller takes the legacy machine-global count.
   try {
-    const parsed = Number.parseInt((await fs.readFile(target, 'utf-8')).trim(), 10);
-    if (Number.isInteger(parsed) && parsed >= 0) return parsed;
-  } catch {
-    /* absent or unreadable → fall through and try to initialise */
-  }
-  try {
-    // Plain 'w': also repairs a corrupt marker by resetting it to 0.
-    await fs.writeFile(target, '0', 'utf-8');
-    return 0;
+    if (!(await fs.stat(afkWorktreesDir(repoRoot))).isDirectory()) return null;
   } catch (err) {
-    // ENOENT/ENOTDIR here mean `.afk-worktrees/` is absent, or is a plain
-    // file rather than a directory — either way this root has nothing for the
-    // sweep to do (the orphan scan's own readdir fails identically), so fall
-    // back to the legacy machine-global count exactly as before. Any OTHER
-    // errno means the directory exists but the marker itself is unusable
-    // (wrong owner, permissions, a directory where the file should be) —
-    // force previews rather than silently inheriting an already-exhausted
-    // global count (see module Contract).
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    return 0; // directory unreadable → fail closed (force previews)
+  }
+
+  // `lstat`, not `stat`: a symlink at the marker path must be classified as
+  // unusable on its own terms rather than resolved to whatever it points at.
+  let markerStat: Stats;
+  try {
+    markerStat = await fs.lstat(markerPath(repoRoot));
+  } catch {
+    // ENOENT is the fresh-root case — previews start at 0 and the marker is
+    // created later by recordRootSweep, not here. Any other errno means the
+    // marker is unreadable. Both fail closed to previews, so neither needs to
+    // be distinguished.
     return 0;
   }
+  // A symlink, directory, socket, or device at the marker path is unusable:
+  // force previews rather than inheriting an already-exhausted global count.
+  if (!markerStat.isFile()) return 0;
+
+  try {
+    const parsed = Number.parseInt((await fs.readFile(markerPath(repoRoot), 'utf-8')).trim(), 10);
+    if (Number.isInteger(parsed) && parsed >= 0) return parsed;
+  } catch {
+    /* unreadable (wrong owner, permissions) → fall through and fail closed */
+  }
+  return 0;
 }
 
 /**
@@ -102,8 +126,26 @@ export async function recordRootSweep(repoRoot: string): Promise<void> {
   try {
     const current = await readRootSweepCount(repoRoot);
     if (current === null) return;
-    await fs.writeFile(markerPath(repoRoot), String(current + 1), 'utf-8');
+    // SEC-4: open with O_NOFOLLOW to prevent symlink attacks. This is the only
+    // write in the valve, and it targets a path inside a repo the daemon merely
+    // visits — a checkout, restored backup, or copied tree can carry a symlink
+    // at `.afk-worktrees/.sweep-runs`. A plain writeFile (O_TRUNC, follows
+    // symlinks) would then truncate the LINK TARGET, i.e. an arbitrary file
+    // OUTSIDE the repo, unattended on the daemon's cron tick. O_NOFOLLOW makes
+    // that open fail with ELOOP instead; the catch below swallows it, so the
+    // root simply keeps previewing — fail-closed, never destructive.
+    // Mirrors src/cli/input/history.ts, which guards its own writes the same way.
+    const handle = await fs.open(
+      markerPath(repoRoot),
+      O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW,
+      MARKER_MODE,
+    );
+    try {
+      await handle.writeFile(String(current + 1), 'utf-8');
+    } finally {
+      await handle.close();
+    }
   } catch {
-    /* best-effort */
+    /* best-effort: a failure here costs an extra preview, never a destructive sweep */
   }
 }
