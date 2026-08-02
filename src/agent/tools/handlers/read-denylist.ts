@@ -168,6 +168,8 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
  */
 export const READ_ALLOWLIST_REL: readonly string[] = ['.afk/config/mcp.json'];
 
+const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
+
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
   (rel) => `${homedir()}/${rel}`,
@@ -314,11 +316,16 @@ function resolveLists(): {
   const extras: string[] = parseReadDenylistEntries(env.AFK_READ_DENYLIST)
     .map((p) => safeRealpath(p))
     .filter(Boolean);
+  // Keep source identity until carve-out gating is complete. Canonical paths
+  // alone are insufficient: the designated AFK config root and an independent
+  // credential root can resolve to the same string through a symlink.
+  const resolvedBuiltinEntries = BUILTIN_READ_DENYLIST.map((source) => ({
+    source,
+    root: safeRealpath(resolve(source)),
+  }));
+  const derivedCarvedRoots = derivedAfkHomeReadEntry();
   const builtins = [
-    ...new Set([
-      ...BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
-      ...derivedAfkHomeReadEntry(),
-    ]),
+    ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots]),
   ];
   // Invariant: the derived carve-outs are gated against the builtin deny
   // prefixes BEFORE they are unioned in, because `allow` is consulted ahead of
@@ -326,15 +333,32 @@ function resolveLists(): {
   // denied root (AFK_HOME=~/.ssh/afk) punched an exact-file hole straight
   // through that root's floor (#779). The gate is applied here rather than via
   // isReadDenied because that function reads the list being built.
-  const carvedRoots = derivedAfkHomeReadEntry();
+  const defaultCarvedRoot = resolvedBuiltinEntries.find(
+    ({ source }) => source === DEFAULT_AFK_CONFIG,
+  )?.root;
+  const defaultGateRoots = [
+    ...resolvedBuiltinEntries
+      .filter(({ source }) => source !== DEFAULT_AFK_CONFIG)
+      .map(({ root }) => root),
+    ...derivedCarvedRoots.filter((root) => root !== defaultCarvedRoot),
+  ];
+  const derivedGateRoots = resolvedBuiltinEntries
+    .filter(
+      ({ source, root }) =>
+        source !== DEFAULT_AFK_CONFIG || !derivedCarvedRoots.includes(root),
+    )
+    .map(({ root }) => root);
   cached = {
     key,
     builtins,
     extras,
     allow: [
       ...new Set([
-        ...BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
-        ...gateDerivedCarveOuts(derivedAfkHomeAllowEntries(), builtins, carvedRoots),
+        ...gateDerivedCarveOuts(
+          BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
+          defaultGateRoots,
+        ),
+        ...gateDerivedCarveOuts(derivedAfkHomeAllowEntries(), derivedGateRoots),
       ]),
     ],
   };

@@ -18,33 +18,38 @@
  * still denies. Using prefix matching for the exclusion would re-open the hole;
  * using equality for the gate itself would miss it.
  *
+ * Callers remove the specifically carved deny entry by provenance before
+ * invoking this function. They must not remove every root with the same
+ * canonical path: an independent builtin can resolve to that path through a
+ * symlink and must continue to enforce the floor.
+ *
  * @module agent/tools/handlers/read-denylist-carveout
  */
 
 /**
- * Prefix-or-equal containment, matching the shape `isReadDenied` uses for its
- * own deny loop so the two cannot drift apart.
+ * Platform-aware prefix-or-equal containment. `relative` avoids hard-coding
+ * `/`, which would silently disable nested-root checks on Windows.
  */
+import { isAbsolute, relative, sep } from 'node:path';
+
 function isUnderRoot(candidate: string, root: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}/`);
+  const rel = relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /**
  * Drop any derived carve-out that falls under a builtin denied root other than
- * the one it is carving out of.
+ * the one it is carving out of. The caller supplies only roots that must gate
+ * the entries, preserving the source identity of duplicate canonical paths.
  *
  * @param derived     Relocated carve-out entries (absolute, symlink-resolved).
- * @param builtinDeny The full builtin deny prefix list.
- * @param carvedRoots The denied root(s) the carve-out legitimately pierces —
- *                    excluded from the gate by exact match.
+ * @param gateRoots   Builtin roots that are not the designated carved source.
  * @returns The subset safe to union into the allow list. Fails CLOSED: an entry
  *          under any other builtin root is dropped, never kept.
  */
 export function gateDerivedCarveOuts(
   derived: readonly string[],
-  builtinDeny: readonly string[],
-  carvedRoots: readonly string[],
+  gateRoots: readonly string[],
 ): string[] {
-  const gateRoots = builtinDeny.filter((root) => !carvedRoots.includes(root));
   return derived.filter((entry) => !gateRoots.some((root) => isUnderRoot(entry, root)));
 }

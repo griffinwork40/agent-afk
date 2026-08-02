@@ -20,20 +20,17 @@ describe('gateDerivedCarveOuts — pure gate', () => {
 
   it('keeps a carve-out whose only containing root is the one it pierces', () => {
     const entry = join(home, '.afk', 'config', 'mcp.json');
-    const carved = join(home, '.afk', 'config');
-    expect(gateDerivedCarveOuts([entry], [carved, OTHER_DENIED_ROOT], [carved])).toEqual([entry]);
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([entry]);
   });
 
   it('drops a carve-out that also sits under another builtin denied root', () => {
     const entry = join(OTHER_DENIED_ROOT, 'afk', 'config', 'mcp.json');
-    const carved = join(OTHER_DENIED_ROOT, 'afk', 'config');
-    expect(gateDerivedCarveOuts([entry], [carved, OTHER_DENIED_ROOT], [carved])).toEqual([]);
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([]);
   });
 
   it('keeps a carve-out under a relocated home that is not denied elsewhere', () => {
     const entry = join(home, 'scratch', 'afk', 'config', 'mcp.json');
-    const carved = join(home, 'scratch', 'afk', 'config');
-    expect(gateDerivedCarveOuts([entry], [carved, OTHER_DENIED_ROOT], [carved])).toEqual([entry]);
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([entry]);
   });
 
   it('excludes the pierced root by EQUALITY, not by prefix', () => {
@@ -41,19 +38,25 @@ describe('gateDerivedCarveOuts — pure gate', () => {
     // the relocated home but not equal to the pierced root, so it must stay in
     // the gate. A prefix-based exclusion would re-open the hole.
     const entry = join(OTHER_DENIED_ROOT, 'afk', 'config', 'mcp.json');
-    const carved = join(OTHER_DENIED_ROOT, 'afk', 'config');
-    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT], [carved])).toEqual([]);
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([]);
   });
 
   it('does not treat a sibling path sharing a name prefix as contained', () => {
     const entry = join(`${OTHER_DENIED_ROOT}-extra`, 'config', 'mcp.json');
-    const carved = join(`${OTHER_DENIED_ROOT}-extra`, 'config');
-    expect(gateDerivedCarveOuts([entry], [carved, OTHER_DENIED_ROOT], [carved])).toEqual([entry]);
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([entry]);
   });
 
-  it('fails closed on an empty carved-root set', () => {
+  it('fails closed when the carved root remains in the gate set', () => {
     const entry = join(home, '.afk', 'config', 'mcp.json');
-    expect(gateDerivedCarveOuts([entry], [join(home, '.afk', 'config')], [])).toEqual([]);
+    expect(gateDerivedCarveOuts([entry], [join(home, '.afk', 'config')])).toEqual([]);
+  });
+
+  it('preserves an independent root that canonicalizes to the carved root', () => {
+    const carved = join(home, 'canonical-config');
+    const entry = join(carved, 'mcp.json');
+    // The caller removes only the designated carved source; the independently
+    // configured root with the same canonical spelling remains in this list.
+    expect(gateDerivedCarveOuts([entry], [carved])).toEqual([]);
   });
 });
 
