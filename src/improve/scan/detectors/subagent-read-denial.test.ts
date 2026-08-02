@@ -21,6 +21,7 @@ import { parseTraceContent, type SessionRead } from '../reader.js';
 import {
   detectSubagentReadDenial,
   computeFingerprint,
+  classifyDenialMechanism,
   makeSlug,
   normalizeReason,
   DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES,
@@ -296,5 +297,126 @@ describe('detectSubagentReadDenial — fingerprint, slug, schema', () => {
       notes: [],
     };
     expect(FailureCardSchema.safeParse(card).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mechanism split — the credential floor is by-design, never a card.
+//
+// History: card `subagent-read-denial-cf21041f85be` was open/high with N=9 and
+// every evidence row was the unconditional read-denylist floor refusing
+// mcp.json / schedules.json / afk.env. That is the guardrail working as
+// designed; no read-scope widening should ever make it stop firing. Worse, it
+// was indistinguishable from the genuine agent-framework containment gap
+// sitting next to it.
+// ---------------------------------------------------------------------------
+
+/** The credential-floor denial the path-approval hook emits verbatim. */
+function floorDenial(path: string, matched = '~/.afk/config'): string {
+  return (
+    `Access denied: ${path} is a protected credential/secret path ` +
+    `(read-denylist entry: ${matched}). This path is never readable — ` +
+    `it holds credentials, not task data; do not retry.`
+  );
+}
+
+const CRED_PATH = '/Users/x/.afk/config/afk.env';
+
+describe('classifyDenialMechanism', () => {
+  it('classifies the credential-floor message as credential-floor', () => {
+    expect(classifyDenialMechanism(floorDenial(CRED_PATH))).toBe('credential-floor');
+  });
+
+  it('classifies a containment message as read-root-containment', () => {
+    expect(classifyDenialMechanism(denial(PATH_A))).toBe('read-root-containment');
+  });
+
+  it('matches on the marker even if the path text varies', () => {
+    expect(classifyDenialMechanism(floorDenial('/tmp/whatever', '~/.ssh'))).toBe(
+      'credential-floor',
+    );
+  });
+
+  it('treats an empty reason as containment (fail-open to the real signal)', () => {
+    expect(classifyDenialMechanism('')).toBe('read-root-containment');
+  });
+});
+
+describe('detectSubagentReadDenial — credential floor produces no card', () => {
+  it('emits nothing when every denial is the credential floor', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'read_file' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'grep' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'glob' }),
+      ]),
+    ];
+    expect(detectSubagentReadDenial(sessions, { minOccurrences: 1 })).toHaveLength(0);
+  });
+
+  it('counts only containment denials when the two are mixed', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'read_file' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: denial(PATH_A), blockedTool: 'read_file' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: denial(PATH_B), blockedTool: 'grep' }),
+      ]),
+    ];
+    const results = detectSubagentReadDenial(sessions, { minOccurrences: 1 });
+    expect(results).toHaveLength(1);
+    const r = results[0]!;
+    // The floor denial must not inflate the count.
+    expect(r.detail['denialCount']).toBe(2);
+    expect(r.evidence).toHaveLength(2);
+    for (const e of r.evidence) {
+      expect(e.excerpt).not.toContain('read-denylist entry');
+    }
+  });
+
+  it('does not let floor denials clear the occurrence threshold', () => {
+    resetSeq();
+    // One genuine containment denial + two floor denials. With a bar of 2, the
+    // pre-fix detector would have fired on the padded count.
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: denial(PATH_A), blockedTool: 'read_file' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'read_file' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'grep' }),
+      ]),
+    ];
+    expect(detectSubagentReadDenial(sessions, { minOccurrences: 2 })).toHaveLength(0);
+  });
+
+  it('labels every emitted card as a containment gap', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: denial(PATH_A), blockedTool: 'read_file' }),
+      ]),
+    ];
+    const r = detectSubagentReadDenial(sessions, { minOccurrences: 1 })[0]!;
+    expect(r.detail['denialMechanism']).toBe('read-root-containment');
+  });
+
+  it('keeps containment fingerprints stable across the split', () => {
+    resetSeq();
+    // The fingerprint tuple is unchanged, so a pre-existing containment card
+    // keeps its slug identity and merges rather than forking a new card.
+    const expected = makeSlug(
+      computeFingerprint({
+        hookEvent: 'PreToolUse',
+        normalizedReason: normalizeReason(denial(PATH_A)),
+      }),
+    );
+    const sessions = [
+      makeSession('s1', [
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: floorDenial(CRED_PATH), blockedTool: 'grep' }),
+        hookLine({ hookEvent: 'PreToolUse', decision: 'block', reason: denial(PATH_A), blockedTool: 'read_file' }),
+      ]),
+    ];
+    const r = detectSubagentReadDenial(sessions, { minOccurrences: 1 })[0]!;
+    expect(r.slug).toBe(expected);
   });
 });

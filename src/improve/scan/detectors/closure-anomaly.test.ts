@@ -245,3 +245,106 @@ describe('default min occurrences', () => {
     expect(DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cascade dedupe — one parent timeout must not read as N sessions.
+//
+// History: a single parent timeout cascade-cancels every in-flight child and
+// each cancellation writes its own closure event into the SAME trace. The
+// event-keyed rollup reported affectedSessions=37 / totalCostUsd=$114.47 for
+// what was a much smaller set of sessions, and emitted duplicate sessionIds.
+// finalCostUsd is CUMULATIVE, so summing per-event multi-counted spend.
+// ---------------------------------------------------------------------------
+
+describe('detectClosureAnomaly — cascade dedupe (per-session rollup)', () => {
+  it('collapses four cascade closures in one session into a single row', () => {
+    resetSeq();
+    // Four children cascade-killed by one parent timeout; cost is cumulative
+    // and monotonically non-decreasing across the four events.
+    const sessions = [
+      makeSession('parent-1', [
+        closureLine('timeout', 10, 3),
+        closureLine('timeout', 20, 4),
+        closureLine('timeout', 30, 5),
+        closureLine('timeout', 40, 6),
+      ]),
+    ];
+    const results = detectClosureAnomaly(sessions);
+    expect(results).toHaveLength(1);
+    const r = results[0]!;
+
+    // One session, not four.
+    expect(r.detail['affectedSessions']).toBe(1);
+    expect(r.detail['sessionIds']).toEqual(['parent-1']);
+    expect(r.evidence).toHaveLength(1);
+
+    // Cost is the session's true final figure, NOT 10+20+30+40=100.
+    expect(r.detail['totalCostUsd']).toBe(40);
+    expect(r.detail['maxCostUsd']).toBe(40);
+
+    // The raw event count survives as its own signal.
+    expect(r.detail['closureEventCount']).toBe(4);
+
+    // Turn count comes from the surviving (highest-cost) sighting.
+    expect(r.detail['avgTurnCount']).toBe(6);
+  });
+
+  it('never emits duplicate session ids', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('a', [closureLine('timeout', 5), closureLine('timeout', 9)]),
+      makeSession('b', [closureLine('timeout', 7)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    const ids = r.detail['sessionIds'] as string[];
+    expect(ids).toEqual(['a', 'b']);
+    expect(new Set(ids).size).toBe(ids.length);
+    // Per-session maxima summed: 9 + 7, not 5+9+7.
+    expect(r.detail['totalCostUsd']).toBe(16);
+    expect(r.detail['closureEventCount']).toBe(3);
+  });
+
+  it('counts sessions, not events, against minOccurrences', () => {
+    resetSeq();
+    // Three closure events but only ONE session — must not clear a 2-session bar.
+    const sessions = [
+      makeSession('solo', [
+        closureLine('timeout', 1),
+        closureLine('timeout', 2),
+        closureLine('timeout', 3),
+      ]),
+    ];
+    expect(detectClosureAnomaly(sessions, { minOccurrences: 2 })).toHaveLength(0);
+    expect(detectClosureAnomaly(sessions, { minOccurrences: 1 })).toHaveLength(1);
+  });
+
+  it('reports the deduped session count in the title', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('p', [closureLine('timeout', 1), closureLine('timeout', 2)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(r.title).toContain('1 session');
+    expect(r.title).not.toContain('2 sessions');
+  });
+
+  it('keeps the highest-cost sighting regardless of event order', () => {
+    resetSeq();
+    // Descending cost order — the survivor is still the max, not the last seen.
+    const sessions = [
+      makeSession('p', [closureLine('timeout', 99, 12), closureLine('timeout', 4, 2)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(r.detail['totalCostUsd']).toBe(99);
+    expect(r.detail['avgTurnCount']).toBe(12);
+  });
+
+  it('still parses against DetectorResultSchema after dedupe', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('p', [closureLine('timeout', 3), closureLine('timeout', 8)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(DetectorResultSchema.safeParse(r).success).toBe(true);
+  });
+});

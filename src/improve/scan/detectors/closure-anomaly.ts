@@ -37,6 +37,11 @@
  *   - A single anomalous closure is meaningful but noisy. Default
  *     threshold is 1 — every anomalous closure is flagged — but
  *     `minOccurrences` lifts the bar when desired.
+ *   - Every count and cost in `detail` is PER SESSION, not per closure event.
+ *     One parent timeout cascade-cancels its children and each writes its own
+ *     `closure` event into the same trace, so an event-keyed rollup reported a
+ *     single session as several and multi-counted its cumulative cost. The raw
+ *     event total survives as `detail.closureEventCount`.
  *
  * @module improve/scan/detectors/closure-anomaly
  */
@@ -113,16 +118,61 @@ export function detectClosureAnomaly(
 
   const results: DetectorResult[] = [];
   for (const [reason, sightings] of byReason.entries()) {
-    if (sightings.length < minOccurrences) continue;
-    results.push(buildResult(reason, sightings));
+    // Contract: the threshold, the rollup arithmetic, and the evidence rows all
+    // count SESSIONS, not closure events. See collapseBySession.
+    const perSession = collapseBySession(sightings);
+    if (perSession.length < minOccurrences) continue;
+    results.push(buildResult(reason, perSession, sightings.length));
   }
   return results;
+}
+
+/**
+ * Invariant: one row per session per reason — a session that emitted N closure
+ * events sharing a reason contributes exactly ONE sighting downstream.
+ *
+ * A single parent timeout cascade-cancels every in-flight child, and each
+ * cancellation writes its own `closure{reason:'timeout'}` event into the SAME
+ * trace. Rolling those up per-event made one parent look like N independent
+ * sessions: `affectedSessions` counted events, `sessionIds` carried duplicate
+ * ids, and `finalCostUsd` — a CUMULATIVE figure, not an increment — was summed
+ * once per child, inflating reported spend severalfold.
+ *
+ * The survivor is the highest-cost sighting: `finalCostUsd` is monotonically
+ * non-decreasing across a session's life, so the maximum is that session's true
+ * final cost. `seq` breaks ties toward the later event. Map insertion order is
+ * preserved on overwrite, so first-seen session ordering is stable.
+ */
+function collapseBySession(sightings: ClosureSighting[]): ClosureSighting[] {
+  const bySession = new Map<string, ClosureSighting>();
+  for (const s of sightings) {
+    const incumbent = bySession.get(s.sessionId);
+    if (
+      incumbent === undefined ||
+      s.finalCostUsd > incumbent.finalCostUsd ||
+      (s.finalCostUsd === incumbent.finalCostUsd && s.seq > incumbent.seq)
+    ) {
+      bySession.set(s.sessionId, s);
+    }
+  }
+  return [...bySession.values()];
 }
 
 /** Hard cap on evidence rows per card. Same convention as repeated-tool-use. */
 const MAX_EVIDENCE_PER_CARD = 8;
 
-function buildResult(reason: string, sightings: ClosureSighting[]): DetectorResult {
+/**
+ * Contract: `sightings` MUST already be collapsed to one entry per session
+ * (see {@link collapseBySession}); every figure in `detail` is per-session.
+ * `closureEventCount` is the RAW pre-collapse event total, preserved because a
+ * session emitting many closures for one reason is itself real signal (cascade
+ * fan-out width) that the collapse would otherwise discard.
+ */
+function buildResult(
+  reason: string,
+  sightings: ClosureSighting[],
+  closureEventCount: number,
+): DetectorResult {
   const slug = makeSlug(reason);
   const observedAt = new Date().toISOString();
 
@@ -150,6 +200,7 @@ function buildResult(reason: string, sightings: ClosureSighting[]): DetectorResu
       detector: 'closure-anomaly@v1',
       closureReason: reason,
       affectedSessions: sightings.length,
+      closureEventCount,
       totalCostUsd: round4(totalCost),
       avgTurnCount: round2(avgTurns),
       maxCostUsd: round4(Math.max(...sightings.map((s) => s.finalCostUsd))),
