@@ -734,6 +734,38 @@ describe('shortenPaths — URL-safety + fs-path collapsing', () => {
       'see https://x.com/a/b/c then y.ts',
     );
   });
+
+  // Regression: the leading `/` was unanchored, so the regex matched from the
+  // first INTERIOR slash of a relative path and spliced the surviving head onto
+  // the basename — fabricating a filename that never existed on disk.
+  it('leaves a relative path intact (regression: src/cli/_lib/x.ts was srcx.ts)', () => {
+    expect(shortenPaths('pnpm test:file src/cli/_lib/child-activity-select.test.ts')).toBe(
+      'pnpm test:file src/cli/_lib/child-activity-select.test.ts',
+    );
+  });
+
+  it('does not fabricate a basename from a relative path head', () => {
+    expect(shortenPaths('src/a/b/c.ts')).toBe('src/a/b/c.ts');
+    expect(shortenPaths('a/b/c/d.ts')).toBe('a/b/c/d.ts');
+  });
+
+  it('leaves a dot-relative path intact (regression: ./src/cli/_lib/x.ts was .x.ts)', () => {
+    expect(shortenPaths('./src/cli/_lib/x.ts')).toBe('./src/cli/_lib/x.ts');
+  });
+
+  it('leaves a ~-rooted path intact rather than emitting ~basename', () => {
+    expect(shortenPaths('~/proj/a/b/c.ts')).toBe('~/proj/a/b/c.ts');
+  });
+
+  it('still collapses an absolute path after a flag separator', () => {
+    expect(shortenPaths('--out=/Users/me/proj/src/x.ts')).toBe('--out=x.ts');
+  });
+
+  it('collapses an absolute path in a cd command (real tool-lane case)', () => {
+    expect(shortenPaths('cd /Users/me/proj/agent-afk/.afk-worktrees/wt && pwd')).toBe(
+      'cd wt && pwd',
+    );
+  });
 });
 
 describe('shortenPaths — OSC 8 hyperlink emission', () => {

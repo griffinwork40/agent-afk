@@ -56,7 +56,21 @@ export function shortenPaths(text: string): string {
  */
 function collapseFsPaths(text: string): string {
   const linkify = hyperlinksEnabled();
-  return text.replace(/\/(?:[^/\s,)]+\/){2,}([^/\s,)]+)/g, (fullPath, basename: string) =>
+  // Invariant: the leading `/` must OPEN an absolute path — it may not be an
+  // interior separator of a longer token. The lookbehind rejects a preceding
+  // path-ish character (word char, `.`, `~`, `-`, `/`), which is what confines
+  // this to absolute paths as documented.
+  //
+  // Without it the regex matched from the FIRST interior slash of a relative
+  // path and spliced the surviving head onto the basename, fabricating a path
+  // that never existed: `src/cli/_lib/child-activity-select.test.ts` rendered
+  // as `srcchild-activity-select.test.ts` (head `src` + basename, separator and
+  // middle segments deleted), and `./src/cli/_lib/x.ts` as `.x.ts`. A tool-lane
+  // label that invents a filename is worse than a long one — a reader cannot
+  // tell the shown path from a real sibling file. Relative and `~/`-rooted
+  // paths are therefore left intact; the lane's own width truncation shortens
+  // them honestly with a trailing ellipsis.
+  return text.replace(/(?<![\w./~-])\/(?:[^/\s,)]+\/){2,}([^/\s,)]+)/g, (fullPath, basename: string) =>
     linkify ? fileHyperlink(basename, fullPath) : basename,
   );
 }
