@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-agent-afk is a standalone TypeScript CLI + daemon + Telegram bot that uses `@anthropic-ai/sdk` (and optionally `@openai/codex-sdk`). It runs **outside** Claude Code as its own process. The binary is `afk`.
+agent-afk is a standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk` (plus the `openai` package for OpenAI-compatible endpoints). It runs **outside** Claude Code as its own process. The binary is `afk`. Node ≥22, pnpm-only.
 
 ## Commands
 
@@ -12,15 +12,24 @@ agent-afk is a standalone TypeScript CLI + daemon + Telegram bot that uses `@ant
 pnpm install              # Use pnpm exclusively — lockfile is pnpm-specific
 pnpm build                # tsc + copies *.md prompt files into dist/
 pnpm test                 # vitest run (all tests)
-pnpm test src/agent/session.test.ts               # single test file (unit tests co-located with src)
-pnpm test -t "sends a message"                     # single test by name
+pnpm test src/agent/session.test.ts               # single file — NO `--`; pnpm 10 drops args after it and runs ALL files
+pnpm test src/agent/session.test.ts -t "sends a message"   # single test by name: scope to a file first, then filter
 pnpm test:watch           # vitest watch mode
+pnpm test:coverage        # CI gate — enforces coverage floors that plain `pnpm test` does not
+pnpm test:pty             # PTY suite, separate config (vitest.pty.config.ts) and its own CI job
 pnpm lint                 # tsc --noEmit (strict, no unused locals/params)
 
 pnpm audit:sdk            # regenerate SDK dependency snapshot (docs/sdk-dependency.md)
 pnpm audit:sdk:check      # CI gate — fails on unlocked new symbols or kind changes
 pnpm audit:sdk:update-lock  # add new symbols to .sdk-dependency.lock.json (edit reason field before committing)
+pnpm audit:env:check      # CI gate — no raw process.env reads outside src/config/env.ts
+pnpm scan:env:check       # CI gate — docs/env-registry.{json,md} in sync with src/config/env.ts
+pnpm audit:chalk:check    # CI gate — no raw chalk.<color> outside src/cli/palette.ts (--list locates sites)
+pnpm fix:pins:check       # CI gate — SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins rewrites)
+pnpm audit:deps           # CI gate — pnpm audit --audit-level=critical --prod
 ```
+
+Every gate above, plus `pnpm lint` and `pnpm build`, runs on each PR (`.github/workflows/ci.yml`). Run them locally before pushing rather than after CI reddens.
 
 ### Running
 
@@ -38,13 +47,15 @@ pnpm telegram:start              # Telegram bot (managed via scripts/telegram-ma
 
 1. **`src/agent/`** — Provider-agnostic session harness. `AgentSession` is the single runtime entry point; it delegates to a `ModelProvider` selected by model family (`providerForModel()`). The two bundled providers live in `src/agent/providers/`:
    - `anthropic-direct/` — wraps `@anthropic-ai/sdk` Messages API directly (default for `claude-*`, `opus`, `sonnet`, `haiku`). `'anthropic'` is a silent alias for this provider.
-   - `openai-codex.ts` — wraps `@openai/codex-sdk` (for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`).
+   - `openai-compatible/` — talks directly to OpenAI's Chat Completions API, and to any compatible endpoint via `baseURL`. Default for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`, **and** HuggingFace-style `org/model` ids (`mlx-community/…`, `Qwen/…`) served by local OpenAI-shim runners (MLX, llama.cpp, vLLM, ollama-openai). It replaced a `@openai/codex-sdk`-backed `openai-codex` provider that no longer exists; `'openai-codex'` survives only as a deprecated alias, and the codex SDK is **not** a dependency.
 
-   Both emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. Nothing outside `src/agent/providers/` imports from any model SDK directly.
+   Both emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. No model SDK is imported for runtime use outside `src/agent/providers/` — the rest of the tree imports only the SDK's `ContentBlockParam` *type*.
 
 2. **`src/cli/`** — Terminal surface. Commander-based with commands under `src/cli/commands/`. The interactive REPL (`commands/interactive/`) has its own lifecycle: bootstrap → REPL loop → turn handler → markdown streaming → cleanup. Slash commands (`src/cli/slash/`) register via a Levenshtein-hint dispatcher.
 
 3. **`src/telegram/`** — Telegram surface. Telegraf-based bot with per-chat session management and an allowlist gate (`AFK_TELEGRAM_ALLOWED_CHAT_IDS`).
+
+Supporting modules outside those three layers: `src/config/` (`env.ts` is the **canonical** `process.env` read-point), `src/paths.ts` (all AFK path resolution), `src/browser/` (Playwright browser-control tools + witness capture + domain policy), `src/web/` (`web_scrape`: fetch → Readability → markdown, headless-render fallback, Exa search), `src/insights/` (`afk insights` report — import via the `index.ts` barrel, not sub-paths), `src/improve/` (telemetry scan → eval-gen → eval-run → propose), `src/service/` (macOS LaunchAgent install/manage), `src/bundled-plugins/` (plugins shipped with the package), `src/utils/` (leaf helpers; nothing here imports upward), and `website/` (Next.js docs site — separate package, npm-locked, typechecked and built in CI).
 
 ### Cross-Cutting Subsystems
 
@@ -52,7 +63,8 @@ pnpm telegram:start              # Telegram bot (managed via scripts/telegram-ma
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession` instances with permission bubbling, transitive abort via `AbortGraph`, and optional Zod output schemas.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort always takes precedence over hook decisions.
 - **Elicitation Router** (`src/agent/elicitation-router.ts`) — Module-scope handler for SDK elicitation requests, bridging to REPL/Telegram/iMessage surfaces.
-- **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction and passes discovered plugins as local entries to the SDK. Includes install, remove, update, and git-based source support.
+- **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — `scanLocalPlugins()` scans `~/.afk/plugins/` at session construction; discovered skills are bridged into the tool surface by `src/agent/tools/skill-bridge.ts`. Plugins are never handed to a model SDK — there is no SDK-side plugin concept. Includes install, remove, update, and git-based source support.
+- **MCP client** (`src/agent/mcp/`) — Wraps `@modelcontextprotocol/sdk`. `McpManager.fromConfig()` connects every server from `loadMcpConfig()`, layered lowest→highest: plugin-contributed `<plugin>/.claude-plugin/mcp.json` → `~/.afk/config/mcp.json` → `<cwd>/.mcp.json` → `--mcp-config <path>`. Higher layer wins on name conflict, displaced source surfaced as a warning. Transports: stdio, streamable-HTTP, SSE fallback, OAuth. Tools bridge as `mcp__<server>__<tool>` and are read fresh per-query, so `notifications/tools/list_changed` refreshes land without a session restart. Sampling capability is deliberately not advertised — it removes the "stub or hang" footgun. `/mcp` lists servers; `/mcp auth` surfaces pending OAuth URLs.
 
 ### Skills System
 
@@ -62,22 +74,38 @@ Vendored agents (`src/skills/_agents/`) are byte-equal copies of agent definitio
 
 ### User-Scope State
 
-All AFK state lives under `~/.afk/` (never `~/.claude/`). AFK resolves user-scope state directly from that home. Layout:
+All AFK state lives under `~/.afk/` (never `~/.claude/`), and every path is resolved through `src/paths.ts` — never hand-join one. Two scopes:
 
 ```
-~/.afk/
-  config/     afk.env, afk.config.json
+~/.afk/                 # user-scope ($AFK_HOME)
+  config/     afk.env, afk.config.json, mcp.json
   state/                ($AFK_STATE_DIR overrides this tier)
-    sessions/    session-store sidecars
+    sessions/    session-store sidecars (tool ARGS live here, in events.jsonl)
     todos/       todo-panel data
     transcripts/ autosaved REPL session transcripts
     daemon/      per-instance daemon state
+    witness/     per-session trace.jsonl — see Observability below
   plugins/    local plugin installs
   logs/
   cache/
+<cwd>/.afk/             # project-scope: per-project skills + plugins, auto-discovered
 ```
 
 All AFK telemetry and briefs write to `~/.afk/agent-framework/` via `paths.ts`. The plugin surface writes to `~/.claude/agent-framework/` independently — no shared state between surfaces.
+
+### Observability / tracing
+
+Every session writes a **witness trace** — the durable chronological record of what the agent actually did (tool calls with timing, result bytes, ok/err; subagent lifecycle; session phases). Reach for this first when reconstructing a past run, not the transcript (prose only) and not the service logs (other processes).
+
+```bash
+afk trace show [<session>]  # pretty-print a trace (default "latest"); --all includes low-signal
+                            # events, -n 40 limits to last N, --json emits raw NDJSON for jq
+afk trace list              # sessions having a trace, newest first (-n/--max <N>, default 20)
+```
+
+Writer + reader live in `src/agent/trace/`; the CLI is `src/cli/commands/trace.ts`. **Two things the trace does not answer**: tool *args* (those are in `state/sessions/<id>/events.jsonl` — the trace carries only `inputBytes`) and raw tool *output* (never recorded durably, only `resultBytes`).
+
+One residual bug worth recognizing: a parent session ending mid-wave seals over live children and silently drops their terminal rows, so ~3% of dispatched subagents have no recorded fate (~8% in daemon/cron parallel waves vs ~1% interactive). Detector: an unmatched `started` in a trace that *contains* `session_sealed` — not "a `started` is the file's last line", which misses it because the seal is written afterward.
 
 ## SDK Dependency Tracking
 
@@ -86,9 +114,11 @@ Every import from `@anthropic-ai/sdk` is tracked. `.sdk-dependency.lock.json` is
 ## Key Conventions
 
 - `tsconfig.json` is maximally strict: `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`. All code must pass `tsc --noEmit`.
-- The system prompt for agent-afk sessions is a raw string loaded from config or a file, sent to the Messages API as-is. No SDK preset (e.g. Agent SDK's `claude_code`) is loaded — agent-afk talks directly to `@anthropic-ai/sdk` / `@openai/codex-sdk`, not the Agent SDK.
+- The system prompt is the framework base (`prompts/system-prompt.md`) with the operator overlay appended, composed by `resolveBaseSystemPrompt()` and sent to the Messages API as a raw string. No SDK preset (e.g. Agent SDK's `claude_code`) is loaded — agent-afk talks directly to the Messages / Chat Completions APIs, not the Agent SDK.
 - The `AgentSession` constructor is synchronous; the SDK lifecycle (provider query setup, session init) runs asynchronously via `initSdkLifecycle()` and surfaces through the provider event stream.
 - DAG executor (`src/agent/dag.ts`) is a Kahn-layer parallel executor with per-node AbortControllers, fail-fast semantics, transitive skip propagation, node-level timeouts, and listener-leak prevention. ~266 LOC, fully implemented.
+- **Three mandatory indirections**, each with a canonical read/write point and a CI gate. Env vars: never read `process.env` in new code — use the typed `env` object and register new vars in `ENV_REGISTRY` (`src/config/env.ts`; `audit:env:check` + `scan:env:check`). A handful of files carry a documented whole-file exemption in `ALLOWED_FILES` (`scripts/audit-env-access.ts`); adding an entry there is a last resort, not the way around the gate. Styling: never call `chalk.<color>()` — use the semantic palette (`src/cli/palette.ts`; `audit:chalk:check`, which landed after ~180 raw sites crept back). Paths: never hand-join anything under `~/.afk/` — use `src/paths.ts`.
+- Vendored agents (`src/skills/_agents/`) and bundled skills (`src/bundled-plugins/`) are SHA-256 pinned in their test files. Editing either on purpose means running `pnpm fix:pins`; an unexplained pin failure means an edit you did not intend.
 
 ### Long-comment prefix convention
 
@@ -130,10 +160,14 @@ The base system prompt is **layered**: the framework prompt (`prompts/system-pro
 |------|--------|---------------------------|
 | 1 | `AFK_SYSTEM_PROMPT` env var | `"env:AFK_SYSTEM_PROMPT"` |
 | 2 | `afk.config.json` (`cwd` → `~/.afk/config/` → legacy) | `"file:<abs path>"` |
-| 3 | `AFK.md` (`cwd` → `$AFK_HOME/`) | `"afk-md:<abs path>"` |
+| 3 | `AFK.md` (`cwd` **+** `$AFK_HOME/`, additive) | `"afk-md:<abs>"` or `"afk-md:<user-abs>+afk-md:<project-abs>"` |
 | — | None | `systemPromptSource` is `undefined` |
 
-`AFK.md` is plain Markdown with no frontmatter. Empty or whitespace-only files are treated as absent. The framework base is always present regardless of overlay tier. `--dump-prompt` reports a composed `systemPromptSource` (`"framework"`, `"framework+afk-md:<path>"`, …) and the full text in `options.system`; the composed prompt is never forwarded to the SDK as a preset. Every overlay appends — there is currently no full-replace escape hatch (a future `AFK_BASE_PROMPT=0` would add one).
+`AFK.md` is plain Markdown with no frontmatter; empty or whitespace-only files count as absent per-file. The framework base is always present regardless of overlay tier.
+
+Tier 3 is **additive, not exclusive** — this is a recent change and the easiest thing to get wrong. `loadAfkMd()` (`src/cli/config/afk-md-tier.ts`) reads *both* `$AFK_HOME/AFK.md` (user-scope) and `<cwd>/AFK.md` (project-scope) when both are non-empty and concatenates them — user-scope first, then project-scope under a `## Project configuration … takes precedence on conflict` header — rather than letting the project file silently shadow the personal one. Dedup runs through `realpath`, so a symlinked pair is not double-counted. When only one tier resolves (the common case) the output is byte-identical to a single-tier read: no header, no behavior change.
+
+`--dump-prompt` reports the composed `systemPromptSource` (`"framework"`, `"framework+afk-md:<path>"`, `"framework+afk-md:<user>+afk-md:<project>"`, …) and the full text in `options.system`; the composed prompt is never forwarded to the SDK as a preset. Every overlay appends — there is currently no full-replace escape hatch (a future `AFK_BASE_PROMPT=0` would add one).
 
 ## Ordered-operation sequences
 
