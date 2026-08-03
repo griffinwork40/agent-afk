@@ -74,3 +74,18 @@ export function resolveMaxToolIterations(configured: number | undefined): number
 export function shouldWindDown(completedRounds: number, maxIterations: number): boolean {
   return maxIterations > 0 && completedRounds >= maxIterations;
 }
+
+/**
+ * Render the round-number label both providers embed in the progress-banner
+ * `summary` string (`round ${label}: ${toolHeadline}`).
+ *
+ * `maxIterations` must already be a RESOLVED cap (the output of {@link
+ * resolveMaxToolIterations}, not raw config) — same contract as {@link
+ * shouldWindDown}. A positive cap renders the denominator (`round 7/50`) so
+ * the banner shows how close the child is to its tool-round ceiling;
+ * `maxIterations <= 0` means unlimited, so the bare `round 7` is kept as-is
+ * rather than rendering the meaningless `round 7/0` or `round 7/Infinity`.
+ */
+export function formatRoundLabel(round: number, maxIterations: number): string {
+  return maxIterations > 0 ? `round ${round}/${maxIterations}` : `round ${round}`;
+}

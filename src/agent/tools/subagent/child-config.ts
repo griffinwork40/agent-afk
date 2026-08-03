@@ -42,6 +42,7 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
+import { isChildReplaySafe } from './retry-safety.js';
 
 /** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
@@ -122,6 +123,8 @@ export interface BuildChildConfigResult {
    * isolate, so its worktree is skipped with a debug note.
    */
   childWriteCapable: boolean;
+  /** True only when every granted tool is proven free of persistent side effects. */
+  childSideEffectFree: boolean;
 }
 
 /**
@@ -148,20 +151,27 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // `resolveOpenAIAuth()` to return the Anthropic key as if it were a config
   // OpenAI key (tier 1 wins) — the OpenAI API then 401s. Clearing them lets
   // the OpenAI auth resolver walk its env / codex precedence cleanly.
-  // Model resolution.
-  //   Unnamed dispatch (legacy, unchanged): call-site > policy default > 'sonnet'.
-  //   Named dispatch (Claude Code parity): call-site > definition model
-  //   ('inherit' → dispatching session's model) > inherit-by-default
-  //   (omitted model also means inherit) > policy default > 'sonnet'.
-  // `parentModel` is optional ctx wiring; when absent, inherit falls
-  // through to the policy chain rather than guessing.
+  // Invariant: an OMITTED definition model means "policy default", never
+  // "inherit the parent". Both dispatch shapes therefore share one chain:
+  //   call-site > definition model > policy default (`defaultSubagentModel`) > 'sonnet'
+  // with exactly one escape hatch: an explicit `model: 'inherit'` resolves to
+  // the dispatching session's model.
+  //
+  // This is load-bearing for cost. `AFK_DEFAULT_SUBAGENT_MODEL` is documented
+  // (src/config/env.ts) as "the default model used when a subagent is
+  // dispatched without an explicit model", and `getDefaultSubagentModel`
+  // (src/cli/shared-helpers.ts) exists so a high-tier parent does not
+  // auto-spawn high-tier children. Treating an omitted model as inherit
+  // silently voided both for every NAMED dispatch — i.e. nearly all of them,
+  // since `agent_type` is the common call shape. An agent that genuinely needs
+  // parent-tier capability must now say so with `model: 'inherit'`.
+  //
+  // `parentModel` is optional ctx wiring; when absent, an explicit 'inherit'
+  // falls through to the policy chain rather than guessing.
   let namedDefaultModel: string | undefined;
   if (namedAgent !== undefined) {
     const defModel = namedAgent.definition.model;
-    namedDefaultModel =
-      defModel !== undefined && defModel !== 'inherit'
-        ? defModel
-        : args.parentModel;
+    namedDefaultModel = defModel === 'inherit' ? args.parentModel : defModel;
   }
   const childModel: string =
     parsed.model ?? namedDefaultModel ?? args.defaultSubagentModel ?? 'sonnet';
@@ -202,6 +212,33 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
     effectiveReadOnlyBash !== true;
   const childWriteCapable = canWriteFiles || canMutateViaBash;
+  // Retry safety is stricter than filesystem write capability: it covers the
+  // reach of a replayed prompt, not just this child's own tool names. Fail
+  // closed for unrestricted surfaces, for non-file tools that can mutate remote
+  // or persistent state, and for a nested-dispatch grant — whether unscoped, or
+  // scoped to a type that is not itself a replay-safe terminal leaf. Scoping
+  // alone is not enough: `Agent(general-purpose)` is scoped and still reaches an
+  // uncaged write-capable grandchild. See `retry-safety.ts`.
+  const childSideEffectFree = isChildReplaySafe({
+    effectiveAllowedTools,
+    nestedAgentTypes: resolvedAccess?.nestedAgentTypes,
+    // Resolve each scoped grandchild type to its own surface. Omitted when no
+    // registry is wired, which fails closed for any non-empty scope.
+    ...(args.agentRegistry !== undefined
+      ? {
+          resolveNestedAgent: (name: string) => {
+            const leaf = args.agentRegistry?.get(name);
+            if (leaf === undefined) return undefined;
+            const leafAccess = resolveAgentToolAccess(leaf, CHILD_ALLOWED_TOOLS);
+            return {
+              allowedTools: leafAccess.allowedTools,
+              bashReadOnly: leafAccess.bashReadOnly,
+              nestedAgentTypes: leafAccess.nestedAgentTypes,
+            };
+          },
+        }
+      : {}),
+  });
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under
@@ -308,6 +345,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // Wire nesting: give the child its own executor + provider so it can
   // dispatch Agent and Skill tool calls. Skip when at maxDepth or no
   // factory — child gracefully loses both tools.
+  //
+  // Invariant: the `depth < maxDepth` disjunct is no longer reachable from
+  // SubagentExecutor.execute(), which refuses at `depth >= maxDepth` before
+  // calling this. It is retained as defense-in-depth for direct callers (and
+  // is exercised as such by child-config.test.ts); the live production trigger
+  // is the `!childProviderFactory` half.
   //
   // childParentSession is a mutable stub: sessionId starts undefined and is
   // backfilled to handle.id once forkSubagent resolves. This ensures depth-2
@@ -433,5 +476,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager, childWriteCapable };
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree };
 }

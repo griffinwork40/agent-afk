@@ -11,6 +11,72 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.86.0] - 2026-08-03
+
+### Added
+- make the nesting-depth cap configurable via AFK_MAX_NESTING_DEPTH (#863) (6f8e33f)
+
+## [5.85.12] - 2026-08-03
+
+### Fixed
+- latch the dead-zone banner flush and close #867 review gaps (#874) (03224b1)
+
+## [5.85.11] - 2026-08-03
+
+### Fixed
+- stop fabricating filenames from relative paths (#872) (58a1e68)
+
+## [5.85.10] - 2026-08-02
+
+### Changed
+- split bootstrap.ts into 9 phase modules (#823) (#873) (8f28491)
+
+## [5.85.9] - 2026-08-02
+
+### Fixed
+- close the case-variant bypass of the credential floor (#736) (#819) (de0f295)
+
+## [5.85.8] - 2026-08-02
+
+### Fixed
+- close the 1.5s–30s live-progress dead zone (#857) (#867) (399e8fa)
+- match rebuildable ignored FILES on the leaf, not the whole path (#799) (1362fab)
+
+## [5.85.7] - 2026-08-02
+
+### Fixed
+- re-dispatch a read-only child once when its stream is cut with zero output (#796) (542464e)
+
+## [5.85.6] - 2026-08-02
+
+### Changed
+- a named subagent dispatched without an explicit model now resolves to the
+  policy default (`AFK_DEFAULT_SUBAGENT_MODEL`, else the `medium` tier) instead
+  of silently inheriting the dispatching session's model. Inheritance is now
+  opt-in via `model: inherit` in the agent definition. Behaviour change on
+  upgrade: named agents that declare no model — including the built-in
+  `research-agent` — drop from the parent's tier to the policy default under a
+  high-tier parent (e.g. `opus`). Pin `model: inherit` to restore the old
+  behaviour per agent.
+
+### Fixed
+- resolve an omitted named-agent model to the policy default (#868) (99294da)
+
+## [5.85.5] - 2026-08-02
+
+### Fixed
+- tell a denied fork the remedy that actually works (#851) (1e885fe)
+
+## [5.85.4] - 2026-08-02
+
+### Fixed
+- make the pipeline's own instruments tell the truth (#847) (4cb26bc)
+
+## [5.85.3] - 2026-08-02
+
+### Fixed
+- render round denominator in progress banner (#857) (#858) (5bc00a8)
+
 ## [5.85.2] - 2026-08-02
 
 ### Fixed

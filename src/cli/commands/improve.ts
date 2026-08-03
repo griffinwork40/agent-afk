@@ -115,6 +115,7 @@ import {
 } from '../../improve/eval-run/runner.js';
 import { knownContractIds } from '../../improve/eval-run/contracts.js';
 import type { EvalCase, EvalCaseStatus, EvalRun, FailurePattern } from '../../improve/schemas.js';
+import { FailurePatternSchema } from '../../improve/schemas.js';
 
 const VALID_STATUSES: readonly CardStatus[] = ['open', 'deferred', 'resolved'];
 const VALID_EVAL_STATUSES: readonly EvalCaseStatus[] = [
@@ -123,11 +124,10 @@ const VALID_EVAL_STATUSES: readonly EvalCaseStatus[] = [
   'rejected',
   'superseded',
 ];
-const VALID_PATTERNS: readonly FailurePattern[] = [
-  'repeated-tool-use',
-  'subagent-block',
-  'closure-anomaly',
-];
+// Invariant: DERIVED from the canonical schema, never hand-maintained. A
+// hand-copied duplicate drifted two sprints behind `FailurePatternSchema`, so
+// `--pattern tool-failure-density` was rejected while cards on disk used it.
+export const VALID_PATTERNS: readonly FailurePattern[] = FailurePatternSchema.options;
 
 export function registerImproveCommand(program: Command): void {
   const improve = program

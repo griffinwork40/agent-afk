@@ -208,6 +208,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_MAX_NESTING_DEPTH',
+    description:
+      'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +
+      'skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 ' +
+      'permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent ' +
+      'and skill tools at depth 3. Resolved once ' +
+      'at the root of each session and propagated down through child AgentConfig, so descendants ' +
+      'inherit the root value rather than re-reading the environment. Raise with care: depth is a ' +
+      'fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values ' +
+      'above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, ' +
+      'unparseable, negative, or out-of-range input falls back to the default. An explicit ' +
+      'programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins.',
+    type: 'number',
+    required: false,
+    default: '3',
+    example: '2',
+    category: 'model',
+  },
+  {
     name: 'AFK_MAX_OUTPUT_TOKENS',
     description: 'Cap on output tokens per turn. Falls back to provider default when unset.',
     type: 'number',
@@ -1446,6 +1465,7 @@ export const env = {
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
   get AFK_FORCE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_FORCE_BASH_INTERPRETER_GUARD']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
+  get AFK_MAX_NESTING_DEPTH(): string | undefined { return process.env['AFK_MAX_NESTING_DEPTH']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
   get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },

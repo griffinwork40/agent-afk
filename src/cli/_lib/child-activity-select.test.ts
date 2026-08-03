@@ -197,7 +197,7 @@ describe('ChildActivityTracker.select', () => {
       ]);
       const picked = new ChildActivityTracker().select(sources, NOW);
       expect(picked?.quiet).toBe(true);
-      expect(picked?.clause).toBe('no output for 41s');
+      expect(picked?.clause).toBe('no output (waiting)');
       // The silence must win over the stale round headline — reporting old work
       // as if current is what makes a hung wave look healthy.
       expect(picked?.clause).not.toContain('round 2');
@@ -217,7 +217,7 @@ describe('ChildActivityTracker.select', () => {
         ['a', makeSource({ agentType: 'sees', lastEventAt: NOW - 45_000 })],
       ]);
       expect(new ChildActivityTracker().select(sources, NOW)?.clause).toBe(
-        'no output for 45s',
+        'no output (waiting)',
       );
     });
   });

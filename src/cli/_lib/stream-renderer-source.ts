@@ -68,6 +68,15 @@ interface SourceState {
   /** Current pause annotation string if source is stale; undefined while active. */
   pauseAnnotation?: string;
   /**
+   * Latch for the dead-zone banner (see stream-renderer-dead-zone.ts). Set when
+   * this source crosses into silence past `CHILD_QUIET_MS` and the static
+   * `no output (waiting)` clause has been announced; cleared when the child
+   * emits again so a later silence re-announces. Without it the checker would
+   * mark the banner dirty and flush on every 80ms tick for as long as the child
+   * stayed quiet.
+   */
+  quietBannerAnnounced?: boolean;
+  /**
    * Increment-only counter: number of ticks where elapsed > PAUSE_THRESHOLD_MS and
    * source is not yet done/errored. Used by checkStalledEntries for bounded stall
    * detection. At K ticks → soft label; at 2K ticks → auto-settle with synthetic result.
