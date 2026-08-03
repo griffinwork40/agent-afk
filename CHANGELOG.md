@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.90.0] - 2026-08-03
+
+### Added
+- make inbound images nameable and forwardable to subagents (#846) (e8bcbaf)
+
 ## [5.89.1] - 2026-08-03
 
 ### Fixed
