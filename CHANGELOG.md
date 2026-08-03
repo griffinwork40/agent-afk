@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.92.0] - 2026-08-03
+
+### Added
+- rank slash-command completions by recency, not alphabetically (#892) (a57ebdb)
+
 ## [5.91.1] - 2026-08-03
 
 ### Fixed
