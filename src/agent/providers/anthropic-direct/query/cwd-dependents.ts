@@ -86,9 +86,17 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
 
     // 2. Rebuild the system prompt with the new `# Environment` line via the
     //    SAME assembler the first-turn path uses (query/system-prompt.ts), so
-    //    the two can never drift. Awareness identity fields
-    //    (sessionId/surface/depth/maxDepth/workspace) are stable across cwd
-    //    swaps, so we reuse the config snapshot; only `newCwd` changes.
+    //    the two can never drift. Identity fields (sessionId/surface/depth/
+    //    maxDepth) are stable across cwd swaps, so we reuse the config
+    //    snapshot.
+    //
+    //    Invariant: `workspace` is NOT stable across a cwd swap — a different
+    //    worktree is a different branch and HEAD — so it MUST be re-read from
+    //    the live source, and `args.setCurrentCwd(newCwd)` above MUST have
+    //    already run. `getWorkspace()` resolves the cwd through the provider's
+    //    live `getCwd` accessor, so re-reading before that assignment would
+    //    re-gather git state for the OLD checkout and pin the `- Workspace:`
+    //    line to the launch directory for the rest of the session.
     const newUserSystem = assembleSystemPrompt(args.stableSystemPrefix, newCwd, {
       surface: args.surface,
       sessionId: args.config.sessionId,

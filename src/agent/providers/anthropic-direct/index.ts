@@ -463,6 +463,12 @@ export class AnthropicDirectProvider implements ModelProvider {
         externalTools: this.externalTools,
         sharedReadRoots: this._sharedReadRoots,
         sharedWriteRoots: this._sharedWriteRoots,
+        // Live cwd: `_currentCwd` wins because `cwdDependentsFactory` updates
+        // it on every setCwd (born-named `afk -w` worktree, `/cd`) before it
+        // re-reads the workspace, while `config.cwd` is the construction-time
+        // value. Same `||` fall-through as the `cwd` const below, so the
+        // `- Working directory:` and `- Workspace:` lines can never disagree.
+        getCwd: () => this._currentCwd || config.cwd || process.cwd(),
         getMcpTools: () => this.mcpManager?.getMcpTools() ?? [],
         getSubagents: () =>
           this.subagentExecutor

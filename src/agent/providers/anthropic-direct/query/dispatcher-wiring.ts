@@ -65,6 +65,12 @@ export interface DispatcherWiringArgs {
   externalTools: ToolDispatcher | undefined;
   sharedReadRoots: string[] | undefined;
   sharedWriteRoots: string[] | undefined;
+  /**
+   * Live cwd accessor for the awareness source. Must reflect mid-session
+   * `setCwd()` re-anchors, not the construction-time `config.cwd` — see
+   * {@link RuntimeSourceDeps.getCwd}.
+   */
+  getCwd: () => string;
   /** Live MCP tool accessor for the awareness source. */
   getMcpTools: () => readonly AnthropicToolDef[];
   /** Live subagent accessor for the awareness source. */
@@ -107,7 +113,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // STEP 2 — build the source, capturing the binding above.
   const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
     surface,
-    cwd: config.cwd ?? process.cwd(),
+    getCwd: args.getCwd,
     modelName: args.model,
     providerName: args.providerName,
     permissionMode: args.permissionMode,

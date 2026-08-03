@@ -27,8 +27,18 @@ export interface RuntimeSourceDeps {
   sessionId?: string | undefined;
   /** Provider-level surface tag (e.g. 'cli', 'daemon', 'telegram'). */
   surface: string;
-  /** Working directory at query time. */
-  cwd: string;
+  /**
+   * Live accessor for the session working directory.
+   *
+   * Invariant: this MUST be a callback, never a snapshot. `setCwd()` (the
+   * `afk -w` born-named worktree path, `/cd`, and worktree re-anchoring) can
+   * repoint the session mid-flight, and both `getSelf().cwd` and
+   * `getWorkspace()` have to follow it. A captured string silently pins the
+   * awareness layer to the launch directory, so `get_runtime_state` and the
+   * `- Workspace:` prompt line keep reporting the ORIGINAL checkout's branch
+   * and HEAD while the tools operate in the new one.
+   */
+  getCwd: () => string;
   /** Resolved model identifier the SDK will be called with. */
   modelName: string;
   /** Provider name — e.g. 'anthropic-direct' or 'openai-compatible'. */
@@ -74,10 +84,16 @@ export interface RuntimeSourceDeps {
  * (`sessionId`, `depth`, `parentSessionId`, etc.) do not change mid-session.
  *
  * `getWorkspace()` recomputes git workspace state on every call via
- * `gatherWorkspace(deps.cwd)`, mirroring the live `getTools()`/`getSubagents()`
- * accessors. This costs 4 `spawnSync` git calls per invocation, but means the
- * model sees the *current* dirty-file count / HEAD / branch when it orients,
- * not a frozen session-start snapshot that silently goes stale as files change.
+ * `gatherWorkspace(deps.getCwd())`, mirroring the live `getTools()`/
+ * `getSubagents()` accessors. This costs 4 `spawnSync` git calls per
+ * invocation, but means the model sees the *current* dirty-file count / HEAD /
+ * branch when it orients, not a frozen session-start snapshot that silently
+ * goes stale as files change.
+ *
+ * `deps.getCwd` is likewise a callback rather than a string: a session can be
+ * repointed mid-flight (`afk -w` born-named worktrees, `/cd`), and a captured
+ * cwd would pin the awareness layer to the launch checkout — reporting the
+ * wrong branch and HEAD for the entire remaining session.
  */
 export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSource {
   return {
@@ -89,7 +105,7 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
         depth: deps.depth ?? null,
         maxDepth: deps.maxDepth ?? null,
         phaseRole: deps.phaseRole ?? null,
-        cwd: deps.cwd,
+        cwd: deps.getCwd(),
         model: {
           provider: deps.providerName,
           name: deps.modelName,
@@ -107,10 +123,12 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       return deps.getSubagents();
     },
     getWorkspace(): RuntimeWorkspace {
-      // Live: recompute per call so the snapshot reflects edits made since
-      // session start — the agent's own writes AND concurrent external writers.
+      // Live on BOTH axes: the cwd is re-read per call (so a mid-session
+      // setCwd re-anchors which repo we report on) and git is re-run against
+      // it (so the snapshot reflects edits made since session start — the
+      // agent's own writes AND concurrent external writers).
       // Cost: 4 spawnSync git calls per call (see gatherWorkspace).
-      return gatherWorkspace(deps.cwd);
+      return gatherWorkspace(deps.getCwd());
     },
   };
 }
