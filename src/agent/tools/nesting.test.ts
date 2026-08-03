@@ -261,10 +261,9 @@ describe('restricted builders thread openaiBaseUrl into the OpenAI client baseUR
   });
 });
 
-// resolveMaxNestingDepth is the DEFAULT resolver consulted at the three
-// `ctx.maxDepth ?? resolveMaxNestingDepth()` sites (subagent-executor,
-// skill-executor, skill-executor/fork-child-config). Pure-function contract,
-// mirroring resolveSubagentTimeoutMs: unset/empty/invalid → default, valid int
+// resolveMaxNestingDepth is snapshotted by root wiring and remains the fallback
+// for directly constructed executors. Pure-function contract, mirroring
+// resolveSubagentTimeoutMs: unset/empty/invalid → default, valid int
 // within [0, MAX_NESTING_DEPTH_CEILING] → that value, 0 → 0 (nesting disabled).
 describe('resolveMaxNestingDepth (AFK_MAX_NESTING_DEPTH)', () => {
   const KEY = 'AFK_MAX_NESTING_DEPTH';
@@ -322,6 +321,14 @@ describe('resolveMaxNestingDepth (AFK_MAX_NESTING_DEPTH)', () => {
     process.env[KEY] = 'not-a-number';
     expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
   });
+
+  it.each(['0.5', '0x5', '0b10', '1oops'])(
+    'falls back to the default for non-decimal input %s',
+    (malformed) => {
+      process.env[KEY] = malformed;
+      expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
+    },
+  );
 
   it('keeps the ENV_REGISTRY documented default in lockstep with the constant', () => {
     // Guards against DEFAULT_MAX_NESTING_DEPTH drifting from the registry
