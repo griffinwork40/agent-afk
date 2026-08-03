@@ -89,11 +89,16 @@ const PASTE_PLACEHOLDER_RE = /\[Pasted text #[0-9a-f]+ \+\d+ (?:lines|chars)\]/g
  * the post-colon suffix, so plugin-scoped forms of a special-cased command
  * pick up the same tone as the bare form.
  */
+// Invariant: each tone MUST be a thunk that reads `palette.<role>` when
+// called, never the chalk instance itself. `palette` is a live view swapped in
+// place by `applyTheme()` (palette.ts); this map is built at module scope,
+// which ESM hoists above the first `applyTheme()` call, so a direct capture
+// would freeze the chip on the dark tones regardless of the active theme.
 const TOKEN_TONE_OVERRIDES: Record<string, (s: string) => string> = {
   // /mint — color pun on the skill name. The mint-green chip visually
   // separates a /mint invocation from every other registered command in the
   // input buffer.
-  mint: palette.mint,
+  mint: (s) => palette.mint(s),
 };
 
 /**

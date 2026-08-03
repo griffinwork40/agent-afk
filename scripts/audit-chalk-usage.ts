@@ -93,6 +93,43 @@ interface Violation {
  */
 const CHALK_STYLE_RE = /\bchalk\s*\.\s*(?!level\b)([A-Za-z][A-Za-z0-9]*)/g;
 
+/**
+ * Matches a hand-rolled SGR escape literal — `\x1b[33m`, `\u001b[1m`, `\e[0m`.
+ * Only the `m` final byte (Select Graphic Rendition) counts: cursor control
+ * (`\x1b[2K`, `\x1b[<row>;1H`, `\x1b[s`) shares the CSI prefix but is layout,
+ * not styling, and the compositor legitimately owns it.
+ *
+ * A regex literal that escapes the bracket (`/\x1b\[[0-9;]*m/`) does not match,
+ * because this pattern requires a literal `[` immediately after the escape —
+ * so ANSI *parsers* and *strippers* are exempt by construction while ANSI
+ * *emitters* are caught.
+ */
+const RAW_SGR_RE = /\\(?:x1b|u001b|u\{1b\}|e|033)\[([0-9;]*)m/g;
+
+/**
+ * SGR parameters that set a color or a text attribute. Anything here means the
+ * literal is styling output, which must go through the palette instead.
+ *
+ * Contract: a BARE reset (`\x1b[0m` / `\x1b[m`) is deliberately NOT a
+ * violation. It opens no color of its own, and ANSI-safe truncation helpers
+ * legitimately append one to close a run the *caller* opened (see
+ * `src/cli/display.ts`). Every real palette bypass has to open a style first,
+ * and that opener is caught here — so exempting the reset costs no coverage
+ * while removing a whole false-positive class.
+ */
+function isStylingSgr(params: string): boolean {
+  if (params === '' || params === '0') return false;
+  return params.split(';').some((raw) => {
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n)) return false;
+    if (n >= 1 && n <= 9) return true; // bold/dim/italic/underline/blink/inverse/hidden/strike
+    if (n >= 30 && n <= 49) return true; // fg + bg, incl. 38/48 extended and 39/49 defaults
+    if (n >= 90 && n <= 97) return true; // bright fg
+    if (n >= 100 && n <= 107) return true; // bright bg
+    return false;
+  });
+}
+
 function walk(dir: string, out: string[]): void {
   if (!fs.existsSync(dir)) return;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -125,7 +162,19 @@ function scan(file: string, source: string): Violation[] {
     CHALK_STYLE_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = CHALK_STYLE_RE.exec(line)) !== null) {
-      violations.push({ file: rel, line: i + 1, text: line.trim(), method: match[1] ?? '?' });
+      violations.push({
+        file: rel,
+        line: i + 1,
+        text: line.trim(),
+        method: `chalk.${match[1] ?? '?'}`,
+      });
+    }
+
+    RAW_SGR_RE.lastIndex = 0;
+    while ((match = RAW_SGR_RE.exec(line)) !== null) {
+      const params = match[1] ?? '';
+      if (!isStylingSgr(params)) continue;
+      violations.push({ file: rel, line: i + 1, text: line.trim(), method: `ESC[${params}m` });
     }
   }
   return violations;
@@ -150,21 +199,21 @@ function main(): void {
   }
 
   if (listMode) {
-    console.log(`\n=== All raw chalk styling sites in src/ ===`);
+    console.log(`\n=== All raw styling sites (chalk + hand-rolled SGR) in src/ ===`);
     console.log(`Allowlisted: ${allowedHits.length} site(s)`);
-    for (const h of allowedHits) console.log(`  ${h.file}:${h.line} → chalk.${h.method}`);
+    for (const h of allowedHits) console.log(`  ${h.file}:${h.line} → ${h.method}`);
     console.log(`Other: ${allViolations.length} site(s)`);
-    for (const h of allViolations) console.log(`  ${h.file}:${h.line} → chalk.${h.method}`);
+    for (const h of allViolations) console.log(`  ${h.file}:${h.line} → ${h.method}`);
   }
 
   if (allViolations.length === 0) {
     console.log(
-      `✓ audit-chalk-usage: ${files.length} files scanned, ${allowedHits.length} legitimate raw-chalk sites inside allowlist, 0 violations.`,
+      `✓ audit-chalk-usage: ${files.length} files scanned, ${allowedHits.length} legitimate raw-styling sites inside allowlist, 0 violations.`,
     );
     process.exit(0);
   }
 
-  console.error(`\n✗ audit-chalk-usage: ${allViolations.length} raw chalk styling call(s) outside the palette:\n`);
+  console.error(`\n✗ audit-chalk-usage: ${allViolations.length} raw styling site(s) outside the palette:\n`);
   const byFile = new Map<string, Violation[]>();
   for (const v of allViolations) {
     const existing = byFile.get(v.file);
@@ -174,7 +223,7 @@ function main(): void {
   for (const [file, vs] of [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     console.error(`  ${file}`);
     for (const v of vs) {
-      console.error(`    L${v.line}: chalk.${v.method}(...)`);
+      console.error(`    L${v.line}: ${v.method}`);
       console.error(`         ${v.text}`);
     }
     console.error('');
@@ -187,6 +236,7 @@ function main(): void {
   console.error('     palette.warning(x)  // ← was: chalk.yellow(x)');
   console.error('     palette.meta(x)     // ← was: chalk.gray(x)');
   console.error('     palette.heading(x)  // ← was: chalk.bold(<section title>) / chalk.cyan.bold(x)');
+  console.error('     palette.bold(x)     // ← was: a hand-rolled \\x1b[1m … \\x1b[0m literal');
   console.error('  2. If the palette lacks a fitting role, add one to src/cli/palette.ts (keep it semantic).');
   console.error('  3. If this is a genuinely uncoverable case (per-pixel art, dynamic runtime hex), add the');
   console.error('     file to ALLOWED_FILES in scripts/audit-chalk-usage.ts with a rationale.\n');

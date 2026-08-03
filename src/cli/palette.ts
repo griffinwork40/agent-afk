@@ -45,8 +45,21 @@
  *
  * Invariant: every theme is built from the shared default `chalk` export
  * (never `new Chalk({ level })`), so `chalk.level = 0` (NO_COLOR / CI /
- * non-TTY, set in `color-config.ts`) strips color from light-theme
- * instances too — chalk builders read the global level at call time.
+ * non-TTY, set in `color-config.ts`) strips color from every theme's
+ * instances too — a level of 0 short-circuits to the bare string at CALL
+ * time, whatever level the builder was created at.
+ *
+ * Invariant: `configureColor()` may only ever LOWER `chalk.level` (to 0), and
+ * must never raise it. Unlike the level-0 strip, the color-SPACE choice is
+ * resolved when `chalk.hex()` is CALLED — i.e. at this module's evaluation —
+ * so a builder created while chalk auto-detected level 1 emits the 16-color
+ * approximation forever, even if `chalk.level` is set to 3 afterwards. That
+ * silently collapses distinct theme hexes onto the same escape (umber's
+ * `#D7AA32` warning and dark's `chalk.yellow` both become `ESC[33m`), making
+ * two themes look identical. Raising the level therefore requires setting
+ * `FORCE_COLOR` in the environment BEFORE chalk is imported — which is
+ * exactly why `configureColor()` returns early when it sees `FORCE_COLOR`
+ * rather than translating it into a `chalk.level` assignment.
  */
 
 import chalk, { type ChalkInstance } from 'chalk';
