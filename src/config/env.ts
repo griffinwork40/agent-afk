@@ -1081,6 +1081,22 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_TEXT_MEASURE',
+    description:
+      'Maximum line length (columns) for unbordered streamed text in the interactive REPL: assistant prose, ' +
+      'thinking blocks, tool-lane text, and subagent text. Display-only — affects wrapping, never behavior. ' +
+      'Bordered elements (cards, error boxes) already cap at 100; this applies the same ceiling to the ' +
+      'unbordered surfaces, which previously scaled to the full terminal width. ' +
+      'Accepts a positive integer (minimum 20), or full | off | none | 0 to disable capping and restore ' +
+      'full-width wrapping. Unparseable or below-minimum values fall back to the default. ' +
+      'No-op on terminals at or below the measure, so narrow terminals are unaffected.',
+    type: 'string',
+    required: false,
+    default: '100',
+    example: 'full',
+    category: 'misc',
+  },
+  {
     name: 'COLORFGBG',
     description:
       'Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. ' +
@@ -1580,6 +1596,7 @@ export const env = {
   get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
   get NO_COLOR(): string | undefined { return process.env['NO_COLOR']; },
   get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
+  get AFK_TEXT_MEASURE(): string | undefined { return process.env['AFK_TEXT_MEASURE']; },
   get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
 
   // Debug

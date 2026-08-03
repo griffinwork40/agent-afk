@@ -29,6 +29,7 @@
 
 import wrapAnsi from 'wrap-ansi';
 import { palette } from '../../palette.js';
+import { capToMeasure } from '../../render/measure.js';
 
 const HEADER = '◆ thinking';
 const INDENT = '  ';
@@ -87,7 +88,9 @@ export function formatThinkingParagraph(
   opts: ThinkingParagraphOptions,
 ): string {
   const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
-  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
+  // Clamped to the shared reading measure so the thinking block keeps the
+  // same right edge as adjacent prose (see `render/measure.ts`).
+  const bodyWidth = Math.max(MIN_BODY_WIDTH, capToMeasure(opts.cols - INDENT.length));
 
   // Bound the per-repaint work *before* the O(N) normalize + wrap. This runs
   // on every thinking-chunk (~50 Hz) and the wrapped output is then sliced to
