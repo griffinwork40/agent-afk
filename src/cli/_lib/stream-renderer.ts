@@ -58,7 +58,8 @@ import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker, type StageTrackerState } from '../commands/interactive/loop-stage.js';
 import { detectCaptureMode, detectReducedMotion, detectGoblinSpinner } from './capture-mode.js';
 import { makeDedupingLineWriter, type DedupingLineWriter } from './dedup-line-writer.js';
-import { registerOverlaySlots, checkPauseAnnotations, checkProgressBannerStaleness, subscribeToResize } from './stream-renderer-lifecycle.js';
+import { registerOverlaySlots, checkPauseAnnotations, subscribeToResize } from './stream-renderer-lifecycle.js';
+import { checkProgressBannerStaleness } from './stream-renderer-dead-zone.js';
 import { makeOrchestratorCtx, makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
 
 export interface StreamRendererOptions {

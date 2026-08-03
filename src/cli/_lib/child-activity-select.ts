@@ -46,11 +46,14 @@ export const STICKY_HOLD_MS = 3000;
  * (which stays at 30s): the banner reports "no output (waiting)" earlier so the
  * operator sees a quiet child during the 8s–30s dead zone that the tool-lane's
  * `· waiting Xs` annotation (armed only past 30s) does not cover. The static
- * clause avoids a live-ticking counter that would change the composed string on
- * every recompose (breaking setOverlay's identical-string dedup), so the banner
- * flips once at this threshold and then stays byte-stable —
- * `checkProgressBannerStaleness` rides the existing 80ms pause tick to trigger
- * that one flip without adding a new timer (see live-progress-no-timer.test.ts).
+ * clause avoids a live-ticking counter that would change the *clause* on every
+ * recompose; note the composed banner still carries the child's elapsed
+ * `durationMs` rounded to whole seconds, so the full overlay string is not
+ * byte-stable across a second boundary and setOverlay's identical-string dedup
+ * cannot be relied on to absorb repeat flushes. `checkProgressBannerStaleness`
+ * (stream-renderer-dead-zone.ts) therefore latches per source and flushes once
+ * per quiet transition, riding the existing 80ms pause tick rather than adding
+ * a timer (see live-progress-no-timer.test.ts).
  *
  * Invariant: must exceed `STICKY_HOLD_MS` (3s) so the sticky selector has settled
  * before the silence clause appears, and must exceed the 1500ms per-parent
