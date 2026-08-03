@@ -577,7 +577,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const reason =
       `Bash command blocked: read-only skill may not run mutating commands ` +
       `(${verdict.reason ?? 'mutation detected'}). Allowed: read-only recon ` +
-      `(git status/log/diff, ls, cat, find, grep).`;
+      `(git status/log/diff/show/ls-remote, ls, cat, find, grep, gh pr view/diff). ` +
+      `For a remote ref you have not fetched, \`gh pr diff <n>\`, \`gh pr view <n>\` ` +
+      `and \`git ls-remote\` need no local ref — \`git fetch\` is blocked. ` +
+      `Do NOT retry variants of a blocked command: if the task genuinely requires a ` +
+      `mutation, stop and report that requirement to your caller instead.`;
     await this.emitPreToolUseBlock(call.name, reason);
     return { content: reason, isError: true, failureClass: 'permission-denied' };
   }

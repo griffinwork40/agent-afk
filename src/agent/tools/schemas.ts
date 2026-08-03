@@ -17,7 +17,9 @@ export const bashTool: AnthropicToolDef = {
   description:
     'Execute a shell command and return its stdout and stderr. ' +
     'Use for running programs, installing packages, git operations, and any task that requires a shell. ' +
-    'Commands run in the user\'s default shell. Long-running commands should use timeout_ms. ' +
+    'Commands run through /bin/sh in POSIX mode (Node spawn with shell:true) — NOT bash and NOT your $SHELL. '
+    + 'Bashisms are syntax errors that exit 2 WITHOUT running the command: process substitution <(...), [[ ]], arrays, {a,b} brace expansion. '
+    + 'Use a temp file or a POSIX equivalent instead. Long-running commands should use timeout_ms. ' +
     'Output is capped to a ~100KB head+tail view (the start and end are kept, the middle elided with a notice), so the command still runs to completion and you keep the real exit code and the tail (test/build summaries, final errors). For the full body of a verbose command, filter it (`| tail -n`, `--quiet`, narrower flags) or redirect to a file and read slices. Commands emitting extreme output (>8MB) are terminated. ' +
     'For reading or writing files — especially anything sensitive — prefer the typed file tools ' +
     '(read_file, write_file, edit_file): they support per-call user approval, and interpreter ' +
