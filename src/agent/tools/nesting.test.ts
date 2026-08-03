@@ -322,12 +322,13 @@ describe('resolveMaxNestingDepth (AFK_MAX_NESTING_DEPTH)', () => {
     expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
   });
 
-  it('falls back to the default when only a numeric prefix is valid', () => {
-    for (const malformed of ['0.5', '0x3', '3oops']) {
+  it.each(['0.5', '0x5', '0b10', '1oops'])(
+    'falls back to the default for non-decimal input %s',
+    (malformed) => {
       process.env[KEY] = malformed;
       expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
-    }
-  });
+    },
+  );
 
   it('keeps the ENV_REGISTRY documented default in lockstep with the constant', () => {
     // Guards against DEFAULT_MAX_NESTING_DEPTH drifting from the registry
