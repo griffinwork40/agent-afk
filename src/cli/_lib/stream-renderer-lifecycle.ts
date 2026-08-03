@@ -18,11 +18,10 @@ import { deriveProgressActivity, formatProgressBanner } from '../commands/intera
 import { palette } from '../palette.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
-import { ORCHESTRATOR_SOURCE_KEY, syntheticResult, type SourceState } from './stream-renderer-source.js';
+import { syntheticResult, type SourceState } from './stream-renderer-source.js';
 import {
   childBannerEvent,
   deriveChildBanner,
-  CHILD_QUIET_MS,
   type ChildActivityTracker,
 } from './child-activity-select.js';
 import type { ToolLane } from '../commands/interactive/tool-lane.js';
@@ -299,45 +298,4 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
     ctx.overlayComposer.flush();
   }
   return changed;
-}
-
-/**
- * Dead-zone checker for the progress-banner slot. Called every 80ms by the same
- * pause tick interval that drives {@link checkPauseAnnotations}.
- *
- * The problem: the progress banner only recomposes when *something* marks the
- * OverlayComposer dirty, and a genuinely-silent child emits no events to drive
- * that recompose. So between roughly 1.5s and 30s (the tool-lane mqtt threshold)
- * the banner's "no output for Xs" clause never appears — the dead zone.
- *
- * This function closes that gap by marking the `progress-banner` slot dirty when
- * any running child has been silent past `CHILD_QUIET_MS`. The resulting recompose
- * re-reads the child-activity selector, which now produces a *static* clause
- * (`no output (waiting)`, not a live-ticking counter) — so once the clause flips,
- * subsequent flushes produce a byte-identical composed string and setOverlay's
- * identical-string dedup (terminal-compositor.ts:794) makes them free no-ops.
- * No cadence gate is needed.
- *
- * Sibling of {@link checkPauseAnnotations} by design: two separate functions
- * on the same tick, each owning one concern. The stall state machine stays in
- * its own function; this function only marks the banner dirty. Adding no new
- * timer satisfies the no-autonomous-timer invariant
- * (live-progress-no-timer.test.ts) by letter and intent.
- *
- * Returns true if the overlay was changed and needs a flush.
- */
-export function checkProgressBannerStaleness(ctx: LifecycleContext): boolean {
-  if (ctx.disposed || !ctx.isTTY || !ctx.overlayComposer) return false;
-  const now = Date.now();
-  for (const [sourceId, source] of ctx.sources) {
-    if (sourceId === ORCHESTRATOR_SOURCE_KEY) continue;
-    if (source.done || source.errored) continue;
-    const silentMs = Math.max(0, now - source.lastEventAt);
-    if (silentMs >= CHILD_QUIET_MS) {
-      ctx.overlayComposer.markDirty('progress-banner');
-      ctx.overlayComposer.flush();
-      return true;
-    }
-  }
-  return false;
 }

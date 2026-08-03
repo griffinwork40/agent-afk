@@ -27,11 +27,13 @@ const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');
 const TIMER_FREE_MODULES = [
   'src/cli/_lib/child-activity-select.ts',
   'src/cli/input/work-derived-verb.ts',
-  // stream-renderer-lifecycle.ts hosts checkProgressBannerStaleness, which
-  // rides the EXISTING 80ms pause tick (stream-renderer.ts:485) — it must not
-  // introduce its own setInterval/setTimeout. Guard this so a future refactor
+  // stream-renderer-lifecycle.ts hosts checkPauseAnnotations, and
+  // stream-renderer-dead-zone.ts hosts checkProgressBannerStaleness. Both ride
+  // the EXISTING 80ms pause tick (stream-renderer.ts:485) — neither may
+  // introduce its own setInterval/setTimeout. Guard both so a future refactor
   // cannot silently add one to the dead-zone path.
   'src/cli/_lib/stream-renderer-lifecycle.ts',
+  'src/cli/_lib/stream-renderer-dead-zone.ts',
 ] as const;
 
 function read(relPath: string): string {
