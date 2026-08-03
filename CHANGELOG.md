@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.86.0] - 2026-08-03
+
+### Added
+- make the nesting-depth cap configurable via AFK_MAX_NESTING_DEPTH (#863) (6f8e33f)
+
 ## [5.85.12] - 2026-08-03
 
 ### Fixed
