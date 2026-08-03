@@ -24,7 +24,7 @@
  * @module cli/_lib/child-activity-select
  */
 
-import { formatDuration, formatToolCallStat } from '../format-utils.js';
+import { formatToolCallStat } from '../format-utils.js';
 import { ORCHESTRATOR_SOURCE_KEY, type SourceState } from './stream-renderer-source.js';
 import type { ProgressEvent } from '../../agent/types.js';
 
@@ -42,13 +42,24 @@ export const STICKY_HOLD_MS = 3000;
 /**
  * Silence past which the banner names the child as producing no output.
  *
- * Matches `PAUSE_THRESHOLD_MS` in stream-renderer-lifecycle.ts so the banner
- * and the tool-lane's `· waiting Xs` annotation agree rather than reporting two
- * different notions of "stalled". The lane keeps its own label (renamed to
- * `waiting` deliberately — see stream-renderer-visibility.test.ts); this adds
- * the same fact in the higher-salience slot where the eye already rests.
+ * Deliberately decoupled from `PAUSE_THRESHOLD_MS` in stream-renderer-lifecycle.ts
+ * (which stays at 30s): the banner reports "no output (waiting)" earlier so the
+ * operator sees a quiet child during the 8s–30s dead zone that the tool-lane's
+ * `· waiting Xs` annotation (armed only past 30s) does not cover. The static
+ * clause avoids a live-ticking counter that would change the *clause* on every
+ * recompose; note the composed banner still carries the child's elapsed
+ * `durationMs` rounded to whole seconds, so the full overlay string is not
+ * byte-stable across a second boundary and setOverlay's identical-string dedup
+ * cannot be relied on to absorb repeat flushes. `checkProgressBannerStaleness`
+ * (stream-renderer-dead-zone.ts) therefore latches per source and flushes once
+ * per quiet transition, riding the existing 80ms pause tick rather than adding
+ * a timer (see live-progress-no-timer.test.ts).
+ *
+ * Invariant: must exceed `STICKY_HOLD_MS` (3s) so the sticky selector has settled
+ * before the silence clause appears, and must exceed the 1500ms per-parent
+ * overlay throttle in stream-renderer-subagent.ts.
  */
-export const CHILD_QUIET_MS = 30_000;
+export const CHILD_QUIET_MS = 8_000;
 
 /** A running child worth naming in the banner detail slot. */
 export interface ChildActivity {
@@ -56,7 +67,7 @@ export interface ChildActivity {
   sourceId: string;
   /** Human label — `agentType` when known, else the raw source key. */
   label: string;
-  /** Progress clause, e.g. `round 3: Read tool-lane.ts` or `no output for 41s`. */
+  /** Progress clause, e.g. `round 3: Read tool-lane.ts` or `no output (waiting)`. */
   clause: string;
   /** True when this child has been silent longer than {@link CHILD_QUIET_MS}. */
   quiet: boolean;
@@ -91,7 +102,21 @@ function runningChildren(
  */
 function clauseFor(candidate: Candidate): string | undefined {
   if (candidate.silentMs >= CHILD_QUIET_MS) {
-    return `no output for ${formatDuration(candidate.silentMs)}`;
+    // Static clause: intentionally NOT a live-ticking "no output for Xs" counter.
+    // A live counter would change THIS CLAUSE on every 80ms recompose. Note the
+    // dedup at terminal-compositor.ts:794 is not what makes that expensive to
+    // avoid — the composed banner already carries the child's elapsed
+    // durationMs rounded to whole seconds, so the overlay string is not
+    // byte-stable across a second boundary and that dedup cannot be relied on
+    // either way (see this module's header). The real cost is the rate: a
+    // per-clause counter churns at the 80ms tick instead of ~1Hz, an ~12x
+    // increase in real repaints, which re-introduces the ghost-row/flicker
+    // class the 1500ms H2 throttle (stream-renderer-subagent.ts) prevents. The
+    // conclusion is unchanged — keep the clause static. The tool-lane's
+    // `· waiting Xs` annotation already shows elapsed silence past 30s
+    // (PAUSE_THRESHOLD_MS); the banner just needs to signal the child went
+    // quiet, which one static string does.
+    return 'no output (waiting)';
   }
   const summary = candidate.source.lastProgressSummary;
   if (summary) return summary;

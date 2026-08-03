@@ -11,6 +11,32 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.11] - 2026-08-03
+
+### Fixed
+- stop fabricating filenames from relative paths (#872) (58a1e68)
+
+## [5.85.10] - 2026-08-02
+
+### Changed
+- split bootstrap.ts into 9 phase modules (#823) (#873) (8f28491)
+
+## [5.85.9] - 2026-08-02
+
+### Fixed
+- close the case-variant bypass of the credential floor (#736) (#819) (de0f295)
+
+## [5.85.8] - 2026-08-02
+
+### Fixed
+- close the 1.5s–30s live-progress dead zone (#857) (#867) (399e8fa)
+- match rebuildable ignored FILES on the leaf, not the whole path (#799) (1362fab)
+
+## [5.85.7] - 2026-08-02
+
+### Fixed
+- re-dispatch a read-only child once when its stream is cut with zero output (#796) (542464e)
+
 ## [5.85.6] - 2026-08-02
 
 ### Changed

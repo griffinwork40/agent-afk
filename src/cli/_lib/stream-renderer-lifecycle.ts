@@ -18,8 +18,7 @@ import { deriveProgressActivity, formatProgressBanner } from '../commands/intera
 import { palette } from '../palette.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
-import type { SourceState } from './stream-renderer-source.js';
-import { syntheticResult } from './stream-renderer-source.js';
+import { syntheticResult, type SourceState } from './stream-renderer-source.js';
 import {
   childBannerEvent,
   deriveChildBanner,

@@ -27,6 +27,13 @@ const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');
 const TIMER_FREE_MODULES = [
   'src/cli/_lib/child-activity-select.ts',
   'src/cli/input/work-derived-verb.ts',
+  // stream-renderer-lifecycle.ts hosts checkPauseAnnotations, and
+  // stream-renderer-dead-zone.ts hosts checkProgressBannerStaleness. Both ride
+  // the EXISTING 80ms pause tick (stream-renderer.ts:485) — neither may
+  // introduce its own setInterval/setTimeout. Guard both so a future refactor
+  // cannot silently add one to the dead-zone path.
+  'src/cli/_lib/stream-renderer-lifecycle.ts',
+  'src/cli/_lib/stream-renderer-dead-zone.ts',
 ] as const;
 
 function read(relPath: string): string {
@@ -42,10 +49,13 @@ describe('live-progress modules introduce no autonomous timer', () => {
   for (const relPath of TIMER_FREE_MODULES) {
     it(`${relPath} schedules nothing`, () => {
       const code = stripComments(read(relPath));
-      expect(code).not.toMatch(/\bsetInterval\b/);
-      expect(code).not.toMatch(/\bsetTimeout\b/);
-      expect(code).not.toMatch(/\bsetImmediate\b/);
-      expect(code).not.toMatch(/requestAnimationFrame/);
+      // Call-form regexes (not bare-word) so type annotations like
+      // `ReturnType<typeof setInterval>` do not false-positive — a real
+      // timer call always has parens. Matches the spinner test's approach.
+      expect(code).not.toMatch(/\bsetInterval\s*\(/);
+      expect(code).not.toMatch(/\bsetTimeout\s*\(/);
+      expect(code).not.toMatch(/\bsetImmediate\s*\(/);
+      expect(code).not.toMatch(/requestAnimationFrame\s*\(/);
     });
   }
 
