@@ -162,11 +162,12 @@ export async function runSkillDispatchTurn(
       }
     }
 
-    const message = buildSkillInvocationMessage(
+    const message = await buildSkillInvocationMessage(
       params.skillMeta,
       params.args,
       manifestBlock,
       params.attachments,
+      ctx.stats.sessionId,
     );
     // Install renderer.sink as the ambient progress sink so any subagents
     // forked during the SDK's tool-dispatch chain (SkillExecutor →

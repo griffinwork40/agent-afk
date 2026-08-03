@@ -36,7 +36,11 @@ function makeHandler(
   existingSessionState: 'idle' | 'streaming' | undefined = undefined,
 ): MessageHandler {
   const sessionManager = {
-    getSession: vi.fn().mockResolvedValue({ state: sessionState }),
+    getSession: vi.fn().mockResolvedValue({
+      state: sessionState,
+      sessionId: 'attribution-test-session',
+      waitForInitialization: vi.fn().mockResolvedValue({ sessionId: 'attribution-test-session' }),
+    }),
     getSessionIfExists: vi.fn().mockReturnValue(
       existingSessionState ? { state: existingSessionState } : undefined,
     ),
@@ -256,7 +260,8 @@ describe('sender attribution — photo (handlePhoto)', () => {
     const [, , content] = mockStreamResponse.mock.calls[0]!;
     const blocks = content as ContentBlockParam[];
     expect(blocks[0]).toMatchObject({ type: 'text', text: '[from Bob @bob (id 7)]: [User caption]: look at this' });
-    expect(blocks[1]).toMatchObject({ type: 'image' });
+    expect(blocks[1]).toMatchObject({ type: 'text', text: expect.stringMatching(/^\[image img_/) });
+    expect(blocks[2]).toMatchObject({ type: 'image' });
   });
 
   it('adds a sender-only text block for a captionless group photo', async () => {
@@ -267,7 +272,8 @@ describe('sender attribution — photo (handlePhoto)', () => {
     const [, , content] = mockStreamResponse.mock.calls[0]!;
     const blocks = content as ContentBlockParam[];
     expect(blocks[0]).toMatchObject({ type: 'text', text: '[from Bob (id 7)]: (image, no caption)' });
-    expect(blocks[1]).toMatchObject({ type: 'image' });
+    expect(blocks[1]).toMatchObject({ type: 'text', text: expect.stringMatching(/^\[image img_/) });
+    expect(blocks[2]).toMatchObject({ type: 'image' });
   });
 
   it('leaves a private captionless photo as image-only (no attribution block)', async () => {
@@ -277,7 +283,8 @@ describe('sender attribution — photo (handlePhoto)', () => {
     }));
     const [, , content] = mockStreamResponse.mock.calls[0]!;
     const blocks = content as ContentBlockParam[];
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ type: 'image' });
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/^\[image img_/) });
+    expect(blocks[1]).toMatchObject({ type: 'image' });
   });
 });

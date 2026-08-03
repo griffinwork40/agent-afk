@@ -37,6 +37,7 @@ import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { TraceWriter } from '../trace/writer.js';
 import type { Surface } from '../awareness/types.js';
 import type { AgentModelInput } from '../types.js';
+import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 
 /** Options for {@link wireExecutors}. */
 export interface WireExecutorsOptions {
@@ -248,6 +249,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     maxDepth,
     ...nestedCwdOpt,
     agentRegistry,
+    inboundAttachmentRegistry,
     parentModel: model,
     ...traceOpt,
   });

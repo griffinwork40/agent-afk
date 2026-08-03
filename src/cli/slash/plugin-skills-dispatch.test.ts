@@ -38,7 +38,7 @@ interface DiscoveredSkill {
 }
 
 /** Build the expected 2-block payload for a given plugin skill + args. */
-function expectedPayload(skill: DiscoveredSkill, args: string): ContentBlockParam[] {
+async function expectedPayload(skill: DiscoveredSkill, args: string): Promise<ContentBlockParam[]> {
   // Mirror the adapter built inside makeForwardHandler: name + inline context.
   return buildSkillInvocationMessage(
     { name: skill.name, description: skill.description, handler: async () => undefined, context: 'inline' },
@@ -91,7 +91,7 @@ describe('plugin-skill slash dispatch (makeForwardHandler fix)', () => {
 
   it('2-block payload shape: breadcrumb block contains skill name in command-name tag', async () => {
     const skill: DiscoveredSkill = { name: 'ship', description: 'Ship the current work.' };
-    const payload = expectedPayload(skill, '');
+    const payload = await expectedPayload(skill, '');
 
     // Breadcrumb block (index 0) must contain the command-name tag.
     const breadcrumb = payload[0];
@@ -103,7 +103,7 @@ describe('plugin-skill slash dispatch (makeForwardHandler fix)', () => {
 
   it('2-block payload shape: instruction block contains skill name and dispatch keyword', async () => {
     const skill: DiscoveredSkill = { name: 'ship', description: 'Ship the current work.' };
-    const payload = expectedPayload(skill, '');
+    const payload = await expectedPayload(skill, '');
 
     const instruction = payload[1];
     expect(instruction).toBeDefined();
@@ -113,26 +113,26 @@ describe('plugin-skill slash dispatch (makeForwardHandler fix)', () => {
     expect(instructionText.toLowerCase()).toContain('dispatch');
   });
 
-  it('2-block payload shape: exactly 2 blocks when no args', () => {
+  it('2-block payload shape: exactly 2 blocks when no args', async () => {
     const skill: DiscoveredSkill = { name: 'review', description: 'Review a PR.' };
-    const payload = expectedPayload(skill, '');
+    const payload = await expectedPayload(skill, '');
     expect(payload).toHaveLength(2);
   });
 
-  it('2-block payload shape: instruction includes args when passed', () => {
+  it('2-block payload shape: instruction includes args when passed', async () => {
     const skill: DiscoveredSkill = { name: 'ship', description: 'Ship the current work.' };
-    const payload = expectedPayload(skill, '--verify');
+    const payload = await expectedPayload(skill, '--verify');
 
     const instructionText = (payload[1] as { type: 'text'; text: string }).text;
     expect(instructionText).toContain('--verify');
   });
 
-  it('plugin skill payload is structurally identical to what builtin makeImmediateHandler would produce', () => {
+  it('plugin skill payload is structurally identical to what builtin makeImmediateHandler would produce', async () => {
     // The fix mirrors makeImmediateHandler: same builder, same 2-block shape.
     // Spot-check: both /ship (plugin) and a builtin skill produce a breadcrumb
     // at [0] and instruction at [1].
-    const pluginPayload = expectedPayload({ name: 'ship', description: 'Ship the current work.' }, 'args');
-    const builtinEquivalent = buildSkillInvocationMessage(
+    const pluginPayload = await expectedPayload({ name: 'ship', description: 'Ship the current work.' }, 'args');
+    const builtinEquivalent = await buildSkillInvocationMessage(
       { name: 'ship', description: 'Ship.', handler: async () => undefined },
       'args',
     );
@@ -160,7 +160,7 @@ describe('plugin-skill slash dispatch (makeForwardHandler fix)', () => {
     // makeForwardHandler calls. This guards the call site contract without
     // needing a full session mock wired through the REPL.
     const skill: DiscoveredSkill = { name: 'ship', description: 'Ship the current work.' };
-    const payload = expectedPayload(skill, '');
+    const payload = await expectedPayload(skill, '');
 
     // Simulate what the fixed handler does: call sendMessageStream with the payload.
     mockSession.current.sendMessageStream(payload);
@@ -178,9 +178,9 @@ describe('plugin-skill slash dispatch (makeForwardHandler fix)', () => {
     expect(allText).toContain('<command-name>/ship</command-name>');
   });
 
-  it('scope: /review plugin skill produces same 2-block structure as /ship', () => {
-    const shipPayload = expectedPayload({ name: 'ship', description: 'Ship.' }, '');
-    const reviewPayload = expectedPayload({ name: 'review', description: 'Review.' }, '');
+  it('scope: /review plugin skill produces same 2-block structure as /ship', async () => {
+    const shipPayload = await expectedPayload({ name: 'ship', description: 'Ship.' }, '');
+    const reviewPayload = await expectedPayload({ name: 'review', description: 'Review.' }, '');
 
     expect(shipPayload).toHaveLength(2);
     expect(reviewPayload).toHaveLength(2);

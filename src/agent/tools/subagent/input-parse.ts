@@ -161,8 +161,10 @@ export function parseAgentInput(input: unknown): AgentInput {
       if (entry.trim().length === 0) {
         throw new Error('Agent tool attachments entries must not be empty strings');
       }
-      if (!isAbsolute(entry)) {
-        throw new Error(`Agent tool attachments entries must be absolute paths, got: ${JSON.stringify(entry)}`);
+      if (!isAbsolute(entry) && !/^img_[0-9a-f]{6,64}(?:_[1-9][0-9]*)?$/.test(entry)) {
+        throw new Error(
+          `Agent tool attachments entries must be absolute image paths or inbound image ids, got: ${JSON.stringify(entry)}`,
+        );
       }
       paths.push(entry);
     }

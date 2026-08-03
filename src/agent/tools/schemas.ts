@@ -329,9 +329,8 @@ export const agentTool: AnthropicToolDef = {
     'research-shaped investigation.\n\n' +
     'Parallelize: dispatch multiple `agent` calls in a single tool-use turn to run ' +
     'independent investigations concurrently.\n\n' +
-    'Nest: a subagent may itself dispatch further subagents (depth limit 3 by default) when it ' +
-    'discovers a separable sub-investigation. Inside a subagent, `get_runtime_state` reports ' +
-    'the live cap.\n\n' +
+    'Nest: a subagent may itself dispatch further subagents (depth limit 3) when it ' +
+    'discovers a separable sub-investigation.\n\n' +
     'Subagents return their final assistant message verbatim — instruct them ' +
     'explicitly to compress their findings into: answer, evidence with file:line ' +
     'citations, confidence, risks, recommended next action, unresolved questions, ' +
@@ -363,8 +362,8 @@ export const agentTool: AnthropicToolDef = {
         type: 'array',
         items: { type: 'string' },
         description:
-          'Optional absolute paths to image files to attach. Bytes are resolved by ' +
-          'the runtime — NEVER paste base64 into the tool call.',
+          'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. ' +
+          'Bytes are resolved by the runtime — NEVER paste base64 into the tool call.',
       },
       model: {
         type: 'string',

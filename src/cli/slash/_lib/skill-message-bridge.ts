@@ -14,6 +14,7 @@ import type { SkillMetadata } from '../../../skills/index.js';
 import type { ImageAttachment } from '../../input/attachments.js';
 import { formatCommandBreadcrumb } from './command-tags.js';
 import { appendImageBlocks } from '../../../agent/content/image-blocks.js';
+import { registerInboundImageBlocks } from '../../../agent/content/attachment-registry.js';
 
 /**
  * Builds the message to send when a skill is invoked via slash command.
@@ -40,12 +41,13 @@ import { appendImageBlocks } from '../../../agent/content/image-blocks.js';
  * after the instruction block. The images are adjacent to the dispatch
  * instruction so the model sees them as part of the skill invocation context.
  */
-export function buildSkillInvocationMessage(
+export async function buildSkillInvocationMessage(
   skill: SkillMetadata,
   args: string,
   manifestBlock?: string,
   attachments?: readonly ImageAttachment[],
-): ContentBlockParam[] {
+  sessionId?: string,
+): Promise<ContentBlockParam[]> {
   const breadcrumb = formatCommandBreadcrumb(skill.name, args);
 
   const forkNote =
@@ -62,6 +64,10 @@ export function buildSkillInvocationMessage(
   }
   blocks.push({ type: 'text', text: breadcrumb });
   blocks.push({ type: 'text', text: instruction });
-  appendImageBlocks(blocks, attachments);
+  if (attachments !== undefined && attachments.length > 0 && sessionId !== undefined) {
+    await registerInboundImageBlocks(blocks, sessionId, attachments);
+  } else {
+    appendImageBlocks(blocks, attachments);
+  }
   return blocks;
 }

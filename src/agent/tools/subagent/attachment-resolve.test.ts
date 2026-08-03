@@ -50,6 +50,19 @@ describe('resolveSubagentAttachments', () => {
     ).rejects.toThrow(/5 MiB/);
   });
 
+  it('enforces the count cap across registry ids and paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'afk-att-'));
+    const path = join(root, 'a.png');
+    await writeFile(path, 'x');
+    await expect(resolveSubagentAttachments({
+      paths: ['img_aaaaaa', ...Array(MAX_SUBAGENT_ATTACHMENT_COUNT).fill(path) as string[]],
+      resolveBase: root,
+      readRoots: [root],
+      sessionId: 'session',
+      registry: { get: () => ({ path, mediaType: 'image/png', sizeBytes: 1 }), listIds: () => ['img_aaaaaa'] },
+    })).rejects.toThrow(/at most 8/);
+  });
+
   it('rejects an oversized file via stat, before its bytes enter memory', async () => {
     // Contract: this file is SPARSE and deliberately larger than Node's maximum
     // buffer length — truncate() allocates no real blocks, and a readFile() of
@@ -68,5 +81,21 @@ describe('resolveSubagentAttachments', () => {
     await expect(
       resolveSubagentAttachments({ paths: [sparse], resolveBase: root, readRoots: [root] }),
     ).rejects.toThrow(/5 MiB/);
+  });
+
+  it('unknown registry id errors listing both available ids in the message', async () => {
+    const availableIds = ['img_aaaaaa', 'img_bbbbbb'];
+    await expect(
+      resolveSubagentAttachments({
+        paths: ['img_nonexist'],
+        resolveBase: undefined,
+        readRoots: undefined,
+        sessionId: 'session',
+        registry: {
+          get: () => undefined,
+          listIds: () => availableIds,
+        },
+      }),
+    ).rejects.toThrow(/img_aaaaaa.*img_bbbbbb/);
   });
 });

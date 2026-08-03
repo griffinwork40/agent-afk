@@ -98,10 +98,46 @@ describe('parseAgentInput', () => {
       );
     });
 
-    it('rejects relative paths', () => {
+    it('accepts inbound image ids and rejects other relative strings', () => {
+      expect(parseAgentInput({ prompt: 'p', attachments: ['img_a1b2c3'] }).attachments)
+        .toEqual(['img_a1b2c3']);
       expect(() => parseAgentInput({ prompt: 'p', attachments: ['a.png'] })).toThrow(
-        /must be absolute paths/,
+        /absolute image paths or inbound image ids/,
       );
+    });
+
+    it('rejects img_XXXX (non-hex chars in the hex portion)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: ['img_XXXX'] })).toThrow(
+        /absolute image paths or inbound image ids/,
+      );
+    });
+
+    it('rejects img_a1b2 (too short — fewer than 6 hex chars)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: ['img_a1b2'] })).toThrow(
+        /absolute image paths or inbound image ids/,
+      );
+    });
+
+    it('rejects img_a1b2c3_0 (suffix must start at 1, not 0)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: ['img_a1b2c3_0'] })).toThrow(
+        /absolute image paths or inbound image ids/,
+      );
+    });
+
+    it('rejects img_a1b2c3_01 (leading zero in suffix)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', attachments: ['img_a1b2c3_01'] })).toThrow(
+        /absolute image paths or inbound image ids/,
+      );
+    });
+
+    it('accepts img_a1b2c3_1 (valid suffix)', () => {
+      expect(parseAgentInput({ prompt: 'p', attachments: ['img_a1b2c3_1'] }).attachments)
+        .toEqual(['img_a1b2c3_1']);
+    });
+
+    it('accepts img_abcdef1234 (longer hex, > 6 chars)', () => {
+      expect(parseAgentInput({ prompt: 'p', attachments: ['img_abcdef1234'] }).attachments)
+        .toEqual(['img_abcdef1234']);
     });
 
     it('rejects background attachments explicitly', () => {

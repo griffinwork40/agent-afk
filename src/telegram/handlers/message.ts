@@ -15,6 +15,7 @@ import { HookBlockedError } from '../../utils/errors.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { registerInboundImageBlocks } from '../../agent/content/attachment-registry.js';
 
 type QueueItem =
   | { type: 'message'; ctx: Context; text: string }
@@ -414,7 +415,6 @@ export class MessageHandler {
         return;
       }
       const bytes = readResult.bytes;
-      const base64 = bytes.toString('base64');
 
       // H1: derive MIME type from the response Content-Type header instead of
       // hardcoding image/jpeg — Telegram can serve PNG, GIF, and WebP as well.
@@ -472,10 +472,9 @@ export class MessageHandler {
         // No caption, but still attribute the sender and/or reply target of the image.
         contentBlocks.push({ type: 'text', text: `${attribution}(image, no caption)` });
       }
-      contentBlocks.push({
-        type: 'image',
-        source: { type: 'base64', media_type, data: base64 },
-      });
+      await session.waitForInitialization();
+      if (session.sessionId === undefined) throw new Error('Telegram session initialized without a session id');
+      await registerInboundImageBlocks(contentBlocks, session.sessionId, [{ mediaType: media_type, bytes }]);
 
       if (session.state !== 'idle' || alreadyClaimed) {
         const depth = this.enqueuePhoto(chatId, ctx, contentBlocks);

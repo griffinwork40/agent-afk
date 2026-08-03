@@ -29,9 +29,11 @@ import type { SubagentHandle, SubagentResult } from '../subagent.js';
 import type { IAgentSession } from '../types.js';
 import type { AgentConfig } from '../types/config-types.js';
 import type { ToolCall } from './types.js';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { ModelProvider } from '../provider.js';
 import { SubagentExecutor, DEFAULT_MAX_NESTING_DEPTH, type SubagentExecutorContext } from './subagent-executor.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
+import type { InboundAttachmentReader } from '../content/attachment-registry.js';
 import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
@@ -259,6 +261,77 @@ describe('SubagentExecutor', () => {
           },
         },
       ]);
+    });
+
+    it('resolves an inbound id and combines it with a path in order', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'afk-subagent-mixed-'));
+      const inboundPath = join(dir, 'inbound.png');
+      const directPath = join(dir, 'direct.jpg');
+      await writeFile(inboundPath, Buffer.from('inbound'));
+      await writeFile(directPath, Buffer.from('direct'));
+      const registry: InboundAttachmentReader = {
+        get: (_sessionId, id) => id === 'img_a1b2c3'
+          ? { path: inboundPath, mediaType: 'image/png', sizeBytes: 7 }
+          : undefined,
+        listIds: () => ['img_a1b2c3'],
+      };
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        inboundAttachmentRegistry: registry,
+        depth: 0,
+      });
+
+      await exec.execute(makeCall({
+        input: { prompt: 'inspect', attachments: ['img_a1b2c3', directPath], model: 'sonnet' },
+      }));
+      const sent = (handle.runToResult as ReturnType<typeof vi.fn>).mock.calls[0]![0] as ContentBlockParam[];
+      expect(sent.map((block) => block.type)).toEqual(['text', 'image', 'image']);
+      expect((sent[1] as Extract<ContentBlockParam, { type: 'image' }>).source.media_type).toBe('image/png');
+      expect((sent[2] as Extract<ContentBlockParam, { type: 'image' }>).source.media_type).toBe('image/jpeg');
+    });
+
+    it('lists available ids when an inbound id is unknown', async () => {
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const registry: InboundAttachmentReader = { get: () => undefined, listIds: () => ['img_111111', 'img_222222'] };
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        inboundAttachmentRegistry: registry,
+        depth: 0,
+      });
+      const result = await exec.execute(makeCall({ input: { prompt: 'inspect', attachments: ['img_abcdef'] } }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('img_111111, img_222222');
+    });
+
+    it('applies the byte cap across mixed id and path attachments', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'afk-subagent-cap-'));
+      const inboundPath = join(dir, 'inbound.png');
+      const directPath = join(dir, 'direct.png');
+      await writeFile(inboundPath, Buffer.alloc(3 * 1024 * 1024));
+      await writeFile(directPath, Buffer.alloc(3 * 1024 * 1024));
+      const registry: InboundAttachmentReader = {
+        get: () => ({ path: inboundPath, mediaType: 'image/png', sizeBytes: 3 * 1024 * 1024 }),
+        listIds: () => ['img_a1b2c3'],
+      };
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        inboundAttachmentRegistry: registry,
+        depth: 0,
+      });
+      const result = await exec.execute(makeCall({
+        input: { prompt: 'inspect', attachments: ['img_a1b2c3', directPath] },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('5 MiB');
     });
 
     it('passes the bare prompt string unchanged when attachments are absent', async () => {

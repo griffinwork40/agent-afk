@@ -38,6 +38,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { appendImageBlocks } from '../content/image-blocks.js';
 import { supportsVision } from '../model-capabilities.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
+import { inboundAttachmentRegistry, type InboundAttachmentReader } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 
@@ -209,6 +210,8 @@ export interface SubagentExecutorContext {
    * and the legacy dispatch path is byte-identical.
    */
   agentRegistry?: AgentRegistry;
+  /** Read-only session attachment lookup; paths are loaded only at dispatch. */
+  inboundAttachmentRegistry?: InboundAttachmentReader;
   /**
    * The dispatching session's own model. Used to resolve a named agent's
    * `model: inherit` (and the omitted-model default for NAMED dispatches,
@@ -800,6 +803,8 @@ export class SubagentExecutor implements SubagentControl {
             this.currentCwd ??
             childScopeInputs.parentReadRoots?.[0],
           readRoots: childScopeInputs.parentReadRoots,
+          sessionId: this.ctx.parentSession.sessionId,
+          registry: this.ctx.inboundAttachmentRegistry ?? inboundAttachmentRegistry,
         });
       } catch (err) {
         await handle.teardown().catch(() => undefined);

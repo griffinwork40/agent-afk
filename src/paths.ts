@@ -326,6 +326,11 @@ export function getTraceDir(sessionId: string): string {
   return join(getAfkStateDir(), 'witness', sessionId);
 }
 
+/** Session-scoped sidecars for human-supplied images addressable by subagents. */
+export function getInboundAttachmentsDir(sessionId: string): string {
+  return join(getTraceDir(sessionId), 'inbound-attachments');
+}
+
 /**
  * Directory for opt-in captured subagent dispatch prompts, keyed by the same
  * witness `sessionLabel` as {@link getTraceDir}.
