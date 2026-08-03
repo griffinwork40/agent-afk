@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.87.1] - 2026-08-03
+
+### Fixed
+- make the Workspace line follow a mid-session cwd re-anchor (#875) (a377607)
+
 ## [5.87.0] - 2026-08-03
 
 ### Added
