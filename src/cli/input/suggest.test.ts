@@ -585,6 +585,24 @@ describe('primePromptSuggestion', () => {
     expect(completeFn).not.toHaveBeenCalled();
   });
 
+  it('is a no-op at the startup prompt — no turn has completed yet', async () => {
+    // Regression: the first readLine() of a session primes like any other turn
+    // handoff, so without this gate the very first prompt showed a ghost
+    // invented from the cwd name plus the PREVIOUS session's history ring.
+    // No transcript => no provider call at all, not merely a discarded reply.
+    const completeFn = vi.fn(async () => 'run the failing parser test');
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(
+      enabledCtx({
+        getTranscriptTail: () => '',
+        getRecentCommands: () => ['/review', '/ship'],
+      }),
+    );
+    expect(completeFn).not.toHaveBeenCalled();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    engine.dispose();
+  });
+
   it('stores a valid suggestion for peek', async () => {
     const engine = createSuggestEngine({
       completeFn: async () => 'run the failing parser test',
@@ -658,10 +676,14 @@ describe('primePromptSuggestion', () => {
 });
 
 describe('primePromptSuggestion — sanitization ordering', () => {
+  // A transcript tail is required grounding — without it the startup gate
+  // short-circuits before the provider call and these cases would pass for
+  // the wrong reason (null from the gate, not from the sanitizer).
   const ctx = () =>
     makeCtx({
       llmEnabled: () => true,
       promptSuggestEnabled: () => true,
+      getTranscriptTail: () => 'user: fix the parser\nassistant: fixed',
     });
 
   it('rejects a multi-line reply even though the scrubber would remove newlines', async () => {

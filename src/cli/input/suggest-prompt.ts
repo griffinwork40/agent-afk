@@ -1,6 +1,8 @@
 /**
  * Empty-prompt suggestion: the "what should I do next" ghost text offered when
- * the user is sitting at a blank prompt after a turn.
+ * the user is sitting at a blank prompt after a turn. Never at the STARTUP
+ * prompt — see {@link hasSuggestionGrounding} for why the first prompt of a
+ * session is deliberately left clean.
  *
  * This is a distinct concern from the Tier-1/Tier-2 completion engine in
  * `./suggest`. Those tiers COMPLETE something the user is already typing and
@@ -84,6 +86,23 @@ export function buildPromptSuggestionUser(ctx: SuggestContext): string {
   parts.push('Suggest the next thing to type:');
 
   return redactSecrets(parts.join('\n'));
+}
+
+/**
+ * Whether the session has anything for a suggestion to be grounded in.
+ *
+ * Invariant: this feature PROPOSES the next action "based on what just
+ * happened" (see {@link buildPromptSuggestionSystem}). At the very first prompt
+ * of a session nothing has happened yet — the transcript tail is empty and the
+ * only remaining inputs are the cwd basename and the persisted history ring,
+ * which carries the PREVIOUS session's commands. A proposal built from those is
+ * an ungrounded guess about work the user has not started, so the startup
+ * prompt stays clean and the first suggestion waits for the first completed
+ * turn. `/clear` empties the same transcript (`resetStats`) and is therefore
+ * covered by the same gate; a resumed session restores it and is not.
+ */
+export function hasSuggestionGrounding(ctx: SuggestContext): boolean {
+  return ctx.getTranscriptTail().trim().length > 0;
 }
 
 /**
@@ -173,6 +192,10 @@ export async function generatePromptSuggestion(
   deps: PromptSuggestionDeps,
 ): Promise<string | null> {
   if (!ctx.llmEnabled() || ctx.promptSuggestEnabled?.() !== true) return null;
+  // Startup gate: no completed turn in this session means no grounding, so
+  // refuse before the provider call rather than proposing from stale
+  // cross-session history. See {@link hasSuggestionGrounding}.
+  if (!hasSuggestionGrounding(ctx)) return null;
 
   const controller = new AbortController();
   deps.onController(controller);

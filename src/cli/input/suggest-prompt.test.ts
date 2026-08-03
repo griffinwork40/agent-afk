@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildPromptSuggestionSystem,
   buildPromptSuggestionUser,
+  hasSuggestionGrounding,
   isValidPromptSuggestion,
   normalizePromptSuggestion,
 } from './suggest-prompt.js';
@@ -70,6 +71,32 @@ describe('buildPromptSuggestionUser', () => {
     const leaked = 'user: deploy with sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     const user = buildPromptSuggestionUser(makeCtx({ getTranscriptTail: () => leaked }));
     expect(user).not.toContain('sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  });
+});
+
+describe('hasSuggestionGrounding', () => {
+  it('is false at the startup prompt (no completed turn yet)', () => {
+    expect(hasSuggestionGrounding(makeCtx({ getTranscriptTail: () => '' }))).toBe(false);
+  });
+
+  it('is false when the transcript tail is only whitespace', () => {
+    expect(hasSuggestionGrounding(makeCtx({ getTranscriptTail: () => '  \n ' }))).toBe(false);
+  });
+
+  it('ignores cross-session history — a stale ring alone is not grounding', () => {
+    // The history ring is loaded from disk at startup, so it holds the PREVIOUS
+    // session's commands. It must not by itself unlock a suggestion.
+    const ctx = makeCtx({
+      getTranscriptTail: () => '',
+      getRecentCommands: () => ['/review', '/ship'],
+      getHistory: () => ['/review', '/ship'],
+    });
+    expect(hasSuggestionGrounding(ctx)).toBe(false);
+  });
+
+  it('is true once a turn has completed in this session', () => {
+    const ctx = makeCtx({ getTranscriptTail: () => 'user: fix the parser\nassistant: done' });
+    expect(hasSuggestionGrounding(ctx)).toBe(true);
   });
 });
 

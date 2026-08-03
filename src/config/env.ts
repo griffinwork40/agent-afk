@@ -511,7 +511,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_SUGGEST_PROMPT',
-    description: 'Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).',
+    description: 'Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).',
     type: 'boolean',
     required: false,
     category: 'model',
