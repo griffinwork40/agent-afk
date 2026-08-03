@@ -67,8 +67,10 @@ vi.mock('fs', async () => {
     // calling through the proxy (which would cause infinite recursion).
     __realExistsSync: real.existsSync,
     __realReadFileSync: real.readFileSync,
+    __realRealpathSync: real.realpathSync,
     existsSync: vi.fn(real.existsSync),
     readFileSync: vi.fn(real.readFileSync),
+    realpathSync: vi.fn(real.realpathSync),
   };
 });
 
@@ -78,6 +80,7 @@ import * as fs from 'fs';
 const realFsModule = fs as typeof fs & {
   __realExistsSync: typeof fs.existsSync;
   __realReadFileSync: typeof fs.readFileSync;
+  __realRealpathSync: typeof fs.realpathSync;
 };
 
 describe('Config Loader', () => {
@@ -401,6 +404,7 @@ describe('Config Loader', () => {
     // cannot redefine them per-test; the factory approach works instead.
     const mockedExistsSync = () => vi.mocked(fs.existsSync);
     const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+    const mockedRealpathSync = () => vi.mocked(fs.realpathSync);
 
     beforeEach(() => {
       // AFK.md cases mutate fs mocks per test — invalidate the disk-tier
@@ -409,6 +413,7 @@ describe('Config Loader', () => {
       // Reset to real implementations before each test.
       mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
       mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+      mockedRealpathSync().mockImplementation(realFsModule.__realRealpathSync);
       // Wipe any prior model/prompt env that could bleed in from sibling tests.
       delete process.env['AFK_SYSTEM_PROMPT'];
       delete process.env.AFK_MODEL;
@@ -423,6 +428,7 @@ describe('Config Loader', () => {
       // Restore real implementations so other describe blocks are unaffected.
       mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
       mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+      mockedRealpathSync().mockImplementation(realFsModule.__realRealpathSync);
       delete process.env['AFK_SYSTEM_PROMPT'];
     });
 
@@ -467,22 +473,158 @@ describe('Config Loader', () => {
       expect(config.systemPromptSource).toBe(`afk-md:${homeAfkMd}`);
     });
 
-    it('prefers cwd/AFK.md over ~/.afk/AFK.md when both exist', () => {
+    it('combines ~/.afk/AFK.md and cwd/AFK.md when both exist, user-scope first and project-scope marked as the conflict winner', () => {
       const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
       mockedExistsSync().mockImplementation((p) => {
         if (String(p).endsWith('AFK.md')) return true; // both exist
         return realFsModule.__realExistsSync(p as fs.PathLike);
       });
       mockedReadFileSync().mockImplementation((p, ...args) => {
         if (String(p).endsWith('AFK.md')) {
-          return String(p) === cwdAfkMd ? 'cwd content wins' : 'user-scope content';
+          return String(p) === cwdAfkMd ? 'project content' : 'personal content';
         }
         return (realFsModule.__realReadFileSync as Function)(p, ...args);
       });
 
       const config = loadConfig();
-      expect(config.systemPrompt).toBe('cwd content wins');
+      expect(config.systemPrompt).toBe(
+        `## Personal configuration (${homeAfkMd})\n\npersonal content\n\n` +
+          `## Project configuration (${cwdAfkMd}) — takes precedence on conflict\n\nproject content`,
+      );
+      expect(config.systemPromptSource).toBe(`afk-md:${homeAfkMd}+afk-md:${cwdAfkMd}`);
+    });
+
+    it('does not duplicate content when $AFK_HOME/AFK.md and cwd/AFK.md resolve to the same file', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const prevAfkHome = process.env['AFK_HOME'];
+      process.env['AFK_HOME'] = process.cwd(); // AFK_HOME relocated onto cwd — same file both ways
+      try {
+        mockedExistsSync().mockImplementation((p) => {
+          if (String(p).endsWith('AFK.md')) return String(p) === cwdAfkMd;
+          return realFsModule.__realExistsSync(p as fs.PathLike);
+        });
+        mockedReadFileSync().mockImplementation((p, ...args) => {
+          if (String(p) === cwdAfkMd) return 'single shared file';
+          return (realFsModule.__realReadFileSync as Function)(p, ...args);
+        });
+
+        const config = loadConfig();
+        expect(config.systemPrompt).toBe('single shared file');
+        expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
+      } finally {
+        if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
+        else process.env['AFK_HOME'] = prevAfkHome;
+      }
+    });
+
+    it('does not duplicate content when $AFK_HOME/AFK.md is a symlink to cwd/AFK.md', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const prevAfkHome = process.env['AFK_HOME'];
+      // Lexically distinct from cwd — only realpath resolution can catch this.
+      process.env['AFK_HOME'] = join(process.cwd(), '.afk-home-link');
+      const homeAfkMd = join(process.env['AFK_HOME'], 'AFK.md');
+      try {
+        mockedExistsSync().mockImplementation((p) => {
+          if (String(p).endsWith('AFK.md')) return true; // both paths exist
+          return realFsModule.__realExistsSync(p as fs.PathLike);
+        });
+        // Both resolve to the same inode — the symlink case.
+        mockedRealpathSync().mockImplementation((p) => {
+          if (String(p).endsWith('AFK.md')) return cwdAfkMd;
+          return realFsModule.__realRealpathSync(p as fs.PathLike) as string;
+        });
+        mockedReadFileSync().mockImplementation((p, ...args) => {
+          if (String(p).endsWith('AFK.md')) return 'shared via symlink';
+          return (realFsModule.__realReadFileSync as Function)(p, ...args);
+        });
+
+        const config = loadConfig();
+        // Counted once, no headers, byte-identical to the single-tier contract.
+        expect(config.systemPrompt).toBe('shared via symlink');
+        expect(config.systemPromptSource).toBe(`afk-md:${homeAfkMd}`);
+      } finally {
+        if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
+        else process.env['AFK_HOME'] = prevAfkHome;
+      }
+    });
+
+    it('still treats two distinct real files as two tiers when realpath resolves them apart', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return true;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      // Identity resolution — genuinely different files, must NOT over-merge.
+      mockedRealpathSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return String(p);
+        return realFsModule.__realRealpathSync(p as fs.PathLike) as string;
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p).endsWith('AFK.md')) {
+          return String(p) === cwdAfkMd ? 'project content' : 'personal content';
+        }
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPromptSource).toBe(`afk-md:${homeAfkMd}+afk-md:${cwdAfkMd}`);
+      expect(config.systemPrompt).toContain('personal content');
+      expect(config.systemPrompt).toContain('project content');
+    });
+
+    it('does not call realpathSync when only one AFK.md exists', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return String(p) === cwdAfkMd;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p) === cwdAfkMd) return 'project only';
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+      // realpathSync THROWS on a missing path — an ungated call would take
+      // down loadConfig() for the majority single-tier install. Assert on the
+      // CALL, not the outcome: isSameFile catches throws, so an outcome-only
+      // assertion passes whether or not the existsSync gate is present.
+      mockedRealpathSync().mockClear();
+
+      expect(() => loadConfig()).not.toThrow();
+      expect(mockedRealpathSync()).not.toHaveBeenCalled();
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('project only');
       expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
+    });
+
+    it('falls back to treating paths as distinct when realpathSync fails', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return true;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p).endsWith('AFK.md')) {
+          return String(p) === cwdAfkMd ? 'project content' : 'personal content';
+        }
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+      // A raced unlink / permission error must degrade to the pre-existing
+      // duplicate-content behavior, never wipe the overlay.
+      mockedRealpathSync().mockImplementation(() => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      expect(() => loadConfig()).not.toThrow();
+      expect(loadConfig().systemPrompt).toContain('project content');
     });
 
     it('ignores AFK.md when AFK_SYSTEM_PROMPT env is set', () => {
@@ -596,6 +738,32 @@ describe('Config Loader', () => {
       const config = loadConfig();
       expect(config.systemPrompt).toBeUndefined();
       expect(config.systemPromptSource).toBeUndefined();
+    });
+
+    it('surfaces the populated tier alone when the other tier is blank (no headers)', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return true; // both files exist...
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        // ...but the personal one is blank, so only the project tier counts.
+        if (String(p) === homeAfkMd) return '  \n\t ';
+        if (String(p) === cwdAfkMd) return 'project content';
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      // Single-tier contract: verbatim content, no disambiguating headers.
+      expect(config.systemPrompt).toBe('project content');
+      expect(config.systemPrompt).not.toContain('## Personal configuration');
+      expect(config.systemPrompt).not.toContain('## Project configuration');
+      expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
     });
 
     it('does not throw when no AFK.md exists anywhere', () => {

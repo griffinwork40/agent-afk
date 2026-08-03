@@ -114,10 +114,10 @@ The base system prompt is **layered**: the framework prompt (`prompts/system-pro
 |------|--------|----------------------|
 | 1 | `AFK_SYSTEM_PROMPT` env | `env:AFK_SYSTEM_PROMPT` |
 | 2 | `afk.config.json` (cwd → `~/.afk/config/` → legacy) | `file:<abs>` |
-| 3 | `AFK.md` (cwd → `$AFK_HOME/`) | `afk-md:<abs>` |
+| 3 | `AFK.md` (cwd **+** `$AFK_HOME/`, additive) | `afk-md:<abs>` or `afk-md:<user-abs>+afk-md:<project-abs>` |
 | — | None | `undefined` |
 
-`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. The framework base is always present regardless of overlay tier (this file, `AFK.md`, is itself a tier-3 overlay appended to the framework base). `--dump-prompt` reports a composed `systemPromptSource` (`framework`, `framework+afk-md:<path>`, …); never forwarded to the SDK as a preset. Every overlay appends — no full-replace escape hatch yet (a future `AFK_BASE_PROMPT=0` would add one).
+`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent per-file (an accidental blank one still falls through to/combines with the other). The framework base is always present regardless of overlay tier (this file, `AFK.md`, is itself a tier-3 overlay appended to the framework base). Tier 3 itself is **additive, not exclusive**: `loadAfkMd()` (`src/cli/config/afk-md-tier.ts`) reads both `$AFK_HOME/AFK.md` (user-scope, default `~/.afk/AFK.md`) and `<cwd>/AFK.md` (project-scope) when both exist and are non-empty, and concatenates them — user-scope first, project-scope second under a `## Project configuration (...) — takes precedence on conflict` header — rather than the project file silently hiding the personal one. When only one tier resolves (the common case), the content and `afk-md:<path>` format are byte-identical to a single-tier read — no header, no behavior change. Delivery is still baked directly into the system prompt (not a separate synthetic user-turn message, unlike Claude Code's CLAUDE.md). `--dump-prompt` reports a composed `systemPromptSource` (`framework`, `framework+afk-md:<path>`, `framework+afk-md:<user-path>+afk-md:<project-path>`, …); never forwarded to the SDK as a preset. Every overlay appends — no full-replace escape hatch yet (a future `AFK_BASE_PROMPT=0` would add one).
 
 ## Conventions
 

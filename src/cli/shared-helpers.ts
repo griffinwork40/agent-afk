@@ -40,7 +40,9 @@ export function loadSystemPrompt(): string | undefined {
  * Load systemPrompt from env or afk.config.json, if set.
  * Precedence: AFK_SYSTEM_PROMPT env > cwd/afk.config.json >
  *   ~/.afk/config/afk.config.json > legacy ~/.afk.config.json >
- *   cwd/AFK.md > $AFK_HOME/AFK.md.
+ *   AFK.md (cwd + $AFK_HOME/, combined additively when both exist —
+ *   project-scope text is appended after personal-scope text and wins on
+ *   conflict; see `loadAfkMd()` in `config/afk-md-tier.ts`).
  * Mirrors the telegram entrypoint so CLI and bot read the same config surface.
  *
  * Delegates to `loadConfig()` to share the same 3-tier walk and disk-cache.
