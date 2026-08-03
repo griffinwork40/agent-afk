@@ -242,7 +242,16 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // foreground await — there is no promotion tool_result for the note to
           // ride there, so leaving the claim unclaimed is what tells the REPL to
           // keep the message queued instead of dropping it.
-          appendInjectContext(promotedResult, claimQueuedNote(outcome.queuedNote));
+          const queuedUserMessage = claimQueuedNote(outcome.queuedNote);
+          if (queuedUserMessage !== undefined) {
+            // Keep user authority in a harness-owned top-level JSON field.
+            // Subagent output can only occur as an escaped JSON string value,
+            // so it cannot synthesize this field by printing lookalike text.
+            promotedResult.content = JSON.stringify({
+              ...(JSON.parse(promotedResult.content as string) as Record<string, unknown>),
+              queuedUserMessage,
+            });
+          }
           return promotedResult;
         } catch (e) {
           // Cap hit (or registry refusal): stay foreground. Mark the trigger

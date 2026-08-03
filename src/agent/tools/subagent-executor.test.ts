@@ -2201,12 +2201,10 @@ describe('SubagentExecutor', () => {
       expect(claim.claimed).toBe(true);
 
       const result = await execPromise;
-      // The JSON pointer is unchanged; the note is appended after it.
       const content = result.content as string;
-      expect(content).toContain('<queued-user-message>');
-      expect(content).toContain('actually check the tests first');
-      const payload = JSON.parse(content.slice(0, content.indexOf('\n\n<queued-user-message>')));
+      const payload = JSON.parse(content);
       expect(payload.status).toBe('running');
+      expect(payload.queuedUserMessage).toBe('actually check the tests first');
     });
 
     it('queued note is delivered EXACTLY ONCE across two promoted subagents', async () => {
@@ -2229,7 +2227,7 @@ describe('SubagentExecutor', () => {
 
       const c1 = (await p1).content as string;
       const c2 = (await p2).content as string;
-      const carriers = [c1, c2].filter((c) => c.includes('<queued-user-message>'));
+      const carriers = [c1, c2].filter((c) => JSON.parse(c).queuedUserMessage !== undefined);
       expect(carriers).toHaveLength(1);
     });
 
@@ -2244,7 +2242,7 @@ describe('SubagentExecutor', () => {
       await exec.promoteActiveForeground();
 
       const content = (await execPromise).content as string;
-      expect(content).not.toContain('<queued-user-message>');
+      expect(content).not.toContain('queuedUserMessage');
       // Still pure JSON — nothing appended.
       expect(() => JSON.parse(content)).not.toThrow();
     });

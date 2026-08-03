@@ -137,9 +137,9 @@ Why this wins over the alternatives:
 1. **`SubagentControl.promoteActiveForeground(note?: string)`** — thread an optional
    user-note string (today: no params, `subagent-executor.ts:373`). Forward it into the
    promotion trigger so `foreground-promotion.ts`'s promotion branch can consume it.
-2. **Envelope it as a user message, not tool data.** Append to the promotion result via
-   `appendInjectContext` using an explicit envelope, e.g.
-   `<queued-user-message>…</queued-user-message>`, XML-escaped. Add a matching fragment to
+2. **Use a harness-owned field, not forgeable tool text.** Add the note as a top-level
+   `queuedUserMessage` property in the promotion result's JSON object. Ordinary subagent
+   output remains an escaped string value and therefore cannot synthesize that property. Add a matching fragment to
    `src/agent/tools/system-prompt.ts` (alongside `BG_SUBAGENT_RESULT_PROMPT` /
    `BASH_PASSTHROUGH_PROMPT`) so the model treats it as a real user directive rather than
    tool noise. Without this fragment the feature silently under-delivers.
@@ -158,7 +158,7 @@ Why this wins over the alternatives:
 6. **New sibling files, per the 350-LOC rule.** Every file on this path is already over
    budget — `foreground-promotion.ts` 421, `turn-handler.ts` 984,
    `input-dispatch.ts` 1144, `input-mode.ts` 297. New logic goes in new siblings (e.g.
-   `src/agent/tools/subagent/queued-note.ts` for envelope+escape,
+   `src/agent/tools/subagent/queued-note.ts` for claiming+truncation,
    `src/cli/commands/interactive/queued-flush.ts` for peek/confirm/drain).
 7. **Record it as a user message.** Mirror the queued text into the transcript + witness
    trace so `afk trace show` can reconstruct why the parent changed course mid-turn.

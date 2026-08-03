@@ -898,23 +898,23 @@ export class TerminalCompositor {
   }
 
   /**
-   * Coalesced text of every queued message (FIFO, newline-joined) without
+   * Snapshot of every queued message (FIFO, newline-joined) without
    * consuming the queue — `undefined` when nothing is queued or any queued
    * payload carries image attachments (those must drain as their own turn).
    * Paired with {@link dropQueued} for the Ctrl+B flush: peek, deliver, then
    * drop only once delivery is confirmed.
    */
-  peekQueuedText(): string | undefined {
+  peekQueuedText(): QueuedAccess.QueuedSnapshot | undefined {
     return QueuedAccess.peekQueuedText(this);
   }
 
   /**
-   * Drop every queued message after its text was delivered out-of-band.
+   * Drop the snapshotted queued messages after their text was delivered out-of-band.
    * Returns the number dropped. Maintains the `queued` mirror and clears the
    * post-ESC coalesce epoch — see the invariant on the underlying helper.
    */
-  dropQueued(): number {
-    return QueuedAccess.dropQueued(this);
+  dropQueued(snapshot: QueuedAccess.QueuedSnapshot): number {
+    return QueuedAccess.dropQueued(this, snapshot);
   }
 
   /**

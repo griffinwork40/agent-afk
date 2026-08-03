@@ -19,8 +19,14 @@
 
 /** Structural view of the compositor's out-of-band queue door. */
 export interface QueuedFlushCompositor {
-  peekQueuedText(): string | undefined;
-  dropQueued(): number;
+  peekQueuedText(): QueuedFlushSnapshot | undefined;
+  dropQueued(snapshot: QueuedFlushSnapshot): number;
+}
+
+export interface QueuedFlushSnapshot {
+  readonly text: string;
+  readonly preview: string;
+  readonly payloads: readonly unknown[];
 }
 
 /**
@@ -40,6 +46,8 @@ export interface QueuedFlushResult {
   jobs: readonly { jobId: string; label: string }[];
   /** The queued text delivered into the running turn, or undefined if none was. */
   flushedText?: string;
+  /** Compact display-safe representation of the flushed text. */
+  flushedPreview?: string;
 }
 
 /** Max characters of flushed text echoed back to the user in the UI note. */
@@ -66,10 +74,11 @@ export function previewOneLine(text: string): string {
 export async function promoteWithQueuedFlush(
   control: QueuedFlushControl,
   compositor: QueuedFlushCompositor | null,
+  persist?: (text: string) => Promise<void> | void,
 ): Promise<QueuedFlushResult> {
   // Peek only — see the module note on why the drain cannot happen up front.
-  const text = compositor?.peekQueuedText();
-  const claim = text !== undefined ? { text, claimed: false } : undefined;
+  const snapshot = compositor?.peekQueuedText();
+  const claim = snapshot !== undefined ? { text: snapshot.text, claimed: false } : undefined;
 
   const jobs = await control.promoteActiveForeground(claim);
 
@@ -78,9 +87,10 @@ export async function promoteWithQueuedFlush(
   // earlier would lose the message on the cap-hit path; dropping later than the
   // next `→ idle` transition would let the existing one-per-turn drain deliver
   // the same text a second time as its own turn.
-  if (claim?.claimed === true && compositor !== null) {
-    compositor.dropQueued();
-    return { jobs, flushedText: claim.text };
+  if (claim?.claimed === true && compositor !== null && snapshot !== undefined) {
+    await Promise.resolve(persist?.(claim.text)).catch(() => { /* best-effort persistence */ });
+    compositor.dropQueued(snapshot);
+    return { jobs, flushedText: claim.text, flushedPreview: snapshot.preview };
   }
   return { jobs };
 }

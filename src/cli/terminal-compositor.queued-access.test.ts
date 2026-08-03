@@ -32,12 +32,12 @@ describe('peekQueuedText', () => {
   });
 
   it('returns the single queued message', () => {
-    expect(peekQueuedText(host([payload('check the tests')]))).toBe('check the tests');
+    expect(peekQueuedText(host([payload('check the tests')]))?.text).toBe('check the tests');
   });
 
   it('coalesces multiple queued messages in FIFO order, newline-joined', () => {
     const h = host([payload('first'), payload('second'), payload('third')]);
-    expect(peekQueuedText(h)).toBe('first\nsecond\nthird');
+    expect(peekQueuedText(h)?.text).toBe('first\nsecond\nthird');
   });
 
   it('does NOT mutate the queue — promotion may still fail', () => {
@@ -64,13 +64,13 @@ describe('peekQueuedText', () => {
 describe('dropQueued', () => {
   it('is a no-op returning 0 on an empty queue', () => {
     const h = host([]);
-    expect(dropQueued(h)).toBe(0);
+    expect(dropQueued(h, { text: '', preview: '', payloads: [] })).toBe(0);
     expect(h.repaint).not.toHaveBeenCalled();
   });
 
   it('removes every payload and maintains the `queued` mirror', () => {
     const h = host([payload('a'), payload('b')]);
-    expect(dropQueued(h)).toBe(2);
+    expect(dropQueued(h, peekQueuedText(h)!)).toBe(2);
     expect(h.pendingSubmissions).toHaveLength(0);
     expect(h.queued).toBe(false);
     expect(h.repaint).toHaveBeenCalled();
@@ -84,7 +84,7 @@ describe('dropQueued', () => {
     h.postEscCoalesce = true;
     h.postEscPayload = tracked;
 
-    dropQueued(h);
+    dropQueued(h, peekQueuedText(h)!);
 
     expect(h.postEscCoalesce).toBe(false);
     expect(h.postEscPayload).toBeNull();
@@ -96,7 +96,7 @@ describe('dropQueued', () => {
     h.postEscCoalesce = true;
     h.postEscPayload = tracked;
 
-    dropQueued(h);
+    dropQueued(h, peekQueuedText(h)!);
 
     // The invariant the input-dispatch coalesce block asserts: a non-null
     // reference must be PRESENT in the queue. Null satisfies it vacuously.
@@ -106,7 +106,24 @@ describe('dropQueued', () => {
 
   it('a second drop after a flush returns 0 — no double-delivery', () => {
     const h = host([payload('once')]);
-    expect(dropQueued(h)).toBe(1);
-    expect(dropQueued(h)).toBe(0);
+    const snapshot = peekQueuedText(h)!;
+    expect(dropQueued(h, snapshot)).toBe(1);
+    expect(dropQueued(h, snapshot)).toBe(0);
+  });
+
+  it('drops only snapshotted payloads and preserves later submissions', () => {
+    const h = host([payload('before Ctrl+B')]);
+    const snapshot = peekQueuedText(h)!;
+    h.pendingSubmissions.push(payload('after Ctrl+B'));
+    expect(dropQueued(h, snapshot)).toBe(1);
+    expect(h.pendingSubmissions.map((p) => p.text)).toEqual(['after Ctrl+B']);
+    expect(h.queued).toBe(true);
+  });
+
+  it('preserves meaningful whitespace and uses displayText for previews', () => {
+    const pasted = { ...payload('  full secret text  '), displayText: '[Pasted text: 18 chars]' };
+    const snapshot = peekQueuedText(host([pasted]))!;
+    expect(snapshot.text).toBe('  full secret text  ');
+    expect(snapshot.preview).toBe('[Pasted text: 18 chars]');
   });
 });

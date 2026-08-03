@@ -1131,7 +1131,11 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
 
     const dropQueued = vi.fn(() => 1);
     const comp = Object.assign(makeFakeCompositor(), {
-      peekQueuedText: () => 'actually check the tests first',
+      peekQueuedText: () => ({
+        text: 'actually check the tests first',
+        preview: '[Pasted text: 30 chars]',
+        payloads: [{}],
+      }),
       dropQueued,
     });
 
@@ -1150,8 +1154,10 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     };
 
     const { h } = makeHandles();
+    const onUserMessage = vi.fn();
     const handles: TurnHandles = {
       ...h,
+      onUserMessage,
       subagentControl,
       getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
       setBackgroundHandler: (handler) => { handler?.(); },
@@ -1177,6 +1183,8 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     expect(promoteActiveForeground.mock.calls[0]![0]?.text).toBe('actually check the tests first');
     // ...and dropped only after the claim confirmed delivery.
     expect(dropQueued).toHaveBeenCalledTimes(1);
+    expect(onUserMessage).toHaveBeenCalledWith('actually check the tests first');
+    expect(writerCalls.some((l) => l.includes('[Pasted text: 30 chars]'))).toBe(true);
     expect(writerCalls.some((l) => l.includes('queued message sent to this turn'))).toBe(true);
   });
 
@@ -1189,7 +1197,7 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
 
     const dropQueued = vi.fn(() => 0);
     const comp = Object.assign(makeFakeCompositor(), {
-      peekQueuedText: () => 'must not be lost',
+      peekQueuedText: () => ({ text: 'must not be lost', preview: 'must not be lost', payloads: [{}] }),
       dropQueued,
     });
 

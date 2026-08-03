@@ -3,7 +3,7 @@
  *
  * The normal queue lifecycle is enqueue-on-Enter (`.input-dispatch`) →
  * drain-one-on-idle (`.input-mode`). Ctrl+B needs a THIRD door: peek the queued
- * text while the turn is still streaming, then remove it only once the agent
+ * text while the turn is still streaming, then remove that snapshot only once the agent
  * layer confirms the text was actually delivered into the running turn. Both
  * halves live here so the `postEscPayload` bookkeeping contract has exactly one
  * out-of-band owner rather than being re-implemented at the keypress site.
@@ -25,8 +25,15 @@ export interface QueuedAccessHost {
   repaint(): void;
 }
 
+export interface QueuedSnapshot {
+  readonly text: string;
+  readonly preview: string;
+  /** Opaque payload identities used to consume exactly this snapshot. */
+  readonly payloads: readonly SubmissionPayload[];
+}
+
 /**
- * Coalesced text of every queued payload, FIFO order, newline-joined —
+ * Snapshot of every currently queued payload, FIFO order, newline-joined —
  * `undefined` when nothing is queued or nothing survives trimming.
  *
  * Read-only by contract: Ctrl+B must not consume the queue before the agent
@@ -39,18 +46,21 @@ export interface QueuedAccessHost {
  * payload has attachments we return `undefined` so the whole queue drains
  * normally as its own turn with its images intact.
  */
-export function peekQueuedText(self: QueuedAccessHost): string | undefined {
+export function peekQueuedText(self: QueuedAccessHost): QueuedSnapshot | undefined {
   if (self.pendingSubmissions.length === 0) return undefined;
   if (self.pendingSubmissions.some((p) => p.attachments.length > 0)) return undefined;
-  const text = self.pendingSubmissions
-    .map((p) => p.text)
-    .join('\n')
-    .trim();
-  return text.length > 0 ? text : undefined;
+  const payloads = [...self.pendingSubmissions];
+  const text = payloads.map((p) => p.text).join('\n');
+  if (text.trim().length === 0) return undefined;
+  return {
+    text,
+    preview: payloads.map((p) => p.displayText ?? p.text).join('\n'),
+    payloads,
+  };
 }
 
 /**
- * Remove every queued payload after its text has been delivered out-of-band.
+ * Remove only the snapshotted payloads after their text has been delivered out-of-band.
  * Returns how many were dropped.
  *
  * Invariant (post-ESC epoch bookkeeping — see the removal-site contract in
@@ -63,13 +73,16 @@ export function peekQueuedText(self: QueuedAccessHost): string | undefined {
  * `→ idle` drain does, not the recall pop (which deliberately leaves the epoch
  * armed).
  */
-export function dropQueued(self: QueuedAccessHost): number {
-  const dropped = self.pendingSubmissions.length;
+export function dropQueued(self: QueuedAccessHost, snapshot: QueuedSnapshot): number {
+  const included = new Set(snapshot.payloads);
+  const dropped = self.pendingSubmissions.reduce((n, payload) => n + Number(included.has(payload)), 0);
   if (dropped === 0) return 0;
-  self.pendingSubmissions.length = 0;
-  self.queued = false; // maintained mirror: pendingSubmissions is now empty
-  self.postEscCoalesce = false;
-  self.postEscPayload = null;
+  self.pendingSubmissions = self.pendingSubmissions.filter((payload) => !included.has(payload));
+  self.queued = self.pendingSubmissions.length > 0;
+  if (self.postEscPayload !== null && included.has(self.postEscPayload)) {
+    self.postEscCoalesce = false;
+    self.postEscPayload = null;
+  }
   self.repaint();
   return dropped;
 }

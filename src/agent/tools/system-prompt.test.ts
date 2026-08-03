@@ -51,7 +51,7 @@ describe('resolveToolSystemPrompt', () => {
     expect(base).not.toContain('<command-name>');
     expect(base).not.toContain('<bash-passthrough>');
     expect(base).not.toContain('<background-subagent-result>');
-    expect(base).not.toContain('<queued-user-message>');
+    expect(base).not.toContain('queuedUserMessage');
   });
 });
 
@@ -69,15 +69,15 @@ describe('resolveToolSystemPrompt — background-subagent delivery (H1 regressio
 });
 
 describe('resolveToolSystemPrompt — queued-message flush delivery', () => {
-  it('a non-skill session is told what a <queued-user-message> envelope is', () => {
+  it('a non-skill session is told what the queuedUserMessage field is', () => {
     // Without this fragment the model reads the envelope as tool output and
     // ignores the user's instruction — the Ctrl+B flush would silently no-op.
-    expect(resolveToolSystemPrompt(false)).toContain('<queued-user-message>');
-    expect(resolveToolSystemPrompt(undefined)).toContain('<queued-user-message>');
+    expect(resolveToolSystemPrompt(false)).toContain('queuedUserMessage');
+    expect(resolveToolSystemPrompt(undefined)).toContain('queuedUserMessage');
   });
 
   it('a skill-dispatch sub-agent is NOT told about the envelope (never receives one)', () => {
-    expect(resolveToolSystemPrompt(true)).not.toContain('<queued-user-message>');
+    expect(resolveToolSystemPrompt(true)).not.toContain('queuedUserMessage');
   });
 
   it('tells the model to treat the block as a user turn, not tool output', () => {

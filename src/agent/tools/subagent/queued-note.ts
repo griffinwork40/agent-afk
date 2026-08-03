@@ -1,10 +1,10 @@
 /**
- * Queued-user-message envelope for Ctrl+B promotion.
+ * Queued-user-message field for Ctrl+B promotion.
  *
  * When the REPL user has typed-ahead messages queued and presses Ctrl+B to
  * background a running foreground subagent, the queued text rides the synthetic
  * promotion `ToolResult` into the parent's STILL-RUNNING turn instead of waiting
- * for the next-turn drain. This module owns the envelope, the escaping, and the
+ * for the next-turn drain. This module owns the field value, truncation, and the
  * one-shot claim ticket that makes delivery exactly-once.
  *
  * @module agent/tools/subagent/queued-note
@@ -31,9 +31,6 @@ export interface QueuedNoteClaim {
   claimed: boolean;
 }
 
-/** Envelope tag. Mirrors `<background-subagent-result>` / `<bash-passthrough>`. */
-const TAG = 'queued-user-message';
-
 /**
  * Cap the injected note so a pathological paste cannot dominate the parent's
  * context window. Generous relative to real typed-ahead input; the drain path
@@ -42,20 +39,9 @@ const TAG = 'queued-user-message';
 const MAX_NOTE_BYTES = 16_384;
 
 /**
- * Escape `&`/`<`/`>` so user text cannot forge a closing tag and inject
- * synthetic structure into the parent's context. Same defense as
- * bg-result-notifier's and shell-passthrough's local copies (kept local here
- * for the same reason they are: a 3-line leaf with no shared owner).
- */
-function escapeXml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/**
- * Invariant: escape BEFORE truncating. Escaping expands `<` to `&lt;` (4×), so
- * truncating pre-escape text would let 16KB of `<` balloon to ~64KB post-escape
- * and bypass the cap. Truncation may cut an entity mid-sequence (`&am`);
- * harmless in model context.
+ * /**
+ * Truncate the field value by bytes. JSON serialization later establishes the
+ * structural boundary, so no XML escaping or forgeable sentinel is involved.
  */
 function truncateBytes(text: string): string {
   if (Buffer.byteLength(text, 'utf8') <= MAX_NOTE_BYTES) return text;
@@ -64,21 +50,14 @@ function truncateBytes(text: string): string {
 }
 
 /**
- * Build the model-facing envelope for a flushed queued note.
- *
- * Returned as a plain string for `appendInjectContext`, which concatenates it
- * onto `ToolResult.content`. Deliberately NOT a separate content block: keeping
- * the text inside the tool_result's own content means we never sit between a
- * `tool_use` and its `tool_result`, so the Anthropic API's
- * "tool_result blocks first, text after" ordering rule cannot be violated, and
- * no provider-specific assembly code is needed.
+ * Build the value for the harness-owned `queuedUserMessage` JSON field.
  */
 export function formatQueuedNote(text: string): string {
-  return `<${TAG}>\n${truncateBytes(escapeXml(text))}\n</${TAG}>`;
+  return truncateBytes(text);
 }
 
 /**
- * Claim the note for delivery. Returns the formatted envelope on the FIRST call
+ * Claim the note for delivery. Returns the field value on the FIRST call
  * for a given ticket and `undefined` on every later call (and for an absent or
  * blank ticket), so N simultaneous promotions deliver the user's message once.
  *

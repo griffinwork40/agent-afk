@@ -134,14 +134,14 @@ export async function runTurn(
   const handleBackgroundKey = (): void => {
     const control = h.subagentControl;
     if (!control?.hasPromotableForeground()) return;
-    void promoteWithQueuedFlush(control, borrowedCompositor)
-      .then(({ jobs, flushedText }) => {
+    void promoteWithQueuedFlush(control, borrowedCompositor, h.onUserMessage)
+      .then(({ jobs, flushedText, flushedPreview }) => {
         const write = (completionWriter ?? { fn: console.log }).fn;
         for (const job of jobs) {
           write(palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`));
         }
         if (flushedText !== undefined) {
-          write(palette.dim(`  → queued message sent to this turn: ${previewOneLine(flushedText)}`));
+          write(palette.dim(`  → queued message sent to this turn: ${previewOneLine(flushedPreview ?? flushedText)}`));
         }
       })
       .catch(() => { /* best-effort UI note; promotion itself already happened */ });

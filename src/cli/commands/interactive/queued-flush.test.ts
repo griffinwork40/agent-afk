@@ -22,7 +22,9 @@ function compositor(queuedText: string | undefined): QueuedFlushCompositor & {
   dropQueued: ReturnType<typeof vi.fn>;
 } {
   return {
-    peekQueuedText: () => queuedText,
+    peekQueuedText: () => queuedText === undefined ? undefined : {
+      text: queuedText, preview: queuedText, payloads: [{}],
+    },
     dropQueued: vi.fn(() => 1),
   };
 }
@@ -108,7 +110,7 @@ describe('promoteWithQueuedFlush', () => {
     const comp: QueuedFlushCompositor = {
       peekQueuedText: () => {
         order.push('peek');
-        return 'text';
+        return { text: 'text', preview: 'text', payloads: [{}] };
       },
       dropQueued: () => {
         order.push('drop');
@@ -126,6 +128,16 @@ describe('promoteWithQueuedFlush', () => {
 
     await promoteWithQueuedFlush(ctrl, comp);
     expect(order).toEqual(['peek', 'promote', 'drop']);
+  });
+
+  it('persists the delivered directive before consuming its snapshot', async () => {
+    const order: string[] = [];
+    const comp = compositor('redirect');
+    comp.dropQueued.mockImplementation(() => { order.push('drop'); return 1; });
+    await promoteWithQueuedFlush(control({ jobs: oneJob, claims: true }), comp, () => {
+      order.push('persist');
+    });
+    expect(order).toEqual(['persist', 'drop']);
   });
 });
 
