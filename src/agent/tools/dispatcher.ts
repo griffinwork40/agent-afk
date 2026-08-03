@@ -808,11 +808,22 @@ export class SessionToolDispatcher implements ToolDispatcher {
     return null;
   }
 
-  async execute(call: ToolCall): Promise<ToolResult> {
-    if (call.signal.aborted) {
-      return { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
-    }
-
+  /**
+   * Shared 7-step pre-dispatch gate chain used by both {@link execute} and
+   * {@link executeBatch}'s phase-1 admission loop: PreToolUse hook, static
+   * allowlist, in-process `canUseTool` callback, read-only-bash gate, repeat
+   * circuit-breaker, repeat-failure guard, and suspected-loop telemetry.
+   *
+   * Invariant: the precedence order below is load-bearing (see the per-step
+   * comments) — the static allowlist deny wins over `canUseTool`, which runs
+   * before the bash gate, which runs before the repeat-breaker/failure-guard
+   * pair, which runs before the observe-only loop telemetry. Do not reorder.
+   *
+   * Returns `null` if the call should proceed to execution, or the blocking
+   * `ToolResult` if a gate short-circuited it. The suspected-loop step never
+   * blocks (observe-only) and always runs last when nothing else did.
+   */
+  private async runPreDispatchGates(call: ToolCall): Promise<ToolResult | null> {
     // 1. PreToolUse hook — can block. Routed through dispatchPreToolUse
     // so the witness-layer hook_decision event lands automatically.
     if (this.hookRegistry) {
@@ -888,6 +899,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // breaker so a short-circuited call is not counted twice.
     this.observeSuspectedLoop(call);
 
+    return null;
+  }
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    if (call.signal.aborted) {
+      return { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
+    }
+
+    const gateResult = await this.runPreDispatchGates(call);
+    if (gateResult) return gateResult;
+
     // 3. Agent routing + handler dispatch + PostToolUse. Delegates to
     // executeCore() — the shared core executeBatch() already calls per-tool
     // (see lines ~936/972). execute() previously inlined a verbatim copy of
@@ -929,97 +951,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
         continue;
       }
 
-      if (this.hookRegistry) {
-        const preCtx: PreToolUseContext = {
-          event: 'PreToolUse',
-          toolName: call.name,
-          input: call.input,
-          // See execute(): identifies the session for the blocked-on-human marker.
-          ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
-          ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
-          ...(this.parentSessionId !== undefined
-            ? { parentSessionId: this.parentSessionId }
-            : {}),
-          // See execute(): inject THIS session's provider grant manager.
-          ...(this.sessionGrantManager !== undefined
-            ? { grantManager: this.sessionGrantManager }
-            : {}),
-        };
-        try {
-          await dispatchPreToolUse(this.hookRegistry, preCtx, {
-            signal: call.signal,
-            ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
-          });
-        } catch (err) {
-          if (err instanceof HookBlockedError) {
-            results[i] = this.recordForkReadDenial(call, err.reason, {
-              content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
-              isError: true,
-              failureClass: 'hook-block',
-            });
-            blocked.add(i);
-            continue;
-          }
-          throw err;
-        }
-      }
-
-      const permResult = checkToolPermission(call.name, this.permissions);
-      if (!permResult.allowed) {
-        const reason = permResult.reason ?? `Tool "${call.name}" is not permitted`;
-        await this.emitPreToolUseBlock(call.name, reason);
-        results[i] = { content: reason, isError: true, failureClass: 'permission-denied' };
+      const gateResult = await this.runPreDispatchGates(call);
+      if (gateResult) {
+        results[i] = gateResult;
         blocked.add(i);
         continue;
       }
-
-      // In-process permission callback (canUseTool) — same precedence as
-      // execute(): after the allowlist, before the bash gate. Parallel tool
-      // calls must be gated too, else the policy is bypassed on batched rounds.
-      const canUseDeny = await this.runCanUseTool(call);
-      if (canUseDeny) {
-        results[i] = canUseDeny;
-        blocked.add(i);
-        continue;
-      }
-
-      // Read-only-skill bash gate — mirror the permission-denied branch:
-      // set the result and add to `blocked` so this call is excluded from
-      // execution in phase 2.
-      const bashBlock = await this.checkReadOnlyBash(call);
-      if (bashBlock) {
-        results[i] = bashBlock;
-        blocked.add(i);
-        continue;
-      }
-
-      // Repeat-loop circuit breaker — same block-and-record shape as the bash
-      // gate. Counting here (in the sequential phase-1 loop) keeps the
-      // consecutive-call count correct even for parallel-safe batches.
-      const repeatBlock = this.checkRepeatCircuitBreaker(call);
-      if (repeatBlock) {
-        results[i] = repeatBlock;
-        blocked.add(i);
-        continue;
-      }
-
-      // Enforcing repeat-FAILURE guard (#723). Same placement rationale as
-      // execute() step 2c-bis, on the sequential phase-1 path so the streak
-      // reflects real call order.
-      const batchFailureRefusal = this.checkRepeatFailureGuard(call);
-      if (batchFailureRefusal) {
-        results[i] = batchFailureRefusal;
-        blocked.add(i);
-        continue;
-      }
-
-      // OBSERVE-ONLY suspected-loop telemetry (forked children only). Same
-      // placement as execute() step 2d — after the repeat breaker, on the
-      // sequential phase-1 path so the fingerprint window sees every
-      // non-short-circuited call in real order. Never blocks: it does not set
-      // `results[i]`, add to `blocked`, or `continue`; the call proceeds to
-      // phase-2 execution exactly as before.
-      this.observeSuspectedLoop(call);
     }
 
     // Phase 2: partition non-blocked calls into batches and execute.
