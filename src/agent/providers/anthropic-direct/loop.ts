@@ -61,7 +61,7 @@ import { consumeRoundStream } from './loop/stream-consumer.js';
 import { runToolRound } from './loop/tool-round.js';
 import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
-import { TurnTrace } from './loop/turn-trace.js';
+import { TurnTrace } from '../shared/turn-trace.js';
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
@@ -123,7 +123,7 @@ export async function* runTurn(
   // interrupt→halt latency stamp. loop_end fires from the generator's finally
   // block so all exit paths — abort, error, clean end-of-turn, capped — are
   // covered without per-site annotation.
-  const trace = new TurnTrace(input.signal, input.traceWriter);
+  const trace = new TurnTrace(input.signal, input.traceWriter, 'anthropic-direct');
 
   try {
   while (true) {
