@@ -6,8 +6,7 @@
 // plugin-skills split).
 
 import { readFileSync, existsSync, realpathSync } from 'fs';
-import { join } from 'path';
-import { getAfkHome } from '../../paths.js';
+import { getUserAfkMdPath, getProjectAfkMdPath } from '../../paths.js';
 
 export interface AfkMdResult {
   content: string;
@@ -116,8 +115,8 @@ const projectScopeHeader = (path: string): string =>
 export function loadAfkMd(): AfkMdResult | null {
   if (afkMdCache !== undefined) return afkMdCache.value;
 
-  const userPath = join(getAfkHome(), 'AFK.md');
-  const projectPath = join(process.cwd(), 'AFK.md');
+  const userPath = getUserAfkMdPath();
+  const projectPath = getProjectAfkMdPath();
 
   const userContent = readAfkMdCandidate(userPath);
   // Skip re-reading the same file twice — treat it as a single tier rather

@@ -995,6 +995,39 @@ export class AgentSession implements IAgentSession {
    * themselves AT a known safe site — `runFirstTurnAutoname` in the
    * interactive REPL is the only sanctioned caller today.
    */
+  /**
+   * Replace the composed base system prompt for all subsequent turns.
+   *
+   * Contract: `basePrompt` is the FULLY COMPOSED prompt — framework doctrine
+   * (`prompts/system-prompt.md`) + the `# Operator configuration` overlay —
+   * exactly what `resolveBaseSystemPrompt()` returns and what
+   * `AgentConfig.systemPrompt` holds. It is NOT the bare AFK.md overlay text:
+   * passing only the overlay would silently strip the framework prompt from a
+   * live session. The parameter is named `basePrompt`, not `overlay`, to make
+   * that misuse visibly wrong at the call site.
+   *
+   * Two things happen:
+   *   1. `config.systemPrompt` is updated, so a later `reset()` — which rebuilds
+   *      the provider query from config — starts from the new prompt.
+   *   2. `providerQuery.setSystemPrompt(...)` swaps the LIVE prompt when the
+   *      provider supports it. Conversation history is untouched; the change
+   *      lands on the next turn.
+   *
+   * Returns whether the live swap actually happened. `false` means the prompt is
+   * recorded in config but the running turn loop still holds the old text (the
+   * active provider does not implement the optional hook — openai-compatible
+   * today) so callers must report "applies on next launch" rather than claiming
+   * a hot-reload. Never claim a reload this returns `false` for.
+   *
+   * Cost note: replacing the stable system prefix invalidates the Anthropic
+   * prompt cache for the next request. That is accepted and expected — the
+   * caller surfaces it to the operator rather than silently eating a cache miss.
+   */
+  setSystemPrompt(basePrompt: string | undefined): boolean {
+    this.config = { ...this.config, systemPrompt: basePrompt };
+    return this.providerQuery.setSystemPrompt?.(basePrompt) ?? false;
+  }
+
   setCwd(cwd: string): void {
     this.config = { ...this.config, cwd };
     this.providerQuery.setCwd?.(cwd);
