@@ -223,18 +223,16 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // outlive the turn that spawned it, exactly like mode:'background'.
           signal.removeEventListener('abort', abortListener);
           resolveJob({ jobId: job.jobId, label: job.label });
-          const promotedResult: ToolResult = {
-            content: JSON.stringify({
-              status: 'running' as const,
-              jobId: job.jobId,
-              subagentId: job.subagentId,
-              label: job.label,
-              message:
-                `Subagent backgrounded by user (jobId=${job.jobId}). ` +
-                `It keeps running detached; its result will be delivered into ` +
-                `this context automatically with the next user message once it ` +
-                `finishes. /bgsub:join ${job.jobId} remains available for manual replay.`,
-            }),
+          const promotedPayload: Record<string, unknown> = {
+            status: 'running' as const,
+            jobId: job.jobId,
+            subagentId: job.subagentId,
+            label: job.label,
+            message:
+              `Subagent backgrounded by user (jobId=${job.jobId}). ` +
+              `It keeps running detached; its result will be delivered into ` +
+              `this context automatically with the next user message once it ` +
+              `finishes. /bgsub:join ${job.jobId} remains available for manual replay.`,
           };
           // Ordering: claim the queued note only AFTER `adoptRunning` succeeded
           // and `promoted` is set. The cap-hit / registry-refusal path below
@@ -247,11 +245,9 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             // Keep user authority in a harness-owned top-level JSON field.
             // Subagent output can only occur as an escaped JSON string value,
             // so it cannot synthesize this field by printing lookalike text.
-            promotedResult.content = JSON.stringify({
-              ...(JSON.parse(promotedResult.content as string) as Record<string, unknown>),
-              queuedUserMessage,
-            });
+            promotedPayload['queuedUserMessage'] = queuedUserMessage;
           }
+          const promotedResult: ToolResult = { content: JSON.stringify(promotedPayload) };
           return promotedResult;
         } catch (e) {
           // Cap hit (or registry refusal): stay foreground. Mark the trigger

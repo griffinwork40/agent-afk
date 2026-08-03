@@ -134,7 +134,7 @@ export async function runTurn(
   const handleBackgroundKey = (): void => {
     const control = h.subagentControl;
     if (!control?.hasPromotableForeground()) return;
-    void promoteWithQueuedFlush(control, borrowedCompositor, h.onUserMessage)
+    void promoteWithQueuedFlush(control, borrowedCompositor, h.onQueuedUserMessage)
       .then(({ jobs, flushedText, flushedPreview }) => {
         const write = (completionWriter ?? { fn: console.log }).fn;
         for (const job of jobs) {

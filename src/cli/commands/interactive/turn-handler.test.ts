@@ -1155,9 +1155,11 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
 
     const { h } = makeHandles();
     const onUserMessage = vi.fn();
+    const onQueuedUserMessage = vi.fn();
     const handles: TurnHandles = {
       ...h,
       onUserMessage,
+      onQueuedUserMessage,
       subagentControl,
       getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
       setBackgroundHandler: (handler) => { handler?.(); },
@@ -1183,7 +1185,11 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     expect(promoteActiveForeground.mock.calls[0]![0]?.text).toBe('actually check the tests first');
     // ...and dropped only after the claim confirmed delivery.
     expect(dropQueued).toHaveBeenCalledTimes(1);
-    expect(onUserMessage).toHaveBeenCalledWith('actually check the tests first');
+    // Persisted through the mid-turn seam, NOT appendUser's turn-opening one:
+    // routing the flush through onUserMessage force-closed the running turn
+    // and duplicated its prompt in the transcript (PR #891 review finding).
+    expect(onQueuedUserMessage).toHaveBeenCalledWith('actually check the tests first');
+    expect(onUserMessage).not.toHaveBeenCalledWith('actually check the tests first');
     expect(writerCalls.some((l) => l.includes('[Pasted text: 30 chars]'))).toBe(true);
     expect(writerCalls.some((l) => l.includes('queued message sent to this turn'))).toBe(true);
   });

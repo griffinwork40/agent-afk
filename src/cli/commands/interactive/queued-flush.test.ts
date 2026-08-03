@@ -139,6 +139,29 @@ describe('promoteWithQueuedFlush', () => {
     });
     expect(order).toEqual(['persist', 'drop']);
   });
+
+  // The note is already inside the promotion tool_result once the claim is
+  // marked, so a failed transcript write must not strand the same text in the
+  // queue — that would re-deliver the user's message as its own next turn.
+  it('still drops the snapshot when persistence throws SYNCHRONOUSLY', async () => {
+    const comp = compositor('redirect');
+    await expect(
+      promoteWithQueuedFlush(control({ jobs: oneJob, claims: true }), comp, () => {
+        throw new Error('transcript EACCES');
+      }),
+    ).resolves.toMatchObject({ flushedText: 'redirect' });
+    expect(comp.dropQueued).toHaveBeenCalledTimes(1);
+  });
+
+  it('still drops the snapshot when persistence REJECTS', async () => {
+    const comp = compositor('redirect');
+    await expect(
+      promoteWithQueuedFlush(control({ jobs: oneJob, claims: true }), comp, () =>
+        Promise.reject(new Error('ENOSPC')),
+      ),
+    ).resolves.toMatchObject({ flushedText: 'redirect' });
+    expect(comp.dropQueued).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('previewOneLine', () => {

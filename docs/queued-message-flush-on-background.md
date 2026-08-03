@@ -1,6 +1,8 @@
 # Flushing a queued message into the parent turn on Ctrl+B
 
-**Status:** research / design proposal (nothing implemented)
+**Status:** implemented in #891. The shipped mechanism is the harness-owned
+top-level `queuedUserMessage` JSON field described in §4 — NOT the
+`<queued-user-message>` XML envelope this document originally proposed.
 **Date:** 2026-08-03
 **Question:** when the REPL user has a typed-ahead message queued and presses Ctrl+B to
 background a running foreground subagent, can the queued message be delivered into the
@@ -187,7 +189,7 @@ Why this wins over the alternatives:
    `postEscPayload` dangling and trip the dev-mode `throw` at `input-dispatch.ts:800-806`.
    The drain must go through a compositor-owned accessor that maintains that bookkeeping.
 4. **Silent under-delivery.** Without the system-prompt fragment (step 2) the model may read
-   the envelope as tool output and ignore the instruction — the feature would "work" while
+   the field as tool output and ignore the instruction — the feature would "work" while
    changing nothing.
 
 ## 5. Test gap to close

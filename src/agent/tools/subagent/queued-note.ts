@@ -38,15 +38,39 @@ export interface QueuedNoteClaim {
  */
 const MAX_NOTE_BYTES = 16_384;
 
+const TRUNCATION_MARKER = `\n… [truncated at ${MAX_NOTE_BYTES} bytes]`;
+
+/** Serialized wire size: the note ships as a JSON string value, not raw. */
+function serializedBytes(text: string): number {
+  return Buffer.byteLength(JSON.stringify(text), 'utf8');
+}
+
 /**
- * /**
- * Truncate the field value by bytes. JSON serialization later establishes the
- * structural boundary, so no XML escaping or forgeable sentinel is involved.
+ * Truncate the field value to fit the cap once serialized.
+ *
+ * Invariant: the cap is measured against `JSON.stringify(text)`, not the raw
+ * string, because the note is delivered as a JSON string value — escaping
+ * (`"`, `\`, control chars) expands it on the wire, so a raw-string
+ * measurement lets an escape-dense paste exceed the cap after serialization.
+ * Slicing walks code points (`Array.from`) rather than bytes: a byte-wise
+ * `subarray` splits multi-byte UTF-8 sequences and corrupts the trailing
+ * character to U+FFFD. JSON serialization establishes the structural
+ * boundary, so no XML escaping or forgeable sentinel is involved.
  */
 function truncateBytes(text: string): string {
-  if (Buffer.byteLength(text, 'utf8') <= MAX_NOTE_BYTES) return text;
-  const buf = Buffer.from(text, 'utf8').subarray(0, MAX_NOTE_BYTES);
-  return `${buf.toString('utf8')}\n… [truncated at ${MAX_NOTE_BYTES} bytes]`;
+  if (serializedBytes(text) <= MAX_NOTE_BYTES) return text;
+  const chars = Array.from(text);
+  const fits = (n: number): boolean =>
+    serializedBytes(chars.slice(0, n).join('') + TRUNCATION_MARKER) <= MAX_NOTE_BYTES;
+  // Largest code-point prefix that still fits once the marker is appended.
+  let lo = 0;
+  let hi = chars.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return chars.slice(0, lo).join('') + TRUNCATION_MARKER;
 }
 
 /**

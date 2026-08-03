@@ -619,6 +619,11 @@ export async function runInputLoop(
           // appendTurn below then closes the turn with the assistant block.
           await transcript.appendUser(userInput);
         },
+        async onQueuedUserMessage(userInput) {
+          // Ctrl+B flush: lands INSIDE the open turn, so it must not open or
+          // close one (appendUser would do both).
+          await transcript.appendQueuedUser(userInput);
+        },
         async onTurnComplete(userInput, assistantText) {
           await transcript.appendTurn(userInput, assistantText);
           // Per-turn session autosave → ~/.afk/state/sessions/<sessionId>.json.

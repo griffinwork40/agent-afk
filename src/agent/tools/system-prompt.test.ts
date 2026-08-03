@@ -70,13 +70,13 @@ describe('resolveToolSystemPrompt — background-subagent delivery (H1 regressio
 
 describe('resolveToolSystemPrompt — queued-message flush delivery', () => {
   it('a non-skill session is told what the queuedUserMessage field is', () => {
-    // Without this fragment the model reads the envelope as tool output and
+    // Without this fragment the model reads the field as tool output and
     // ignores the user's instruction — the Ctrl+B flush would silently no-op.
     expect(resolveToolSystemPrompt(false)).toContain('queuedUserMessage');
     expect(resolveToolSystemPrompt(undefined)).toContain('queuedUserMessage');
   });
 
-  it('a skill-dispatch sub-agent is NOT told about the envelope (never receives one)', () => {
+  it('a skill-dispatch sub-agent is NOT told about the field (never receives one)', () => {
     expect(resolveToolSystemPrompt(true)).not.toContain('queuedUserMessage');
   });
 

@@ -88,7 +88,14 @@ export async function promoteWithQueuedFlush(
   // next `→ idle` transition would let the existing one-per-turn drain deliver
   // the same text a second time as its own turn.
   if (claim?.claimed === true && compositor !== null && snapshot !== undefined) {
-    await Promise.resolve(persist?.(claim.text)).catch(() => { /* best-effort persistence */ });
+    // Invariant: the text is already inside the promotion tool_result by this
+    // point, so the drop MUST still happen if persistence fails. A throw that
+    // skipped it — `Promise.resolve(persist())` does not catch a SYNCHRONOUS
+    // throw, the rejection escapes before .catch() is attached — would leave
+    // the same text queued and deliver the user's message a second time.
+    try {
+      await persist?.(claim.text);
+    } catch { /* best-effort persistence */ }
     compositor.dropQueued(snapshot);
     return { jobs, flushedText: claim.text, flushedPreview: snapshot.preview };
   }

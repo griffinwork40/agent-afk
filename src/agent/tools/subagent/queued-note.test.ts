@@ -1,5 +1,7 @@
 /**
- * Tests for the `<queued-user-message>` envelope + one-shot claim ticket.
+ * Tests for the harness-owned `queuedUserMessage` field value + one-shot
+ * claim ticket. There is no XML envelope — JSON serialization at the merge
+ * site (foreground-promotion.ts) is the structural boundary.
  *
  * The claim is what makes Ctrl+B queue-flush exactly-once: one keypress may fire
  * N promotion triggers, and the user's message must reach the parent turn once —
@@ -26,10 +28,32 @@ describe('formatQueuedNote', () => {
     expect(out).toContain('[truncated at 16384 bytes]');
     expect(Buffer.byteLength(out, 'utf8')).toBeLessThan(17_000);
   });
+
+  // The cap governs the WIRE value, and the note ships as a JSON string —
+  // escaping expands it, so measuring the raw string lets an escape-dense
+  // paste blow past 16KB after JSON.stringify.
+  it('caps the SERIALIZED size, not the raw string', () => {
+    // Every char escapes to 2 bytes ("\\\""), so 12k raw chars ≈ 24k serialized.
+    const out = formatQueuedNote('"'.repeat(12_000));
+    expect(out).toContain('[truncated at 16384 bytes]');
+    expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThanOrEqual(16_384);
+  });
+
+  it('never splits a multi-byte character into U+FFFD', () => {
+    // 4-byte astral chars: a byte-wise slice lands mid-sequence.
+    const out = formatQueuedNote('😀'.repeat(6_000));
+    expect(out).not.toContain('\uFFFD');
+    expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThanOrEqual(16_384);
+  });
+
+  it('leaves a note that exactly fits untouched', () => {
+    const text = 'y'.repeat(16_000);
+    expect(formatQueuedNote(text)).toBe(text);
+  });
 });
 
 describe('claimQueuedNote', () => {
-  it('returns the envelope on the first claim and marks the ticket', () => {
+  it('returns the field value on the first claim and marks the ticket', () => {
     const t = ticket('do the other thing');
     const first = claimQueuedNote(t);
     expect(first).toContain('do the other thing');

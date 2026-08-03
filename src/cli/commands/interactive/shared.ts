@@ -597,6 +597,15 @@ export interface TurnHandles {
    */
   onUserMessage?(userInput: string): Promise<void> | void;
   /**
+   * Fired when a typed-ahead message is flushed into the ALREADY-RUNNING turn
+   * by Ctrl+B, rather than draining as its own turn. Distinct from
+   * `onUserMessage` because that one opens a turn on disk: reusing it here
+   * force-closes the in-flight turn with a false "no response recorded"
+   * marker and duplicates that turn's prompt. Best-effort — errors are
+   * swallowed by the caller.
+   */
+  onQueuedUserMessage?(userInput: string): Promise<void> | void;
+  /**
    * Fired once per completed turn after the assistant's final text is
    * in hand. Used by the REPL to append a human-readable row to the
    * autosaved markdown transcript. Best-effort — errors are swallowed
