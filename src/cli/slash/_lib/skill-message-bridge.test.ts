@@ -15,13 +15,13 @@ function getTextBlock(block: ContentBlockParam | undefined): { type: 'text'; tex
 }
 
 describe('skill-message-bridge', () => {
-  it('buildSkillInvocationMessage returns an array of length 2 with text blocks', () => {
+  it('buildSkillInvocationMessage returns an array of length 2 with text blocks', async () => {
     const skill: SkillMetadata = {
       name: 'foo',
       description: 'test skill',
       handler: vi.fn(),
     };
-    const result = buildSkillInvocationMessage(skill, 'bar');
+    const result = await buildSkillInvocationMessage(skill, 'bar');
 
     expect(Array.isArray(result)).toBe(true);
     expect(result).toHaveLength(2);
@@ -29,26 +29,26 @@ describe('skill-message-bridge', () => {
     expect(result[1]).toEqual({ type: 'text', text: expect.any(String) });
   });
 
-  it('first block contains breadcrumb with command-name tag and skill name', () => {
+  it('first block contains breadcrumb with command-name tag and skill name', async () => {
     const skill: SkillMetadata = {
       name: 'parallelize',
       description: 'test',
       handler: vi.fn(),
     };
-    const result = buildSkillInvocationMessage(skill, 'myargs');
+    const result = await buildSkillInvocationMessage(skill, 'myargs');
 
     const firstBlock = getTextBlock(result[0]);
     expect(firstBlock.text).toContain('<command-name>/parallelize</command-name>');
     expect(firstBlock.text).toContain('parallelize');
   });
 
-  it('second block contains skill name, args, and dispatch instruction', () => {
+  it('second block contains skill name, args, and dispatch instruction', async () => {
     const skill: SkillMetadata = {
       name: 'foo',
       description: 'test',
       handler: vi.fn(),
     };
-    const result = buildSkillInvocationMessage(skill, 'bar');
+    const result = await buildSkillInvocationMessage(skill, 'bar');
 
     const secondBlock = getTextBlock(result[1]);
     expect(secondBlock.text).toContain('foo');
@@ -57,53 +57,53 @@ describe('skill-message-bridge', () => {
     expect(secondBlock.text.toLowerCase()).toContain('dispatch');
   });
 
-  it('second block handles empty args cleanly', () => {
+  it('second block handles empty args cleanly', async () => {
     const skill: SkillMetadata = {
       name: 'mint',
       description: 'test',
       handler: vi.fn(),
     };
-    const result = buildSkillInvocationMessage(skill, '');
+    const result = await buildSkillInvocationMessage(skill, '');
 
     const secondBlock = getTextBlock(result[1]);
     expect(secondBlock.text).toContain('mint');
     expect(secondBlock.text).toContain('skill');
   });
 
-  it('second block mentions fork context when skill.context is fork', () => {
+  it('second block mentions fork context when skill.context is fork', async () => {
     const skill: SkillMetadata = {
       name: 'parallelize',
       description: 'test',
       handler: vi.fn(),
       context: 'fork',
     };
-    const result = buildSkillInvocationMessage(skill, 'args');
+    const result = await buildSkillInvocationMessage(skill, 'args');
 
     const secondBlock = getTextBlock(result[1]);
     expect(secondBlock.text).toContain('fork');
   });
 
-  it('second block does not mention fork context when skill.context is inline or absent', () => {
+  it('second block does not mention fork context when skill.context is inline or absent', async () => {
     const skill: SkillMetadata = {
       name: 'test-inline',
       description: 'test',
       handler: vi.fn(),
       context: 'inline',
     };
-    const result = buildSkillInvocationMessage(skill, 'args');
+    const result = await buildSkillInvocationMessage(skill, 'args');
 
     const secondBlock = getTextBlock(result[1]);
     expect(secondBlock.text).not.toContain('fork');
   });
 
-  it('returns a fresh array on each call with no shared mutable state', () => {
+  it('returns a fresh array on each call with no shared mutable state', async () => {
     const skill: SkillMetadata = {
       name: 'test',
       description: 'test',
       handler: vi.fn(),
     };
-    const result1 = buildSkillInvocationMessage(skill, 'args');
-    const result2 = buildSkillInvocationMessage(skill, 'args');
+    const result1 = await buildSkillInvocationMessage(skill, 'args');
+    const result2 = await buildSkillInvocationMessage(skill, 'args');
 
     expect(result1).not.toBe(result2);
     expect(result1[0]).not.toBe(result2[0]);
@@ -112,16 +112,16 @@ describe('skill-message-bridge', () => {
 
   // --- Preflight manifest injection ---
 
-  it('without a manifestBlock, returns exactly 2 blocks (breadcrumb + instruction)', () => {
+  it('without a manifestBlock, returns exactly 2 blocks (breadcrumb + instruction)', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
-    const result = buildSkillInvocationMessage(skill, '277');
+    const result = await buildSkillInvocationMessage(skill, '277');
     expect(result).toHaveLength(2);
   });
 
-  it('with a manifestBlock, prepends a third block before breadcrumb', () => {
+  it('with a manifestBlock, prepends a third block before breadcrumb', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
     const manifest = '<preflight-context skill="review">data</preflight-context>';
-    const result = buildSkillInvocationMessage(skill, '277', manifest);
+    const result = await buildSkillInvocationMessage(skill, '277', manifest);
 
     expect(result).toHaveLength(3);
     expect(getTextBlock(result[0]).text).toBe(manifest);
@@ -130,16 +130,16 @@ describe('skill-message-bridge', () => {
     expect(getTextBlock(result[2]).text).toContain('skill');
   });
 
-  it('treats an empty/whitespace manifestBlock as absent (no third block)', () => {
+  it('treats an empty/whitespace manifestBlock as absent (no third block)', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
-    expect(buildSkillInvocationMessage(skill, '277', '')).toHaveLength(2);
-    expect(buildSkillInvocationMessage(skill, '277', '   \n  ')).toHaveLength(2);
+    expect(await buildSkillInvocationMessage(skill, '277', '')).toHaveLength(2);
+    expect(await buildSkillInvocationMessage(skill, '277', '   \n  ')).toHaveLength(2);
   });
 
-  it('manifest does not alter the breadcrumb or instruction blocks', () => {
+  it('manifest does not alter the breadcrumb or instruction blocks', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
-    const withoutManifest = buildSkillInvocationMessage(skill, '277');
-    const withManifest = buildSkillInvocationMessage(skill, '277', '<x>m</x>');
+    const withoutManifest = await buildSkillInvocationMessage(skill, '277');
+    const withManifest = await buildSkillInvocationMessage(skill, '277', '<x>m</x>');
 
     expect(getTextBlock(withManifest[1]).text).toBe(getTextBlock(withoutManifest[0]).text);
     expect(getTextBlock(withManifest[2]).text).toBe(getTextBlock(withoutManifest[1]).text);
@@ -147,7 +147,7 @@ describe('skill-message-bridge', () => {
 
   // --- Image attachment support ---
 
-  it('appends image block when 1 attachment passed (no manifest) → length 3', () => {
+  it('appends image block when 1 attachment passed (no manifest) → length 3', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
     const img = {
       id: 'img-1',
@@ -155,7 +155,7 @@ describe('skill-message-bridge', () => {
       bytes: Buffer.from('fakeimagedata'),
       sizeBytes: 13,
     };
-    const result = buildSkillInvocationMessage(skill, '277', undefined, [img]);
+    const result = await buildSkillInvocationMessage(skill, '277', undefined, [img]);
 
     expect(result).toHaveLength(3);
     expect(result[0]).toMatchObject({ type: 'text' }); // breadcrumb
@@ -168,7 +168,7 @@ describe('skill-message-bridge', () => {
     expect(imgBlock.source.data).toBe(img.bytes.toString('base64'));
   });
 
-  it('appends image block after manifest when manifest + 1 attachment → length 4', () => {
+  it('appends image block after manifest when manifest + 1 attachment → length 4', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
     const manifest = '<preflight-context>data</preflight-context>';
     const img = {
@@ -177,7 +177,7 @@ describe('skill-message-bridge', () => {
       bytes: Buffer.from('jpegdata'),
       sizeBytes: 8,
     };
-    const result = buildSkillInvocationMessage(skill, '277', manifest, [img]);
+    const result = await buildSkillInvocationMessage(skill, '277', manifest, [img]);
 
     expect(result).toHaveLength(4);
     expect(result[0]).toEqual({ type: 'text', text: manifest }); // manifest
@@ -186,30 +186,30 @@ describe('skill-message-bridge', () => {
     expect(result[3]).toMatchObject({ type: 'image', source: { media_type: 'image/jpeg' } });
   });
 
-  it('appends multiple image blocks in order when N attachments passed', () => {
+  it('appends multiple image blocks in order when N attachments passed', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
     const imgs = [
       { id: 'a', mediaType: 'image/png' as const, bytes: Buffer.from('a'), sizeBytes: 1 },
       { id: 'b', mediaType: 'image/webp' as const, bytes: Buffer.from('b'), sizeBytes: 1 },
     ];
-    const result = buildSkillInvocationMessage(skill, '', undefined, imgs);
+    const result = await buildSkillInvocationMessage(skill, '', undefined, imgs);
 
     expect(result).toHaveLength(4); // breadcrumb + instruction + 2 images
     expect(result[2]).toMatchObject({ type: 'image', source: { media_type: 'image/png' } });
     expect(result[3]).toMatchObject({ type: 'image', source: { media_type: 'image/webp' } });
   });
 
-  it('preserves 2-block shape when empty attachments array passed', () => {
+  it('preserves 2-block shape when empty attachments array passed', async () => {
     const skill: SkillMetadata = { name: 'review', description: '', handler: vi.fn() };
-    const result = buildSkillInvocationMessage(skill, '', undefined, []);
+    const result = await buildSkillInvocationMessage(skill, '', undefined, []);
     expect(result).toHaveLength(2);
   });
 
-  it('breadcrumb and instruction blocks are unchanged when attachments added', () => {
+  it('breadcrumb and instruction blocks are unchanged when attachments added', async () => {
     const skill: SkillMetadata = { name: 'forge', description: '', handler: vi.fn() };
     const img = { id: 'x', mediaType: 'image/png' as const, bytes: Buffer.from('x'), sizeBytes: 1 };
-    const without = buildSkillInvocationMessage(skill, 'idea');
-    const withImg = buildSkillInvocationMessage(skill, 'idea', undefined, [img]);
+    const without = await buildSkillInvocationMessage(skill, 'idea');
+    const withImg = await buildSkillInvocationMessage(skill, 'idea', undefined, [img]);
 
     expect(getTextBlock(withImg[0]).text).toBe(getTextBlock(without[0]).text);
     expect(getTextBlock(withImg[1]).text).toBe(getTextBlock(without[1]).text);

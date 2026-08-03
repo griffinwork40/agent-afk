@@ -158,4 +158,25 @@ describe('buildUserPayload', async () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({ type: 'text', text: 'hi' });
   });
+
+  it('dedups through the full buildUserPayload path — same bytes + session → same img_ marker', async () => {
+    const bytes = Buffer.from('unique-dedup-bytes');
+    const img: ImageAttachment = {
+      id: 'dedup-1',
+      mediaType: 'image/png',
+      bytes,
+      sizeBytes: bytes.length,
+    };
+    const r1 = await buildUserPayload('first', [img], undefined, undefined, 'dedup-test-session');
+    const r2 = await buildUserPayload('second', [img], undefined, undefined, 'dedup-test-session');
+    // The marker text block sits at index 1 (after the user text at index 0).
+    const marker1 = r1[1];
+    const marker2 = r2[1];
+    expect(marker1).toBeDefined();
+    expect(marker2).toBeDefined();
+    expect(marker1).toEqual(marker2);
+    // Verify the marker contains an img_ id (the same one both times).
+    const text = (marker1 as { type: 'text'; text: string }).text;
+    expect(text).toMatch(/^\[image img_[0-9a-f]{6,64}/);
+  });
 });

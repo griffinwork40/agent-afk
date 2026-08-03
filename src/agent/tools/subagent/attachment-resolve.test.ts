@@ -82,4 +82,20 @@ describe('resolveSubagentAttachments', () => {
       resolveSubagentAttachments({ paths: [sparse], resolveBase: root, readRoots: [root] }),
     ).rejects.toThrow(/5 MiB/);
   });
+
+  it('unknown registry id errors listing both available ids in the message', async () => {
+    const availableIds = ['img_aaaaaa', 'img_bbbbbb'];
+    await expect(
+      resolveSubagentAttachments({
+        paths: ['img_nonexist'],
+        resolveBase: undefined,
+        readRoots: undefined,
+        sessionId: 'session',
+        registry: {
+          get: () => undefined,
+          listIds: () => availableIds,
+        },
+      }),
+    ).rejects.toThrow(/img_aaaaaa.*img_bbbbbb/);
+  });
 });

@@ -30,4 +30,59 @@ describe('InboundAttachmentRegistry', () => {
     expect(formatInboundImageMarker('img_a1b2c3', 'image/png', 842 * 1024))
       .toBe('[image img_a1b2c3 · image/png · 842 KB]');
   });
+
+  it('isolates entries by session — get and listIds on a different session return empty', async () => {
+    const entries = new Map();
+    const registry = new InboundAttachmentRegistry(entries);
+    const first = await registry.put('session-A', Buffer.from('img-A'), 'image/png');
+    expect(registry.get('session-B', first.id)).toBeUndefined();
+    expect(registry.listIds('session-B')).toEqual([]);
+  });
+
+  it('appends a _1 suffix when different byte inputs share the same 64-char digest', async () => {
+    // Same full-digest collision: the prefix-lengthening loop fills entries at
+    // hexLen 6, 8, 10, ..., 64 (30 puts), then the 31st finds the full-digest
+    // id already occupied with different bytes → the suffix kicks in as `_1`.
+    const digest = 'a1b2c3'.padEnd(64, 'f');
+    const registry = new InboundAttachmentRegistry(new Map(), () => digest);
+    for (let i = 0; i < 30; i++) {
+      await registry.put('session-suffix', Buffer.from([i + 1]), 'image/png');
+    }
+    const last = await registry.put('session-suffix', Buffer.from([31]), 'image/png');
+    expect(last.id).toBe(`img_${digest}_1`);
+  });
+
+  it('returns listIds in sorted order', async () => {
+    const entries = new Map();
+    const registry = new InboundAttachmentRegistry(entries);
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const rec = await registry.put('session-sort', Buffer.from([i]), 'image/png');
+      ids.push(rec.id);
+    }
+    const listed = registry.listIds('session-sort');
+    expect(listed).toEqual([...ids].sort());
+  });
+
+  it('get() returns undefined for an unknown session and an unknown id', async () => {
+    const entries = new Map();
+    const registry = new InboundAttachmentRegistry(entries);
+    await registry.put('session-known', Buffer.from('data'), 'image/png');
+    expect(registry.get('session-unknown', 'img_a1b2c3')).toBeUndefined();
+    expect(registry.get('session-known', 'img_nonexistent')).toBeUndefined();
+  });
+
+  it('clear(sessionId) evicts all entries for that session', async () => {
+    const entries = new Map();
+    const registry = new InboundAttachmentRegistry(entries);
+    const first = await registry.put('session-clear', Buffer.from([1]), 'image/png');
+    const second = await registry.put('session-clear', Buffer.from([2]), 'image/png');
+    expect(registry.listIds('session-clear').length).toBeGreaterThan(0);
+
+    registry.clear('session-clear');
+
+    expect(registry.get('session-clear', first.id)).toBeUndefined();
+    expect(registry.get('session-clear', second.id)).toBeUndefined();
+    expect(registry.listIds('session-clear')).toEqual([]);
+  });
 });

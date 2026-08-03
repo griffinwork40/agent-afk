@@ -70,6 +70,17 @@ export class InboundAttachmentRegistry implements InboundAttachmentReader {
     return [...(this.entries.get(sessionId)?.keys() ?? [])].sort();
   }
 
+  /**
+   * Evict all entry keys held for `sessionId`, freeing the module-level
+   * `sessions` Map so terminated sessions don't leak image records forever.
+   * Called from the `SessionEnd` hook (default-hook-registry.ts) — every
+   * forked child owns its own `AgentSession.sessionId`, so a subagent's
+   * SessionEnd clears its own (empty) bucket without touching the parent's.
+   */
+  clear(sessionId: string): void {
+    this.entries.delete(sessionId);
+  }
+
   async put(
     sessionId: string,
     bytes: Buffer,

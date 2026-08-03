@@ -16,6 +16,7 @@ import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
+import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
 import {
   createPathApprovalHook,
@@ -262,6 +263,16 @@ export function createDefaultHookRegistry(
   registry.register('SessionEnd', (context) => {
     if (context.event !== 'SessionEnd') return {};
     if (context.sessionId) cleanupComposeSpills(context.sessionId);
+    return {};
+  });
+  // Evict the session's inbound image records from the module-level Map so
+  // terminated sessions don't leak image data forever. Each forked child owns
+  // its own AgentSession.sessionId, so a subagent's SessionEnd clears an empty
+  // bucket — the parent's entries (under the parent's id) survive until the
+  // parent's own SessionEnd fires.
+  registry.register('SessionEnd', (context) => {
+    if (context.event !== 'SessionEnd') return {};
+    if (context.sessionId) inboundAttachmentRegistry.clear(context.sessionId);
     return {};
   });
   // Read-only run receipt: after the trace is sealed (sealing precedes
