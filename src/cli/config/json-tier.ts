@@ -305,6 +305,13 @@ export function loadJsonConfig(): {
             );
             interactive.worktreeBase = json.interactive.worktreeBase;
           }
+          if (
+            json.interactive.worktreeOnExit === 'ask' ||
+            json.interactive.worktreeOnExit === 'keep' ||
+            json.interactive.worktreeOnExit === 'remove'
+          ) {
+            interactive.worktreeOnExit = json.interactive.worktreeOnExit;
+          }
           if (typeof json.interactive.suggestGhost === 'boolean') {
             interactive.suggestGhost = json.interactive.suggestGhost;
           }

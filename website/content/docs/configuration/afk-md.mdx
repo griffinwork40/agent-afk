@@ -21,15 +21,30 @@ is parsed.
 
 ## Resolution order
 
-`loadConfig()` searches for `AFK.md` in this order (first found wins):
+`loadConfig()` checks **both** locations and loads whichever are present — the
+tiers are additive, not first-found-wins:
 
-1. `<cwd>/AFK.md` — **project-scope**: loaded when you run `afk` from inside
-   the project directory.
-2. `$AFK_HOME/AFK.md` (default `~/.afk/AFK.md`) — **user-scope global**:
-   loaded when no project-level file is found.
+1. `$AFK_HOME/AFK.md` (default `~/.afk/AFK.md`) — **user-scope global**:
+   cross-project preferences that apply on every run.
+2. `<cwd>/AFK.md` — **project-scope**: loaded when you run `afk` from inside a
+   directory that contains one.
 
-If neither file exists, the framework prompt runs alone with no overlay.
-An empty or whitespace-only `AFK.md` is treated as absent.
+When both exist they are concatenated **user-scope first, project-scope
+second**, each under a heading naming its source path, with the project
+section explicitly marked as taking precedence on conflict. Broadest context
+lands first; the most specific instructions land closest to the conversation.
+
+When only one exists — by far the common case — its content is used verbatim
+with **no added headings**, byte-identical to the previous single-tier
+behavior.
+
+If both paths resolve to the same file (for example `AFK_HOME` pointed at your
+project directory, whether directly or through a symlink) it is loaded once,
+not twice.
+
+If neither file exists, the framework prompt runs alone with no overlay. An
+empty or whitespace-only `AFK.md` is treated as absent — evaluated per file, so
+a blank project file still lets a populated personal one through.
 
 ## How it layers with the framework prompt
 

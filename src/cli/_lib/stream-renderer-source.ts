@@ -37,6 +37,18 @@ interface SourceState {
     progressReportedToolUses?: number;
   };
   /**
+   * Most recent `event.progress.summary` — the provider's per-round headline
+   * (`round N: <tool + key arg>`, see anthropic-direct/loop.ts and
+   * openai-compatible/query.ts). Stored so the progress banner can name what a
+   * subagent is doing while the parent turn is blocked awaiting it; before this
+   * field the value was received and discarded, leaving the banner's detail
+   * slot frozen for the whole child run.
+   *
+   * Advisory display data only — never a control input, and never conflated
+   * with `stats.toolUses` (round count ≠ distinct tool_use_detail events).
+   */
+  lastProgressSummary?: string;
+  /**
    * Captured content. Orchestrator: used as the markdown source for non-TTY
    * rendering on done. Subagent: the live text-buffer mirrored into the
    * subagent's active TextEntry under its synthetic Agent.
@@ -55,6 +67,15 @@ interface SourceState {
   lastEventAt: number;
   /** Current pause annotation string if source is stale; undefined while active. */
   pauseAnnotation?: string;
+  /**
+   * Latch for the dead-zone banner (see stream-renderer-dead-zone.ts). Set when
+   * this source crosses into silence past `CHILD_QUIET_MS` and the static
+   * `no output (waiting)` clause has been announced; cleared when the child
+   * emits again so a later silence re-announces. Without it the checker would
+   * mark the banner dirty and flush on every 80ms tick for as long as the child
+   * stayed quiet.
+   */
+  quietBannerAnnounced?: boolean;
   /**
    * Increment-only counter: number of ticks where elapsed > PAUSE_THRESHOLD_MS and
    * source is not yet done/errored. Used by checkStalledEntries for bounded stall

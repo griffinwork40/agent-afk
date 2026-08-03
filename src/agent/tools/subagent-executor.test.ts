@@ -4,7 +4,7 @@
  * Run with: npm test -- tests/agent/tools/subagent-executor.test.ts
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,6 +34,7 @@ import type { ModelProvider } from '../provider.js';
 import { SubagentExecutor, DEFAULT_MAX_NESTING_DEPTH, type SubagentExecutorContext } from './subagent-executor.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
+import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 function mockHandle(
@@ -1133,18 +1134,40 @@ describe('SubagentExecutor', () => {
       expect(args.childExecutor).toBeInstanceOf(SubagentExecutor);
     });
 
-    it('does not set provider when at maxDepth', async () => {
+    it('refuses the dispatch at maxDepth instead of forking a capped leaf', async () => {
+      // Contract change: the cap used to be enforced only by child-config NOT
+      // wiring nested executors (`depth < maxDepth`), so a dispatch AT the cap
+      // still forked a child — one generation deeper than `skill`, which
+      // refuses at `depth >= maxDepth`. Both tools now stop at the same depth.
       const { executor: nestingExec, manager, factory } = makeNestingExecutor({
         depth: 3,
         maxDepth: 3,
       });
 
-      await nestingExec.execute(makeCall());
+      const result = await nestingExec.execute(makeCall());
 
-      const forkCall = (manager.forkSubagent as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
-      const config = (forkCall[0] as { config: AgentConfig }).config;
-      expect(config.provider).toBeUndefined();
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Agent tool not available at nesting depth 3 (max 3)');
+      expect(result.content).toContain(SKILL_MAX_DEPTH_RECOVERY_HINT);
+      expect(manager.forkSubagent).not.toHaveBeenCalled();
       expect(factory).not.toHaveBeenCalled();
+    });
+
+    it('refuses every dispatch when maxDepth is 0 (nesting disabled)', async () => {
+      const { executor: nestingExec, manager } = makeNestingExecutor({
+        depth: 0,
+        maxDepth: 0,
+      });
+
+      const result = await nestingExec.execute(makeCall());
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Agent tool not available at nesting depth 0 (max 0)');
+      // The recovery hint is the user-facing half of the refusal: a caller told
+      // only "not available" has no next move. Asserted on BOTH refusal paths
+      // (here and at the cap above) so a future refactor cannot drop it from one.
+      expect(result.content).toContain(SKILL_MAX_DEPTH_RECOVERY_HINT);
+      expect(manager.forkSubagent).not.toHaveBeenCalled();
     });
 
     it('does not set provider when no factory is provided', async () => {
@@ -1225,12 +1248,73 @@ describe('SubagentExecutor', () => {
         // maxDepth omitted — should default to DEFAULT_MAX_NESTING_DEPTH
       });
 
-      await depthAtMax.execute(makeCall());
+      const result = await depthAtMax.execute(makeCall());
 
-      const forkCall = (manager.forkSubagent as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[];
-      const config = (forkCall[0] as { config: AgentConfig }).config;
-      expect(config.provider).toBeUndefined();
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain(
+        `Agent tool not available at nesting depth ${DEFAULT_MAX_NESTING_DEPTH} (max ${DEFAULT_MAX_NESTING_DEPTH})`,
+      );
+      expect(manager.forkSubagent).not.toHaveBeenCalled();
       expect(factory).not.toHaveBeenCalled();
+    });
+
+    // AFK_MAX_NESTING_DEPTH feeds the SAME `??` fallback the omitted-maxDepth
+    // case above exercises — see resolveMaxNestingDepth's unit tests in
+    // nesting.test.ts for the parsing contract.
+    describe('AFK_MAX_NESTING_DEPTH at the dispatch site', () => {
+      const KEY = 'AFK_MAX_NESTING_DEPTH';
+      let original: string | undefined;
+      beforeEach(() => {
+        original = process.env[KEY];
+        delete process.env[KEY];
+      });
+      afterEach(() => {
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      });
+
+      it('tightens the cap for an executor that omits maxDepth', async () => {
+        process.env[KEY] = '1';
+        const { executor: nestingExec, manager } = makeNestingExecutor({
+          depth: 1,
+          maxDepth: undefined,
+        });
+
+        const result = await nestingExec.execute(makeCall());
+
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain('Agent tool not available at nesting depth 1 (max 1)');
+        expect(manager.forkSubagent).not.toHaveBeenCalled();
+      });
+
+      it('still permits a dispatch below the env-tightened cap', async () => {
+        process.env[KEY] = '1';
+        const { executor: nestingExec, manager } = makeNestingExecutor({
+          depth: 0,
+          maxDepth: undefined,
+        });
+
+        const result = await nestingExec.execute(makeCall());
+
+        expect(result.isError).toBeFalsy();
+        expect(manager.forkSubagent).toHaveBeenCalledOnce();
+      });
+
+      it('loses to an explicit ctx.maxDepth', async () => {
+        // Precedence: the env value resolves the DEFAULT only. A caller that
+        // passes maxDepth explicitly (every test double, and any programmatic
+        // embedder) is unaffected by the environment.
+        process.env[KEY] = '0';
+        const { executor: nestingExec, manager } = makeNestingExecutor({
+          depth: 0,
+          maxDepth: 3,
+        });
+
+        const result = await nestingExec.execute(makeCall());
+
+        expect(result.isError).toBeFalsy();
+        expect(manager.forkSubagent).toHaveBeenCalledOnce();
+      });
     });
 
     it('B1: forwards ctx.allowedTools and ctx.readOnlyBash into childProviderFactory and recursive child executor', async () => {

@@ -557,9 +557,16 @@ function resolveSegment(rawTokens: readonly string[], vars: Map<string, string>)
 const GIT_GLOBAL_FLAG_WITH_ARG = new Set([
   '-c', '-C', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env',
 ]);
+// `fetch` earns its place here despite leaving the working tree untouched: it
+// performs network I/O and rewrites `.git/refs/remotes/*`, so it is neither
+// side-effect-free nor idempotent against a moving remote. That matters beyond
+// plan mode — `retry-safety.ts` admits a `bashReadOnly`-gated leaf as
+// replay-safe, so anything this classifier allows can be re-run wholesale by a
+// stream-cut re-dispatch.
 const GIT_MUTATING_SUBCMDS = new Set([
-  'commit', 'push', 'pull', 'merge', 'rebase', 'reset', 'checkout', 'switch', 'restore',
-  'cherry-pick', 'revert', 'am', 'apply', 'clean', 'add', 'rm', 'mv', 'init', 'clone',
+  'commit', 'push', 'pull', 'fetch', 'merge', 'rebase', 'reset', 'checkout', 'switch',
+  'restore', 'cherry-pick', 'revert', 'am', 'apply', 'clean', 'add', 'rm', 'mv', 'init',
+  'clone',
 ]);
 
 /** Split git argv (tokens after `git`) into the subcommand + its trailing args, skipping global flags. */

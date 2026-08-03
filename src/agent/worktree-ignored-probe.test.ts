@@ -32,6 +32,10 @@ describe('isRebuildableIgnoredEntry', () => {
     '.afk-worktree-meta.json',
     'packages/app/node_modules/', 'packages/app/dist/',
     'crates/server/target/', 'packages/app/.cache/',
+    // Nested machine-generated leaves. These read NON-rebuildable while the file
+    // table was matched against the whole path, so one nested `.DS_Store` took a
+    // worktree out of the sweep's reach permanently.
+    'src/.DS_Store', 'packages/app/.eslintcache',
   ];
   for (const entry of rebuildable) {
     it(`treats ${entry} as rebuildable`, () => {

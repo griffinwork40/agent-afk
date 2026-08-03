@@ -44,6 +44,8 @@ import {
   type SourceState,
   freshSourceState,
 } from './stream-renderer-source.js';
+import { ChildActivityTracker } from './child-activity-select.js';
+import { InFlightToolTracker, noteToolEvent } from '../input/work-derived-verb.js';
 import {
   handleOrchestratorEvent,
   setComposedOverlay,
@@ -57,6 +59,7 @@ import { createStageTracker, type StageTrackerState } from '../commands/interact
 import { detectCaptureMode, detectReducedMotion, detectGoblinSpinner } from './capture-mode.js';
 import { makeDedupingLineWriter, type DedupingLineWriter } from './dedup-line-writer.js';
 import { registerOverlaySlots, checkPauseAnnotations, subscribeToResize } from './stream-renderer-lifecycle.js';
+import { checkProgressBannerStaleness } from './stream-renderer-dead-zone.js';
 import { makeOrchestratorCtx, makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
 
 export interface StreamRendererOptions {
@@ -275,6 +278,21 @@ export class StreamRenderer {
   /** Last progress event per task — emitted on stream end as a one-line summary. */
   private lastProgressByTask = new Map<string, ProgressEvent>();
 
+  /**
+   * Sticky selector for the subagent named in the progress banner's detail slot.
+   * Held here (not on the ctx) because `buildOrchestratorCtx` allocates a fresh
+   * ctx object per call, which would reset the stickiness on every repaint and
+   * reintroduce the child-to-child thrash the hold exists to prevent.
+   */
+  private childActivity = new ChildActivityTracker();
+
+  /**
+   * In-flight tool set backing the spinner's work-derived verb. Spans the
+   * orchestrator and all subagents — the verb describes the session, not one
+   * source, so a single tracker is correct here.
+   */
+  private inFlightTools = new InFlightToolTracker();
+
   private disposed = false;
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
   /**
@@ -456,6 +474,8 @@ export class StreamRenderer {
       streamingMarkdownRef: this.streamingMarkdownRef,
       toolLane: this.toolLane,
       lastProgressByTask: this.lastProgressByTask,
+      sources: this.sources,
+      childActivity: this.childActivity,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
     });
@@ -552,6 +572,8 @@ export class StreamRenderer {
       streamingMarkdown: this.streamingMarkdownRef,
       coordinator: this.coordinator,
       lastProgressByTask: this.lastProgressByTask,
+      sources: this.sources,
+      childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
       ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
     });
@@ -560,6 +582,11 @@ export class StreamRenderer {
   process(event: OutputEvent, meta?: SubagentProgressMeta): void {
     if (this.disposed) return;
 
+    // Feed the spinner's work-derived verb. Done here — before delegation —
+    // because `process` is the one choke point that sees tool events from BOTH
+    // the orchestrator and every subagent, so neither handler needs its own
+    // call site. Pure bookkeeping plus one setter; fires no repaint of its own.
+    noteToolEvent(event, this.inFlightTools, this.compositor);
     const sourceId = meta?.subagentId ?? ORCHESTRATOR_SOURCE_KEY;
     const isOrchestrator = sourceId === ORCHESTRATOR_SOURCE_KEY;
     let source = this.sources.get(sourceId);
@@ -612,6 +639,16 @@ export class StreamRenderer {
       }));
       // Refresh staleness timestamp and clear any pause annotation on new activity.
       source.lastEventAt = Date.now();
+      // Invariant: the quiet-banner latch is re-armed HERE, at the single site
+      // that records child activity — not by checkProgressBannerStaleness
+      // observing an intermediate fresh state on a later tick. The tick-side
+      // clear alone is not sufficient: it only fires if some tick lands inside
+      // the CHILD_QUIET_MS window after a resume, so a suspended process, a
+      // closed laptop lid, or an event loop blocked past 8s skips every such
+      // tick and strands the latch at true. The next genuine quiet transition
+      // would then be swallowed by the `already announced` guard and the dead
+      // zone would silently reopen for that child, permanently.
+      source.quietBannerAnnounced = false;
       if (source.pauseAnnotation !== undefined && source.syntheticAgentToolUseId) {
         source.pauseAnnotation = undefined;
         // Reset stall counter — a heartbeat proves the source is alive again.
@@ -922,10 +959,15 @@ export class StreamRenderer {
 
   /**
    * Bounded stalled-entry lifecycle checker. Called every 80ms by the pause tick interval.
-   * Delegates to the lifecycle module to keep core class compact.
+   * checkProgressBannerStaleness (stream-renderer-dead-zone.ts) covers the
+   * 8s–30s span of the dead zone by marking the progress-banner slot dirty once
+   * a child crosses CHILD_QUIET_MS; checkPauseAnnotations
+   * (stream-renderer-lifecycle.ts) then handles the post-30s stall state
+   * machine. Both ride the same tick; neither adds a new timer. Return values
+   * are intentionally discarded — nothing branches on whether either fired.
    */
   private checkPauseAnnotations(): void {
-    checkPauseAnnotations({
+    const lifecycleCtx = {
       compositor: this.compositor,
       disposed: this.disposed,
       sources: this.sources,
@@ -940,7 +982,9 @@ export class StreamRenderer {
       out: this.out,
       pauseTickInterval: this.pauseTickInterval,
       resizeUnsub: this.resizeUnsub,
-    });
+    };
+    checkProgressBannerStaleness(lifecycleCtx);
+    checkPauseAnnotations(lifecycleCtx);
   }
 
 }

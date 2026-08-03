@@ -153,7 +153,11 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     const afkMd = loadAfkMd();
     if (afkMd !== null) {
       merged.systemPrompt = afkMd.content;
-      systemPromptSource = `afk-md:${afkMd.path}`;
+      // Each contributing path gets its own `afk-md:` prefix, joined with the
+      // same `+` convention resolveBaseSystemPrompt() uses for framework+overlay
+      // layering: `afk-md:<path>` when one tier resolved (unchanged format),
+      // `afk-md:<user>+afk-md:<project>` when both combined.
+      systemPromptSource = afkMd.paths.map((p) => `afk-md:${p}`).join('+');
     }
   }
 

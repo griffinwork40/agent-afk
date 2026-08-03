@@ -579,7 +579,12 @@ describe('runTurn mid-stream clean-close (StreamIncompleteError) retry', () => {
     expect(errorEvent).toBeDefined();
     if (errorEvent?.type === 'error') {
       expect(errorEvent.error.name).toBe('StreamIncompleteError');
-      expect(errorEvent.error.message).toContain('cut off mid-stream');
+      // Assert the OBSERVABLE fact, not a cause. This used to pin "cut off
+      // mid-stream"; the message no longer asserts why the stream ended, because
+      // this layer cannot tell a client-side AbortError abort (including the SDK's
+      // own request timeout) from an upstream peer close. See
+      // anthropic-direct/stream-completeness.ts.
+      expect(errorEvent.error.message).toContain('ended without a terminal message');
     }
   });
 

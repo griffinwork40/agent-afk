@@ -1,11 +1,15 @@
 import type { ToolEntry } from './tool-lane-render.js';
 import { palette } from '../../palette.js';
 import { NESTING_TOOLS } from '../../tool-category.js';
+import { truncateDisplayWidth } from '../../display.js';
 import {
   GROUP_THRESHOLD_DISPATCH,
   GROUP_THRESHOLD_LEAF,
   formatToolLine,
+  isBenignFailure,
 } from './tool-lane-format.js';
+import { shortenPaths } from './tool-lane-format-args.js';
+import { sanitizeLabel } from './tool-lane-format-sanitize.js';
 import type { Glyphs } from './tool-lane-render.js';
 import { getGlyphs } from './tool-lane-render.js';
 import {
@@ -133,25 +137,88 @@ function groupSiblings(toolChildren: ToolEntry[]): Array<ToolEntry | GroupedSibl
 }
 
 /**
+ * Display budget for the trailing failure preview on a grouped row.
+ *
+ * Deliberately small: the row already carries a spine indent, the tool name, the
+ * `×N` count and the ok/error tally, and the caller clamps the whole line to the
+ * terminal. The preview's job is to identify the failure CLASS ("not a git
+ * repository", "ENOENT", "exit 1"), not to reproduce the tool's stderr.
+ */
+const GROUP_ERROR_PREVIEW_WIDTH = 40;
+
+/**
+ * Contract: on an errored result, `ToolResultChunk.content` holds the failure
+ * message (the handler's stderr or exception text, already clipped to a preview
+ * upstream). `formatOutcome` is deliberately NOT reused here — its `lineCount`
+ * branch renders a multi-line result as `12 lines`, which for a failure discards
+ * the only part the operator needs.
+ *
+ * Returns `''` when the message is empty so the caller emits no dangling `· last:`.
+ */
+function formatGroupErrorPreview(entry: ToolEntry): string {
+  const raw = entry.result?.content ?? '';
+  // sanitizeLabel BEFORE shortenPaths — the sanitizer collapses the control
+  // bytes and whitespace runs the path regex assumes are already gone. Error
+  // text is LLM/tool-controlled and routinely embeds absolute paths.
+  const clean = shortenPaths(sanitizeLabel(raw));
+  if (!clean) return '';
+  return truncateDisplayWidth(clean, GROUP_ERROR_PREVIEW_WIDTH);
+}
+
+/**
  * Render a grouped-sibling row:
  *   `<glyph> <Name><label>  ×<N> — <status>`
  *
  * Status flips between `N running`, `K/N done`, `N done`, or
  * `K ok, M errors` based on per-entry result presence.
+ *
+ * When any entry failed, the error tally is toned with `palette.error` (matching
+ * the root-group convention in tool-lane-render-grouped-root.ts) and the most
+ * recent failure's message is appended. Before this, a collapsed group reported
+ * `×50 — 48 ok, 2 errors` and stopped: the failure text was retained on
+ * `ToolEntry.result` but had no render path, so a subagent silently looping on
+ * the same broken command was indistinguishable from one making progress.
+ *
+ * Failures are further split by `failureClass`: deliberate refusals tally as
+ * `blocked` in the warning tone, real faults stay `errors` in the error tone
+ * (`48 ok, 1 error, 1 blocked`). A group whose only failures were the system
+ * saying no carries no red at all — that is the point of #75.
  */
 function formatGroupedSibling(group: GroupedSibling): string {
   const total = group.entries.length;
   const completed = group.entries.filter((e) => e.result);
   const errors = completed.filter((e) => e.result!.isError);
   const done = completed.length;
+  // A deliberate refusal is still isError, so it belongs to `errors` for
+  // branch-selection purposes; only its TONE and noun differ.
+  const blocked = errors.filter((e) => isBenignFailure(e.result!.failureClass));
+  const faults = errors.filter((e) => !isBenignFailure(e.result!.failureClass));
 
+  // Invariant: the errored branch returns a PRE-STYLED status (each span carries
+  // its own tone) while the healthy branches return plain text the caller wraps in
+  // a single palette.dim(). Keeping them separate preserves the healthy rows'
+  // exact ANSI byte sequence — snapshot suites compare it — and avoids nesting the
+  // error tone inside an outer dim, the hazard documented for the synthetic
+  // summary above.
   let status: string;
+  let errorTail = '';
   if (errors.length > 0) {
     const ok = done - errors.length;
     const parts: string[] = [];
-    if (ok > 0) parts.push(`${ok} ok`);
-    parts.push(`${errors.length} error${errors.length === 1 ? '' : 's'}`);
-    status = parts.join(', ');
+    if (ok > 0) parts.push(palette.dim(`${ok} ok`));
+    if (faults.length > 0) {
+      parts.push(palette.error(`${faults.length} error${faults.length === 1 ? '' : 's'}`));
+    }
+    if (blocked.length > 0) parts.push(palette.warning(`${blocked.length} blocked`));
+    status = parts.join(palette.dim(', '));
+    // Most recent failure: entries are appended in dispatch order, so the last
+    // errored entry answers "is it still failing?" rather than "did it ever".
+    // A real fault outranks a more-recent refusal — otherwise a broken command
+    // would be hidden by a benign allowlist rejection that happened to land after it.
+    const source = faults.length > 0 ? faults : blocked;
+    const tone = faults.length > 0 ? palette.error : palette.warning;
+    const preview = formatGroupErrorPreview(source[source.length - 1]!);
+    if (preview) errorTail = palette.dim(' · last: ') + tone(preview);
   } else if (done === total) {
     status = `${total} done`;
   } else if (done === 0) {
@@ -161,6 +228,9 @@ function formatGroupedSibling(group: GroupedSibling): string {
   }
 
   const prefix = formatToolLine(group.toolName + group.label);
+  if (errors.length > 0) {
+    return prefix + palette.dim(` ×${total} — `) + status + errorTail;
+  }
   return prefix + palette.dim(` ×${total} — ${status}`);
 }
 

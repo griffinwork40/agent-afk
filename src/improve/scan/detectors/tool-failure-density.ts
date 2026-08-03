@@ -60,6 +60,7 @@
 import type { DetectorResult, FailureEvidence, Severity } from '../../schemas.js';
 import type { SessionRead } from '../reader.js';
 import type { ToolFailureClass } from '../../../agent/trace/types.js';
+import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
 
 /**
  * Failure classes that mean "the system correctly said no" or "the human did
@@ -80,14 +81,13 @@ import type { ToolFailureClass } from '../../../agent/trace/types.js';
  * Back-compat: traces written before the `failureClass` field existed carry no
  * class, so historical failures are never excluded — they count exactly as they
  * did before. Only post-upgrade traces benefit.
+ *
+ * The membership list itself lives in `agent/trace/types.ts` beside the
+ * `ToolFailureClass` per-class notes, because the interactive tool-lane keys
+ * its neutral-glyph rendering off the same "system correctly said no" split
+ * (#75). Two copies of this set would drift the moment a class is added.
  */
-const EXCLUDED_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
-  'policy-refusal',
-  'permission-denied',
-  'hook-block',
-  'abort',
-  'elicitation-declined',
-]);
+const EXCLUDED_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = BENIGN_FAILURE_CLASSES;
 
 /** Minimum absolute failure count for a tool before a card fires. */
 export const DEFAULT_TOOL_FAILURE_MIN_FAILURES = 3;

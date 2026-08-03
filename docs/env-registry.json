@@ -91,6 +91,14 @@
       "category": "browser"
     },
     {
+      "name": "AFK_CAPTURE_SUBAGENT_PROMPTS",
+      "description": "Opt-in: when set to 1, every prompt a parent session sends to a subagent is written as a redacted markdown file under state/witness/<label>/prompts/. Off by default because nothing prunes the witness tree and prompts may carry secrets the regex redactor cannot catch (connection strings, PEM blocks, PII).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_COMPACT_KEEP_LAST_TURNS",
       "description": "Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts.",
       "type": "number",
@@ -314,6 +322,15 @@
       "required": false,
       "default": "5.00",
       "example": "10.00",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MAX_NESTING_DEPTH",
+      "description": "Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins.",
+      "type": "number",
+      "required": false,
+      "default": "3",
+      "example": "2",
       "category": "model"
     },
     {
@@ -884,6 +901,14 @@
       "type": "number",
       "required": false,
       "default": "30",
+      "category": "worktree"
+    },
+    {
+      "name": "AFK_WORKTREE_ON_EXIT",
+      "description": "Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove.",
+      "type": "string",
+      "required": false,
+      "example": "ask",
       "category": "worktree"
     },
     {

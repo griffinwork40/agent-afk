@@ -61,6 +61,19 @@ export function getSdkHomeDir(): string {
 }
 
 export function getAgentFrameworkDir(): string {
+  const envVal = env.AFK_FRAMEWORK_DIR;
+  if (envVal !== undefined && envVal !== '') {
+    // External constraint: AFK_FRAMEWORK_DIR governs the agent-framework tier
+    // (telemetry, briefs, improve artifacts). Mirror the getAfkStateDir() guard
+    // since this value is load-bearing for read-scope grants (subagent.ts) and
+    // write paths alike — both must resolve to the same directory.
+    if (!isAbsolute(envVal) || envVal === '/') {
+      throw new Error(
+        `AFK_FRAMEWORK_DIR must be an absolute path that is not /, got: ${envVal}`,
+      );
+    }
+    return envVal;
+  }
   return join(getAfkHome(), 'agent-framework');
 }
 
@@ -319,6 +332,19 @@ export function getInboundAttachmentsDir(sessionId: string): string {
 }
 
 /**
+ * Directory for opt-in captured subagent dispatch prompts, keyed by the same
+ * witness `sessionLabel` as {@link getTraceDir}.
+ *
+ * A forked child resumes its parent's sessionId, so a child writing here lands
+ * in its PARENT's directory — which is what makes "every prompt this session
+ * dispatched" a single-directory read. Pure path helper: the caller owns `mkdir`
+ * (see `agent/session/subagent-prompt-capture.ts`).
+ */
+export function getPromptsDir(sessionId: string): string {
+  return join(getTraceDir(sessionId), 'prompts');
+}
+
+/**
  * Inverse of {@link getTraceDir}: recover the witness `sessionLabel` from a
  * trace-file path (`.../witness/<label>/trace.jsonl`).
  *
@@ -352,6 +378,15 @@ export function getDaemonStateDir(instanceId: string = 'default'): string {
 
 export function getWorktreeSweepLockPath(): string {
   return join(getAfkStateDir(), 'worktree-sweep.lock');
+}
+
+/**
+ * Registry of repo roots known to contain afk-managed worktrees. The sweep is
+ * per-root, so without this the daemon only ever reclaims the ONE repo its cwd
+ * happens to resolve to and trees under every other repo leak forever (#761).
+ */
+export function getWorktreeRootsRegistryPath(): string {
+  return join(getAfkStateDir(), 'worktree-roots.json');
 }
 
 export function getEnvConfigPath(): string {

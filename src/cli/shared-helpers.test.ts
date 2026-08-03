@@ -164,6 +164,24 @@ describe('resolveBaseSystemPrompt', () => {
     const { source } = resolveBaseSystemPrompt();
     expect(source).toBe('framework+env:AFK_SYSTEM_PROMPT');
   });
+
+  // Invariant: the `+` join is a flat list of contributing sources, not a
+  // two-field "framework plus one overlay" shape. When both AFK.md tiers
+  // resolve, loadConfig() already hands up a `+`-joined pair, so the composed
+  // string carries three segments. Locking this guards against a refactor
+  // that "simplifies" the join back to a single overlay path and silently
+  // drops the personal tier from provenance while still loading its content.
+  it('preserves every segment when both AFK.md tiers contributed', () => {
+    vi.mocked(loadConfig).mockReturnValue(
+      fakeConfig(
+        'personal + project overlay',
+        'afk-md:/home/user/.afk/AFK.md+afk-md:/repo/AFK.md',
+      ),
+    );
+    const { source } = resolveBaseSystemPrompt();
+    expect(source).toBe('framework+afk-md:/home/user/.afk/AFK.md+afk-md:/repo/AFK.md');
+    expect(source.split('+')).toHaveLength(3);
+  });
 });
 
 describe('isGrantManager', () => {

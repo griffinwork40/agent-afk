@@ -38,7 +38,7 @@ Configuration is layered. Higher tiers win over lower ones.
 |------|--------|-----------|
 | 1 (highest) | `AFK_SYSTEM_PROMPT` env var | everything |
 | 2 | `afk.config.json` — searched in order: `<cwd>/afk.config.json` → `~/.afk/config/afk.config.json` → legacy `~/.afk.config.json` | AFK.md |
-| 3 (lowest) | `AFK.md` — searched in order: `<cwd>/AFK.md` → `~/.afk/AFK.md` | nothing |
+| 3 (lowest) | `AFK.md` — **additive**: `~/.afk/AFK.md` and `<cwd>/AFK.md` are both loaded when both exist, user-scope first | nothing |
 
 The built-in prompt is always present. Any overlay you set is appended after it
 under an `# Operator configuration` header — it adds to the base, never overwrites it.

@@ -86,9 +86,17 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
 
     // 2. Rebuild the system prompt with the new `# Environment` line via the
     //    SAME assembler the first-turn path uses (query/system-prompt.ts), so
-    //    the two can never drift. Awareness identity fields
-    //    (sessionId/surface/depth/maxDepth/workspace) are stable across cwd
-    //    swaps, so we reuse the config snapshot; only `newCwd` changes.
+    //    the two can never drift. Identity fields (sessionId/surface/depth/
+    //    maxDepth) are stable across cwd swaps, so we reuse the config
+    //    snapshot.
+    //
+    //    Invariant: `workspace` is NOT stable across a cwd swap — a different
+    //    worktree is a different branch and HEAD — so it MUST be re-read from
+    //    the live source, and `args.setCurrentCwd(newCwd)` above MUST have
+    //    already run. `getWorkspace()` resolves the cwd through the provider's
+    //    live `getCwd` accessor, so re-reading before that assignment would
+    //    re-gather git state for the OLD checkout and pin the `- Workspace:`
+    //    line to the launch directory for the rest of the session.
     const newUserSystem = assembleSystemPrompt(args.stableSystemPrefix, newCwd, {
       surface: args.surface,
       sessionId: args.config.sessionId,
@@ -108,8 +116,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
     //    accepted minor staleness window for Phase 1 (worktree rename
     //    rarely coincides with mid-session MCP tool refresh).
     // Use the LIVE permission mode (not the captured construction-time
-    // `permissionMode`) so a `/cd` after a `/bypass` toggle rebuilds the
-    // dispatcher with the current allowAll, never reverting the toggle.
+    // `permissionMode`) so a cwd re-anchor after a `/bypass` toggle rebuilds
+    // the dispatcher with the current allowAll, never reverting the toggle.
     const newDispatcher = args.buildDispatcher(args.getCurrentPermissionMode(), {
       cwd: newCwd,
       readRoots: args.sharedReadRoots,
@@ -121,7 +129,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       runtimeStateSource: args.runtimeStateSource,
       hookRegistry: args.config.hookRegistry,
       // Carry the resident plan-exit handler across a cwd rebuild — omitting
-      // this previously dropped `exit_plan_mode` after a `/cd` while planning.
+      // this previously dropped `exit_plan_mode` after a cwd re-anchor while planning.
       planExitControls: args.config.planExitControls,
     });
     return { userSystem: newUserSystem, dispatcher: newDispatcher };

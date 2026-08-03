@@ -225,4 +225,30 @@ describe('buildDaemonSessionFactory', () => {
 
     void session.close().catch(() => undefined);
   });
+
+  it('snapshots one environment nesting cap across all root executors', () => {
+    const key = 'AFK_MAX_NESTING_DEPTH';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '1';
+      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = factory(makeConfig());
+      const internals = session as unknown as { config?: { provider?: unknown } };
+      const provider = internals.config?.provider as AnthropicDirectProvider;
+
+      // A later mutation must not change any sibling executor in this session.
+      process.env[key] = '0';
+      const subExec = readSubagentExecutor(provider) as { ctx?: { maxDepth?: number } };
+      const skillExec = readSkillExecutor(provider) as { ctx?: { maxDepth?: number } };
+      const composeExec = readComposeExecutor(provider) as { ctx?: { maxDepth?: number } };
+      expect(subExec.ctx?.maxDepth).toBe(1);
+      expect(skillExec.ctx?.maxDepth).toBe(1);
+      expect(composeExec.ctx?.maxDepth).toBe(1);
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
 });

@@ -31,6 +31,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent } from '../provider.js';
+import type { ToolFailureClass } from '../../trace/types.js';
 import { AnthropicDirectProvider, __setAnthropicClientFactory } from './index.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
 import { createAfkModeGate } from '../../afk-mode-gate.js';
@@ -178,12 +179,18 @@ function afkGateRegistry(mode: 'autonomous' | 'default'): HookRegistry {
 
 const BASH_RM_INPUT = JSON.stringify({ command: 'rm -rf x' });
 
-function toolOutputOf(events: ProviderEvent[]): { content: string; isError?: boolean } {
+function toolOutputOf(
+  events: ProviderEvent[],
+): { content: string; isError?: boolean; failureClass?: ToolFailureClass } {
   const ev = events.find((e) => e.type === 'tool.output');
   if (!ev || ev.type !== 'tool.output') {
     throw new Error('expected a tool.output event');
   }
-  return { content: ev.content, ...(ev.isError !== undefined ? { isError: ev.isError } : {}) };
+  return {
+    content: ev.content,
+    ...(ev.isError !== undefined ? { isError: ev.isError } : {}),
+    ...(ev.failureClass !== undefined ? { failureClass: ev.failureClass } : {}),
+  };
 }
 
 describe('AnthropicDirectProvider — AFK-mode gate reaches the dispatcher via config.hookRegistry', () => {
@@ -224,6 +231,12 @@ describe('AnthropicDirectProvider — AFK-mode gate reaches the dispatcher via c
     expect(out.isError).toBe(true);
     expect(out.content).toContain('AFK mode');
     expect(out.content).toContain('bash');
+    // The block must be CLASSIFIED on the render-facing event, not only worded
+    // in the content. The tool-lane keys its neutral ⊘ glyph off this field
+    // (#75), and this is the anthropic-direct half of the parity pair asserted
+    // for openai-compatible in tool-dispatch.test.ts — a field plumbed in one
+    // provider and forgotten in the other is the documented failure mode here.
+    expect(out.failureClass).toBe('hook-block');
   });
 
   it('does NOT block bash rm -rf when the session is in default mode', async () => {

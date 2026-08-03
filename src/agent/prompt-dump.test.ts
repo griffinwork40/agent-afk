@@ -245,6 +245,29 @@ describe('dumpIfEnabled', () => {
     expect(obj.resolution).toBeDefined();
   });
 
+  it('renders a combined-tier systemPrompt source unmangled', () => {
+    process.env['AFK_DUMP_PROMPT'] = '1';
+    // `+`-joined provenance from both AFK.md tiers, composed with the
+    // framework base — the widest shape this field ever takes. The dump path
+    // must pass it through verbatim; it does no parsing of the value, and
+    // this locks that (a future "split on +" would corrupt the report the
+    // operator uses to debug which overlay actually loaded).
+    const source = 'framework+afk-md:/home/u/.afk/AFK.md+afk-md:/repo/AFK.md';
+    const payload: DumpPayload = {
+      prompt: { message: 'test' },
+      options: { model: 'claude-3-sonnet' },
+      provenance: { systemPrompt: { source } },
+    };
+    dumpIfEnabled(payload);
+
+    const jsonCall = stderrSpy.mock.calls
+      .map((c) => c[0] as string)
+      .find((s) => s.trimStart().startsWith('{'));
+    expect(jsonCall).toBeDefined();
+    const obj = JSON.parse(jsonCall!);
+    expect(obj.provenance.systemPrompt.source).toBe(source);
+  });
+
   it('writes to stderr when AFK_DUMP_PROMPT is "true" (case-insensitive)', () => {
     process.env['AFK_DUMP_PROMPT'] = 'True';
     const payload: DumpPayload = {

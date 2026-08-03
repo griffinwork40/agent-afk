@@ -17,6 +17,7 @@ import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js'
 // THIS file) is `import type`, which TypeScript erases at compile time — so
 // no runtime require()/import cycle exists between the two modules.
 import { probeNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
+import { readRootSweepCount, recordRootSweep, SOFT_LAUNCH_RUNS } from './worktree-sweep-valve.js';
 import { classifyOrphanDir } from './worktree-orphan-guard.js';
 
 // ---------------------------------------------------------------------------
@@ -186,6 +187,13 @@ export interface SweepResult {
   warnings: string[];
   dryRun: boolean;
   candidates: SweepCandidateSummary[];
+  /**
+   * Set only when the run returned early because another process held the
+   * machine-global sweep lock, so nothing was inspected. Additive and optional:
+   * a caller that ignores it behaves exactly as before. The daemon's multi-root
+   * tick needs it to avoid counting an untouched root as swept.
+   */
+  contested?: boolean;
 }
 
 /**
@@ -489,13 +497,19 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     candidates: [],
   };
 
-  // Soft-launch valve: force dry-run for first 3 real runs. Callers with
-  // their own narrower allowlist can bypass to avoid being stuck in
-  // dry-run on machines that don't run the daemon.
+  // Soft-launch valve: force dry-run for the first few runs AGAINST THIS ROOT.
+  // The counter is per-root because the machine-global telemetry count stopped
+  // meaning "this repo has been previewed" the moment the daemon began
+  // sweeping every registered root — a freshly registered repo would otherwise
+  // inherit an exhausted counter and be swept destructively on first contact.
+  // A root with no usable marker falls back to the legacy global count rather
+  // than being pinned in dry-run forever. Callers with their own narrower
+  // allowlist bypass the valve entirely.
   const priorRuns = options.bypassSoftLaunch
     ? Number.POSITIVE_INFINITY
-    : await countPriorSuccessfulRuns(resolvedTelemetryPath);
-  const effectiveDryRun = (options.dryRun === true) || (priorRuns < 3);
+    : (await readRootSweepCount(repoRoot))
+      ?? await countPriorSuccessfulRuns(resolvedTelemetryPath);
+  const effectiveDryRun = (options.dryRun === true) || (priorRuns < SOFT_LAUNCH_RUNS);
   result.dryRun = effectiveDryRun;
 
   let releaseLock: (() => Promise<void>) | null = null;
@@ -504,6 +518,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   } catch (err) {
     if (err instanceof LockContestedError) {
       result.warnings.push(`[WARN] ${err.message}`);
+      result.contested = true;
       return result;
     }
     throw err;
@@ -520,12 +535,32 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     // Detect orphaned directories (exist on disk, not in git list)
     const registeredPaths = new Set(parsed.map((p) => p.path));
     let diskEntries: string[] = [];
+    // Invariant: the orphan scan is the one path that recursively DELETES a
+    // directory chosen by disk listing rather than by git, so its root must be
+    // a real directory in this repo. `readdir` follows a symlink, so a
+    // `.afk-worktrees` symlink would have the scan enumerate — and `fs.rm`
+    // recursively delete — entries that live somewhere else entirely. One
+    // daemon-resolved root made that a narrow window; sweeping every registered
+    // root (#761) multiplies it by every repo the daemon has ever visited.
+    // Skip such a root instead of resolving through the link: nothing legitimate
+    // in this engine ever creates `.afk-worktrees` as a symlink.
+    let orphanScanRoot: string | null = afkWorktreesRoot;
     try {
-      const entries = await fs.readdir(afkWorktreesRoot, { withFileTypes: true });
-      diskEntries = entries
-        .filter((e) => e.isDirectory())
-        .map((e) => join(afkWorktreesRoot, e.name));
-    } catch { /* .afk-worktrees doesn't exist yet — no orphaned dirs */ }
+      if ((await fs.lstat(afkWorktreesRoot)).isSymbolicLink()) {
+        result.warnings.push(
+          `[WARN] skipping orphan scan: .afk-worktrees is a symlink, not a directory: ${afkWorktreesRoot}`,
+        );
+        orphanScanRoot = null;
+      }
+    } catch { /* absent — handled by the readdir below */ }
+    if (orphanScanRoot !== null) {
+      try {
+        const entries = await fs.readdir(orphanScanRoot, { withFileTypes: true });
+        diskEntries = entries
+          .filter((e) => e.isDirectory())
+          .map((e) => join(afkWorktreesRoot, e.name));
+      } catch { /* .afk-worktrees doesn't exist yet — no orphaned dirs */ }
+    }
 
     const orphanedDirs = diskEntries.filter((d) => !registeredPaths.has(d));
 
@@ -610,8 +645,13 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     for (const entry of parsed) {
       // Skip main worktree and bare repos
       if (entry.path === mainPath || entry.isBare) continue;
-      // Skip worktrees not under .afk-worktrees/
-      if (!entry.path.startsWith(afkWorktreesRoot)) continue;
+      // Skip worktrees not under .afk-worktrees/. Path-boundary test, not a
+      // string prefix: `startsWith` also accepted siblings whose name merely
+      // begins with the root (`.afk-worktrees-scratch`), letting a tree the
+      // engine does not own reach the removal verdicts below. One root made
+      // that a narrow window; the multi-root fan-out multiplies it by every
+      // registered repo.
+      if (!isPathWithin(entry.path, afkWorktreesRoot)) continue;
 
       // Apply scope filter
       let meta: WorktreeMeta | undefined;
@@ -868,6 +908,22 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   } finally {
     if (releaseLock) await releaseLock();
   }
+
+  // Credit this root only after a completed pass, and only when the valve was
+  // actually in play — a bypassing caller never consumed a preview, so it must
+  // not spend one on the daemon's behalf. Best-effort: failing to record costs
+  // at most one extra dry-run.
+  //
+  // Keyed on `options.dryRun` (what the CALLER asked for), never on
+  // `effectiveDryRun` (which is also true when the valve itself forced the
+  // preview). A valve-forced preview MUST still credit the counter — that is
+  // the only thing that ever advances it towards SOFT_LAUNCH_RUNS. An
+  // explicit caller-requested dry-run (`list`, `prune` without `--apply`, the
+  // agent-facing `list` action) never touched anything, so it must not spend
+  // one of the root's previews — three such calls would otherwise exhaust the
+  // budget with no daemon preview ever having run, and the daemon's FIRST
+  // sweep of that root would then be destructive.
+  if (options.bypassSoftLaunch !== true && options.dryRun !== true) await recordRootSweep(repoRoot);
 
   return result;
 }

@@ -620,6 +620,7 @@ describe('loop.ts runTurn', () => {
       (e) => e.type === 'tool.output' && e.content === 'Tool call aborted',
     );
     expect(secondOutput).toBeDefined();
+    expect(secondOutput).toMatchObject({ isError: true, failureClass: 'abort' });
   });
 
   // covers lines 189-215: non-tool_use stopReason handling (assistant.message, suggestion)

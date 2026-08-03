@@ -123,8 +123,19 @@ export async function* dispatchAndAppendToolCalls({
 
   if (signal.aborted) {
     // Aborted before dispatch — synthesize aborted results and emit outputs.
+    // `abort` here (both the pushed result and the yielded event below) covers
+    // ANY signal-fired teardown — deliberate user cancel, session timeout, or
+    // budget exhaustion all funnel through the same AbortSignal
+    // (requestAbort() only tracks 'interrupted' | 'closed', see
+    // abort-coordinator.ts:56), so the original cause is lost by the time this
+    // dispatch site sees `signal.aborted`. Widening AbortReason to carry the
+    // origin is the real fix; out of scope here.
     for (const call of calls) {
-      const result: ToolResult = { content: 'Tool call aborted', isError: true };
+      const result: ToolResult = {
+        content: 'Tool call aborted',
+        isError: true,
+        failureClass: 'abort',
+      };
       results.push({ call, result });
       yield {
         type: 'tool.output',
@@ -132,6 +143,7 @@ export async function* dispatchAndAppendToolCalls({
         toolName: call.name,
         content: result.content,
         isError: true,
+        failureClass: 'abort',
         sessionId,
       };
     }
@@ -144,8 +156,14 @@ export async function* dispatchAndAppendToolCalls({
       } else {
         dispatcherResults = [];
         for (const call of calls) {
+          // Same abort-origin caveat as the pre-dispatch branch above:
+          // `signal.aborted` cannot distinguish cancel/timeout/budget here either.
           if (signal.aborted) {
-            dispatcherResults.push({ content: 'Tool call aborted', isError: true });
+            dispatcherResults.push({
+              content: 'Tool call aborted',
+              isError: true,
+              failureClass: 'abort',
+            });
             continue;
           }
           try {
@@ -218,6 +236,11 @@ export async function* dispatchAndAppendToolCalls({
         ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
           ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
           : {}),
+        // Carry WHY the call failed so the tool-lane can render a deliberate
+        // refusal neutrally instead of as a red ✗. Parity with
+        // anthropic-direct/loop/tool-results.ts — omitting it silently drops
+        // the benign-rejection glyph for every openai-compatible session.
+        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
         sessionId,
       };
       if (result.render?.diff) {

@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**140 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**143 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -18,6 +18,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_EFFORT` | string |  |  | `medium` | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. |
 | `AFK_LOCAL_BASE_URL` | string |  |  | `http://127.0.0.1:8080` | Base URL for a self-hosted Anthropic-compatible server. When set, routes traffic away from api.anthropic.com. |
 | `AFK_MAX_BUDGET_USD` | number |  | `5.00` | `10.00` | Cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. |
+| `AFK_MAX_NESTING_DEPTH` | number |  | `3` | `2` | Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins. |
 | `AFK_MAX_OUTPUT_TOKENS` | number |  |  | `8192` | Cap on output tokens per turn. Falls back to provider default when unset. |
 | `AFK_MAX_TOKENS` | number |  | `4096` | `8192` | Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset. |
 | `AFK_MAX_TOOL_USE_ITERATIONS` | number |  | `0` | `150` | Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level turn ends only when the model stops calling tools, the abort signal fires, the provider errors, or the dollar budget trips. A positive integer N makes top-level turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var. |
@@ -111,6 +112,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_WORKTREE_BRANCH_PREFIX` | string |  | `afk/` | `wt/` | Branch-name prefix for AFK-managed worktrees. Default afk/. Set to empty string to drop the prefix. |
 | `AFK_WORKTREE_MAX_AGE_CLEAN` | number |  | `14` |  | Maximum age (in days) before a clean worktree is auto-pruned. Default 14. |
 | `AFK_WORKTREE_MAX_AGE_DIRTY` | number |  | `30` |  | Maximum age (in days) before a dirty worktree is auto-pruned. Default 30. |
+| `AFK_WORKTREE_ON_EXIT` | string |  |  | `ask` | Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove. |
 | `AFK_WORKTREE_PRUNE_DISABLE` | boolean |  |  |  | Disable the worktree prune job entirely. Useful for long-running tests. |
 | `AFK_WORKTREE_SWEEP_ROOT` | string |  |  |  | Override the root directory under which AFK worktrees are tracked for pruning. |
 
@@ -144,6 +146,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_CAPTURE_SUBAGENT_PROMPTS` | boolean |  |  | `1` | Opt-in: when set to 1, every prompt a parent session sends to a subagent is written as a redacted markdown file under state/witness/<label>/prompts/. Off by default because nothing prunes the witness tree and prompts may carry secrets the regex redactor cannot catch (connection strings, PEM blocks, PII). |
 | `AFK_DEBUG` | boolean |  |  | `1` | Enable verbose debug logging across the codebase. Accepts 1 to enable. |
 | `AFK_DEBUG_CLIPBOARD` | boolean |  |  |  | Debug bracketed-paste and image-paste handling in the interactive REPL. |
 | `AFK_DEBUG_COMPOSITOR` | boolean |  |  |  | Gate compositor phase-boundary traces to stderr; any truthy value enables. |

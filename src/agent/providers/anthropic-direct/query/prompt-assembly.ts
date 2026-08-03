@@ -83,7 +83,11 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory);
 
   // Awareness identity fields interleaved into the `# Environment` fragment
-  // (Phase 1 + 2). Stable across cwd swaps — only `cwd` changes on setCwd().
+  // (Phase 1 + 2). The identity fields (surface/sessionId/depth/maxDepth) are
+  // stable across cwd swaps; `workspace` is NOT — a different worktree is a
+  // different branch and HEAD. It is re-read from the live source here and
+  // again in `cwd-dependents.ts` on every setCwd, so it tracks the cwd rather
+  // than freezing at the launch checkout.
   const environmentIdentity = {
     surface: args.surface,
     sessionId: config.sessionId,

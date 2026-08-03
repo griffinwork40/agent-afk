@@ -558,6 +558,12 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     if (out?.type === 'tool.output') {
       expect(out.isError).toBe(true);
       expect(out.content).toMatch(/not permitted|not allowed|permission|allowlist/i);
+      // The gate's refusal must be CLASSIFIED on the render-facing event, not
+      // just worded in the content. The tool-lane keys its neutral ⊘ glyph off
+      // this field (#75); without it a gated probe renders as a red ✗ on every
+      // openai-compatible session, and no renderer test would catch it because
+      // the renderer is correct — the event is just missing the field.
+      expect(out.failureClass).toBe('permission-denied');
     }
   });
 
@@ -812,6 +818,15 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     if (completed?.type === 'turn.completed') {
       expect(completed.usage.stopReason).toBe('tool_use_loop_capped');
     }
+
+    // Issue #857: each tool-round progress event's summary carries the
+    // resolved cap as a denominator (`round N/3`) — mirrors anthropic-direct.
+    const progressEvents = events.filter((e) => e.type === 'progress');
+    expect(progressEvents).toHaveLength(3);
+    const summaries = progressEvents.map((e) =>
+      e.type === 'progress' ? e.progress.summary : undefined,
+    );
+    expect(summaries).toEqual(['round 1/3: echo', 'round 2/3: echo', 'round 3/3: echo']);
   });
 
   it('runs uncapped at top level — past the former hard-coded 50-round limit (no maxToolUseIterations)', async () => {
@@ -846,6 +861,16 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     if (completed?.type === 'turn.completed') {
       expect(completed.usage.stopReason).not.toBe('tool_use_loop_capped');
     }
+
+    // Issue #857: unlimited (no configured cap) keeps the bare "round N" form
+    // — never a "round N/0" or "round N/Infinity" denominator.
+    const progressEvents = events.filter((e) => e.type === 'progress');
+    expect(progressEvents).toHaveLength(52);
+    expect(progressEvents[0]!.type === 'progress' ? progressEvents[0].progress.summary : undefined).toBe(
+      'round 1: echo',
+    );
+    const last = progressEvents.at(-1);
+    expect(last?.type === 'progress' ? last.progress.summary : undefined).toBe('round 52: echo');
   });
 });
 

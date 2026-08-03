@@ -134,7 +134,11 @@ export interface RuntimeSubagents {
 }
 
 /**
- * Git workspace state captured once at session start (Phase 2).
+ * Git workspace state for the session's CURRENT working directory (Phase 2).
+ *
+ * Re-gathered on every `getWorkspace()` call against the live cwd, so it
+ * follows the deferred born-named `afk -w` worktree re-anchor instead of
+ * pinning to the launch checkout.
  *
  * All fields are nullable — the object is returned with every field `null`
  * when the cwd is not a git repo, git is not installed, or any git command
@@ -177,6 +181,10 @@ export interface RuntimeStateSource {
   getSelf(): RuntimeSelf;
   getTools(): RuntimeTools;
   getSubagents(): RuntimeSubagents;
-  /** Returns the workspace baseline captured at session start. Always the same object. */
+  /**
+   * Returns git state for the session's current cwd, re-gathered per call.
+   * Follows mid-session `setCwd()` re-anchors — never a frozen session-start
+   * baseline.
+   */
   getWorkspace(): RuntimeWorkspace;
 }

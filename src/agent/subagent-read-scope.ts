@@ -135,6 +135,27 @@ export interface InheritedReadRootsArgs {
    * it gets byte-for-byte the pre-fix behaviour.
    */
   afkStateRoot?: string | undefined;
+  /**
+   * The AFK agent-framework directory (`~/.afk/agent-framework`). Folded into a
+   * CONFINED fork's read union for the same reason as
+   * {@link InheritedReadRootsArgs.afkStateRoot}, but a DIFFERENT tree: this one
+   * holds the framework's own durable artifacts — improve-pipeline failure
+   * cards / proposals / eval-cases, forge telemetry, pattern-cards, and skill
+   * briefs.
+   *
+   * Sub-agents dispatched by the skills whose whole job is to read that tree
+   * (`/orient`, `/harvest`, `/forge`, `/distill`, and the improve pipeline) were
+   * hard-denied it, because a confined parent's cwd+repo roots do not lexically
+   * contain it and forks cannot prompt for approval. Measured at 46 denials
+   * across 15 sessions before this grant (improve card
+   * `subagent-read-denial-ab89c2bd6a6f`).
+   *
+   * Same guard as the state root: pass the AGENT-FRAMEWORK dir ONLY — NEVER
+   * `~/.afk/config`, which holds `afk.env` credentials. Ignored by the
+   * unconfined branch (already read-open). `undefined` adds nothing, so a caller
+   * that omits it gets byte-for-byte the pre-fix behaviour.
+   */
+  afkFrameworkRoot?: string | undefined;
 }
 
 /**
@@ -147,7 +168,9 @@ export interface InheritedReadRootsArgs {
  *    confined to the child's own cwd/writeRoots.
  *  - Parent CONFINED (explicit `parentReadRoots`, or a defined `parentCwd`):
  *    the child gets the UNION of the parent's roots, its own cwd, the worktree
- *    main root, and the AFK state dir ({@link InheritedReadRootsArgs.afkStateRoot})
+ *    main root, the AFK state dir ({@link InheritedReadRootsArgs.afkStateRoot}),
+ *    and the AFK agent-framework dir
+ *    ({@link InheritedReadRootsArgs.afkFrameworkRoot})
  *    — never narrower than the parent (child read scope ⊇ parent read scope),
  *    never write-relevant.
  *
@@ -156,7 +179,8 @@ export interface InheritedReadRootsArgs {
  * leaves the provider default untouched.
  */
 export function computeInheritedReadRoots(args: InheritedReadRootsArgs): string[] | undefined {
-  const { parentReadRoots, parentCwd, childCwd, worktreeMainRoot, afkStateRoot } = args;
+  const { parentReadRoots, parentCwd, childCwd, worktreeMainRoot, afkStateRoot, afkFrameworkRoot } =
+    args;
   const resolvedChildCwd =
     childCwd !== undefined && childCwd !== '' ? path.resolve(childCwd) : undefined;
 
@@ -189,6 +213,16 @@ export function computeInheritedReadRoots(args: InheritedReadRootsArgs): string[
   // below correctly see it as a broadening grant.
   if (afkStateRoot !== undefined && afkStateRoot !== '') {
     roots.add(path.resolve(afkStateRoot));
+  }
+  // The AFK agent-framework dir (~/.afk/agent-framework) — the framework's own
+  // artifact tree (improve cards/proposals/eval-cases, forge telemetry,
+  // pattern-cards, briefs) that /orient, /harvest, /forge, /distill and the
+  // improve pipeline dispatch children specifically to read. Same rules as the
+  // state root above: callers pass this dir only, never ~/.afk/config. Added in
+  // the same position (after cwd/parent/worktree roots, before the size checks)
+  // so it too is correctly seen as a broadening grant.
+  if (afkFrameworkRoot !== undefined && afkFrameworkRoot !== '') {
+    roots.add(path.resolve(afkFrameworkRoot));
   }
 
   // Nothing to grant, OR the only root is the child's own cwd (which equals the
