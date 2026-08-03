@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.91.1] - 2026-08-03
+
+### Fixed
+- resolve tier-name pins before the cross-provider Claude-family check (#879) (2a19470)
+
 ## [5.91.0] - 2026-08-03
 
 ### Added
