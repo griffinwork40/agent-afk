@@ -189,7 +189,10 @@ export interface StreamRendererOptions {
    * Best-effort: if the callback throws the error is swallowed so a bar
    * paint failure never breaks the streaming event loop.
    */
-  onStageChange?: (stage: import('../commands/interactive/loop-stage.js').LoopStage) => void;
+  onStageChange?: (
+    stage: import('../commands/interactive/loop-stage.js').LoopStage,
+    signals?: import('../commands/interactive/loop-stage.js').StageSignals,
+  ) => void;
 }
 
 /**
@@ -209,7 +212,12 @@ export class StreamRenderer {
   private readonly autocompleteState: AutocompleteState | undefined;
   private readonly promptText: string | undefined;
   private readonly scrollRegion: { withFullScrollRegion<T>(fn: () => T): T; getExtraRows(): number } | undefined;
-  private readonly onStageChange: ((stage: import('../commands/interactive/loop-stage.js').LoopStage) => void) | undefined;
+  private readonly onStageChange:
+    | ((
+        stage: import('../commands/interactive/loop-stage.js').LoopStage,
+        signals?: import('../commands/interactive/loop-stage.js').StageSignals,
+      ) => void)
+    | undefined;
   /**
    * True when this renderer constructed its own compositor in {@link arm};
    * false when a compositor was borrowed via {@link StreamRendererOptions.compositor}.
@@ -624,8 +632,26 @@ export class StreamRenderer {
       // Fire onStageChange when the loop stage transitions so the LoopStageBar
       // footer row repaints immediately — without polling or threading the bar
       // through the overlay compositor. Swallows errors defensively.
-      if (this.onStageChange && this.stageTracker.stage !== stageBefore) {
-        try { this.onStageChange(this.stageTracker.stage); } catch { /* best-effort */ }
+      //
+      // Also fire on an ERRORED tool result even when the stage did not change:
+      // a failed tool inside a parallel wave leaves other tools pending, so the
+      // stage stays 'acting' and the mascot band would never learn about the
+      // error. Consumers are idempotent repaints (LoopStageBar.repaint is a
+      // no-op re-render of the same stage), so the extra fire is free.
+      const toolErrored =
+        event.type === 'chunk' &&
+        event.chunk.type === 'tool_result' &&
+        event.chunk.isError === true;
+      if (this.onStageChange && (this.stageTracker.stage !== stageBefore || toolErrored)) {
+        try {
+          // Invariant: the no-signal case calls with ONE argument, never
+          // `(stage, undefined)`. Vitest's toHaveBeenCalledWith compares the
+          // whole argument array, so passing an explicit undefined would break
+          // every existing single-argument assertion on this callback — and any
+          // future one — for no benefit.
+          if (toolErrored) this.onStageChange(this.stageTracker.stage, { toolErrored: true });
+          else this.onStageChange(this.stageTracker.stage);
+        } catch { /* best-effort */ }
       }
     } else {
       handleSubagentEvent(event, sourceId, source, makeSubagentCtx({

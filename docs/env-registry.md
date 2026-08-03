@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**143 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**144 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -193,6 +193,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_BG_AUTO_DELIVER` | boolean |  | `1` | `0` | Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow. |
 | `AFK_DEMO_CLEAN` | boolean |  |  | `1` | Explicit opt-in to capture-mode. When set to 1, suppresses high-frequency repaint drivers (spinner ticker, live thinking-preview) so recorded artifacts contain each state once instead of once per timer tick. |
 | `AFK_DIFF_LINES` | number |  |  | `50` | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. |
+| `AFK_GOBLIN_MASCOT` | boolean |  |  | `1` | Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in. |
 | `AFK_GOBLIN_SPINNER` | boolean |  |  | `0` | Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner. |
 | `AFK_MEMORY_EVIDENCE_GATE` | boolean |  |  | `1` | Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an `evidence` citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. Default off — memory behaves identically to legacy when unset. |
 | `AFK_NOTIFY` | boolean |  |  | `1` | Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only. |

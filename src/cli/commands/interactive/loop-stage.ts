@@ -50,6 +50,21 @@ import { isPlainOutputRequested } from '../../../config/env.js';
 
 export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'updating';
 
+/**
+ * Out-of-band facts observed on the transition that produced a stage change.
+ *
+ * The stage vocabulary is deliberately structural (see above) and cannot encode
+ * an outcome: `updating` is the same stage whether the tool succeeded or blew
+ * up. Consumers that react to outcomes (the mascot band's `alert` state) need
+ * that bit, so it rides alongside the stage rather than corrupting the stage
+ * enum with a pseudo-stage like `'errored'`. Optional and additive: every
+ * existing single-argument consumer keeps working untouched.
+ */
+export interface StageSignals {
+  /** The tool result on this transition carried `isError: true`. */
+  toolErrored?: boolean;
+}
+
 /** All stages in canonical order — used by the rail renderer. */
 export const LOOP_STAGES: readonly LoopStage[] = [
   'observing',
