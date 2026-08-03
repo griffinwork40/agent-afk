@@ -63,12 +63,22 @@ The \`<command>\` child contains the literal command the user typed (XML-escaped
 export const BG_SUBAGENT_RESULT_PROMPT = `When a user message contains a \`<background-subagent-result>\` block, it is the completed output of a background subagent you previously dispatched with the \`agent\` tool (\`mode: "background"\`) or that the user backgrounded with Ctrl+B. It was delivered automatically — no join was needed. Attributes: \`jobId\`, \`status\` (\`completed\`/\`failed\`), \`model\`, \`duration\`. The \`<task>\` child echoes the dispatch prompt's first 80 chars; \`<output>\` carries the subagent's final message (XML-escaped, truncated at 16KB with a marker naming \`/bgsub:join <jobId>\` for the full text). Treat the output as the subagent's compressed findings — reason over it as you would a foreground \`agent\` result.`;
 
 /**
- * Full tool system prompt — base conventions + slash-command routing +
- * bash-passthrough + background-subagent result delivery. Backwards-compat
- * export; consumers that want only the base (e.g. skill sub-agents) should
- * use \`TOOL_SYSTEM_PROMPT_BASE\` directly.
+ * Queued-message flush explanation — interactive-only, like
+ * BASH_PASSTHROUGH_PROMPT. Describes the `<queued-user-message>` envelope that
+ * rides the `agent` tool's promotion result when the user presses Ctrl+B with
+ * typed-ahead messages pending. Without this fragment the model reads the
+ * envelope as tool output and ignores the instruction, so the feature would
+ * silently do nothing. NOT sent to skill-dispatch sub-agents.
  */
-export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}\n\n${BG_SUBAGENT_RESULT_PROMPT}`;
+export const QUEUED_USER_MESSAGE_PROMPT = `When an \`agent\` tool result contains a \`<queued-user-message>\` block, that block is **not** tool output — it is a message the user typed while you were working and which was delivered the moment they pressed Ctrl+B to background the subagent. Treat its contents exactly as you would a normal user turn arriving right now: it is the most recent thing the human said, it may redirect or supersede what you were doing, and it takes precedence over the plan you were following. Act on it in this turn rather than finishing the previous plan first and reading it later. The text is XML-escaped and truncated at 16KB. Do not echo the tags back.`;
+
+/**
+ * Full tool system prompt — base conventions + slash-command routing +
+ * bash-passthrough + background-subagent result delivery + queued-message
+ * flush. Backwards-compat export; consumers that want only the base (e.g.
+ * skill sub-agents) should use \`TOOL_SYSTEM_PROMPT_BASE\` directly.
+ */
+export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}\n\n${BG_SUBAGENT_RESULT_PROMPT}\n\n${QUEUED_USER_MESSAGE_PROMPT}`;
 
 export const MEMORY_SYSTEM_PROMPT = `# Cross-Session Memory
 
@@ -134,7 +144,8 @@ Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
  *   "Run the <name> skill" directive, not a `<command-name>` tag or any
  *   REPL-delivered envelope).
  * - every other session → the full compound (base + slash-command routing +
- *   bash-passthrough + background-subagent result delivery).
+ *   bash-passthrough + background-subagent result delivery + queued-message
+ *   flush).
  */
 export function resolveToolSystemPrompt(isSkillDispatch: boolean | undefined): string {
   return isSkillDispatch ? TOOL_SYSTEM_PROMPT_BASE : TOOL_SYSTEM_PROMPT;

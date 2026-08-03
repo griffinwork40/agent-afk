@@ -2177,6 +2177,87 @@ describe('SubagentExecutor', () => {
       expect(new Set([r1.subagentId, r2.subagentId])).toEqual(new Set(['sub-a', 'sub-b']));
     });
 
+    // -----------------------------------------------------------------------
+    // Queued-message flush (Ctrl+B with typed-ahead pending).
+    //
+    // The promotion tool_result is the only carrier that reaches the parent's
+    // STILL-RUNNING turn, so a queued REPL message rides it instead of waiting
+    // for the next-turn drain. Delivery is gated on a shared claim ticket: it
+    // happens exactly once across N promotions, or not at all (which is what
+    // tells the REPL to keep the message queued).
+    // -----------------------------------------------------------------------
+    it('queued note rides the promotion tool_result and marks the claim', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const exec = promotableExecutor(registry);
+
+      const execPromise = exec.execute(makeCall({ input: { prompt: 'deep investigation' } }));
+      await tick();
+
+      const claim = { text: 'actually check the tests first', claimed: false };
+      const promoted = await exec.promoteActiveForeground(claim);
+      expect(promoted).toHaveLength(1);
+      expect(claim.claimed).toBe(true);
+
+      const result = await execPromise;
+      // The JSON pointer is unchanged; the note is appended after it.
+      const content = result.content as string;
+      expect(content).toContain('<queued-user-message>');
+      expect(content).toContain('actually check the tests first');
+      const payload = JSON.parse(content.slice(0, content.indexOf('\n\n<queued-user-message>')));
+      expect(payload.status).toBe('running');
+    });
+
+    it('queued note is delivered EXACTLY ONCE across two promoted subagents', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const a = hangingHandle();
+      const b = hangingHandle();
+      (a.handle as any).id = 'sub-a';
+      (b.handle as any).id = 'sub-b';
+      const forks = [a.handle, b.handle];
+      let i = 0;
+      mockSubagentMgr.forkSubagent = vi.fn().mockImplementation(() => Promise.resolve(forks[i++]));
+      const exec = promotableExecutor(registry);
+
+      const p1 = exec.execute(makeCall({ id: 'call-a', input: { prompt: 'first' } }));
+      const p2 = exec.execute(makeCall({ id: 'call-b', input: { prompt: 'second' } }));
+      await tick();
+
+      const claim = { text: 'stop and read this', claimed: false };
+      expect(await exec.promoteActiveForeground(claim)).toHaveLength(2);
+
+      const c1 = (await p1).content as string;
+      const c2 = (await p2).content as string;
+      const carriers = [c1, c2].filter((c) => c.includes('<queued-user-message>'));
+      expect(carriers).toHaveLength(1);
+    });
+
+    it('promotion without a queued note is byte-identical to the pre-feature result', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const exec = promotableExecutor(registry);
+
+      const execPromise = exec.execute(makeCall({ input: { prompt: 'no note' } }));
+      await tick();
+      await exec.promoteActiveForeground();
+
+      const content = (await execPromise).content as string;
+      expect(content).not.toContain('<queued-user-message>');
+      // Still pure JSON — nothing appended.
+      expect(() => JSON.parse(content)).not.toThrow();
+    });
+
+    it('nothing promotable: the claim stays unclaimed so the REPL keeps the message queued', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const exec = promotableExecutor(registry);
+      const claim = { text: 'must not be lost', claimed: false };
+
+      expect(await exec.promoteActiveForeground(claim)).toEqual([]);
+      expect(claim.claimed).toBe(false);
+    });
+
     it('race: run completes before promotion — normal result, nothing promoted, torn down', async () => {
       const registry = new BackgroundAgentRegistry({});
       // Non-hanging handle: runToResult resolves immediately with output.
