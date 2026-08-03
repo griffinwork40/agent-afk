@@ -435,3 +435,159 @@ describe('LoopStageBar — AFK_PLAIN_OUTPUT full render opt-out', () => {
     bar.stop();
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// LoopStageBar — right-edge decoration
+//
+// The rail lends its row's spare right edge to a decoration (the live goblin
+// sprite, mascot-live.ts). That is how the sprite avoids reserving rows of its
+// own, so these tests pin the two properties the arrangement depends on: the
+// decoration lands at `columns - 1` (never the final column, which would arm
+// DECAWM's pending wrap and scroll the reserved band), and it is dropped whole
+// rather than truncated or wrapped when the row cannot hold it.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('LoopStageBar — right-edge decoration', () => {
+  beforeEach(() => {
+    vi.spyOn(ResizeBus, 'subscribe').mockImplementation(() => vi.fn());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The painted row content, minus the CUP/erase/save/restore control writes. */
+  function paintedRow(stream: NodeJS.WriteStream): string {
+    const out = joinWrites(stream);
+    const body = out.split('\x1b[2K').pop() ?? '';
+    return body.replace(/\x1b\[u$/, '');
+  }
+
+  it('right-aligns the decoration so the row ends at columns - 1', () => {
+    const stream = makeMockStream(24, 80);
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => 'XXXXXXX',
+    });
+    bar.start();
+    const row = paintedRow(stream);
+    expect(row).toMatch(/XXXXXXX$/);
+    // Strictly inside the last column: a write into column 80 would leave the
+    // terminal in pending-wrap and the next emitted character would scroll.
+    expect(row.length).toBe(79);
+    bar.stop();
+  });
+
+  it('keeps at least two clear columns between the rail and the decoration', () => {
+    const stream = makeMockStream(24, 80);
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => 'GOB',
+    });
+    bar.start();
+    bar.repaint('acting');
+    const row = paintedRow(stream);
+    expect(row).toMatch(/ {2,}GOB$/);
+    bar.stop();
+  });
+
+  it('drops the decoration entirely when the row cannot hold it', () => {
+    // The full 5-cell rail is ~51 columns with its gutter; 55 columns leaves no
+    // room for a 7-column sprite plus its gap.
+    const stream = makeMockStream(24, 55);
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => 'XXXXXXX',
+    });
+    bar.start();
+    bar.repaint('acting');
+    const row = paintedRow(stream);
+    expect(row).not.toContain('XXXXXXX');
+    // The rail itself is never dropped — it is the row's reason to exist.
+    expect(row).toContain('act');
+    bar.stop();
+  });
+
+  it('drops it rather than truncating it — never a partial sprite', () => {
+    const stream = makeMockStream(24, 56);
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => 'ABCDEFG',
+    });
+    bar.start();
+    bar.repaint('acting');
+    const row = paintedRow(stream);
+    expect(row).not.toMatch(/A|BCDEFG/);
+    bar.stop();
+  });
+
+  it('re-fits the decoration when the same row gets shorter content', () => {
+    // Idle collapses the rail to `· idle`, so a width that cannot hold the
+    // sprite mid-turn can hold it between turns. Each paint re-decides.
+    const stream = makeMockStream(24, 55);
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => 'XXXXXXX',
+    });
+    bar.start();
+    bar.repaint('acting');
+    expect(paintedRow(stream)).not.toContain('XXXXXXX');
+    (stream.write as ReturnType<typeof vi.fn>).mockClear();
+    bar.repaint('observing');
+    expect(paintedRow(stream)).toMatch(/XXXXXXX$/);
+    bar.stop();
+  });
+
+  it('reads the decoration fresh on every paint (an animated sprite needs no other wiring)', () => {
+    const stream = makeMockStream(24, 80);
+    let frame = 0;
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => `f${frame}`,
+    });
+    bar.start();
+    bar.repaint('acting');
+    expect(paintedRow(stream)).toMatch(/f0$/);
+    frame = 1;
+    (stream.write as ReturnType<typeof vi.fn>).mockClear();
+    bar.redraw();
+    expect(paintedRow(stream)).toMatch(/f1$/);
+    bar.stop();
+  });
+
+  it('paints a byte-identical row to a bar with no decoration provider when it returns ``', () => {
+    // The inert-mascot case: an operator who never opted in must see exactly the
+    // row that shipped before the sprite existed.
+    const bare = makeMockStream(24, 80);
+    const decorated = makeMockStream(24, 80);
+    const a = new LoopStageBar({ getExtraRows: () => 1, stream: bare });
+    const b = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream: decorated,
+      getRightDecoration: () => '',
+    });
+    a.start();
+    b.start();
+    expect(joinWrites(decorated)).toBe(joinWrites(bare));
+    a.stop();
+    b.stop();
+  });
+
+  it('never overflows the row when the decoration is absurdly wide', () => {
+    const stream = makeMockStream(24, 80);
+    const bar = new LoopStageBar({
+      getExtraRows: () => 1,
+      stream,
+      getRightDecoration: () => 'X'.repeat(200),
+    });
+    bar.start();
+    bar.repaint('acting');
+    expect(paintedRow(stream).length).toBeLessThan(80);
+    bar.stop();
+  });
+});

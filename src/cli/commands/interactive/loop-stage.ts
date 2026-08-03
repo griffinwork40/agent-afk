@@ -46,6 +46,7 @@
 import type { OutputEvent } from '../../../agent/types.js';
 import { ResizeBus } from '../../terminal-size.js';
 import { palette } from '../../palette.js';
+import { displayWidth } from '../../display.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
 
 export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'updating';
@@ -55,7 +56,7 @@ export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'upda
  *
  * The stage vocabulary is deliberately structural (see above) and cannot encode
  * an outcome: `updating` is the same stage whether the tool succeeded or blew
- * up. Consumers that react to outcomes (the mascot band's `alert` state) need
+ * up. Consumers that react to outcomes (the live mascot's `alert` state) need
  * that bit, so it rides alongside the stage rather than corrupting the stage
  * enum with a pseudo-stage like `'errored'`. Optional and additive: every
  * existing single-argument consumer keeps working untouched.
@@ -199,6 +200,16 @@ export function formatStageRail(
 
 // ─── Reserved-footer bar ────────────────────────────────────────────────────
 
+/** Left indent of the rail within its reserved row. */
+const RAIL_GUTTER = '  ';
+
+/**
+ * Clear columns required between the rail and a right-edge decoration. Two, so
+ * the decoration never abuts the rail's last cell and always reads as a
+ * separate object rather than another rail segment.
+ */
+const DECORATION_MIN_GAP = 2;
+
 /**
  * Persistent loop-stage bar pinned as a reserved footer row above the status
  * line.
@@ -234,10 +245,21 @@ export function formatStageRail(
  * Between turns (stage = `'observing'`) `formatStageRail` collapses the full
  * 5-cell rail to a single dim `· idle` cell (see its docstring) rather than
  * painting all five stages with none of them earned yet.
+ *
+ * ## Right-edge decoration
+ *
+ * The rail is short and its row is wide, so the row's right edge is spare
+ * space. `getRightDecoration` lends it out: a caller supplies a snippet that
+ * this bar right-aligns against `columns - 1` (see `composeRow`). The live
+ * goblin sprite (mascot-live.ts) is the one tenant today, and lending the edge
+ * is why it needs no reserved rows of its own — one painter owns the row, so
+ * the two can never clobber each other, and a decoration that animates only
+ * has to call `redraw()`.
  */
 export class LoopStageBar {
   private readonly stream: NodeJS.WriteStream;
   private readonly getExtraRows: () => number;
+  private readonly getRightDecoration?: () => string;
   private started = false;
   private currentStage: LoopStage = 'observing';
   private resizeUnsub: (() => void) | null = null;
@@ -248,10 +270,19 @@ export class LoopStageBar {
    *   from the StatusLine (including this bar's own 1 row). Used to compute
    *   the absolute paint row. Typically `() => ctx.statusLine.getExtraRows()`.
    * @param opts.stream - Write stream (defaults to `process.stdout`).
+   * @param opts.getRightDecoration - Optional ANSI-styled snippet to right-align
+   *   on this row (the live-mascot sprite; see mascot-live.ts). Read fresh on
+   *   every paint, so an animated decoration only has to ask this bar to
+   *   `redraw()`. Return `''` for none.
    */
-  constructor(opts: { getExtraRows: () => number; stream?: NodeJS.WriteStream }) {
+  constructor(opts: {
+    getExtraRows: () => number;
+    stream?: NodeJS.WriteStream;
+    getRightDecoration?: () => string;
+  }) {
     this.stream = opts.stream ?? process.stdout;
     this.getExtraRows = opts.getExtraRows;
+    this.getRightDecoration = opts.getRightDecoration;
   }
 
   setRowCountChangeHandler(handler: (rows: number) => void): void {
@@ -303,15 +334,40 @@ export class LoopStageBar {
     this.stream.write('\x1b[s');
     this.stream.write(`\x1b[${paintRow};1H`);
     this.stream.write('\x1b[2K');
-    this.stream.write(
-      '  ' +
-        formatStageRail(stage, {
-          dim: palette.dim,
-          accent: palette.brand,
-          bold: palette.bold,
-        }),
-    );
+    this.stream.write(this.composeRow(stage));
     this.stream.write('\x1b[u');
+  }
+
+  /**
+   * Compose the row: the rail, plus any right-aligned decoration.
+   *
+   * Invariant (terminal auto-wrap): the composed row's display width must stay
+   * strictly below `columns`. A write into the final column arms DECAWM's
+   * pending-wrap state, and the next character emitted scrolls the reserved
+   * band out from under the reservation. So the decoration's right edge is
+   * `columns - 1`, the same last-column reserve used by src/cli/input/echo.ts
+   * and src/cli/render/card.ts.
+   *
+   * When the row cannot hold the rail, DECORATION_MIN_GAP clear columns, and
+   * the decoration, the decoration is dropped whole — never truncated and never
+   * wrapped. Half a sprite is worse than no sprite, and a wrapped one would
+   * push a line into the scroll region. The rail itself is never dropped: it is
+   * the row's reason to exist.
+   */
+  private composeRow(stage: LoopStage): string {
+    const rail =
+      RAIL_GUTTER +
+      formatStageRail(stage, {
+        dim: palette.dim,
+        accent: palette.brand,
+        bold: palette.bold,
+      });
+    const decoration = this.getRightDecoration?.() ?? '';
+    if (decoration === '') return rail;
+    const columns = this.stream.columns ?? 80;
+    const gap = columns - 1 - displayWidth(rail) - displayWidth(decoration);
+    if (gap < DECORATION_MIN_GAP) return rail;
+    return rail + ' '.repeat(gap) + decoration;
   }
 
   /**

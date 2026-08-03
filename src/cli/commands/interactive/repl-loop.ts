@@ -102,7 +102,7 @@ export async function runReplLoop(
       transcript,
       sigintHandler,
       suggestGhostEnabled,
-      { getLoopStageBar: () => footer?.loopStageBar, getMascotBar: () => footer?.mascotBar },
+      { getLoopStageBar: () => footer?.loopStageBar, getLiveMascot: () => footer?.liveMascot },
     );
 
     footer = setupFooterSubsystems(ctx, turnState);
@@ -133,16 +133,17 @@ export async function runReplLoop(
     footer?.bgResultNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
     // painted before the counts below it change. LoopStageBar positions from
-    // the full extraRows, so it must clear before mascotBar/bgStatusBar/
-    // verdictLedger shrink their counts. The mascot band positions from
-    // bgBarRowCount + ledgerRowCount, so it must clear before those two. The
-    // bg bar's clear row depends on the verdict count (its getAdjacentRows), so
-    // it must clear before the verdict ledger drops ledgerRowCount to 0. The
-    // verdict rail sits at the bottom (row N-1), independent of the others.
+    // the full extraRows, so it must clear before bgStatusBar/verdictLedger
+    // shrink their counts. The bg bar's clear row depends on the verdict count
+    // (its getAdjacentRows), so it must clear before the verdict ledger drops
+    // ledgerRowCount to 0. The verdict rail sits at the bottom (row N-1),
+    // independent of the others.
+    //
+    // The live mascot goes FIRST, ahead of that order: it owns no rows, but its
+    // animation ticker's only job is to ask the loop-stage rail to repaint, so
+    // it must fall silent before that rail stops rather than after.
+    footer?.liveMascot.stop();
     footer?.loopStageBar.stop();
-    // The mascot band sits between the loop-stage rail and the bg bar, so it
-    // clears after the rail above it and before the counts below it change.
-    footer?.mascotBar.stop();
     footer?.bgStatusBar.stop();
     footer?.verdictLedger.stop();
     footer?.contextPane.dispose();
