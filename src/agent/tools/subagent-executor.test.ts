@@ -5,6 +5,9 @@
  */
 
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Hoisted mock so SubagentExecutor picks up the mocked appendRoutingDecision.
 const appendRoutingDecision = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -232,6 +235,51 @@ describe('SubagentExecutor', () => {
 
       expect(result.content).toBe(expectedContent);
       expect(result.isError).toBeUndefined();
+    });
+
+    it('dispatches text first followed by path-backed image blocks', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'afk-subagent-image-'));
+      const imagePath = join(dir, 'sample.png');
+      await writeFile(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(
+        makeCall({ input: { prompt: 'inspect image', attachments: [imagePath], model: 'sonnet' } }),
+      );
+
+      expect(handle.runToResult).toHaveBeenCalledWith([
+        { type: 'text', text: 'inspect image' },
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: 'image/png',
+            data: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+          },
+        },
+      ]);
+    });
+
+    it('passes the bare prompt string unchanged when attachments are absent', async () => {
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      await executor.execute(makeCall({ input: { prompt: 'exact prompt bytes' } }));
+      expect(handle.runToResult).toHaveBeenCalledWith('exact prompt bytes');
+    });
+
+    it('warns the parent when attachments target a non-vision child model', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'afk-subagent-image-'));
+      const imagePath = join(dir, 'sample.png');
+      await writeFile(imagePath, Buffer.from('png'));
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(
+        makeCall({ input: { prompt: 'inspect', attachments: [imagePath], model: 'unknown-text-model' } }),
+      );
+      expect(result.content).toContain('WARNING: child model unknown-text-model is not vision-capable');
+      expect(result.content).toContain('images were dropped');
     });
 
     it('passes model override to child config', async () => {

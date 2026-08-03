@@ -34,6 +34,10 @@ import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/fo
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { debugLog } from '../../utils/debug.js';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { appendImageBlocks } from '../content/image-blocks.js';
+import { supportsVision } from '../model-capabilities.js';
+import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 
@@ -781,14 +785,43 @@ export class SubagentExecutor implements SubagentControl {
       });
     }
 
+    // Invariant: assemble multimodal content only after every label, promptHead,
+    // background hand-off, and other string-derived artifact above has consumed
+    // parsed.prompt. This keeps image bytes out of metadata and preserves the
+    // bare-string no-attachment path exactly.
+    let childPrompt: string | ContentBlockParam[] = parsed.prompt;
+    if (parsed.attachments !== undefined) {
+      let attachments;
+      try {
+        attachments = await resolveSubagentAttachments({
+          paths: parsed.attachments,
+          resolveBase:
+            childScopeInputs.parentCwd ??
+            this.currentCwd ??
+            childScopeInputs.parentReadRoots?.[0],
+          readRoots: childScopeInputs.parentReadRoots,
+        });
+      } catch (err) {
+        await handle.teardown().catch(() => undefined);
+        return {
+          content: `Agent tool attachment resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+          isError: true,
+        };
+      }
+      const blocks: ContentBlockParam[] = [{ type: 'text', text: parsed.prompt }];
+      appendImageBlocks(blocks, attachments);
+      childPrompt = blocks;
+    }
+
     // Foreground branch: race the run against a user-triggered promotion
     // (Ctrl+B), shape success/failure, and clean up in a finally. The
     // executor's two in-flight maps are handed in so the SubagentControl seam
     // (promote/cancel) still observes and mutates the same live entries.
-    return runForegroundWithPromotion({
+    const result = await runForegroundWithPromotion({
       handle,
       signal: call.signal,
-      prompt: parsed.prompt,
+      prompt: childPrompt,
+      backgroundPrompt: parsed.prompt,
       idPrefix: parsed.id_prefix,
       model: childConfig.model,
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
@@ -801,5 +834,11 @@ export class SubagentExecutor implements SubagentControl {
       activeForegroundHandles: this.activeForegroundHandles,
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     });
+    if (parsed.attachments !== undefined && !supportsVision(childConfig.model)) {
+      result.content =
+        `WARNING: child model ${childConfig.model} is not vision-capable; attached images were dropped.\n\n` +
+        result.content;
+    }
+    return result;
   }
 }

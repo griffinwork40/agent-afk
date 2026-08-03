@@ -356,6 +356,13 @@ export const agentTool: AnthropicToolDef = {
         type: 'string',
         description: 'The task for the agent to perform.',
       },
+      attachments: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Optional absolute paths to image files to attach. Bytes are resolved by ' +
+          'the runtime — NEVER paste base64 into the tool call.',
+      },
       model: {
         type: 'string',
         description:

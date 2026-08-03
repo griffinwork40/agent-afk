@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import type { ImageAttachment } from '../../input/attachments.js';
+import type { ImageAttachment } from '../../cli/input/attachments.js';
 import { appendImageBlocks } from './image-blocks.js';
 
 function fakeImage(

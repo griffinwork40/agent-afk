@@ -17,6 +17,7 @@
  * @module agent/tools/subagent/foreground-promotion
  */
 
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SubagentManager } from '../../subagent.js';
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
@@ -45,7 +46,9 @@ export interface RunForegroundArgs {
   handle: ForkedHandle;
   /** The dispatching tool-call's abort signal + id_prefix carrier. */
   signal: AbortSignal;
-  prompt: string;
+  prompt: string | ContentBlockParam[];
+  /** Plain string prompt retained for background promotion metadata. */
+  backgroundPrompt: string;
   /** Optional: sourced from `AgentInput.id_prefix` (`id_prefix?: string`); flows only into telemetry, which accepts undefined. */
   idPrefix: string | undefined;
   /** Child model for the promotion registry record; falls back to 'sonnet'. */
@@ -108,6 +111,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     handle,
     signal,
     prompt,
+    backgroundPrompt,
     idPrefix,
     model,
     parentModel,
@@ -203,7 +207,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           const job = registry.adoptRunning({
             handle,
             runPromise,
-            prompt,
+            prompt: backgroundPrompt,
             model: model ?? 'sonnet',
             parentSessionId,
           });

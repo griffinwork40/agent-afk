@@ -18,7 +18,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { ImageAttachment } from '../../input/attachments.js';
-import { appendImageBlocks } from './image-blocks.js';
+import { appendImageBlocks } from '../../../agent/content/image-blocks.js';
 
 /**
  * Build a ContentBlockParam array for a user message.
