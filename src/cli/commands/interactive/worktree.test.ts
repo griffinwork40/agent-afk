@@ -153,10 +153,26 @@ describe('setupWorktree', () => {
     const handle = await setupWorktree('feat-keep', { execFile: mock });
     const callsBefore = mock.calls.length;
 
-    await handle.cleanup({ disposition: 'keep' });
+    await handle.cleanup({ disposition: 'keep-locked' });
     const cleanupCalls = mock.calls.slice(callsBefore);
 
     expect(cleanupCalls.some((c) => c.args.includes('lock') && c.args.includes('--reason'))).toBe(true);
+    expect(cleanupCalls.some((c) => c.args.includes('remove'))).toBe(false);
+  });
+
+  // Regression guard: `keep-unlocked` is the unattended backstop (signal exit,
+  // non-TTY). It must preserve WITHOUT locking — a lock is permanent, because
+  // worktree-sweep classifies `locked` ahead of every age/owner check and then
+  // no-ops, so locking here would leak a worktree per abnormal exit.
+  it('cleanup keeps a clean tree WITHOUT locking for keep-unlocked', async () => {
+    const mock = makeMock(defaultHandler(repoRoot));
+    const handle = await setupWorktree('feat-keep-unlocked', { execFile: mock });
+    const callsBefore = mock.calls.length;
+
+    await handle.cleanup({ disposition: 'keep-unlocked' });
+    const cleanupCalls = mock.calls.slice(callsBefore);
+
+    expect(cleanupCalls.some((c) => c.args.includes('lock'))).toBe(false);
     expect(cleanupCalls.some((c) => c.args.includes('remove'))).toBe(false);
   });
 
@@ -169,7 +185,7 @@ describe('setupWorktree', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const callsBefore = mock.calls.length;
 
-    await handle.cleanup({ disposition: 'keep' });
+    await handle.cleanup({ disposition: 'keep-locked' });
     const cleanupCalls = mock.calls.slice(callsBefore);
 
     expect(cleanupCalls.some((c) => c.args.includes('remove'))).toBe(false);

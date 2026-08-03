@@ -735,7 +735,8 @@ async function createWorktreeAt(
         return;
       }
 
-      if ((opts?.disposition ?? 'remove') === 'keep') {
+      const disposition = opts?.disposition ?? 'remove';
+      if (disposition === 'keep-locked') {
         // External sweep constraint: lock BEFORE advertising preservation; a clean
         // dead-owner worktree without this lock may be reclaimed at the next sweep.
         try {
@@ -752,6 +753,14 @@ async function createWorktreeAt(
           );
         }
         preserveWorktree('kept on exit');
+        return;
+      }
+      if (disposition === 'keep-unlocked') {
+        // Deliberately NOT locked: nobody chose to keep this tree (the input
+        // surface was gone), so it is preserved as a grace window and left
+        // sweep-eligible rather than pinned forever. Say so, because "preserved"
+        // alone would imply the durability that only a lock provides.
+        preserveWorktree('kept on exit (not locked — a later sweep may reclaim it)');
         return;
       }
 

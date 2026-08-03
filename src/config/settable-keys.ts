@@ -86,6 +86,9 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   // Worktree git-ref fields — env twins of human-tier `interactive.worktree*` (git-flag sensitive).
   'AFK_WORKTREE_BASE',
   'AFK_WORKTREE_BRANCH_PREFIX',
+  // Worktree quit-time keep/remove policy — env twin of human-tier `interactive.worktreeOnExit`
+  // (governs destructive teardown of the agent's own workspace; see that key's comment).
+  'AFK_WORKTREE_ON_EXIT',
   // Telegram routing + allowlist — who may drive the bot, where notifications go
   // (env twins of human-tier `telegram.notify.*` / `telegram.tagOnlyChats`).
   'AFK_TELEGRAM_ALLOWED_CHAT_IDS',

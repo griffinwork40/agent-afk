@@ -516,12 +516,22 @@ export function registerInteractiveCommand(program: Command): void {
         };
       }
       let dispositionResolution: Promise<void> | undefined;
+      // Invariant: the picker owns raw stdin until it settles, so a signal-driven
+      // shutdown MUST be able to cancel it. Without this signal the cleanup
+      // closure's `await ctx.resolveWorktreeDisposition?.(false)` can await a
+      // promise that never resolves, and nothing bounds that wait: GRACE_MS only
+      // *starts* cleanup, and `runCleanupFunctions()` carries no deadline of its
+      // own. Aborted by handleSigterm/handleSighup below.
+      const pickerAbort = new AbortController();
       ctx.resolveWorktreeDisposition = (canPrompt: boolean): Promise<void> => {
         if (dispositionResolution !== undefined) return dispositionResolution;
         const compositor = canPrompt ? ctx.slashCtx.getCompositor?.() ?? null : null;
         dispositionResolution = resolveWorktreeDisposition({
           ...(compositor !== null
-            ? { picker: (pickerOpts) => runPicker(compositor, pickerOpts) }
+            ? {
+                picker: (pickerOpts) =>
+                  runPicker(compositor, { ...pickerOpts, signal: pickerAbort.signal }),
+              }
             : {}),
           isTTY: canPrompt && Boolean(process.stdout.isTTY),
           policy: worktreeExitPolicy,
@@ -692,6 +702,11 @@ export function registerInteractiveCommand(program: Command): void {
         // Pre-abort before rl.close() so deriveClosureReason sees 'sigterm'
         // (a non-'closed' reason) and returns 'abort' instead of 'model_end_turn'.
         ctx.session.current?.abort('sigterm');
+        // Ordering constraint: cancel the quit-time picker BEFORE closing
+        // readline, so it releases raw stdin and settles its promise while the
+        // terminal is still intact. Reversing this strands the awaited
+        // disposition in the cleanup closure below.
+        pickerAbort.abort();
         // Close readline first so any in-progress prompt unwinds before
         // we close the session and run cleanups. rl.on('close') will
         // also fire and trigger the standard exit path; the guard above
@@ -724,6 +739,9 @@ export function registerInteractiveCommand(program: Command): void {
         // Pre-abort before rl.close() so deriveClosureReason sees 'sighup'
         // (a non-'closed' reason) and returns 'abort' instead of 'model_end_turn'.
         ctx.session.current?.abort('sighup');
+        // Same ordering constraint as handleSigterm: picker cancel precedes
+        // readline teardown.
+        pickerAbort.abort();
         try { ctx.rl.close(); } catch { /* best-effort */ }
         const GRACE_MS = 2000;
         setTimeout(() => {
