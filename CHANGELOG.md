@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.87.0] - 2026-08-03
+
+### Added
+- choose keep or delete when quitting a -w session (#859) (66f5220)
+
+### Fixed
+- ground-state memory surveyor calls memory_search, not a dead path (#862) (#878) (0c5ba47)
+
 ## [5.86.0] - 2026-08-03
 
 ### Added
