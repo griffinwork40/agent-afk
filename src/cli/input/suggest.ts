@@ -29,6 +29,7 @@ import type { ModelProvider } from '../../agent/provider.js';
 import { redactSecrets } from '../../agent/redact-secrets.js';
 import { env } from '../../config/env.js';
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
+import { sortByRecency } from './suggest-rank.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -327,9 +328,13 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
       const canonicalNames = listSlashCommands().map(cmd => cmd.name);
       const aliasNames = aliasEntries().map(e => e.alias);
       const allNames = [...canonicalNames, ...aliasNames];
-      const match = allNames
-        .filter(name => name.startsWith(slashPartial))
-        .sort((a, b) => a.localeCompare(b))[0];
+      // Recency-ranked, alphabetical as terminal tie-break. With ~100 names a
+      // 2-char prefix is ambiguous for most commands, so alphabetical alone
+      // rarely surfaces the one the user means.
+      const match = sortByRecency(
+        allNames.filter(name => name.startsWith(slashPartial)),
+        ctx.getHistory(),
+      )[0];
       if (match) {
         // Return the full buffer with the partial /token replaced by the full skill name.
         const prefixEnd = buffer.length - slashPartial.length;

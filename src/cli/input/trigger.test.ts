@@ -177,6 +177,52 @@ describe('filterSlashCandidates', () => {
     expect(vals.length).toBeGreaterThan(0);
     expect(vals).toContain('/config');
   });
+
+  describe('recency ranking', () => {
+    it('omitting history preserves the previous alphabetical ordering', () => {
+      const withoutArg = filterSlashCandidates('c').map((c) => c.value);
+      const withEmpty = filterSlashCandidates('c', []).map((c) => c.value);
+      expect(withEmpty).toEqual(withoutArg);
+      // And that ordering really is alphabetical within the prefix bucket.
+      const prefixOnly = withoutArg.filter((v) => v.slice(1).toLowerCase().startsWith('c'));
+      expect(prefixOnly).toEqual([...prefixOnly].sort((a, b) => a.localeCompare(b)));
+    });
+
+    it('promotes a recently used command above the alphabetical winner', () => {
+      // Pick the LAST prefix-bucket entry — the alphabetically worst prefix
+      // match. A subsequence-only match would legitimately stay below the
+      // whole prefix bucket, so it cannot be used to prove promotion.
+      const prefixBucket = filterSlashCandidates('c')
+        .map((c) => c.value)
+        .filter((v) => v.slice(1).toLowerCase().startsWith('c'));
+      expect(prefixBucket.length).toBeGreaterThan(1);
+      const target = prefixBucket[prefixBucket.length - 1]!;
+      expect(filterSlashCandidates('c').map((c) => c.value)[0]).not.toBe(target);
+
+      const ranked = filterSlashCandidates('c', [`${target} some args`]).map((c) => c.value);
+      expect(ranked[0]).toBe(target);
+    });
+
+    it('keeps the prefix bucket ahead of the subsequence bucket', () => {
+      // Recency must reorder WITHIN a bucket, never across buckets — a
+      // recently used subsequence-only match must not jump above prefix hits.
+      const subseqOnly = filterSlashCandidates('cfg').map((c) => c.value);
+      expect(subseqOnly).toContain('/config');
+      const ranked = filterSlashCandidates('co', ['/config x']).map((c) =>
+        c.value.slice(1).toLowerCase(),
+      );
+      const firstNonPrefix = ranked.findIndex((k) => !k.startsWith('co'));
+      if (firstNonPrefix !== -1) {
+        expect(ranked.slice(firstNonPrefix).every((k) => !k.startsWith('co'))).toBe(true);
+      }
+    });
+
+    it('ignores history naming commands that do not match the query', () => {
+      const baseline = filterSlashCandidates('c').map((c) => c.value);
+      const ranked = filterSlashCandidates('c', ['/totally-unrelated']).map((c) => c.value);
+      expect(ranked).toEqual(baseline);
+    });
+  });
 });
 
 describe('detectTrigger — flag completion for aliases', () => {
