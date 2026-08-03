@@ -137,7 +137,7 @@ export interface RuntimeSubagents {
  * Git workspace state for the session's CURRENT working directory (Phase 2).
  *
  * Re-gathered on every `getWorkspace()` call against the live cwd, so it
- * follows a mid-session `setCwd()` re-anchor (`afk -w`, `/cd`) instead of
+ * follows the deferred born-named `afk -w` worktree re-anchor instead of
  * pinning to the launch checkout.
  *
  * All fields are nullable — the object is returned with every field `null`

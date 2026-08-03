@@ -287,8 +287,9 @@ describe('buildRuntimeStateSource.getWorkspace', () => {
 
   it('re-reads getCwd per call so a mid-session setCwd re-anchors the repo', () => {
     // Regression guard (worktree staleness): `cwd` used to be a captured
-    // string, so after an `afk -w` / `/cd` re-anchor the awareness layer kept
-    // gathering git state for the LAUNCH checkout. The symptom was a session
+    // string, so after the deferred born-named `afk -w` worktree re-anchor the
+    // awareness layer kept gathering git state for the LAUNCH checkout. The
+    // symptom was a session
     // whose `- Working directory:` line pointed at the new worktree while its
     // `- Workspace:` line reported the original checkout's branch and HEAD.
     vi.mocked(gatherWorkspace).mockReturnValue(ws(0));

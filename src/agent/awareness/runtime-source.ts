@@ -2,9 +2,10 @@
  * Constructs a {@link RuntimeStateSource} from the provider's per-query state.
  *
  * Shared by both `anthropic-direct` and `openai-compatible` providers so the
- * resulting snapshot shape is provider-agnostic. The provider supplies live
- * accessors (lambdas), not snapshots, so subsequent `get_runtime_state` calls
- * see up-to-date subagent counts, MCP tool counts, and git workspace state.
+ * resulting snapshot shape is provider-agnostic. Providers supply callbacks so
+ * subsequent `get_runtime_state` calls can see up-to-date subagent counts, MCP
+ * tool counts, and git workspace state; openai-compatible's cwd callback is a
+ * known per-query snapshot until #876.
  *
  * @module agent/awareness/runtime-source
  */
@@ -30,13 +31,14 @@ export interface RuntimeSourceDeps {
   /**
    * Live accessor for the session working directory.
    *
-   * Invariant: this MUST be a callback, never a snapshot. `setCwd()` (the
-   * `afk -w` born-named worktree path, `/cd`, and worktree re-anchoring) can
-   * repoint the session mid-flight, and both `getSelf().cwd` and
-   * `getWorkspace()` have to follow it. A captured string silently pins the
-   * awareness layer to the launch directory, so `get_runtime_state` and the
-   * `- Workspace:` prompt line keep reporting the ORIGINAL checkout's branch
-   * and HEAD while the tools operate in the new one.
+   * Invariant: providers SHOULD supply a live callback, not a captured string.
+   * The deferred born-named `afk -w` worktree path can repoint an anthropic-direct
+   * session mid-flight, and both `getSelf().cwd` and `getWorkspace()` have to
+   * follow it. A captured string silently pins the awareness layer to the launch
+   * directory, so `get_runtime_state` and the `- Workspace:` prompt line keep
+   * reporting the ORIGINAL checkout's branch and HEAD while the tools operate in
+   * the new one. Known exception: openai-compatible currently freezes this value
+   * per query; fixing its mid-query `setCwd()` staleness is tracked in #876.
    */
   getCwd: () => string;
   /** Resolved model identifier the SDK will be called with. */
@@ -90,10 +92,11 @@ export interface RuntimeSourceDeps {
  * branch when it orients, not a frozen session-start snapshot that silently
  * goes stale as files change.
  *
- * `deps.getCwd` is likewise a callback rather than a string: a session can be
- * repointed mid-flight (`afk -w` born-named worktrees, `/cd`), and a captured
- * cwd would pin the awareness layer to the launch checkout — reporting the
- * wrong branch and HEAD for the entire remaining session.
+ * `deps.getCwd` is likewise a callback rather than a string: anthropic-direct
+ * sessions can be repointed mid-flight by the deferred born-named `afk -w`
+ * worktree path, and a captured cwd would pin the awareness layer to the launch
+ * checkout — reporting the wrong branch and HEAD for the remaining session.
+ * Known exception: openai-compatible freezes this value per query until #876.
  */
 export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSource {
   return {

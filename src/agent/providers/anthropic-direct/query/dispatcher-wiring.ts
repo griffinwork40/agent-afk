@@ -47,6 +47,7 @@ import {
   buildRuntimeStateSource,
   getRuntimeStateTool,
   wrapDispatcherWithRuntimeState,
+  type RuntimeSourceDeps,
   type RuntimeStateSource,
 } from '../../../awareness/index.js';
 import { builtinToolSchemas } from '../../../tools/schemas.js';

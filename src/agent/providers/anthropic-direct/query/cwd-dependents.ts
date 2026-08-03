@@ -116,8 +116,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
     //    accepted minor staleness window for Phase 1 (worktree rename
     //    rarely coincides with mid-session MCP tool refresh).
     // Use the LIVE permission mode (not the captured construction-time
-    // `permissionMode`) so a `/cd` after a `/bypass` toggle rebuilds the
-    // dispatcher with the current allowAll, never reverting the toggle.
+    // `permissionMode`) so a cwd re-anchor after a `/bypass` toggle rebuilds
+    // the dispatcher with the current allowAll, never reverting the toggle.
     const newDispatcher = args.buildDispatcher(args.getCurrentPermissionMode(), {
       cwd: newCwd,
       readRoots: args.sharedReadRoots,
@@ -129,7 +129,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       runtimeStateSource: args.runtimeStateSource,
       hookRegistry: args.config.hookRegistry,
       // Carry the resident plan-exit handler across a cwd rebuild — omitting
-      // this previously dropped `exit_plan_mode` after a `/cd` while planning.
+      // this previously dropped `exit_plan_mode` after a cwd re-anchor while planning.
       planExitControls: args.config.planExitControls,
     });
     return { userSystem: newUserSystem, dispatcher: newDispatcher };

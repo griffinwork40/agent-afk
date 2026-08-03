@@ -437,6 +437,14 @@ export class AnthropicDirectProvider implements ModelProvider {
     // Route through ensureSharedRoots so _initialResolveBase is captured for
     // the non-revocable guard in revokeRoot.
     this.ensureSharedRoots(config.cwd);
+    // Invariant: a cached provider instance is reused across `/model` swaps, and
+    // ProviderRouter.buildInner injects the router's live cwd into each new
+    // innerConfig — so `_currentCwd` left over from a PREVIOUS query can be older
+    // than THIS query's `config.cwd`. Re-seed from the incoming config so the
+    // awareness source never reports a checkout the rebuilt prompt and tools have
+    // already left. Later `setCwd()` calls still win: they overwrite `_currentCwd`
+    // after this point, and this only runs at query() entry.
+    if (config.cwd) this._currentCwd = config.cwd;
     // If the caller pre-supplied roots (e.g. forked subagent), prefer them on
     // the very first init only — ensureSharedRoots will have created defaults
     // we now overwrite with the explicit values.
@@ -463,10 +471,10 @@ export class AnthropicDirectProvider implements ModelProvider {
         externalTools: this.externalTools,
         sharedReadRoots: this._sharedReadRoots,
         sharedWriteRoots: this._sharedWriteRoots,
-        // Live cwd: `_currentCwd` wins because `cwdDependentsFactory` updates
-        // it on every setCwd (born-named `afk -w` worktree, `/cd`) before it
-        // re-reads the workspace, while `config.cwd` is the construction-time
-        // value. Same `||` fall-through as the `cwd` const below, so the
+        // Live cwd: `_currentCwd` is re-seeded from this query's config above,
+        // then `cwdDependentsFactory` updates it on every live-session re-anchor
+        // (the deferred born-named `afk -w` worktree path) before the workspace
+        // is re-read. Same `||` fall-through as the `cwd` const below, so the
         // `- Working directory:` and `- Workspace:` lines can never disagree.
         getCwd: () => this._currentCwd || config.cwd || process.cwd(),
         getMcpTools: () => this.mcpManager?.getMcpTools() ?? [],

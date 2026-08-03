@@ -39,8 +39,19 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent } from '../../provider.js';
 import type { RuntimeSnapshot } from '../../awareness/index.js';
+import { gatherWorkspace } from '../../awareness/workspace-source.js';
 import { AnthropicDirectProvider, __setAnthropicClientFactory } from './index.js';
 import { tool } from '../../tools/custom-tool.js';
+
+vi.mock('../../awareness/workspace-source.js', () => ({
+  gatherWorkspace: vi.fn(() => ({
+    branch: null,
+    headSha: null,
+    dirty: null,
+    dirtyCount: null,
+    remoteUrl: null,
+  })),
+}));
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -546,5 +557,24 @@ describe('query() characterization (#824) — shared roots and grants', () => {
       provider.query({ prompt: singleInput('hi'), config: { ...BASE_CONFIG, cwd: '/work' } }),
     );
     expect(provider.getGrants().resolveBase).toBe('/work');
+  });
+
+  it('re-seeds awareness cwd from each query config on a cached provider', async () => {
+    const provider = new AnthropicDirectProvider();
+
+    scriptRuntimeStateCall('all');
+    const firstEvents = await collect(
+      provider.query({ prompt: singleInput('orient'), config: { ...BASE_CONFIG, cwd: '/checkout-a' } }),
+    );
+    expect(snapshotFrom(firstEvents).self?.cwd).toBe('/checkout-a');
+
+    scriptRuntimeStateCall('all');
+    const secondEvents = await collect(
+      provider.query({ prompt: singleInput('orient again'), config: { ...BASE_CONFIG, cwd: '/checkout-b' } }),
+    );
+    const second = snapshotFrom(secondEvents);
+
+    expect(second.self?.cwd).toBe('/checkout-b');
+    expect(vi.mocked(gatherWorkspace)).toHaveBeenLastCalledWith('/checkout-b');
   });
 });

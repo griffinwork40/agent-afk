@@ -1806,6 +1806,30 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
+  it('get_runtime_state cwd is frozen to the query config cwd (#876 characterization)', async () => {
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: makeControlledPromptStream().stream,
+      config: baseConfig({ cwd: '/query-cwd' }),
+    });
+
+    q.setCwd('/mid-query-cwd');
+    const dispatcher = (q as unknown as { toolDispatcher: SessionToolDispatcher }).toolDispatcher;
+    const result = await dispatcher.execute({
+      id: 'toolu_state',
+      name: 'get_runtime_state',
+      input: { view: 'self' },
+      signal: new AbortController().signal,
+    });
+
+    const snapshot = JSON.parse(result.content) as { self: { cwd: string } };
+    expect(snapshot.self.cwd).toBe('/query-cwd');
+    // #876 gap: unlike the dispatcher resolve base, awareness cwd does not follow
+    // a mid-query setCwd() on openai-compatible until that provider is fixed.
+    expect(snapshot.self.cwd).not.toBe('/mid-query-cwd');
+    q.close();
+  });
+
   it('setPermissionMode flips dispatcher allowAll: autonomous (AFK) + bypass ON, default/plan OFF', async () => {
     const hookRegistry = createHookRegistry();
     const dispatcher = new SessionToolDispatcher({

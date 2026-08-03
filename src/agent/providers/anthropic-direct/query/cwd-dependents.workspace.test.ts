@@ -8,7 +8,7 @@
  * launch directory's.
  *
  * Symptom this guards against: a session started in the main checkout and
- * re-anchored into a worktree (`afk -w`, `/cd`) emitted an `# Environment`
+ * re-anchored into a worktree by the deferred born-named `afk -w` path emitted an `# Environment`
  * block whose `- Working directory:` line pointed at the worktree while its
  * `- Workspace:` line still named the main checkout's branch and HEAD — so the
  * model was told it was on a branch it was not on.
@@ -66,6 +66,10 @@ function setup() {
     getSubagents: () => ({ active: [], backgroundJobs: [] }),
   });
 
+  const setCurrentCwd = vi.fn((cwd: string) => {
+    currentCwd = cwd;
+  });
+
   const factory = createCwdDependentsFactory({
     stableSystemPrefix: buildStableSystemPrefix({
       toolBase: 'TOOLBASE',
@@ -78,9 +82,7 @@ function setup() {
     surface: 'cli',
     runtimeStateSource,
     getCurrentCwd: () => currentCwd,
-    setCurrentCwd: (cwd: string) => {
-      currentCwd = cwd;
-    },
+    setCurrentCwd,
     getCurrentPermissionMode: () => 'default',
     sharedReadRoots: [LAUNCH_CWD],
     sharedWriteRoots: [LAUNCH_CWD],
@@ -90,7 +92,7 @@ function setup() {
     buildDispatcher: () => ({}) as ToolDispatcher,
   });
 
-  return { factory, runtimeStateSource };
+  return { factory, runtimeStateSource, setCurrentCwd };
 }
 
 describe('cwdDependentsFactory — workspace follows the re-anchored cwd', () => {
@@ -117,6 +119,16 @@ describe('cwdDependentsFactory — workspace follows the re-anchored cwd', () =>
     factory(WORKTREE_CWD);
 
     expect(vi.mocked(gatherWorkspace)).toHaveBeenLastCalledWith(WORKTREE_CWD);
+  });
+
+  it('updates the live cwd before gathering workspace for the rebuilt prompt', () => {
+    const { factory, setCurrentCwd } = setup();
+
+    factory(WORKTREE_CWD);
+
+    expect(setCurrentCwd.mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(gatherWorkspace).mock.invocationCallOrder[0]!,
+    );
   });
 
   it('leaves get_runtime_state agreeing with the rebuilt prompt', () => {
