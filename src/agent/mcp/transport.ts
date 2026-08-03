@@ -216,31 +216,3 @@ export function createTransport(
   );
 }
 
-/**
- * Attempt streamable-HTTP first; fall back to SSE when the server replies
- * with 404 or 405 (indicating a legacy SSE-only server). Emits the
- * deprecation warning on fallback.
- *
- * Returns the transport that actually succeeded at the TCP/HTTP level (i.e.
- * prior to the MCP handshake). The caller is responsible for calling
- * `Client.connect()`.
- *
- * Note: "succeeded" here means the transport object was constructed and is
- * ready for `Client.connect()`; actual connection is deferred to the caller
- * via the standard SDK `client.connect(transport)` call. The fallback probe
- * logic is handled inside `client.ts` by catching `StreamableHTTPError` with
- * code 404/405 from the first connect attempt.
- */
-export function createTransportWithFallbackHint(
-  serverName: string,
-  config: McpServerConfig,
-  oauthProvider?: OAuthClientProvider,
-): { primary: CreateTransportResult; fallback: () => CreateTransportResult } {
-  const primary = createTransport(serverName, config, oauthProvider);
-  const fallback = () => {
-    // Build the SSE config by overriding type.
-    const sseConfig: McpServerConfig = { ...config, type: 'sse' };
-    return createTransport(serverName, sseConfig, oauthProvider);
-  };
-  return { primary, fallback };
-}
