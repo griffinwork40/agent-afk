@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.11] - 2026-08-03
+
+### Fixed
+- stop fabricating filenames from relative paths (#872) (58a1e68)
+
 ## [5.85.10] - 2026-08-02
 
 ### Changed
