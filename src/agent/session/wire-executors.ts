@@ -25,7 +25,11 @@ import { SubagentManager } from '../subagent.js';
 import { SubagentExecutor } from '../tools/subagent-executor.js';
 import { SkillExecutor } from '../tools/skill-executor.js';
 import { ComposeExecutor } from '../tools/compose-executor.js';
-import { createChildProviderFactory, createChildSkillExecutorFactory } from '../tools/nesting.js';
+import {
+  createChildProviderFactory,
+  createChildSkillExecutorFactory,
+  resolveMaxNestingDepth,
+} from '../tools/nesting.js';
 import { loadAgentRegistry } from '../agents/index.js';
 import { discoverPluginAgents } from '../tools/skill-bridge.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
@@ -176,6 +180,10 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const skillTraceOpt = skillTraceWriter !== undefined ? { traceWriter: skillTraceWriter } : {};
   const apiKeyOpt = apiKey !== undefined ? { apiKey } : {};
   const bgRegistryOpt = backgroundRegistry !== undefined ? { backgroundRegistry } : {};
+  // Session-static snapshot shared by all root executors and inherited by
+  // descendants. Do not resolve inside execute(): sibling calls must not see
+  // different caps if the process environment changes during the session.
+  const maxDepth = resolveMaxNestingDepth();
 
   // 1. The single root manager. Every executor below reads through this
   //    instance; a second manager would fork children outside the abort graph
@@ -237,6 +245,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // Top-level wiring → explicit depth 0. See SubagentExecutorContext.depth
     // for why this is required rather than defaulted.
     depth: 0,
+    maxDepth,
     ...nestedCwdOpt,
     agentRegistry,
     parentModel: model,
@@ -259,6 +268,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     resolveApiKeyForModel,
     ...skillTraceOpt,
     ...nestedCwdOpt,
+    maxDepth,
     // Read-scope inheritance (#547): skill-forked children inherit the parent
     // session's read scope via the root manager — symmetric with the `agent`
     // tool. Read fresh so mid-session setCwd re-anchors are reflected.
@@ -279,6 +289,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     systemPrompt: systemPrompt ?? '',
     surface,
     depth: 0,
+    maxDepth,
     ...traceOpt,
   });
 

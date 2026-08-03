@@ -16,7 +16,7 @@ import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { AgentConfig } from '../types/config-types.js';
 import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
 import {
-  DEFAULT_MAX_NESTING_DEPTH,
+  resolveMaxNestingDepth,
   type ChildProviderFactoryArgs,
 } from './nesting.js';
 import { buildAgentToolDef } from '../agents/index.js';
@@ -34,6 +34,8 @@ import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/fo
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { debugLog } from '../../utils/debug.js';
+import { appendRoutingDecision } from '../routing-telemetry.js';
+import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
@@ -532,7 +534,7 @@ export class SubagentExecutor implements SubagentControl {
     // the silent misconfig fallback the Phase 1 awareness contract is designed
     // to avoid.
     const depth = this.ctx.depth;
-    const maxDepth = this.ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
+    const maxDepth = this.ctx.maxDepth ?? resolveMaxNestingDepth();
 
     // Session identity for routing-decision rows. Only emitted when this
     // executor was wired with a `surface` (the new top-level wiring); legacy/
@@ -542,6 +544,32 @@ export class SubagentExecutor implements SubagentControl {
       this.ctx.surface !== undefined
         ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(depth) }
         : {};
+
+    // Depth cap, mirroring the `skill` tool's guard (skill-executor.ts). Before
+    // this existed the cap was enforced only by child-config.ts NOT wiring
+    // nested executors into the child it builds (`depth < maxDepth`), which
+    // made the two tools stop one generation apart: a depth-3 child (wired by
+    // its depth-2 parent, which passed that gate) still held a live `agent`
+    // tool and could fork a depth-4 leaf, whereas `skill` already refused at
+    // depth 3. The leaf then answered "Agent tool is not available in this
+    // session configuration" from the dispatcher — a config-shaped message for
+    // what is really a depth wall, with no recovery hint. Refusing here makes
+    // `maxDepth` mean one thing for both tools and hands back the actionable
+    // "work inline" clause instead.
+    if (depth >= maxDepth) {
+      void appendRoutingDecision({
+        ...identity,
+        event: 'delegation.skipped',
+        parent_session_id: this.ctx.parentSession.sessionId,
+        reason: 'max_depth',
+        depth,
+        ...(parsed.agent_type !== undefined ? { requested_name: parsed.agent_type } : {}),
+      }).catch(() => {});
+      return {
+        content: buildAgentMaxDepthRefusal(depth, maxDepth),
+        isError: true,
+      };
+    }
 
     // Transitive read-scope propagation (see ../subagent-read-scope): compute
     // THIS child's inherited read roots from the manager that will fork it, so

@@ -8,6 +8,7 @@
  * @module agent/tools/nesting
  */
 
+import { env } from '../../config/env.js';
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput } from '../types.js';
@@ -26,6 +27,47 @@ import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
+
+/**
+ * Upper bound accepted from `AFK_MAX_NESTING_DEPTH`.
+ *
+ * Invariant: depth is a fan-out EXPONENT, not a linear budget — a width-N wave
+ * repeated at depth D reaches on the order of N^D concurrent children, all
+ * sharing one provider rate limit. The cap is what keeps a typo (`30` for `3`)
+ * from turning a single dispatch into a 429 cascade that kills the whole tree.
+ * Anything above 4 is already unadvisable; 6 is the hard refusal point.
+ */
+export const MAX_NESTING_DEPTH_CEILING = 6;
+
+/**
+ * Resolve the default nesting-depth cap from `AFK_MAX_NESTING_DEPTH`.
+ *
+ * Mirrors {@link resolveSubagentTimeoutMs} (src/agent/subagent/constants.ts):
+ * returns the parsed value when it is a finite integer within
+ * `[0, MAX_NESTING_DEPTH_CEILING]`. `0` is the explicit escape hatch that
+ * disables nested delegation entirely — the `agent`, `skill`, AND `compose`
+ * tools all refuse at depth 0. Unset, empty, unparseable, negative, or
+ * above-ceiling input falls back to {@link DEFAULT_MAX_NESTING_DEPTH}.
+ *
+ * Contract: this resolves the DEFAULT only. An explicit `ctx.maxDepth`
+ * (SubagentExecutorContext / SkillExecutorContext) still wins via the `??` at
+ * each call site — which is also why children never re-read the environment:
+ * the root resolves once and threads the number down through child
+ * `AgentConfig.maxDepth` and `childSkillExecutorFactory(depth + 1, maxDepth,…)`,
+ * so a mid-process env mutation cannot desynchronise one branch of the tree
+ * from another.
+ */
+export function resolveMaxNestingDepth(): number {
+  const raw = env.AFK_MAX_NESTING_DEPTH;
+  if (raw === undefined) return DEFAULT_MAX_NESTING_DEPTH;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return DEFAULT_MAX_NESTING_DEPTH;
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n < 0 || n > MAX_NESTING_DEPTH_CEILING) {
+    return DEFAULT_MAX_NESTING_DEPTH;
+  }
+  return n;
+}
 
 export interface ChildProviderFactoryArgs {
   childExecutor: SubagentExecutor;

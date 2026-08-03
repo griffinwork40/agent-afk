@@ -15,7 +15,7 @@ import { SubagentManager } from '../../subagent.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import {
-  DEFAULT_MAX_NESTING_DEPTH,
+  resolveMaxNestingDepth,
   RECON_ALLOWED_TOOLS,
   buildReadOnlyReconProvider,
   createStubParentSession,
@@ -58,7 +58,7 @@ export function buildForkedChildConfig(
 ): { childConfig: AgentConfig; childManager: SubagentManager | undefined } {
   const { ctx, currentCwd } = internals;
   const depth = ctx.depth ?? 0;
-  const maxDepth = ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
+  const maxDepth = ctx.maxDepth ?? resolveMaxNestingDepth();
   const childConfig: AgentConfig = { ...baseConfig };
 
   // Invariant (single source of truth for effective allowlist):
