@@ -115,14 +115,17 @@ export function detectGoblinSpinner(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /**
- * Decide whether the reacting goblin mini-sprite rides the loop-stage rail's
- * right edge (issue #336, `LiveMascot`).
+ * Decide whether the reacting goblin sprite claims its reserved footer band —
+ * three rows, right-aligned, present for the whole session (issue #336,
+ * `MascotBand` + `LiveMascot`).
  *
- * OFF by default; `AFK_GOBLIN_MASCOT=1` (or `true`) opts IN. The sprite claims
- * no rows and shifts nothing — it decorates the spare right edge of a footer row
- * that already existed — so this default is conservatism about a new persistent
- * on-screen object, not about geometry. `0`/unset/anything else stays off. Kept
- * here beside the other CLI UX-preference detectors, read via the same
+ * OFF by default; `AFK_GOBLIN_MASCOT=1` (or `true`) opts IN. Unlike the goblin
+ * spinner — a pure reskin of a row that already existed — this one *claims
+ * terminal rows* from the transcript, so it defaults to off and the operator
+ * asks for it. What it does not do is claim them intermittently: the
+ * reservation is constant for the session, so saying yes costs three rows once,
+ * not a transcript that jumps per tool call. `0`/unset/anything else stays off.
+ * Kept here beside the other CLI UX-preference detectors, read via the same
  * `env`-parameter pattern.
  *
  * Reads `process.env` at call time. Pure function with no side effects.

@@ -1,24 +1,24 @@
 /**
- * Tests for LiveMascot — the reacting goblin as a right-edge decoration on the
- * loop-stage rail (issue #336).
+ * Tests for LiveMascot — the reacting goblin's state machine and frame clock
+ * (issue #336).
  *
- * The load-bearing behaviour is no longer geometry: this class reserves no
- * rows, holds no stream, and writes nothing, so what has to be pinned is
- * (a) total inertness unless opted in — an unset flag must leave the host row
- * byte-identical, (b) the state machine and the alert dwell, (c) the ticker
- * lifecycle, because a timer that outlives `stop()` would keep poking a stopped
- * painter forever, and (d) the sprite's width, which is the host row's right-edge
- * budget.
+ * Geometry is deliberately NOT this class's job: it reserves no rows, holds no
+ * stream, and writes nothing, so what has to be pinned here is (a) total
+ * inertness unless opted in — an unset flag must produce no frame and no
+ * repaint request at all, (b) the state machine and the alert dwell, (c) the
+ * ticker lifecycle, because a timer that outlives `stop()` would keep poking a
+ * released band forever, and (d) the frame's shape (rows × columns), which is
+ * the band's reservation and right-edge budget.
  *
  * The row-arithmetic side of the feature lives with its owner, in
- * `loop-stage.test.ts` ("LoopStageBar — right-edge decoration").
+ * `mascot-band.test.ts`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import stringWidth from 'string-width';
 import chalk from 'chalk';
 import { LiveMascot } from './mascot-live.js';
-import { MINI_MASCOT_WIDTH } from '../../mascot-mini.js';
+import { MINI_MASCOT_WIDTH, MINI_MASCOT_HEIGHT } from '../../mascot-mini.js';
 
 const prevEnv = { ...process.env };
 
@@ -40,18 +40,27 @@ function strip(s: string): string {
   return s.replace(/\x1B\[[0-9;]*m/g, '');
 }
 
+/**
+ * The mascot's current frame as one comparable string — `''` while inert. Rows
+ * are joined rather than asserted individually wherever a test cares about
+ * "which face", not "what shape".
+ */
+function frame(m: LiveMascot): string {
+  return m.lines().join('\n');
+}
+
 function mascot(frameMs = 100) {
   const repaint = vi.fn();
   return { repaint, m: new LiveMascot({ requestRepaint: repaint, frameMs }) };
 }
 
 describe('LiveMascot opt-in gates', () => {
-  it('is inert without AFK_GOBLIN_MASCOT (no decoration, no repaint requests)', () => {
+  it('is inert without AFK_GOBLIN_MASCOT (no frame, no repaint requests)', () => {
     delete process.env['AFK_GOBLIN_MASCOT'];
     const { repaint, m } = mascot();
     m.start();
     m.onStage('acting');
-    expect(m.decoration()).toBe('');
+    expect(frame(m)).toBe('');
     expect(repaint).not.toHaveBeenCalled();
   });
 
@@ -60,7 +69,7 @@ describe('LiveMascot opt-in gates', () => {
     const { repaint, m } = mascot();
     m.start();
     m.onStage('acting');
-    expect(m.decoration()).toBe('');
+    expect(frame(m)).toBe('');
     expect(repaint).not.toHaveBeenCalled();
   });
 
@@ -69,7 +78,7 @@ describe('LiveMascot opt-in gates', () => {
     const { repaint, m } = mascot();
     m.start();
     m.onStage('acting');
-    expect(m.decoration()).toBe('');
+    expect(frame(m)).toBe('');
     expect(repaint).not.toHaveBeenCalled();
   });
 
@@ -77,7 +86,7 @@ describe('LiveMascot opt-in gates', () => {
     process.env['AFK_GOBLIN_MASCOT'] = 'true';
     const { m } = mascot();
     m.start();
-    expect(m.decoration()).not.toBe('');
+    expect(frame(m)).not.toBe('');
     m.stop();
   });
 
@@ -93,41 +102,53 @@ describe('LiveMascot opt-in gates', () => {
   });
 });
 
-describe('LiveMascot decoration', () => {
+describe('LiveMascot frames', () => {
   it('is present at rest — the goblin sits there when the agent is idle', () => {
     const { m } = mascot();
     m.start();
-    expect(strip(m.decoration())).not.toBe('');
+    expect(strip(frame(m))).not.toBe('');
     m.stop();
   });
 
-  it('is exactly MINI_MASCOT_WIDTH display columns in every state', () => {
+  it('every row is exactly MINI_MASCOT_WIDTH display columns in every state', () => {
+    // The band right-aligns against a fixed width; a wide row would overrun the
+    // margin column and arm DECAWM's pending wrap.
     const { m } = mascot();
     m.start();
+    const check = (label: string) => {
+      for (const [i, row] of m.lines().entries()) {
+        expect(stringWidth(strip(row)), `${label} row ${i}`).toBe(MINI_MASCOT_WIDTH);
+      }
+    };
     for (const stage of ['observing', 'acting', 'updating'] as const) {
       m.onStage(stage);
-      expect(stringWidth(strip(m.decoration()))).toBe(MINI_MASCOT_WIDTH);
+      check(stage);
     }
     m.onStage('acting', { toolErrored: true });
-    expect(stringWidth(strip(m.decoration()))).toBe(MINI_MASCOT_WIDTH);
+    check('alert');
     m.stop();
   });
 
-  it('is a single row — a two-row sprite would not fit the host row', () => {
+  it('is exactly MINI_MASCOT_HEIGHT rows, and no row contains a newline', () => {
+    // The band reserves this many rows and clears exactly this many; a frame of
+    // any other height would either orphan a row or paint outside the band.
     const { m } = mascot();
     m.start();
-    m.onStage('acting');
-    expect(m.decoration()).not.toContain('\n');
+    for (const stage of ['observing', 'acting'] as const) {
+      m.onStage(stage);
+      expect(m.lines()).toHaveLength(MINI_MASCOT_HEIGHT);
+      for (const row of m.lines()) expect(row).not.toContain('\n');
+    }
     m.stop();
   });
 
-  it('falls back to `` after stop(), so the host row returns to bare', () => {
+  it('falls back to [] after stop(), so the band paints blank rows', () => {
     const { m } = mascot();
     m.start();
     m.onStage('acting');
-    expect(m.decoration()).not.toBe('');
+    expect(m.lines()).toHaveLength(MINI_MASCOT_HEIGHT);
     m.stop();
-    expect(m.decoration()).toBe('');
+    expect(m.lines()).toEqual([]);
   });
 
   it('asks the host to repaint once on start() and once on stop()', () => {
@@ -198,7 +219,7 @@ describe('LiveMascot animation', () => {
     m.onStage('acting');
     const seen = new Set<string>();
     for (let i = 0; i < 12; i++) {
-      seen.add(strip(m.decoration()));
+      seen.add(strip(frame(m)));
       vi.advanceTimersByTime(100);
     }
     expect(seen.size).toBeGreaterThan(1);
@@ -209,11 +230,11 @@ describe('LiveMascot animation', () => {
     vi.useFakeTimers();
     const { m } = mascot(100);
     m.start();
-    const resting = m.decoration();
+    const resting = frame(m);
     m.onStage('acting');
     vi.advanceTimersByTime(500);
     m.onStage('observing');
-    expect(m.decoration()).toBe(resting);
+    expect(frame(m)).toBe(resting);
     m.stop();
   });
 });
@@ -222,15 +243,15 @@ describe('LiveMascot.onStage', () => {
   it('maps acting → working and every other stage → rest', () => {
     const { m } = mascot();
     m.start();
-    const resting = m.decoration();
+    const resting = frame(m);
 
     m.onStage('acting');
-    expect(m.decoration()).not.toBe('');
+    expect(frame(m)).not.toBe('');
     // Rest is a single still frame, so every non-acting stage renders it.
     for (const stage of ['observing', 'modeling', 'choosing', 'updating'] as const) {
       m.onStage('acting');
       m.onStage(stage);
-      expect(m.decoration(), stage).toBe(resting);
+      expect(frame(m), stage).toBe(resting);
     }
     m.stop();
   });
@@ -239,14 +260,14 @@ describe('LiveMascot.onStage', () => {
     vi.useFakeTimers();
     const { m } = mascot(100);
     m.start();
-    const resting = m.decoration();
+    const resting = frame(m);
 
     m.onStage('updating', { toolErrored: true });
     // Alarm red is only in the alert frames (pinned in mascot-mini.test.ts).
-    expect(m.decoration()).toMatch(/200;60;40/);
+    expect(frame(m)).toMatch(/200;60;40/);
 
     vi.advanceTimersByTime(1600); // past ALERT_DWELL_MS
-    expect(m.decoration()).toBe(resting);
+    expect(frame(m)).toBe(resting);
     m.stop();
   });
 
@@ -259,28 +280,28 @@ describe('LiveMascot.onStage', () => {
     m.start();
     m.onStage('acting');
     m.onStage('acting', { toolErrored: true });
-    expect(m.decoration()).toMatch(/200;60;40/);
+    expect(frame(m)).toMatch(/200;60;40/);
 
     // Stage traffic during the dwell does not steal the sprite back.
     m.onStage('acting');
-    expect(m.decoration()).toMatch(/200;60;40/);
+    expect(frame(m)).toMatch(/200;60;40/);
 
     vi.advanceTimersByTime(1600);
-    expect(m.decoration()).not.toMatch(/200;60;40/);
+    expect(frame(m)).not.toMatch(/200;60;40/);
     m.stop();
   });
 
   it('ignores stage traffic before start() and after stop()', () => {
     const { repaint, m } = mascot();
     m.onStage('acting');
-    expect(m.decoration()).toBe('');
+    expect(frame(m)).toBe('');
     expect(repaint).not.toHaveBeenCalled();
 
     m.start();
     m.stop();
     repaint.mockClear();
     m.onStage('acting', { toolErrored: true });
-    expect(m.decoration()).toBe('');
+    expect(frame(m)).toBe('');
     expect(repaint).not.toHaveBeenCalled();
   });
 

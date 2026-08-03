@@ -1,36 +1,30 @@
 /**
- * LiveMascot — the reacting goblin as a right-edge decoration on the
- * loop-stage rail.
+ * LiveMascot — the reacting goblin's state machine and animation clock.
  *
- * Issue #336. The goblin needs a visible, reacting presence during a turn, and
- * the obvious shapes for that are both wrong:
+ * Issue #336. The goblin needs a visible, reacting presence during a turn. The
+ * 1-row spinner cannot carry a *multi*-row sprite (the compositor's `fixedRows`
+ * accounting budgets the spinner at exactly one physical row, so a newline in
+ * spinner output corrupts the DECSTBM scroll math), and the sprite needs three
+ * character rows to read as a goblin rather than a head — so it lives in a
+ * reserved band of its own, painted by `MascotBand` (mascot-band.ts).
  *
- *   - The 1-row spinner cannot carry a *multi*-row sprite: the compositor's
- *     `fixedRows` accounting budgets the spinner at exactly one physical row,
- *     so a newline in spinner output corrupts the DECSTBM scroll math.
- *   - Its own reserved band can, but then the sprite claims rows — and a
- *     reservation that appears while a tool runs and collapses at idle makes
- *     the transcript jump on every tool call. That is the most obtrusive thing
- *     a footer tenant can do, which is exactly the complaint this shape fixes.
+ * This class is deliberately NOT that painter. The split is the lesson of the
+ * first two attempts at this feature: what the mascot *looks like* changes on a
+ * timer many times a second, while *where it is painted* is DECSTBM geometry
+ * that must change as rarely as possible. Mixing the two produced a band that
+ * reserved rows when a tool started and released them at idle, which made the
+ * transcript jump twice per tool call. So:
  *
- * So this class is not a painter at all. It owns the mascot's state machine and
- * its animation ticker, and hands `LoopStageBar` a one-row sprite to
- * right-align on the row the rail already owns (see `getRightDecoration` there).
- * Consequences worth stating, because they are the point:
+ *   - **Here (LiveMascot):** state (`idle`/`working`/`alert`), the alert dwell,
+ *     the frame counter, the ticker. No stream, no rows, no terminal size.
+ *   - **There (MascotBand):** a reservation established once at REPL start and
+ *     released once at exit, right-aligned out of the reading path. It asks
+ *     this class for the current frame; it never asks whether to exist.
  *
- *   - **No geometry.** It reserves no rows, reads no terminal size, and never
- *     writes to a stream, so the `extraRows` sum in `footer-subsystems.ts` is
- *     byte-identical whether or not the operator enabled the mascot. There is
- *     no reserve-before-paint ordering to get wrong and nothing to erase.
- *   - **One owner per row.** The rail composes the row including the sprite, so
- *     the two can never clobber each other's columns.
- *   - **Resize is free.** The rail re-composes on every paint (including its
- *     ResizeBus self-heal) and pulls the sprite fresh, dropping it when the row
- *     is too narrow to hold both.
- *
- * Unlike the rail it decorates, the mascot is present at rest: `idle` is a
- * single still frame and runs no timer, so a resting REPL pays nothing for a
- * goblin that is simply sitting there.
+ * The mascot is therefore present at rest rather than transient: `idle` is a
+ * single still frame that runs no timer, so a resting REPL pays for the rows and
+ * nothing else — and a companion that is simply sitting there is less obtrusive
+ * than one that pops in and out.
  *
  * Lifecycle: construct → `start()` → `onStage(...)` per loop-stage transition
  * → `stop()` before exit.
@@ -58,6 +52,12 @@ const ALERT_DWELL_MS = 1500;
  */
 const DEFAULT_FRAME_MS = 300;
 
+/**
+ * Frames the mascot renders, ANSI-styled — one string per character row.
+ * Empty while inert, which the painter must treat as "paint nothing".
+ */
+export type MascotFrame = readonly string[];
+
 export class LiveMascot {
   private readonly requestRepaint: () => void;
   private readonly frameMs: number;
@@ -70,9 +70,9 @@ export class LiveMascot {
   private alertTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
-   * @param opts.requestRepaint - Asks the host row to repaint (typically
-   *   `() => loopStageBar.redraw()`). Called once per animation frame and on
-   *   every state change; must be idempotent and cheap.
+   * @param opts.requestRepaint - Asks the painter to re-assert the band at the
+   *   current frame (typically `() => mascotBand.redraw()`). Called once per
+   *   animation frame and on every state change; must be idempotent and cheap.
    * @param opts.frameMs - Animation period in ms.
    */
   constructor(opts: { requestRepaint: () => void; frameMs?: number }) {
@@ -81,14 +81,14 @@ export class LiveMascot {
   }
 
   /**
-   * Go inert: stop the ticker and stop contributing a decoration. Idempotent.
+   * Go inert: stop the ticker and stop producing frames. Idempotent.
    *
-   * Teardown is written above `start()` so the inverse of every setup step
-   * stays visible next to it. Note what is absent versus a band painter: there
-   * are no rows to erase and no reservation to release, so ordering against the
-   * other footer tenants does not matter — the host row's own `stop()` clears
-   * the whole line. The one real requirement is that the ticker die before the
-   * host does, so a stray tick cannot outlive its repaint target.
+   * Teardown is written above `start()` so the inverse of every setup step stays
+   * visible next to it. Invariant: this must run BEFORE the painter's own
+   * `stop()`. It owns no rows, so it erases nothing — but its ticker's only job
+   * is to ask the painter to repaint, and a tick that outlives the band would
+   * write to rows the reservation no longer covers. Silencing the clock first
+   * makes the band's release the last write either object performs.
    */
   stop(): void {
     if (!this.started) return;
@@ -108,7 +108,9 @@ export class LiveMascot {
    * `AFK_PLAIN_OUTPUT`/`--plain` (full render opt-out, mirroring the
    * status-line/compositor/loop-stage gates) and `AFK_BANNER_PLAIN=1` (pixel
    * art suppressed everywhere). A non-TTY needs no gate here: this class never
-   * writes, and its host row is already TTY-gated.
+   * writes, and its painter is separately TTY-gated (a band tenant that starts
+   * must be able to reserve rows, and a phantom reservation on a dumb pipe would
+   * shrink the scroll region for output nobody can see).
    */
   start(): void {
     if (this.started) return;
@@ -120,14 +122,18 @@ export class LiveMascot {
   }
 
   /**
-   * The sprite to render at the host row's right edge, ANSI-styled, exactly
-   * MINI_MASCOT_WIDTH display columns wide — or `''` when the mascot is inert,
-   * which the host must treat as "decorate nothing" so its row is unchanged for
-   * operators who never enabled the goblin.
+   * The sprite's current frame — MINI_MASCOT_HEIGHT ANSI-styled rows, each
+   * exactly MINI_MASCOT_WIDTH display columns wide — or `[]` when the mascot is
+   * inert, which the painter must treat as "paint nothing".
+   *
+   * Contract: this is a pure read. It never starts a timer or changes state, so
+   * the painter may call it as often as it likes (every repaint, every resize
+   * self-heal) without side effects, and a caller that ignores the result costs
+   * nothing.
    */
-  decoration(): string {
-    if (!this.started) return '';
-    return renderMiniMascotLines(this.state, this.frame)[0] ?? '';
+  lines(): MascotFrame {
+    if (!this.started) return [];
+    return renderMiniMascotLines(this.state, this.frame);
   }
 
   /**

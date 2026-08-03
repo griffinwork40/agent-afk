@@ -212,7 +212,7 @@ function renderPixelRow(
  * shared {@link PIXEL_PALETTE}; `overlays` are whole-cell overrides applied on
  * top (pass `{}` for none).
  *
- * Shared by the 13-row banner goblin and the one-row live mini-mascot
+ * Shared by the 13-row banner goblin and the 3-row live mini-mascot
  * (`mascot-mini.ts`) so both degrade through the exact same chalk path — a
  * second half-block routine would be a second fallback ladder to keep honest.
  */

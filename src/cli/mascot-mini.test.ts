@@ -1,14 +1,13 @@
 /**
- * Tests for src/cli/mascot-mini.ts — the one-row reacting goblin (issue #336).
+ * Tests for src/cli/mascot-mini.ts — the 3-row reacting goblin (issue #336).
  *
- * The sprite rides an existing footer row (`LoopStageBar` right-aligns it
- * against `columns - 1`), so its shape is load-bearing arithmetic, not
- * decoration: a frame that is two rows tall would push a line into the scroll
- * region, and one that is wider than MINI_MASCOT_WIDTH would blow the rail's
- * right-edge budget. These tests pin the shape mechanically for every frame of
- * every state, the rest-dominant rhythm that keeps the sprite from reading as a
- * second spinner, and the fallback ladder (truecolor → uncoloured silhouette →
- * suppressed).
+ * The band painter (`MascotBand`) reserves a FIXED number of rows and clears
+ * exactly what it painted, so the sprite's shape is load-bearing geometry, not
+ * decoration: a frame with the wrong row count or an over-wide row would leave
+ * the reserved band and corrupt the DECSTBM accounting. These tests pin the
+ * shape mechanically for every frame of every state, the rest-dominant rhythm
+ * that keeps the sprite from reading as a second spinner, and the fallback
+ * ladder (truecolor → uncoloured silhouette → suppressed).
  */
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
@@ -57,8 +56,8 @@ describe('mini mascot grids', () => {
   });
 
   it('every pixel row is left-right symmetric', () => {
-    // At 7 columns a single off-centre pixel is a visible defect, so unlike the
-    // banner sprite (whose cap leans right) the whole mini grid must be a
+    // At 13 columns a single off-centre pixel is a visible defect, so unlike
+    // the banner sprite (whose cap leans right) the whole mini grid must be a
     // palindrome — including the cap.
     for (const state of STATES) {
       for (const [i, grid] of FRAMES[state].entries()) {
@@ -196,25 +195,11 @@ describe('renderMiniMascotLines', () => {
     }
   });
 
-  it('alert raises the ears relative to idle (mono-visible, not just red)', () => {
-    // The ear pixel moves from the bottom of its cell to the top, flipping the
-    // outer cells from ▄ to ▀. That flip is the whole mono-visible vocabulary of
-    // a one-row sprite, so it is pinned rather than left to the colour channel.
+  it('alert widens the silhouette relative to idle (flared ears, mono-visible)', () => {
     chalk.level = 0;
-    const idle = renderMiniMascotLines('idle', 0)[0] ?? '';
-    const flare = renderMiniMascotLines('alert', 0)[0] ?? '';
-    expect(idle.startsWith('▄') && idle.endsWith('▄')).toBe(true);
-    expect(flare.startsWith('▀') && flare.endsWith('▀')).toBe(true);
-  });
-
-  it('every state renders one row, so it can share a row with the rail', () => {
-    for (const state of STATES) {
-      for (let f = 0; f < miniMascotFrameCount(state); f++) {
-        const lines = renderMiniMascotLines(state, f);
-        expect(lines, `${state} frame ${f}`).toHaveLength(1);
-        expect(lines[0]).not.toContain('\n');
-      }
-    }
+    const idleFace = renderMiniMascotLines('idle')[2] ?? '';
+    const alertFace = renderMiniMascotLines('alert', 0)[2] ?? '';
+    expect(idleFace.trim().length).toBeLessThan(alertFace.trim().length);
   });
 
   it('AFK_BANNER_PLAIN=1 suppresses the sprite entirely (reserve no rows)', () => {

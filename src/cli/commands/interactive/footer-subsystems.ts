@@ -4,6 +4,7 @@ import { createVerdictLedger } from './verdict-ledger.js';
 import { BackgroundStatusBar } from '../../background-status-bar.js';
 import { LoopStageBar } from './loop-stage.js';
 import { LiveMascot } from './mascot-live.js';
+import { MascotBand } from './mascot-band.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
@@ -20,6 +21,7 @@ export interface FooterSubsystems {
   bgStatusBar: BackgroundStatusBar;
   loopStageBar: LoopStageBar;
   liveMascot: LiveMascot;
+  mascotBand: MascotBand;
   verdictLedger: ReturnType<typeof createVerdictLedger>;
   shellPassthrough: ShellPassthrough;
   bgResultNotifier: BgResultNotifier;
@@ -38,10 +40,11 @@ export interface FooterSubsystems {
  * any reserved-row painter starts.
  *
  * Teardown is the orchestrator's responsibility (the `finally` block): it must
- * stop the painters top → bottom (loopStageBar → bgStatusBar → verdictLedger)
- * so each clears the exact row it painted before the counts below it change.
- * The live mascot is not a painter (it decorates the loop-stage row) so it has
- * no place in that order — it only has to stop before the row it decorates.
+ * stop the painters top → bottom (loopStageBar → mascotBand → bgStatusBar →
+ * verdictLedger) so each clears the exact row it painted before the counts below
+ * it change. The live mascot itself owns no rows — it is the state machine
+ * driving mascotBand — so it stops ahead of all of them, silencing its ticker
+ * before the band it repaints goes away.
  */
 export function setupFooterSubsystems(
   ctx: InteractiveCtx,
@@ -80,24 +83,31 @@ export function setupFooterSubsystems(
   //   row N                                  StatusLine
   //   row N-1                                verdict ledger rail (0 or 1 row)
   //   rows [N-1-ledgerRows-bgRows .. N-2]    BackgroundStatusBar (0+ rows)
+  //   rows above those                       MascotBand (0 or 3 rows)
   //   row N - extraRows (topmost reserved)   LoopStageBar (always 1 row)
   //
   //   reserved band = 1 (status) + extraRows, where
-  //   extraRows = loopStageRows + bgBarRowCount + ledgerRowCount
+  //   extraRows = loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount
   //
   // Each painter positions itself from the live counts: the verdict rail sits
   // at the bottom (getAdjacentRows: () => 0), the bg bar floats just above it
-  // (getAdjacentRows: () => ledgerRowCount), and the loop-stage bar reads the
-  // full extraRows so it always lands on the topmost reserved row.
+  // (getAdjacentRows: () => ledgerRowCount), the mascot band floats above the bg
+  // bar (getAdjacentRows: () => ledgerRowCount + bgBarRowCount), and the
+  // loop-stage bar reads the full extraRows so it always lands on the topmost
+  // reserved row.
   //
-  // The live goblin mascot is deliberately NOT in this list: it decorates the
-  // loop-stage row's right edge instead of claiming rows, so an enabled mascot
-  // leaves the sum below untouched (issue #336).
+  // The goblin mascot band (issue #336) is a fourth tenant, but a quiet one: its
+  // count is 0 until start() and back to 0 at stop(), and in between it changes
+  // only if a resize crosses its headroom threshold. It never flips with tool
+  // activity — that transient shape is what made the transcript jump.
   let bgBarRowCount = 0;
   let ledgerRowCount = 0;
+  let mascotRowCount = 0;
   const loopStageRows = 1; // LoopStageBar always occupies exactly 1 row.
   const syncExtraRows = () =>
-    ctx.statusLine.setExtraRows(loopStageRows + bgBarRowCount + ledgerRowCount);
+    ctx.statusLine.setExtraRows(
+      loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount,
+    );
 
   // Hoisted so the verdict-ledger row-count handler (registered before the
   // bars are constructed) can reference them via closure. Both are assigned
@@ -106,6 +116,7 @@ export function setupFooterSubsystems(
   let bgStatusBar: BackgroundStatusBar | undefined;
   let loopStageBar: LoopStageBar | undefined;
   let liveMascot: LiveMascot | undefined;
+  let mascotBand: MascotBand | undefined;
 
   // Register the verdict ledger row-count handler BEFORE constructing the bg
   // bar so its getAdjacentRows closure reads a consistent ledgerRowCount.
@@ -119,6 +130,7 @@ export function setupFooterSubsystems(
     // loop-stage bar otherwise only repaints on a stage change, which has
     // already stopped by the time an end-of-turn terminal-state verdict pushes.
     bgStatusBar?.redraw();
+    mascotBand?.redraw();
     loopStageBar?.redraw();
   });
 
@@ -131,22 +143,41 @@ export function setupFooterSubsystems(
   bgStatusBar.setRowCountChangeHandler((rows) => {
     bgBarRowCount = rows;
     syncExtraRows();
+    // Everything ABOVE the bg bar is displaced when its count changes: the
+    // mascot band positions from ledgerRowCount + bgBarRowCount, and the rail
+    // from the full extraRows. Neither repaints on its own for a count it does
+    // not own, so nudge both rather than leaving a stale row behind until their
+    // next independent repaint (same reasoning as the verdict handler above).
+    mascotBand?.redraw();
+    loopStageBar?.redraw();
   });
 
-  // Reacting goblin mini-sprite (issue #336) - opt-in via AFK_GOBLIN_MASCOT=1,
-  // inert otherwise. It is not a band tenant: it owns a state machine and an
-  // animation ticker, and rides the loop-stage row's right edge (the two are
-  // wired to each other below), so it claims no rows and never writes to the
-  // stream. `decoration()` returns '' while inert, which makes the rail's row
-  // byte-identical for every operator who has not asked for a goblin.
-  liveMascot = new LiveMascot({ requestRepaint: () => loopStageBar?.redraw() });
+  // Reacting goblin sprite (issue #336) — opt-in via AFK_GOBLIN_MASCOT=1, inert
+  // otherwise. Split in two on purpose: `LiveMascot` owns the state machine, the
+  // alert dwell and the animation clock but no rows and no stream, while
+  // `MascotBand` owns the reservation and the paint. Each drives the other in
+  // exactly one direction — the mascot asks the band to redraw, the band asks the
+  // mascot for a frame — so a frame change can never become a geometry change.
+  liveMascot = new LiveMascot({ requestRepaint: () => mascotBand?.redraw() });
+  mascotBand = new MascotBand({
+    getLines: () => liveMascot?.lines() ?? [],
+    // Rows between this band and the status line: the bg bar and the verdict
+    // rail. The loop-stage rail is ABOVE us, so it is not counted here.
+    getAdjacentRows: () => ledgerRowCount + bgBarRowCount,
+  });
+  mascotBand.setRowCountChangeHandler((rows) => {
+    mascotRowCount = rows;
+    syncExtraRows();
+    // The rail sits above the band and positions from the full extraRows, so a
+    // band that appears, collapses, or re-appears on resize displaces it.
+    loopStageBar?.redraw();
+  });
 
   loopStageBar = new LoopStageBar({
     // LoopStageBar paints at totalRows - getExtraRows(), i.e. the topmost
-    // reserved row, so it always sits above both the bg bar and the verdict
-    // rail regardless of how their counts fluctuate.
+    // reserved row, so it always sits above the mascot band, the bg bar, and the
+    // verdict rail regardless of how their counts fluctuate.
     getExtraRows: () => ctx.statusLine.getExtraRows(),
-    getRightDecoration: () => liveMascot?.decoration() ?? '',
   });
   loopStageBar.setRowCountChangeHandler((_rows) => {
     // LoopStageBar always occupies 1 row (loopStageRows, already in the sum).
@@ -164,21 +195,24 @@ export function setupFooterSubsystems(
   // hook their scrolled-up copies orphan above the status row (#634/#641).
   // Redraw all three so they self-heal exactly like the status line. Each
   // painter brackets its own write in save/restore, so order is cosmetic; we
-  // go bottom → top (verdict rail, bg bar, loop-stage bar).
+  // go bottom → top (verdict rail, bg bar, mascot band, loop-stage bar).
   ctx.statusLine.setAfterScrollRestore(() => {
     verdictLedger.repaint();
     bgStatusBar?.redraw();
+    mascotBand?.redraw();
     loopStageBar?.redraw();
   });
   bgStatusBar.start();
-  // Arm the mascot BEFORE the rail that renders it: LoopStageBar paints inside
-  // start(), and that first paint should already carry the resting sprite.
-  // (The mascot's own start() repaint is a no-op until the rail is started.)
+  // Arm the mascot state machine BEFORE the band that paints it: MascotBand
+  // paints inside start(), and that first paint should already carry the resting
+  // sprite. (The mascot's own start() repaint is a no-op until the band exists —
+  // its requestRepaint reaches a painter that has not started yet.)
   liveMascot.start();
-  // LoopStageBar must start AFTER bgStatusBar so it reads a fully-initialized
-  // extraRows from StatusLine and paints at the correct row.  The bg bar may
-  // start with 0 rows (no jobs yet), in which case the loop-stage bar sits
-  // immediately above the status line.
+  mascotBand.start();
+  // LoopStageBar must start LAST so it reads a fully-initialized extraRows from
+  // StatusLine and paints at the correct row. The bg bar may start with 0 rows
+  // (no jobs yet) and the mascot band with 0 (opt-out, or a cramped terminal),
+  // in which case the loop-stage bar sits immediately above the status line.
   loopStageBar.start();
 
   // Start the verdict ledger painter. The verdict rail always occupies the
@@ -226,6 +260,7 @@ export function setupFooterSubsystems(
     bgStatusBar,
     loopStageBar,
     liveMascot,
+    mascotBand,
     verdictLedger,
     shellPassthrough,
     bgResultNotifier,
