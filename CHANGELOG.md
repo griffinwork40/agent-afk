@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.88.0] - 2026-08-03
+
+### Added
+- propagate path-backed image attachments (#843) (18ac9a8)
+
 ## [5.87.1] - 2026-08-03
 
 ### Fixed
