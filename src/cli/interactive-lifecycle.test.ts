@@ -843,7 +843,10 @@ describe('interactive worktree flag', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(worktreeCleanup).toHaveBeenCalledTimes(1);
-    expect(worktreeCleanup).toHaveBeenCalledWith({ force: true });
+    // `disposition` defaults to 'remove' here: this harness is non-TTY, so the
+    // quit-time keep/delete picker never arms and the policy falls back to the
+    // pre-picker behaviour (remove). force:true still short-circuits it.
+    expect(worktreeCleanup).toHaveBeenCalledWith({ force: true, disposition: 'remove' });
   });
 
   it('non-zero-turn worktree session calls cleanup with force:false', async () => {
@@ -899,7 +902,9 @@ describe('interactive worktree flag', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(worktreeCleanup).toHaveBeenCalledTimes(1);
-    expect(worktreeCleanup).toHaveBeenCalledWith({ force: false });
+    // Non-TTY harness ⇒ resolveWorktreeExitPolicy returns 'remove' (the non-TTY
+    // fallback), so disposition is 'remove' regardless of the ask-keep fix.
+    expect(worktreeCleanup).toHaveBeenCalledWith({ force: false, disposition: 'remove' });
   });
 });
 

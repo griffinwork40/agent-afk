@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**142 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**143 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -112,6 +112,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_WORKTREE_BRANCH_PREFIX` | string |  | `afk/` | `wt/` | Branch-name prefix for AFK-managed worktrees. Default afk/. Set to empty string to drop the prefix. |
 | `AFK_WORKTREE_MAX_AGE_CLEAN` | number |  | `14` |  | Maximum age (in days) before a clean worktree is auto-pruned. Default 14. |
 | `AFK_WORKTREE_MAX_AGE_DIRTY` | number |  | `30` |  | Maximum age (in days) before a dirty worktree is auto-pruned. Default 30. |
+| `AFK_WORKTREE_ON_EXIT` | string |  |  | `ask` | Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove. |
 | `AFK_WORKTREE_PRUNE_DISABLE` | boolean |  |  |  | Disable the worktree prune job entirely. Useful for long-running tests. |
 | `AFK_WORKTREE_SWEEP_ROOT` | string |  |  |  | Override the root directory under which AFK worktrees are tracked for pruning. |
 

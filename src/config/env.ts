@@ -883,6 +883,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'worktree',
   },
   {
+    name: 'AFK_WORKTREE_ON_EXIT',
+    description: 'Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove.',
+    type: 'string',
+    required: false,
+    example: 'ask',
+    category: 'worktree',
+  },
+  {
     name: 'AFK_WORKTREE_BOOT_PRUNE',
     description: 'When set, the daemon prunes stale worktrees at boot in addition to the cron-driven sweep.',
     type: 'boolean',
@@ -1542,6 +1550,7 @@ export const env = {
   get AFK_WORKTREE_AUTONAME(): string | undefined { return process.env['AFK_WORKTREE_AUTONAME']; },
   get AFK_WORKTREE_BRANCH_PREFIX(): string | undefined { return process.env['AFK_WORKTREE_BRANCH_PREFIX']; },
   get AFK_WORKTREE_BASE(): string | undefined { return process.env['AFK_WORKTREE_BASE']; },
+  get AFK_WORKTREE_ON_EXIT(): string | undefined { return process.env['AFK_WORKTREE_ON_EXIT']; },
   get AFK_WORKTREE_BOOT_PRUNE(): string | undefined { return process.env['AFK_WORKTREE_BOOT_PRUNE']; },
   get AFK_WORKTREE_PRUNE_DISABLE(): string | undefined { return process.env['AFK_WORKTREE_PRUNE_DISABLE']; },
   get AFK_WORKTREE_MAX_AGE_CLEAN(): string | undefined { return process.env['AFK_WORKTREE_MAX_AGE_CLEAN']; },
