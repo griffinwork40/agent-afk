@@ -200,6 +200,25 @@ describe('LiveMascot animation', () => {
     m.stop();
   });
 
+  it('ticks the DEFAULT interval at 300ms — the calm cadence, not a spinner rate', () => {
+    // Every other timing test injects frameMs to stay fast, which leaves the
+    // production default unpinned: dropping it to a spinner-like 80ms would
+    // change what an operator actually sees and fail nothing. Constructed here
+    // WITHOUT frameMs on purpose. Pairs with the 8-frame cycle length pinned in
+    // mascot-mini.test.ts — together they are the documented ~2.4s loop.
+    vi.useFakeTimers();
+    const repaint = vi.fn();
+    const m = new LiveMascot({ requestRepaint: repaint });
+    m.start();
+    m.onStage('acting');
+    const before = repaint.mock.calls.length;
+    vi.advanceTimersByTime(299);
+    expect(repaint.mock.calls.length).toBe(before);
+    vi.advanceTimersByTime(1);
+    expect(repaint.mock.calls.length).toBe(before + 1);
+    m.stop();
+  });
+
   it('releases the ticker on stop() so it cannot outlive its repaint target', () => {
     vi.useFakeTimers();
     const { repaint, m } = mascot(100);

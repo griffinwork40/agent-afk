@@ -65,9 +65,30 @@ const CAP_ROWS: readonly string[] = [
   'DDKMMMMMMMKDD', // brow, ears at their widest
 ];
 
-/** Compose a full grid from the shared cap/brow rows + a face pair. */
+/**
+ * Compose a full grid from the shared cap/brow rows + a face pair.
+ *
+ * Invariant: every pixel row is exactly MINI_MASCOT_WIDTH columns. MascotBand
+ * places the sprite at `columns - MINI_MASCOT_WIDTH` and trusts that arithmetic
+ * instead of measuring the rendered line, so a row WIDER than the constant
+ * writes the terminal's final column, arms DECAWM's pending wrap, and lets the
+ * next write scroll the reserved band out from under the reservation; a
+ * narrower one leaves a ragged right edge. `renderHalfBlockGrid` only checks
+ * that a row PAIR is self-consistent (top.length === bot.length), so two
+ * equally-wrong rows pass it — this is the check that catches them. Every frame
+ * is a module-scope constant built through here, so a violation throws at
+ * import, never mid-paint.
+ */
 function grid(eyeRow: string, grinRow: string): readonly string[] {
-  return [...CAP_ROWS, eyeRow, grinRow];
+  const rows = [...CAP_ROWS, eyeRow, grinRow];
+  for (const row of rows) {
+    if (row.length !== MINI_MASCOT_WIDTH) {
+      throw new Error(
+        `mini mascot pixel row must be ${MINI_MASCOT_WIDTH} columns, got ${row.length}: ${row}`,
+      );
+    }
+  }
+  return rows;
 }
 
 /*

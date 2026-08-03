@@ -95,6 +95,12 @@ describe('mini mascot grids', () => {
     const rest = FRAMES['idle'][0]!.join('|');
     const restBeats = rendered.filter((f) => f === rest).length;
     expect(restBeats * 2).toBeGreaterThan(rendered.length);
+    // Pin the cycle LENGTH too, not just its shape: the documented "~2.4s loop,
+    // three beats" is 8 frames x the 300ms interval. The ratio and adjacency
+    // assertions above are both scale-free, so without this a 4- or 16-frame
+    // list preserving rest-majority would silently halve or double the loop.
+    expect(rendered).toHaveLength(8);
+    expect(restBeats).toBe(5);
   });
 
   it('every expressive working frame is followed by the resting face', () => {

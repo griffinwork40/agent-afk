@@ -11,10 +11,13 @@
  * This shape keeps the 13×3 sprite and pays for its rows differently:
  *
  *   - **Constant, not transient.** The reservation is established once in
- *     `start()` and released once in `stop()`. Between them, the row count
- *     changes only if a resize crosses the headroom threshold — so an enabled
- *     mascot shifts the transcript exactly as often as the loop-stage rail
- *     does, which is never.
+ *     `start()` and released once in `stop()`. Between them the row count
+ *     changes only when `visibleRows()` crosses its headroom floor, which takes
+ *     a geometry change: a resize, or a co-tenant below us (bg bar / verdict
+ *     rail) growing enough to squeeze the floor. Sprite CONTENT can never move
+ *     it — `visibleRows()` reads only `stream.rows`, `stream.columns` and
+ *     `getAdjacentRows()`, never `getLines()` — so an enabled mascot shifts the
+ *     transcript exactly as often as the loop-stage rail does, which is never.
  *   - **Right-aligned, not left.** The sprite sits at the row's right edge, out
  *     of the reading path where the eye is not tracking prose.
  *   - **Content is somebody else's job.** `LiveMascot` (mascot-live.ts) owns the
