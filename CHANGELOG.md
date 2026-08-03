@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.85.12] - 2026-08-03
+
+### Fixed
+- latch the dead-zone banner flush and close #867 review gaps (#874) (03224b1)
+
 ## [5.85.11] - 2026-08-03
 
 ### Fixed
