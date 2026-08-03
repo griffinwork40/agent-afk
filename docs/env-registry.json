@@ -91,6 +91,14 @@
       "category": "browser"
     },
     {
+      "name": "AFK_CAPTURE_SUBAGENT_PROMPTS",
+      "description": "Opt-in: when set to 1, every prompt a parent session sends to a subagent is written as a redacted markdown file under state/witness/<label>/prompts/. Off by default because nothing prunes the witness tree and prompts may carry secrets the regex redactor cannot catch (connection strings, PEM blocks, PII).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_COMPACT_KEEP_LAST_TURNS",
       "description": "Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts.",
       "type": "number",
@@ -317,6 +325,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_MAX_NESTING_DEPTH",
+      "description": "Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins.",
+      "type": "number",
+      "required": false,
+      "default": "3",
+      "example": "2",
+      "category": "model"
+    },
+    {
       "name": "AFK_MAX_OUTPUT_TOKENS",
       "description": "Cap on output tokens per turn. Falls back to provider default when unset.",
       "type": "number",
@@ -521,6 +538,14 @@
       "type": "boolean",
       "required": false,
       "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_OVERLOAD_PAUSE_MS",
+      "description": "Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity.",
+      "type": "number",
+      "required": false,
+      "example": "600000",
       "category": "model"
     },
     {
@@ -879,6 +904,14 @@
       "category": "worktree"
     },
     {
+      "name": "AFK_WORKTREE_ON_EXIT",
+      "description": "Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove.",
+      "type": "string",
+      "required": false,
+      "example": "ask",
+      "category": "worktree"
+    },
+    {
       "name": "AFK_WORKTREE_PRUNE_DISABLE",
       "description": "Disable the worktree prune job entirely. Useful for long-running tests.",
       "type": "boolean",
@@ -1096,7 +1129,7 @@
     },
     {
       "name": "TELEGRAM_VERBOSE",
-      "description": "Set to 'true' to log per-message details from the Telegram bot — chat IDs, message text, latency. (The code checks the literal string 'true'.)",
+      "description": "Set to a truthy value ('1'/'true'/'yes'/'on', case-insensitive) to log per-message details from the Telegram bot — chat IDs, message text, latency.",
       "type": "boolean",
       "required": false,
       "example": "true",

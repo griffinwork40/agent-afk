@@ -86,6 +86,9 @@ export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
   // Worktree git-ref fields — env twins of human-tier `interactive.worktree*` (git-flag sensitive).
   'AFK_WORKTREE_BASE',
   'AFK_WORKTREE_BRANCH_PREFIX',
+  // Worktree quit-time keep/remove policy — env twin of human-tier `interactive.worktreeOnExit`
+  // (governs destructive teardown of the agent's own workspace; see that key's comment).
+  'AFK_WORKTREE_ON_EXIT',
   // Telegram routing + allowlist — who may drive the bot, where notifications go
   // (env twins of human-tier `telegram.notify.*` / `telegram.tagOnlyChats`).
   'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
@@ -241,6 +244,8 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'enablePluginHooks', tier: 'human', type: 'boolean', description: 'Enable Claude Code plugin-contributed hooks (trust gate for third-party plugin hooks.json; independent of enableShellHooks).' },
   { path: 'interactive.worktreeBranchPrefix', tier: 'human', type: 'string', description: 'Worktree branch prefix (git-flag sensitive).' },
   { path: 'interactive.worktreeBase', tier: 'human', type: 'string', description: 'Worktree base ref (git-flag sensitive).' },
+  // Human-tier because this governs destructive teardown of the agent's own workspace.
+  { path: 'interactive.worktreeOnExit', tier: 'human', type: 'enum', enumValues: ['ask', 'keep', 'remove'], description: 'Clean-worktree quit policy (ask | keep | remove).' },
   { path: 'daemon.task', tier: 'human', type: 'string', description: 'Daemon task prompt.' },
   { path: 'daemon.taskId', tier: 'human', type: 'string', description: 'Daemon task id.' },
   { path: 'daemon.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in daemon-surface "Done" verification gate: a cron-tick completion push whose response self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) is relabelled "⚠️ Done (unverified)" with a caveat line. The daemon analog of telegram.verifyDone (which is REPL-only); the daemon is single-turn-per-tick, so the only honest enforcement is relabelling the outgoing push rather than bouncing a next turn. Human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as telegram.verifyDone.' },

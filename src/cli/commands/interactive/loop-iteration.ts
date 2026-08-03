@@ -392,7 +392,13 @@ export async function runInputLoop(
       if (text.startsWith('/')) {
         const res = await dispatchSlash(text, ctx.slashCtx, attachments);
         if (res.handled) {
-          if (res.result === 'exit') { ctx.rl.close(); return; }
+          if (res.result === 'exit') {
+            // Readline/compositor teardown makes prompting impossible, so the
+            // external input-lifecycle constraint requires disposition first.
+            await ctx.resolveWorktreeDisposition?.(true);
+            ctx.rl.close();
+            return;
+          }
           if (text === '/clear' || text.startsWith('/clear ')) {
             await transcript.rotateOnClear();
             ctx.replRenderer.writeLine(palette.dim(`  transcript: ${transcript.path()}`));

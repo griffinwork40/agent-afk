@@ -423,7 +423,7 @@ export interface AgentConfig {
    *
    * Writing is the only capability a session needs here. Ending the shared
    * file's life is a separate, non-inherited capability — see
-   * {@link AgentConfig.traceSealOwner}.
+   * {@link AgentConfig.isSubagentFork}.
    */
   traceWriter?: TraceWriter;
 
@@ -623,7 +623,16 @@ export interface AgentConfig {
   /** Nesting depth assigned at fork (0-indexed). Top-level → undefined. */
   depth?: number;
 
-  /** Maximum allowed nesting depth at fork time. */
+  /**
+   * Maximum allowed nesting depth at fork time.
+   *
+   * Contract: an explicit value here (and on SubagentExecutorContext /
+   * SkillExecutorContext) wins over `AFK_MAX_NESTING_DEPTH` and is NOT
+   * checked against `MAX_NESTING_DEPTH_CEILING` — the ceiling guards the
+   * env-parsed default only. An embedder that sets this field owns the
+   * fan-out consequences. Not reachable from model tool-call input: neither
+   * parseAgentInput nor parseSkillInput accepts a depth field.
+   */
   maxDepth?: number;
 
   /** Phase enforcement tag inherited from `ForkSubagentOptions.phaseRole`. */

@@ -80,12 +80,12 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    'a9d6da1956a60dd4362eecb26321998b0e512db40d571671e9b4427bfb8e5d6e',
+    'b04da3abfa4f79d4599928f62896143b88fb9751f0d0d26ca0eb27134f9ba17a',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
   'intent-lock':
-    'a0844035c011205eaab9b61e793c4dbe32a48eea0f84ae9fa7b7b4a59e801066',
+    'ecb4477a40c5f7a64b79779e01a6186f834dd3d4dc59c13a5c4e4b12191cf13b',
   // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
@@ -99,58 +99,12 @@ const PINNED_HASHES = {
   // ~/.afk/skills/ if it drifts back.
   refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
-  // History: hash bumped (#726): Wave 1's per-agent citation requirement no
-  // longer mandates a `git show` re-read at the reviewed ref. `research-agent`
-  // has no shell, so that clause forced every Wave 1 agent to nest a
-  // `git-investigator` purely to run one command — doubling the concurrency of
-  // a declared 2-agent wave and cascading into 429s. Ref-anchored verification
-  // is now centralized: Wave 1.5 runs INLINE in the orchestrator (which already
-  // holds the read-only shell it needs) instead of as a fourth sub-agent,
-  // absence-claim grounding uses the shell-free `Grep` tool, and a "Concurrency
-  // floor" block documents the real budget (peak 2 concurrent, 3 dispatched,
-  // zero nesting) so the regression cannot be reintroduced silently — now
-  // guarded by an assertion, not just this comment (see 'review Wave 1 keeps
-  // the no-git citation contract' below). Re-bumped after review feedback on
-  // PR #777: the concurrency floor now states its conditional post-synthesis
-  // budget and bounds the shadow-verify wave, Wave 1.5 Check A verifies
-  // `file-state` citations at EVERY severity (not just blocking/critical/high,
-  // which left medium-and-lower citations permanently unverified), and the
-  // research-agent `tools:` quote is now exact. Re-bumped again after the #777
-  // review: the api-compat reachability pre-check sat inside the Wave 1 slice
-  // still saying "grep production source files", the one shell-implying verb the
-  // rest of this change removed, and Check B verified absence claims only at
-  // blocking/critical/high — the same severity-scope gap Check A had just closed.
-  //
-  // The bundled copy is the SOLE copy of /review: upstream deleted its own
-  // review skill on 2026-07-24 (ce27e45), a deliberate dedup of a skill that
-  // only ever shadowed this one. So #726 had nothing to back-port. The defect
-  // CLASS was ported to the one place it still lived upstream: /weekly-reflect
-  // dispatched two shell-mandating survey waves as `research-agent` (upstream
-  // PR #77; all 40 upstream SKILL.md scanned, no other instance).
+  // History: /review Wave 1 no longer mandates a `git show` re-read (#726, #777).
+  // Full rationale: docs/bundled-plugins.md#review-726
   review: 'e40dbb244d3b0d074f366e6d3a7e27d053b00657571fb8d4d8027549350e0e81',
-  // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
-  // landed in this branch's commit 1e35850 — adds high-confidence language
-  // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
-  // own right, a three-way CONFIRMED/REFUTED/UNVERIFIABLE verdict with
-  // [was: …]/[needs-human-review] annotations, and a bounded 3-round retry loop.
-  // The behavior change is intentional; this records the new content.
-  // Hash re-bumped during PR #52 review: the frontmatter description used YAML
-  // escape sequences that parseSkillMetadata (tool-injector.ts) renders
-  // literally — replaced with a literal ≥ and unquoted terms so the
-  // model-facing description is clean.
-  // Hash re-bumped during PR #187 review: the Merge section now enumerates the
-  // new UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER verdict states — prose-
-  // consistency fix only; no behavior change to the composition-axis guard.
-  // Hash re-bumped: ported the private-plugin refinements — the Merge section
-  // now frames UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER as produced by
-  // the Composition-axis guard (not individual verifiers) with the specific
-  // tags [needs-human-review: composition boundary unchecked] / [echo-chamber
-  // suspected]; the guard gains the REFUTED-exemption parenthetical (a refuted
-  // claim already halts action, so its boundary-blindness is safe) and the
-  // echo-chamber loop-cap escalation (UNVERIFIED-ECHO-CHAMBER [loop-cap-reached]
-  // when the 3-round cap is exhausted). Bundled frontmatter/description
-  // preserved verbatim (kept the literal-quote description, NOT the reference's
-  // escaped-quote form).
+  // History: /shadow-verify gained the confidence-trigger + composition-axis
+  // verdicts (#52, #187).
+  // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
     '01bddcdd5446943f6fe4694a2cdbb669ab194dc0765d3630899755bc65530b9a',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
@@ -209,6 +163,23 @@ describe('bundled skills', () => {
         .sort();
       const registered = [...SKILLS].sort();
       expect(entries).toEqual(registered);
+    });
+
+    it('intent-lock preserves all signal classes and reconstructed-goal lock', () => {
+      const content = readBundled('intent-lock');
+      for (const heading of [
+        '**Ambiguous referents**',
+        '**Unverified characterizations**',
+        '**Identity assumptions**',
+        '**Code-vs-runtime dual referent**',
+        '**No task statement at all**',
+      ]) {
+        expect(content).toContain(heading);
+      }
+      expect(content).toContain('**Lock format (reconstructed goal):**');
+      expect(content).toContain(
+        '> Reading [fragment] as: [reconstructed task statement] (from [evidence]).',
+      );
     });
 
     // Invariant: #726 — Wave 1 of /review dispatches `research-agent`, which has

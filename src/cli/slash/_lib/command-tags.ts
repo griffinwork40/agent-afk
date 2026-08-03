@@ -34,6 +34,28 @@ const COMMAND_TAG_PAT = `<(?:${COMMAND_NAME_TAG}|${COMMAND_MESSAGE_TAG}|${COMMAN
 const COMMAND_LINE_TAG_RE = new RegExp(`(\\n|^)[ \\t]*${COMMAND_TAG_PAT}[ \\t]*\\n?`, 'gm');
 const COMMAND_INLINE_TAG_RE = new RegExp(COMMAND_TAG_PAT, 'g');
 
+/**
+ * Invariant (line-scoped, never string-scoped): normalize a whitespace-only
+ * LINE to empty so `\n   \n` still reads as a paragraph break ('\n\n') to
+ * findBlockBoundary — but ONLY when the input actually contains a line boundary.
+ *
+ * `^`/`$` under /m also match the STRING's own ends, so a bare `/^[ \t]+$/gm`
+ * matched an input consisting solely of spaces. Both callers run PER DELTA in
+ * the streaming orchestrator, where a lone ' ' delta is an ordinary word
+ * separator, not a blank line. Annihilating it there — the empty result is then
+ * discarded outright by the orchestrator's `if (!cleaned) return` guard — fused
+ * the neighbouring words on screen: "The" + " " + "6 lint errors" rendered as
+ * "The6 lint errors", and "branch," + " " + "as requested." as "branch,as
+ * requested.". Requiring a newline preserves the blank-line normalization
+ * (which by definition needs a line boundary to exist) while letting a
+ * separator-only delta through verbatim. Same reasoning as each caller's
+ * `tagsRemoved` guard on the leading/trailing newline trim, for spaces.
+ */
+function normalizeWhitespaceOnlyLines(text: string): string {
+  if (!text.includes('\n')) return text;
+  return text.replace(/^[ \t]+$/gm, '');
+}
+
 export function stripCommandTags(text: string): string {
   let tagsRemoved = false;
   // Pass 1 — line-level tags: restore the preceding \n but eat the tag line
@@ -46,7 +68,7 @@ export function stripCommandTags(text: string): string {
     tagsRemoved = true;
     return '';
   });
-  result = result.replace(/^[ \t]+$/gm, '');
+  result = normalizeWhitespaceOnlyLines(result);
   result = result.replace(/\n{3,}/g, '\n\n');
   // Only trim string-level leading/trailing newlines when we removed a tag —
   // a delta that is purely '\n' with no tags must survive unchanged.
@@ -86,7 +108,7 @@ export function extractSkillTag(
   result = result.replace(closeLineRe, (_, pre: string) => { tagsRemoved = true; return pre; });
   result = result.replace(openInlineRe, () => { tagsRemoved = true; return ''; });
   result = result.replace(closeInlineRe, () => { tagsRemoved = true; return ''; });
-  result = result.replace(/^[ \t]+$/gm, '');
+  result = normalizeWhitespaceOnlyLines(result);
   result = result.replace(/\n{3,}/g, '\n\n');
   if (tagsRemoved) {
     result = result.replace(/^\n+/, '').replace(/\n+$/, '');

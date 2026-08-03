@@ -323,6 +323,8 @@ export interface CliOptions {
    * default branch (origin/main); pass `HEAD` to base on the local checkout.
    */
   worktreeBase?: string;
+  /** `--worktree-on-exit`: clean-worktree quit policy. */
+  worktreeOnExit?: 'ask' | 'keep' | 'remove';
   /**
    * Commander emits `shellPassthrough: false` when `--no-shell-passthrough`
    * is passed. When false, `!text` is NOT dispatched to the shell and falls
@@ -440,6 +442,10 @@ export interface InteractiveCtx {
    * `/command` routes through the slash dispatcher. Absent for a bare `afk`.
    */
   initialInput?: string;
+  /** Resolved once while the input surface is still live, then consumed by cleanup. */
+  worktreeDisposition?: import('./worktree-disposition.js').WorktreeDisposition;
+  /** Quit-time resolver installed by the interactive composition root. */
+  resolveWorktreeDisposition?: (canPrompt: boolean) => Promise<void>;
   /**
    * Returns true while a turn is in flight. Set by `interactive.ts` after
    * building `turnState` so the swap closure can refuse mid-turn swaps.

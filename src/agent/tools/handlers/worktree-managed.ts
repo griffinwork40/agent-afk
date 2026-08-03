@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree-sweep.js';
+import { registerWorktreeRoot } from '../../worktree-root-registry.js';
 import { hasNonRebuildableIgnoredFiles } from '../../worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 
@@ -126,6 +127,15 @@ export async function createManagedWorktree(
   await execFile('git', [
     '-C', repoRoot, 'worktree', 'add', '-b', branch, worktreePath, baseRef,
   ]);
+  // The sweep is per-root, so a root the daemon never resolves is a root whose
+  // trees leak forever (#761). This covers the `worktree` tool's create action
+  // and the agent tool's isolation path, which both funnel through here — but
+  // it is NOT the only registration site: the `afk -w` session launcher
+  // (cli/commands/interactive/worktree.ts) builds a managed tree with its own
+  // `git worktree add` and registers alongside it. Any future managed-create
+  // path must do the same. Awaited but non-throwing, so it orders before the
+  // meta write without being able to fail the create.
+  await registerWorktreeRoot(repoRoot);
   // Meta write is what makes this tree a first-class citizen of the sweep
   // protocol (age from createdAt, PID liveness). Best-effort: never fail the
   // create over the rev-parse or the write.

@@ -11,6 +11,247 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.87.0] - 2026-08-03
+
+### Added
+- choose keep or delete when quitting a -w session (#859) (66f5220)
+
+### Fixed
+- ground-state memory surveyor calls memory_search, not a dead path (#862) (#878) (0c5ba47)
+
+## [5.86.0] - 2026-08-03
+
+### Added
+- make the nesting-depth cap configurable via AFK_MAX_NESTING_DEPTH (#863) (6f8e33f)
+
+## [5.85.12] - 2026-08-03
+
+### Fixed
+- latch the dead-zone banner flush and close #867 review gaps (#874) (03224b1)
+
+## [5.85.11] - 2026-08-03
+
+### Fixed
+- stop fabricating filenames from relative paths (#872) (58a1e68)
+
+## [5.85.10] - 2026-08-02
+
+### Changed
+- split bootstrap.ts into 9 phase modules (#823) (#873) (8f28491)
+
+## [5.85.9] - 2026-08-02
+
+### Fixed
+- close the case-variant bypass of the credential floor (#736) (#819) (de0f295)
+
+## [5.85.8] - 2026-08-02
+
+### Fixed
+- close the 1.5s–30s live-progress dead zone (#857) (#867) (399e8fa)
+- match rebuildable ignored FILES on the leaf, not the whole path (#799) (1362fab)
+
+## [5.85.7] - 2026-08-02
+
+### Fixed
+- re-dispatch a read-only child once when its stream is cut with zero output (#796) (542464e)
+
+## [5.85.6] - 2026-08-02
+
+### Changed
+- a named subagent dispatched without an explicit model now resolves to the
+  policy default (`AFK_DEFAULT_SUBAGENT_MODEL`, else the `medium` tier) instead
+  of silently inheriting the dispatching session's model. Inheritance is now
+  opt-in via `model: inherit` in the agent definition. Behaviour change on
+  upgrade: named agents that declare no model — including the built-in
+  `research-agent` — drop from the parent's tier to the policy default under a
+  high-tier parent (e.g. `opus`). Pin `model: inherit` to restore the old
+  behaviour per agent.
+
+### Fixed
+- resolve an omitted named-agent model to the policy default (#868) (99294da)
+
+## [5.85.5] - 2026-08-02
+
+### Fixed
+- tell a denied fork the remedy that actually works (#851) (1e885fe)
+
+## [5.85.4] - 2026-08-02
+
+### Fixed
+- make the pipeline's own instruments tell the truth (#847) (4cb26bc)
+
+## [5.85.3] - 2026-08-02
+
+### Fixed
+- render round denominator in progress banner (#857) (#858) (5bc00a8)
+
+## [5.85.2] - 2026-08-02
+
+### Fixed
+- render a deliberate tool refusal as blocked, not failed (#75) (#848) (e3f73e1)
+
+## [5.85.1] - 2026-08-02
+
+### Fixed
+- sweep every repo root known to hold managed trees (#761) (#771) (f237057)
+
+### Changed
+- bump @types/node from 26.1.1 to 26.1.2 in /website (#855) (c62558c)
+- bump the fumadocs group in /website with 2 updates (#854) (9477a77)
+
+## [5.85.0] - 2026-08-02
+
+### Added
+- opt-in capture of parent→subagent dispatch prompts (#844) (c4b7696)
+
+## [5.84.17] - 2026-08-02
+
+### Fixed
+- grant confined forks read access to the agent-framework dir (#841) (fa271ee)
+
+## [5.84.16] - 2026-08-01
+
+### Fixed
+- make a running subagent legible instead of decorative (#840) (582b5a2)
+
+## [5.84.15] - 2026-08-01
+
+### Fixed
+- stop pixel art sharing rows with text so resize can't tear it (#842) (062a15a)
+
+## [5.84.14] - 2026-08-01
+
+### Fixed
+- stop the TTFB bound firing on throttle backoff, and stop guessing why a stream ended (#839) (ad7c976)
+
+### Changed
+- impact map for ADR 0002 item 2, and mark it rejected (#774) (f59e6bf)
+
+## [5.84.13] - 2026-08-01
+
+### Changed
+- extract constants + fork types from subagent.ts (#829) (#838) (4e0af66)
+
+## [5.84.12] - 2026-08-01
+
+### Fixed
+- reject newline/CR in rm-allowlist carve-out (#806 follow-up) (#835) (ee01384)
+
+## [5.84.11] - 2026-08-01
+
+### Fixed
+- alias /add-dir to /allow-dir (#837) (4e74dc6)
+
+## [5.84.10] - 2026-08-01
+
+### Changed
+- split scrollback logic out of terminal-compositor.types.ts (#826) (#836) (7347dae)
+
+## [5.84.9] - 2026-08-01
+
+### Fixed
+- gate orphaned-dir removal on age and content (#794) (#813) (27060bc)
+
+## [5.84.8] - 2026-08-01
+
+### Fixed
+- allow curated in-workspace rm -rf in AFK autonomous mode (#579 O3) (#806) (13403f2)
+
+### Changed
+- split anthropic-direct/index.ts behind characterization tests (#824) (#833) (3bd13ea)
+
+## [5.84.7] - 2026-08-01
+
+### Changed
+- extract a shared wireExecutors() factory (#822) (#834) (6ed0186)
+
+## [5.84.6] - 2026-08-01
+
+### Fixed
+- re-render the # Environment date line per turn in openai-compatible (#785) (#804) (f7665d1)
+
+### Changed
+- cover openai-compatible manifest forwarding (closes #742) (#821) (4610e25)
+
+## [5.84.5] - 2026-08-01
+
+### Fixed
+- refuse a tool call that keeps failing identically (#723) (#814) (7807e67)
+
+### Changed
+- cover user-skills.ts fork path for skillDispatchName + anchor (closes #741) (#820) (3dfa4b4)
+
+## [5.84.4] - 2026-08-01
+
+### Changed
+- split loop.ts into a modular loop/ subdirectory (#818) (8d11048)
+
+## [5.84.3] - 2026-08-01
+
+### Fixed
+- stop making the operator hand-recover from a usage-limit death (auto re-resolve credentials + /retry) (#811) (b017bc6)
+
+### Changed
+- run the vendored/bundled hash-pin gate on every PR (#775) (#817) (d4d5706)
+
+## [5.84.2] - 2026-08-01
+
+### Fixed
+- credit provider-paused time against the wall-clock ceiling (#797) (f6b33cf)
+
+## [5.84.1] - 2026-08-01
+
+### Fixed
+- fail the bundle build when a prompt read cannot be inlined (#776) (#816) (548029c)
+
+## [5.84.0] - 2026-08-01
+
+### Added
+- fold the fragment-goal signal class into intent-lock (#793) (c791d8e)
+
+### Changed
+- migrate hash-pin history blocks to docs/bundled-plugins.md (#790) (#809) (5ea1493)
+
+## [5.83.9] - 2026-07-31
+
+### Fixed
+- preserve the turn and bound a pause when mid-stream overload retries exhaust (#762) (#764) (7f5083c)
+- stop annihilating whitespace-only text deltas and fusing round-boundary prose (#810) (9db7413)
+
+### Changed
+- close breadth-guard and warn-latch coverage gaps from #753 (#783) (#812) (a0be547)
+
+## [5.83.8] - 2026-07-31
+
+### Fixed
+- carve ssh config + known_hosts out of read-denylist (#579 O2) (#805) (badd34a)
+
+### Changed
+- fix dangling @link and restate ~60% orphan figure (#730) (#807) (73e8577)
+- close three builtin-shadow warning coverage gaps (#746) (#808) (dcf22ba)
+
+## [5.83.7] - 2026-07-31
+
+### Fixed
+- accept common truthy values for TELEGRAM_VERBOSE (#683) (#802) (29b0903)
+
+### Changed
+- extract two named concerns over the 350-LOC ceiling (#782) (#801) (d7df7ea)
+- add anthropic-direct query.test.ts for subagentId threading (#634) (#803) (49b8afd)
+
+## [5.83.6] - 2026-07-31
+
+### Fixed
+- stop a blank environment variable from permanently shadowing the real value in `afk.env` — a shell profile with `export OPENAI_API_KEY=""` masked the key in `~/.afk/config/afk.env` (dotenv's `override: false` skip is presence-based, not value-based), so an OpenAI-compatible-only operator was told to "set OPENAI_API_KEY" for a key they had already set, after the auth chain fell through to `~/.codex/auth.json`
+
+### Fixed
+- stop a blank env var from shadowing the real value in afk.env (#800) (91c80ce)
+
+## [5.83.5] - 2026-07-31
+
+### Fixed
+- keep the hanging indent when a list or blockquote token exceeds the wrap budget (#798) (532f78d)
+
 ## [5.83.4] - 2026-07-31
 
 ### Fixed

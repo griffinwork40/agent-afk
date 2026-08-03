@@ -245,3 +245,162 @@ describe('default min occurrences', () => {
     expect(DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cascade dedupe — one parent timeout must not read as N sessions.
+//
+// History: a single parent timeout cascade-cancels every in-flight child and
+// each cancellation writes its own closure event into the SAME trace. The
+// event-keyed rollup reported affectedSessions=37 / totalCostUsd=$114.47 for
+// what was a much smaller set of sessions, and emitted duplicate sessionIds.
+// finalCostUsd is CUMULATIVE, so summing per-event multi-counted spend.
+// ---------------------------------------------------------------------------
+
+describe('detectClosureAnomaly — cascade dedupe (per-session rollup)', () => {
+  it('collapses four cascade closures in one session into a single row', () => {
+    resetSeq();
+    // Four children cascade-killed by one parent timeout; cost is cumulative
+    // and monotonically non-decreasing across the four events.
+    const sessions = [
+      makeSession('parent-1', [
+        closureLine('timeout', 10, 3),
+        closureLine('timeout', 20, 4),
+        closureLine('timeout', 30, 5),
+        closureLine('timeout', 40, 6),
+      ]),
+    ];
+    const results = detectClosureAnomaly(sessions);
+    expect(results).toHaveLength(1);
+    const r = results[0]!;
+
+    // One session, not four.
+    expect(r.detail['affectedSessions']).toBe(1);
+    expect(r.detail['sessionIds']).toEqual(['parent-1']);
+
+    // Evidence is per EVENT: a cascade's distinct child closures are the
+    // evidence, so all four survive (codex review, PR #847).
+    expect(r.evidence).toHaveLength(4);
+
+    // Cost sums across instances. The four accumulators are disjoint — a
+    // child's spend never reaches the parent's `sessionRunningCostUsd` — so
+    // 10+20+30+40 IS this trace file's true spend, and the old max-based 40
+    // under-reported it.
+    expect(r.detail['totalCostUsd']).toBe(100);
+    expect(r.detail['maxCostUsd']).toBe(40);
+
+    // The raw event count survives as its own signal.
+    expect(r.detail['closureEventCount']).toBe(4);
+
+    // Turns average over every instance: (3+4+5+6)/4.
+    expect(r.detail['avgTurnCount']).toBe(4.5);
+  });
+
+  it('never emits duplicate session ids', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('a', [closureLine('timeout', 5), closureLine('timeout', 9)]),
+      makeSession('b', [closureLine('timeout', 7)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    const ids = r.detail['sessionIds'] as string[];
+    expect(ids).toEqual(['a', 'b']);
+    expect(new Set(ids).size).toBe(ids.length);
+    // Every instance's disjoint segment summed: 5+9+7, not the per-session
+    // maxima 9+7 — session ids stay deduped, cost does not.
+    expect(r.detail['totalCostUsd']).toBe(21);
+    expect(r.detail['closureEventCount']).toBe(3);
+  });
+
+  it('counts sessions, not events, against minOccurrences', () => {
+    resetSeq();
+    // Three closure events but only ONE session — must not clear a 2-session bar.
+    const sessions = [
+      makeSession('solo', [
+        closureLine('timeout', 1),
+        closureLine('timeout', 2),
+        closureLine('timeout', 3),
+      ]),
+    ];
+    expect(detectClosureAnomaly(sessions, { minOccurrences: 2 })).toHaveLength(0);
+    expect(detectClosureAnomaly(sessions, { minOccurrences: 1 })).toHaveLength(1);
+  });
+
+  it('reports the deduped session count in the title', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('p', [closureLine('timeout', 1), closureLine('timeout', 2)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(r.title).toContain('1 session');
+    expect(r.title).not.toContain('2 sessions');
+  });
+
+  it('aggregates every instance regardless of event order', () => {
+    resetSeq();
+    // Descending cost order — nothing is discarded, so the totals are
+    // order-independent and no sighting "wins".
+    const sessions = [
+      makeSession('p', [closureLine('timeout', 99, 12), closureLine('timeout', 4, 2)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(r.detail['totalCostUsd']).toBe(103);
+    expect(r.detail['maxCostUsd']).toBe(99);
+    expect(r.detail['avgTurnCount']).toBe(7);
+    expect(r.detail['affectedSessions']).toBe(1);
+  });
+
+  it('is order-independent: reversed input yields identical aggregates', () => {
+    resetSeq();
+    const ascending = detectClosureAnomaly([
+      makeSession('p', [closureLine('timeout', 4, 2), closureLine('timeout', 99, 12)]),
+    ])[0]!;
+    resetSeq();
+    const descending = detectClosureAnomaly([
+      makeSession('p', [closureLine('timeout', 99, 12), closureLine('timeout', 4, 2)]),
+    ])[0]!;
+    expect(ascending.detail['totalCostUsd']).toBe(descending.detail['totalCostUsd']);
+    expect(ascending.detail['avgTurnCount']).toBe(descending.detail['avgTurnCount']);
+    expect(ascending.detail['maxCostUsd']).toBe(descending.detail['maxCostUsd']);
+  });
+
+  it('still parses against DetectorResultSchema after dedupe', () => {
+    resetSeq();
+    const sessions = [
+      makeSession('p', [closureLine('timeout', 3), closureLine('timeout', 8)]),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(DetectorResultSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('caps seqs with evidence but leaves sessionIds whole', () => {
+    resetSeq();
+    // A wide cascade: 20 children killed by one parent timeout. Evidence and
+    // seqs index each other, so both cap at 8; the aggregates and sessionIds
+    // must still describe every event/session, uncapped.
+    const sessions = [
+      makeSession('wide', Array.from({ length: 20 }, () => closureLine('timeout', 1, 2))),
+    ];
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect(r.evidence).toHaveLength(8);
+    expect((r.detail['seqs'] as number[]).length).toBe(8);
+    // Uncapped: the honest event count, the true summed spend, and the session
+    // list whose length IS affectedSessions.
+    expect(r.detail['closureEventCount']).toBe(20);
+    expect(r.detail['totalCostUsd']).toBe(20);
+    expect(r.detail['sessionIds']).toEqual(['wide']);
+    expect(r.detail['affectedSessions']).toBe(1);
+  });
+
+  it('caps seqs across many sessions without truncating sessionIds', () => {
+    resetSeq();
+    // 12 distinct sessions — sessionIds.length must stay equal to
+    // affectedSessions even though seqs is clamped to the evidence cap.
+    const sessions = Array.from({ length: 12 }, (_, i) =>
+      makeSession(`s${i}`, [closureLine('timeout', 1, 2)]),
+    );
+    const r = detectClosureAnomaly(sessions)[0]!;
+    expect((r.detail['seqs'] as number[]).length).toBe(8);
+    expect((r.detail['sessionIds'] as string[]).length).toBe(12);
+    expect(r.detail['affectedSessions']).toBe(12);
+  });
+});

@@ -18,8 +18,8 @@ import {
   scrollbackFlushLines,
   snapFlushCountToLogicalBoundary,
   buildScrollbackArchiveEscape,
-  type BandRowMeta,
-} from './terminal-compositor.types.js';
+} from './terminal-compositor.scrollback.js';
+import type { BandRowMeta } from './terminal-compositor.types.js';
 import { reflowBandSplit } from './terminal-compositor.band-reflow.js';
 import { hardWrapToWidth } from './wrap.js';
 

@@ -4,13 +4,14 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam } from '@anthropic-ai/sdk/resources';
+import { runTurn } from './loop.js';
 import {
-  runTurn,
   isTransientServerError,
   isOverloadedErrorEvent,
   OVERLOAD_MAX_RETRIES,
   STREAM_INCOMPLETE_MAX_RETRIES,
-} from './loop.js';
+} from './loop/retry-budget.js';
+import { OVERLOAD_EXHAUSTED } from './overload-pause.js';
 import type { AnthropicClientLike } from './types.js';
 import {
   fromArray,
@@ -174,8 +175,9 @@ describe('runTurn transient error retry', () => {
       }),
     );
 
-    // Advance past all retry delays (5s + 10s + 20s = 35s)
-    await vi.advanceTimersByTimeAsync(40_000);
+    // Advance past all retry delays: the 5s + 10s + 20s ladder plus the additive
+    // jitter each attempt now carries (<=25%, so <=43.75s worst case, #762).
+    await vi.advanceTimersByTimeAsync(60_000);
 
     const events = await resultPromise;
 
@@ -327,7 +329,15 @@ describe('runTurn mid-stream overload retry', () => {
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
   });
 
-  it('exhausts the retry budget on a persistent mid-stream overload and yields the error', async () => {
+  // CONTRACT CHANGE (#762). This test previously pinned the FATAL contract:
+  // exhaustion yielded a raw `error` event, which set `sawProviderError` in
+  // agent-session.ts → `closure {reason:'abort'}` → seal `failed` with
+  // `finalTurnCount: 0`, discarding every accumulated turn of the session.
+  // Exhaustion now ends the turn CLEANLY with `turn.completed` stamped
+  // `OVERLOAD_EXHAUSTED`, so the turn commits (turnCount++) and the session
+  // stays resumable. The failure is still loud — closure-reason.ts maps the
+  // sentinel to `abort` and closure-emitter.ts to a `failed` seal.
+  it('exhausts the retry budget on a persistent mid-stream overload and preserves the turn', async () => {
     const client: AnthropicClientLike = {
       messages: { create: vi.fn(() => midStreamOverloadStream()) },
     };
@@ -339,18 +349,88 @@ describe('runTurn mid-stream overload retry', () => {
       }),
     );
 
-    await vi.advanceTimersByTimeAsync(40_000); // past all backoffs (5s + 10s + 20s)
+    // Past all backoffs (5s + 10s + 20s) plus the additive jitter (<=25% each).
+    await vi.advanceTimersByTimeAsync(60_000);
     const events = await resultPromise;
 
     expect(client.messages.create).toHaveBeenCalledTimes(OVERLOAD_MAX_RETRIES + 1);
     // One stream.retry per backoff/re-drive — OVERLOAD_MAX_RETRIES total (the
-    // final, exhausted attempt yields the error, not another retry marker).
+    // final, exhausted attempt terminates the turn, not another retry marker).
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(OVERLOAD_MAX_RETRIES);
-    const errorEvent = events.find((e) => e.type === 'error');
-    expect(errorEvent).toBeDefined();
-    if (errorEvent?.type === 'error') {
-      expect(errorEvent.error.message).toContain('Overloaded');
+
+    // Turn preservation: NO fatal error event, and a clean turn.completed
+    // carrying the exhaustion sentinel. This is what keeps finalTurnCount > 0.
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expect(completed).toBeDefined();
+    if (completed?.type === 'turn.completed') {
+      expect(completed.usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
     }
+
+    // The raw {"type":"overloaded_error"} SSE envelope was being read by
+    // operators as a TypeScript error — a human-readable notice replaces it.
+    const notice = events.find((e) => e.type === 'assistant.message');
+    expect(notice).toBeDefined();
+    if (notice?.type === 'assistant.message') {
+      expect(notice.text).toContain('529');
+      expect(notice.text).toContain('afk --resume');
+    }
+  });
+
+  // Exhaustion must emit EXACTLY ONE terminal event. Two terminals would strand
+  // the trailing one in AgentSession.sendMessageStreamInternal (it breaks on the
+  // first `done`|`error`), so the next user turn would run a full turn late.
+  it('emits exactly one terminal event on overload exhaustion', async () => {
+    const client: AnthropicClientLike = {
+      messages: { create: vi.fn(() => midStreamOverloadStream()) },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {}, signal: new AbortController().signal, ctx,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    const events = await resultPromise;
+
+    const terminals = events.filter((e) => e.type === 'turn.completed' || e.type === 'error');
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]?.type).toBe('turn.completed');
+  });
+
+  // A NON-overload mid-stream error must still be fatal — the exhaustion branch
+  // re-tests isOverloadedErrorEvent rather than inferring from "retry declined",
+  // so an auth/invalid-request failure is never silently turned into a clean turn.
+  it('does not preserve the turn for a non-overload mid-stream error', async () => {
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => (async function* () {
+          yield {
+            type: 'message_start',
+            message: {
+              id: 'msg_bad', type: 'message', role: 'assistant', content: [],
+              model: 'claude-test', stop_reason: null, stop_sequence: null, usage: baseUsage(),
+            },
+          } as unknown as RawMessageStreamEvent;
+          throw Object.assign(new Error('Invalid request'), {
+            status: undefined,
+            error: { type: 'error', error: { type: 'invalid_request_error', message: 'bad' } },
+          });
+        })()),
+      },
+    };
+    const events = await collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {}, signal: new AbortController().signal, ctx,
+      }),
+    );
+
+    expect(events.find((e) => e.type === 'error')).toBeDefined();
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expect(completed).toBeUndefined();
   });
 
   it('does NOT retry a non-overload mid-stream error', async () => {
@@ -499,7 +579,12 @@ describe('runTurn mid-stream clean-close (StreamIncompleteError) retry', () => {
     expect(errorEvent).toBeDefined();
     if (errorEvent?.type === 'error') {
       expect(errorEvent.error.name).toBe('StreamIncompleteError');
-      expect(errorEvent.error.message).toContain('cut off mid-stream');
+      // Assert the OBSERVABLE fact, not a cause. This used to pin "cut off
+      // mid-stream"; the message no longer asserts why the stream ended, because
+      // this layer cannot tell a client-side AbortError abort (including the SDK's
+      // own request timeout) from an upstream peer close. See
+      // anthropic-direct/stream-completeness.ts.
+      expect(errorEvent.error.message).toContain('ended without a terminal message');
     }
   });
 

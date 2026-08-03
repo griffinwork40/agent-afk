@@ -26,7 +26,7 @@ import { getSkill } from '../../skills/index.js';
 import type { IAgentSession } from '../types.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { collectSkillEntries, discoverPluginSkillBodies, type PluginSkillBody } from './skill-bridge.js';
-import { DEFAULT_MAX_NESTING_DEPTH, DEFAULT_READ_ONLY_SKILLS } from './nesting.js';
+import { DEFAULT_READ_ONLY_SKILLS, resolveMaxNestingDepth } from './nesting.js';
 import { buildSkillMaxDepthRefusal } from './skill-depth-message.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { isTrustedSkill } from '../_lib/trusted-skill-registry.js';
@@ -121,7 +121,7 @@ export class SkillExecutor {
     }
 
     const depth = this.ctx.depth ?? 0;
-    const maxDepth = this.ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
+    const maxDepth = this.ctx.maxDepth ?? resolveMaxNestingDepth();
     if (depth >= maxDepth) {
       // Best-effort: surface a name for the telemetry payload without
       // changing the error precedence (parse errors still come later).

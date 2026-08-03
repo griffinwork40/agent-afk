@@ -192,6 +192,8 @@ export interface CliConfig {
      * Precedence: CLI flag > env > this config value > remote-default detection.
      */
     worktreeBase?: string;
+    /** Clean-worktree quit policy for interactive worktree sessions. */
+    worktreeOnExit?: 'ask' | 'keep' | 'remove';
     /**
      * Master toggle for REPL ghost-text suggestions (Tier-1 history +
      * optional Tier-2 LLM). Mirrors `AFK_SUGGEST_GHOST` env var.
@@ -368,6 +370,7 @@ export interface ConfigFileSchema {
     worktreeAutoname?: boolean;
     worktreeBranchPrefix?: string;
     worktreeBase?: string;
+    worktreeOnExit?: 'ask' | 'keep' | 'remove';
     suggestGhost?: boolean;
     thinkingUi?: 'summary' | 'live' | 'digest' | 'off';
   };

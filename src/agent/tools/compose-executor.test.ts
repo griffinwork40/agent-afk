@@ -5,6 +5,7 @@ import { join } from 'path';
 import type { ToolCall } from './types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { runWithSink } from '../_lib/skill-sink-channel.js';
+import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 
 // Mock SubagentManager + runSubagentDAG before importing the executor.
 const mockForkSubagent = vi.fn();
@@ -440,6 +441,59 @@ describe('ComposeExecutor', () => {
       const result = await executor.execute(makeCall({ nodes }));
       expect(result.isError).toBeFalsy();
       expect(mockRunSubagentDAG).toHaveBeenCalledOnce();
+    });
+
+    // Depth cap parity with the `agent` and `skill` tools. Inert at any
+    // non-zero cap (compose is never wired below the root), so the reachable
+    // case is AFK_MAX_NESTING_DEPTH=0 — the documented "disable nested
+    // delegation entirely" escape hatch.
+    it('refuses when the resolved cap is 0 (AFK_MAX_NESTING_DEPTH=0)', async () => {
+      const KEY = 'AFK_MAX_NESTING_DEPTH';
+      const original = process.env[KEY];
+      process.env[KEY] = '0';
+      try {
+        const executor = new ComposeExecutor(makeContext());
+        const result = await executor.execute(makeCall({
+          nodes: [{ id: 'a', prompt: 'task a' }],
+        }));
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain('Compose tool not available at nesting depth 0 (max 0)');
+        // Parity with the `agent` and `skill` refusals: the actionable "work
+        // inline" hint must reach the caller, not just the depth number.
+        expect(result.content).toContain(SKILL_MAX_DEPTH_RECOVERY_HINT);
+        expect(mockRunSubagentDAG).not.toHaveBeenCalled();
+      } finally {
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      }
+    });
+
+    it('runs normally at the default cap (depth 0 < 3)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: {}, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+      }));
+      expect(result.isError).toBeFalsy();
+      expect(mockRunSubagentDAG).toHaveBeenCalledOnce();
+    });
+
+    it('honours an explicit ctx.maxDepth over the env value', async () => {
+      const KEY = 'AFK_MAX_NESTING_DEPTH';
+      const original = process.env[KEY];
+      process.env[KEY] = '0';
+      try {
+        mockRunSubagentDAG.mockResolvedValue({ outputs: {}, failed: [], skipped: [] });
+        const executor = new ComposeExecutor(makeContext({ maxDepth: 3 }));
+        const result = await executor.execute(makeCall({
+          nodes: [{ id: 'a', prompt: 'task a' }],
+        }));
+        expect(result.isError).toBeFalsy();
+        expect(mockRunSubagentDAG).toHaveBeenCalledOnce();
+      } finally {
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      }
     });
 
     it('returns isError when apiKey is missing (M5)', async () => {

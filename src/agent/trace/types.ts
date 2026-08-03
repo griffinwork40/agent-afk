@@ -64,6 +64,8 @@ export const TOOL_FAILURE_CLASSES = [
   'abort',
   'elicitation-declined',
   'denial-breaker',
+  /** A call refused after N consecutive identical failures (#723). */
+  'repeat-failure',
 ] as const;
 
 /**
@@ -98,9 +100,38 @@ export const TOOL_FAILURE_CLASSES = [
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
  * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
  * excluded from failure stats entirely — while `timeout`, `denial-breaker`, and
- * unclassified failures still count.
+ * unclassified failures still count. That split is `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
+
+/**
+ * The failure classes that mean "the system correctly said no", as opposed to
+ * "the tool broke". Every member returns `isError: true` so the model sees the
+ * outcome and can adapt — but none of them is a fault worth alarming a human
+ * about.
+ *
+ * Single source of truth for two consumers that must not drift apart:
+ *   - `src/improve/scan/detectors/tool-failure-density.ts` excludes these from
+ *     failure-rate stats, so a `browser_open` that refused half its navigations
+ *     on domain policy does not look 50% broken.
+ *   - `src/cli/commands/interactive/tool-lane-format.ts` renders these with a
+ *     neutral `⊘` instead of a red `✗`, so an agent probing a gated tool during
+ *     a long run does not read as something going wrong (#75).
+ *
+ * Membership is deliberately narrower than "not the tool's fault". `timeout` is
+ * excluded because a high timeout rate is a real problem (too tight a deadline,
+ * a systematically slow target), and `denial-breaker` is excluded because a fork
+ * torn down for spinning is review-worthy — see the per-class notes above. An
+ * unclassified failure (no `failureClass`) is never benign: pre-classification
+ * traces and genuine handler bugs share that shape, so it must stay alarming.
+ */
+export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
+  'policy-refusal',
+  'permission-denied',
+  'hook-block',
+  'abort',
+  'elicitation-declined',
+]);
 
 export interface ToolCallCompletedPayload {
   phase: 'completed';
@@ -175,6 +206,7 @@ export type HookEventName =
  * automatic ceiling refusal.
  */
 export type AfkApprovalOutcome =
+  | 'carve-out'
   | 'approved'
   | 'denied'
   | 'unrecognised'
@@ -704,6 +736,16 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
+  // Mid-stream overload (529) exhaustion park/unpark (#762). Distinct from
+  // `usage_limit_pause` — that brackets an OAuth subscription window with an
+  // authoritative reset deadline; a 529 carries NO reset timestamp, so this pair
+  // brackets a bounded PLAIN WALL-CLOCK park that re-probes upstream capacity on
+  // a jittered interval. `overload_resume` carries the parked `durationMs`.
+  // Emitted as a pair, but a pause may end without a resume (ceiling reached,
+  // abort, or the pause disabled for the surface) — a lone `overload_pause` is
+  // expected, and is always followed by a real `closure`.
+  | 'overload_pause'
+  | 'overload_resume'
   // A progress-aware watchdog fired on unexplained silence. Two sources, told
   // apart by `metadata.source`:
   //   - absent → a forked sub-agent turn: the child produced no observable
@@ -718,6 +760,17 @@ export type SessionPhaseName =
   // `rate_limit`/`usage_limit_*`, which mark LEGITIMATE waits — this marks an
   // unexplained stall that fired.
   | 'idle_watchdog_fired'
+  // A forked sub-agent turn's wall-clock ceiling granted a bounded extension
+  // because the provider reported being parked (`paused` w/ resetsAt or
+  // `rate_limit` w/ retryAfterMs). See subagent/pause-ceiling.ts. A single event
+  // per grant (no paired start), emitted fire-and-forget from the handle when
+  // `PauseAwareCeiling.onDeadline()` returns a positive grant. Carries, in
+  // `metadata`, the `subagentId`, `grantMs`, `totalGrantedMs`, `remainingCapMs`,
+  // `grantCount`, and (when known) the `pauseDescription`. PURE OBSERVABILITY:
+  // without it, a pause-driven extension is invisible until the eventual
+  // terminal timeout error — reconstructing "the child got N extensions
+  // totaling Xms across this park" required the error string alone.
+  | 'pause_extension_granted'
   // OBSERVE-ONLY loop telemetry (see tools/suspected-loop-detector.ts): a
   // FORKED sub-agent issued the same (tool, normalized-args) fingerprint
   // >= N times within the last M tool rounds on one dispatcher (per-turn).

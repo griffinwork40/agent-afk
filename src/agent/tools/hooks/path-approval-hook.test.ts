@@ -306,6 +306,14 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
     expect(decision.reason).toContain('read');
     // Read-mode remedy should NOT mention writeRoots.
     expect(decision.reason).not.toContain('writeRoots');
+    // The read remedy must name the same concrete recovery vector the write
+    // branch does — a re-dispatch carrying an explicit readRoots grant — rather
+    // than vague "the parent can widen access" prose. A fork's roots are fixed
+    // at dispatch, so a post-dispatch grant cannot reach it; wording contract
+    // and rationale live in `fork-denial-remedy.ts`.
+    expect(decision.reason).toContain('`agent` tool');
+    expect(decision.reason).toContain('readRoots: ["/etc/hosts"]');
+    expect(decision.reason).toContain('fixed at dispatch');
   });
 
   it('leaves inherited in-root access untouched for a sub-agent (no prompt, no block)', async () => {

@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**139 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**143 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -18,6 +18,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_EFFORT` | string |  |  | `medium` | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. |
 | `AFK_LOCAL_BASE_URL` | string |  |  | `http://127.0.0.1:8080` | Base URL for a self-hosted Anthropic-compatible server. When set, routes traffic away from api.anthropic.com. |
 | `AFK_MAX_BUDGET_USD` | number |  | `5.00` | `10.00` | Cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. |
+| `AFK_MAX_NESTING_DEPTH` | number |  | `3` | `2` | Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins. |
 | `AFK_MAX_OUTPUT_TOKENS` | number |  |  | `8192` | Cap on output tokens per turn. Falls back to provider default when unset. |
 | `AFK_MAX_TOKENS` | number |  | `4096` | `8192` | Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset. |
 | `AFK_MAX_TOOL_USE_ITERATIONS` | number |  | `0` | `150` | Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level turn ends only when the model stops calling tools, the abort signal fires, the provider errors, or the dollar budget trips. A positive integer N makes top-level turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var. |
@@ -41,6 +42,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_OPENAI_BASE_URL` | string |  |  | `http://127.0.0.1:8000/v1` | Base URL override for the OpenAI-compatible provider. Used for local shims (mlx_lm.server, Ollama, vLLM, LM Studio). The OpenAI SDK appends `/chat/completions` itself — a value ending in `/chat/completions` will be stripped at config-load time with a one-shot warning. |
 | `AFK_OPENAI_CHATGPT_OAUTH` | boolean |  |  | `1` | Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api). |
 | `AFK_OPENAI_USE_RESPONSES` | boolean |  |  | `1` | Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag. |
+| `AFK_OVERLOAD_PAUSE_MS` | number |  |  | `600000` | Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity. |
 | `AFK_PROMPT_CACHE_TTL` | string |  | `1h` | `1h` | TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h. |
 | `AFK_PROVIDER` | string |  |  | `openai-compatible` | Force provider selection (anthropic \| anthropic-direct \| openai \| openai-compatible \| openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set. |
 | `AFK_SUBAGENT_IDLE_TIMEOUT_MS` | number |  | `480000` | `300000` | Forked-subagent progress-aware idle-watchdog window in ms; 0 disables the watchdog; an explicit per-fork config.idleTimeoutMs still wins. Fires when a forked child produces no observable output event for this window, aborting the same controller the wall-clock timeout targets so partial output is preserved and the run classifies as a failure. This is distinct from AFK_SUBAGENT_TIMEOUT_MS, the blunt wall-clock that bounds total turn time: the idle watchdog is the tighter first-to-fire bound and never fires while the stream is legitimately parked on a provider-communicated backoff (OAuth pause, or a rate-limit event carrying a retry-after), extending the deadline for the pause window instead. Default 480000 (8 min) clears the worst-case transient-429 backoff the watchdog is currently blind to (about 363s) with roughly 2 min of margin, while staying materially tighter than the 45-min wall-clock. Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to disable the idle watchdog for a whole session (the wall-clock still applies). v1 applies to forked sub-agent turns only, not top-level or daemon sessions. |
@@ -79,7 +81,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` | string |  |  | `-100987654321,123456789` | Comma-separated list of Telegram chat IDs where the bot answers only when addressed (a reply to the bot, an @mention of the bot, or a text_mention resolving to the bot). Slash-commands are unaffected; chats not listed behave as usual. The afk.config.json telegram.tagOnlyChats block takes precedence. Requires Telegram privacy mode OFF (BotFather /setprivacy Disable) for non-addressed group messages to reach the bot. |
 | `TELEGRAM_BOT_TOKEN` | string |  |  |  | Telegram bot token from @BotFather. Required to run the Telegram bot surface. |
 | `TELEGRAM_DATA_DIR` | string |  |  |  | Override the directory where Telegram bot state is stored. Defaults to ~/.afk/state/telegram/. |
-| `TELEGRAM_VERBOSE` | boolean |  |  | `true` | Set to 'true' to log per-message details from the Telegram bot — chat IDs, message text, latency. (The code checks the literal string 'true'.) |
+| `TELEGRAM_VERBOSE` | boolean |  |  | `true` | Set to a truthy value ('1'/'true'/'yes'/'on', case-insensitive) to log per-message details from the Telegram bot — chat IDs, message text, latency. |
 
 ## Paths
 
@@ -110,6 +112,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_WORKTREE_BRANCH_PREFIX` | string |  | `afk/` | `wt/` | Branch-name prefix for AFK-managed worktrees. Default afk/. Set to empty string to drop the prefix. |
 | `AFK_WORKTREE_MAX_AGE_CLEAN` | number |  | `14` |  | Maximum age (in days) before a clean worktree is auto-pruned. Default 14. |
 | `AFK_WORKTREE_MAX_AGE_DIRTY` | number |  | `30` |  | Maximum age (in days) before a dirty worktree is auto-pruned. Default 30. |
+| `AFK_WORKTREE_ON_EXIT` | string |  |  | `ask` | Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove. |
 | `AFK_WORKTREE_PRUNE_DISABLE` | boolean |  |  |  | Disable the worktree prune job entirely. Useful for long-running tests. |
 | `AFK_WORKTREE_SWEEP_ROOT` | string |  |  |  | Override the root directory under which AFK worktrees are tracked for pruning. |
 
@@ -143,6 +146,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_CAPTURE_SUBAGENT_PROMPTS` | boolean |  |  | `1` | Opt-in: when set to 1, every prompt a parent session sends to a subagent is written as a redacted markdown file under state/witness/<label>/prompts/. Off by default because nothing prunes the witness tree and prompts may carry secrets the regex redactor cannot catch (connection strings, PEM blocks, PII). |
 | `AFK_DEBUG` | boolean |  |  | `1` | Enable verbose debug logging across the codebase. Accepts 1 to enable. |
 | `AFK_DEBUG_CLIPBOARD` | boolean |  |  |  | Debug bracketed-paste and image-paste handling in the interactive REPL. |
 | `AFK_DEBUG_COMPOSITOR` | boolean |  |  |  | Gate compositor phase-boundary traces to stderr; any truthy value enables. |

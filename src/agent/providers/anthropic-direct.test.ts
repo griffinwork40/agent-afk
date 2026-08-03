@@ -979,6 +979,76 @@ describe('AnthropicDirectProvider', () => {
     expect(second.progress.taskId).toBe(first.progress.taskId);
   });
 
+  // Issue #857: the progress banner named the round but never its cap
+  // ("round 7" said nothing about how close the child was to winding down).
+  // With no configured cap the loop is unlimited, so the summary must keep the
+  // bare "round N" form — never "round N/0" or "round N/Infinity".
+  it('progress.summary has no denominator when maxToolUseIterations is unset', async () => {
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) return fromArray(makeToolUseStream('toolu_1', 'read_file', '{}'));
+      return fromArray(makeTextStream('Done.'));
+    });
+
+    const dispatcher: ToolDispatcher = {
+      async execute(): Promise<ToolResult> {
+        return { content: 'ok' };
+      },
+    };
+
+    const provider = new AnthropicDirectProvider({ tools: dispatcher });
+    const query = provider.query({
+      prompt: singleInput('do stuff'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
+    });
+    const events = await collect(query);
+
+    const progressEvents = events.filter((e) => e.type === 'progress') as Array<
+      Extract<ProviderEvent, { type: 'progress' }>
+    >;
+    expect(progressEvents.length).toBe(1);
+    expect(progressEvents[0]!.progress.summary).toBe('round 1: read_file');
+  });
+
+  // Issue #857 companion: when a real cap IS configured, the same summary
+  // string must carry it as a denominator (`round N/cap`) so the banner shows
+  // how close the child is to its tool-round ceiling.
+  it('progress.summary carries the resolved cap as a denominator', async () => {
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx >= 3) return fromArray(makeTextStream('Summary of findings.'));
+      return fromArray(makeToolUseStream(`toolu_${callIdx}`, 'get_weather', '{"city":"SF"}'));
+    });
+
+    const dispatcher: ToolDispatcher = {
+      async execute(): Promise<ToolResult> {
+        return { content: 'sunny' };
+      },
+    };
+
+    const provider = new AnthropicDirectProvider({ tools: dispatcher });
+    const query = provider.query({
+      prompt: singleInput('weather?'),
+      config: {
+        model: 'claude-sonnet-5',
+        apiKey: 'sk-ant-api03-test',
+        maxToolUseIterations: 2,
+      },
+    });
+    const events = await collect(query);
+
+    const progressEvents = events.filter((e) => e.type === 'progress') as Array<
+      Extract<ProviderEvent, { type: 'progress' }>
+    >;
+    expect(progressEvents.length).toBe(2);
+    // get_weather's `city` arg isn't a recognized summarizeToolInput key
+    // (path/command/query), so the headline is the bare tool name.
+    expect(progressEvents[0]!.progress.summary).toBe('round 1/2: get_weather');
+    expect(progressEvents[1]!.progress.summary).toBe('round 2/2: get_weather');
+  });
+
   // Regression (PR 508 codex review, P2): a single round that batches multiple
   // parallel tool_use blocks must report `toolUses` as the actual number of
   // tool CALLS — not "1" (the round/iteration count). Before the fix `toolUses`

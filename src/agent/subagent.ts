@@ -20,13 +20,11 @@
  */
 
 import type { CanUseTool } from './types/sdk-types.js';
-import type { ZodType } from 'zod';
 import { AbortGraph, type ChildAbortedListener } from './abort-graph.js';
 import type { HookRegistry } from './hooks.js';
 import { AgentSession } from './session.js';
 
-import type { AgentConfig, IAgentSession } from './types.js';
-import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
+import type { AgentConfig } from './types.js';
 import type { SubagentProgressSink } from './types/session-types.js';
 import { dispatchSubagentStart } from './subagent-hooks.js';
 import { emitSubagentLifecycle } from './trace/emit.js';
@@ -37,10 +35,9 @@ import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
-import { getAfkStateDir } from '../paths.js';
+import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
 import path from 'path';
-import { env } from '../config/env.js';
-import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
+import { buildPhaseRestrictedProvider } from './tools/nesting.js';
 import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -54,365 +51,36 @@ import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/r
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
 
-// External constraint: backgrounded subagents have no surface to serve
-// elicitations — auto-decline prevents silent hangs.
-// Exported so it can be wired into forkSubagent's background-mode path by callers.
-export const DENY_ELICITATION: NonNullable<AgentConfig['onElicitation']> = async (
-  _request: ElicitationRequest,
-  _options: { signal: AbortSignal },
-): Promise<ElicitationResult> => ({ action: 'decline' });
+// Contract: the default budgets and the fork-time option types moved to
+// ./subagent/{constants,fork-types}.ts (#829). They are imported for internal
+// use by SubagentManager below AND re-exported here unchanged, so every
+// existing `from './subagent.js'` importer keeps working untouched.
+import {
+  DENY_ELICITATION,
+  SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+  SUBAGENT_DEFAULT_TIMEOUT_MS,
+  SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
+  SUBAGENT_BACKGROUND_TIMEOUT_MS,
+  resolveSubagentTimeoutMs,
+  resolveSubagentIdleTimeoutMs,
+} from './subagent/constants.js';
+import type {
+  ForkParent,
+  ForkSubagentOptions,
+  SubagentManagerOptions,
+} from './subagent/fork-types.js';
 
-/**
- * Default tool-use-iteration ceiling applied to every forked subagent.
- *
- * A subagent runs exactly one conversation turn (one `sendMessageStream`), so
- * this bounds the tool-use loop WITHIN that turn. anthropic-direct otherwise
- * defaults to `0` (unbounded — see DEFAULT_MAX_TOOL_USE_ITERATIONS), which lets
- * a runaway child spin indefinitely while its parent is suspended at
- * `await runToResult`. `50` matches openai-compatible's built-in cap so both
- * providers bound child loops identically. Hitting the cap surfaces as a
- * `tool_use_loop_capped` done (not an error), returning the child's partial
- * work. Callers may override per-fork via `config.maxToolUseIterations` (e.g.
- * `0` to opt a trusted deep-investigation child back into unbounded mode).
- */
-export const SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS = 50;
+export {
+  DENY_ELICITATION,
+  SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+  SUBAGENT_DEFAULT_TIMEOUT_MS,
+  SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
+  SUBAGENT_BACKGROUND_TIMEOUT_MS,
+  resolveSubagentTimeoutMs,
+  resolveSubagentIdleTimeoutMs,
+};
+export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
 
-/**
- * Default wall-clock budget applied to every forked subagent turn.
- *
- * `DEFAULT_SESSION_TIMEOUT_MS` is `0` (unbounded), which is correct for
- * top-level sessions — a human owns them — but not for forks: a child stalled
- * by provider throttling, a wedged stream, or a slow-grinding tool loop parks
- * its parent at `await runToResult` indefinitely (observed 2026-07-07: four
- * parallel children spun 29 minutes under a 429 cascade until the operator
- * manually cancelled). The tool-iteration cap above bounds ROUNDS but not
- * TIME — throttled rounds can each take minutes. On expiry `withTimeout`
- * aborts the child's controller, cascading through the AbortGraph to its
- * descendants, and the parent receives a legible TimeoutError tool_result
- * instead of hanging.
- *
- * 45 minutes (raised from an earlier 20 min): the 20-min cap was a BLUNT wall
- * that guillotined genuinely-working read-only research/review children —
- * `/review`'s `research-agent` (which nests `git-investigator`) does continuous
- * grep/read archaeology that legitimately exceeds 20 min on a large diff, so a
- * healthy child was being killed mid-work rather than a hung one relieved.
- * 45 min gives real headroom over the longest healthy child observed while
- * still guaranteeing every fork terminates. Operators can tune per-environment
- * via `AFK_SUBAGENT_TIMEOUT_MS` (see {@link resolveSubagentTimeoutMs}); callers
- * may override per-fork via `config.timeoutMs` (`0` restores unbounded).
- *
- * NOTE: a follow-up will add a progress-aware idle watchdog (reset the budget
- * on observable child progress) so an ACTIVELY-working child is never cut off
- * regardless of total wall-clock; this raised blunt cap is the interim relief.
- */
-export const SUBAGENT_DEFAULT_TIMEOUT_MS = 45 * 60_000;
-
-/**
- * Resolve the foreground forked-subagent wall-clock budget from
- * `AFK_SUBAGENT_TIMEOUT_MS`.
- *
- * Mirrors {@link resolveTtfbTimeoutMs}: returns the parsed value when it is a
- * finite integer `>= 0`. A value of `0` is the explicit disable escape hatch
- * (returned as `0` = unbounded). Unset, empty, or unparseable input falls back
- * to {@link SUBAGENT_DEFAULT_TIMEOUT_MS}; negative values are treated as invalid
- * and also fall back to the default.
- *
- * Only consulted for the DEFAULT budget: an explicit per-fork `config.timeoutMs`
- * (including the background {@link SUBAGENT_BACKGROUND_TIMEOUT_MS} set by the
- * SubagentExecutor) still wins via the `??` at the fork site.
- */
-export function resolveSubagentTimeoutMs(): number {
-  const raw = env.AFK_SUBAGENT_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === '') return SUBAGENT_DEFAULT_TIMEOUT_MS;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0) return SUBAGENT_DEFAULT_TIMEOUT_MS;
-  return n;
-}
-
-/**
- * Default progress-aware IDLE budget applied to every forked subagent turn.
- *
- * Distinct from {@link SUBAGENT_DEFAULT_TIMEOUT_MS} (the 45-min blunt
- * wall-clock that bounds total turn TIME): this bounds time since the child last
- * produced an observable `OutputEvent`. The incident that motivated it — a
- * `/review` run that hung ~43 min producing zero output — was a subagent's model
- * call stalling under HTTP 429 / provider throttling with NO detection: round
- * caps bound *work done*, wall-clock bounds *time elapsed*, and neither bounds
- * *time since anything observable happened*. The idle watchdog (see
- * {@link import('./subagent/idle-watchdog.js').IdleWatchdog}) fires materially
- * sooner than the wall-clock on a genuine stall and never fires while the stream
- * is legitimately parked on a provider-communicated backoff (OAuth `paused`,
- * `rate_limit` with `retryAfterMs`).
- *
- * 8 minutes: a companion follow-up SPLITS OUT the transient-429 stream signal
- * (the `retry-layer.ts` change that would make a transient backoff wait a
- * visible, deadline-extending stream event). Until it lands, THIS watchdog is
- * blind to the retry-layer's transient backoff. The verified worst case there is
- * `RATE_LIMIT_TRANSIENT_MAX_RETRIES (3)` × `RATE_LIMIT_RETRY_MAX_WAIT_MS (120s)`
- * + jitter ≈ 363s of legitimate near-silence; an 8-min (480s) default clears
- * that with ~2 min margin, so a transient backoff can never false-fire the
- * watchdog, while it is still 5.6× tighter than the wall-clock. Once the
- * follow-up lands the default can tighten toward ~5 min. Env-tunable via
- * `AFK_SUBAGENT_IDLE_TIMEOUT_MS` (see {@link resolveSubagentIdleTimeoutMs});
- * per-fork override via `config.idleTimeoutMs`; `0` disables the watchdog (the
- * wall-clock still applies).
- */
-export const SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS = 8 * 60_000;
-
-/**
- * Resolve the forked-subagent idle-watchdog budget from
- * `AFK_SUBAGENT_IDLE_TIMEOUT_MS`.
- *
- * Mirrors {@link resolveSubagentTimeoutMs} byte-for-byte: returns the parsed
- * value when it is a finite integer `>= 0`. A value of `0` is the explicit
- * disable escape hatch (returned as `0` = watchdog off). Unset, empty, or
- * unparseable input falls back to {@link SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS};
- * negative values are treated as invalid and also fall back to the default.
- *
- * Only consulted for the DEFAULT budget: an explicit per-fork
- * `config.idleTimeoutMs` still wins via the `??` at the fork site.
- */
-export function resolveSubagentIdleTimeoutMs(): number {
-  const raw = env.AFK_SUBAGENT_IDLE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === '') return SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0) return SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS;
-  return n;
-}
-
-/**
- * Wall-clock budget for BACKGROUND-mode agent dispatches (fire-and-forget
- * jobs whose results auto-deliver later). Background children don't park
- * their parent, so the anti-hang pressure is lower — but an unbounded
- * detached child is still a zombie token-burner when it wedges. 60 minutes
- * keeps documented "long investigations" viable at 3× the foreground budget
- * while guaranteeing every fork terminates. Applied by SubagentExecutor
- * before forking (background mode is executor-level knowledge the manager
- * doesn't have); explicit `config.timeoutMs` wins, `0` = unbounded.
- */
-export const SUBAGENT_BACKGROUND_TIMEOUT_MS = 60 * 60_000;
-
-export interface ForkParent {
-  sessionId?: string;
-  /**
-   * Parent session id used to tag outgoing SubagentStart/SubagentStop
-   * dispatches so consumers can correlate events. Optional — falls back
-   * to `sessionId` when not set.
-   */
-  id?: string;
-}
-
-export interface ForkSubagentOptions<T = unknown> {
-  /**
-   * Parent session to fork from. If it has a `sessionId`, the child resumes + forks it.
-   * Optional `getInputStreamRef` unlocks `SubagentStop` context injection; optional
-   * `abortSignal` makes that injection respect parent abort (skip when aborted).
-   * Optional `hookRegistry` is the production wiring path for subagent-lifecycle
-   * hooks: when neither `config.hookRegistry` nor the manager's registry is set
-   * (the common case — the registry is built after the manager), the parent's
-   * registry is used to dispatch SubagentStart/SubagentStop and is threaded into
-   * the child config. This is why the shadow-verify nudge reaches the parent.
-   */
-  parent: Pick<IAgentSession, 'sessionId'> &
-    Partial<Pick<IAgentSession, 'getInputStreamRef' | 'abortSignal' | 'hookRegistry'>>;
-  /** Child config. `resume`/`forkSession` are managed by this module. */
-  config: AgentConfig;
-  /** Optional prefix to help identify subagents in logs. */
-  idPrefix?: string;
-  /**
-   * Optional Zod schema for validating structured output. When provided,
-   * {@link SubagentHandle.runToResult} attempts to extract JSON from the final
-   * assistant message and parse it through the schema.
-   */
-  outputSchema?: ZodType<T>;
-  /**
-   * Required display label used by the CLI renderer to title the synthesized
-   * `Agent(<label>)` tool-lane entry for this subagent. Use to give
-   * compose-spawned nodes human-readable labels (e.g. `"diagnose [1/3]"`)
-   * without polluting `idPrefix` — which is also threaded into routing
-   * telemetry.
-   *
-   * Invariant: every `forkSubagent` callsite must supply an explicit label.
-   * The type is `required` (not optional) so future omissions are caught at
-   * compile time rather than silently falling back to the raw `idPrefix` at
-   * render time. Callers that have no better label than `idPrefix` should
-   * pass `agentType: idPrefix` explicitly to document that choice.
-   *
-   * Runtime: empty strings are normalized to `undefined` before use, so
-   * `forkSubagent` still falls back to `idPrefix` if the caller passes `''`.
-   * See `SubagentManager.forkSubagent` (this file, `effectiveAgentType`).
-   */
-  agentType: string;
-  /**
-   * The resolved *registered* agent type for this fork — the clean, enumerable
-   * counterpart to the {@link agentType} render label. Callers set this ONLY
-   * when the dispatch named an `agent_type` that resolved to a registry entry
-   * (see SubagentExecutor). Absent for bare/unnamed dispatches, compose node
-   * labels, and skill id_prefix forks. Flows verbatim into the
-   * `subagent_lifecycle.started` trace event and the routing-decision row so
-   * cross-session telemetry can group by real type without the label noise.
-   */
-  resolvedAgentType?: string;
-  /**
-   * Optional parent identifier for the renderer's nesting machinery. When
-   * provided, overrides the default of `parent.sessionId`. Used by the
-   * `compose` tool to pass its own `tool_use_id` so spawned subagents render
-   * nested under the compose tool-lane entry rather than as top-level
-   * siblings. Does not affect execution — purely a rendering hint.
-   */
-  parentId?: string;
-  /**
-   * Optional first-80-chars slice of the dispatch prompt, forwarded verbatim
-   * into the `subagent_lifecycle.started` trace event's `promptHead` field for
-   * at-a-glance forensics (WHAT was the child asked to do). The prompt itself
-   * is not a `forkSubagent` argument — it arrives later via `handle.run(prompt)`
-   * — so the raw agent-dispatch site (which HAS the prompt) passes this
-   * pre-sliced hint. Purely observational: never affects execution. Omitted for
-   * fork sites with no prompt in scope.
-   */
-  promptHead?: string;
-  /**
-   * When true, overrides `config.onElicitation` with `DENY_ELICITATION` so
-   * background subagents never stall on an interactive permission prompt.
-   * Propagates transitively: a bg parent's DENY_ELICITATION is inherited by
-   * grandchildren via the `...options.config` spread in `childConfig` unless
-   * overridden by a deeper `denyElicitations: true`.
-   */
-  denyElicitations?: boolean;
-
-  /**
-   * Enforce a per-phase permission boundary on the forked subagent.
-   *
-   * - `'read-only'`: construct a provider whose `permissions.allowedTools`
-   *   is restricted to {@link READ_ONLY_PHASE_TOOLS} (read_file, glob, grep,
-   *   list_directory, memory_search). The dispatcher rejects any other tool
-   *   call with `'not in the configured allowlist'` — enforced at the
-   *   provider's `SessionToolDispatcher.checkToolPermission` gate, not at
-   *   the telemetry layer. Required posture for skill phases that must not
-   *   mutate the repo before user approval (e.g. mint spec/research/plan).
-   * - `'read-write'` (default when omitted): no enforcement; the child
-   *   inherits the host's default permissive surface.
-   *
-   * Contract: mutually exclusive with `config.provider`. The manager
-   * throws synchronously if both are supplied — a caller's explicit
-   * provider would silently override the phase-restricted one, which
-   * is the exact failure mode this option exists to prevent.
-   *
-   * See `src/agent/tools/nesting.ts buildPhaseRestrictedProvider` for
-   * the construction and `src/agent/tool-category.ts READ_ONLY_PHASE_TOOLS`
-   * for the canonical allowlist.
-   */
-  phaseRole?: PhaseRole;
-}
-
-export interface SubagentManagerOptions {
-  /**
-   * Parent permission handler forwarded to all spawned children.
-   * When a child has no explicit `canUseTool` of its own, tool-permission
-   * requests bubble up to this callback.
-   */
-  canUseTool?: CanUseTool;
-  /**
-   * External abort signal. When it fires, the manager aborts its root
-   * (cascading to all subagents). Use to wire a parent session's
-   * {@link IAgentSession.abortSignal} into nested managers.
-   */
-  parentAbortSignal?: AbortSignal;
-  /**
-   * Harness hook registry. When provided, `forkSubagent` dispatches
-   * `SubagentStart` before creating the child session (block => throw);
-   * `cancel()` dispatches `SubagentStop` before tearing the child down
-   * (non-blocking). If the caller does not set `config.hookRegistry` on
-   * the fork, this registry is threaded into the child's config so the
-   * child session dispatches SessionStart/SessionEnd against the same
-   * registry.
-   */
-  hookRegistry?: HookRegistry;
-  /**
-   * Optional sink for streaming subagent progress events. When set, all
-   * forked subagents will forward their OutputEvent stream to this sink.
-   * Falls back to the ambient sink from AsyncLocalStorage if not provided.
-   */
-  progressSink?: SubagentProgressSink;
-  /**
-   * API key (or OAuth token) inherited by all forked children whose
-   * `config.apiKey` is missing or empty. Mirrors the hookRegistry /
-   * permissionBubbler auto-fill pattern in {@link SubagentManager.forkSubagent}.
-   */
-  apiKey?: string;
-  /**
-   * Local-server base URL inherited by all forked children whose
-   * `config.baseUrl` is missing. Ensures subagents spawned by the `agent`
-   * tool hit the same local server as the parent rather than silently
-   * falling back to api.anthropic.com.
-   */
-  baseUrl?: string;
-  /**
-   * The model the parent session runs — i.e. the model {@link apiKey} was
-   * resolved for. The manager derives the parent's *provider* from it (via
-   * `providerForModel`) exactly once, and uses that to gate the fork-time
-   * credential fallback: a parent credential is inherited only by a
-   * same-provider child, so an Anthropic key never reaches an OpenAI child and
-   * an OpenAI key never reaches an Anthropic child. When omitted, the fallback
-   * degrades to key-shape inference (forward guard only) — pass this wherever
-   * `apiKey` is provided to get both-direction protection. See
-   * `applyManagerApiKeyFallback` in ./tools/child-credential.ts.
-   */
-  parentModel?: string;
-  /**
-   * Working directory inherited by all forked children whose `config.cwd`
-   * is unset. Without this, subagents forked from a session running in an
-   * `afk interactive -w` worktree fall back to the Node host's
-   * `process.cwd()` and run their bash/grep tool calls in the main repo —
-   * defeating worktree isolation across sibling sessions. Typically set
-   * by callers that hold a parent {@link IAgentSession} to the parent's
-   * `config.cwd`.
-   */
-  cwd?: string;
-  /**
-   * The parent session's effective READ roots, used to derive a forked child's
-   * inherited read scope (see ./subagent-read-scope). `undefined` means "derive
-   * from {@link cwd}": a defined `cwd` is treated as the parent's containment
-   * base, an undefined `cwd` as an UNCONFINED parent (reads anywhere → read-open
-   * child). Pass an explicit array only when the parent is confined to roots
-   * that differ from its cwd — chiefly to propagate a read-open or `/allow-dir`-
-   * widened scope transitively to grandchildren. A caller (e.g. `afk farm`) that
-   * pins each fork's `config.readRoots` suppresses inheritance entirely, so this
-   * never widens a deliberately-confined worker.
-   */
-  parentReadRoots?: string[];
-  /**
-   * Witness-layer trace writer. Threaded into the manager's {@link AbortGraph}
-   * so cascade aborts emit `abort` events, AND auto-inherited by every forked
-   * child whose `config.traceWriter` is unset — so all worker sessions write
-   * into the same trace file without per-call plumbing. When omitted, AbortGraph
-   * runs without trace emission and child sessions emit no traces (useful for
-   * tests and harnesses that don't need the witness layer).
-   */
-  traceWriter?: TraceWriter;
-  /**
-   * Execution surface inherited by all forked children whose `config.surface`
-   * is unset. Governs the `origin` field (`cli` / `telegram` / `daemon`) in
-   * every child session's trace events. Set by each top-level entrypoint (farm
-   * → `'cli'`, daemon → `'daemon'`, telegram → `'telegram'`) so worker sessions
-   * report the correct origin without per-call plumbing.
-   */
-  surface?: Surface;
-  /**
-   * Optional callback invoked after each forked subagent reaches
-   * `succeeded` status. Receives the subagent's token usage and optional
-   * USD cost so a parent session can accumulate them into the
-   * `session_sealed` rollup without a direct reference to `AgentSession`.
-   *
-   * Intended wiring: `AgentSession.recordSubagentCompletion` bound to the
-   * session instance. The callback fires synchronously on the
-   * `SubagentHandleImpl.run()` success path before `onTerminal()`.
-   */
-  onSubagentSucceeded?: (
-    usage: import('./subagent/result.js').SubagentTrace['usage'],
-    costUsd: number | undefined,
-  ) => void;
-}
 
 export class SubagentManager {
   private readonly active = new Map<string, SubagentHandleImpl<unknown>>();
@@ -721,6 +389,22 @@ export class SubagentManager {
         // dir only — NEVER ~/.afk/config (credentials). Unconfined forks are
         // already read-open, so this is a confined-parent-only grant.
         ...(parentUnconfined ? {} : { afkStateRoot: getAfkStateDir() }),
+        // Gap C (the agent-framework read grant — distinct from Gap A/Gap B
+        // above): ~/.afk/agent-framework is a SIBLING of ~/.afk/state under the
+        // same AFK home, and a confined fork's cwd+repo roots do not lexically
+        // contain it either. It holds the framework's own artifacts (improve
+        // cards/proposals/eval-cases, forge telemetry, pattern-cards, briefs),
+        // so children dispatched by /orient, /harvest, /forge, /distill and the
+        // improve pipeline were hard-denied the one tree their task requires —
+        // 46 denials across 15 sessions (card subagent-read-denial-ab89c2bd6a6f,
+        // now HISTORICAL: that slug is a hash of the denial reason string, which
+        // was reworded when the read remedy moved to
+        // `tools/hooks/fork-denial-remedy.ts`. Post-rewording denials accumulate
+        // under a new slug; this card no longer accrues sightings).
+        // Same guard as Gap A: this dir only, NEVER ~/.afk/config (credentials).
+        ...(parentUnconfined
+          ? {}
+          : { afkFrameworkRoot: getAgentFrameworkDir() }),
       });
     }
 

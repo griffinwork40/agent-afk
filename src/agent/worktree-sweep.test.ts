@@ -59,6 +59,15 @@ function worktreeBlock(opts: {
   return lines.join('\n');
 }
 
+/**
+ * Seed the per-root soft-launch marker with N prior sweeps of `root`.
+ * This, not the telemetry file, is what the valve consults for a root that
+ * has a `.afk-worktrees/` directory.
+ */
+async function writeRootMarker(root: string, count: number): Promise<void> {
+  await fs.writeFile(join(root, '.afk-worktrees', '.sweep-runs'), String(count), 'utf-8');
+}
+
 /** Write a telemetry JSONL file with N prior worktree-prune success records */
 function writeFakeTelemetry(path: string, count: number, status = 'success'): void {
   const lines: string[] = [];
@@ -98,8 +107,12 @@ beforeEach(async () => {
   // lock — the loser short-circuits with LockContestedError and returns an
   // empty result, which is the root cause this suite used to flake on.
   lockFile = join(repoRoot, 'sweep.lock');
-  // Write 3 prior runs so soft-launch valve is satisfied by default
+  // Write 3 prior runs so soft-launch valve is satisfied by default. The valve
+  // is now per-root (#771 review), so the root's own marker is what actually
+  // governs — the telemetry file remains seeded because it is still the
+  // fallback for a root with no usable marker.
   writeFakeTelemetry(telemetryFile, 3);
+  await writeRootMarker(repoRoot, 3);
 });
 
 afterEach(() => {
@@ -563,6 +576,45 @@ describe('stale-dirty-never-removes', () => {
     expect(warning).not.toContain('uncommitted changes');
   });
 
+  it('F-S4: skips the orphan scan when .afk-worktrees is a symlink', async () => {
+    // The orphan scan is the one path that recursively deletes a directory
+    // chosen by disk listing rather than by git. readdir follows symlinks, so a
+    // `.afk-worktrees` symlink had the scan enumerate — and fs.rm delete —
+    // entries living entirely outside the repo. Sweeping every registered root
+    // (#761) multiplies that from one window to every repo the daemon visits.
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'afk-sweep-outside-')));
+    const victim = join(elsewhere, 'not-ours');
+    await fs.mkdir(victim, { recursive: true });
+    await fs.writeFile(join(victim, 'keep-me.txt'), 'precious', 'utf-8');
+    // The shared setup materialises a real .afk-worktrees/; replace it with the
+    // symlink this case is about.
+    await fs.rm(join(repoRoot, '.afk-worktrees'), { recursive: true, force: true });
+    await fs.symlink(elsewhere, join(repoRoot, '.afk-worktrees'));
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      bypassSoftLaunch: true,
+      telemetryPath: telemetryFile,
+    });
+
+    // Nothing beyond the link was touched, and the skip is reported.
+    expect(await fs.readFile(join(victim, 'keep-me.txt'), 'utf-8')).toBe('precious');
+    expect(result.removed).toEqual([]);
+    expect(result.warnings.some((w) => w.includes('.afk-worktrees is a symlink'))).toBe(true);
+
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+
   // A probe that protects because git FAILED must say so; otherwise the tree is
   // preserved forever with no trace of why.
   it('warns distinctly when the ignored probe itself fails', async () => {
@@ -655,8 +707,55 @@ describe('locked-always-skipped', () => {
 // ---------------------------------------------------------------------------
 
 describe('orphaned-dir-cleanup', () => {
-  it('detects and removes directories in .afk-worktrees/ not registered in git', async () => {
-    // Create an orphaned directory under .afk-worktrees/
+  it('never touches a sibling directory whose name merely starts with .afk-worktrees', async () => {
+    // The containment test used to be a raw string prefix, so
+    // `<root>/.afk-worktrees-scratch` — a directory the engine does not own —
+    // satisfied the guard and could reach the removal verdicts. A path-boundary
+    // test rejects it. The registered worktree here lives in the LOOKALIKE
+    // directory, which is what a prefix test would wrongly accept.
+    const lookalike = join(repoRoot, '.afk-worktrees-scratch');
+    const intruder = join(lookalike, 'afk-not-ours');
+    await fs.mkdir(intruder, { recursive: true });
+    await fs.writeFile(
+      join(intruder, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 40).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const porcelainOut =
+      `${worktreeBlock({ path: repoRoot })}\n\n${worktreeBlock({ path: intruder, head: 'base123' })}\n`;
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) return { stdout: porcelainOut, stderr: '' };
+      if (args.includes('status')) return { stdout: '', stderr: '' };
+      if (args.includes('rev-list')) return { stdout: '0\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(intruder);
+    expect(result.candidates.map((c) => c.path)).not.toContain(intruder);
+    // And it is still on disk.
+    await expect(fs.stat(intruder)).resolves.toBeDefined();
+  });
+
+  // Invariant: an unregistered directory is detected, but only receives the
+  // prunable `orphaned-dir` verdict after the guard authorises removal. The
+  // orphan path has no git information (git does not list the directory, so
+  // `status` cannot classify it), so removal is gated on the filesystem guard
+  // instead — age first, then content. A directory created seconds ago is
+  // almost always an in-flight `git worktree add`, and deleting it destroys
+  // work no branch ref holds (#794).
+  it('detects but PRESERVES a freshly-created unregistered directory', async () => {
     const orphanPath = join(afkWorktreesDir, 'afk-orphaned-dir');
     await fs.mkdir(orphanPath, { recursive: true });
     await fs.writeFile(join(orphanPath, 'somefile.txt'), 'content');
@@ -682,9 +781,136 @@ describe('orphaned-dir-cleanup', () => {
       telemetryPath: telemetryFile,
     });
 
-    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir')).toBe(true);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir-preserved')).toBe(true);
+    expect(result.removed).not.toContain(orphanPath);
+    expect(fsSpy).not.toHaveBeenCalledWith(orphanPath, { recursive: true, force: true });
+    expect(result.warnings.some((w) => w.includes('orphaned dir preserved') && w.includes(orphanPath))).toBe(true);
+  });
+
+  it('PRESERVES an orphan when the filesystem reports no birth time', async () => {
+    const orphanPath = join(afkWorktreesDir, 'afk-orphaned-no-birthtime');
+    await fs.mkdir(orphanPath, { recursive: true });
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const realStat = fs.stat.bind(fs);
+    vi.spyOn(fs, 'stat').mockImplementation(async (target: Parameters<typeof fs.stat>[0]) => {
+      const stat = await realStat(target);
+      if (String(target) === orphanPath) {
+        Object.defineProperty(stat, 'birthtimeMs', { value: 0, configurable: true });
+      }
+      return stat;
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates).toContainEqual({
+      path: orphanPath,
+      verdict: 'orphaned-dir-preserved',
+      owner: 'interactive',
+      ageMs: 0,
+    });
+    expect(result.removed).not.toContain(orphanPath);
+    await expect(fs.stat(orphanPath)).resolves.toBeDefined();
+  });
+
+  it('removes an AGED unregistered directory holding only rebuildable content', async () => {
+    // The sweep must still reclaim genuine leaks, or the guard defeats its
+    // purpose. Birthtime cannot be backdated portably, so the age is injected
+    // by stubbing the single `fs.stat` the orphan path performs.
+    const orphanPath = join(afkWorktreesDir, 'afk-orphaned-aged');
+    await fs.mkdir(join(orphanPath, 'node_modules', 'left-pad'), { recursive: true });
+    await fs.writeFile(join(orphanPath, 'node_modules', 'left-pad', 'index.js'), '0');
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const porcelainOut = `${mainBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const realStat = fs.stat.bind(fs);
+    vi.spyOn(fs, 'stat').mockImplementation(async (target: Parameters<typeof fs.stat>[0]) => {
+      const stat = await realStat(target);
+      if (String(target) === orphanPath) {
+        Object.defineProperty(stat, 'birthtimeMs', {
+          value: Date.now() - 7 * 86_400_000,
+          configurable: true,
+        });
+      }
+      return stat;
+    });
+
+    const fsSpy = vi.spyOn(fs, 'rm');
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
     expect(result.removed).toContain(orphanPath);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir')).toBe(true);
     expect(fsSpy).toHaveBeenCalledWith(orphanPath, { recursive: true, force: true });
+  });
+
+  it('PRESERVES an aged unregistered directory holding a non-rebuildable file', async () => {
+    const orphanPath = join(afkWorktreesDir, 'afk-orphaned-secret');
+    await fs.mkdir(orphanPath, { recursive: true });
+    await fs.writeFile(join(orphanPath, '.env'), 'TOKEN=abc');
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const porcelainOut = `${mainBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const realStat = fs.stat.bind(fs);
+    vi.spyOn(fs, 'stat').mockImplementation(async (target: Parameters<typeof fs.stat>[0]) => {
+      const stat = await realStat(target);
+      if (String(target) === orphanPath) {
+        Object.defineProperty(stat, 'birthtimeMs', {
+          value: Date.now() - 7 * 86_400_000,
+          configurable: true,
+        });
+      }
+      return stat;
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.removed).not.toContain(orphanPath);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir-preserved')).toBe(true);
+    expect(
+      result.warnings.some((w) => w.includes('non-rebuildable-content') && w.includes(orphanPath)),
+    ).toBe(true);
   });
 
   it('does not remove orphaned dir in dry-run mode', async () => {
@@ -709,7 +935,7 @@ describe('orphaned-dir-cleanup', () => {
       telemetryPath: telemetryFile,
     });
 
-    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir')).toBe(true);
+    expect(result.candidates.some((c) => c.verdict === 'orphaned-dir-preserved')).toBe(true);
     expect(result.removed).not.toContain(orphanPath);
     // Directory should still exist
     const exists = await fs.stat(orphanPath).then(() => true).catch(() => false);
@@ -974,6 +1200,7 @@ describe('soft-launch-valve', () => {
   it('forces dry-run when fewer than 3 prior successful runs (0 runs)', async () => {
     const emptyTelemetry = join(repoRoot, 'empty-telemetry.jsonl');
     writeFakeTelemetry(emptyTelemetry, 0);
+    await writeRootMarker(repoRoot, 0);
 
     const worktreePath = join(afkWorktreesDir, 'afk-valve-test');
     await fs.mkdir(worktreePath, { recursive: true });
@@ -1010,6 +1237,7 @@ describe('soft-launch-valve', () => {
   it('forces dry-run with 2 prior runs (below threshold)', async () => {
     const twoRunTelemetry = join(repoRoot, 'two-run-telemetry.jsonl');
     writeFakeTelemetry(twoRunTelemetry, 2);
+    await writeRootMarker(repoRoot, 2);
 
     const worktreePath = join(afkWorktreesDir, 'afk-valve-2');
     await fs.mkdir(worktreePath, { recursive: true });
@@ -1081,30 +1309,60 @@ describe('soft-launch-valve', () => {
     expect(result.dryRun).toBe(false); // valve satisfied — live run
   });
 
-  it('counts only worktree-prune success/error records, not skipped', async () => {
-    const mixedTelemetry = join(repoRoot, 'mixed-telemetry.jsonl');
-    // 2 success + 2 skipped — skipped should not count
+  it('falls back to the telemetry count when the root has no usable marker, counting only success/error', async () => {
+    // A root with no .afk-worktrees/ cannot hold a marker. Rather than pin it
+    // in dry-run forever (which would leak worktrees — the #761 bug), the
+    // valve falls back to the legacy machine-global telemetry count. This is
+    // the only path on which that count's filtering still matters.
+    const bareRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-sweep-bare-')));
+    const mixedTelemetry = join(bareRoot, 'mixed-telemetry.jsonl');
+    // 2 success + 2 skipped — skipped must not count, so this is below 3.
     const lines = [
       JSON.stringify({ taskId: 'worktree-prune', status: 'success', triggeredAt: new Date().toISOString() }),
       JSON.stringify({ taskId: 'worktree-prune', status: 'skipped', triggeredAt: new Date().toISOString() }),
       JSON.stringify({ taskId: 'worktree-prune', status: 'success', triggeredAt: new Date().toISOString() }),
       JSON.stringify({ taskId: 'worktree-prune', status: 'skipped', triggeredAt: new Date().toISOString() }),
-      // Other task — should not count
+      // Other task — must not count
       JSON.stringify({ taskId: 'other-task', status: 'success', triggeredAt: new Date().toISOString() }),
     ];
     writeFileSync(mixedTelemetry, lines.join('\n') + '\n');
 
-    const worktreePath = join(afkWorktreesDir, 'afk-valve-mixed');
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: bareRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    try {
+      const result = await runSweep({
+        execFile: mock as ExecFileFn,
+        repoRoot: bareRoot,
+        lockPath: lockFile,
+        dryRun: false,
+        telemetryPath: mixedTelemetry,
+      });
+      expect(result.dryRun).toBe(true);
+    } finally {
+      rmSync(bareRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('previews a freshly registered root even when the machine has swept for months', async () => {
+    // Regression for the multi-root valve bug: the counter used to be
+    // machine-global, so a root registered today inherited an exhausted
+    // counter and was swept DESTRUCTIVELY on first contact, never seeing the
+    // three previews the valve exists to provide.
+    writeFakeTelemetry(telemetryFile, 500); // months of ticks against other repos
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+
+    const worktreePath = join(afkWorktreesDir, 'afk-fresh-root');
     await fs.mkdir(worktreePath, { recursive: true });
     await fs.writeFile(
       join(worktreePath, '.afk-worktree-meta.json'),
       JSON.stringify({ owner: 'interactive', createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), baseSha: 'base123' }),
     );
-
-    const mainBlock = worktreeBlock({ path: repoRoot });
-    const wtBlock = worktreeBlock({ path: worktreePath, head: 'base123' });
-    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
-
+    const porcelainOut = `${worktreeBlock({ path: repoRoot })}\n\n${worktreeBlock({ path: worktreePath, head: 'base123' })}\n`;
     const mock = makeMock(async ({ args }) => {
       if (args.includes('list') && args.includes('--porcelain')) return { stdout: porcelainOut, stderr: '' };
       if (args.includes('status')) return { stdout: '', stderr: '' };
@@ -1112,16 +1370,102 @@ describe('soft-launch-valve', () => {
       return { stdout: '', stderr: '' };
     });
 
-    // 2 success records — below threshold of 3 → should still be dry-run
     const result = await runSweep({
       execFile: mock as ExecFileFn,
       repoRoot,
       lockPath: lockFile,
       dryRun: false,
-      telemetryPath: mixedTelemetry,
+      telemetryPath: telemetryFile,
     });
 
     expect(result.dryRun).toBe(true);
+    expect(result.removed).toHaveLength(0);
+  });
+
+  it('credits the root after each sweep, so the valve eventually opens', async () => {
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const call = async (): Promise<boolean> => (await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    })).dryRun;
+
+    expect(await call()).toBe(true);  // 0 prior
+    expect(await call()).toBe(true);  // 1
+    expect(await call()).toBe(true);  // 2
+    expect(await call()).toBe(false); // 3 → valve opens
+  });
+
+  it('does NOT credit the counter for an explicitly requested dry-run (review item 1)', async () => {
+    // Three explicit-preview callers (agent-facing `list`, CLI `list`, CLI
+    // `prune` without --apply) must not spend the root's soft-launch budget —
+    // only a caller that actually asked to sweep live may advance the
+    // counter. Keyed on `dryRun: true` at the call site, not on the valve's
+    // own effectiveDryRun (see the next test for that half).
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+    const marker = join(repoRoot, '.afk-worktrees', '.sweep-runs');
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const callExplicitDryRun = async (): Promise<boolean> => (await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: true,
+      telemetryPath: telemetryFile,
+    })).dryRun;
+
+    expect(await callExplicitDryRun()).toBe(true);
+    expect(await callExplicitDryRun()).toBe(true);
+    expect(await callExplicitDryRun()).toBe(true);
+    // Three previews later the marker must still not exist at all. It used to
+    // read '0' here because the valve's READ probe-wrote it; that write is gone
+    // (#771 review, F-A2 — a documented preview must not mutate the repo), so
+    // the assertion is now the stronger one: an explicit dry-run leaves no
+    // trace whatsoever, rather than leaving an uncredited marker.
+    await expect(fs.stat(marker)).rejects.toThrow(/ENOENT/);
+    // A follow-up sweep is STILL valve-forced to dry-run: the counter never
+    // moved, so the daemon's first live sweep of this root has not happened.
+    expect(await callExplicitDryRun()).toBe(true);
+  });
+
+  it('DOES credit the counter for a valve-forced preview (review item 1 critical subtlety)', async () => {
+    // The converse of the test above: a caller that did NOT ask for dry-run
+    // (dryRun omitted/false) but gets forced into one anyway because the
+    // counter is below SOFT_LAUNCH_RUNS must still advance the counter — that
+    // is the only mechanism that ever lets the valve open. Keying the credit
+    // gate on `effectiveDryRun` instead of `options.dryRun` would pin this
+    // root in dry-run forever.
+    await fs.rm(join(repoRoot, '.afk-worktrees', '.sweep-runs'), { force: true });
+    const marker = join(repoRoot, '.afk-worktrees', '.sweep-runs');
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${worktreeBlock({ path: repoRoot })}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false, // caller asked for live — the valve is what forces the preview
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.dryRun).toBe(true); // valve-forced (0 prior runs < SOFT_LAUNCH_RUNS)
+    expect((await fs.readFile(marker, 'utf-8')).trim()).toBe('1'); // credited anyway
   });
 });
 

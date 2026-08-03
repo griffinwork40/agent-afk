@@ -23,7 +23,7 @@ vi.mock('./workspace-source.js', () => ({
 function defaultDeps() {
   return {
     surface: 'cli',
-    cwd: '/work',
+    getCwd: () => '/work',
     modelName: 'sonnet',
     providerName: 'anthropic-direct',
     permissionMode: 'default',
@@ -278,10 +278,43 @@ describe('buildRuntimeStateSource.getWorkspace', () => {
     expect(vi.mocked(gatherWorkspace)).not.toHaveBeenCalled();
   });
 
-  it('passes deps.cwd through to gatherWorkspace on each read', () => {
+  it('passes deps.getCwd() through to gatherWorkspace on each read', () => {
     vi.mocked(gatherWorkspace).mockReturnValue(ws(0));
-    const src = buildRuntimeStateSource({ ...defaultDeps(), cwd: '/custom/work' });
+    const src = buildRuntimeStateSource({ ...defaultDeps(), getCwd: () => '/custom/work' });
     src.getWorkspace();
     expect(vi.mocked(gatherWorkspace)).toHaveBeenCalledWith('/custom/work');
+  });
+
+  it('re-reads getCwd per call so a mid-session setCwd re-anchors the repo', () => {
+    // Regression guard (worktree staleness): `cwd` used to be a captured
+    // string, so after the deferred born-named `afk -w` worktree re-anchor the
+    // awareness layer kept gathering git state for the LAUNCH checkout. The
+    // symptom was a session
+    // whose `- Working directory:` line pointed at the new worktree while its
+    // `- Workspace:` line reported the original checkout's branch and HEAD.
+    vi.mocked(gatherWorkspace).mockReturnValue(ws(0));
+    let cwd = '/launch/checkout';
+    const src = buildRuntimeStateSource({ ...defaultDeps(), getCwd: () => cwd });
+
+    src.getWorkspace();
+    expect(vi.mocked(gatherWorkspace)).toHaveBeenLastCalledWith('/launch/checkout');
+
+    // Simulate cwdDependentsFactory's setCurrentCwd() on a worktree swap.
+    cwd = '/repo/.afk-worktrees/feature';
+
+    src.getWorkspace();
+    // The captured-string implementation would still pass '/launch/checkout'.
+    expect(vi.mocked(gatherWorkspace)).toHaveBeenLastCalledWith('/repo/.afk-worktrees/feature');
+  });
+
+  it('reports the re-anchored cwd on getSelf so the two never disagree', () => {
+    // `get_runtime_state` view 'self' and view 'workspace' must resolve the
+    // same cwd — a divergence there is what made the bug hard to see.
+    let cwd = '/launch/checkout';
+    const src = buildRuntimeStateSource({ ...defaultDeps(), getCwd: () => cwd });
+
+    expect(src.getSelf().cwd).toBe('/launch/checkout');
+    cwd = '/repo/.afk-worktrees/feature';
+    expect(src.getSelf().cwd).toBe('/repo/.afk-worktrees/feature');
   });
 });

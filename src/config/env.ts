@@ -208,6 +208,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_MAX_NESTING_DEPTH',
+    description:
+      'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +
+      'skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 ' +
+      'permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent ' +
+      'and skill tools at depth 3. Resolved once ' +
+      'at the root of each session and propagated down through child AgentConfig, so descendants ' +
+      'inherit the root value rather than re-reading the environment. Raise with care: depth is a ' +
+      'fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values ' +
+      'above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, ' +
+      'unparseable, negative, or out-of-range input falls back to the default. An explicit ' +
+      'programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins.',
+    type: 'number',
+    required: false,
+    default: '3',
+    example: '2',
+    category: 'model',
+  },
+  {
     name: 'AFK_MAX_OUTPUT_TOKENS',
     description: 'Cap on output tokens per turn. Falls back to provider default when unset.',
     type: 'number',
@@ -467,6 +486,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_OVERLOAD_PAUSE_MS',
+    description: 'Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity.',
+    type: 'number',
+    required: false,
+    example: '600000',
+    category: 'model',
+  },
+  {
     name: 'AFK_PROMPT_CACHE_TTL',
     description: 'TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h.',
     type: 'string',
@@ -722,7 +749,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'TELEGRAM_VERBOSE',
-    description: "Set to 'true' to log per-message details from the Telegram bot — chat IDs, message text, latency. (The code checks the literal string 'true'.)",
+    description: "Set to a truthy value ('1'/'true'/'yes'/'on', case-insensitive) to log per-message details from the Telegram bot — chat IDs, message text, latency.",
     type: 'boolean',
     required: false,
     example: 'true',
@@ -853,6 +880,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     type: 'string',
     required: false,
     example: 'origin/main',
+    category: 'worktree',
+  },
+  {
+    name: 'AFK_WORKTREE_ON_EXIT',
+    description: 'Clean-worktree quit policy for interactive --worktree sessions: ask, keep, or remove.',
+    type: 'string',
+    required: false,
+    example: 'ask',
     category: 'worktree',
   },
   {
@@ -1104,6 +1139,18 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
       'Disable the post-session run receipt (state/receipts/<label>.json and .md). ' +
       'Set to 1 to skip receipt writes; the underlying witness trace is unaffected. ' +
       'Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
+    name: 'AFK_CAPTURE_SUBAGENT_PROMPTS',
+    description:
+      'Opt-in: when set to 1, every prompt a parent session sends to a subagent is written ' +
+      'as a redacted markdown file under state/witness/<label>/prompts/. Off by default ' +
+      'because nothing prunes the witness tree and prompts may carry secrets the regex ' +
+      'redactor cannot catch (connection strings, PEM blocks, PII).',
     type: 'boolean',
     required: false,
     example: '1',
@@ -1418,6 +1465,7 @@ export const env = {
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
   get AFK_FORCE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_FORCE_BASH_INTERPRETER_GUARD']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
+  get AFK_MAX_NESTING_DEPTH(): string | undefined { return process.env['AFK_MAX_NESTING_DEPTH']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
   get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
@@ -1440,6 +1488,7 @@ export const env = {
   get AFK_MODEL_SMALL_API_KEY(): string | undefined { return process.env['AFK_MODEL_SMALL_API_KEY']; },
   get AFK_MODEL_SMALL_BASE_URL(): string | undefined { return process.env['AFK_MODEL_SMALL_BASE_URL']; },
   get AFK_VISION_MODELS(): string | undefined { return process.env['AFK_VISION_MODELS']; },
+  get AFK_OVERLOAD_PAUSE_MS(): string | undefined { return process.env['AFK_OVERLOAD_PAUSE_MS']; },
   get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
@@ -1501,6 +1550,7 @@ export const env = {
   get AFK_WORKTREE_AUTONAME(): string | undefined { return process.env['AFK_WORKTREE_AUTONAME']; },
   get AFK_WORKTREE_BRANCH_PREFIX(): string | undefined { return process.env['AFK_WORKTREE_BRANCH_PREFIX']; },
   get AFK_WORKTREE_BASE(): string | undefined { return process.env['AFK_WORKTREE_BASE']; },
+  get AFK_WORKTREE_ON_EXIT(): string | undefined { return process.env['AFK_WORKTREE_ON_EXIT']; },
   get AFK_WORKTREE_BOOT_PRUNE(): string | undefined { return process.env['AFK_WORKTREE_BOOT_PRUNE']; },
   get AFK_WORKTREE_PRUNE_DISABLE(): string | undefined { return process.env['AFK_WORKTREE_PRUNE_DISABLE']; },
   get AFK_WORKTREE_MAX_AGE_CLEAN(): string | undefined { return process.env['AFK_WORKTREE_MAX_AGE_CLEAN']; },
@@ -1538,6 +1588,7 @@ export const env = {
   get AFK_TRACE_DISABLED(): string | undefined { return process.env['AFK_TRACE_DISABLED']; },
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
+  get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 

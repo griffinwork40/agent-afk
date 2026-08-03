@@ -106,6 +106,9 @@ vi.mock('../../agent/tools/compose-executor.js', () => ({
 vi.mock('../../agent/tools/nesting.js', () => ({
   createChildProviderFactory: vi.fn(() => ({})),
   createChildSkillExecutorFactory: vi.fn(() => ({})),
+  // wireExecutors() resolves the nesting cap once at the root (#871). The chat
+  // surface never exercises depth, so return the production default.
+  resolveMaxNestingDepth: vi.fn(() => 3),
 }));
 
 vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({

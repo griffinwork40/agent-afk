@@ -165,6 +165,15 @@ export function registerWorktreeCommand(program: Command): void {
         handleCommandError(err);
       }
 
+      // Invariant: an explicit `--apply` bypasses the soft-launch valve. The
+      // valve's job is to preview a root a few times before the UNATTENDED
+      // daemon tick is allowed to delete anything; it was never meant to
+      // override a human who typed --apply. Since the valve became per-root
+      // (#771), its counter starts at 0 for every repo that predates the
+      // marker, so without this bypass the first three `--apply` runs against
+      // any existing repo printed "Dry-run mode — no changes made" and removed
+      // nothing, at exit 0. The dry-run branch below must NOT set this flag:
+      // that is what keeps a brand-new repo previewing before it is reaped.
       const sweepOptions: SweepOptions = {
         execFile,
         repoRoot,
@@ -172,6 +181,7 @@ export function registerWorktreeCommand(program: Command): void {
         maxAgeDaysClean,
         maxAgeDaysDirty,
         scope: scopeVal,
+        ...(options.apply === true ? { bypassSoftLaunch: true } : {}),
       };
 
       let result;

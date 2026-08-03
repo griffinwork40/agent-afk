@@ -1,5 +1,10 @@
 /**
- * Skill-tool max-nesting-depth refusal message.
+ * Max-nesting-depth refusal messages for the delegation tools (`skill`, `agent`).
+ *
+ * The module is still filed under its original skill-specific name so the
+ * `afk improve eval-run` contract refs that cite it by path stay valid; it now
+ * serves both tools, which share one recovery hint because a caller at the
+ * depth wall has the same remedy either way.
  *
  * Extracted as a pure, dependency-free module so two consumers share one
  * source of truth:
@@ -34,4 +39,27 @@ export const SKILL_MAX_DEPTH_RECOVERY_HINT =
  */
 export function buildSkillMaxDepthRefusal(depth: number, maxDepth: number): string {
   return `Skill tool not available at nesting depth ${depth} (max ${maxDepth}). ${SKILL_MAX_DEPTH_RECOVERY_HINT}`;
+}
+
+/**
+ * Build the refusal returned by the `agent` tool at or beyond the nesting-depth
+ * limit. Deliberately the same shape and the same
+ * {@link SKILL_MAX_DEPTH_RECOVERY_HINT} as the skill refusal — the hint's text
+ * ("perform the work inline … instead of calling skill/agent/compose") was
+ * already tool-agnostic, and a caller that hits the wall on one tool must not
+ * be told to reach for the other.
+ */
+export function buildAgentMaxDepthRefusal(depth: number, maxDepth: number): string {
+  return `Agent tool not available at nesting depth ${depth} (max ${maxDepth}). ${SKILL_MAX_DEPTH_RECOVERY_HINT}`;
+}
+
+/**
+ * Build the refusal returned by the `compose` tool at or beyond the
+ * nesting-depth limit. Reachable only when the cap is `0`: `compose` is absent
+ * from the child tool allowlist, so the executor is never wired below the root.
+ * It exists so `AFK_MAX_NESTING_DEPTH=0` closes every dispatch door rather than
+ * three-quarters of them.
+ */
+export function buildComposeMaxDepthRefusal(depth: number, maxDepth: number): string {
+  return `Compose tool not available at nesting depth ${depth} (max ${maxDepth}). ${SKILL_MAX_DEPTH_RECOVERY_HINT}`;
 }

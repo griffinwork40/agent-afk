@@ -20,6 +20,8 @@ import { randomBytes } from 'node:crypto';
 import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
 import { detectShellFromEnv } from '../shell-init.js';
 import { hasNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
+import { registerWorktreeRoot } from '../../../agent/worktree-root-registry.js';
+import type { WorktreeDisposition } from './worktree-disposition.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -58,7 +60,7 @@ export interface WorktreeHandle {
    *   worktree unconditionally. Use when the session ended with zero turns —
    *   no work was done so there is nothing to preserve.
    */
-  cleanup: (opts?: { force?: boolean }) => Promise<void>;
+  cleanup: (opts?: { force?: boolean; disposition?: WorktreeDisposition }) => Promise<void>;
 }
 
 /**
@@ -622,6 +624,15 @@ async function createWorktreeAt(
     throw classifyAddError(err, branch, worktreePath);
   }
 
+  // The sweep is per-root, so a root the daemon never resolves is a root whose
+  // trees leak forever (#761). This launcher is a managed-create path in its
+  // own right — it writes the same `.afk-worktree-meta.json` protocol below —
+  // so it must register too. cleanup() and the REPL boot-prune do NOT cover
+  // this: cleanup() never runs for a kill -9'd session, and boot-prune only
+  // fires if the user later reopens a REPL in this same repo. Best-effort by
+  // contract (never throws), so it cannot fail a create that already succeeded.
+  await registerWorktreeRoot(repoRoot);
+
   // Constraint: cleanup() runs at session shutdown, potentially LONG after
   // the worktree was created. The closure reads `handle.path`/`handle.branch`
   // at invocation time (not construction time) so it remains correct even if
@@ -630,7 +641,7 @@ async function createWorktreeAt(
   const handle: WorktreeHandle = {
     path: worktreePath,
     branch,
-    cleanup: async (opts?: { force?: boolean }): Promise<void> => {
+    cleanup: async (opts?: { force?: boolean; disposition?: WorktreeDisposition }): Promise<void> => {
       // Best-effort: every git invocation below is guarded so a failure during
       // shutdown (e.g. worktree dir manually deleted, transient git lock) cannot
       // surface as an unhandled rejection from `rl.on('close', ...)`.
@@ -721,6 +732,35 @@ async function createWorktreeAt(
         preserveWorktree(
           'non-rebuildable ignored files (e.g. .env) that `git status` cannot see',
         );
+        return;
+      }
+
+      const disposition = opts?.disposition ?? 'remove';
+      if (disposition === 'keep-locked') {
+        // External sweep constraint: lock BEFORE advertising preservation; a clean
+        // dead-owner worktree without this lock may be reclaimed at the next sweep.
+        try {
+          await execFile('git', [
+            '-C', repoRoot, 'worktree', 'lock',
+            '--reason', `afk: kept on exit ${new Date().toISOString()}`,
+            currentPath,
+          ]);
+        } catch (err) {
+          const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Worktree cleanup: could not lock ${currentPath} (${message}). It is preserved now, but a later sweep may reclaim it.`,
+          );
+        }
+        preserveWorktree('kept on exit');
+        return;
+      }
+      if (disposition === 'keep-unlocked') {
+        // Deliberately NOT locked: nobody chose to keep this tree (the input
+        // surface was gone), so it is preserved as a grace window and left
+        // sweep-eligible rather than pinned forever. Say so, because "preserved"
+        // alone would imply the durability that only a lock provides.
+        preserveWorktree('kept on exit (not locked — a later sweep may reclaim it)');
         return;
       }
 

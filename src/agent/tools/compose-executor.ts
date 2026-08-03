@@ -25,6 +25,8 @@ import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
 import type { SubagentExecutionError } from '../subagent/result.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
+import { resolveMaxNestingDepth } from './nesting.js';
+import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import { getSessionsDir } from '../../paths.js';
 
 export interface ComposeExecutorContext {
@@ -122,6 +124,18 @@ export interface ComposeExecutorContext {
    * → `subagent`). Optional/back-compat: defaults to 0 when unset.
    */
   depth?: number;
+  /**
+   * Maximum allowed nesting depth. Optional: unset resolves the default from
+   * `AFK_MAX_NESTING_DEPTH` via {@link resolveMaxNestingDepth}, matching the
+   * `agent` and `skill` executors.
+   *
+   * Invariant: `compose` is excluded from {@link CHILD_ALLOWED_TOOLS}, so this
+   * executor is only ever wired at the root (`depth` 0) and the gate below is
+   * inert at any default cap. It exists so `AFK_MAX_NESTING_DEPTH=0` means what
+   * it says — no nested delegation from ANY of the three dispatch tools —
+   * rather than silently leaving one fan-out door open.
+   */
+  maxDepth?: number;
   /**
    * Reads the parent session's read scope ({@link ReadScopeInputs}) at
    * dispatch time (wired to the root
@@ -559,6 +573,26 @@ export class ComposeExecutor {
       this.ctx.surface !== undefined
         ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(this.ctx.depth) }
         : {};
+
+    // Depth cap, mirroring the `agent` and `skill` executors. See
+    // ComposeExecutorContext.maxDepth: this is inert at any non-zero cap
+    // because compose is never wired below the root, and exists so that
+    // AFK_MAX_NESTING_DEPTH=0 disables every dispatch tool uniformly.
+    const depth = this.ctx.depth ?? 0;
+    const maxDepth = this.ctx.maxDepth ?? resolveMaxNestingDepth();
+    if (depth >= maxDepth) {
+      void appendRoutingDecision({
+        ...identity,
+        event: 'delegation.skipped',
+        parent_session_id: this.ctx.parentSession.sessionId,
+        reason: 'max_depth',
+        depth,
+      }).catch(() => {});
+      return {
+        content: buildComposeMaxDepthRefusal(depth, maxDepth),
+        isError: true,
+      };
+    }
 
     // Contract: the per-node tool budget is enforced BY THE PROVIDER LOOP, not
     // by this executor. `max_tool_rounds_per_node` is forwarded to each node's

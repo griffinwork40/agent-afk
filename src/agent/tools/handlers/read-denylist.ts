@@ -47,6 +47,7 @@ import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 import { gateDerivedCarveOuts } from './read-denylist-carveout.js';
+import { pathIsWithin } from '../fs-case.js';
 
 /**
  * Paths that `read_file` / `grep` / `glob` / `list_directory` must never read —
@@ -147,8 +148,8 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
 
 /**
  * Home-relative files that sit INSIDE a denied directory but are deliberately
- * readable. Matched as EXACT files (never as a prefix), so `mcp.json.bak` and
- * `mcp.json/<child>` stay denied.
+ * readable. Matched as EXACT files (never as a prefix), so `mcp.json.bak`,
+ * `mcp.json/<child>`, `config.bak`, and `known_hosts.old` stay denied.
  *
  * `~/.afk/config/mcp.json` is the MCP server REGISTRY, not a credential store:
  * its `env` / `headers` values are documented to hold `${VAR}` placeholders
@@ -162,11 +163,26 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
  * `AFK_READ_DENYLIST=~/.afk/config/mcp.json` — see the ordering invariant in
  * {@link isReadDenied}.
  *
+ * `~/.ssh/config` and `~/.ssh/known_hosts` sit inside the whole-dir `~/.ssh`
+ * floor (which stays — SSH private keys have ARBITRARY names like `github_key`,
+ * so a key-name glob would fail-open). These two files are well-known
+ * non-secret siblings the agent legitimately needs for git/ssh host-alias
+ * work: `config` carries host aliases (IdentityFile PATHS, not key material),
+ * `known_hosts` is the trusted-host list. Neither is a private key. They are
+ * carved out as EXACT files so `~/.ssh/id_*`, `~/.ssh/config.bak`, and any
+ * other sibling stay denied. Operators who consider either sensitive in their
+ * environment can re-deny explicitly with
+ * `AFK_READ_DENYLIST=~/.ssh/config` (extras outrank the exception).
+ *
  * Kept home-RELATIVE so the REPL `@`-file injector
  * (`cli/commands/interactive/at-file-inject.ts`), which resolves against an
  * injectable home, shares this one list instead of duplicating it.
  */
-export const READ_ALLOWLIST_REL: readonly string[] = ['.afk/config/mcp.json'];
+export const READ_ALLOWLIST_REL: readonly string[] = [
+  '.afk/config/mcp.json',
+  '.ssh/config',
+  '.ssh/known_hosts',
+];
 
 const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
 
@@ -391,10 +407,23 @@ export function getReadDenylist(): readonly string[] {
  */
 export function getReadDenylistDescendants(root: string): string[] {
   const realRoot = safeRealpath(resolve(root));
-  const rels = getReadDenylist().map((blocked) => relative(realRoot, blocked));
-  return rels
-    .filter((rel) => rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`))
-    .map((rel) => rel.split(sep).join('/'));
+  return getReadDenylist()
+    .filter(
+      (blocked) =>
+        blocked !== realRoot && pathIsWithin(blocked, realRoot, blocked),
+    )
+    .map((blocked) => {
+      // `path.relative` is case-sensitive even when the filesystem is not.
+      // On a folded match, count path segments instead of string offsets:
+      // lowercasing can change a segment's UTF-16 length (for example, İ).
+      const rel = blocked.startsWith(realRoot + sep)
+        ? relative(realRoot, blocked)
+        : blocked
+            .split(sep)
+            .slice(realRoot.split(sep).length)
+            .join(sep);
+      return rel.split(sep).join('/');
+    });
 }
 
 /**
@@ -421,7 +450,7 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
   // first (an early return at the top of this function) would silently invert
   // that contract and make the carve-out unremovable.
   for (const blocked of extras) {
-    if (real === blocked || real.startsWith(blocked + '/')) {
+    if (pathIsWithin(real, blocked)) {
       return { denied: true, matched: blocked };
     }
   }
@@ -431,7 +460,7 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
   // symlinked `mcp.json` cannot smuggle a protected target into this set.
   if (allow.includes(real)) return { denied: false };
   for (const blocked of builtins) {
-    if (real === blocked || real.startsWith(blocked + '/')) {
+    if (pathIsWithin(real, blocked)) {
       return { denied: true, matched: blocked };
     }
   }

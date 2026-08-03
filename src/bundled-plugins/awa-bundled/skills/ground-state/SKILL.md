@@ -12,7 +12,7 @@ failure_modes:
 ## Sub-agent contract
 /contract
 
-**Constraint: read-only reconnaissance.** Surveyors and the synthesizer MUST NOT call `edit_file`, `write_file`, or any mutating bash command (no `git commit`, `git push`, `git checkout`, `mv`, `rm`, file redirection, package installs, etc.). Read-only tools only: `read_file`, `grep`, `glob`, `list_directory`, and read-only bash (`git status`, `git log`, `git diff`, `cat`, `ls`, `find`, etc.).
+**Constraint: read-only reconnaissance.** Surveyors and the synthesizer MUST NOT call `edit_file`, `write_file`, or any mutating bash command (no `git commit`, `git push`, `git checkout`, `mv`, `rm`, file redirection, package installs, etc.). Read-only tools only: `read_file`, `grep`, `glob`, `list_directory`, `memory_search`, and read-only bash (`git status`, `git log`, `git diff`, `cat`, `ls`, `find`, etc.). `memory_search` is non-mutating and is the **only** way to reach the cross-session fact archive — it is in scope for this skill, do not strip it from this list.
 
 If the survey reveals a fix that's tempting to apply, **return it as a recommendation in the snapshot** — the orchestrator decides whether to act. Even if the invoking brief sounds prescriptive ("draft the edit", "apply the change"), this skill stops at the snapshot and the preamble artifact. The orchestrator dispatches a separate implementation step afterward.
 
@@ -41,13 +41,17 @@ Before any multi-step implementation (not single-file fixes, not pure Q&A), disp
 When domain is unspecified, infer from the working directory contents.
 
 **Memory surveyor**
-Grep the user's auto-memory store (`~/.claude/projects/-<cwd-slug>/memory/`) + any project CLAUDE.md for keywords from the user's current request. Return relevant memory file pointers with 1-line summaries, or "no relevant memory found."
+Call the **`memory_search` tool** with keywords from the user's current request — FTS5 syntax, so `term1 AND term2`, `"exact phrase"`, and `prefix*` all work. Run 2–3 query variants (different keyword angles) before concluding nothing is there; a single miss is not evidence of absence. Then read hot memory at `~/.afk/state/memory/HOT.md` and the project overlay — `AFK.md`, or `CLAUDE.md` on a Claude Code surface — for conventions bearing on this task.
+
+**Invariant: do not grep a filesystem path for memory.** `~/.claude/projects/-<cwd-slug>/memory/` is vestigial — it is another product's state tree, its slug is not a literal cwd substitution (underscores hyphenate), and it holds zero files in every project on both the `~/.claude` and `~/.afk` trees. The archive is SQLite at `~/.afk/state/memory/memory.db` and is not greppable; `memory_search` is the only route in. Restoring a path-grep here silently zeroes this third of the recon wave.
+
+Return: relevant facts with 1-line summaries, **plus the stores actually consulted** — e.g. `memory_search: 3 queries, 0 hits; HOT.md: read; AFK.md: read` — so the orchestrator can tell "no relevant memory exists" from "the surveyor never looked." If `memory_search` is unavailable on this surface, say so explicitly instead of returning a bare "no relevant memory found."
 
 **Synthesize** into a 6-line ground-truth snapshot:
 - Branch: `<current>`, `<clean|diverged>`, upstream: `<fresh|stale>`
 - Recent work: last 3 commits or stash items
 - Infrastructure: CI present? package scripts? authoritative configs for this task
-- Memory hits: file refs or "none"
+- Memory hits: facts (1-line each) + which stores were consulted, or `none (consulted: …)`
 - Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"
 - Epistemic confidence: `<high|medium|low>` — based on how much state could be verified. Flag if working directory is sparse, if domain is unfamiliar, or if key artifacts may be missing.
 

@@ -7,6 +7,8 @@
  *   /allow-dir --rw <path>       Add <path> to readRoots AND writeRoots
  *   /allow-dir --revoke <path>   Remove <path> from both lists
  *
+ * Aliased as `/add-dir` for parity with the Claude Code command name.
+ *
  * Path is resolved to absolute via path.resolve(process.cwd(), <path>).
  * The initial resolveBase is non-revocable.
  *
@@ -39,6 +41,15 @@ export function setAllowDirDispatcher(manager: GrantManager): void {
 
 export const allowDirCmd: SlashCommand = {
   name: '/allow-dir',
+  // `/add-dir` is the Claude Code name for this capability. Operators arriving
+  // from Claude Code type it from muscle memory, and neither discovery path
+  // rescues them: the autocomplete dropdown filters by prefix-then-subsequence
+  // (`add-dir` is neither for `allow-dir` — it needs three `d`s), and the
+  // unknown-command "did you mean" hint uses Levenshtein with maxDistance 3
+  // while editDistance('/add-dir', '/allow-dir') is exactly 4. The alias is the
+  // narrow fix: it restores both dispatch and dropdown visibility without
+  // loosening the suggestion threshold for the other 90+ commands.
+  aliases: ['/add-dir'],
   summary: 'Manage per-session directory access grants for tool handlers',
   usage: '/allow-dir [--rw | --revoke] [<path>]',
   hint: 'When the model needs read or write access to a directory outside the session root — grant it here without restarting.',

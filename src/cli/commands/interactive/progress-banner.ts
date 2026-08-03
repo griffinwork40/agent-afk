@@ -7,6 +7,7 @@ import { formatDuration, formatTokens, formatToolCallStat } from '../../format-u
 import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
+import { shortenPaths } from './tool-lane-format-args.js';
 import { sanitizeLabel } from './tool-lane-format-sanitize.js';
 
 /**
@@ -22,6 +23,8 @@ function clampToTerminal(line: string, columns?: number): string {
   if (!Number.isFinite(cols) || cols <= 0) return line;
   return truncateDisplayWidth(line, cols);
 }
+
+
 
 /**
  * Derive the grounded "current activity" clause for the progress banner from
@@ -146,7 +149,11 @@ export function formatProgressBanner(
     ? palette.warning('stopping…')
     : (() => {
         const detailRaw = activity?.trim() ? activity : summary;
-        return detailRaw ? sanitizeLabel(detailRaw) : '';
+        // sanitizeLabel BEFORE shortenPaths: the sanitizer collapses control
+        // bytes and runs of whitespace, which the path-collapsing regex assumes
+        // has already happened. Same order as tool-lane-format-args.ts, which
+        // shortens the already-summarized arg string.
+        return detailRaw ? shortenPaths(sanitizeLabel(detailRaw)) : '';
       })();
 
   if (detail) {
