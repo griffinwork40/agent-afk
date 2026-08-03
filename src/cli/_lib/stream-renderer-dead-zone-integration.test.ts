@@ -45,6 +45,9 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
       childActivity: new ChildActivityTracker(),
     } as unknown as Parameters<typeof registerOverlaySlots>[1]);
 
+    // Capturing tool-lane so the sibling checkPauseAnnotations can be driven
+    // in the combined-tick case below, not just observed staying dormant.
+    const laneCalls: string[] = [];
     const ctx = {
       disposed: false,
       isTTY: true,
@@ -53,7 +56,13 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
       compositor: null,
       stageTracker: undefined,
       thinkingLane: new ThinkingLane(),
-      toolLane: { hasPending: () => false, getOverlay: () => '' },
+      toolLane: {
+        hasPending: () => false,
+        getOverlay: () => '',
+        addStartWithAgentContext: (_id: string, _kind: string, label: string) =>
+          laneCalls.push(label),
+        addResult: () => {},
+      },
       streamingMarkdownRef: { current: null },
       lastProgressByTask: new Map(),
       thinkingMode: 'summary' as const,
@@ -63,7 +72,8 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
     } as unknown as Parameters<typeof checkProgressBannerStaleness>[0];
 
     const overlay = (): string => stripAnsi(captured.at(-1) ?? '');
-    return { composer, ctx, overlay };
+    const flushCount = (): number => captured.length;
+    return { composer, ctx, overlay, laneCalls, flushCount };
   }
 
   it('paints `no output (waiting)` once the child crosses CHILD_QUIET_MS, before the 30s lane annotation arms', () => {
@@ -103,5 +113,33 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
     // ever fires early the two mechanisms have collided.
     expect(checkPauseAnnotations(ctx)).toBe(false);
     expect(child.pauseAnnotation).toBeUndefined();
+  });
+
+  it('keeps banner latch and 30s lane annotation independent when both fire on one tick', () => {
+    // Past 30s BOTH checkers are live on the same 80ms tick: the dead-zone
+    // banner latch and the tool-lane stall annotation. They own separate slots
+    // and separate state, so neither may suppress or clobber the other.
+    const child = freshSourceState('reviewer');
+    child.lastProgressSummary = 'round 2: bash pnpm test';
+    child.syntheticAgentToolUseId = 'tool-1';
+    child.lastEventAt = Date.now() - 40_000;
+    const sources = new Map([['child-1', child]]);
+
+    const { ctx, overlay, laneCalls } = harness(sources);
+
+    // Banner half: latches and paints the static clause.
+    expect(checkProgressBannerStaleness(ctx)).toBe(true);
+    expect(overlay()).toContain('no output (waiting)');
+
+    // Lane half, same tick: the 30s annotation now DOES arm (contrast with the
+    // ~10s case above, where it must stay dormant).
+    expect(checkPauseAnnotations(ctx)).toBe(true);
+    expect(child.pauseAnnotation).toMatch(/ · waiting /);
+    expect(laneCalls.some((l) => l.includes('waiting'))).toBe(true);
+
+    // Neither clobbered the other: the banner clause survives the tool-lane
+    // flush, and the banner latch is still held so the next tick is quiet.
+    expect(overlay()).toContain('no output (waiting)');
+    expect(checkProgressBannerStaleness(ctx)).toBe(false);
   });
 });
