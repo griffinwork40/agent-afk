@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.92.1] - 2026-08-03
+
+### Changed
+- extract shared runPreDispatchGates from execute/executeBatch (#896) (722cfcd)
+- promote TurnTrace to providers/shared (#897) (e69dc3a)
+
 ## [5.92.0] - 2026-08-03
 
 ### Added
