@@ -136,7 +136,7 @@ export function registerChatCommand(program: Command): void {
     .option('--max-turns <number>', 'Maximum conversation turns', '10')
     .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
     .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
-    .option('--theme <mode>', 'TUI color palette: dark|light|auto. Default dark. Also: AFK_THEME env, or theme in afk.config.json.', parseThemeFlag)
+    .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json.', parseThemeFlag)
     .option('--max-budget-usd <usd>', 'Hard session cost ceiling in USD. Env: AFK_MAX_BUDGET_USD')
     .option('--task-budget <tokens>', 'Soft per-task token budget. Env: AFK_TASK_BUDGET')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
@@ -164,7 +164,7 @@ export function registerChatCommand(program: Command): void {
       maxTurns: string;
       thinking?: string;
       effort?: string;
-      theme?: 'dark' | 'light' | 'auto';
+      theme?: 'dark' | 'light' | 'umber' | 'auto';
       maxBudgetUsd?: string;
       taskBudget?: string;
       maxOutputTokens?: string;

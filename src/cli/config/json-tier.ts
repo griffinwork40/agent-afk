@@ -218,8 +218,8 @@ export function loadJsonConfig(): {
           config.updatePolicy = json.updatePolicy as 'notify' | 'auto' | 'off';
         }
 
-        if (json.theme && ['dark', 'light', 'auto'].includes(json.theme)) {
-          config.theme = json.theme as 'dark' | 'light' | 'auto';
+        if (json.theme && ['dark', 'light', 'umber', 'auto'].includes(json.theme)) {
+          config.theme = json.theme as 'dark' | 'light' | 'umber' | 'auto';
         }
 
         if (typeof json.autoResumeOnUsageLimit === 'boolean') {

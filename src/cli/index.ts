@@ -49,7 +49,7 @@ import { configureColor } from './color-config.js';
 import { env } from '../config/env.js';
 import { applyTheme, resolveTheme, parseThemeMode } from './theme.js';
 configureColor();
-// Apply the color theme (dark | light | auto) before any command registers
+// Apply the color theme (dark | light | umber | auto) before any command registers
 // or renders. This sets the env/default baseline for EVERY surface (chat,
 // daemon, telegram banners); the interactive/chat bootstraps refine it with
 // the config `theme` key and the `--theme` flag. Default is dark, so an

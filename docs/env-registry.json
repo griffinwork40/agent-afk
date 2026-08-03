@@ -789,7 +789,7 @@
     },
     {
       "name": "AFK_THEME",
-      "description": "TUI color palette for the interactive REPL and all CLI rendering: dark | light | auto. Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). auto detects from COLORFGBG and falls back to dark. Overridden per-launch by --theme and mutable mid-session via /theme. Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark).",
+      "description": "TUI color palette for the interactive REPL and all CLI rendering: dark | light | umber | auto. Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). auto detects from COLORFGBG and falls back to dark; umber matches the Umber terminal, is dark-only, and is never chosen by auto. Overridden per-launch by --theme and mutable mid-session via /theme. Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark).",
       "type": "string",
       "required": false,
       "default": "dark",

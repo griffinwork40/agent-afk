@@ -4,12 +4,13 @@
  * Covers: mode parsing/validation, COLORFGBG auto-detection, precedence
  * (flag > env > config), the live palette swap (identity preserved, chained
  * modifiers survive, dark restores), the NO_COLOR invariant (chalk.level = 0
- * strips a light theme too), and dark/light role-set parity.
+ * strips a light theme too), dark/light/umber role-set parity, and the
+ * umber-is-opt-in invariant (auto never resolves to it).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
-import { palette, darkPalette, lightPalette, type ThemePalette } from './palette.js';
+import { palette, darkPalette, lightPalette, umberPalette, type ThemePalette } from './palette.js';
 import {
   applyTheme,
   getActiveTheme,
@@ -18,6 +19,7 @@ import {
   detectTerminalTheme,
   resolveTheme,
   resolveThemeMode,
+  THEME_NAMES,
 } from './theme.js';
 
 // Save/restore the global mutable state the theme layer touches.
@@ -41,10 +43,12 @@ afterEach(() => {
 });
 
 describe('parseThemeMode', () => {
-  it('accepts dark|light|auto, case-insensitive and trimmed', () => {
+  it('accepts dark|light|umber|auto, case-insensitive and trimmed', () => {
     expect(parseThemeMode('dark')).toBe('dark');
     expect(parseThemeMode('LIGHT')).toBe('light');
     expect(parseThemeMode('  Auto ')).toBe('auto');
+    expect(parseThemeMode('umber')).toBe('umber');
+    expect(parseThemeMode('  UMBER ')).toBe('umber');
   });
   it('returns undefined for absent or unrecognized values', () => {
     expect(parseThemeMode(undefined)).toBeUndefined();
@@ -60,6 +64,13 @@ describe('parseThemeFlag', () => {
   });
   it('throws on an invalid value so commander surfaces the error', () => {
     expect(() => parseThemeFlag('nope')).toThrow(/Invalid --theme/);
+  });
+  it('names every valid mode in the error so the message never goes stale', () => {
+    // The message is derived from THEME_NAMES, so a new theme must appear
+    // in it without anyone remembering to edit the string.
+    for (const name of [...THEME_NAMES, 'auto']) {
+      expect(() => parseThemeFlag('nope')).toThrow(new RegExp(name));
+    }
   });
 });
 
@@ -96,6 +107,7 @@ describe('resolveTheme', () => {
   it('passes through concrete names', () => {
     expect(resolveTheme('dark')).toBe('dark');
     expect(resolveTheme('light')).toBe('light');
+    expect(resolveTheme('umber')).toBe('umber');
   });
   it('auto resolves via the terminal hint', () => {
     process.env['COLORFGBG'] = '0;15';
@@ -105,6 +117,15 @@ describe('resolveTheme', () => {
   });
   it('undefined resolves to dark (no visual change on default)', () => {
     expect(resolveTheme(undefined)).toBe('dark');
+  });
+  it('auto never resolves to umber, on any COLORFGBG (umber is opt-in only)', () => {
+    // umber is tuned for its own warm-brown background and ships no light
+    // variant, so background detection must never select it. Sweep every
+    // background index rather than spot-checking two.
+    for (let bg = 0; bg <= 15; bg++) {
+      process.env['COLORFGBG'] = `7;${bg}`;
+      expect(resolveTheme('auto')).not.toBe('umber');
+    }
   });
 });
 
@@ -154,6 +175,26 @@ describe('applyTheme / live palette swap', () => {
     expect(palette.user.bold('u')).toContain('u');
     expect(palette.brand.bold('b')).toContain('b');
   });
+  it('swaps to umber and restores on dark', () => {
+    chalk.level = 3;
+    const darkBrand = palette.brand('X');
+    applyTheme('umber');
+    expect(getActiveTheme()).toBe('umber');
+    expect(palette.brand('X')).not.toBe(darkBrand);
+    applyTheme('dark');
+    expect(palette.brand('X')).toBe(darkBrand);
+  });
+  it('reaches a distinct palette for every theme name (no silent fall-through)', () => {
+    // A ThemeName missing from THEME_PALETTES would quietly render as dark.
+    chalk.level = 3;
+    const rendered = new Set<string>();
+    for (const name of THEME_NAMES) {
+      applyTheme(name);
+      expect(getActiveTheme()).toBe(name);
+      rendered.add(palette.brand('X'));
+    }
+    expect(rendered.size).toBe(THEME_NAMES.length);
+  });
 });
 
 describe('NO_COLOR invariant', () => {
@@ -164,14 +205,28 @@ describe('NO_COLOR invariant', () => {
     expect(palette.error('e')).toBe('e');
     expect(palette.caret.inverse('c')).toBe('c');
   });
+  it('chalk.level = 0 strips all color under every theme', () => {
+    // Each theme must be built from the shared default chalk export, never
+    // `new Chalk({ level })`, or NO_COLOR would leak color from that theme.
+    for (const name of THEME_NAMES) {
+      applyTheme(name);
+      chalk.level = 0;
+      for (const [role, fn] of Object.entries(palette)) {
+        expect(fn('hello'), `${name}.${role} leaked color under NO_COLOR`).toBe('hello');
+      }
+    }
+  });
 });
 
 describe('palette theme maps', () => {
   it('light and dark expose exactly the same role set', () => {
     expect(Object.keys(lightPalette).sort()).toEqual(Object.keys(darkPalette).sort());
   });
+  it('umber exposes exactly the same role set as dark', () => {
+    expect(Object.keys(umberPalette).sort()).toEqual(Object.keys(darkPalette).sort());
+  });
   it('every role in each theme is callable and echoes its input', () => {
-    for (const map of [darkPalette, lightPalette] as ThemePalette[]) {
+    for (const map of [darkPalette, lightPalette, umberPalette] as ThemePalette[]) {
       for (const fn of Object.values(map)) {
         expect(typeof fn).toBe('function');
         expect(fn('z')).toContain('z');

@@ -213,7 +213,7 @@ export interface CliConfig {
   };
   updatePolicy: 'notify' | 'auto' | 'off';
   /**
-   * TUI color palette: `'dark' | 'light' | 'auto'`. Display-only — swaps the
+   * TUI color palette: `'dark' | 'light' | 'umber' | 'auto'`. Display-only — swaps the
    * semantic color palette, never behavior. Left undefined unless explicitly
    * set, so it ranks BELOW `AFK_THEME` in precedence (a defaulted value would
    * masquerade as a deliberate user choice and wrongly beat the env var).
@@ -221,7 +221,7 @@ export interface CliConfig {
    * Precedence: `--theme` flag > env > this config value > auto-detect > dark.
    * Runtime-mutable per session via the `/theme` slash command.
    */
-  theme?: 'dark' | 'light' | 'auto';
+  theme?: 'dark' | 'light' | 'umber' | 'auto';
   /**
    * When true (the default), the CLI auto-waits for the OAuth subscription
    * reset and replays the failed turn rather than surfacing a raw 429 error.
@@ -375,8 +375,8 @@ export interface ConfigFileSchema {
     thinkingUi?: 'summary' | 'live' | 'digest' | 'off';
   };
   updatePolicy?: 'notify' | 'auto' | 'off';
-  /** TUI color palette (validated on load): dark | light | auto. See `CliConfig.theme`. */
-  theme?: 'dark' | 'light' | 'auto';
+  /** TUI color palette (validated on load): dark | light | umber | auto. See `CliConfig.theme`. */
+  theme?: 'dark' | 'light' | 'umber' | 'auto';
   autoResumeOnUsageLimit?: boolean;
   /** Opt-in AFK terminal-state enforcement gate; default off. See `CliConfig.enforceDoneEvidence`. */
   enforceDoneEvidence?: boolean;
