@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.91.0] - 2026-08-03
+
+### Added
+- add an umber theme mirroring the Umber terminal's palette (#886) (1593bbf)
+
 ## [5.90.0] - 2026-08-03
 
 ### Added
