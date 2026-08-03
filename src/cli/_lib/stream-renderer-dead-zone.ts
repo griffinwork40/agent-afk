@@ -24,9 +24,12 @@ import type { LifecycleContext } from './stream-renderer-lifecycle.js';
 //
 // Problem being solved: the progress banner only recomposes when something
 // marks the OverlayComposer dirty, and a genuinely-silent child emits no events
-// to drive that recompose. So between roughly 1.5s and 30s — the tool-lane
-// pause threshold (PAUSE_THRESHOLD_MS), past which the `· waiting Xs`
-// annotation arms — the banner's silence clause never appeared.
+// to drive that recompose. So between roughly 1.5s (the H2 overlay throttle)
+// and 30s — the tool-lane pause threshold (PAUSE_THRESHOLD_MS), past which the
+// `· waiting Xs` annotation arms — the banner's silence clause never appeared.
+// This checker covers the 8s-and-later part of that window: the clause is
+// gated on CHILD_QUIET_MS (8s), so ~1.5s-8s remains without new feedback by
+// design, since a child silent under 8s is not yet worth flagging.
 //
 // Why the flush is LATCHED rather than fired every tick: flush() recomposes all
 // five overlay slots (markDirty sets one shared dirty flag, so there is no

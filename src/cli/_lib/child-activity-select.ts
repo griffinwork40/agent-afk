@@ -103,10 +103,16 @@ function runningChildren(
 function clauseFor(candidate: Candidate): string | undefined {
   if (candidate.silentMs >= CHILD_QUIET_MS) {
     // Static clause: intentionally NOT a live-ticking "no output for Xs" counter.
-    // A live counter would change the composed string on every recompose,
-    // breaking setOverlay's identical-string dedup (terminal-compositor.ts:794)
-    // and re-introducing the ghost-row/flicker class the 1500ms H2 throttle
-    // (stream-renderer-subagent.ts) exists to prevent. The tool-lane's
+    // A live counter would change THIS CLAUSE on every 80ms recompose. Note the
+    // dedup at terminal-compositor.ts:794 is not what makes that expensive to
+    // avoid — the composed banner already carries the child's elapsed
+    // durationMs rounded to whole seconds, so the overlay string is not
+    // byte-stable across a second boundary and that dedup cannot be relied on
+    // either way (see this module's header). The real cost is the rate: a
+    // per-clause counter churns at the 80ms tick instead of ~1Hz, an ~12x
+    // increase in real repaints, which re-introduces the ghost-row/flicker
+    // class the 1500ms H2 throttle (stream-renderer-subagent.ts) prevents. The
+    // conclusion is unchanged — keep the clause static. The tool-lane's
     // `· waiting Xs` annotation already shows elapsed silence past 30s
     // (PAUSE_THRESHOLD_MS); the banner just needs to signal the child went
     // quiet, which one static string does.

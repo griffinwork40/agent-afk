@@ -1,5 +1,7 @@
 /**
- * End-to-end proof that the 1.5s–30s live-progress dead zone is closed (#857).
+ * End-to-end proof that the 8s-30s span of the live-progress dead zone is
+ * closed (#857). The full dead zone runs ~1.5s-30s; the banner clause is gated
+ * on CHILD_QUIET_MS (8s), so this covers 8s onward, not the whole window.
  *
  * The two halves of the fix had only ever been unit-tested in isolation: the
  * staleness checker (does it mark the slot dirty?) and the child-activity
@@ -15,6 +17,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { OverlayComposer } from './overlay-composer.js';
+import { StreamRenderer } from './stream-renderer.js';
+import type { Writer } from '../slash/types.js';
 import { registerOverlaySlots, checkPauseAnnotations } from './stream-renderer-lifecycle.js';
 import { checkProgressBannerStaleness } from './stream-renderer-dead-zone.js';
 import { CHILD_QUIET_MS, ChildActivityTracker } from './child-activity-select.js';
@@ -141,5 +145,46 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
     // flush, and the banner latch is still held so the next tick is quiet.
     expect(overlay()).toContain('no output (waiting)');
     expect(checkProgressBannerStaleness(ctx)).toBe(false);
+  });
+});
+
+describe('dead-zone latch re-arms at the activity site, not on a later tick', () => {
+  // Regression for the codex P2 on #874. The latch used to be cleared ONLY by
+  // checkProgressBannerStaleness observing an intermediate fresh state, which
+  // requires some tick to land inside the 8s window after a child resumes. A
+  // suspended process, a closed lid, or an event loop blocked past 8s skips
+  // every such tick, stranding the latch at true — and the next real quiet
+  // transition is then swallowed by the `already announced` guard, reopening
+  // the dead zone for that child permanently. So the clear must happen
+  // synchronously where activity is recorded. This test runs NO tick at all
+  // between the activity and the assertion, which is the whole point.
+  function sink(): Writer {
+    const noop = (): void => {};
+    return { line: noop, raw: noop, success: noop, info: noop, warn: noop, error: noop };
+  }
+
+  it('clears quietBannerAnnounced on child activity with no intervening tick', () => {
+    const r = new StreamRenderer({ out: sink(), forceNonTty: true });
+    const progress = {
+      type: 'progress' as const,
+      progress: { taskId: 't', description: 'd', totalTokens: 0, toolUses: 1, durationMs: 0 },
+    };
+    r.process(progress, { subagentId: 'child-1', agentType: 'reviewer' });
+
+    const sources = (r as unknown as { sources: Map<string, SourceState> }).sources;
+    const child = sources.get('child-1');
+    expect(child).toBeDefined();
+    if (!child) return;
+
+    // Simulate the state left behind after a quiet transition was announced
+    // and the process was then suspended past the whole fresh window.
+    child.quietBannerAnnounced = true;
+    child.lastEventAt = Date.now() - 60_000;
+
+    // One real activity event — and nothing else. No pause tick runs here.
+    r.process(progress, { subagentId: 'child-1', agentType: 'reviewer' });
+
+    expect(child.quietBannerAnnounced).toBe(false);
+    r.dispose();
   });
 });

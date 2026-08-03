@@ -639,6 +639,16 @@ export class StreamRenderer {
       }));
       // Refresh staleness timestamp and clear any pause annotation on new activity.
       source.lastEventAt = Date.now();
+      // Invariant: the quiet-banner latch is re-armed HERE, at the single site
+      // that records child activity — not by checkProgressBannerStaleness
+      // observing an intermediate fresh state on a later tick. The tick-side
+      // clear alone is not sufficient: it only fires if some tick lands inside
+      // the CHILD_QUIET_MS window after a resume, so a suspended process, a
+      // closed laptop lid, or an event loop blocked past 8s skips every such
+      // tick and strands the latch at true. The next genuine quiet transition
+      // would then be swallowed by the `already announced` guard and the dead
+      // zone would silently reopen for that child, permanently.
+      source.quietBannerAnnounced = false;
       if (source.pauseAnnotation !== undefined && source.syntheticAgentToolUseId) {
         source.pauseAnnotation = undefined;
         // Reset stall counter — a heartbeat proves the source is alive again.
@@ -949,10 +959,12 @@ export class StreamRenderer {
 
   /**
    * Bounded stalled-entry lifecycle checker. Called every 80ms by the pause tick interval.
-   * Delegates to the lifecycle module — checkProgressBannerStaleness closes the
-   * 1.5s–30s dead zone by marking the progress-banner slot dirty when a child
-   * goes quiet, then checkPauseAnnotations handles the post-30s stall state
-   * machine. Both ride the same tick; neither adds a new timer.
+   * checkProgressBannerStaleness (stream-renderer-dead-zone.ts) covers the
+   * 8s–30s span of the dead zone by marking the progress-banner slot dirty once
+   * a child crosses CHILD_QUIET_MS; checkPauseAnnotations
+   * (stream-renderer-lifecycle.ts) then handles the post-30s stall state
+   * machine. Both ride the same tick; neither adds a new timer. Return values
+   * are intentionally discarded — nothing branches on whether either fired.
    */
   private checkPauseAnnotations(): void {
     const lifecycleCtx = {
