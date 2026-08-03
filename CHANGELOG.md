@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.89.0] - 2026-08-03
+
+### Added
+- make AFK.md's user-scope fallback additive instead of exclusive (#845) (920724d)
+
+### Changed
+- correct stale provider claims in CLAUDE.md and sync with AFK.md (#880) (321a22b)
+
 ## [5.88.0] - 2026-08-03
 
 ### Added
