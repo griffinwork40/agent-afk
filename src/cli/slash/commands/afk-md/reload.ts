@@ -12,7 +12,9 @@
 import { loadAfkMd } from '../../../config/afk-md-tier.js';
 import { resetAfkMdCache } from '../../../config/afk-md-tier.js';
 import { _resetConfigCache } from '../../../config.js';
+import { loadConfig } from '../../../config.js';
 import { resolveBaseSystemPrompt } from '../../../shared-helpers.js';
+import { assembleSystemPrompt } from '../../../../agent/routing-directive.js';
 import { estimateTokens } from '../../../../agent/memory/index.js';
 import type { SlashContext } from '../../types.js';
 
@@ -25,14 +27,16 @@ export interface ReloadOutcome {
   delta: number;
   /** Provenance string, e.g. `framework+afk-md:/a/AFK.md+afk-md:/b/AFK.md`. */
   source: string;
+  /** True when an env or JSON prompt override prevents AFK.md from contributing. */
+  shadowed: boolean;
 }
 
 /**
  * Estimated tokens of the currently-cached overlay. Call BEFORE mutating the
  * file to capture the baseline for a delta.
  */
-export function currentOverlayTokens(): number {
-  const loaded = loadAfkMd();
+export function currentOverlayTokens(cwd?: string): number {
+  const loaded = loadAfkMd(cwd);
   return loaded ? estimateTokens(loaded.content) : 0;
 }
 
@@ -71,14 +75,22 @@ export function applyReload(ctx: SlashContext, baselineTokens: number): ReloadOu
   _resetConfigCache();
 
   // Step 2 — re-derive the FULL composed prompt (framework + overlay).
-  const { prompt, source } = resolveBaseSystemPrompt();
-  const loaded = loadAfkMd();
+  const cwd = ctx.stats.cwd ?? process.cwd();
+  const { prompt: basePrompt, source } = resolveBaseSystemPrompt(cwd);
+  const config = loadConfig(undefined, cwd);
+  const shadowed = source.includes('env:AFK_SYSTEM_PROMPT') || source.includes('file:');
+  const loaded = shadowed ? null : loadAfkMd(cwd);
   const tokens = loaded ? estimateTokens(loaded.content) : 0;
+  const prompt = assembleSystemPrompt(
+    basePrompt,
+    config.autoRouting?.interactive ?? true,
+    'repl',
+  );
 
   // Step 3 — apply, then report what actually happened.
   const applied = ctx.session.current.setSystemPrompt(prompt);
 
-  return { applied, tokens, delta: tokens - baselineTokens, source };
+  return { applied, tokens, delta: tokens - baselineTokens, source, shadowed };
 }
 
 /** Format the signed delta for display: `+180`, `-42`, or `no size change`. */

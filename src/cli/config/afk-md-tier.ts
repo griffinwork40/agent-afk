@@ -24,7 +24,7 @@ export interface AfkMdResult {
   paths: string[];
 }
 
-let afkMdCache: { value: AfkMdResult | null } | undefined;
+let afkMdCache: { cwd: string; value: AfkMdResult | null } | undefined;
 
 /**
  * Clear this tier's memoized AFK.md read. Called (only) by
@@ -112,11 +112,11 @@ const projectScopeHeader = (path: string): string =>
  * Memoized via `afkMdCache` — see the cache block above for the
  * invalidation contract.
  */
-export function loadAfkMd(): AfkMdResult | null {
-  if (afkMdCache !== undefined) return afkMdCache.value;
+export function loadAfkMd(cwd: string = process.cwd()): AfkMdResult | null {
+  if (afkMdCache?.cwd === cwd) return afkMdCache.value;
 
   const userPath = getUserAfkMdPath();
-  const projectPath = getProjectAfkMdPath();
+  const projectPath = getProjectAfkMdPath(cwd);
 
   const userContent = readAfkMdCandidate(userPath);
   // Skip re-reading the same file twice — treat it as a single tier rather
@@ -143,6 +143,6 @@ export function loadAfkMd(): AfkMdResult | null {
     result = null;
   }
 
-  afkMdCache = { value: result };
+  afkMdCache = { cwd, value: result };
   return afkMdCache.value;
 }

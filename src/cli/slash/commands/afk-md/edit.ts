@@ -90,8 +90,12 @@ function renderDiff(ctx: SlashContext, diff: DiffPayload): void {
  * live-swap support is told the truth rather than shown a success line.
  */
 function reportReload(ctx: SlashContext, baseline: number): void {
-  const { applied, tokens, delta, source } = applyReload(ctx, baseline);
-  if (applied) {
+  const { applied, tokens, delta, source, shadowed } = applyReload(ctx, baseline);
+  if (shadowed) {
+    ctx.out.warn(
+      'Saved to disk, but AFK.md is shadowed by a higher-priority system prompt override and is not part of what the model receives.',
+    );
+  } else if (applied) {
     ctx.out.success(
       `Reloaded into this session — overlay now ${formatTokens(tokens)} tokens (${formatDelta(delta)}). Takes effect on your next message.`,
     );
@@ -115,7 +119,7 @@ export async function editTarget(ctx: SlashContext, target: AfkMdTarget): Promis
   if (created) ctx.out.info(`Created ${target.path}`);
 
   const before = readOrEmpty(target.path);
-  const baseline = currentOverlayTokens();
+  const baseline = currentOverlayTokens(ctx.stats.cwd);
 
   const { outcome, exitCode } = await spawnEditorOnPath({
     compositor: ctx.getCompositor?.() ?? null,
@@ -157,7 +161,7 @@ export async function editTarget(ctx: SlashContext, target: AfkMdTarget): Promis
 /** Append a bullet to a tier without opening an editor, then hot-reload. */
 export function appendToTarget(ctx: SlashContext, target: AfkMdTarget, text: string): void {
   const created = ensureExists(target);
-  const baseline = currentOverlayTokens();
+  const baseline = currentOverlayTokens(ctx.stats.cwd);
 
   const existing = readOrEmpty(target.path);
   // Guarantee the bullet starts on its own line without stacking blank lines on

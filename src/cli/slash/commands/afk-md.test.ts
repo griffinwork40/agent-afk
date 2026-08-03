@@ -24,6 +24,7 @@ const projectDir = (): string => join(tmpRoot, 'repo');
 let callLog: string[] = [];
 /** Overlay text the mocked loader reports. */
 let overlayContent: string | null = null;
+let promptSource = 'framework+afk-md:/fixture/AFK.md';
 
 const COMPOSED_SENTINEL = 'FRAMEWORK-DOCTRINE\n\n# Operator configuration\n\nOVERLAY-TEXT';
 
@@ -39,7 +40,7 @@ vi.mock('../../../paths.js', async (importOriginal) => {
   return {
     ...actual,
     getUserAfkMdPath: (): string => join(userDir(), 'AFK.md'),
-    getProjectAfkMdPath: (): string => join(projectDir(), 'AFK.md'),
+    getProjectAfkMdPath: (cwd?: string): string => join(cwd ?? projectDir(), 'AFK.md'),
   };
 });
 
@@ -53,12 +54,15 @@ vi.mock('../../config/afk-md-tier.js', () => ({
 
 vi.mock('../../config.js', () => ({
   _resetConfigCache: (): void => { callLog.push('bust-composed'); },
+  loadConfig: (): { autoRouting: { interactive: boolean } } => ({
+    autoRouting: { interactive: false },
+  }),
 }));
 
 vi.mock('../../shared-helpers.js', () => ({
   resolveBaseSystemPrompt: (): { prompt: string; source: string } => {
     callLog.push('compose');
-    return { prompt: COMPOSED_SENTINEL, source: 'framework+afk-md:/fixture/AFK.md' };
+    return { prompt: COMPOSED_SENTINEL, source: promptSource };
   },
 }));
 
@@ -83,7 +87,7 @@ interface Harness {
   text: () => string;
 }
 
-function makeCtx(opts: { tty?: boolean; applied?: boolean } = {}): Harness {
+function makeCtx(opts: { tty?: boolean; applied?: boolean; cwd?: string } = {}): Harness {
   const lines: string[] = [];
   const push = (s: string): void => { lines.push(plain(s)); };
   const setSystemPrompt = vi.fn((_p: string | undefined) => {
@@ -102,7 +106,7 @@ function makeCtx(opts: { tty?: boolean; applied?: boolean } = {}): Harness {
       error: (s: string) => push(`ERR ${s}`),
     },
     ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
-    stats: { model: 'test' },
+    stats: { model: 'test', cwd: opts.cwd ?? projectDir() },
     getCompositor: () => compositor,
   } as unknown as SlashContext;
   return { ctx, lines, setSystemPrompt, text: () => lines.join('\n') };
@@ -114,6 +118,7 @@ beforeEach(() => {
   mkdirSync(projectDir(), { recursive: true });
   callLog = [];
   overlayContent = 'OVERLAY-TEXT';
+  promptSource = 'framework+afk-md:/fixture/AFK.md';
   spawnMock.mockReset();
 });
 
@@ -185,11 +190,12 @@ describe('/afk-md reload — ordering invariant', () => {
 
     expect(h.setSystemPrompt).toHaveBeenCalledTimes(1);
     const applied = h.setSystemPrompt.mock.calls[0]?.[0] as string;
-    expect(applied).toBe(COMPOSED_SENTINEL);
+    expect(applied).toContain(COMPOSED_SENTINEL);
     // The regression this guards: passing loadAfkMd().content would lose the
     // framework doctrine entirely.
     expect(applied).toContain('FRAMEWORK-DOCTRINE');
     expect(applied).toContain('# Operator configuration');
+    expect(applied).toContain('Every turn must end in one externally identifiable terminal state');
     expect(applied).not.toBe('OVERLAY-TEXT');
   });
 
@@ -203,6 +209,14 @@ describe('/afk-md reload — ordering invariant', () => {
     await afkMdCmd.handler(no.ctx, 'reload');
     expect(no.text()).toContain('applies on next launch');
     expect(no.text()).not.toContain('Takes effect on your next message');
+  });
+
+  it('reports AFK.md as shadowed by a higher-priority prompt override', async () => {
+    promptSource = 'framework+env:AFK_SYSTEM_PROMPT';
+    const h = makeCtx();
+    await afkMdCmd.handler(h.ctx, 'reload');
+    expect(h.text()).toContain('shadowed by a higher-priority system prompt override');
+    expect(h.text()).not.toContain('Takes effect on your next message');
   });
 });
 
@@ -219,6 +233,15 @@ describe('/afk-md add', () => {
     const h = makeCtx();
     await afkMdCmd.handler(h.ctx, 'add --user be terse');
     expect(readFileSync(join(userDir(), 'AFK.md'), 'utf-8')).toContain('- be terse');
+    expect(existsSync(join(projectDir(), 'AFK.md'))).toBe(false);
+  });
+
+  it('targets the active session cwd instead of the launch cwd', async () => {
+    const activeCwd = join(tmpRoot, 'active-worktree');
+    mkdirSync(activeCwd, { recursive: true });
+    const h = makeCtx({ cwd: activeCwd });
+    await afkMdCmd.handler(h.ctx, 'add worktree rule');
+    expect(readFileSync(join(activeCwd, 'AFK.md'), 'utf-8')).toContain('- worktree rule');
     expect(existsSync(join(projectDir(), 'AFK.md'))).toBe(false);
   });
 
@@ -248,7 +271,7 @@ describe('/afk-md add', () => {
   it('hot-reloads after appending', async () => {
     const h = makeCtx();
     await afkMdCmd.handler(h.ctx, 'add x');
-    expect(h.setSystemPrompt).toHaveBeenCalledWith(COMPOSED_SENTINEL);
+    expect(h.setSystemPrompt.mock.calls[0]?.[0]).toContain(COMPOSED_SENTINEL);
   });
 });
 
@@ -282,7 +305,7 @@ describe('/afk-md edit', () => {
     await afkMdCmd.handler(h.ctx, 'project');
     expect(h.text()).toContain('+1');
     expect(h.text()).toContain('- new');
-    expect(h.setSystemPrompt).toHaveBeenCalledWith(COMPOSED_SENTINEL);
+    expect(h.setSystemPrompt.mock.calls[0]?.[0]).toContain(COMPOSED_SENTINEL);
   });
 
   it('warns when an edit empties the tier', async () => {

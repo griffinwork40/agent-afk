@@ -50,10 +50,11 @@ function scopeFromWord(word: string): AfkMdScope | null {
 }
 
 function renderOverview(ctx: SlashContext): void {
-  const targets = resolveTargets();
-  const { source } = resolveBaseSystemPrompt();
-  const loaded = loadAfkMd();
-  const totalTokens = currentOverlayTokens();
+  const cwd = ctx.stats.cwd ?? process.cwd();
+  const targets = resolveTargets(cwd);
+  const { source } = resolveBaseSystemPrompt(cwd);
+  const loaded = loadAfkMd(cwd);
+  const totalTokens = currentOverlayTokens(cwd);
   const totalBytes = loaded ? Buffer.byteLength(loaded.content, 'utf8') : 0;
 
   ctx.out.line(palette.heading('AFK.md prompt overlay'));
@@ -95,8 +96,9 @@ function renderOverview(ctx: SlashContext): void {
 }
 
 function renderShow(ctx: SlashContext): void {
-  const { source } = resolveBaseSystemPrompt();
-  const loaded = loadAfkMd();
+  const cwd = ctx.stats.cwd ?? process.cwd();
+  const { source } = resolveBaseSystemPrompt(cwd);
+  const loaded = loadAfkMd(cwd);
   if (!loaded) {
     ctx.out.info('No AFK.md overlay is active — nothing to show.');
     ctx.out.line(palette.dim(`  ${source}`));
@@ -132,9 +134,13 @@ export const afkMdCmd: SlashCommand = {
     }
 
     if (word === 'reload') {
-      const baseline = currentOverlayTokens();
-      const { applied, tokens, delta, source } = applyReload(ctx, baseline);
-      if (applied) {
+      const baseline = currentOverlayTokens(ctx.stats.cwd);
+      const { applied, tokens, delta, source, shadowed } = applyReload(ctx, baseline);
+      if (shadowed) {
+        ctx.out.warn(
+          'AFK.md is shadowed by a higher-priority system prompt override; the file is not part of what the model receives.',
+        );
+      } else if (applied) {
         ctx.out.success(
           `Re-read from disk — overlay now ${formatTokens(tokens)} tokens (${formatDelta(delta)}). Takes effect on your next message.`,
         );
@@ -156,13 +162,13 @@ export const afkMdCmd: SlashCommand = {
         ctx.out.error('Nothing to add. Usage: /afk-md add <text> [--user]');
         return 'continue';
       }
-      appendToTarget(ctx, targetFor(toUser ? 'user' : 'project'), text);
+      appendToTarget(ctx, targetFor(toUser ? 'user' : 'project', ctx.stats.cwd), text);
       return 'continue';
     }
 
     const scope = scopeFromWord(word);
     if (scope) {
-      await editTarget(ctx, targetFor(scope));
+      await editTarget(ctx, targetFor(scope, ctx.stats.cwd));
       return 'continue';
     }
 
