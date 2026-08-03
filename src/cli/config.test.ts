@@ -1034,7 +1034,7 @@ describe('Config Loader', () => {
       mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
     });
 
-    it.each(['dark', 'light', 'auto'] as const)('round-trips theme=%s from afk.config.json into CliConfig.theme', (theme) => {
+    it.each(['dark', 'light', 'umber', 'auto'] as const)('round-trips theme=%s from afk.config.json into CliConfig.theme', (theme) => {
       mockConfig({ theme });
       expect(loadConfig().theme).toBe(theme);
     });

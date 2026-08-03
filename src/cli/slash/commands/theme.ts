@@ -1,7 +1,7 @@
 /**
  * /theme slash command — switch the TUI color palette mid-session.
  *
- * Exposes the boot-time `--theme <dark|light|auto>` flag / `AFK_THEME` env /
+ * Exposes the boot-time `--theme <dark|light|umber|auto>` flag / `AFK_THEME` env /
  * `theme` config key as a runtime toggle so the operator can flip the palette
  * without restarting the REPL. `applyTheme()` rewrites the live palette in
  * place and drops the syntax-highlight cache; a `getCompositor().repaint()`
@@ -15,6 +15,7 @@
  *   /theme          — show the active theme
  *   /theme dark     — the default palette
  *   /theme light    — palette retuned for light-background terminals
+ *   /theme umber    — the Umber terminal's warm palette (dark-only)
  *   /theme auto     — detect from the terminal (COLORFGBG; falls back to dark)
  */
 
@@ -25,22 +26,26 @@ import {
   getActiveTheme,
   parseThemeMode,
   resolveTheme,
+  THEME_NAMES,
   type ThemeMode,
 } from '../../theme.js';
 
-const VALID_MODES: readonly ThemeMode[] = ['dark', 'light', 'auto'];
+// Derived from THEME_NAMES so a new theme reaches the validator, the help
+// text, and the completion flags without a second edit site here.
+const VALID_MODES: readonly ThemeMode[] = [...THEME_NAMES, 'auto'];
 
 export const themeCmd: SlashCommand = {
   name: '/theme',
-  usage: '/theme [dark|light|auto]',
-  summary: 'Switch the TUI color palette (dark/light) mid-session',
+  usage: `/theme [${VALID_MODES.join('|')}]`,
+  summary: 'Switch the TUI color palette (dark/light/umber) mid-session',
   hint:
     'Switch the color palette: `dark` (default), `light` (retuned for light-background ' +
-    'terminals), or `auto` (detect from the terminal, falling back to dark). ' +
+    'terminals), `umber` (the Umber terminal\'s warm palette — dark-only, never auto-selected), ' +
+    'or `auto` (detect from the terminal, falling back to dark). ' +
     'Applies to the active frame and new output immediately; already-printed scrollback ' +
     'keeps its original colors. Session-scoped — persist with `afk config set theme <mode>`. ' +
     'Run without args to see the active theme.',
-  flags: ['dark', 'light', 'auto'],
+  flags: [...VALID_MODES],
   async handler(ctx, args) {
     const raw = args.trim();
 

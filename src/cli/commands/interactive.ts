@@ -205,7 +205,7 @@ export function registerInteractiveCommand(program: Command): void {
     .option('--max-turns <number>', 'Maximum conversation turns', '100')
     .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
     .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
-    .option('--theme <mode>', 'TUI color palette: dark|light|auto. Default dark. Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme.', parseThemeFlag)
+    .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme.', parseThemeFlag)
     .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
     .option('--resume <id>', 'Resume a persisted SDK session by id')

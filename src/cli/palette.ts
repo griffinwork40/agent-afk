@@ -19,14 +19,21 @@
  * blue" — anything that wants a second blue should use `fileRef` (teal)
  * or `tool` (steel) instead.
  *
- * ## Theming (dark / light)
+ * ## Theming (dark / light / umber)
  *
- * `palette` is a LIVE view over the active theme. Two theme maps are
- * defined — `darkPalette` (the canonical tones documented below) and
- * `lightPalette` (the same roles retuned for light-background terminals).
- * `applyTheme()` in `./theme.ts` rewrites `palette`'s members in place, so
- * the ~100 modules that already `import { palette }` pick up the new tones
- * on their next render with zero code changes.
+ * `palette` is a LIVE view over the active theme. Three theme maps are
+ * defined — `darkPalette` (the canonical tones documented below),
+ * `lightPalette` (the same roles retuned for light-background terminals),
+ * and `umberPalette` (the same roles mapped onto the Umber terminal's
+ * measured warm palette). `applyTheme()` in `./theme.ts` rewrites
+ * `palette`'s members in place, so the ~100 modules that already
+ * `import { palette }` pick up the new tones on their next render with zero
+ * code changes.
+ *
+ * Adding a FOURTH theme should extract the three maps into
+ * `./palettes/{dark,light,umber}.ts` and leave this module owning only the
+ * `ThemePalette` type + the live view — a fourth inline map would push this
+ * file past the 350-line ceiling.
  *
  * Invariant: `palette` keeps the SAME object identity across a theme swap —
  * only its member chalk instances change. Consumers therefore MUST access
@@ -181,10 +188,98 @@ const lightPaletteDef: ThemePalette = {
   diffHunk: chalk.hex('#6B7280'),
 };
 
+/**
+ * Umber theme — the same semantic roles mapped onto the Umber terminal's
+ * measured palette (github.com/griffinwork40/umber, `ThemeValues.swift`).
+ *
+ * Umber is a DARK-ONLY theme: it is tuned for its own `#19120D` warm-brown
+ * background, has no light variant upstream, and therefore never participates
+ * in `auto` detection — it is an explicit opt-in (`--theme umber`). On a
+ * light-background terminal it will be illegible; that is expected.
+ *
+ * Why these values: the dark theme's chrome is COOL slate grey (`#B0B8C2`,
+ * `blackBright`), which visibly clashes against a warm-brown background. The
+ * substitution that matters most is therefore the neutral spine — Umber's
+ * warm neutrals `#F9F6F2` / `#D3CDC5` / `#AAA19B` replace the cool greys, and
+ * that is what makes the theme read as umber rather than as "dark with an
+ * orange accent."
+ *
+ * Provenance: 18 of the 22 colored roles are MEASURED Umber values (its
+ * cursor accent + its ANSI 0–15 table), noted per-role below as `ansi<N>`.
+ * Four roles — goblin, syntaxString, thinking, plan — have no Umber analogue
+ * and are warm-shifted from their dark-theme hues, preserving hue identity
+ * while moving toward Umber's warm cast. The five pure modifiers are
+ * theme-agnostic and shared verbatim.
+ *
+ * Legibility: every colored role was checked against `#19120D` with the same
+ * WCAG + APCA math Umber's own `check-theme-contrast.sh` harness uses; all
+ * land at APCA Lc >= 49.5, above the Lc 45 floor. Umber's contrast harness is
+ * a build-time validator with no runtime call sites, so these static values
+ * are a faithful port — nothing is clamped at render time upstream.
+ */
+const umberPaletteDef: ThemePalette = {
+  /** Umber's cursor accent — the signature warm amber. A near-neighbor of the dark theme's `#E67E4C`, so brand identity survives the port intact. */
+  brand: chalk.hex('#FF9B5A'),
+  /** ansi10 bright green — pale mint, distinct from `success` (ansi2). */
+  mint: chalk.hex('#B4FCC3'),
+  /** Warm olive — no Umber analogue; warm-shifted from the dark theme's `#9CB04A` to sit beside Umber's `#D7AA32` yellow. */
+  goblin: chalk.hex('#A5AC55'),
+  /** ansi6 cyan — the faithful translation of the dark theme's `chalk.cyan`. Reserved for user identity only. */
+  user: chalk.hex('#42CBC8'),
+  /** ansi12 bright blue — soft cornflower, matching the dark theme's `#7AA2F7` caret intent. */
+  caret: chalk.hex('#9DBEFC'),
+  /** ansi11 bright yellow — pale warm yellow, the analogue of the dark theme's `#DCDCAA` function tone. */
+  tool: chalk.hex('#F7D179'),
+  /** ansi7 white — bullet chrome. Warm neutral replacing the dark theme's cool slate `#B0B8C2`; still recedes against the saturated per-category hues. */
+  chrome: chalk.hex('#D3CDC5'),
+  /** Warm sage italic — no Umber analogue; warm-shifted from the dark theme's `#8AB07A`. Italic preserved as the colorblind-safety cue. */
+  syntaxString: chalk.italic.hex('#96C182'),
+  /** ansi7 white, dimmed — the faithful translation of the dark theme's `chalk.dim.white`. */
+  toolArg: chalk.dim.hex('#D3CDC5'),
+  /** Warm mauve italic — no Umber analogue; warm-shifted from the dark theme's `#9B8FB5`. */
+  thinking: chalk.italic.hex('#B49EC4'),
+  /** ansi2 green — the faithful translation of `chalk.green`. */
+  success: chalk.hex('#8AE49E'),
+  /** ansi1 red — the faithful translation of `chalk.red`. */
+  error: chalk.hex('#EF7F74'),
+  /** ansi3 yellow — the faithful translation of `chalk.yellow`. */
+  warning: chalk.hex('#D7AA32'),
+  /** Warm lavender — no Umber analogue; warm-shifted from the dark theme's `#9F7CE0`. */
+  plan: chalk.hex('#AE93DE'),
+  /** ansi5 magenta, bold — Umber's measured pink reads as the synthwave bypass chip without needing the dark theme's `#FF6AC1`. */
+  bypass: chalk.bold.hex('#FFACE9'),
+  /** ansi8 bright black — the faithful translation of `chalk.blackBright`, and the warm counterpart to it. One tier below `chrome`. */
+  meta: chalk.hex('#AAA19B'),
+  /** ansi4 blue — the ambient-notice channel. */
+  info: chalk.hex('#739EF0'),
+  /** ansi14 bright cyan — file refs. Brighter than `user` (ansi6), inverting the dark theme's relative ordering; both stay legible and distinguishable. */
+  fileRef: chalk.hex('#80E5E2'),
+  /** ansi15 bright white, bold — H2 headings. */
+  heading: chalk.bold.hex('#F9F6F2'),
+  /** Dim (theme-agnostic). */
+  label: chalk.dim,
+  /** Dim (theme-agnostic). */
+  dim: chalk.dim,
+  /** Bold (theme-agnostic). */
+  bold: chalk.bold,
+  /** Italic (theme-agnostic). */
+  italic: chalk.italic,
+  /** Inverse (theme-agnostic). */
+  inverse: chalk.inverse,
+  /** ansi2 green — diff insertions (mirrors `success`, as the dark theme does). */
+  diffAdd: chalk.hex('#8AE49E'),
+  /** ansi1 red — diff deletions (mirrors `error`, as the dark theme does). */
+  diffRemove: chalk.hex('#EF7F74'),
+  /** ansi8 bright black — diff hunk headers (mirrors `meta`, as the dark theme does). */
+  diffHunk: chalk.hex('#AAA19B'),
+};
+
 /** Canonical dark tones (named export for `theme.ts` + tests). */
 export const darkPalette: ThemePalette = darkPaletteDef;
 /** Light-background tones (named export for `theme.ts` + tests). */
 export const lightPalette: ThemePalette = lightPaletteDef;
+/** Umber-terminal tones (named export for `theme.ts` + tests). */
+export const umberPalette: ThemePalette = umberPaletteDef;
 
 /**
  * The live palette every consumer imports. Starts on the dark theme;

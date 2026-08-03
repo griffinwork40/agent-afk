@@ -1,7 +1,7 @@
 /**
  * Unit tests for the /theme slash command.
  *
- * The command resolves dark/light/auto, applies it to the live palette via
+ * The command resolves dark/light/umber/auto, applies it to the live palette via
  * applyTheme(), repaints the active frame, and reports via ctx.out. These
  * tests verify dispatch, the no-arg report path, invalid-arg rejection, and
  * tolerance of a missing compositor. applyTheme mutates global palette state,
@@ -86,8 +86,19 @@ describe('/theme command', () => {
     expect(result).toBe('continue');
   });
 
+  it('/theme umber → applies the Umber palette', async () => {
+    const { ctx } = makeCtx();
+    const result = await themeCmd.handler(ctx, 'umber');
+    expect(getActiveTheme()).toBe('umber');
+    expect(result).toBe('continue');
+  });
+
   it('exposes correct metadata', () => {
     expect(themeCmd.name).toBe('/theme');
-    expect(themeCmd.flags).toEqual(['dark', 'light', 'auto']);
+    expect(themeCmd.flags).toEqual(['dark', 'light', 'umber', 'auto']);
+    // usage is derived from VALID_MODES, so it must list every mode
+    for (const mode of ['dark', 'light', 'umber', 'auto']) {
+      expect(themeCmd.usage).toContain(mode);
+    }
   });
 });
