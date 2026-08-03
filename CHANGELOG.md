@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.89.1] - 2026-08-03
+
+### Fixed
+- make read-only bash refusals actionable and state the real shell dialect (#884) (1d01353)
+
 ## [5.89.0] - 2026-08-03
 
 ### Added
