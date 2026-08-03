@@ -945,6 +945,16 @@ export class TerminalCompositor {
   }
 
   /**
+   * Ask the suggestion engine for an empty-prompt proposal for the turn now
+   * starting. Fire-and-forget; safe to call when suggestions are disabled (it
+   * no-ops). Body in terminal-compositor.autocomplete.ts.
+   * @internal Called by InputSurface.readLine at the per-turn prompt handoff.
+   */
+  primePromptGhost(): void {
+    Autocomplete.primePromptGhost(this);
+  }
+
+  /**
    * Render autocomplete dropdown rows for the compositor frame. Body extracted
    * to terminal-compositor.render.ts — see {@link Render.renderDropdownRows}
    * for the bottom-pinned row-ordering invariant.

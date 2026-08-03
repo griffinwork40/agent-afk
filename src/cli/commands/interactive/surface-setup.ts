@@ -204,6 +204,10 @@ export async function setupSurface(
               // suggestions off, otherwise typing would start firing provider calls
               // despite the user explicitly disabling them.
               llmEnabled: () => /^(1|true|yes|on)$/i.test(env.AFK_SUGGEST_ENABLED ?? ''),
+              // Same documented-activation parse as llmEnabled. Gates ONLY the
+              // empty-prompt suggestion; the completion tiers are unaffected.
+              promptSuggestEnabled: () =>
+                /^(1|true|yes|on)$/i.test(env.AFK_SUGGEST_PROMPT ?? ''),
             }),
           },
         }

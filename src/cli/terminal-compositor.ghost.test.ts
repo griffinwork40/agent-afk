@@ -100,9 +100,12 @@ function makeEngine(opts: {
   tier1Result?: string | null;
   tier2Result?: string | null;
   tier2Delay?: number;
+  /** Value primePromptSuggestion() stores for the empty-prompt ghost. */
+  promptSuggestion?: string | null;
 } = {}): SuggestEngine & { disposeCalled: boolean } {
   const { tier1Result = null, tier2Result = undefined, tier2Delay = 0 } = opts;
   let disposeCalled = false;
+  let promptSuggestion: string | null = null;
 
   const engine = {
     get disposeCalled() { return disposeCalled; },
@@ -118,8 +121,18 @@ function makeEngine(opts: {
         setTimeout(() => resolve(tier2Result), tier2Delay);
       });
     },
+    async primePromptSuggestion(_ctx: SuggestContext): Promise<void> {
+      promptSuggestion = opts.promptSuggestion ?? null;
+    },
+    peekPromptSuggestion(): string | null {
+      return promptSuggestion;
+    },
+    clearPromptSuggestion(): void {
+      promptSuggestion = null;
+    },
     dispose() {
       disposeCalled = true;
+      promptSuggestion = null;
     },
   };
   return engine;
@@ -570,6 +583,138 @@ describe('TerminalCompositor ghost text', () => {
       stdin.emit('keypress', ch, { name: ch, sequence: ch });
     }
     expect(c.getBuffer().text).toBe('hello');
+    c.disarm();
+  });
+});
+
+// ── Empty-prompt suggestion ───────────────────────────────────────────────────
+//
+// The completion tiers are guarded off at an empty buffer by design. The
+// empty-prompt suggestion is the one source permitted to produce a ghost there,
+// so these cases pin both that it renders and that it stays dismissible.
+
+describe('empty-prompt suggestion', () => {
+  let stdout: MockStdout;
+  let stdin: MockStdin;
+  let writes: ReturnType<typeof collectWrites>;
+
+  beforeEach(() => {
+    resetSlashRegistry();
+    stdout = makeMockStdout();
+    stdin = makeMockStdin();
+    writes = collectWrites(stdout);
+  });
+
+  afterEach(() => {
+    resetSlashRegistry();
+  });
+
+  it('renders a primed suggestion as ghost text at an EMPTY buffer', async () => {
+    const engine = makeEngine({ promptSuggestion: 'run the failing parser test' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    writes.clear();
+
+    c.updateGhost();
+    c.repaint();
+
+    expect(writes.all()).toContain('run the failing parser test');
+    c.disarm();
+  });
+
+  it('renders nothing when no suggestion is primed (unchanged default)', async () => {
+    const engine = makeEngine();
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    writes.clear();
+
+    c.updateGhost();
+    c.repaint();
+
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('Tab accepts the empty-prompt suggestion into the buffer', async () => {
+    // Tab already falls through to applyGhostAccept when no dropdown is open,
+    // so acceptance needs no new keybinding — this pins that it works at ''.
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+
+    stdin.emit('keypress', '\t', { name: 'tab', sequence: '\t' });
+
+    // Accepted into the input buffer, NOT submitted — Enter is a separate step.
+    expect(c.getBuffer().text).toBe('run the tests');
+    c.disarm();
+  });
+
+  it('typing dismisses the suggestion rather than completing it', async () => {
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+    expect(c.activeGhost).toBe('run the tests');
+
+    // First real keystroke: 'run the tests' does not start with 'x'.
+    stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('a suggestion whose text the user has begun typing is still not a completion source', async () => {
+    // 'run the tests' DOES start with 'r', but the empty-prompt source is
+    // scoped to buffer.length === 0 — it must not silently become a Tier-1
+    // completion once the user starts typing.
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+
+    stdin.emit('keypress', 'r', { name: 'r', sequence: 'r' });
+
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('is tolerant of an engine that predates peekPromptSuggestion', async () => {
+    // Test files are excluded from tsc, so a stale mock must not crash the
+    // input hot path on backspace-to-empty.
+    const legacy = {
+      disposeCalled: false,
+      getDeterministicGhost: (): string | null => null,
+      getGhost: (): Promise<string | null> => Promise.resolve(null),
+      dispose() { this.disposeCalled = true; },
+    } as unknown as SuggestEngine & { disposeCalled: boolean };
+
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine: legacy, getContext: makeCtx },
+    });
+    await c.arm();
+
+    expect(() => c.updateGhost()).not.toThrow();
     c.disarm();
   });
 });

@@ -482,6 +482,11 @@ export class InputSurface {
         this.pendingReadReject = reject;
         this.pendingReadResolve = resolve;
 
+        // Per-turn prompt handoff: ask for an empty-prompt suggestion now that
+        // the prompt belongs to the user again. Fire-and-forget by contract —
+        // never awaited, so it cannot delay the prompt.
+        compositor.primePromptGhost();
+
         const handler = (payload: SubmissionPayload) => {
           // One-shot: clear the handler after fire so the next
           // readLine() call wires a fresh resolver. Reading

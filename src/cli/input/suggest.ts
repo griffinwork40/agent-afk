@@ -30,6 +30,7 @@ import { redactSecrets } from '../../agent/redact-secrets.js';
 import { env } from '../../config/env.js';
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 import { sortByRecency } from './suggest-rank.js';
+import { generatePromptSuggestion } from './suggest-prompt.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,12 @@ export interface SuggestContext {
   getRecentCommands(): string[];
   /** Whether the LLM suggestion tier is active (`AFK_SUGGEST_ENABLED` truthy). */
   llmEnabled(): boolean;
+  /**
+   * Whether empty-prompt suggestions are active (`AFK_SUGGEST_PROMPT` truthy).
+   * Optional so existing test doubles that predate the feature stay valid; an
+   * absent implementation means "disabled".
+   */
+  promptSuggestEnabled?(): boolean;
 }
 
 // ── Prompt helpers ────────────────────────────────────────────────────────────
@@ -230,6 +237,23 @@ export interface SuggestEngine {
    */
   getGhost(buffer: string, ctx: SuggestContext): Promise<string | null>;
 
+  /**
+   * Generate an empty-prompt suggestion from session context and hold it for
+   * the next {@link peekPromptSuggestion}. Call when the prompt is handed back
+   * to the user at the start of a turn. No-op unless both `llmEnabled()` and
+   * `promptSuggestEnabled()` are true. Never throws.
+   */
+  primePromptSuggestion(ctx: SuggestContext): Promise<void>;
+
+  /**
+   * The suggestion primed for an empty buffer, or null. Synchronous so
+   * `updateGhost` can consult it on the render path.
+   */
+  peekPromptSuggestion(): string | null;
+
+  /** Drop any primed suggestion (accepted, dismissed, or superseded). */
+  clearPromptSuggestion(): void;
+
   /** Cancel any pending debounce timer. Call on REPL cleanup. */
   dispose(): void;
 }
@@ -240,6 +264,10 @@ export interface SuggestEngine {
 export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEngine {
   const debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+
+  // Empty-prompt suggestion state (independent of the Tier-2 cache/debounce).
+  let promptSuggestion: string | null = null;
+  let promptController: AbortController | null = null;
 
   // Tier 2 state
   let debounceHandle: ReturnType<typeof setTimeout> | null = null;
@@ -490,7 +518,47 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     }
   }
 
+  /**
+   * Generate the empty-prompt suggestion. Shares the provider memoization,
+   * abort/timeout race, and injected-completer seam with `runLlmTier`, but is
+   * deliberately NOT cached: it is a function of session state that changes
+   * every turn, so a buffer-keyed cache (whose key would always be '') would
+   * serve a stale proposal for the whole session.
+   */
+  async function primePromptSuggestion(ctx: SuggestContext): Promise<void> {
+    promptSuggestion = await generatePromptSuggestion(ctx, {
+      model: pickModel(ctx),
+      timeoutMs,
+      scrub: stripGhostControlChars,
+      onController: (c) => {
+        // Only clear when the settling call owns the slot — a superseding
+        // prime must not have its controller dropped by its predecessor.
+        if (c !== null || promptController !== null) promptController = c;
+      },
+      resolveComplete: (model) => {
+        if (opts.completeFn) return opts.completeFn;
+        const hints = ctx.baseUrl ? { openaiBaseUrl: ctx.baseUrl } : undefined;
+        const provider = resolveSuggestProvider(model, hints);
+        if (typeof provider.complete !== 'function') return null;
+        return provider.complete.bind(provider);
+      },
+    });
+  }
+
+  function peekPromptSuggestion(): string | null {
+    return promptSuggestion;
+  }
+
+  function clearPromptSuggestion(): void {
+    promptSuggestion = null;
+  }
+
   function dispose(): void {
+    promptSuggestion = null;
+    if (promptController !== null) {
+      promptController.abort();
+      promptController = null;
+    }
     if (debounceHandle !== null) {
       clearTimeout(debounceHandle);
       debounceHandle = null;
@@ -518,7 +586,14 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     providerCache.clear();
   }
 
-  return { getDeterministicGhost, getGhost, dispose };
+  return {
+    getDeterministicGhost,
+    getGhost,
+    primePromptSuggestion,
+    peekPromptSuggestion,
+    clearPromptSuggestion,
+    dispose,
+  };
 }
 
 // ── Model selection ───────────────────────────────────────────────────────────

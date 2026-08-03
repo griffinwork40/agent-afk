@@ -164,6 +164,39 @@ function updateFileCandidates(self: AutocompleteHost, ac: AutocompleteState, que
  * compute the Tier-1 ghost here so it is ready the moment the dropdown
  * closes — no additional async round-trip needed.
  */
+/**
+ * Request an empty-prompt suggestion for the turn that is starting, then show
+ * it if the user has not begun typing.
+ *
+ * Contract: fire-and-forget. The caller (the per-turn `readLine` handoff) must
+ * not await this — a suggestion is a nicety and must never delay handing the
+ * prompt to the user. Mirrors the Tier-2 stale-guard: the result is only
+ * surfaced when the buffer is STILL empty on resolve, so a user who starts
+ * typing immediately never sees a late ghost appear under their text.
+ */
+export function primePromptGhost(self: AutocompleteHost): void {
+  const engine = self.ghostEngine;
+  const getContext = self.ghostGetContext;
+  if (!engine || !getContext) return;
+  // Only propose into a genuinely empty prompt.
+  if (self.input.buffer.length > 0) return;
+
+  // A suggestion from the previous turn is stale the moment a new turn ends.
+  engine.clearPromptSuggestion();
+
+  void engine
+    .primePromptSuggestion(getContext())
+    .then(() => {
+      if (self.input.buffer.length !== 0) return;
+      if (engine.peekPromptSuggestion() === null) return;
+      updateGhost(self);
+      self.repaint();
+    })
+    .catch(() => {
+      /* engine never throws; defensive */
+    });
+}
+
 export function updateGhost(self: AutocompleteHost): void {
   if (!self.ghostEngine || !self.ghostGetContext) return;
   const buffer = self.input.buffer;
@@ -179,6 +212,23 @@ export function updateGhost(self: AutocompleteHost): void {
   if (tier1 !== null) {
     self.activeGhost = tier1;
     return;
+  }
+
+  // Empty-prompt suggestion. The completion tiers are guarded off at an empty
+  // buffer by design (they complete a prefix; there is nothing to complete), so
+  // this is the only source permitted to produce a ghost here. It must be read
+  // BEFORE the `activeGhost = null` below, which would otherwise wipe it on
+  // every edit that lands back at an empty buffer.
+  if (buffer.length === 0) {
+    // Optional-called on purpose. Test files are excluded from `tsc`
+    // (tsconfig `exclude`), so a hand-rolled SuggestEngine mock predating this
+    // method type-checks fine and would throw here on the input hot path —
+    // every backspace-to-empty. A missing implementation means "no suggestion".
+    const primed = self.ghostEngine.peekPromptSuggestion?.() ?? null;
+    if (primed !== null) {
+      self.activeGhost = primed;
+      return;
+    }
   }
 
   // No Tier-1 match — clear any stale ghost and, when the dropdown is
