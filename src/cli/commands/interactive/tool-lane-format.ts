@@ -1,4 +1,6 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
+import type { ToolFailureClass } from '../../../agent/trace/types.js';
+import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
@@ -31,9 +33,28 @@ export {
  * dark-theme glyph on screen. Resolving per call (mirrors
  * `buildSyntaxTheme()` in syntax-theme.ts) keeps the glyph in lock-step
  * with `applyTheme()`.
+ *
+ * Three outcomes, not two. `failureClass` is optional and additive: callers
+ * that omit it keep the original binary ✓/✗ byte-for-byte, which is what lets
+ * every pre-existing row and snapshot stay untouched. Only an errored result
+ * carrying a class in `BENIGN_FAILURE_CLASSES` renders the third glyph — the
+ * system deliberately said no, so it is neither a success nor a fault (#75).
+ * An unclassified failure stays red: absence of a class means we do not know
+ * it was benign, and guessing in that direction hides real breakage.
  */
-export function doneGlyph(isError: boolean | undefined): string {
-  return isError ? palette.error('✗') : palette.success('✓');
+export function doneGlyph(isError: boolean | undefined, failureClass?: ToolFailureClass): string {
+  if (!isError) return palette.success('✓');
+  return isBenignFailure(failureClass) ? palette.warning('⊘') : palette.error('✗');
+}
+
+/**
+ * True when an errored result was the system correctly saying no rather than
+ * a tool breaking. Thin wrapper so render sites read declaratively and the
+ * set stays owned by `agent/trace/types.ts`, shared with the failure-density
+ * detector that must classify these identically.
+ */
+export function isBenignFailure(failureClass: ToolFailureClass | undefined): boolean {
+  return failureClass !== undefined && BENIGN_FAILURE_CLASSES.has(failureClass);
 }
 
 export const MAX_VISIBLE_CHILDREN = 3;
@@ -88,7 +109,15 @@ export function formatOutcome(
   maxPreview = 60,
   toolName?: string,
 ): string {
-  const resultColor = chunk.isError ? palette.error : palette.dim;
+  // Three-tone split mirrors doneGlyph()/formatGroupedSibling(): a benign
+  // refusal (isError with a class in BENIGN_FAILURE_CLASSES) tones its body
+  // palette.warning to match the neutral ⊘ glyph beside it, so the row never
+  // reads `⊘ <red text>`. An unclassified failure stays palette.error — byte-
+  // for-byte identical to pre-#75 behavior — since absence of a class means
+  // we do not know it was benign.
+  const resultColor = chunk.isError
+    ? (isBenignFailure(chunk.failureClass) ? palette.warning : palette.error)
+    : palette.dim;
   const effectiveHomeDir = homeDir ?? env.HOME ?? '___NOHOME___';
 
   // Handler-supplied display string wins over every other branch. The tool

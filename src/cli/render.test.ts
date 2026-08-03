@@ -212,8 +212,8 @@ describe('welcomeBanner', () => {
   });
 
   it('keeps the full tagline un-truncated in the mid-width band beside the sprite', () => {
-    // Regression guard for the 55–72-col "dead zone": the mascot still renders
-    // here (drops only below 55 cols), but the 42-col tagline used to live in
+    // Regression guard for the 56–72-col "dead zone": the mascot still renders
+    // here (drops only below 56 cols), but the 42-col tagline used to live in
     // the ~(cols−31) column beside the 27-col sprite — only ~33 cols at 64 — and
     // truncated to "Run coding agents without ba…". Hoisting it to a full-width
     // row fixed that; assert the whole thesis survives, un-ellipsized, WITH the
@@ -322,7 +322,7 @@ describe('welcomeBanner', () => {
     });
 
     it('drops the mascot and stacks info flush-left on a very narrow terminal', () => {
-      // Below the sprite budget (cols − 2 − 27 − 2 < 24, i.e. cols < 55) the
+      // Below the sprite budget (cols − 1 − 2 − 27 − 2 < 24, i.e. cols < 56) the
       // 27-col goblin would crush every info row into a one-char sliver. The
       // compact fallback drops the sprite and stacks the info full-width so the
       // identity signals stay legible instead of ellipsizing to nothing.
@@ -339,9 +339,29 @@ describe('welcomeBanner', () => {
       expect(hasSprite(out)).toBe(false);
       // …but every identity signal still survives, full-width.
       expect(out).toContain('Agent AFK');
-      expect(out).toContain('run coding agents without babysitting them');
       expect(out).toContain('opus_1m');
       expect(out).toContain('afk/polish-goblin-banner');
+      // Tagline present, though it ellipsizes by one char here — see the 45-col
+      // pin below for why 44 is one column short of holding it whole.
+      expect(out).toContain('run coding agents without babysitting');
+    });
+
+    it('holds the full tagline from 45 cols up in the compact fallback', () => {
+      // The 42-col tagline + 2-col LEFT_PAD needs 44 columns of glyphs, so it
+      // only used to fit at exactly cols=44 by occupying the terminal's FINAL
+      // column — which is the DECAWM deferred-wrap hazard that mangled the
+      // banner on resize (see welcome-banner.last-column.test.ts). Reserving
+      // that column moved the untruncated-tagline floor from 44 to 45. The
+      // tradeoff is deliberate: one ellipsized char at one narrow width, in
+      // exchange for sprite rows that survive a SIGWINCH intact.
+      Object.defineProperty(process.stdout, 'columns', { value: 45, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        cwd: '/Users/example/projects/agent-afk',
+      }));
+      expect(out).toContain('run coding agents without babysitting them');
     });
 
     it('keeps every compact-banner row within the terminal width', () => {
@@ -355,23 +375,27 @@ describe('welcomeBanner', () => {
         hintLine: '/help · /model · /resume · Esc to interrupt · /exit to quit',
       }));
       const maxLine = Math.max(...out.split('\n').map((l) => stringWidth(l)));
-      expect(maxLine).toBeLessThanOrEqual(44);
+      // Strictly LESS than the width: a row landing exactly on column 44 puts a
+      // glyph in the final column, which sets the emulator's soft-wrap bit and
+      // re-splits the row on resize. This assertion used to be `<=`, which
+      // admitted precisely the corrupting case.
+      expect(maxLine).toBeLessThan(44);
     });
   });
 
-  describe('right-column vertical centering', () => {
+  describe('art-column vertical centering', () => {
     // The block-art hero is the ONLY source of full-block (█) glyphs — the
     // sprite is drawn with half-blocks (▀▄) only — so the first output line
-    // carrying a █ marks where the right column begins, i.e. its top pad.
+    // carrying a █ marks where the art column begins, i.e. its top pad.
     const heroTopRow = (s: string): number =>
       s.split('\n').findIndex((l) => /█/.test(l));
 
-    it('centers the right column onto the sprite, round-biased DOWN (not floor)', () => {
-      // A full column — model·mode + worktree + cwd + metaLine — is 12 rows
-      // against the 13-row sprite. (13−12)/2 = 0.5, so Math.round lands the top
-      // pad at 1, where Math.floor would strand the column at the cap tip (row
-      // 0). Pinning the exact top row is the direct guard for the round-not-floor
-      // bias the layout comment promises (welcome-banner.ts renderHybridBanner).
+    it('centers the 5-row hero onto the 13-row sprite, round-biased DOWN', () => {
+      // The hero is the only content sharing rows with the sprite (session text
+      // moved to full-width rows below — see welcome-banner.ts "Invariant (no row
+      // mixes pixel art with text)"). (13−5)/2 = 4, landing the logo beside the
+      // goblin's ear/eye band rather than the narrow cap tip. ROUND, not floor,
+      // is what the layout comment promises; this pins it.
       Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
       const out = strip(welcomeBanner({
         mode: 'Interactive Mode',
@@ -382,15 +406,19 @@ describe('welcomeBanner', () => {
         metaLine: 'Resuming abc123',
       }));
       expect(/[▀▄]/.test(out)).toBe(true); // sprite present → mascot layout
-      expect(heroTopRow(out)).toBe(1); // padded DOWN by one row (round, not floor)
+      expect(heroTopRow(out)).toBe(4);
     });
 
-    it('pushes the hero lower when the info column is shorter', () => {
-      // Centering responds to column height: a minimal column (model·mode only)
-      // is shorter than a full one, so it earns a larger top pad and its hero
-      // sits strictly lower. This exercises the round-biased centering across
-      // two different column heights without over-pinning either exact value.
+    it('holds the hero position invariant across session facts', () => {
+      // Regression guard for the mangling fix: the art block's geometry must not
+      // depend on how much session text there is. Previously the facts rode in
+      // the same column as the hero, so a /resume metaLine or a long branch name
+      // changed the sprite/hero pairing — and, worse, widened the art rows until
+      // a resize tore them. A fully-populated banner and a bare one must now
+      // produce byte-identical art rows.
       Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const artRows = (s: string): string[] =>
+        s.split('\n').filter((l) => /[▀▄█]/.test(l));
       const fuller = strip(welcomeBanner({
         mode: 'Interactive Mode',
         model: 'opus_1m',
@@ -400,7 +428,8 @@ describe('welcomeBanner', () => {
         metaLine: 'Resuming abc123',
       }));
       const minimal = strip(welcomeBanner({ mode: 'Interactive Mode', model: 'opus_1m' }));
-      expect(heroTopRow(minimal)).toBeGreaterThan(heroTopRow(fuller));
+      expect(heroTopRow(minimal)).toBe(heroTopRow(fuller));
+      expect(artRows(minimal)).toEqual(artRows(fuller));
     });
   });
 

@@ -216,7 +216,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
       surface: this.providerOpts.surface ?? 'cli',
-      cwd: config.cwd ?? process.cwd(),
+      // Behaviour-preserving: this provider builds the source per query, so
+      // `config.cwd` is frozen at query construction. Its `setCwd` only re-bases
+      // the dispatcher (query.ts) without rebuilding this source or the system
+      // prompt, so mid-query `get_runtime_state` cwd is stale until #876.
+      getCwd: () => config.cwd ?? process.cwd(),
       modelName,
       providerName: PROVIDER_NAME,
       permissionMode,

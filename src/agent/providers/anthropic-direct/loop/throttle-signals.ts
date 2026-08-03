@@ -29,10 +29,17 @@ import type { RunTurnInput } from '../types.js';
  *
  * When `throttleQueue` is absent this degrades to a bare `await` (one extra
  * microtask), so non-throttling paths and unit tests are unaffected.
+ *
+ * `onThrottle` fires once per drained signal, immediately BEFORE the matching
+ * `rate_limit` yield, carrying that signal's `retryAfterMs`. It exists so the
+ * caller can forgive the park against a deadline it owns — the TTFB bound is
+ * armed before this await and would otherwise be consumed by the SDK's own
+ * backoff (the "~70s, retried twice ≈ 140s" case above, against a 180s default).
  */
 export async function* awaitCreateWithThrottleSignals(
   createPromise: Promise<AsyncIterable<unknown>>,
   input: RunTurnInput,
+  onThrottle?: (retryAfterMs: number | undefined) => void,
 ): AsyncGenerator<ProviderEvent, AsyncIterable<unknown>, void> {
   const queue = input.throttleQueue;
   if (!queue) {
@@ -57,6 +64,12 @@ export async function* awaitCreateWithThrottleSignals(
   for (;;) {
     // Drain and surface anything already queued before parking again.
     for (const sig of queue.takeAll()) {
+      // Invariant: notify BEFORE yielding. The yield parks this generator until
+      // the consumer resumes it, and the TTFB deadline this callback extends is
+      // racing in real time — deferring the extension until after the consumer
+      // comes back would let the bound fire during the very park it is meant to
+      // forgive. Synchronous by contract for the same reason.
+      onThrottle?.(sig.retryAfterMs);
       yield {
         type: 'rate_limit',
         sessionId: input.ctx.sessionId,

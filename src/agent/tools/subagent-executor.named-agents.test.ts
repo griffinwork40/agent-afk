@@ -237,10 +237,16 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('opus');
   });
 
-  it('named dispatch with omitted model inherits the parent model (CC parity)', async () => {
+  // `research-agent` declares no model, so it takes the policy default rather
+  // than the dispatching session's model. Regression guard: this previously
+  // resolved to 'opus' (parent), which silently voided
+  // `AFK_DEFAULT_SUBAGENT_MODEL` for every named dispatch and let a high-tier
+  // parent auto-spawn high-tier read-only children. Inheritance is now opt-in
+  // via `model: 'inherit'` — see the 'inheritor' case above.
+  it('named dispatch with omitted model takes the policy default, not the parent model', async () => {
     const executor = makeExecutor({ defaultSubagentModel: 'haiku' });
     await executor.execute(makeCall({ prompt: 'go', agent_type: 'research-agent' }));
-    expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('opus');
+    expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('haiku');
   });
 
   it('unnamed dispatch keeps the policy default chain', async () => {
@@ -284,10 +290,16 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(factoryCalls[0]?.['readOnlyBash']).toBe(true);
   });
 
-  it('falls back to a restricted provider at the depth cap instead of failing open', async () => {
-    const executor = makeExecutor({ depth: 3, maxDepth: 3 });
+  it('falls back to a restricted provider with no nesting factory instead of failing open', async () => {
+    // buildChildConfig skips the nesting branch when EITHER the factory is
+    // absent OR depth >= maxDepth; without an explicit provider the fork would
+    // inherit the default UNRESTRICTED one and the named agent's contract would
+    // silently fail open. The depth trigger is no longer reachable from
+    // execute() (it now refuses at the cap — see subagent-executor.test.ts),
+    // so the no-factory route is what keeps this fail-safe under test.
+    const executor = makeExecutor({ childProviderFactory: undefined });
     await executor.execute(makeCall({ prompt: 'go', agent_type: 'research-agent' }));
-    expect(factoryCalls).toHaveLength(0); // factory not used at cap
+    expect(factoryCalls).toHaveLength(0); // no factory wired
     const forkArgs = forkSubagent.mock.calls[0]?.[0];
     // A provider override IS present (the restricted fallback), not undefined.
     expect(forkArgs.config.provider).toBeDefined();

@@ -3,10 +3,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DEFAULT_MODEL_TTFB_TIMEOUT_MS,
+  SDK_HONORED_RETRY_AFTER_CEILING_MS,
+  SDK_MAX_DEFAULT_BACKOFF_MS,
+  TTFB_THROTTLE_SLACK_MS,
   TTFB_TIMEOUT_MESSAGE,
   armFirstByteTimeout,
   isTtfbTimeoutError,
   resolveTtfbTimeoutMs,
+  throttleExtensionMs,
 } from './first-byte-timeout.js';
 import { MAX_TIMER_DELAY_MS } from './timer-limits.js';
 
@@ -123,5 +127,141 @@ describe('armFirstByteTimeout', () => {
     vi.advanceTimersByTime(1_000_000);
     expect(h.timedOut()).toBe(false);
     expect(h.signal.aborted).toBe(false);
+  });
+});
+
+describe('throttleExtensionMs', () => {
+  it('adds the slack to a retry-after the SDK will actually honour', () => {
+    expect(throttleExtensionMs(30_000)).toBe(30_000 + TTFB_THROTTLE_SLACK_MS);
+    // Just under the honoured ceiling: still taken at face value.
+    expect(throttleExtensionMs(59_999)).toBe(59_999 + TTFB_THROTTLE_SLACK_MS);
+  });
+
+  it('returns undefined when the provider gave no usable window', () => {
+    // Mirrors pauseWindowMs: no communicated window → caller keeps its normal
+    // bound rather than extending by a guess.
+    for (const bad of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(throttleExtensionMs(bad as number | undefined)).toBeUndefined();
+    }
+  });
+
+  it('clamps a hint the SDK DISCARDS to the SDK\'s own backoff ceiling', () => {
+    // client.js:412 honours retry-after only while `< 60 * 1000`; at or above it
+    // the hint is thrown away and calculateDefaultRetryTimeoutMillis caps the
+    // wait at 8s. Granting the raw header would buy an hour of grace for an ~8s
+    // park — reinstating the unbounded hang #583/#762 exist to prevent.
+    const clamped = SDK_MAX_DEFAULT_BACKOFF_MS + TTFB_THROTTLE_SLACK_MS;
+    expect(throttleExtensionMs(SDK_HONORED_RETRY_AFTER_CEILING_MS)).toBe(clamped);
+    expect(throttleExtensionMs(120_000)).toBe(clamped);
+    expect(throttleExtensionMs(3_600_000)).toBe(clamped); // the one-hour header
+  });
+
+  it('bounds total grace: a throttle can defer the watchdog, never disable it', () => {
+    // Worst honoured case per throttle. If this ever stops holding, an endpoint
+    // could park a dead request indefinitely.
+    const worstPerThrottle = SDK_HONORED_RETRY_AFTER_CEILING_MS - 1 + TTFB_THROTTLE_SLACK_MS;
+    for (const ms of [1, 59_999, 60_000, 3_600_000, Number.MAX_SAFE_INTEGER]) {
+      expect(throttleExtensionMs(ms)!).toBeLessThanOrEqual(worstPerThrottle);
+    }
+    // Whole-round ceiling. The bound is armed once per ROUND, not per attempt,
+    // and TWO retry layers nest inside that one window: the SDK's 1+maxRetries(2)
+    // = 3 HTTP attempts per messages.create, times the up-to-4 create calls
+    // anthropic-direct's own createWithRetry makes for a transient 529/503
+    // (OVERLOAD_MAX_RETRIES = 3). Not imported — shared/ must not depend on a
+    // provider — so this mirrors the count the docblock derives.
+    const MAX_GRANTS_PER_ROUND = 3 * 4;
+    expect(worstPerThrottle * MAX_GRANTS_PER_ROUND).toBeLessThan(20 * 60_000);
+  });
+});
+
+describe('armFirstByteTimeout — throttle extension (TTFB false-positive fix)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('forgives an explained park: the bound does not fire at its original deadline', () => {
+    const base = new AbortController();
+    const h = armFirstByteTimeout(base.signal, 180_000);
+    // 100s in, the provider says "retry after 60s" — the park is explained.
+    vi.advanceTimersByTime(100_000);
+    h.extend(60_000);
+    // Original 180s deadline passes; the request must NOT be declared a stall.
+    vi.advanceTimersByTime(80_000);
+    expect(h.timedOut()).toBe(false);
+    expect(h.signal.aborted).toBe(false);
+    // But the bound is still a bound: it fires once the granted window is spent.
+    vi.advanceTimersByTime(60_001);
+    expect(h.timedOut()).toBe(true);
+  });
+
+  it('adds to the ORIGINAL budget rather than restarting a full window', () => {
+    // Two 20s extensions must cost 20s+20s of grace, not two fresh 180s bounds —
+    // otherwise a throttling endpoint could keep a dead request alive forever.
+    const base = new AbortController();
+    const h = armFirstByteTimeout(base.signal, 180_000);
+    h.extend(20_000);
+    h.extend(20_000);
+    vi.advanceTimersByTime(219_999);
+    expect(h.timedOut()).toBe(false);
+    vi.advanceTimersByTime(2);
+    expect(h.timedOut()).toBe(true);
+  });
+
+  it('still fires on schedule when the park is UNEXPLAINED (no extension)', () => {
+    const base = new AbortController();
+    const h = armFirstByteTimeout(base.signal, 180_000);
+    // A throttle with no retry-after yields undefined upstream, so extend is
+    // never called — silence must still trip the bound.
+    vi.advanceTimersByTime(180_000);
+    expect(h.timedOut()).toBe(true);
+  });
+
+  it('cannot resurrect a spent timer (no-op after it has fired)', () => {
+    const base = new AbortController();
+    const h = armFirstByteTimeout(base.signal, 180_000);
+    vi.advanceTimersByTime(180_000);
+    expect(h.timedOut()).toBe(true);
+    h.extend(600_000);
+    // Already aborted; the extension must not un-abort or re-arm anything.
+    expect(h.timedOut()).toBe(true);
+    expect(h.signal.aborted).toBe(true);
+  });
+
+  it('is a no-op after dispose(), and after firstByteSeen()', () => {
+    const disposed = armFirstByteTimeout(new AbortController().signal, 180_000);
+    disposed.dispose();
+    disposed.extend(60_000);
+    vi.advanceTimersByTime(10_000_000);
+    expect(disposed.timedOut()).toBe(false);
+
+    const streaming = armFirstByteTimeout(new AbortController().signal, 180_000);
+    streaming.firstByteSeen();
+    streaming.extend(60_000);
+    vi.advanceTimersByTime(10_000_000);
+    expect(streaming.timedOut()).toBe(false);
+  });
+
+  it('is a no-op when the bound is disabled, and ignores unusable deltas', () => {
+    const off = armFirstByteTimeout(new AbortController().signal, 0);
+    off.extend(60_000);
+    vi.advanceTimersByTime(10_000_000);
+    expect(off.timedOut()).toBe(false);
+
+    const h = armFirstByteTimeout(new AbortController().signal, 180_000);
+    for (const bad of [0, -5_000, Number.NaN, Number.POSITIVE_INFINITY]) h.extend(bad);
+    vi.advanceTimersByTime(180_000);
+    expect(h.timedOut()).toBe(true); // deadline unmoved
+  });
+
+  it('re-arms on the remaining window, shifting the deadline by exactly the delta', () => {
+    // Boundary check on the re-arm arithmetic: extending mid-flight must move the
+    // deadline by the delta and no more — the new timer is scheduled for
+    // (deadline - now), not for a fresh full window.
+    const h = armFirstByteTimeout(new AbortController().signal, 10_000);
+    vi.advanceTimersByTime(9_000);
+    h.extend(1_000); // deadline: 10_000 -> 11_000
+    vi.advanceTimersByTime(1_999); // now 10_999
+    expect(h.timedOut()).toBe(false);
+    vi.advanceTimersByTime(1); // now 11_000
+    expect(h.timedOut()).toBe(true);
   });
 });

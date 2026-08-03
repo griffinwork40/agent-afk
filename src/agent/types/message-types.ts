@@ -4,6 +4,7 @@
  */
 
 import type { DiffPayload } from '../../utils/diff.js';
+import type { ToolFailureClass } from '../trace/types.js';
 
 /** Message role types */
 export type MessageRole = 'user' | 'assistant';
@@ -139,6 +140,19 @@ export interface ToolResultChunk {
    */
   batchIndex?: number;
   batchSize?: number;
+  /**
+   * WHY this result carries `isError: true`, plumbed from the `tool.output`
+   * provider event (originally `ToolResult.failureClass`, stamped by the
+   * dispatcher). Present only on errored results; absent means "unclassified
+   * failure", which the renderer must keep treating as a real fault.
+   *
+   * The tool-lane renders classes in `BENIGN_FAILURE_CLASSES` — a permission
+   * gate, a PreToolUse hook block, a browser domain-policy refusal, an abort,
+   * a declined elicitation — with a neutral `⊘` rather than a red `✗`. Those
+   * are the system correctly saying no, and during a long run a screenful of
+   * red for an agent harmlessly probing a gated tool reads as breakage (#75).
+   */
+  failureClass?: ToolFailureClass;
   metadata?: Record<string, unknown>;
 }
 

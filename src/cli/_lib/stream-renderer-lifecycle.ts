@@ -18,8 +18,12 @@ import { deriveProgressActivity, formatProgressBanner } from '../commands/intera
 import { palette } from '../palette.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
-import type { SourceState } from './stream-renderer-source.js';
-import { syntheticResult } from './stream-renderer-source.js';
+import { syntheticResult, type SourceState } from './stream-renderer-source.js';
+import {
+  childBannerEvent,
+  deriveChildBanner,
+  type ChildActivityTracker,
+} from './child-activity-select.js';
 import type { ToolLane } from '../commands/interactive/tool-lane.js';
 import type { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
@@ -68,6 +72,14 @@ export interface LifecycleContext {
 export function registerOverlaySlots(
   overlayComposer: OverlayComposer,
   ctx: Readonly<Pick<LifecycleContext, 'stageTracker' | 'thinkingMode' | 'thinkingLane' | 'streamingMarkdownRef' | 'toolLane' | 'lastProgressByTask'>> & {
+    /**
+     * Live source map + sticky selector for the banner's child-activity
+     * fallback. Optional so existing non-TTY callers and tests register slots
+     * unchanged; when absent the banner keeps its pre-change behaviour of
+     * leaving the detail slot blank during a foreground subagent dispatch.
+     */
+    sources?: ReadonlyMap<string, SourceState>;
+    childActivity?: ChildActivityTracker;
     /** Live interrupt state — true while a Ctrl+C interrupt is being processed. */
     getInterrupting: () => boolean;
     /**
@@ -136,15 +148,35 @@ export function registerOverlaySlots(
       // uncommitted phase only — peekPhase clears at each seal boundary, so
       // a stale clause never outlives the phase that produced it). Falls
       // back to the event's tool-derived summary inside formatProgressBanner.
-      const activity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
+      // Fallback: the model's clause is empty for the whole of a foreground
+      // subagent dispatch (phase sealed at the agent tool_use_detail boundary),
+      // so name the busiest child instead of letting the line go blank. This is
+      // the production render path — setComposedOverlay carries the same
+      // fallback for the direct-compositor path used by tests/non-TTY.
+      const modelActivity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
+      // The child banner applies only when the model's own clause is empty —
+      // i.e. exactly the foreground-dispatch case, where lastProgressByTask is
+      // frozen at its pre-dispatch values. See deriveChildBanner for why the
+      // stats must be re-scoped along with the clause.
+      const childBanner = modelActivity ? undefined : deriveChildBanner(ctx);
+      const activity = modelActivity ?? childBanner?.activity;
       for (const progress of ctx.lastProgressByTask.values()) {
-        bannerLines.push(...formatProgressBanner(progress, undefined, activity, stopping));
+        const event = childBanner
+          ? { ...progress, ...childBanner.stats, lastToolName: undefined }
+          : progress;
+        bannerLines.push(...formatProgressBanner(event, undefined, activity, stopping));
       }
       // ESC soft-stop must give visible feedback even on a text-only turn that
       // never emitted a `progress` event (lastProgressByTask empty). Synthesize
       // a minimal banner so the `stopping…` state always paints; the synthetic
       // event carries no stats, so formatProgressBanner renders just the glyph +
       // description + stopping clause.
+      //
+      // Ordering constraint: this branch runs BEFORE the child fallback below.
+      // Both fire only when the per-task loop produced nothing, and a stopping
+      // turn must surface `stopping…` rather than a child clause — so soft-stop
+      // claims the empty slot first and the child branch sees a non-empty
+      // bannerLines.
       if (stopping && bannerLines.length === 0) {
         bannerLines.push(
           ...formatProgressBanner(
@@ -152,6 +184,20 @@ export function registerOverlaySlots(
             undefined,
             undefined,
             true,
+          ),
+        );
+      }
+      // A live child while the parent has reported no round yet: the per-task
+      // loop above had nothing to iterate, so the clause and the child-scoped
+      // stats would be dropped. See childBannerEvent for why lastProgressByTask
+      // is empty for the whole of a FIRST-round foreground dispatch.
+      if (childBanner && bannerLines.length === 0) {
+        bannerLines.push(
+          ...formatProgressBanner(
+            childBannerEvent(childBanner.stats),
+            undefined,
+            activity,
+            stopping,
           ),
         );
       }

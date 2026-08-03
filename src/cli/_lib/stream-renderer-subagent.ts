@@ -148,6 +148,23 @@ export function handleSubagentEvent(
       if (event.progress.toolUses !== undefined) {
         source.stats.progressReportedToolUses = event.progress.toolUses;
       }
+      // Retain the provider's per-round headline for the progress banner's
+      // detail slot, then repaint ONCE.
+      //
+      // Invariant: the "at most one setComposedOverlay call per event" rule in
+      // stream-renderer-orchestrator.ts is a CAP, not a prohibition, and this arm
+      // previously made zero calls. The earlier reasoning — that the discrete
+      // tool_use_detail / tool_result transitions "arrive at least as often as
+      // progress events" — held for frequency but not for ORDER: both provider
+      // loops emit a round's tool_result BEFORE its progress event, so the result
+      // repaint renders the PREVIOUS headline and this one stays invisible for the
+      // whole of the child's next model request. Unthrottled, matching the discrete
+      // arms below rather than the 1500ms-gated streaming paths: progress fires
+      // once per round, not at streaming frequency.
+      if (event.progress.summary) source.lastProgressSummary = event.progress.summary;
+      if (ctx.isTTY && ctx.orchestratorCtx) {
+        setComposedOverlay(ctx.orchestratorCtx);
+      }
       return;
 
     case 'chunk': {

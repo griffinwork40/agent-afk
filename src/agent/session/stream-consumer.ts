@@ -213,6 +213,16 @@ function buildToolOutputEvent(
       ? { batchIndex: event.batchIndex, batchSize: event.batchSize }
       : {};
 
+  // Plumb the failure class through so the tool-lane can tell a deliberate
+  // refusal (permission gate, hook block, domain policy) from a tool that
+  // actually broke, and render the former neutrally. Must be spread into BOTH
+  // return branches below — the persisted-output branch builds its chunk
+  // separately, and a rejection large enough to be persisted is still a
+  // rejection.
+  const failureClassPassthrough = event.failureClass
+    ? { failureClass: event.failureClass }
+    : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -227,6 +237,7 @@ function buildToolOutputEvent(
         sizeLabel: parsed.sizeLabel,
         ...displayPassthrough,
         ...batchPassthrough,
+        ...failureClassPassthrough,
       },
     };
   }
@@ -256,6 +267,7 @@ function buildToolOutputEvent(
       ...(lineCount !== undefined && { lineCount }),
       ...displayPassthrough,
       ...batchPassthrough,
+      ...failureClassPassthrough,
     },
   };
 }

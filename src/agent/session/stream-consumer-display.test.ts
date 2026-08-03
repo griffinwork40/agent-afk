@@ -171,6 +171,59 @@ describe('stream-consumer: render-registry → chunk.display → formatOutcome',
     if (shortOut.chunk.type !== 'tool_result') throw new Error('unreachable');
     expect(shortOut.chunk.truncated).toBe(true);
   });
+
+  // Regression: `failureClass` travels dispatcher → tool.output → chunk so the
+  // interactive tool-lane can render a deliberate refusal with a neutral glyph
+  // instead of a red ✗ (#75). This hop is invisible at runtime — drop it and
+  // the glyph simply never appears, with every renderer test still green — so
+  // it is pinned here at the transform boundary itself.
+  it('propagates tool.output.failureClass onto the chunk', () => {
+    const denied: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'denied',
+      content: 'Tool "bash" is not in the configured allowlist',
+      isError: true,
+      failureClass: 'permission-denied',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(denied, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.failureClass).toBe('permission-denied');
+  });
+
+  it('leaves failureClass undefined for an unclassified failure', () => {
+    const broke: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'broke',
+      content: 'boom',
+      isError: true,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(broke, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.failureClass).toBeUndefined();
+  });
+
+  it('propagates failureClass through the persisted-output branch too', () => {
+    // The persisted branch builds its chunk separately from the normal path.
+    // A refusal large enough to spill to disk is still a refusal, so both
+    // branches must carry the class — this is the easier of the two to forget.
+    const persistedDenial: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'persisted',
+      content: 'Output too large (2.5 MB). Full output saved to: /tmp/afk-out.txt',
+      isError: true,
+      failureClass: 'hook-block',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(persistedDenial, noopDeps) as Extract<
+      OutputEvent,
+      { type: 'chunk' }
+    >;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.persistedPath).toBe('/tmp/afk-out.txt');
+    expect(out.chunk.failureClass).toBe('hook-block');
+  });
 });
 
 describe('stream-consumer: stream.retry → stream_retry', () => {

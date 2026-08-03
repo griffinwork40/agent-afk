@@ -199,3 +199,86 @@ describe('H2 fix: setOverlay throttled on high-frequency content/thinking chunks
     }
   });
 });
+
+describe('child progress events repaint the composed frame (PR #840 review, P2)', () => {
+  // Regression: the progress arm stored lastProgressSummary and returned without
+  // repainting, on the theory that the discrete tool_use_detail / tool_result
+  // transitions "arrive at least as often as progress events". True for
+  // frequency, false for ORDER — both provider loops emit a round's tool_result
+  // BEFORE its progress event, so the result repaint rendered the PREVIOUS
+  // headline and the new one stayed invisible until the child's next tool call.
+  const mkProgress = () =>
+    ({
+      type: 'progress',
+      progress: {
+        taskId: 'child-task',
+        description: 'Working',
+        summary: 'round 4: bash pnpm lint',
+        totalTokens: 900,
+        toolUses: 3,
+        durationMs: 1200,
+      },
+    }) as OutputEvent;
+
+  it('fires exactly one composed repaint per progress event', () => {
+    const lane = new ToolLane();
+    const setOverlaySpy = vi.fn();
+    const compositor = { setOverlay: setOverlaySpy, commitAbove: vi.fn() } as unknown as TerminalCompositor;
+    const ctx = makeCtx(lane, compositor);
+
+    const source: SourceState = freshSourceState('reviewer');
+    synthesizeAgentEntry('src-progress', source, ctx, undefined);
+    setOverlaySpy.mockClear();
+
+    handleSubagentEvent(mkProgress(), 'src-progress', source, ctx);
+
+    expect(source.lastProgressSummary).toBe('round 4: bash pnpm lint');
+    // Exactly one — the "at most one setComposedOverlay call per event"
+    // invariant is a cap, and this arm must not exceed it.
+    expect(setOverlaySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not throttled across consecutive rounds', () => {
+    // Progress fires once per round, not at streaming frequency, so it uses the
+    // discrete-arm path rather than the 1500ms content gate. Two rounds inside
+    // one window must produce two repaints.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      const lane = new ToolLane();
+      const setOverlaySpy = vi.fn();
+      const compositor = { setOverlay: setOverlaySpy, commitAbove: vi.fn() } as unknown as TerminalCompositor;
+      const ctx = makeCtx(lane, compositor);
+
+      const source: SourceState = freshSourceState('reviewer');
+      synthesizeAgentEntry('src-progress-2', source, ctx, undefined);
+      setOverlaySpy.mockClear();
+
+      handleSubagentEvent(mkProgress(), 'src-progress-2', source, ctx);
+      vi.advanceTimersByTime(200); // well inside the 1500ms streaming window
+      handleSubagentEvent(mkProgress(), 'src-progress-2', source, ctx);
+
+      expect(setOverlaySpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not repaint on a non-TTY surface', () => {
+    const lane = new ToolLane();
+    const setOverlaySpy = vi.fn();
+    const compositor = { setOverlay: setOverlaySpy, commitAbove: vi.fn() } as unknown as TerminalCompositor;
+    const ctx = { ...makeCtx(lane, compositor), isTTY: false };
+
+    const source: SourceState = freshSourceState('reviewer');
+    // Required setup: handleSubagentEvent early-returns unless
+    // synthesizeAgentEntry has stamped source.syntheticAgentToolUseId.
+    synthesizeAgentEntry('src-progress-3', source, ctx, undefined);
+    setOverlaySpy.mockClear();
+
+    handleSubagentEvent(mkProgress(), 'src-progress-3', source, ctx);
+
+    expect(source.lastProgressSummary).toBe('round 4: bash pnpm lint');
+    expect(setOverlaySpy).not.toHaveBeenCalled();
+  });
+});

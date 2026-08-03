@@ -13,7 +13,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { ToolLane } from './tool-lane.js';
+import type { ChalkInstance } from 'chalk';
 import { displayWidth, stripAnsi } from '../../display.js';
+import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 
 function makeResult(content: string, isError = false): ToolResultChunk {
@@ -1882,5 +1884,91 @@ describe('ToolLane.getOverlay — last-child connector closes its column (severe
     const toolRow = lines.find((l) => l.includes('Grep'))!;
     expect(toolRow.startsWith('  │ '),
       `grandchild col-0 not closed below the last-child ╰─; got: ${JSON.stringify(toolRow)}`).toBe(true);
+  });
+});
+
+// ─── Benign rejection glyph on an ungrouped child row (#75) ───────────────────
+//
+// The literal scenario from issue #75: during a long skill run the agent probes
+// a gated tool, and the row `✗ Tool "bash" is not in the configured allowlist`
+// reads as a failure. Grouped rows are covered in tool-lane-grouped-errors;
+// this pins the SINGLE-child path (tool-lane-render-children), which is what the
+// operator actually screenshotted.
+describe('benign rejection rendering (#75)', () => {
+  function laneWithOneRejectedChild(failureClass?: ToolResultChunk['failureClass']): ToolLane {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('agent', 'Agent', '(mint-research)', undefined);
+    lane.addStartWithAgentContext('b0', 'bash', '("git status")', 'agent');
+    lane.addResult('b0', {
+      type: 'tool_result',
+      toolUseId: 'unused',
+      content: 'Tool "bash" is not in the configured allowlist',
+      isError: true,
+      ...(failureClass ? { failureClass } : {}),
+    });
+    return lane;
+  }
+
+  function bashRow(lane: ToolLane): string {
+    const row = stripAnsi(lane.getOverlay())
+      .split('\n')
+      .find((l) => l.includes('bash'));
+    if (!row) throw new Error('no bash row');
+    return row;
+  }
+
+  /**
+   * Render the row with `palette.error`/`palette.warning` swapped for tagged
+   * sentinel renderers, so tone is asserted as literal text rather than raw
+   * ANSI. Mirrors `tonedBashRow` in tool-lane-grouped-errors.test.ts.
+   *
+   * Invariant: tone CANNOT be asserted via `stripAnsi` + raw escape codes —
+   * Chalk auto-disables colour when the test process has no TTY, so a plain
+   * ANSI-stripped comparison passes vacuously whether or not the row was ever
+   * toned. Swapping the palette member is colour-level-independent.
+   */
+  function tonedRow(lane: ToolLane): string {
+    const savedError = palette.error;
+    const savedWarning = palette.warning;
+    try {
+      palette.error = ((...t: unknown[]) => `<ERR>${t.join(' ')}</ERR>`) as ChalkInstance;
+      palette.warning = ((...t: unknown[]) => `<WARN>${t.join(' ')}</WARN>`) as ChalkInstance;
+      const row = stripAnsi(lane.getOverlay())
+        .split('\n')
+        .find((l) => l.includes('bash'));
+      if (!row) throw new Error('no bash row');
+      return row;
+    } finally {
+      palette.error = savedError;
+      palette.warning = savedWarning;
+    }
+  }
+
+  it('renders a permission-denied probe with the neutral glyph, not the error glyph', () => {
+    const lane = laneWithOneRejectedChild('permission-denied');
+    const row = bashRow(lane);
+    expect(row).toContain('⊘');
+    expect(row).not.toContain('✗');
+  });
+
+  it('still renders an unclassified failure with the error glyph', () => {
+    const lane = laneWithOneRejectedChild(undefined);
+    const row = bashRow(lane);
+    expect(row).toContain('✗');
+    expect(row).not.toContain('⊘');
+  });
+
+  it('permission-denied row carries the warning tone on the message body, not the error tone', () => {
+    const lane = laneWithOneRejectedChild('permission-denied');
+    const row = tonedRow(lane);
+    expect(row).toContain('<WARN>');
+    expect(row).not.toContain('<ERR>');
+  });
+
+  it('unclassified failure row still carries the error tone on the message body', () => {
+    const lane = laneWithOneRejectedChild(undefined);
+    const row = tonedRow(lane);
+    expect(row).toContain('<ERR>');
+    expect(row).not.toContain('<WARN>');
   });
 });

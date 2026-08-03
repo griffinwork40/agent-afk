@@ -40,8 +40,15 @@ const RM_RF_SAFE_LEAF_DIRS: ReadonlySet<string> = new Set([
 ]);
 
 /** Shell metacharacters whose presence makes tokenization unreliable (glob
- *  expansion, variable interpolation, command substitution, chaining). */
-const SHELL_METACHAR = /[*?$`(){};|&<>'"\\]/;
+ *  expansion, variable interpolation, command substitution, chaining). `\r`
+ *  and `\n` are included too: the bash tool runs commands via
+ *  `spawn(cmd, { shell: true })`, a real `/bin/sh -c`, where a literal
+ *  embedded newline is a statement separator identical to `;`. Tokenization
+ *  below (`cmd.trim().split(/\s+/)`) treats `\n` as ordinary whitespace, so
+ *  without this a command like `rm -rf node_modules\ndist` — two shell
+ *  statements — would flatten into one token stream (`targets: ["node_modules",
+ *  "dist"]`) and be evaluated as if it were a single validated `rm` call. */
+const SHELL_METACHAR = /[*?$`(){};|&<>'"\\\r\n]/;
 
 /**
  * True for a recursive-delete flag: `-r`, `-R`, any clustered short-flag run
