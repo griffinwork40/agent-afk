@@ -42,6 +42,7 @@ import type { IAgentSession } from '../types.js';
 import type { AgentConfig } from '../types/config-types.js';
 import type { Surface } from '../awareness/types.js';
 import type { ToolCall } from './types.js';
+import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
 import {
   SubagentExecutor,
   type SubagentExecutorContext,
@@ -435,6 +436,107 @@ describe('delegation.skipped telemetry (skill depth limit)', () => {
   });
 });
 
+describe('delegation.skipped telemetry (agent depth limit)', () => {
+  function makeAgentExecutor(opts: {
+    depth: number;
+    maxDepth: number;
+    agentRegistry?: AgentRegistry;
+  }) {
+    const manager = mockManager();
+    const ctx: SubagentExecutorContext = {
+      subagentManager: manager as unknown as SubagentExecutorContext['subagentManager'],
+      parentSession: {
+        sessionId: 'parent-sess',
+        getInputStreamRef: vi.fn(),
+        abortSignal: new AbortController().signal,
+      } as unknown as SubagentExecutorContext['parentSession'],
+      defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+      depth: opts.depth,
+      maxDepth: opts.maxDepth,
+      ...(opts.agentRegistry !== undefined ? { agentRegistry: opts.agentRegistry } : {}),
+    };
+    return { executor: new SubagentExecutor(ctx), manager };
+  }
+
+  const RESEARCH: RegisteredAgent = {
+    name: 'research-agent',
+    source: 'builtin',
+    definition: {
+      description: 'Read-only research sub-agent',
+      prompt: 'You are the research agent system prompt.',
+      tools: ['Read', 'Grep', 'Glob'],
+    },
+  };
+
+  it('emits delegation.skipped with reason=max_depth at the depth limit', async () => {
+    // Invariant: `agent` and `skill` emit the SAME row at the wall. The
+    // agent_type must resolve against a registry to reach the depth gate —
+    // named-agent resolution runs first, so an unknown type would return
+    // "not found" and emit nothing.
+    const { executor, manager } = makeAgentExecutor({
+      depth: 3,
+      maxDepth: 3,
+      agentRegistry: new Map([[RESEARCH.name, RESEARCH]]),
+    });
+
+    const result = await executor.execute(
+      makeCall({ input: { prompt: 'investigate', agent_type: 'research-agent' } }),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('nesting depth');
+    expect(manager.forkSubagent).not.toHaveBeenCalled();
+
+    const evt = findEvent('delegation.skipped');
+    expect(evt).toBeDefined();
+    expect(evt).toMatchObject({
+      event: 'delegation.skipped',
+      reason: 'max_depth',
+      depth: 3,
+      requested_name: 'research-agent',
+      parent_session_id: 'parent-sess',
+    });
+  });
+
+  it('does not emit delegation.skipped below the depth limit', async () => {
+    const { executor } = makeAgentExecutor({ depth: 1, maxDepth: 3 });
+    await executor.execute(makeCall());
+    expect(findEvent('delegation.skipped')).toBeUndefined();
+  });
+
+  it('omits requested_name for a bare dispatch at the depth limit', async () => {
+    // Contract: unlike the skill path — which derives a name from raw input
+    // before parsing — the agent row carries requested_name only when the
+    // dispatch named an agent_type. A bare dispatch emits the row without it.
+    const { executor } = makeAgentExecutor({ depth: 3, maxDepth: 3 });
+    await executor.execute(makeCall());
+
+    const evt = findEvent('delegation.skipped');
+    expect(evt).toBeDefined();
+    expect(evt!['requested_name']).toBeUndefined();
+  });
+
+  it('refuses every dispatch when the cap is 0 and still emits the row', async () => {
+    const { executor, manager } = makeAgentExecutor({ depth: 0, maxDepth: 0 });
+    const result = await executor.execute(makeCall());
+
+    expect(result.isError).toBe(true);
+    expect(manager.forkSubagent).not.toHaveBeenCalled();
+    expect(findEvent('delegation.skipped')).toMatchObject({
+      reason: 'max_depth',
+      depth: 0,
+    });
+  });
+
+  it('depth-gate refusal payload does not contain the dispatch prompt', async () => {
+    const { executor } = makeAgentExecutor({ depth: 3, maxDepth: 3 });
+    await executor.execute(
+      makeCall({ input: { prompt: 'SECRET-AGENT-PROMPT-88' } }),
+    );
+    const serialized = JSON.stringify(appendRoutingDecision.mock.calls);
+    expect(serialized).not.toContain('SECRET-AGENT-PROMPT-88');
+  });
+});
+
 describe('skill.dispatched / skill.completed telemetry (inline registry path)', () => {
   /**
    * Closes the inline-skill telemetry blind spot. Plugin skills + forked
@@ -803,5 +905,77 @@ describe('compose routing rows — Fix 2 (compose-executor.ts identity)', () => 
     expect(evt).toBeDefined();
     expect('origin' in (evt ?? {})).toBe(false);
     expect('actor' in (evt ?? {})).toBe(false);
+  });
+});
+
+describe('delegation.skipped telemetry (compose depth limit)', () => {
+  beforeEach(() => {
+    // mockClear (not just mockResolvedValue): the hoisted DAG mock is shared
+    // file-wide and its call history is never reset globally, so a
+    // `not.toHaveBeenCalled()` assertion here would otherwise observe
+    // dispatches from earlier describe blocks.
+    mockRunSubagentDAG.mockClear();
+    mockRunSubagentDAG.mockResolvedValue({ outputs: { n1: 'ok' }, failed: [], skipped: [] });
+  });
+
+  // Invariant: this gate is INERT at any non-zero cap — `compose` is absent
+  // from CHILD_ALLOWED_TOOLS, so the executor is only ever wired at the root
+  // (depth 0). The reachable case is AFK_MAX_NESTING_DEPTH=0, the documented
+  // "disable nested delegation entirely" escape hatch. These cases exist so
+  // that promise covers compose too, not just `agent` and `skill`.
+  it('emits delegation.skipped with reason=max_depth when the cap is 0', async () => {
+    const executor = new ComposeExecutor(makeComposeContext({ maxDepth: 0 }));
+    const result = await executor.execute(makeComposeCall());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('nesting depth');
+    expect(mockRunSubagentDAG).not.toHaveBeenCalled();
+
+    const evt = findEvent('delegation.skipped');
+    expect(evt).toBeDefined();
+    expect(evt).toMatchObject({
+      event: 'delegation.skipped',
+      reason: 'max_depth',
+      depth: 0,
+      parent_session_id: 'compose-parent-sess',
+    });
+  });
+
+  it('carries origin + actor on the refusal row when surface is set', async () => {
+    const executor = new ComposeExecutor(
+      makeComposeContext({ maxDepth: 0, surface: 'daemon', depth: 0 }),
+    );
+    await executor.execute(makeComposeCall());
+
+    const evt = findEvent('delegation.skipped');
+    expect(evt?.['origin']).toBe('daemon');
+    expect(evt?.['actor']).toBe('main');
+  });
+
+  it('omits requested_name — compose dispatches no named unit', async () => {
+    const executor = new ComposeExecutor(makeComposeContext({ maxDepth: 0 }));
+    await executor.execute(makeComposeCall());
+
+    const evt = findEvent('delegation.skipped');
+    expect(evt).toBeDefined();
+    expect(evt!['requested_name']).toBeUndefined();
+  });
+
+  it('does not emit delegation.skipped at the default cap', async () => {
+    const executor = new ComposeExecutor(makeComposeContext());
+    await executor.execute(makeComposeCall());
+    expect(findEvent('delegation.skipped')).toBeUndefined();
+  });
+
+  it('depth-gate refusal payload does not contain node prompts', async () => {
+    const executor = new ComposeExecutor(makeComposeContext({ maxDepth: 0 }));
+    await executor.execute({
+      id: 'cc-secret',
+      name: 'compose',
+      input: { nodes: [{ id: 'n1', prompt: 'SECRET-NODE-PROMPT-99' }] },
+      signal: new AbortController().signal,
+    });
+    const serialized = JSON.stringify(appendRoutingDecision.mock.calls);
+    expect(serialized).not.toContain('SECRET-NODE-PROMPT-99');
   });
 });

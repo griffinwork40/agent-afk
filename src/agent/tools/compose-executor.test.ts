@@ -5,6 +5,7 @@ import { join } from 'path';
 import type { ToolCall } from './types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { runWithSink } from '../_lib/skill-sink-channel.js';
+import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 
 // Mock SubagentManager + runSubagentDAG before importing the executor.
 const mockForkSubagent = vi.fn();
@@ -457,6 +458,9 @@ describe('ComposeExecutor', () => {
         }));
         expect(result.isError).toBe(true);
         expect(result.content).toContain('Compose tool not available at nesting depth 0 (max 0)');
+        // Parity with the `agent` and `skill` refusals: the actionable "work
+        // inline" hint must reach the caller, not just the depth number.
+        expect(result.content).toContain(SKILL_MAX_DEPTH_RECOVERY_HINT);
         expect(mockRunSubagentDAG).not.toHaveBeenCalled();
       } finally {
         if (original !== undefined) process.env[KEY] = original;

@@ -1042,6 +1042,10 @@ describe('SubagentExecutor', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content).toContain('Agent tool not available at nesting depth 0 (max 0)');
+      // The recovery hint is the user-facing half of the refusal: a caller told
+      // only "not available" has no next move. Asserted on BOTH refusal paths
+      // (here and at the cap above) so a future refactor cannot drop it from one.
+      expect(result.content).toContain(SKILL_MAX_DEPTH_RECOVERY_HINT);
       expect(manager.forkSubagent).not.toHaveBeenCalled();
     });
 
