@@ -1,11 +1,17 @@
 /**
- * Autocomplete dropdown + inline ghost-text logic, extracted from
- * terminal-compositor.ts. Follows the free-functions-on-host pattern used by
- * src/cli/_lib/stream-renderer-*: TerminalCompositor owns the state; these
- * functions operate on the narrow {@link AutocompleteHost} slice it passes as
- * `self`. No behavior change — bodies are moves with `this.` rewritten to
- * `self.`, intra-module calls (updateAutocomplete) made direct, and the shared
- * MAX_DROPDOWN_ROWS budget co-located here.
+ * Autocomplete dropdown logic, extracted from terminal-compositor.ts. Follows
+ * the free-functions-on-host pattern used by src/cli/_lib/stream-renderer-*:
+ * TerminalCompositor owns the state; these functions operate on the narrow
+ * {@link AutocompleteHost} slice it passes as `self`. The shared
+ * MAX_DROPDOWN_ROWS budget is co-located here.
+ *
+ * Scope: the DROPDOWN — candidates derived synchronously from the buffer on
+ * every keystroke, plus Tab-apply. Inline ghost text is the other suggestion
+ * surface and has a different lifecycle (async tiers, a per-turn empty-prompt
+ * proposal that persists across keystrokes); it lives in
+ * ./terminal-compositor.ghost.ts, which imports {@link AutocompleteHost} and
+ * {@link updateAutocomplete} from here. The dependency runs one way — nothing
+ * in this module calls into the ghost module.
  */
 
 import { InputCore, type InputCoreState } from './input-core.js';
@@ -17,7 +23,6 @@ import {
   filterSlashCandidates,
   invalidateFileScanCache,
 } from './input/trigger.js';
-import { stripGhostControlChars } from './input/suggest.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { SuggestContext, SuggestEngine } from './terminal-compositor.types.js';
@@ -27,9 +32,11 @@ export const MAX_DROPDOWN_ROWS = 6;
 
 /**
  * Narrowest TerminalCompositor state slice the autocomplete/ghost functions
- * touch. `input`/`activeGhost` are mutated; `autocompleteState` is
- * mutated in-place (never reassigned, so it stays a `readonly` view).
- * `repaint` is the cross-cluster render callback (a class method on the host).
+ * touch. Shared with ./terminal-compositor.ghost.ts so both suggestion
+ * surfaces are wired against one host contract. `input`/`activeGhost` are
+ * mutated; `autocompleteState` is mutated in-place (never reassigned, so it
+ * stays a `readonly` view). `repaint` is the cross-cluster render callback (a
+ * class method on the host).
  *
  * Note: applying a completion/ghost does NOT touch the pending-submission
  * queue — editing the live buffer is independent of committed messages
@@ -145,118 +152,6 @@ function updateFileCandidates(self: AutocompleteHost, ac: AutocompleteState, que
 }
 
 /**
- * Update the active ghost text for the current buffer state.
- *
- * Called from `applyEdit` (every buffer/cursor change) so the ghost is
- * always consistent with the current input. Never called while `pasting`
- * — the paste burst suppresses per-character repaints and a ghost mid-paste
- * would be stale by the time the paste ends.
- *
- * Invariant: MUST NOT block the keystroke path. `getDeterministicGhost` is
- * synchronous (safe). `getGhost` is fire-and-forget — its resolution only
- * stores a result when the buffer is still identical to what was requested
- * (stale-async guard captures the buffer snapshot before dispatch and
- * compares on resolve; mismatched buffer → result is silently dropped).
- * A repaint is scheduled only after the guard passes.
- *
- * Invariant: when the dropdown is open, ghost text is suppressed in
- * `renderInputLine` (ghost defers to the dropdown UI). We still eagerly
- * compute the Tier-1 ghost here so it is ready the moment the dropdown
- * closes — no additional async round-trip needed.
- */
-/**
- * Request an empty-prompt suggestion for the turn that is starting, then show
- * it if the user has not begun typing.
- *
- * Contract: fire-and-forget. The caller (the per-turn `readLine` handoff) must
- * not await this — a suggestion is a nicety and must never delay handing the
- * prompt to the user. Mirrors the Tier-2 stale-guard: the result is only
- * surfaced when the buffer is STILL empty on resolve, so a user who starts
- * typing immediately never sees a late ghost appear under their text.
- */
-export function primePromptGhost(self: AutocompleteHost): void {
-  const engine = self.ghostEngine;
-  const getContext = self.ghostGetContext;
-  if (!engine || !getContext) return;
-  // Only propose into a genuinely empty prompt.
-  if (self.input.buffer.length > 0) return;
-
-  // A suggestion from the previous turn is stale the moment a new turn ends.
-  engine.clearPromptSuggestion();
-
-  void engine
-    .primePromptSuggestion(getContext())
-    .then(() => {
-      if (self.input.buffer.length !== 0) return;
-      if (engine.peekPromptSuggestion() === null) return;
-      updateGhost(self);
-      self.repaint();
-    })
-    .catch(() => {
-      /* engine never throws; defensive */
-    });
-}
-
-export function updateGhost(self: AutocompleteHost): void {
-  if (!self.ghostEngine || !self.ghostGetContext) return;
-  const buffer = self.input.buffer;
-
-  // Stale-invalidation: clear any ghost that no longer extends the buffer.
-  if (self.activeGhost !== null && !self.activeGhost.startsWith(buffer)) {
-    self.activeGhost = null;
-  }
-
-  // Tier 1: synchronous, always runs.
-  const ctx = self.ghostGetContext();
-  const tier1 = self.ghostEngine.getDeterministicGhost(buffer, ctx);
-  if (tier1 !== null) {
-    self.activeGhost = tier1;
-    return;
-  }
-
-  // Empty-prompt suggestion. The completion tiers are guarded off at an empty
-  // buffer by design (they complete a prefix; there is nothing to complete), so
-  // this is the only source permitted to produce a ghost here. It must be read
-  // BEFORE the `activeGhost = null` below, which would otherwise wipe it on
-  // every edit that lands back at an empty buffer.
-  if (buffer.length === 0) {
-    // Optional-called on purpose. Test files are excluded from `tsc`
-    // (tsconfig `exclude`), so a hand-rolled SuggestEngine mock predating this
-    // method type-checks fine and would throw here on the input hot path —
-    // every backspace-to-empty. A missing implementation means "no suggestion".
-    const primed = self.ghostEngine.peekPromptSuggestion?.() ?? null;
-    if (primed !== null) {
-      self.activeGhost = primed;
-      return;
-    }
-  }
-
-  // No Tier-1 match — clear any stale ghost and, when the dropdown is
-  // closed, kick off a Tier-2 async request (fire-and-forget).
-  self.activeGhost = null;
-  const ac = self.autocompleteState;
-  if (ac?.dropdownOpen) return;
-
-  // Stale-async guard: snapshot the buffer BEFORE the async dispatch.
-  // The resolve handler will discard the result if the buffer has changed.
-  const requestedBuffer = buffer;
-  self.ghostEngine.getGhost(buffer, ctx).then((result) => {
-    // Contract: only store the result when the buffer is still the same
-    // and the result is a strict prefix-extension (safety net against a
-    // misbehaving engine returning a non-prefix string).
-    if (
-      result !== null &&
-      self.input.buffer === requestedBuffer &&
-      result.startsWith(requestedBuffer) &&
-      result.length > requestedBuffer.length
-    ) {
-      self.activeGhost = result;
-      self.repaint();
-    }
-  }).catch(() => { /* engine never throws, but be defensive */ });
-}
-
-/**
  * Apply the currently highlighted dropdown candidate to the buffer. Mirrors
  * `applySelection` in `src/cli/input/reader.ts` so Tab behaves identically
  * across the user-turn and agent-turn input surfaces.
@@ -311,43 +206,6 @@ export function applyDropdownSelection(self: AutocompleteHost): boolean {
   ac.candidates = [];
   ac.viewportStart = 0;
   ac.selectedIndex = 0;
-  updateAutocomplete(self);
-  self.repaint();
-  return true;
-}
-
-/**
- * Accept the current ghost text: replace the buffer with the full ghost
- * string, move the cursor to the end, clear the ghost, and repaint.
- *
- * Returns `true` when a ghost was accepted; `false` when there was no
- * active ghost to accept (or the preconditions were not met). Callers
- * check the return to decide whether to fall through to their own logic.
- *
- * Preconditions (all must hold):
- *   - `activeGhost` is set
- *   - cursor is at end-of-buffer
- *   - the ghost still strictly extends the current buffer (strict-prefix check)
- *   - the autocomplete dropdown is closed
- */
-export function applyGhostAccept(self: AutocompleteHost): boolean {
-  const ghost = self.activeGhost;
-  if (ghost === null) return false;
-  const ac = self.autocompleteState;
-  if (ac?.dropdownOpen) return false;
-  if (self.input.cursor !== self.input.buffer.length) return false;
-  if (!ghost.startsWith(self.input.buffer) || ghost.length <= self.input.buffer.length) return false;
-  // Replace buffer with the full ghost and position cursor at end. Sanitize
-  // the suggested *remainder* before committing it (mirrors the render-path
-  // strip in renderInputLine): the typed prefix is the user's own clean
-  // input, but a Tier-1 candidate sourced from history could carry an
-  // embedded newline / control char that would otherwise be injected
-  // verbatim into the buffer — and then submitted — on accept.
-  const sanitizedGhost =
-    self.input.buffer + stripGhostControlChars(ghost.slice(self.input.buffer.length));
-  const next = InputCore.seed(sanitizedGhost);
-  self.input = next;
-  self.activeGhost = null;
   updateAutocomplete(self);
   self.repaint();
   return true;

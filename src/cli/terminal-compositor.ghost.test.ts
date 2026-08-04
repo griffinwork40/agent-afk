@@ -717,4 +717,123 @@ describe('empty-prompt suggestion', () => {
     expect(() => c.updateGhost()).not.toThrow();
     c.disarm();
   });
+
+  // ── Suggestion does not resurrect after the user moves on ────────────────
+  //
+  // The proposal lives in the ENGINE, and `updateGhost` re-reads it on every
+  // edit that lands back at an empty buffer. Clearing only `activeGhost`
+  // therefore looks correct for one frame and then re-offers the same ghost on
+  // the next backspace/Ctrl+U. These pin the engine-level clear.
+
+  it('does not resurrect the suggestion when the user backspaces back to empty', async () => {
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+    expect(c.activeGhost).toBe('run the tests');
+
+    // User starts typing — the proposal is implicitly declined.
+    stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+    expect(c.activeGhost).toBeNull();
+
+    // ...and backspaces straight back to an empty buffer.
+    stdin.emit('keypress', undefined, { name: 'backspace' });
+    expect(c.getBuffer().text).toBe('');
+
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('does not resurrect the suggestion after Ctrl+U clears a typed line', async () => {
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+
+    for (const ch of 'abc') {
+      stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    }
+    stdin.emit('keypress', 'u', { name: 'u', sequence: '\u0015', ctrl: true });
+    expect(c.getBuffer().text).toBe('');
+
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('does not resurrect the suggestion after it is accepted and the buffer cleared', async () => {
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+
+    // Tab accepts the proposal into the buffer — it is consumed, not pending.
+    stdin.emit('keypress', '\t', { name: 'tab', sequence: '\t' });
+    expect(c.getBuffer().text).toBe('run the tests');
+    expect(engine.peekPromptSuggestion()).toBeNull();
+
+    // Wiping the accepted text must not re-offer it as a ghost.
+    stdin.emit('keypress', 'u', { name: 'u', sequence: '\u0015', ctrl: true });
+    expect(c.getBuffer().text).toBe('');
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('Esc at an empty idle prompt dismisses the suggestion for good', async () => {
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    c.setInputMode('idle');
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+    expect(c.activeGhost).toBe('run the tests');
+
+    stdin.emit('keypress', undefined, { name: 'escape' });
+
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    expect(c.activeGhost).toBeNull();
+
+    // And it stays gone across a subsequent edit round-trip to empty.
+    stdin.emit('keypress', 'z', { name: 'z', sequence: 'z' });
+    stdin.emit('keypress', undefined, { name: 'backspace' });
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('a dismissed suggestion does not block a later prime', async () => {
+    // Dismissal invalidates the CURRENT proposal, not the feature: the next
+    // turn handoff must still be able to install a fresh one.
+    const engine = makeEngine({ promptSuggestion: 'run the tests' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    c.setInputMode('idle');
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+    stdin.emit('keypress', undefined, { name: 'escape' });
+    expect(engine.peekPromptSuggestion()).toBeNull();
+
+    await engine.primePromptSuggestion(makeCtx());
+    c.updateGhost();
+    expect(c.activeGhost).toBe('run the tests');
+    c.disarm();
+  });
 });

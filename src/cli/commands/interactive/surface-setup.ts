@@ -245,6 +245,10 @@ export async function setupSurface(
   // for surfaces that can't render a live frame.
   const armedCompositor = surface.getCompositor();
   const stdinElicitationHandler = makeReplElicitationHandler({
+    // Elicitation / form / MCP-question sub-prompts deliberately omit
+    // `primePromptSuggestion` (defaults false): the user is answering a
+    // specific question, so a "what should I do next" ghost over the answer
+    // field is off-topic — and it would burn one provider call per field.
     readLine: (prompt) =>
       surface.readLine({ promptFn: () => prompt }).then((r) => r.text),
     writer: {

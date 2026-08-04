@@ -107,6 +107,20 @@ export interface InputSurfaceReadOpts {
    * the bottom row.
    */
   compositor?: TerminalCompositor;
+  /**
+   * Whether this read is the REPL's own turn-boundary prompt and may
+   * therefore prime an empty-prompt ghost suggestion. Defaults to `false`
+   * — opt-in, not opt-out.
+   *
+   * Rationale: `readLine()` is shared by the main REPL loop AND by every
+   * borrowed sub-prompt — elicitation confirms ("Continue? [y/N]"), form
+   * fields, MCP-driven questions. Those sub-prompts are NOT a "what should
+   * I do next" moment: the user is answering a specific question, so a
+   * proposal invented from the transcript is off-topic ghost text over an
+   * answer field, and it spends a provider call per field. Only the REPL's
+   * per-turn handoff passes `primePromptSuggestion: true`.
+   */
+  primePromptSuggestion?: boolean;
 }
 
 /**
@@ -485,7 +499,14 @@ export class InputSurface {
         // Per-turn prompt handoff: ask for an empty-prompt suggestion now that
         // the prompt belongs to the user again. Fire-and-forget by contract —
         // never awaited, so it cannot delay the prompt.
-        compositor.primePromptGhost();
+        //
+        // Opt-in only (see InputSurfaceReadOpts.primePromptSuggestion): the
+        // elicitation / form / MCP-question sub-prompts also call readLine(),
+        // and a "what should I do next" proposal over an answer field is both
+        // off-topic and a wasted provider call per field.
+        if (opts.primePromptSuggestion === true) {
+          compositor.primePromptGhost();
+        }
 
         const handler = (payload: SubmissionPayload) => {
           // One-shot: clear the handler after fire so the next

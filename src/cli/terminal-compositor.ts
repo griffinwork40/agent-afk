@@ -39,6 +39,7 @@ import {
 } from './terminal-compositor.types.js';
 import * as Paste from './terminal-compositor.paste.js';
 import * as Autocomplete from './terminal-compositor.autocomplete.js';
+import * as Ghost from './terminal-compositor.ghost.js';
 import * as Render from './terminal-compositor.render.js';
 import * as CommittedBand from './terminal-compositor.committed-band.js';
 import * as Frame from './terminal-compositor.frame.js';
@@ -936,22 +937,33 @@ export class TerminalCompositor {
 
   /**
    * Update the active ghost text for the current buffer state. Body extracted
-   * to terminal-compositor.autocomplete.ts — see {@link Autocomplete.updateGhost}
-   * for the keystroke-path and stale-async-guard invariants.
+   * to terminal-compositor.ghost.ts — see {@link Ghost.updateGhost} for the
+   * keystroke-path and stale-async-guard invariants.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   updateGhost(): void {
-    Autocomplete.updateGhost(this);
+    Ghost.updateGhost(this);
   }
 
   /**
    * Ask the suggestion engine for an empty-prompt proposal for the turn now
    * starting. Fire-and-forget; safe to call when suggestions are disabled (it
-   * no-ops). Body in terminal-compositor.autocomplete.ts.
-   * @internal Called by InputSurface.readLine at the per-turn prompt handoff.
+   * no-ops). Body in terminal-compositor.ghost.ts.
+   * @internal Called by InputSurface.readLine at the per-turn prompt handoff,
+   * and only when that read opts in (`primePromptSuggestion: true`).
    */
   primePromptGhost(): void {
-    Autocomplete.primePromptGhost(this);
+    Ghost.primePromptGhost(this);
+  }
+
+  /**
+   * Drop a primed empty-prompt suggestion so it does not reappear (ESC at an
+   * empty idle prompt). Returns true when a suggestion was actually dismissed.
+   * Body in terminal-compositor.ghost.ts.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  dismissPromptGhost(): boolean {
+    return Ghost.dismissPromptGhost(this);
   }
 
   /**
@@ -1114,12 +1126,12 @@ export class TerminalCompositor {
   /**
    * Accept the current ghost text (replace buffer with the full ghost, cursor
    * to end, clear ghost, repaint). Body extracted to
-   * terminal-compositor.autocomplete.ts — see {@link Autocomplete.applyGhostAccept}
-   * for the accept preconditions. Returns `true` when a ghost was accepted.
+   * terminal-compositor.ghost.ts — see {@link Ghost.applyGhostAccept} for the
+   * accept preconditions. Returns `true` when a ghost was accepted.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   applyGhostAccept(): boolean {
-    return Autocomplete.applyGhostAccept(this);
+    return Ghost.applyGhostAccept(this);
   }
 
 }

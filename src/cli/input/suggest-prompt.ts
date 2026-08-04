@@ -10,15 +10,18 @@
  * whole next action from session context, and is the only path allowed to
  * produce a ghost when the buffer is empty.
  *
- * Kept in its own file so `suggest.ts` (already over the repo's 350-line norm)
- * does not grow, and so prompt construction stays unit-testable without a
- * provider, a REPL, or a session.
+ * Scope: this module PRODUCES one proposal — prompt construction, acceptance
+ * guard, a single provider round-trip. It deliberately owns no lifecycle:
+ * which invocation is authoritative, when a late reply may publish, and when
+ * the stored value is dropped all live in `./suggest-prompt-state`. Keeping
+ * production separate from lifecycle is what lets prompt construction stay
+ * unit-testable without a provider, a REPL, or a session.
  *
  * @module cli/input/suggest-prompt
  */
 
 import { redactSecrets } from '../../agent/redact-secrets.js';
-import type { SuggestContext } from './suggest.js';
+import type { CompleteRequest, SuggestContext } from './suggest-types.js';
 
 /**
  * Hard ceiling on an accepted suggestion. Anything longer is treated as the
@@ -154,16 +157,12 @@ export function normalizePromptSuggestion(raw: string): string | null {
   return isValidPromptSuggestion(s) ? s : null;
 }
 
-/** Minimal completion call shape shared with the Tier-2 engine. */
-export interface PromptCompleteRequest {
-  system: string;
-  user: string;
-  model: string;
-  maxTokens: number;
-  signal: AbortSignal;
-  apiKey?: string;
-  baseUrl?: string;
-}
+/**
+ * Minimal completion call shape shared with the Tier-2 engine.
+ * Alias of the canonical {@link CompleteRequest}; kept as a named export
+ * because callers already import this name.
+ */
+export type PromptCompleteRequest = CompleteRequest;
 
 /** Collaborators injected by the engine so this module stays provider-agnostic. */
 export interface PromptSuggestionDeps {
@@ -177,6 +176,14 @@ export interface PromptSuggestionDeps {
   scrub(s: string): string;
   /** Receives the controller so the engine can abort an in-flight prime. */
   onController(c: AbortController | null): void;
+  /**
+   * Diagnostic sink for a thrown completion (bad auth, 404 model, unreachable
+   * shim). Optional; the engine wires the same `opts.onError` the Tier-2 tier
+   * uses so an empty-prompt failure is visible under `AFK_DEBUG=1` instead of
+   * being silently swallowed. NOT called on the expected abort/timeout path,
+   * which resolves without throwing.
+   */
+  onError?(err: unknown): void;
 }
 
 /**
@@ -231,7 +238,12 @@ export async function generatePromptSuggestion(
     if (candidate === null) return null;
     const scrubbed = deps.scrub(candidate).trim();
     return scrubbed.length > 0 ? scrubbed : null;
-  } catch {
+  } catch (err) {
+    // Never-throws: a failed suggestion is simply no suggestion. Surface the
+    // cause through the injected sink (same one the Tier-2 tier uses) so a
+    // misconfigured suggestion endpoint is diagnosable rather than presenting
+    // as "the empty-prompt ghost silently never appears".
+    deps.onError?.(err);
     return null;
   } finally {
     clearTimeout(timeoutHandle);

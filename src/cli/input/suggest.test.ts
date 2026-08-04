@@ -631,13 +631,64 @@ describe('primePromptSuggestion', () => {
     expect(engine.peekPromptSuggestion()).toBeNull();
   });
 
-  it('never throws when the provider rejects', async () => {
+  it('never throws and reports the error when the provider rejects', async () => {
+    const error = new Error('provider exploded');
+    const onError = vi.fn();
     const engine = createSuggestEngine({
       completeFn: async () => {
-        throw new Error('provider exploded');
+        throw error;
       },
+      onError,
     });
     await expect(engine.primePromptSuggestion(enabledCtx())).resolves.toBeUndefined();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(error);
+  });
+
+  it('keeps the newer suggestion when an older completion resolves last', async () => {
+    let resolveFirst: ((value: string) => void) | undefined;
+    let resolveSecond: ((value: string) => void) | undefined;
+    const completeFn = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => { resolveFirst = resolve; }),
+      )
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => { resolveSecond = resolve; }),
+      );
+    const engine = createSuggestEngine({ completeFn });
+
+    const first = engine.primePromptSuggestion(enabledCtx());
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf('function'));
+    const second = engine.primePromptSuggestion(enabledCtx());
+    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf('function'));
+
+    resolveSecond?.('newer action');
+    await second;
+    expect(engine.peekPromptSuggestion()).toBe('newer action');
+
+    resolveFirst?.('stale action');
+    await first;
+    expect(engine.peekPromptSuggestion()).toBe('newer action');
+  });
+
+  it('dispose aborts the current prompt-suggestion request', async () => {
+    let signal: AbortSignal | undefined;
+    const engine = createSuggestEngine({
+      completeFn: (req) => {
+        signal = req.signal;
+        return new Promise<string>(() => {});
+      },
+    });
+
+    const prime = engine.primePromptSuggestion(enabledCtx());
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    expect(signal?.aborted).toBe(false);
+
+    engine.dispose();
+    expect(signal?.aborted).toBe(true);
+    await prime;
     expect(engine.peekPromptSuggestion()).toBeNull();
   });
 
