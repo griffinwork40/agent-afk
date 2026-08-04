@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.93.2] - 2026-08-04
+
+### Fixed
+- resolve palette at call time so theme swaps actually reach the UI (#898) (4d09deb)
+
 ## [5.93.1] - 2026-08-04
 
 ### Changed
