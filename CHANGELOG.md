@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.93.0] - 2026-08-04
+
+### Added
+- reacting goblin mini-sprite in a constant right-aligned band (#336) (#888) (2f8bf9c)
+
 ## [5.92.1] - 2026-08-03
 
 ### Changed
