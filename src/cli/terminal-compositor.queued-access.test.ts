@@ -8,7 +8,14 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { peekQueuedText, dropQueued, type QueuedAccessHost } from './terminal-compositor.queued-access.js';
+import {
+  peekQueuedText,
+  reserveQueued,
+  releaseQueued,
+  isQueuedReserved,
+  dropQueued,
+  type QueuedAccessHost,
+} from './terminal-compositor.queued-access.js';
 import type { SubmissionPayload } from './terminal-compositor.types.js';
 
 const payload = (text: string, attachments: SubmissionPayload['attachments'] = []): SubmissionPayload => ({
@@ -19,6 +26,7 @@ const payload = (text: string, attachments: SubmissionPayload['attachments'] = [
 function host(pending: SubmissionPayload[]): QueuedAccessHost & { repaint: ReturnType<typeof vi.fn> } {
   return {
     pendingSubmissions: pending,
+    queuedReservations: new Set(),
     queued: pending.length > 0,
     postEscCoalesce: false,
     postEscPayload: null,
@@ -58,6 +66,22 @@ describe('peekQueuedText', () => {
 
   it('returns undefined for a whitespace-only queue', () => {
     expect(peekQueuedText(host([payload('  '), payload('\n')]))).toBeUndefined();
+  });
+});
+
+describe('queue reservation', () => {
+  it('is explicitly owned by one compositor and releases without cross-instance leakage', () => {
+    const sharedPayload = payload('redirect');
+    const owner = host([sharedPayload]);
+    const other = host([sharedPayload]);
+    const snapshot = peekQueuedText(owner)!;
+
+    reserveQueued(owner, snapshot);
+    expect(isQueuedReserved(owner, sharedPayload)).toBe(true);
+    expect(isQueuedReserved(other, sharedPayload)).toBe(false);
+
+    releaseQueued(owner, snapshot);
+    expect(isQueuedReserved(owner, sharedPayload)).toBe(false);
   });
 });
 

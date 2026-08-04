@@ -2088,12 +2088,14 @@ describe('SubagentExecutor', () => {
 
     function promotableExecutor(
       registry: InstanceType<typeof BackgroundAgentRegistry>,
+      traceWriter?: { write(event: unknown): Promise<void> },
     ): SubagentExecutor {
       return new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
         backgroundRegistry: registry,
+        ...(traceWriter !== undefined ? { traceWriter: traceWriter as never } : {}),
         depth: 0,
       });
     }
@@ -2186,11 +2188,12 @@ describe('SubagentExecutor', () => {
     // happens exactly once across N promotions, or not at all (which is what
     // tells the REPL to keep the message queued).
     // -----------------------------------------------------------------------
-    it('queued note rides the promotion tool_result and marks the claim', async () => {
+    it('queued note rides the structural carrier and emits a redacted witness event', async () => {
       const registry = new BackgroundAgentRegistry({});
       const { handle } = hangingHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
-      const exec = promotableExecutor(registry);
+      const traceWriter = { write: vi.fn(async () => undefined) };
+      const exec = promotableExecutor(registry, traceWriter);
 
       const execPromise = exec.execute(makeCall({ input: { prompt: 'deep investigation' } }));
       await tick();
@@ -2201,10 +2204,22 @@ describe('SubagentExecutor', () => {
       expect(claim.claimed).toBe(true);
 
       const result = await execPromise;
-      const content = result.content as string;
-      const payload = JSON.parse(content);
+      const payload = JSON.parse(result.content);
       expect(payload.status).toBe('running');
-      expect(payload.queuedUserMessage).toBe('actually check the tests first');
+      expect(payload.queuedUserMessage).toBeUndefined();
+      expect(result.harnessUserMessage).toEqual({
+        kind: 'queued_user_message',
+        text: 'actually check the tests first',
+      });
+      expect(traceWriter.write).toHaveBeenCalledWith({
+        kind: 'queued_user_message',
+        payload: expect.objectContaining({
+          jobId: expect.any(String),
+          subagentId: expect.any(String),
+          byteLength: Buffer.byteLength('actually check the tests first'),
+        }),
+      });
+      expect(JSON.stringify(traceWriter.write.mock.calls)).not.toContain('actually check the tests first');
     });
 
     it('queued note is delivered EXACTLY ONCE across two promoted subagents', async () => {
@@ -2225,9 +2240,9 @@ describe('SubagentExecutor', () => {
       const claim = { text: 'stop and read this', claimed: false };
       expect(await exec.promoteActiveForeground(claim)).toHaveLength(2);
 
-      const c1 = (await p1).content as string;
-      const c2 = (await p2).content as string;
-      const carriers = [c1, c2].filter((c) => JSON.parse(c).queuedUserMessage !== undefined);
+      const r1 = await p1;
+      const r2 = await p2;
+      const carriers = [r1, r2].filter((result) => result.harnessUserMessage !== undefined);
       expect(carriers).toHaveLength(1);
     });
 

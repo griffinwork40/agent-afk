@@ -73,9 +73,7 @@ function truncateBytes(text: string): string {
   return chars.slice(0, lo).join('') + TRUNCATION_MARKER;
 }
 
-/**
- * Build the value for the harness-owned `queuedUserMessage` JSON field.
- */
+/** Build the bounded text for the harness-authenticated user-message carrier. */
 export function formatQueuedNote(text: string): string {
   return truncateBytes(text);
 }

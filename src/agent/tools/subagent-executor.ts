@@ -844,6 +844,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
       childManager,
       identity,
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       depth,
       parentSessionId: this.ctx.parentSession.sessionId,
       registry: this.ctx.backgroundRegistry,

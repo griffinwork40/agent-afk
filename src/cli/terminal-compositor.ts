@@ -324,6 +324,8 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces.
    */
   pendingSubmissions: SubmissionPayload[] = [];
+  /** Payload identities owned by an in-flight Ctrl+B flush on this compositor. */
+  readonly queuedReservations = new Set<SubmissionPayload>();
 
   /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
   handleKeypress: ((char: string | undefined, key: KeyInfo) => void) | null = null;
@@ -906,6 +908,14 @@ export class TerminalCompositor {
    */
   peekQueuedText(): QueuedAccess.QueuedSnapshot | undefined {
     return QueuedAccess.peekQueuedText(this);
+  }
+
+  reserveQueued(snapshot: QueuedAccess.QueuedSnapshot): void {
+    QueuedAccess.reserveQueued(this, snapshot);
+  }
+
+  releaseQueued(snapshot: QueuedAccess.QueuedSnapshot): void {
+    QueuedAccess.releaseQueued(this, snapshot);
   }
 
   /**

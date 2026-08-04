@@ -19,6 +19,7 @@ import type { SubmissionPayload } from './terminal-compositor.types.js';
  */
 export interface QueuedAccessHost {
   pendingSubmissions: SubmissionPayload[];
+  readonly queuedReservations: Set<SubmissionPayload>;
   queued: boolean;
   postEscCoalesce: boolean;
   postEscPayload: SubmissionPayload | null;
@@ -30,6 +31,21 @@ export interface QueuedSnapshot {
   readonly preview: string;
   /** Opaque payload identities used to consume exactly this snapshot. */
   readonly payloads: readonly SubmissionPayload[];
+}
+
+/** Reserve a snapshot on its owning compositor until promotion settles. */
+export function reserveQueued(self: QueuedAccessHost, snapshot: QueuedSnapshot): void {
+  for (const payload of snapshot.payloads) self.queuedReservations.add(payload);
+}
+
+/** Release a failed/unclaimed snapshot back to the ordinary idle drain. */
+export function releaseQueued(self: QueuedAccessHost, snapshot: QueuedSnapshot): void {
+  for (const payload of snapshot.payloads) self.queuedReservations.delete(payload);
+}
+
+/** Whether this compositor's Ctrl+B flush currently owns the payload. */
+export function isQueuedReserved(self: QueuedAccessHost, payload: SubmissionPayload): boolean {
+  return self.queuedReservations.has(payload);
 }
 
 /**
@@ -75,6 +91,7 @@ export function peekQueuedText(self: QueuedAccessHost): QueuedSnapshot | undefin
  */
 export function dropQueued(self: QueuedAccessHost, snapshot: QueuedSnapshot): number {
   const included = new Set(snapshot.payloads);
+  releaseQueued(self, snapshot);
   const dropped = self.pendingSubmissions.reduce((n, payload) => n + Number(included.has(payload)), 0);
   if (dropped === 0) return 0;
   self.pendingSubmissions = self.pendingSubmissions.filter((payload) => !included.has(payload));

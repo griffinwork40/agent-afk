@@ -20,6 +20,8 @@
 /** Structural view of the compositor's out-of-band queue door. */
 export interface QueuedFlushCompositor {
   peekQueuedText(): QueuedFlushSnapshot | undefined;
+  reserveQueued?(snapshot: QueuedFlushSnapshot): void;
+  releaseQueued?(snapshot: QueuedFlushSnapshot): void;
   dropQueued(snapshot: QueuedFlushSnapshot): number;
 }
 
@@ -76,11 +78,17 @@ export async function promoteWithQueuedFlush(
   compositor: QueuedFlushCompositor | null,
   persist?: (text: string) => Promise<void> | void,
 ): Promise<QueuedFlushResult> {
-  // Peek only — see the module note on why the drain cannot happen up front.
   const snapshot = compositor?.peekQueuedText();
   const claim = snapshot !== undefined ? { text: snapshot.text, claimed: false } : undefined;
+  if (snapshot !== undefined) compositor?.reserveQueued?.(snapshot);
 
-  const jobs = await control.promoteActiveForeground(claim);
+  let jobs: readonly { jobId: string; label: string }[];
+  try {
+    jobs = await control.promoteActiveForeground(claim);
+  } catch (error) {
+    if (snapshot !== undefined) compositor?.releaseQueued?.(snapshot);
+    throw error;
+  }
 
   // Ordering: the drop must follow the claim check, and the claim is only set
   // once a promotion has handed its subagent to the registry. Dropping any
@@ -99,5 +107,6 @@ export async function promoteWithQueuedFlush(
     compositor.dropQueued(snapshot);
     return { jobs, flushedText: claim.text, flushedPreview: snapshot.preview };
   }
+  if (snapshot !== undefined) compositor?.releaseQueued?.(snapshot);
   return { jobs };
 }

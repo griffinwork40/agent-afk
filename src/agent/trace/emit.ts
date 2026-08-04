@@ -27,6 +27,7 @@ import type {
   ClosurePayload,
   CompactionPayloadInput,
   HookDecisionPayload,
+  QueuedUserMessagePayload,
   SessionPhasePayload,
   SubagentLifecyclePayload,
   ToolCallPayload,
@@ -150,6 +151,18 @@ export async function emitBrowserEvent(
     await writer.write({ kind: 'browser_event', payload });
   } catch (err) {
     debugLog(`trace.emit browser_event failed: ${stringifyError(err)}`);
+  }
+}
+
+export async function emitQueuedUserMessage(
+  writer: TraceWriter | undefined,
+  payload: QueuedUserMessagePayload,
+): Promise<void> {
+  if (!writer) return;
+  try {
+    await writer.write({ kind: 'queued_user_message', payload });
+  } catch (err) {
+    debugLog(`trace.emit queued_user_message failed: ${stringifyError(err)}`);
   }
 }
 

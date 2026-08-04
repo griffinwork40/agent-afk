@@ -23,6 +23,8 @@ import type { SubagentManager } from '../../subagent.js';
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
+import type { TraceWriter } from '../../trace/index.js';
+import { emitQueuedUserMessage } from '../../trace/emit.js';
 import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, measurePartial, buildFailurePayload } from './failure-payload.js';
@@ -72,6 +74,7 @@ export interface RunForegroundArgs {
   childManager: SubagentManager | undefined;
   /** Routing-decision identity fields (empty when this executor lacks a surface). */
   identity: { origin?: TraceOrigin; actor?: TraceActor };
+  traceWriter?: TraceWriter;
   depth: number;
   /** Optional: `IAgentSession.sessionId` is `string | undefined`; forwarded as-is into telemetry + registry (preserves the pre-extraction contract). */
   parentSessionId: string | undefined;
@@ -124,6 +127,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     parentModel,
     childManager,
     identity,
+    traceWriter,
     depth,
     parentSessionId,
     registry,
@@ -242,12 +246,21 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // keep the message queued instead of dropping it.
           const queuedUserMessage = claimQueuedNote(outcome.queuedNote);
           if (queuedUserMessage !== undefined) {
-            // Keep user authority in a harness-owned top-level JSON field.
-            // Subagent output can only occur as an escaped JSON string value,
-            // so it cannot synthesize this field by printing lookalike text.
-            promotedPayload['queuedUserMessage'] = queuedUserMessage;
+            // Ordering invariant: claim → witness → structural carrier. The trace
+            // records only size/job identity (never raw user text), and the model
+            // receives authority outside child-controlled `content`.
+            await emitQueuedUserMessage(traceWriter, {
+              jobId: job.jobId,
+              subagentId: job.subagentId,
+              byteLength: Buffer.byteLength(queuedUserMessage, 'utf8'),
+            });
           }
-          const promotedResult: ToolResult = { content: JSON.stringify(promotedPayload) };
+          const promotedResult: ToolResult = {
+            content: JSON.stringify(promotedPayload),
+            ...(queuedUserMessage !== undefined
+              ? { harnessUserMessage: { kind: 'queued_user_message' as const, text: queuedUserMessage } }
+              : {}),
+          };
           return promotedResult;
         } catch (e) {
           // Cap hit (or registry refusal): stay foreground. Mark the trigger

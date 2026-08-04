@@ -155,6 +155,25 @@ describe('TerminalCompositor — input mode + onSubmit (Stage 3a)', () => {
       expect(c.getBuffer().text).toBe('q');
     });
 
+    it('an actual idle transition cannot drain a Ctrl+B-reserved payload', async () => {
+      const onSubmit = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSubmit });
+      await c.arm();
+      stdin.emit('keypress', 'q', { name: 'q', sequence: 'q' });
+      stdin.emit('keypress', undefined, { name: 'return' });
+      const snapshot = c.peekQueuedText()!;
+      c.reserveQueued(snapshot);
+
+      c.setInputMode('idle');
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(c.getPendingCount()).toBe(1);
+
+      c.releaseQueued(snapshot);
+      c.setInputMode('idle');
+      expect(onSubmit).toHaveBeenCalledOnce();
+      expect(onSubmit).toHaveBeenCalledWith({ text: 'q', attachments: [] });
+    });
+
     it('idle → idle with queued buffer + handler flushes (race between readLine calls)', async () => {
       // Scenario: between two readLine calls, the user types + Enter
       // while no onSubmit is installed. The Enter falls through to the

@@ -9,6 +9,7 @@
  */
 
 import { type InputCoreState } from './input-core.js';
+import { isQueuedReserved } from './terminal-compositor.queued-access.js';
 import type { ImageAttachment } from './input/attachments.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type {
@@ -63,6 +64,8 @@ export interface InputModeHost {
    * turn. The live buffer is NOT part of this queue.
    */
   pendingSubmissions: SubmissionPayload[];
+  /** In-flight Ctrl+B ownership, scoped to this compositor instance. */
+  readonly queuedReservations: Set<SubmissionPayload>;
 
   /** Live input buffer. */
   input: InputCoreState;
@@ -263,10 +266,15 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
   // commit time in handleEnter), so no live-buffer read is needed here.
   if (mode === 'idle' && self.pendingSubmissions.length > 0 && self.onSubmit) {
     const handler = self.onSubmit;
+    // Reservation protocol: Ctrl+B owns its snapshotted prefix until promotion
+    // settles. Idle may fire during that await, so it must not drain through the
+    // reservation; later submissions remain behind it to preserve FIFO order.
+    const payload = self.pendingSubmissions[0]!;
+    if (isQueuedReserved(self, payload)) return;
     // Shift BEFORE invoking the handler so a reentrant call back into this
     // compositor (e.g. the handler synchronously flips mode again) observes
     // the already-consumed queue and cannot double-fire the same payload.
-    const payload = self.pendingSubmissions.shift()!;
+    self.pendingSubmissions.shift();
     self.queued = self.pendingSubmissions.length > 0;
     // The coalesced post-ESC redirect is now draining to a running turn — end
     // the epoch so input typed against the NEW turn is normal (sequential)

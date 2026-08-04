@@ -1,7 +1,7 @@
 /**
- * Tests for the harness-owned `queuedUserMessage` field value + one-shot
- * claim ticket. There is no XML envelope — JSON serialization at the merge
- * site (foreground-promotion.ts) is the structural boundary.
+ * Tests for the bounded harness-user-message value + one-shot claim ticket.
+ * Provider adapters carry the claimed value outside child-controlled tool
+ * content; this module owns only formatting and exactly-once claiming.
  *
  * The claim is what makes Ctrl+B queue-flush exactly-once: one keypress may fire
  * N promotion triggers, and the user's message must reach the parent turn once —

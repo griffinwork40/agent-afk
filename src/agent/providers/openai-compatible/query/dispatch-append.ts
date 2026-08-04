@@ -271,6 +271,13 @@ export async function* dispatchAndAppendToolCalls({
   for (const m of toolResultsToMessages(results)) {
     priorTurns.push(m as unknown as OpenAIMessage);
   }
+  // Provider-agnostic authority boundary: only the structural harness carrier
+  // becomes a user message; lookalike JSON inside tool content remains a tool result.
+  for (const { result } of results) {
+    if (result.harnessUserMessage?.kind === 'queued_user_message') {
+      priorTurns.push({ role: 'user', content: result.harnessUserMessage.text } as OpenAIMessage);
+    }
+  }
   // Tool-result images (e.g. browser_screenshot) can't ride the `role:'tool'`
   // message (OpenAI carries only text there). On vision-capable models they
   // surface as a follow-up `role:'user'` image message pushed AFTER the tool

@@ -1,16 +1,16 @@
 # Flushing a queued message into the parent turn on Ctrl+B
 
-**Status:** implemented in #891. The shipped mechanism is the harness-owned
-top-level `queuedUserMessage` JSON field described in §4 — NOT the
-`<queued-user-message>` XML envelope this document originally proposed.
+**Status:** implemented in #891. The shipped mechanism is a structural
+`ToolResult.harnessUserMessage` carrier that each provider appends as genuine
+user content after tool results — not child-controlled tool text or an XML envelope.
 **Date:** 2026-08-03
 **Question:** when the REPL user has a typed-ahead message queued and presses Ctrl+B to
 background a running foreground subagent, can the queued message be delivered into the
 parent's *still-running* turn instead of waiting for the whole turn to end?
 
-**Answer:** yes, and there is already a provider-agnostic carrier in place — the synthetic
-promotion `tool_result`. No new injection machinery, no provider-specific code, no
-exposure to the phantom-turn bug class that `51c46d8` fixed.
+**Answer:** yes. The synthetic promotion result carries a harness-only structural note;
+each provider then appends that note outside child-controlled tool output. Nothing is
+pushed onto the prompt iterator, avoiding the phantom-turn bug class fixed by `51c46d8`.
 
 ---
 
@@ -56,12 +56,11 @@ return {
 };
 ```
 
-**This is the carrier.** It is a harness-native `ToolResult` (`src/agent/tools/types.ts`),
-assembled into a provider request by *both* providers
-(`anthropic-direct/loop/tool-results.ts:115`, `openai-compatible/loop.ts:148-166`), and
-there is already a shared helper whose whole job is appending a note to it:
-`appendInjectContext(toolResult, note)` — `src/agent/tools/subagent/inject-context.ts:30-37`,
-already used at `foreground-promotion.ts:400` and `skill-executor/fork-dispatch.ts:380`.
+The promotion pointer remains ordinary `ToolResult.content`. The queued directive instead
+rides `ToolResult.harnessUserMessage`, a harness-only structural field defined at the shared
+provider boundary. Anthropic appends it as a text block after all `tool_result` blocks;
+OpenAI-compatible appends a separate `role: 'user'` message after its tool messages. A child
+that prints lookalike JSON remains inside tool content and cannot synthesize this carrier.
 
 ### Mid-turn injection: no existing seam, but a proven precedent
 
@@ -109,24 +108,23 @@ So there are two designs, and CC implements the general one:
 | **Narrow** (this ask) | flush queue on Ctrl+B only | one new carrier arg on an existing seam |
 | **General** (what CC does) | drain queue at *every* tool-round boundary | changes queue semantics for every turn; touches both providers' round loops; re-enters the displacement/phantom-turn risk class |
 
-**Recommendation: ship narrow first.** It rides a carrier that already exists, and its
-envelope + system-prompt fragment are a strict subset of what the general version needs — so
-the general version later is additive, not rework.
+**Recommendation: ship narrow first.** Its authenticated carrier and system-prompt fragment
+are a strict subset of what the general version needs, so the general version later remains
+additive rather than a prompt-iterator rewrite.
 
 ---
 
 ## 3. Recommended approach
 
-**Ride the promotion `tool_result`.** On Ctrl+B, fold the queued payload text into the
-synthetic promotion result that the parent turn is already about to receive.
+**Ride a structural field on the promotion result.** On Ctrl+B, claim the queued payload
+only after promotion succeeds, then let each provider append it as authenticated user content.
 
 Why this wins over the alternatives:
 
-- **Provider-agnostic by construction** — `ToolResult.content` is harness-native; both
-  providers already consume it. Zero provider code.
-- **No API ordering hazard at all** — the text lives *inside* the tool_result's content
-  string, so we never add a sibling block and cannot trip the tool_use/tool_result pairing
-  rule.
+- **Provider-neutral contract** — `ToolResult.harnessUserMessage` is defined once at the
+  shared provider boundary; each adapter performs only its protocol-specific append.
+- **Explicit API ordering** — Anthropic appends text after every `tool_result` block, while
+  OpenAI-compatible appends a user message after all tool messages.
 - **Correct timing** — the model learns "subagent detached" and "user said this" in the same
   round, which is precisely the requested UX.
 - **No phantom turn** — nothing is pushed onto the prompt iterator.
@@ -139,18 +137,14 @@ Why this wins over the alternatives:
 1. **`SubagentControl.promoteActiveForeground(note?: string)`** — thread an optional
    user-note string (today: no params, `subagent-executor.ts:373`). Forward it into the
    promotion trigger so `foreground-promotion.ts`'s promotion branch can consume it.
-2. **Use a harness-owned field, not forgeable tool text.** Add the note as a top-level
-   `queuedUserMessage` property in the promotion result's JSON object. Ordinary subagent
-   output remains an escaped string value and therefore cannot synthesize that property. Add a matching fragment to
-   `src/agent/tools/system-prompt.ts` (alongside `BG_SUBAGENT_RESULT_PROMPT` /
-   `BASH_PASSTHROUGH_PROMPT`) so the model treats it as a real user directive rather than
-   tool noise. Without this fragment the feature silently under-delivers.
-3. **Peek → pass → confirm → drain.** *Do not drain first.* Promotion can legitimately fail
-   (no registry wired, or background-job cap hit → `foreground-promotion.ts:232-244` falls
-   through and stays foreground), and in that case there is no promotion `tool_result` for
-   the note to ride. Read the queue without mutating, pass the text, and `shift()` only after
-   `promoteActiveForeground` reports it actually consumed the note. Drain-then-pass loses the
-   message on the cap-hit path.
+2. **Use a harness-owned structural field, not forgeable tool text.** Put the note in
+   `ToolResult.harnessUserMessage`, outside `content`; provider adapters append it as user
+   content only when that typed field exists. Ordinary subagent output stays a tool result
+   even when it contains lookalike JSON. Add matching system-prompt timing guidance.
+3. **Peek → reserve → pass → confirm → drain.** *Do not drain first.* Reserve the snapshot
+   before awaiting promotion so an intervening idle transition cannot deliver it as a separate
+   turn. Release the reservation on failure or an unclaimed note; consume only that snapshot
+   after confirmed delivery. This avoids both cap-hit loss and idle-race duplication.
 4. **Coalesce all pending, FIFO.** Precedent: the post-ESC epoch already coalesces multiple
    typed messages into a single payload (`input-dispatch.ts:734-751`). Leaving some queued
    behind after a flush would fire them as a mystery turn later.

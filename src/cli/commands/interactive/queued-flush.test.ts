@@ -19,12 +19,16 @@ import {
 type Claim = { readonly text: string; claimed: boolean };
 
 function compositor(queuedText: string | undefined): QueuedFlushCompositor & {
+  reserveQueued: ReturnType<typeof vi.fn>;
+  releaseQueued: ReturnType<typeof vi.fn>;
   dropQueued: ReturnType<typeof vi.fn>;
 } {
   return {
     peekQueuedText: () => queuedText === undefined ? undefined : {
       text: queuedText, preview: queuedText, payloads: [{}],
     },
+    reserveQueued: vi.fn(),
+    releaseQueued: vi.fn(),
     dropQueued: vi.fn(() => 1),
   };
 }
@@ -72,6 +76,7 @@ describe('promoteWithQueuedFlush', () => {
 
     expect(out.flushedText).toBeUndefined();
     expect(comp.dropQueued).not.toHaveBeenCalled();
+    expect(comp.releaseQueued).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT drain when a job was promoted but the note went unclaimed', async () => {
@@ -83,6 +88,18 @@ describe('promoteWithQueuedFlush', () => {
 
     expect(out.jobs).toEqual(oneJob);
     expect(out.flushedText).toBeUndefined();
+    expect(comp.dropQueued).not.toHaveBeenCalled();
+  });
+
+  it('releases the reservation when promotion throws', async () => {
+    const comp = compositor('survive failure');
+    const ctrl: QueuedFlushControl = {
+      hasPromotableForeground: () => true,
+      promoteActiveForeground: async () => { throw new Error('promotion failed'); },
+    };
+
+    await expect(promoteWithQueuedFlush(ctrl, comp)).rejects.toThrow('promotion failed');
+    expect(comp.releaseQueued).toHaveBeenCalledTimes(1);
     expect(comp.dropQueued).not.toHaveBeenCalled();
   });
 
@@ -112,6 +129,7 @@ describe('promoteWithQueuedFlush', () => {
         order.push('peek');
         return { text: 'text', preview: 'text', payloads: [{}] };
       },
+      reserveQueued: () => { order.push('reserve'); },
       dropQueued: () => {
         order.push('drop');
         return 1;
@@ -127,7 +145,7 @@ describe('promoteWithQueuedFlush', () => {
     };
 
     await promoteWithQueuedFlush(ctrl, comp);
-    expect(order).toEqual(['peek', 'promote', 'drop']);
+    expect(order).toEqual(['peek', 'reserve', 'promote', 'drop']);
   });
 
   it('persists the delivered directive before consuming its snapshot', async () => {

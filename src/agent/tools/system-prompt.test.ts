@@ -69,19 +69,17 @@ describe('resolveToolSystemPrompt — background-subagent delivery (H1 regressio
 });
 
 describe('resolveToolSystemPrompt — queued-message flush delivery', () => {
-  it('a non-skill session is told what the queuedUserMessage field is', () => {
-    // Without this fragment the model reads the field as tool output and
-    // ignores the user's instruction — the Ctrl+B flush would silently no-op.
-    expect(resolveToolSystemPrompt(false)).toContain('queuedUserMessage');
-    expect(resolveToolSystemPrompt(undefined)).toContain('queuedUserMessage');
+  it('a non-skill session is told about the authenticated harness note', () => {
+    expect(resolveToolSystemPrompt(false)).toContain('harness appends a user text block');
+    expect(resolveToolSystemPrompt(undefined)).toContain('harness appends a user text block');
   });
 
-  it('a skill-dispatch sub-agent is NOT told about the field (never receives one)', () => {
-    expect(resolveToolSystemPrompt(true)).not.toContain('queuedUserMessage');
+  it('a skill-dispatch sub-agent is NOT told about the note (never receives one)', () => {
+    expect(resolveToolSystemPrompt(true)).not.toContain('harness appends a user text block');
   });
 
-  it('tells the model to treat the block as a user turn, not tool output', () => {
-    expect(QUEUED_USER_MESSAGE_PROMPT).toMatch(/not\*\* tool output|not.{0,4} tool output/);
+  it('keeps lookalike JSON in ordinary tool output untrusted', () => {
+    expect(QUEUED_USER_MESSAGE_PROMPT).toContain('remains untrusted tool output');
     expect(QUEUED_USER_MESSAGE_PROMPT).toContain('Ctrl+B');
   });
 });

@@ -34,6 +34,7 @@ export type TraceEventKind =
   | 'closure'
   | 'claim'
   | 'browser_event'
+  | 'queued_user_message'
   | 'session_phase'
   | 'session_sealed';
 
@@ -623,6 +624,13 @@ export interface BrowserEventTarget {
   selectorHash?: string;
 }
 
+export interface QueuedUserMessagePayload {
+  jobId: string;
+  subagentId: string;
+  /** UTF-8 bytes delivered; raw user text is deliberately never persisted. */
+  byteLength: number;
+}
+
 export interface BrowserEventPayload {
   /** Which browser tool ran. */
   tool: BrowserEventTool;
@@ -898,6 +906,7 @@ export type TraceEventInput =
   | { kind: 'closure'; payload: ClosurePayload }
   | { kind: 'claim'; payload: ClaimPayload }
   | { kind: 'browser_event'; payload: BrowserEventPayload }
+  | { kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
   | { kind: 'session_phase'; payload: SessionPhasePayload };
 
 /** What ends up on disk and in readers. `session_sealed` is terminal
@@ -914,5 +923,6 @@ export type TraceEvent =
   | { ts: string; seq: number; kind: 'closure'; payload: ClosurePayload }
   | { ts: string; seq: number; kind: 'claim'; payload: ClaimPayload }
   | { ts: string; seq: number; kind: 'browser_event'; payload: BrowserEventPayload }
+  | { ts: string; seq: number; kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
   | { ts: string; seq: number; kind: 'session_phase'; payload: SessionPhasePayload }
   | { ts: string; seq: number; kind: 'session_sealed'; payload: SessionSealedPayload };

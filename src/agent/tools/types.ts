@@ -8,11 +8,12 @@
  * @module agent/tools/types
  */
 
-export type { ToolCall, ToolResult, RenderHints } from '../providers/anthropic-direct/types.js';
+export type { ToolCall } from '../providers/anthropic-direct/types.js';
+export type { ToolResult, RenderHints } from '../providers/shared/tool-result.js';
 export type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
 
-import type { ToolResult } from '../providers/anthropic-direct/types.js';
+import type { ToolResult } from '../providers/shared/tool-result.js';
 import type { TraceWriter } from '../trace/index.js';
 
 /**
