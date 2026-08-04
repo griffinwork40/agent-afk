@@ -635,7 +635,7 @@ export class StreamRenderer {
       //
       // Also fire on an ERRORED tool result even when the stage did not change:
       // a failed tool inside a parallel wave leaves other tools pending, so the
-      // stage stays 'acting' and the live mascot would never learn about the
+      // stage stays 'acting' and the mascot band would never learn about the
       // error. Consumers are idempotent repaints (LoopStageBar.repaint is a
       // no-op re-render of the same stage), so the extra fire is free.
       const toolErrored =

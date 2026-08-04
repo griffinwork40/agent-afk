@@ -1021,7 +1021,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_GOBLIN_MASCOT',
-    description: 'Reacting goblin sprite in a reserved footer band, right-aligned and present for the whole session (3 rows; animated while the agent runs tools, resting otherwise). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.',
+    description: 'Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.',
     type: 'boolean',
     required: false,
     example: '1',
