@@ -103,8 +103,12 @@ const CHALK_STYLE_RE = /\bchalk\s*\.\s*(?!level\b)([A-Za-z][A-Za-z0-9]*)/g;
  * because this pattern requires a literal `[` immediately after the escape —
  * so ANSI *parsers* and *strippers* are exempt by construction while ANSI
  * *emitters* are caught.
+ *
+ * Hex digits are matched case-insensitively per-alternative, not via the `i`
+ * flag — `\x1B` is `\x1b`, but `i` would also match `\E[` (not ESC) and a
+ * trailing `M` (not SGR), both false positives.
  */
-const RAW_SGR_RE = /\\(?:x1b|u001b|u\{1b\}|e|033)\[([0-9;]*)m/g;
+const RAW_SGR_RE = /\\(?:x1[bB]|u001[bB]|u\{0*1[bB]\}|e|033)\[([0-9;]*)m/g;
 
 /**
  * SGR parameters that set a color or a text attribute. Anything here means the
