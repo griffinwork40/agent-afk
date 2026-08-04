@@ -102,7 +102,7 @@ export async function runReplLoop(
       transcript,
       sigintHandler,
       suggestGhostEnabled,
-      { getLoopStageBar: () => footer?.loopStageBar, getMascotBar: () => footer?.mascotBar },
+      { getLoopStageBar: () => footer?.loopStageBar, getLiveMascot: () => footer?.liveMascot },
     );
 
     footer = setupFooterSubsystems(ctx, turnState);
@@ -132,17 +132,18 @@ export async function runReplLoop(
     // notices into a buffer that will never drain.
     footer?.bgResultNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
-    // painted before the counts below it change. LoopStageBar positions from
-    // the full extraRows, so it must clear before mascotBar/bgStatusBar/
-    // verdictLedger shrink their counts. The mascot band positions from
-    // bgBarRowCount + ledgerRowCount, so it must clear before those two. The
-    // bg bar's clear row depends on the verdict count (its getAdjacentRows), so
-    // it must clear before the verdict ledger drops ledgerRowCount to 0. The
-    // verdict rail sits at the bottom (row N-1), independent of the others.
+    // painted before the counts below it change. The bg bar's clear row depends
+    // on the verdict count (its getAdjacentRows), so it must clear before the
+    // verdict ledger drops ledgerRowCount to 0. The verdict rail sits at the
+    // bottom (row N-1), independent of the others.
+    //
+    // The live mascot and the loop-stage rail go FIRST, ahead of that order.
+    // Neither owns a reserved row — both are compositor frame content — but
+    // both drive repaints (the mascot's animation ticker, the rail's stage
+    // changes), so they must fall silent before the compositor they repaint is
+    // disarmed rather than after.
+    footer?.liveMascot.stop();
     footer?.loopStageBar.stop();
-    // The mascot band sits between the loop-stage rail and the bg bar, so it
-    // clears after the rail above it and before the counts below it change.
-    footer?.mascotBar.stop();
     footer?.bgStatusBar.stop();
     footer?.verdictLedger.stop();
     footer?.contextPane.dispose();

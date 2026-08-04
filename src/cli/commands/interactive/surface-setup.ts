@@ -14,7 +14,7 @@ import { onQuotaUpdate } from '../../../agent/quota-cache.js';
 import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { LoopStageBar } from './loop-stage.js';
-import type { MascotBar } from './mascot-bar.js';
+import type { LiveMascot } from './mascot-live.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 
 /**
@@ -28,7 +28,7 @@ import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 export interface SurfaceSetupDeps {
   getLoopStageBar: () => LoopStageBar | undefined;
   /** Same lazy-getter contract as {@link getLoopStageBar} (issue #336). */
-  getMascotBar: () => MascotBar | undefined;
+  getLiveMascot: () => LiveMascot | undefined;
 }
 
 export interface SurfaceSetupResult {
@@ -106,6 +106,15 @@ export async function setupSurface(
     //   - Idle: "Press Ctrl+C again to quit" cycle.
     // No per-turn swap needed — the dispatch is mode-aware via turnState.
     onCancel: sigintHandler,
+    // Footer inlining (#336 follow-up): the loop-stage rail and the goblin
+    // sprite are compositor FRAME content now, not reserved DECSTBM rows. That
+    // is what puts the prompt BELOW its own stage rail and lets the sprite
+    // flank the prompt instead of sitting in three mostly-blank rows beneath
+    // it. Both getters are lazy for exactly the same reason `getLoopStageBar`
+    // is (see below): the footer subsystems are constructed AFTER this phase,
+    // and these closures only fire once the compositor begins repainting.
+    getRailRow: () => deps.getLoopStageBar()?.railLine() ?? null,
+    getMascotLines: () => deps.getLiveMascot()?.lines() ?? [],
     onShiftTab: () => {
       // Replicated from the user-turn onShiftTab handler below — the
       // persistent compositor uses ONE onShiftTab across both phases
@@ -352,7 +361,7 @@ export async function setupSurface(
   // the bar exists. Matches the original hoisted-`let loopStageBar` capture.
   ctx.slashCtx.onStageChange = (stage, signals) => {
     deps.getLoopStageBar()?.repaint(stage);
-    deps.getMascotBar()?.onStage(stage, signals);
+    deps.getLiveMascot()?.onStage(stage, signals);
   };
   ctx.slashCtx.onContextProgress = async () => {
     await ctx.contextSampler.refresh();
