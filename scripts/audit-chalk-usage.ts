@@ -38,6 +38,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RAW_SGR_RE, isStylingSgr } from './audit-chalk-sgr.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -93,46 +94,6 @@ interface Violation {
  */
 const CHALK_STYLE_RE = /\bchalk\s*\.\s*(?!level\b)([A-Za-z][A-Za-z0-9]*)/g;
 
-/**
- * Matches a hand-rolled SGR escape literal — `\x1b[33m`, `\u001b[1m`, `\e[0m`.
- * Only the `m` final byte (Select Graphic Rendition) counts: cursor control
- * (`\x1b[2K`, `\x1b[<row>;1H`, `\x1b[s`) shares the CSI prefix but is layout,
- * not styling, and the compositor legitimately owns it.
- *
- * A regex literal that escapes the bracket (`/\x1b\[[0-9;]*m/`) does not match,
- * because this pattern requires a literal `[` immediately after the escape —
- * so ANSI *parsers* and *strippers* are exempt by construction while ANSI
- * *emitters* are caught.
- *
- * Hex digits are matched case-insensitively per-alternative, not via the `i`
- * flag — `\x1B` is `\x1b`, but `i` would also match `\E[` (not ESC) and a
- * trailing `M` (not SGR), both false positives.
- */
-const RAW_SGR_RE = /\\(?:x1[bB]|u001[bB]|u\{0*1[bB]\}|e|033)\[([0-9;]*)m/g;
-
-/**
- * SGR parameters that set a color or a text attribute. Anything here means the
- * literal is styling output, which must go through the palette instead.
- *
- * Contract: a BARE reset (`\x1b[0m` / `\x1b[m`) is deliberately NOT a
- * violation. It opens no color of its own, and ANSI-safe truncation helpers
- * legitimately append one to close a run the *caller* opened (see
- * `src/cli/display.ts`). Every real palette bypass has to open a style first,
- * and that opener is caught here — so exempting the reset costs no coverage
- * while removing a whole false-positive class.
- */
-function isStylingSgr(params: string): boolean {
-  if (params === '' || params === '0') return false;
-  return params.split(';').some((raw) => {
-    const n = Number.parseInt(raw, 10);
-    if (!Number.isInteger(n)) return false;
-    if (n >= 1 && n <= 9) return true; // bold/dim/italic/underline/blink/inverse/hidden/strike
-    if (n >= 30 && n <= 49) return true; // fg + bg, incl. 38/48 extended and 39/49 defaults
-    if (n >= 90 && n <= 97) return true; // bright fg
-    if (n >= 100 && n <= 107) return true; // bright bg
-    return false;
-  });
-}
 
 function walk(dir: string, out: string[]): void {
   if (!fs.existsSync(dir)) return;
