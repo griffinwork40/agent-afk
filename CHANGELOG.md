@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.93.1] - 2026-08-04
+
+### Changed
+- return the goblin mini-sprite to the transient left band (#336) (#900) (f0d78d6)
+
 ## [5.93.0] - 2026-08-04
 
 ### Added
