@@ -29,11 +29,28 @@ export function wrapToWidth(
     return text;
   }
   const w = Math.floor(width);
-  return wrapAnsi(text, w, {
-    hard: opts.breakLongWords ?? false,
-    trim: false,
-    wordWrap: true,
-  });
+  return text
+    .replaceAll('\r\n', '\n')
+    .split('\n')
+    .map((line) => {
+      // wrap-ansi's trim mode removes source indentation along with wrap-boundary
+      // whitespace. Protect only the source line's leading spaces with a private-use
+      // marker absent from that line, then restore them after wrapping. This keeps
+      // intentional list/blockquote indentation while removing generated edge spaces.
+      const indentMarker = Array.from({ length: 256 }, (_, i) => String.fromCodePoint(0xE000 + i))
+        .find((candidate) => !line.includes(candidate));
+      const protectedLine = indentMarker
+        ? line.replace(/^((?:\x1B\[[0-9;]*m)*)( +)/, (_match, ansi: string, spaces: string) =>
+            ansi + indentMarker.repeat(spaces.length),
+          )
+        : line;
+      return wrapAnsi(protectedLine, w, {
+        hard: opts.breakLongWords ?? false,
+        trim: true,
+        wordWrap: true,
+      }).replaceAll(indentMarker ?? '\uE000', ' ');
+    })
+    .join('\n');
 }
 
 /**
