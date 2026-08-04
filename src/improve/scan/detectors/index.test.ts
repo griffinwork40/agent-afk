@@ -184,13 +184,16 @@ function toolPairWithError(toolUseId: string, name: string): string[] {
 describe('runAllDetectors', () => {
   it('default mode skips enabledByDefault:false detectors', () => {
     const session = makeAllPatternSession('s1');
-    // No enabledNames, no includeDisabled → repeated-tool-use AND tool-failure-density
-    // fire (both enabled-by-default); closure-anomaly + subagent-block stay opt-in.
+    // No enabledNames, no includeDisabled → repeated-tool-use, closure-anomaly
+    // and tool-failure-density fire (all three enabled-by-default);
+    // subagent-block + subagent-read-denial stay opt-in.
     const results = runAllDetectors([session], {});
     const patterns = new Set(results.map((r) => r.pattern));
-    expect(patterns).toEqual(new Set(['repeated-tool-use', 'tool-failure-density']));
-    expect(patterns.has('closure-anomaly')).toBe(false);
+    expect(patterns).toEqual(
+      new Set(['repeated-tool-use', 'closure-anomaly', 'tool-failure-density']),
+    );
     expect(patterns.has('subagent-block')).toBe(false);
+    expect(patterns.has('subagent-read-denial')).toBe(false);
     expect(patterns.has('tool-failure-density')).toBe(true);
   });
 
@@ -282,17 +285,26 @@ describe('runAllDetectors', () => {
 // ---------------------------------------------------------------------------
 
 describe('defaultEnabledDetectorNames', () => {
-  it('returns repeated-tool-use and tool-failure-density (registry order)', () => {
+  it('returns repeated-tool-use, closure-anomaly and tool-failure-density (registry order)', () => {
     expect(defaultEnabledDetectorNames()).toEqual([
       'repeated-tool-use',
+      'closure-anomaly',
       'tool-failure-density',
     ]);
   });
 });
 
 describe('disabledByDefaultDetectorNames', () => {
-  it('contains closure-anomaly, subagent-block, subagent-read-denial (in any order)', () => {
+  it('contains subagent-block and subagent-read-denial (in any order)', () => {
     const names = new Set(disabledByDefaultDetectorNames());
-    expect(names).toEqual(new Set(['closure-anomaly', 'subagent-block', 'subagent-read-denial']));
+    expect(names).toEqual(new Set(['subagent-block', 'subagent-read-denial']));
+  });
+
+  it('does NOT contain closure-anomaly — promoted to default-on Aug 2026', () => {
+    // Regression pin: closure-anomaly sat opt-in on a stale docstring claiming
+    // iteration_cap/timeout emission was unwired. Both emit. If this flips back
+    // to disabled, re-read agent-session.ts emission sites before believing it.
+    expect(disabledByDefaultDetectorNames()).not.toContain('closure-anomaly');
+    expect(defaultEnabledDetectorNames()).toContain('closure-anomaly');
   });
 });

@@ -267,7 +267,7 @@ function buildAssertionRationale(args: {
     `After the proposed fix lands, replaying the prefix [seq 0..${args.endSeq}] ` +
     `(${args.sliceLineCount} lines, session ${sidShort}…) through ${args.detectorVersion} ` +
     `must produce zero findings for '${args.patternId}' with the fingerprint at generation time. ` +
-    `**Sprint 3 ships eval-case-as-contract; the runner that enforces this lands in a later sprint.**`
+    `**Enforced by \`afk improve eval-run\`.**`
   );
 }
 
@@ -360,10 +360,12 @@ export function renderEvalCaseMarkdown(ec: EvalCase): string {
   );
   out.push('');
 
-  out.push('> **Sprint 3 disclaimer.** This file is a CONTRACT, not an');
-  out.push('> executable. No runner consumes it yet. A future sprint will');
-  out.push('> replay the fixture through the detector and assert the');
-  out.push('> pattern is absent. Until then this artifact captures intent.');
+  out.push('> **How to run this.** This file is a CONTRACT; the fixture');
+  out.push('> beside it is the executable input. Run it with');
+  out.push('> `afk improve eval-run ' + ec.evalCaseId + '` — the runner');
+  out.push('> replays the fixture through the live guardrail and asserts');
+  out.push('> the recorded failure is neutralised. Patterns with no');
+  out.push('> registered contract report status `unsupported` (exit 3).');
   out.push('');
 
   out.push('## Replay fixture');

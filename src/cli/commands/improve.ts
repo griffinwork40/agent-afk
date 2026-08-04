@@ -93,6 +93,7 @@ import { proposeFromCard } from '../../improve/propose/template-engine.js';
 import {
   generateProposalId,
   getProposal,
+  getProposalsForCard,
   listProposals,
   renderProposalMarkdown,
   writeProposal,
@@ -542,16 +543,39 @@ function registerProposeSubcommand(improve: Command): void {
       '--no-write',
       'Render the proposal without persisting to disk (preview mode)',
     )
+    .option(
+      '--force',
+      'Write even if this card already has a proposal (default: refuse)',
+      false,
+    )
     .action(
       (
         slug: string,
-        opts: { id?: string; json: boolean; write: boolean },
+        opts: { id?: string; json: boolean; write: boolean; force: boolean },
       ) => {
         try {
           const card = getCard(slug);
           if (!card) {
             console.error(`Card not found: ${slug}`);
             process.exit(1);
+          }
+
+          // Refuse to silently stack a near-identical proposal on a card that
+          // already has one. Re-running `propose` on an unchanged card was the
+          // default path to 4x duplicates (tool-failure-compose, browser-open).
+          // Preview mode (--no-write) persists nothing, so it is never gated.
+          if (opts.write !== false && !opts.force) {
+            const existing = getProposalsForCard(slug);
+            if (existing.length > 0) {
+              const ids = existing.map((p) => p.proposalId);
+              console.error(
+                `Card '${slug}' already has ${existing.length} proposal(s):\n` +
+                  ids.map((id) => `  ${id}`).join('\n') +
+                  `\nRe-run with --force to add another, --no-write to preview, ` +
+                  `or inspect with 'afk improve proposals show ${ids[0]}'.`,
+              );
+              process.exit(1);
+            }
           }
 
           const proposalId = opts.id ?? generateProposalId(slug);
@@ -687,6 +711,11 @@ function registerEvalGenSubcommand(improve: Command): void {
       '--no-write',
       'Render the eval-case without persisting to disk (preview mode). Still reads the source trace.',
     )
+    .option(
+      '--force',
+      'Write even if this card already has an eval-case (default: refuse)',
+      false,
+    )
     .action(
       (
         cardSlug: string,
@@ -696,6 +725,7 @@ function registerEvalGenSubcommand(improve: Command): void {
           id?: string;
           json: boolean;
           write: boolean;
+          force: boolean;
         },
       ) => {
         try {
@@ -704,6 +734,25 @@ function registerEvalGenSubcommand(improve: Command): void {
           if (!card) {
             console.error(`Card not found: ${cardSlug}`);
             process.exit(1);
+          }
+
+          // 1b. Same duplicate guard as `propose`: an eval-case slices a
+          //     fixture from a specific evidence row, so a second one for the
+          //     same card is only meaningful with an explicit --evidence-row
+          //     (or --force). Preview mode persists nothing and is never gated.
+          if (opts.write !== false && !opts.force && opts.evidenceRow === undefined) {
+            const existing = getEvalCasesForCard(cardSlug);
+            if (existing.length > 0) {
+              const ids = existing.map((e) => e.evalCaseId);
+              console.error(
+                `Card '${cardSlug}' already has ${existing.length} eval-case(s):\n` +
+                  ids.map((id) => `  ${id}`).join('\n') +
+                  `\nRe-run with --force, target a different row with ` +
+                  `--evidence-row <n>, or --no-write to preview. ` +
+                  `Run the existing one: 'afk improve eval-run ${ids[0]}'.`,
+              );
+              process.exit(1);
+            }
           }
 
           // 2. Validate --proposal existence if provided. The eval-case writer
@@ -989,14 +1038,29 @@ function printEvalRunSummary(evalRun: EvalRun, jsonPath: string, markdownPath: s
 }
 
 /**
- * Set a non-zero exit code when the run found a regression, so the command is
- * usable as a CI / scripting gate (`afk improve eval-run X && …`). `pass` and
- * `unsupported` exit 0 (no regression detected); `fail`/`error` exit 1. Uses
- * `process.exitCode` rather than `process.exit()` so buffered stdout flushes.
+ * Contract: map eval-run status onto a distinct process exit code so the
+ * command is usable as a CI / scripting gate (`afk improve eval-run X && …`).
+ *
+ *   pass        → 0  the recorded failure was re-driven and is neutralised
+ *   fail|error  → 1  a regression, or the runner itself broke
+ *   unsupported → 3  NOTHING WAS CHECKED — the eval-case's pattern has no
+ *                    registered contract (`contracts.ts` resolveContract →
+ *                    undefined), so the run asserted nothing at all
+ *
+ * `unsupported` previously exited 0, which made it indistinguishable from a
+ * real `pass`: wiring this command into CI would have silently green-lit any
+ * pattern lacking a contract (today: `subagent-read-denial`). It gets its own
+ * code rather than 1 so a gate can still choose to tolerate "no contract yet"
+ * without also tolerating a genuine regression. 2 is reserved for CLI argument
+ * errors (see `parsePositiveInt` / `parseRate`).
+ *
+ * Uses `process.exitCode` rather than `process.exit()` so buffered stdout flushes.
  */
-function applyEvalRunExit(status: EvalRun['status']): void {
+export function applyEvalRunExit(status: EvalRun['status']): void {
   if (status === 'fail' || status === 'error') {
     process.exitCode = 1;
+  } else if (status === 'unsupported') {
+    process.exitCode = 3;
   }
 }
 

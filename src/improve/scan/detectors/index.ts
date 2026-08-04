@@ -112,7 +112,15 @@ export const DETECTOR_REGISTRY: readonly DetectorEntry[] = Object.freeze([
   {
     name: 'closure-anomaly',
     description: `Session closure reason ∈ {budget_exceeded,timeout,hook_blocked,abort,iteration_cap,max_turns_exceeded} (default ≥${DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES})`,
-    enabledByDefault: false,
+    // Flipped on by default (Aug 2026) after the opt-in rationale was found
+    // stale: it rested on a docstring claiming `iteration_cap` / `timeout`
+    // emission was "not yet wired", but both have emitted since early July
+    // (78c40833, 1ba29e7e). While the detector sat opt-in, capped subagent
+    // forks accumulated unmetered — a scan of 12,766 local witness traces
+    // found 296 `timeout`/`iteration_cap` closures worth $990 that no default
+    // scan would have surfaced. `abort` stays in-scope but is severity-capped
+    // downstream (abort ≈ user Ctrl+C) so the default floor is not noisy.
+    enabledByDefault: true,
     run: (sessions, opts): DetectorResult[] =>
       detectClosureAnomaly(sessions, {
         minOccurrences:
@@ -134,8 +142,10 @@ export const DETECTOR_REGISTRY: readonly DetectorEntry[] = Object.freeze([
     description: `Tool with ≥N failures (isError: true) AND failure rate ≥R (defaults: ${DEFAULT_TOOL_FAILURE_MIN_FAILURES} failures, ${DEFAULT_TOOL_FAILURE_MIN_RATE} rate)`,
     // Flipped on by default after a two-week noise-floor evaluation (Jun 2026):
     // dual count+rate thresholds produced the highest-signal cards (skill 37.6%,
-    // browser_open 77.8%) with zero false positives. closure-anomaly and
-    // subagent-block stay opt-in (abort≈Ctrl+C ambiguity / fire during active bug fixing).
+    // browser_open 77.8%) with zero false positives. subagent-block and
+    // subagent-read-denial stay opt-in (both fire during active bug fixing and
+    // legitimate worktree confinement); closure-anomaly was promoted to
+    // default-on in Aug 2026 — see its entry above.
     enabledByDefault: true,
     run: (sessions, opts): DetectorResult[] =>
       detectToolFailureDensity(sessions, {
