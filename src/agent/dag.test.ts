@@ -637,16 +637,18 @@ describe('runDAG — maxConcurrency', () => {
     expect(t.peak).toBe(2);
   });
 
-  it('default (no maxConcurrency) does not throttle a typical layer', async () => {
-    const t = { live: 0, peak: 0 };
-    const nodes = ['a', 'b', 'c', 'd'].map((id) => trackedNode(id, 20, t));
+  it('uses the operator env ceiling when maxConcurrency is omitted', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '2');
+    try {
+      const t = { live: 0, peak: 0 };
+      const nodes = ['a', 'b', 'c', 'd'].map((id) => trackedNode(id, 20, t));
+      const result = await runDAG({ nodes, edges: [] }, new AbortController().signal);
 
-    // No maxConcurrency → defaults to DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS (8),
-    // which sits above this 4-node layer, so all four run at once (peak 4).
-    const result = await runDAG({ nodes, edges: [] }, new AbortController().signal);
-
-    expect(result.failed).toEqual([]);
-    expect(t.peak).toBe(4);
+      expect(result.failed).toEqual([]);
+      expect(t.peak).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('does not charge queue-wait against nodeTimeoutMs (timeout fairness)', async () => {

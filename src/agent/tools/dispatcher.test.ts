@@ -1060,6 +1060,25 @@ describe('SessionToolDispatcher', () => {
         return { state, handler };
       }
 
+      it('uses the operator env ceiling when no explicit limit is supplied', async () => {
+        vi.stubEnv('AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS', '2');
+        try {
+          const { state, handler } = makeConcurrencyProbe();
+          const dispatcher = makeDispatcher({
+            handlers: new Map([['read_file', handler]]),
+            permissions: { allowedTools: ['read_file'] },
+          });
+
+          const calls = Array.from({ length: 6 }, (_, i) =>
+            makeBatchCall('read_file', `env-read-${i}`),
+          );
+          await dispatcher.executeBatch(calls);
+          expect(state.peak).toBe(2);
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      });
+
       it('caps simultaneous in-flight safe calls at the configured limit', async () => {
         const { state, handler } = makeConcurrencyProbe();
         const dispatcher = makeDispatcher({

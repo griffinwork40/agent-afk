@@ -208,6 +208,24 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS',
+    description: 'Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; positive integers only.',
+    type: 'number',
+    required: false,
+    default: '8',
+    example: '4',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS',
+    description: 'Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; positive integers only.',
+    type: 'number',
+    required: false,
+    default: '8',
+    example: '4',
+    category: 'model',
+  },
+  {
     name: 'AFK_MAX_NESTING_DEPTH',
     description:
       'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +
@@ -1474,6 +1492,8 @@ export const env = {
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
   get AFK_FORCE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_FORCE_BASH_INTERPRETER_GUARD']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
+  get AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS']; },
+  get AFK_MAX_CONCURRENT_SUBAGENT_CALLS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_SUBAGENT_CALLS']; },
   get AFK_MAX_NESTING_DEPTH(): string | undefined { return process.env['AFK_MAX_NESTING_DEPTH']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },

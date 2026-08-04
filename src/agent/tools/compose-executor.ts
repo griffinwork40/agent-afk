@@ -752,6 +752,8 @@ export class ComposeExecutor {
         };
       });
 
+      // Invariant: model-facing compose deliberately omits maxConcurrency here;
+      // the operator-governed subagent ceiling controls fan-out width.
       const result = await runSubagentDAG({
         manager,
         parentSession: this.ctx.parentSession,
