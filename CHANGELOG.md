@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.93.3] - 2026-08-04
+
+### Fixed
+- render auto-settle timeout as an error, not a green success (#902) (acfc8d4)
+
 ## [5.93.2] - 2026-08-04
 
 ### Fixed
