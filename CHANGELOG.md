@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.94.0] - 2026-08-04
+
+### Added
+- add /afk-md to edit AFK.md overlays with live hot-reload (#887) (274ffc1)
+
 ## [5.93.3] - 2026-08-04
 
 ### Fixed
