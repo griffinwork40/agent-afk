@@ -30,6 +30,7 @@ import { reauthCmd } from './commands/reauth.js';
 import { retryCmd } from './commands/retry.js';
 import { transcriptCmd } from './commands/transcript.js';
 import { editorCmd } from './commands/editor.js';
+import { afkMdCmd } from './commands/afk-md.js';
 import { searchCmd } from './commands/search.js';
 import { configDoctorCommands } from './commands/config-doctor.js';
 import { registerStaticPluginSkillCommands } from './plugin-skills.js';
@@ -62,6 +63,7 @@ export function registerAll(): void {
   register(retryCmd);
   register(transcriptCmd);
   register(editorCmd);
+  register(afkMdCmd);
   register(searchCmd);
   for (const cmd of configDoctorCommands) register(cmd);
   // Placeholders for plugin-backed commands. The real lists get registered

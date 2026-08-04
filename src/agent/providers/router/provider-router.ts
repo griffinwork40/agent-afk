@@ -166,6 +166,14 @@ export class ProviderRouter implements ProviderQuery {
   /** Permission mode / cwd carried across inner swaps. */
   private currentPermissionMode: AgentConfig['permissionMode'];
   private currentCwd: string | undefined;
+  /**
+   * Composed base system prompt carried across inner swaps, set by
+   * `setSystemPrompt`. `undefined` is a MEANINGFUL value here (the operator
+   * cleared their overlay), so a separate flag — not a null check — records
+   * whether an override was ever applied.
+   */
+  private currentSystemPrompt: string | undefined;
+  private systemPromptOverridden = false;
   /** The provider family `config.apiKey` was resolved for (anti-leak gate). */
   private readonly startupFamily: string;
 
@@ -266,6 +274,9 @@ export class ProviderRouter implements ProviderQuery {
     // do not affect the routing signature (computed in resolveInner above).
     if (this.currentPermissionMode !== undefined) innerConfig.permissionMode = this.currentPermissionMode;
     if (this.currentCwd !== undefined) innerConfig.cwd = this.currentCwd;
+    // Flag-gated, not `!== undefined`: clearing the operator overlay is a
+    // legitimate override that must survive a model swap too.
+    if (this.systemPromptOverridden) innerConfig.systemPrompt = this.currentSystemPrompt;
 
     if (seed) innerConfig.resumeHistory = [...this.shadowHistory];
 
@@ -458,6 +469,24 @@ export class ProviderRouter implements ProviderQuery {
   setCwd(cwd: string): void {
     this.currentCwd = cwd;
     this.active?.query.setCwd?.(cwd);
+  }
+
+  /**
+   * Contract: returns the INNER query's honest result, not merely "the router
+   * accepted the call". The router always implements this method, so returning
+   * `true` unconditionally would tell `/afk-md` a hot-reload succeeded even when
+   * the active provider cannot apply one (openai-compatible leaves the hook
+   * undefined). `?? false` collapses both "no active inner yet" and "inner does
+   * not support live swaps" to an honest negative.
+   *
+   * The value is recorded either way so `buildInner()` carries it onto a fresh
+   * inner after a `/model` swap — otherwise switching models would silently
+   * revert to the launch-time prompt.
+   */
+  setSystemPrompt(basePrompt: string | undefined): boolean {
+    this.currentSystemPrompt = basePrompt;
+    this.systemPromptOverridden = true;
+    return this.active?.query.setSystemPrompt?.(basePrompt) ?? false;
   }
 
   async reauth(): Promise<{ accountId: string; swapped: boolean } | null> {
