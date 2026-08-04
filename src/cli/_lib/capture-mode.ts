@@ -115,6 +115,27 @@ export function detectGoblinSpinner(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /**
+ * Decide whether the reacting goblin sprite claims its reserved footer band —
+ * three rows, right-aligned, present for the whole session (issue #336,
+ * `MascotBand` + `LiveMascot`).
+ *
+ * OFF by default; `AFK_GOBLIN_MASCOT=1` (or `true`) opts IN. Unlike the goblin
+ * spinner — a pure reskin of a row that already existed — this one *claims
+ * terminal rows* from the transcript, so it defaults to off and the operator
+ * asks for it. What it does not do is claim them intermittently: the
+ * reservation is constant for the session, so saying yes costs three rows once,
+ * not a transcript that jumps per tool call. `0`/unset/anything else stays off.
+ * Kept here beside the other CLI UX-preference detectors, read via the same
+ * `env`-parameter pattern.
+ *
+ * Reads `process.env` at call time. Pure function with no side effects.
+ */
+export function detectGoblinMascot(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env['AFK_GOBLIN_MASCOT'];
+  return raw === '1' || raw === 'true';
+}
+
+/**
  * Ring the terminal bell (audible BEL, \x07) if the bell is enabled
  * and the stream is a TTY. Non-printing; does not disturb the overlay.
  *

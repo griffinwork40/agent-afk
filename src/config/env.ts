@@ -1020,6 +1020,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_GOBLIN_MASCOT',
+    description: 'Reacting goblin sprite in a reserved footer band, right-aligned and present for the whole session (3 rows; animated while the agent runs tools, resting otherwise). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_TERM_TITLE',
     description: 'Set the terminal/tab title (OSC 2) to reflect afk state — "afk — <cwd> · running" during a turn, "afk — <cwd>" when idle, cleared on exit. 1 = on (default when stdout is a TTY), 0 = leave the title alone. TTY-only.',
     type: 'boolean',
@@ -1573,6 +1581,7 @@ export const env = {
   get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
   get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
+  get AFK_GOBLIN_MASCOT(): string | undefined { return process.env['AFK_GOBLIN_MASCOT']; },
   get AFK_TERM_TITLE(): string | undefined { return process.env['AFK_TERM_TITLE']; },
   get AFK_NOTIFY(): string | undefined { return process.env['AFK_NOTIFY']; },
   get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
