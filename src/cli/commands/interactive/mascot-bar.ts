@@ -269,11 +269,21 @@ export class MascotBar {
    * cannot spare MASCOT_BAR_ROWS on top of the status line, the rows below us
    * (bg bar + verdict rail), the loop-stage rail, and a floor of readable
    * transcript.
+   *
+   * Width guard (PR #900 review): `GUTTER + lines[i]` writes exactly
+   * `MINI_MASCOT_WIDTH + GUTTER.length` columns starting at column 1. Requiring
+   * only that many columns lets the sprite's last cell land in the terminal's
+   * final column, arming DECAWM's pending-wrap state — the save/restore
+   * (`\x1b[s`/`\x1b[u`) around the paint does not reset that per-row flag. The
+   * old right-aligned band reserved a trailing `RIGHT_MARGIN` column for the
+   * same reason; this is that guard's left-aligned equivalent: require one
+   * spare column past the sprite's own width so the last written cell is never
+   * the terminal's last column.
    */
   private visibleRows(): number {
     const totalRows = this.stream.rows ?? 24;
     const columns = this.stream.columns ?? 80;
-    if (columns < MINI_MASCOT_WIDTH + GUTTER.length) return 0;
+    if (columns < MINI_MASCOT_WIDTH + GUTTER.length + 1) return 0;
     const headroom =
       totalRows - 1 - this.getAdjacentRows() - 1 - MASCOT_BAR_MIN_CONTENT_ROWS;
     return headroom >= MASCOT_BAR_ROWS ? MASCOT_BAR_ROWS : 0;

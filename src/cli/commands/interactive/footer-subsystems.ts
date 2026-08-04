@@ -138,6 +138,12 @@ export function setupFooterSubsystems(
     // reason to repaint mid-turn (its own animation tick only fires while the
     // agent is working), so nudge it here or it keeps a stale row.
     mascotBar?.redraw();
+    // The loop-stage rail positions from the full extraRows (which just moved),
+    // but only repaints on its own on a stage change — a bg-bar-only resize
+    // between transitions would otherwise leave it at its old row, overlapping
+    // the displaced rows below it or orphaning a gap above them. Mirrors the
+    // same nudge in the verdict-ledger handler above. (PR #900 review.)
+    loopStageBar?.redraw();
   });
 
   // Reacting goblin mini-sprite (issue #336) - opt-in via AFK_GOBLIN_MASCOT=1;
