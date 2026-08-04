@@ -11,6 +11,7 @@ import type { CardSpec } from '../render.js';
 import { card, errorBox } from '../render.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { getTerminalWidth } from '../terminal-size.js';
+import { capToMeasure } from '../render/measure.js';
 import { wrapToWidth } from '../wrap.js';
 import { formatThoughtSummary } from '../commands/interactive/thinking-lane.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
@@ -362,14 +363,14 @@ export function emitMarkdown(text: string, out: Writer): void {
   // natural width overflowed past the right edge on any terminal narrower than
   // the table, and never reflowed on resize (the lines are already committed to
   // scrollback). The streaming commit path was always width-capped; this aligns
-  // the fallback with it. On a TTY, cap to the visible content width (matching
-  // calculateContentWidth = terminal − 2) so tables are squeezed/truncated and
-  // prose is wrapped, breaking over-long tokens (URLs, long identifiers) that a
+  // the fallback with it. On a TTY, cap the visible content width to the shared
+  // unbordered-text measure so tables are squeezed/truncated and prose is
+  // wrapped, breaking over-long tokens (URLs, long identifiers) that a
   // raw-line sink would otherwise let run off the edge. Off a TTY (piped /
   // redirected) keep the width unbounded so consumers receive full-width
   // markdown — the prior behavior.
   const contentWidth = process.stdout.isTTY
-    ? Math.max(1, getTerminalWidth() - 2)
+    ? capToMeasure(Math.max(1, getTerminalWidth() - 2))
     : Number.POSITIVE_INFINITY;
   const rendered = renderMarkdownToTerminal(text, { maxWidth: contentWidth });
   const wrapped = wrapToWidth(rendered, contentWidth, { breakLongWords: true });

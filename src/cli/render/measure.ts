@@ -44,6 +44,7 @@ export function resolveTextMeasure(): number | null {
   const raw = env.AFK_TEXT_MEASURE?.trim();
   if (raw === undefined || raw === '') return DEFAULT_TEXT_MEASURE;
   if (/^(full|off|none|0)$/i.test(raw)) return null;
+  if (!/^\d+$/.test(raw)) return DEFAULT_TEXT_MEASURE;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < MIN_TEXT_MEASURE) return DEFAULT_TEXT_MEASURE;
   return parsed;

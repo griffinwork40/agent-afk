@@ -67,11 +67,12 @@ describe('resolveTextMeasure', () => {
     );
   });
 
-  it('falls back to the default on unparseable input', () => {
-    withMeasureEnv('wide-please', () =>
-      expect(resolveTextMeasure()).toBe(DEFAULT_TEXT_MEASURE),
-    );
-  });
+  it.each(['wide-please', '20px', '20.5', '20e9'])(
+    'falls back to the default on malformed input %s',
+    (value) => {
+      withMeasureEnv(value, () => expect(resolveTextMeasure()).toBe(DEFAULT_TEXT_MEASURE));
+    },
+  );
 });
 
 describe('capToMeasure', () => {
