@@ -11,10 +11,19 @@
  *     nested, so the single-overlay guard (terminal-compositor.input-mode.ts:95)
  *     always holds — each overlay `exitPickerMode`s before the next enters.
  *
- * Value semantics: writes go through `setConfigValue`, which persists to
- * afk.config.json but is CACHED AT LOAD — the running session is unchanged until
- * restart (mutate.ts:19-21). Every write echoes `RESTART_NOTE` so the user is
- * never surprised.
+ * Value semantics: writes go through `setConfigValue`, which persists to the
+ * user-global afk.config.json. That store is CACHED AT LOAD, so by default the
+ * running session is unchanged until restart (mutate.ts:19-21) and the write
+ * echoes `RESTART_NOTE`. Two refinements sit on top:
+ *   - Liveness (config/live-apply.ts): a small allowlist of keys whose live path
+ *     is already proven by a shipped slash command (`model` → `/model`, `theme`
+ *     → `/theme`) is pushed into the running session and reports "applied to
+ *     this session" instead. Everything else keeps the restart note verbatim.
+ *   - Provenance (config/provenance.ts): rows show the value the LOADER will
+ *     use, which is not always the value in the file we write — env and a
+ *     project-local afk.config.json both outrank it. When a higher tier wins,
+ *     the row names it and the editor warns before and after the write, because
+ *     a silently-inert save is the worst outcome this menu can produce.
  *
  * Security: config keys are only tier 'agent' | 'human' — never `secret` (secrets
  * are env-only). So editing config keys in-REPL cannot leak a credential.
@@ -34,128 +43,22 @@ import { palette } from '../palette.js';
 import { runPicker } from './picker.js';
 import { runTextInput } from './text-input.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
+import { CONFIG_KEY_SPECS, type ConfigKeySpec } from '../../config/settable-keys.js';
 import {
-  CONFIG_KEY_SPECS,
-  coerceConfigValue,
-  type ConfigKeySpec,
-} from '../../config/settable-keys.js';
+  buildCategories,
+  editorFor,
+  formatValue,
+  keyRowLabel,
+  makeValidator,
+} from './config-menu-model.js';
 import { setConfigValue, getConfigValue, RESTART_NOTE } from '../../config/mutate.js';
-
-// ── Categorisation (pure) ───────────────────────────────────────────────────
-
-/** Display order for categories. Any category not listed here is dropped. */
-export const CATEGORY_ORDER = [
-  'Model & routing',
-  'Interactive',
-  'Session',
-  'Telegram',
-  'Advanced',
-] as const;
-
-/**
- * Map a config key path to its menu category. Total over every path in
- * CONFIG_KEY_SPECS (asserted by a test) — a new spec that matches nothing here
- * lands in 'Session' rather than vanishing, but the test will flag it so the
- * author can place it deliberately.
- */
-export function categoryOf(path: string): (typeof CATEGORY_ORDER)[number] {
-  if (
-    path === 'model' ||
-    path.startsWith('models.') ||
-    path === 'temperature' ||
-    path === 'maxTokens' ||
-    path.startsWith('autoRouting.')
-  ) {
-    return 'Model & routing';
-  }
-  if (path.startsWith('interactive.')) return 'Interactive';
-  if (path.startsWith('telegram.')) return 'Telegram';
-  if (path.startsWith('daemon.')) return 'Advanced';
-  if (
-    path === 'systemPrompt' ||
-    path === 'permissionMode' ||
-    path === 'enableShellHooks' ||
-    path === 'enablePluginHooks' ||
-    path === 'updatePolicy'
-  ) {
-    return 'Advanced';
-  }
-  return 'Session';
-}
-
-interface MenuCategory {
-  name: (typeof CATEGORY_ORDER)[number];
-  keys: readonly ConfigKeySpec[];
-}
-
-/** Group specs into ordered, non-empty categories. */
-export function buildCategories(specs: readonly ConfigKeySpec[]): MenuCategory[] {
-  const byCat = new Map<string, ConfigKeySpec[]>();
-  for (const spec of specs) {
-    const cat = categoryOf(spec.path);
-    const bucket = byCat.get(cat);
-    if (bucket) bucket.push(spec);
-    else byCat.set(cat, [spec]);
-  }
-  const out: MenuCategory[] = [];
-  for (const name of CATEGORY_ORDER) {
-    const keys = byCat.get(name);
-    if (keys && keys.length > 0) out.push({ name, keys });
-  }
-  return out;
-}
-
-// ── Value formatting + validation (pure) ─────────────────────────────────────
-
-/** Render a persisted config value as a compact display string. */
-export function formatValue(v: unknown): string {
-  if (v === undefined) return '(unset)';
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return v.length === 0 ? '(empty)' : v.join(',');
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
-
-/** One key row: `🔒 path            value  (type)` — lock glyph on human-tier keys. */
-export function keyRowLabel(spec: ConfigKeySpec, current: unknown, pad: number): string {
-  const lock = spec.tier === 'human' ? '🔒 ' : '   ';
-  return `${lock}${spec.path.padEnd(pad)}  ${formatValue(current)}  (${spec.type})`;
-}
-
-/**
- * Editor shape for a key: a fixed-option picker (boolean/enum) or a free-text
- * overlay (everything else), with a help line describing the accepted input.
- */
-type EditorPlan =
-  | { kind: 'pick'; options: string[] }
-  | { kind: 'text'; help: string };
-
-export function editorFor(spec: ConfigKeySpec): EditorPlan {
-  if (spec.type === 'boolean') return { kind: 'pick', options: ['true', 'false'] };
-  if (spec.type === 'enum' && spec.enumValues && spec.enumValues.length > 0) {
-    return { kind: 'pick', options: [...spec.enumValues] };
-  }
-  let help = 'enter to save · esc to cancel';
-  if (spec.type === 'number' && spec.clamp) {
-    const range = `[${spec.clamp.min}..${spec.clamp.max}]${spec.clamp.integer ? ' integer' : ''}`;
-    help = `number ${range} · enter to save · esc to cancel`;
-  } else if (spec.type === 'number') {
-    help = 'number · enter to save · esc to cancel';
-  } else if (spec.type === 'number-array') {
-    help = 'comma-separated numbers · enter to save · esc to cancel';
-  } else if (spec.type === 'model-slot') {
-    help = 'model id (e.g. sonnet) · enter to save · esc to cancel';
-  }
-  return { kind: 'text', help };
-}
-
-/** A synchronous validator for the text overlay — wraps `coerceConfigValue`. */
-export function makeValidator(spec: ConfigKeySpec): (raw: string) => string | null {
-  return (raw: string): string | null => {
-    const r = coerceConfigValue(spec, raw);
-    return r.ok ? null : r.error;
-  };
-}
+import {
+  resolveConfigProvenance,
+  sourceSuffix,
+  shadowNote,
+  type ConfigProvenance,
+} from '../config/provenance.js';
+import { applyConfigLive, type LiveApplyHandle, type LiveApplyOutcome } from '../config/live-apply.js';
 
 // ── Injected effects (for testability) ───────────────────────────────────────
 
@@ -179,6 +82,16 @@ export interface MenuIo {
   current(path: string): unknown;
   /** Persist a value; return the display form of what was written, or throw. */
   write(path: string, rawValue: string, allowHuman: boolean): string;
+  /**
+   * Effective value + originating tier. Optional: surfaces that omit it get the
+   * pre-provenance rendering (persisted value only, no tier annotation).
+   */
+  provenance?(path: string): ConfigProvenance;
+  /**
+   * Push an already-persisted write into the running session. Optional: absent
+   * on surfaces with no live session, where every write stays restart-scoped.
+   */
+  applyLive?(path: string, rawValue: string): Promise<LiveApplyOutcome>;
 }
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -215,7 +128,21 @@ export async function runConfigMenu(ov: MenuOverlays, io: MenuIo): Promise<void>
       const keyHeader = [palette.bold(`${TITLE} › ${cat.name}`), ''];
       const ki = await ov.pick(
         keyHeader,
-        cat.keys.map((k) => keyRowLabel(k, io.current(k.path), pad)),
+        cat.keys.map((k) => {
+          // Invariant: `io.current` must be called for EVERY row even when
+          // provenance supersedes its value. It is the only read that throws
+          // MalformedConfigError on a broken write-target file, and the caller
+          // (config-doctor.ts) relies on that throw to degrade to the read-only
+          // view. Provenance deliberately tolerates unparseable files (it mirrors
+          // the loader's fall-through), so dropping this call silently opens a
+          // menu whose every write would fail.
+          const persisted = io.current(k.path);
+          const prov = io.provenance?.(k.path);
+          // Show the value the loader will actually use, not the file value —
+          // they differ exactly when a higher tier shadows this key.
+          const shown = prov ? prov.effective : persisted;
+          return keyRowLabel(k, shown, pad, prov ? sourceSuffix(prov) : undefined);
+        }),
       );
       if (ki === null) break; // Esc → back to categories
       const spec = cat.keys[ki];
@@ -227,10 +154,15 @@ export async function runConfigMenu(ov: MenuOverlays, io: MenuIo): Promise<void>
 
 async function editKey(ov: MenuOverlays, io: MenuIo, spec: ConfigKeySpec): Promise<void> {
   const current = io.current(spec.path);
+  const prov = io.provenance?.(spec.path);
+  const shadow = prov ? shadowNote(prov) : undefined;
   const header = [
     palette.bold(`${TITLE} › ${spec.path}`),
     palette.dim(spec.description),
-    palette.dim(`current: ${formatValue(current)}`),
+    palette.dim(`current: ${formatValue(prov ? prov.effective : current)}`),
+    // Warn BEFORE the edit, not only after the write — a user who learns their
+    // change is inert only after saving has already wasted the round trip.
+    ...(shadow ? [palette.warning(`⚠ ${shadow}`)] : []),
     '',
   ];
   const plan = editorFor(spec);
@@ -267,7 +199,15 @@ async function editKey(ov: MenuOverlays, io: MenuIo, spec: ConfigKeySpec): Promi
 
   try {
     const display = io.write(spec.path, rawValue, allowHuman);
-    ov.emit(`${palette.success('  ✓')} ${spec.path} = ${palette.bold(display)}  ${palette.dim(`— ${RESTART_NOTE}`)}`);
+    // Persistence succeeded. Liveness is reported separately and never
+    // downgrades the write: a failed live-apply still leaves a saved value.
+    const live = await io.applyLive?.(spec.path, rawValue);
+    const note = live?.applied === true ? live.note : RESTART_NOTE;
+    ov.emit(`${palette.success('  ✓')} ${spec.path} = ${palette.bold(display)}  ${palette.dim(`— ${note}`)}`);
+    if (live && live.applied === false && live.reason !== undefined) {
+      ov.emit(`${palette.warning('  ⚠')} ${palette.dim(`saved, but not applied live: ${live.reason}`)}`);
+    }
+    if (shadow) ov.emit(`${palette.warning('  ⚠')} ${palette.dim(shadow)}`);
   } catch (err) {
     ov.emit(`${palette.error('  ✗')} ${palette.error(err instanceof Error ? err.message : String(err))}`);
   }
@@ -293,12 +233,19 @@ export function overlaysFromCompositor(c: TerminalCompositor): MenuOverlays {
   };
 }
 
-/** Real io backed by the config-mutation engine. */
-export function defaultIo(): MenuIo {
+/**
+ * Real io backed by the config-mutation engine.
+ *
+ * `handle` is the running session's live-apply capability; omit it on surfaces
+ * without one (tests, non-TTY) and every write stays restart-scoped.
+ */
+export function defaultIo(handle?: LiveApplyHandle): MenuIo {
   return {
     specs: () => CONFIG_KEY_SPECS,
     current: (path) => getConfigValue(path).value,
     write: (path, rawValue, allowHuman) =>
       String(setConfigValue(path, rawValue, allowHuman ? { allowHumanOnly: true } : undefined).value),
+    provenance: (path) => resolveConfigProvenance(path),
+    applyLive: (path, rawValue) => applyConfigLive(path, rawValue, handle),
   };
 }

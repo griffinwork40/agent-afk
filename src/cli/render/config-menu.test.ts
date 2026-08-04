@@ -7,6 +7,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { runConfigMenu, type MenuOverlays, type MenuIo } from './config-menu.js';
+import type { ConfigProvenance } from '../config/provenance.js';
+import type { LiveApplyOutcome } from '../config/live-apply.js';
 import {
   CATEGORY_ORDER,
   categoryOf,
@@ -15,10 +18,7 @@ import {
   keyRowLabel,
   editorFor,
   makeValidator,
-  runConfigMenu,
-  type MenuOverlays,
-  type MenuIo,
-} from './config-menu.js';
+} from './config-menu-model.js';
 import { CONFIG_KEY_SPECS, getConfigKeySpec, type ConfigKeySpec } from '../../config/settable-keys.js';
 
 // ── Fakes ────────────────────────────────────────────────────────────────────
@@ -247,5 +247,127 @@ describe('runConfigMenu', () => {
     expect(ov.emits.length).toBe(1);
     expect(ov.emits[0]).toContain('✗');
     expect(ov.emits[0]).toContain('refused');
+  });
+});
+
+// ── Provenance + live-apply wiring ───────────────────────────────────────────
+//
+// Contract: both MenuIo members are OPTIONAL. An io that omits them must render
+// and write exactly as before — that back-compat is what keeps every fake above
+// (and every non-TTY surface) valid.
+
+describe('provenance + live-apply wiring', () => {
+  const provIo = (
+    values: Record<string, unknown>,
+    prov: Partial<Record<string, ConfigProvenance>>,
+    live?: LiveApplyOutcome,
+  ): MenuIo & { writes: Array<{ path: string; value: string }>; liveCalls: string[] } => {
+    const writes: Array<{ path: string; value: string }> = [];
+    const liveCalls: string[] = [];
+    return {
+      writes,
+      liveCalls,
+      specs: () => TWO_KEY_SPECS,
+      current: (p) => values[p],
+      write: (p, v) => {
+        writes.push({ path: p, value: v });
+        return v;
+      },
+      provenance: (p) =>
+        prov[p] ?? {
+          path: p,
+          effective: values[p],
+          source: { kind: 'user', path: '/u/afk.config.json' },
+          userValue: values[p],
+        },
+      applyLive: async (p, v) => {
+        liveCalls.push(`${p}=${v}`);
+        return live ?? { applied: false };
+      },
+    };
+  };
+
+  it('renders the EFFECTIVE value and names the shadowing tier in the row', async () => {
+    // Enter the category (0), Esc out of the key list, Esc out of the menu.
+    const ov = new FakeOverlays([0, null, null], []);
+    const io = provIo(
+      { temperature: 1.0 },
+      {
+        temperature: {
+          path: 'temperature',
+          effective: 0.2,
+          source: { kind: 'env', via: 'AFK_TEMPERATURE' },
+          shadowedBy: { kind: 'env', via: 'AFK_TEMPERATURE' },
+          userValue: 1.0,
+        },
+      },
+    );
+
+    await runConfigMenu(ov, io);
+
+    const rows = ov.pickCalls[1]!.options.join('\n');
+    // The env value wins the display, NOT the 1.0 sitting in the file.
+    expect(rows).toContain('0.2');
+    expect(rows).not.toMatch(/temperature\s+1\b/);
+    expect(rows).toContain('env AFK_TEMPERATURE');
+  });
+
+  it('warns before AND after a write that lands beneath a shadowing tier', async () => {
+    const ov = new FakeOverlays([0, 0, null, null], ['1.5']);
+    const io = provIo(
+      { temperature: 1.0 },
+      {
+        temperature: {
+          path: 'temperature',
+          effective: 0.2,
+          source: { kind: 'env', via: 'AFK_TEMPERATURE' },
+          shadowedBy: { kind: 'env', via: 'AFK_TEMPERATURE' },
+          userValue: 1.0,
+        },
+      },
+    );
+
+    await runConfigMenu(ov, io);
+
+    expect(io.writes).toEqual([{ path: 'temperature', value: '1.5' }]);
+    // Pre-write: the edit header carries the warning.
+    const editHeader = ov.textCalls[0]!.header.join('\n');
+    expect(editHeader).toContain('AFK_TEMPERATURE');
+    // Post-write: success line, then the shadow warning.
+    expect(ov.emits.some((e) => e.includes('✓'))).toBe(true);
+    expect(ov.emits.some((e) => e.includes('AFK_TEMPERATURE'))).toBe(true);
+  });
+
+  it('reports a live-applied key instead of the restart note', async () => {
+    const ov = new FakeOverlays([0, 0, null, null], ['1.5']);
+    const io = provIo({ temperature: 1.0 }, {}, { applied: true, note: 'applied to this session' });
+
+    await runConfigMenu(ov, io);
+
+    expect(io.liveCalls).toEqual(['temperature=1.5']);
+    const ok = ov.emits.find((e) => e.includes('✓'))!;
+    expect(ok).toContain('applied to this session');
+    expect(ok).not.toContain('restart');
+  });
+
+  it('keeps a saved-but-not-applied write reported as a SUCCESS plus a caveat', async () => {
+    const ov = new FakeOverlays([0, 0, null, null], ['1.5']);
+    const io = provIo({ temperature: 1.0 }, {}, { applied: false, reason: 'provider unreachable' });
+
+    await runConfigMenu(ov, io);
+
+    expect(io.writes).toHaveLength(1); // the write still counts
+    expect(ov.emits.some((e) => e.includes('✓'))).toBe(true);
+    expect(ov.emits.some((e) => e.includes('saved, but not applied live'))).toBe(true);
+  });
+
+  it('falls back to the pre-provenance rendering when io omits both members', async () => {
+    const ov = new FakeOverlays([0, 0, null, null], ['1.5']);
+    const io = new FakeIo(TWO_KEY_SPECS, { temperature: 1.0 });
+
+    await runConfigMenu(ov, io);
+
+    expect(io.writes).toEqual([{ path: 'temperature', value: '1.5', human: false }]);
+    expect(ov.emits.find((e) => e.includes('✓'))).toContain('restart');
   });
 });
