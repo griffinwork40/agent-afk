@@ -77,7 +77,7 @@ import { registerBgCommand } from './commands/bg.js';
 import { registerTraceCommand } from './commands/trace.js';
 import { registerServiceCommand } from './commands/service.js';
 import { registerBrowserCommand } from './commands/browser.js';
-import { registerImproveCommand } from './commands/improve.js';
+import { registerImproveCommand } from './commands/improve/index.js';
 import { registerShellInitCommand } from './commands/shell-init.js';
 import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';

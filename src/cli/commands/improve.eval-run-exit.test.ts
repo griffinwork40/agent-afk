@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { applyEvalRunExit } from './improve.js';
+import { applyEvalRunExit } from './improve/index.js';
 
 describe('applyEvalRunExit', () => {
   let original: number | undefined;
