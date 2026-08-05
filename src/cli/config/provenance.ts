@@ -33,6 +33,7 @@ import { getAtPath } from '../../config/settable-keys.js';
 import { maskSecret } from '../../config/mutate.js';
 import { parseJsonConfigFile, validatedValueView } from './json-tier-parse.js';
 import { jsonConfigTierPaths, TIER_LABELS, type JsonConfigTier } from './json-tier-paths.js';
+import { NO_PROVENANCE_CACHE, type ProvenanceCache } from './provenance-cache.js';
 
 // ── The env-shadow map ───────────────────────────────────────────────────────
 
@@ -125,9 +126,21 @@ export function describeSource(src: ConfigSource): string {
  * Row suffix naming the tier in effect, or undefined when the value comes from
  * the same file `/config` writes to (the unsurprising case, left unannotated to
  * keep the menu quiet).
+ *
+ * The one noisy `default` is a shadowed one: a higher tier won the load but
+ * omits this key, so the row shows `(unset)` while a write to the user file
+ * would still be inert. Unannotated, that row is indistinguishable from a key
+ * the menu genuinely controls, and the user only discovers the shadow one
+ * screen deeper in the edit header — the misattribution this suffix exists to
+ * prevent.
  */
 export function sourceSuffix(prov: ConfigProvenance): string | undefined {
-  if (prov.source.kind === 'user' || prov.source.kind === 'default') return undefined;
+  if (prov.source.kind === 'default') {
+    return prov.shadowedBy
+      ? `← default (${describeSource(prov.shadowedBy)} active — see ⚠)`
+      : undefined;
+  }
+  if (prov.source.kind === 'user') return undefined;
   return `← ${describeSource(prov.source)}`;
 }
 
@@ -226,14 +239,25 @@ export function activeEnvShadow(path: string): string | undefined {
  * `default` rather than a lower tier's value — which is exactly what
  * `loadJsonConfig()` does, and the reason a project config with one unrelated
  * key makes every user-config value inert.
+ *
+ * `cache` deduplicates the file reads across a batch of keys — pass one shared
+ * cache per render pass and drop it after (see provenance-cache.ts: it must not
+ * survive an `await`, or a write made mid-session would render stale). Omit it
+ * for one-shot resolution; every read then hits disk, as before.
  */
-export function resolveConfigProvenance(path: string): ConfigProvenance {
+export function resolveConfigProvenance(
+  path: string,
+  cache: ProvenanceCache = NO_PROVENANCE_CACHE,
+): ConfigProvenance {
   const tiers = jsonConfigTierPaths();
   const userTier = tiers.find((t) => t.tier === 'user');
   // `userValue` is the RAW value in the write-target file: it describes what a
   // `/config` edit replaces, independent of whether that file wins the walk.
   const userValue = userTier
-    ? getAtPath((readRawJsonFile(userTier.path) ?? {}) as never, path)
+    ? getAtPath(
+        (cache.raw(userTier.path, () => readRawJsonFile(userTier.path)) ?? {}) as never,
+        path,
+      )
     : undefined;
 
   const envVar = activeEnvShadow(path);
@@ -246,7 +270,7 @@ export function resolveConfigProvenance(path: string): ConfigProvenance {
   }
 
   for (const tier of tiers) {
-    const obj = readValidatedTier(tier.path);
+    const obj = cache.validated(tier.path, () => readValidatedTier(tier.path));
     if (obj === undefined) continue; // absent / malformed / rejected → next tier
     // FILE-level selection: this tier wins even if it omits `path`. An absent
     // key here resolves to the default, so `effective` is undefined and the

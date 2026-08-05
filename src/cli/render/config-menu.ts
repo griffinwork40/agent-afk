@@ -58,6 +58,7 @@ import {
   shadowNote,
   type ConfigProvenance,
 } from '../config/provenance.js';
+import { createProvenanceCache, type ProvenanceCache } from '../config/provenance-cache.js';
 import { applyConfigLive, type LiveApplyHandle, type LiveApplyOutcome } from '../config/live-apply.js';
 
 // ── Injected effects (for testability) ───────────────────────────────────────
@@ -85,8 +86,12 @@ export interface MenuIo {
   /**
    * Effective value + originating tier. Optional: surfaces that omit it get the
    * pre-provenance rendering (persisted value only, no tier annotation).
+   *
+   * `cache` is supplied when a whole screen of keys is resolved at once, so the
+   * tier files are read once per render instead of once per row. Implementations
+   * may ignore it (the resolver treats an absent cache as "read every time").
    */
-  provenance?(path: string): ConfigProvenance;
+  provenance?(path: string, cache?: ProvenanceCache): ConfigProvenance;
   /**
    * Push an already-persisted write into the running session. Optional: absent
    * on surfaces with no live session, where every write stays restart-scoped.
@@ -126,6 +131,13 @@ export async function runConfigMenu(ov: MenuOverlays, io: MenuIo): Promise<void>
     const pad = Math.min(28, Math.max(...cat.keys.map((k) => k.path.length)));
     for (;;) {
       const keyHeader = [palette.bold(`${TITLE} › ${cat.name}`), ''];
+      // Invariant: one cache per render, created INSIDE the loop and never
+      // awaited across. Every row resolves against the same four files, so
+      // hoisting the reads turns ~4 reads-per-key into ~4 reads-per-screen —
+      // but a cache that survived `editKey` below would re-render the value the
+      // user just overwrote. Rebuilding it each pass is the whole invalidation
+      // strategy.
+      const provCache = createProvenanceCache();
       const ki = await ov.pick(
         keyHeader,
         cat.keys.map((k) => {
@@ -137,7 +149,7 @@ export async function runConfigMenu(ov: MenuOverlays, io: MenuIo): Promise<void>
           // the loader's fall-through), so dropping this call silently opens a
           // menu whose every write would fail.
           const persisted = io.current(k.path);
-          const prov = io.provenance?.(k.path);
+          const prov = io.provenance?.(k.path, provCache);
           // Show the value the loader will actually use, not the file value —
           // they differ exactly when a higher tier shadows this key.
           const shown = prov ? prov.effective : persisted;
@@ -245,7 +257,7 @@ export function defaultIo(handle?: LiveApplyHandle): MenuIo {
     current: (path) => getConfigValue(path).value,
     write: (path, rawValue, allowHuman) =>
       String(setConfigValue(path, rawValue, allowHuman ? { allowHumanOnly: true } : undefined).value),
-    provenance: (path) => resolveConfigProvenance(path),
+    provenance: (path, cache) => resolveConfigProvenance(path, cache),
     applyLive: (path, rawValue) => applyConfigLive(path, rawValue, handle),
   };
 }

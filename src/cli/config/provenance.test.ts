@@ -86,6 +86,7 @@ describe('resolveConfigProvenance — tier precedence', () => {
     expect(p.effective).toBeUndefined();
     expect(p.source.kind).toBe('default');
     expect(p.shadowedBy).toBeUndefined();
+    expect(sourceSuffix(p)).toBeUndefined(); // unshadowed default: nothing to warn about
   });
 
   it('lets a project config outrank the user file and flags it as shadowing', () => {
@@ -97,6 +98,7 @@ describe('resolveConfigProvenance — tier precedence', () => {
     expect(p.shadowedBy?.kind).toBe('project');
     // The user file's own value is still reported — that is what a write edits.
     expect(p.userValue).toBe('sonnet');
+    expect(sourceSuffix(p)).toBe('\u2190 project afk.config.json');
     expect(shadowNote(p)).toMatch(/outranks the user config/);
   });
 
@@ -126,6 +128,10 @@ describe('resolveConfigProvenance — tier precedence', () => {
     expect(p.source.kind).toBe('default');
     expect(p.shadowedBy?.kind).toBe('project');
     expect(p.userValue).toBe('sonnet');
+    // The row reads `(unset)` here; without a suffix it is indistinguishable
+    // from a key the menu controls, and the shadow surfaces only one screen
+    // deeper. Name the blocking tier on the row itself.
+    expect(sourceSuffix(p)).toBe('\u2190 default (project afk.config.json active \u2014 see \u26a0)');
     expect(shadowNote(p)).toMatch(/loaded INSTEAD of it/);
   });
 
