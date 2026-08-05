@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.6] - 2026-08-05
+
+### Fixed
+- bill cache-creation residual outside known TTL buckets, clamp wire-sourced counts (#915) (f09c5bc)
+- resolve dated wire ids for Opus 4.6/4.7/4.8 and Sonnet 4.6 (#914) (7a8a57d)
+
 ## [5.95.5] - 2026-08-05
 
 ### Fixed
