@@ -14,6 +14,7 @@
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { formatCost, formatTokens } from '../../format-utils.js';
+import { cacheHitRate } from '../../commands/trace-usage-format.js';
 import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
@@ -114,14 +115,13 @@ function renderSdkBreakdown(
   const output = api?.output_tokens ?? 0;
   const cacheRead = api?.cache_read_input_tokens ?? 0;
   const cacheCreate = api?.cache_creation_input_tokens ?? 0;
-  // Contract: never sum the four fields above — they are a mixed basis
-  // (cumulative input/output vs. last-round-only cache counts), so adding them
-  // double-counts every prior round. `context_window_tokens` is the
-  // provider-computed footprint of the last round; fall back to the
-  // authoritative cumulative total rather than reconstructing a bad sum.
-  const lastTurnTotal = api?.context_window_tokens ?? usage.totalTokens ?? 0;
-  const cacheTotal = cacheRead + cacheCreate;
-  const hitRate = cacheTotal > 0 ? Math.round((cacheRead / cacheTotal) * 100) : undefined;
+  // Contract: never sum the four fields above (mixed basis, double-counts
+  // prior rounds). `totalTokens` and `context_window_tokens` both hold the
+  // SAME last-round footprint (buildContextUsageFields, auto-compact.ts), so
+  // neither is a cumulative total. Precedence matches context-sampler.ts's
+  // resolveUsedTokens (status line) — arbitrary today per that docstring.
+  const lastTurnTotal = usage.totalTokens ?? api?.context_window_tokens ?? 0;
+  const hitRate = cacheHitRate(cacheRead, cacheCreate);
 
   out.line();
   out.line(palette.bold('Token usage') + palette.dim('  (SDK breakdown)'));

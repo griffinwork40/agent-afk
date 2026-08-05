@@ -180,6 +180,14 @@ export class ContextSampler {
  * last resort is `input + output` — deliberately cache-excluded, mirroring
  * `contextWindowTokensUsed`'s own fallback in providers/shared/auto-compact.ts
  * so both paths degrade identically. Never adds the cache counts back in.
+ *
+ * `/tokens` (src/cli/slash/commands/info.ts) reads the same two fields in
+ * this same totalTokens-first order for consistency between the status line
+ * and that display. The order is arbitrary today: `buildContextUsageFields`
+ * (auto-compact.ts) is the sole producer for both providers and assigns both
+ * fields the identical last-round footprint, so no payload observed today
+ * distinguishes the two orders. Keep the two sites in sync if this ever
+ * changes rather than re-deriving the choice independently.
  */
 function resolveUsedTokens(payload: {
   totalTokens?: number;

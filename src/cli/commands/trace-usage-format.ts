@@ -17,6 +17,28 @@ export interface FinalTokens {
 }
 
 /**
+ * Contract: return the prompt-cache hit rate as a rounded percentage
+ * (0–100), or `undefined` when there is no cacheable activity to report
+ * (`read + created === 0`) — callers must treat `undefined` as "nothing to
+ * show," never coerce it into a rendered `NaN%`.
+ *
+ * The hit rate is `read / (read + created)` — the share of cacheable tokens
+ * served from an existing entry rather than freshly written. A healthy warm
+ * session trends high; a prefix that keeps getting invalidated shows
+ * sustained low values because every call re-writes what it should have
+ * read.
+ *
+ * Single source of truth for this formula: `formatCacheUsage` below (trace
+ * closure rendering) and `/tokens` (`src/cli/slash/commands/info.ts`) both
+ * call this instead of each reimplementing the ratio, so the two surfaces
+ * cannot drift onto different numbers for the same inputs.
+ */
+export function cacheHitRate(read: number, created: number): number | undefined {
+  const cacheable = read + created;
+  return cacheable > 0 ? Math.round((read / cacheable) * 100) : undefined;
+}
+
+/**
  * Contract: render the prompt-cache slice of a closure's token counts as a
  * compact suffix, or `''` when the session recorded no cache activity (so
  * uncached and pre-cache-era traces render exactly as before).
@@ -29,22 +51,15 @@ export interface FinalTokens {
  * miss rate would show up only on the monthly bill. Emitting the hit rate here
  * makes the regression observable in the one artifact that is durable per
  * session.
- *
- * The hit rate is `cacheRead / (cacheRead + cacheCreation)` — the share of
- * cacheable tokens served from an existing entry rather than freshly written.
- * A healthy warm session trends high; a prefix that keeps getting invalidated
- * shows sustained low values because every call re-writes what it should have
- * read.
  */
 export function formatCacheUsage(tokens: FinalTokens | undefined): string {
   if (!tokens) return '';
   const read = tokens.cacheRead ?? 0;
   const created = tokens.cacheCreation ?? 0;
-  const cacheable = read + created;
-  if (cacheable === 0) return '';
+  const hitRate = cacheHitRate(read, created);
+  if (hitRate === undefined) return '';
 
-  const parts = [`cache r=${fmtTokens(read)}`, `w=${fmtTokens(created)}`];
-  parts.push(`hit=${Math.round((read / cacheable) * 100)}%`);
+  const parts = [`cache r=${fmtTokens(read)}`, `w=${fmtTokens(created)}`, `hit=${hitRate}%`];
   return `  ${parts.join(' ')}`;
 }
 
