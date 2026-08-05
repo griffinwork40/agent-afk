@@ -64,6 +64,7 @@ import {
   resolveSubagentTimeoutMs,
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
+import { injectToolBudgetPreamble } from './subagent/budget-preamble.js';
 import type {
   ForkParent,
   ForkSubagentOptions,
@@ -474,7 +475,16 @@ export class SubagentManager {
       );
     }
 
-    const childConfig: AgentConfig = {
+    // Invariant (budget disclosure): the preamble is applied HERE, wrapping the
+    // whole literal, because this is the sole path to a child AgentSession —
+    // agent-tool, compose/DAG, skill forks, and in-process callers all converge
+    // on forkSubagent, while `tools/subagent/child-config.ts` is reached only by
+    // the agent-tool paths. It wraps rather than sits inside the literal so it
+    // reads the FINAL resolved `maxToolUseIterations` (line ~571 below), not the
+    // caller's pre-default value. Injecting at this provider-neutral site is
+    // also what stops the two providers from drifting on it — see the module
+    // header on ./subagent/budget-preamble.js.
+    const childConfig: AgentConfig = injectToolBudgetPreamble({
       ...options.config,
       // Invariant (trace seal ownership): mark this session as a fork so it
       // never seals the SHARED witness trace. The whole tree shares ONE
@@ -656,7 +666,7 @@ export class SubagentManager {
       ...(options.phaseRole === 'read-only'
         ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
         : {}),
-    };
+    });
 
     // Occupancy touch: subagents never write presence files (top-level-only
     // by design — presence.ts), so the worktree sweep's live-session guard
