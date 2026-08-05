@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.1] - 2026-08-05
+
+### Fixed
+- make the pipeline's own signals honest + split improve.ts under the 350 ceiling (#901) (acba4f9)
+
 ## [5.95.0] - 2026-08-05
 
 ### Added
