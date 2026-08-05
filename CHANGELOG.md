@@ -11,6 +11,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.94.0] - 2026-08-04
+
+### Added
+- add /afk-md to edit AFK.md overlays with live hot-reload (#887) (274ffc1)
+
+## [5.93.3] - 2026-08-04
+
+### Fixed
+- render auto-settle timeout as an error, not a green success (#902) (acfc8d4)
+
+## [5.93.2] - 2026-08-04
+
+### Fixed
+- resolve palette at call time so theme swaps actually reach the UI (#898) (4d09deb)
+
+## [5.93.1] - 2026-08-04
+
+### Changed
+- return the goblin mini-sprite to the transient left band (#336) (#900) (f0d78d6)
+
+## [5.93.0] - 2026-08-04
+
+### Added
+- reacting goblin mini-sprite in a constant right-aligned band (#336) (#888) (2f8bf9c)
+
 ## [5.92.1] - 2026-08-03
 
 ### Changed

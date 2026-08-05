@@ -37,6 +37,12 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
   // below. Darkened a second time on request (was #5A3A20).
   // #3C2614 ≈ [60, 38, 20]
   B: [60, 38, 20],
+  // Alarm red — the live mini-mascot's `alert` eyes (see mascot-mini.ts).
+  // Deliberately absent from GOBLIN_GRID (the banner goblin has no red; the
+  // "no red tongue" test in mascot.test.ts pins that), so this token exists
+  // only for the reacting sprite states.
+  // #C83C28 ≈ [200, 60, 40]
+  R: [200, 60, 40],
 };
 
 /**
@@ -134,9 +140,7 @@ export const MASCOT_HEIGHT = 13;
  * never resurrect the olive gap. The `▼` is deliberately absent from the
  * render-guard's forbidden-glyph set in mascot.test.ts for this reason.
  */
-const GLYPH_OVERLAY: Readonly<
-  Record<string, { char: string; fg: string; bg: string }>
-> = {
+const GLYPH_OVERLAY: GlyphOverlay = {
   // single POINTED fang, hung from the grin's viewer-LEFT canine, on col 11
   // (left of centre col 13), one char row below the dark grin band. grid row 22
   // carries a dark notch (cols 10–16) and the cell's own bg is 'K', so the ▼
@@ -155,8 +159,18 @@ function styleGlyph(glyph: { char: string; fg: string; bg: string }): string {
   return glyph.char;
 }
 
+/** A whole-cell glyph override, keyed `"charRow,col"` in CHARACTER coords. */
+export type GlyphOverlay = Readonly<
+  Record<string, { char: string; fg: string; bg: string }>
+>;
+
 /** Render two stacked pixel rows as one terminal character row via half-block technique. */
-function renderPixelRow(top: string, bot: string, charRow: number): string {
+function renderPixelRow(
+  top: string,
+  bot: string,
+  charRow: number,
+  overlays: GlyphOverlay,
+): string {
   if (top.length !== bot.length) {
     throw new Error(
       `pixel row width mismatch: top=${top.length}, bot=${bot.length}`,
@@ -165,7 +179,7 @@ function renderPixelRow(top: string, bot: string, charRow: number): string {
   let line = '';
   for (let c = 0; c < top.length; c++) {
     // Whole-cell glyph overlay wins over the half-block pair beneath it.
-    const overlay = GLYPH_OVERLAY[`${charRow},${c}`];
+    const overlay = overlays[`${charRow},${c}`];
     if (overlay) {
       line += styleGlyph(overlay);
       continue;
@@ -187,6 +201,37 @@ function renderPixelRow(top: string, bot: string, charRow: number): string {
   return line;
 }
 
+/**
+ * Pair adjacent pixel rows of any grid into terminal character rows.
+ *
+ * Contract: `grid` must have an EVEN row count (each character row consumes
+ * two pixel rows — top half `▀`, bottom half `▄`) and every row must be the
+ * same length; both are enforced by throw, because a mismatch would emit rows
+ * of unequal display width and corrupt a caller's row accounting. Returns
+ * `grid.length / 2` ANSI-styled lines. Palette tokens resolve through the
+ * shared {@link PIXEL_PALETTE}; `overlays` are whole-cell overrides applied on
+ * top (pass `{}` for none).
+ *
+ * Shared by the 13-row banner goblin and the 3-row live mini-mascot
+ * (`mascot-mini.ts`) so both degrade through the exact same chalk path — a
+ * second half-block routine would be a second fallback ladder to keep honest.
+ */
+export function renderHalfBlockGrid(
+  grid: readonly string[],
+  overlays: GlyphOverlay = {},
+): string[] {
+  if (grid.length % 2 !== 0) {
+    throw new Error(`pixel grid must have an even row count, got ${grid.length}`);
+  }
+  const lines: string[] = [];
+  for (let r = 0; r < grid.length / 2; r++) {
+    const top = grid[r * 2] ?? '';
+    const bot = grid[r * 2 + 1] ?? '';
+    lines.push(renderPixelRow(top, bot, r, overlays));
+  }
+  return lines;
+}
+
 /** Pair adjacent pixel rows into terminal character rows. */
 function buildSpriteIdle(): string[] {
   if (GOBLIN_GRID.length !== MASCOT_HEIGHT * 2) {
@@ -196,13 +241,7 @@ function buildSpriteIdle(): string[] {
       }`,
     );
   }
-  const lines: string[] = [];
-  for (let r = 0; r < MASCOT_HEIGHT; r++) {
-    const top = GOBLIN_GRID[r * 2] ?? '';
-    const bot = GOBLIN_GRID[r * 2 + 1] ?? '';
-    lines.push(renderPixelRow(top, bot, r));
-  }
-  return lines;
+  return renderHalfBlockGrid(GOBLIN_GRID, GLYPH_OVERLAY);
 }
 
 /** Render the mascot sprite as an array of ANSI-styled lines. */

@@ -382,6 +382,32 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    */
   setCwd?(cwd: string): void;
   /**
+   * Optional. Replace the composed base system prompt for all **subsequent**
+   * turns in this query's lifetime, without resetting the session or touching
+   * conversation history.
+   *
+   * Contract: `basePrompt` is the FULLY COMPOSED base prompt — the framework
+   * doctrine (`prompts/system-prompt.md`) plus the `# Operator configuration`
+   * overlay — i.e. exactly the shape of `AgentConfig.systemPrompt`, as produced
+   * by `resolveBaseSystemPrompt()`. It is NOT the bare AFK.md overlay text;
+   * passing only the overlay would silently drop the framework prompt from a
+   * live session.
+   *
+   * Returns `true` when the live prompt was actually rebuilt, `false` when the
+   * provider accepted the call but could not apply it (e.g. no rebuild factory
+   * was wired because the caller owns an external dispatcher). The return value
+   * is the honesty channel for `/afk-md`: a surface must never report a
+   * hot-reload it did not achieve, so a `false` here means "saved to disk,
+   * applies on next launch".
+   *
+   * Implemented by `AnthropicDirectQuery` and forwarded by `ProviderRouter`.
+   * `OpenAICompatibleQuery` deliberately leaves this undefined — it assembles
+   * its system parts as locals inside `query()` rather than retaining them on
+   * the instance, so a live swap there needs the #876 staleness rework first.
+   * `AgentSession.setSystemPrompt()` calls this only when present.
+   */
+  setSystemPrompt?(basePrompt: string | undefined): boolean;
+  /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).
    *

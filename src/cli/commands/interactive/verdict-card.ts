@@ -40,26 +40,32 @@ interface KindStyle {
 // as 1 column, but terminals/fonts that render it as 2 push the row 1 column
 // past the right border, wrapping the trailing `│` and breaking the box. Use
 // ASCII `-` for dashes. (Chip glyphs ✓/⊘/?/⏸ are NOT ambiguous — verified.)
+//
+// Invariant: each `color` MUST be a thunk that reads `palette.<role>` when
+// called, never the chalk instance itself. `palette` is a live view swapped
+// in place by `applyTheme()` (palette.ts), but this map is built at module
+// scope — ESM hoists it above the first `applyTheme()` call, so capturing
+// `color: palette.success` would freeze the card on the dark tones forever.
 const STYLES: Record<TerminalKind, KindStyle> = {
   done: {
-    color: palette.success,
+    color: (s) => palette.success(s),
     chip: '✓ Done',
     affordance: 'Objective satisfied - review evidence and close.',
   },
   blocked: {
-    color: palette.error,
+    color: (s) => palette.error(s),
     chip: '⊘ Blocked',
     affordance: 'External dependency - unblock above to resume.',
   },
   asking: {
-    color: palette.warning,
+    color: (s) => palette.warning(s),
     chip: '? Asking',
     affordance: 'Waiting on you - answer above to continue.',
   },
   interrupted: {
     // Neutral terminal state — see verdict-ledger.ts for rationale. Meta
     // grey conveys "this happened, low salience," not "informational event."
-    color: palette.meta,
+    color: (s) => palette.meta(s),
     chip: '⏸ Interrupted',
     affordance: 'Halted with state preserved - resume when ready.',
   },

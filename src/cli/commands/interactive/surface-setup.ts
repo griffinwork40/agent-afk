@@ -14,6 +14,7 @@ import { onQuotaUpdate } from '../../../agent/quota-cache.js';
 import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { LoopStageBar } from './loop-stage.js';
+import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 
 /**
@@ -26,6 +27,8 @@ import { buildPrompt, type TurnState } from './repl-loop-shared.js';
  */
 export interface SurfaceSetupDeps {
   getLoopStageBar: () => LoopStageBar | undefined;
+  /** Same lazy-getter contract as {@link getLoopStageBar} (issue #336). */
+  getMascotBar: () => MascotBar | undefined;
 }
 
 export interface SurfaceSetupResult {
@@ -347,7 +350,10 @@ export async function setupSurface(
   // `getLoopStageBar` is read lazily: the footer subsystems are constructed
   // AFTER this phase, but this closure only fires during a turn — long after
   // the bar exists. Matches the original hoisted-`let loopStageBar` capture.
-  ctx.slashCtx.onStageChange = (stage) => deps.getLoopStageBar()?.repaint(stage);
+  ctx.slashCtx.onStageChange = (stage, signals) => {
+    deps.getLoopStageBar()?.repaint(stage);
+    deps.getMascotBar()?.onStage(stage, signals);
+  };
   ctx.slashCtx.onContextProgress = async () => {
     await ctx.contextSampler.refresh();
     await ctx.gitStatusSampler.refresh();

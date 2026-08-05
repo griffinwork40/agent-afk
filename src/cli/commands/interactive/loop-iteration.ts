@@ -110,7 +110,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, verdictLedger, shellPassthrough, bgResultNotifier } =
+  const { contextPane, loopStageBar, mascotBar, verdictLedger, shellPassthrough, bgResultNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -708,7 +708,17 @@ export async function runInputLoop(
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is
         // safe to call on non-TTY (LoopStageBar.repaint() TTY-gates itself).
-        ...(loopStageBar ? { onStageChange: (stage) => loopStageBar!.repaint(stage) } : {}),
+        // The mascot band rides the same transition (issue #336): it maps the
+        // stage onto idle/working itself and is inert unless opted in, so this
+        // stays a single call regardless of whether the sprite is enabled.
+        ...(loopStageBar
+          ? {
+              onStageChange: (stage, signals) => {
+                loopStageBar!.repaint(stage);
+                mascotBar?.onStage(stage, signals);
+              },
+            }
+          : {}),
       }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()
