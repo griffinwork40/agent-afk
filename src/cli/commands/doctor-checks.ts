@@ -223,7 +223,9 @@ export function checkConcurrencySettings(): Check[] {
       : `invalid value ${JSON.stringify(status.rawValue)}; effective value ${status.effectiveValue} (fallback)`,
     ...(status.valid
       ? {}
-      : { fix: `Set ${status.key} to a positive integer or unset it to use the default.` }),
+      : {
+          fix: `Set ${status.key} to an integer in [1, ${status.maxValue}] or unset it to use the default.`,
+        }),
   }));
 }
 
