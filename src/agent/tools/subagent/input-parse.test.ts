@@ -473,6 +473,15 @@ describe('parseAgentInput', () => {
       );
     });
 
+    it('redirects a home-directory cwd to readRoots rather than a narrower cwd', () => {
+      // Observed failure: an agent asked to explain the operator's dotfiles set
+      // cwd to $HOME, was refused, and re-planned around WHERE TO STAND instead
+      // of WHAT TO GRANT. A read-only task should never relocate cwd.
+      expect(() => parseAgentInput({ prompt: 'p', cwd: os.homedir() })).toThrow(
+        /grant those paths via readRoots/,
+      );
+    });
+
     it('throws when cwd is an ancestor of the home directory', () => {
       const parentOfHome = path.dirname(os.homedir());
       expect(() => parseAgentInput({ prompt: 'p', cwd: parentOfHome })).toThrow(
@@ -751,6 +760,22 @@ describe('parseAgentInput', () => {
       expect(() => parseAgentInput({ prompt: 'p', readRoots: [os.homedir()] })).toThrow(
         /must not be a filesystem root, your home directory, or an ancestor/,
       );
+    });
+
+    it('points a home-directory rejection at file-granular grants', () => {
+      // The remedy noun matters. "grant a specific subdirectory instead" is the
+      // WRONG advice for this task class: home-root dotfiles (~/.zshrc,
+      // ~/.gitconfig) sit directly at $HOME, so no grantable subdirectory
+      // encloses them — a caller told to find one enumerates guesses instead of
+      // listing the files it actually needs.
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [os.homedir()] })).toThrow(
+        /a single file is a valid read root/,
+      );
+    });
+
+    it('accepts a single FILE as an entry (the home-root dotfile shape)', () => {
+      const dotfile = path.join(os.homedir(), '.zshrc');
+      expect(parseAgentInput({ prompt: 'p', readRoots: [dotfile] }).readRoots).toEqual([dotfile]);
     });
 
     it('throws when an entry is an ancestor of the home directory', () => {

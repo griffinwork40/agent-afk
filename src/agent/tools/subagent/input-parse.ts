@@ -113,6 +113,13 @@ export interface AgentInput {
    * even attempt to shadow secrets. This is defense-in-depth ON TOP of the
    * read-time floor in `resolveAndContain` / the path-approval hook.
    *
+   * An entry may be a DIRECTORY or a single FILE. A file grants exactly that
+   * file (containment compares `path.relative(root, target) === ''`), which is
+   * the only least-privilege way to reach home-ROOT dotfiles — `~/.zshrc`,
+   * `~/.gitconfig`, `~/.tmux.conf` sit directly at `$HOME`, and `$HOME` itself
+   * is refused by rule (a). Granting the enclosing dir is not an option there,
+   * so file-granular grants are the intended shape, not a workaround.
+   *
    * Deliberately NOT mutually exclusive with `isolation:'worktree'` — widening a
    * confined worktree fork's READS is legitimate (only WRITES break isolation).
    */
@@ -278,7 +285,9 @@ export function parseAgentInput(input: unknown): AgentInput {
       throw new Error(
         `Agent tool cwd must not be a filesystem root, your home directory, ` +
           `or an ancestor of it (checked after resolving symlinks) — pass a ` +
-          `specific subdirectory instead, got: ${JSON.stringify(cwdValue)}`,
+          `specific subdirectory instead. If the child only needs to READ files ` +
+          `outside its tree (dotfiles, ~/.config), do NOT move cwd there: leave ` +
+          `cwd alone and grant those paths via readRoots. Got: ${JSON.stringify(cwdValue)}`,
       );
     }
     cwd = cwdValue;
@@ -395,8 +404,11 @@ export function parseAgentInput(input: unknown): AgentInput {
       if (isTooBroadRoot(resolved) || isTooBroadRoot(realResolved)) {
         throw new Error(
           `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
-            `or an ancestor of it (checked after resolving symlinks) — grant a specific ` +
-            `subdirectory instead, got: ${JSON.stringify(entry)}`,
+            `or an ancestor of it (checked after resolving symlinks) — grant specific ` +
+            `subdirectories, or the individual FILES you need: a single file is a valid ` +
+            `read root and grants exactly that file, which is how to reach home-root ` +
+            `dotfiles (e.g. "<home>/.zshrc", "<home>/.gitconfig") without granting the ` +
+            `home directory. Got: ${JSON.stringify(entry)}`,
         );
       }
       // (b) Denylist rejection — never let a grant target the credential floor.

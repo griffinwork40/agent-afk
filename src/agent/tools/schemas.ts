@@ -425,7 +425,10 @@ export const agentTool: AnthropicToolDef = {
           "child's first cwd-relative tool call. Does not auto-propagate to " +
           'further nested subagents — each `agent` call must specify `cwd` ' +
           'explicitly to operate in a worktree. To NOT set a cwd, omit the field ' +
-          'entirely; a blank value is treated as omitted, never as a path.',
+          'entirely; a blank value is treated as omitted, never as a path. A ' +
+          'filesystem root, your home directory, or an ancestor of it is refused; ' +
+          'when the child only needs to READ files outside its tree, keep cwd and ' +
+          'add readRoots instead of relocating cwd.',
       },
       writeRoots: {
         type: 'array',
@@ -437,7 +440,7 @@ export const agentTool: AnthropicToolDef = {
         type: 'array',
         items: { type: 'string' },
         description:
-          'Optional extra read roots to pre-grant to the forked child. Use when the task data lives OUTSIDE the repo — e.g. `~/Downloads`, a scratch data dir. Each entry must be an absolute path with no `..` segments (and not a filesystem root or your home dir). Composed WITH (never replaces) the fork\'s inherited read scope, so the child keeps its repo/worktree/state reach AND gains the named dirs. Writes stay confined. Grandchildren must be re-granted (not inherited). Unlike writeRoots, NOT mutually exclusive with isolation:"worktree" — widening reads inside an isolated worktree is legitimate.',
+          'Optional extra read roots to pre-grant to the forked child. Use when the task data lives OUTSIDE the repo — e.g. `~/Downloads`, a scratch data dir. Each entry must be an absolute path with no `..` segments (and not a filesystem root or your home dir). An entry may be a DIRECTORY or a single FILE — a file grants exactly that file, which is how to read home-root dotfiles (`~/.zshrc`, `~/.gitconfig`) given the home dir itself is refused; list the files rather than guessing at a directory that encloses them. Composed WITH (never replaces) the fork\'s inherited read scope, so the child keeps its repo/worktree/state reach AND gains the named dirs. Writes stay confined. Grandchildren must be re-granted (not inherited). Unlike writeRoots, NOT mutually exclusive with isolation:"worktree" — widening reads inside an isolated worktree is legitimate.',
       },
       isolation: {
         type: 'string',
