@@ -424,7 +424,8 @@ export const agentTool: AnthropicToolDef = {
           'at dispatch time — a non-existent path surfaces as an error on the ' +
           "child's first cwd-relative tool call. Does not auto-propagate to " +
           'further nested subagents — each `agent` call must specify `cwd` ' +
-          'explicitly to operate in a worktree.',
+          'explicitly to operate in a worktree. To NOT set a cwd, omit the field ' +
+          'entirely; a blank value is treated as omitted, never as a path.',
       },
       writeRoots: {
         type: 'array',
@@ -451,7 +452,8 @@ export const agentTool: AnthropicToolDef = {
           'dirty or commits-ahead tree is preserved and locked instead of ' +
           'removed, so work in progress is never destroyed (recover it via the ' +
           '`worktree` tool). Mutually exclusive with `cwd` (the runtime owns the ' +
-          "child's cwd when isolating). Ignored for read-only agents such as " +
+          "child's cwd when isolating) — to isolate, omit `cwd` rather than " +
+          'blanking it. Ignored for read-only agents such as ' +
           'research-agent — they have nothing to isolate. Not supported together ' +
           'with mode:"background" in this release.',
       },

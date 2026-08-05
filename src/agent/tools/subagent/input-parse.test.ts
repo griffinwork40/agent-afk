@@ -164,11 +164,13 @@ describe('parseAgentInput', () => {
       );
     });
 
-    it('throws when model is null (explicit non-string)', () => {
-      // `null !== undefined`, so it reaches the type check and is rejected.
-      expect(() => parseAgentInput({ prompt: 'p', model: null })).toThrow(
-        /model must be a string/,
-      );
+    it('treats a null model as absent (inherit the parent model)', () => {
+      // Was: threw. `null` is serializer padding for "no value", not intent.
+      expect(parseAgentInput({ prompt: 'p', model: null }).model).toBeUndefined();
+    });
+
+    it('treats an empty-string model as absent rather than dispatching model ""', () => {
+      expect(parseAgentInput({ prompt: 'p', model: '' }).model).toBeUndefined();
     });
   });
 
@@ -304,16 +306,25 @@ describe('parseAgentInput', () => {
     });
 
     it('falls through to the alias when canonical is a whitespace-only string', () => {
-      // `agentInput['agent_type'] ?? agentInput['subagent_type']` uses nullish
-      // coalescing, so a present-but-empty agent_type ('') still wins the ??
-      // (it is not null/undefined). It then trims to '' and is dropped — the
-      // alias is NOT consulted. This pins that documented precedence.
+      // Previously the body pinned the opposite of this title: nullish
+      // coalescing (`agent_type ?? subagent_type`) let a present-but-blank
+      // canonical win the `??` (it is not null/undefined), then trimmed it away
+      // — so BOTH were dropped and the caller's real alias was ignored.
+      // readOptional skips blanks by key order, so precedence now matches the
+      // documented "canonical wins" rule only when canonical is real.
       const result = parseAgentInput({
         prompt: 'p',
         agent_type: '   ',
         subagent_type: 'alias',
       });
-      expect(result.agent_type).toBeUndefined();
+      expect(result.agent_type).toBe('alias');
+    });
+
+    it('keeps canonical precedence when BOTH are real', () => {
+      expect(
+        parseAgentInput({ prompt: 'p', agent_type: 'canonical', subagent_type: 'alias' })
+          .agent_type,
+      ).toBe('canonical');
     });
 
     it('throws when agent_type is not a string (number)', () => {
@@ -340,10 +351,11 @@ describe('parseAgentInput', () => {
       );
     });
 
-    it('accepts an empty-string id_prefix verbatim (no default substitution)', () => {
-      // An explicit '' is a string, so it passes the type check and is used
-      // as-is — the default only applies when the field is absent.
-      expect(parseAgentInput({ prompt: 'p', id_prefix: '' }).id_prefix).toBe('');
+    it('falls back to the default for a blank id_prefix', () => {
+      // Was: used '' verbatim, yielding unlabelled subagent ids. Blank is
+      // not-supplied, so the default applies.
+      expect(parseAgentInput({ prompt: 'p', id_prefix: '' }).id_prefix).toBe('agent-tool');
+      expect(parseAgentInput({ prompt: 'p', id_prefix: null }).id_prefix).toBe('agent-tool');
     });
 
     it('throws when id_prefix is not a string (number)', () => {
@@ -402,10 +414,21 @@ describe('parseAgentInput', () => {
       );
     });
 
-    it('throws when cwd is an empty string', () => {
-      expect(() => parseAgentInput({ prompt: 'p', cwd: '' })).toThrow(
-        /cwd must be a non-empty string/,
-      );
+    it('treats an empty-string cwd as absent (blank means not-supplied)', () => {
+      // Was: threw "cwd must be a non-empty string". A model padding the
+      // optional with '' read that as "cwd is required" and, because cwd and
+      // isolation are mutually exclusive, gave up isolation entirely.
+      const result = parseAgentInput({ prompt: 'p', cwd: '' });
+      expect(result.cwd).toBeUndefined();
+      expect('cwd' in result).toBe(false);
+    });
+
+    it('treats a whitespace-only cwd as absent', () => {
+      expect(parseAgentInput({ prompt: 'p', cwd: '   ' }).cwd).toBeUndefined();
+    });
+
+    it('treats a null cwd as absent', () => {
+      expect(parseAgentInput({ prompt: 'p', cwd: null }).cwd).toBeUndefined();
     });
 
     it('throws when cwd is a relative path', () => {
@@ -851,6 +874,86 @@ describe('parseAgentInput', () => {
       expect(() =>
         parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/x', isolation: 'worktree' }),
       ).toThrow(/mutually exclusive/);
+    });
+
+    it('names the escape hatch in the cwd/isolation conflict message', () => {
+      // The model gets another round after this throw, so the message must say
+      // WHICH field to drop for WHICH goal — a rule-only message led callers to
+      // drop isolation and silently degrade to an unisolated dispatch.
+      expect(() =>
+        parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/x', isolation: 'worktree' }),
+      ).toThrow(/OMIT cwd entirely/);
+    });
+
+    it('names the escape hatch in the writeRoots/isolation conflict message', () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', writeRoots: ['/tmp/w'], isolation: 'worktree' }),
+      ).toThrow(/Omit writeRoots to isolate/);
+    });
+  });
+
+  // Regression: the padded-optional trap. A model that pads optionals with ''
+  // (or null) hit "cwd and isolation are mutually exclusive", retried with
+  // isolation alone but still emitted cwd:'', hit "cwd must be a non-empty
+  // string", concluded cwd was REQUIRED — and therefore that isolation was
+  // inexpressible — then dropped isolation and dispatched into the shared tree.
+  // Every case below must parse, not throw.
+  describe('blank optional fields normalize to absent (padded-serializer trap)', () => {
+    it("accepts cwd:'' alongside isolation:'worktree' and keeps the isolation", () => {
+      const result = parseAgentInput({ prompt: 'p', cwd: '', isolation: 'worktree' });
+      expect(result.isolation).toBe('worktree');
+      expect('cwd' in result).toBe(false);
+    });
+
+    it("accepts cwd:null alongside isolation:'worktree'", () => {
+      expect(parseAgentInput({ prompt: 'p', cwd: null, isolation: 'worktree' }).isolation).toBe(
+        'worktree',
+      );
+    });
+
+    it('accepts a fully padded dispatch (every optional blank)', () => {
+      const result = parseAgentInput({
+        prompt: 'p',
+        cwd: '',
+        model: '',
+        agent_type: '',
+        id_prefix: '',
+        mode: '',
+        isolation: '',
+        max_turns: null,
+        max_tool_use_iterations: null,
+        attachments: null,
+        writeRoots: null,
+        readRoots: null,
+      });
+      expect(result.mode).toBe('foreground');
+      expect(result.id_prefix).toBe('agent-tool');
+      expect(result.max_turns).toBe(0);
+      expect(result.max_turns_explicit).toBe(false);
+      expect(result.max_tool_use_iterations_explicit).toBe(false);
+      expect(result.cwd).toBeUndefined();
+      expect(result.model).toBeUndefined();
+      expect(result.agent_type).toBeUndefined();
+      expect(result.isolation).toBeUndefined();
+      expect(result.attachments).toBeUndefined();
+      expect(result.writeRoots).toBeUndefined();
+      expect(result.readRoots).toBeUndefined();
+    });
+
+    it('lets a real subagent_type through a blank canonical agent_type', () => {
+      // Plain `??` kept the blank because '' !== undefined, dropping both.
+      expect(
+        parseAgentInput({ prompt: 'p', agent_type: '', subagent_type: 'research-agent' })
+          .agent_type,
+      ).toBe('research-agent');
+    });
+
+    it('still rejects a wrong-typed optional loudly (blank-collapse is not coercion)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', cwd: 42 })).toThrow(/cwd must be a string/);
+      expect(() => parseAgentInput({ prompt: 'p', max_turns: '10' })).toThrow(
+        /max_turns must be a number/,
+      );
+      expect(() => parseAgentInput({ prompt: 'p', mode: 'back' })).toThrow(/"back"/);
     });
 
     it("allows cwd together with isolation:'none' (none is a no-op)", () => {
