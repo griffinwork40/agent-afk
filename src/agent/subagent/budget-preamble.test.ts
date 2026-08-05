@@ -23,6 +23,20 @@ describe('renderBudgetPreamble', () => {
     expect(renderBudgetPreamble(12)).toContain('12 tool-use rounds');
     expect(renderBudgetPreamble(12)).not.toContain('50 tool-use rounds');
   });
+
+  // Regression: the "roughly 50 and roughly 500" example used to be a hardcoded
+  // literal that stayed put regardless of maxRounds, so a small cap (e.g. 7)
+  // rendered a preamble that contradicted itself — "7 is a hard ceiling"
+  // alongside an example scaled for 50. The example must track maxRounds.
+  it('scales the batching example to the default cap of 50', () => {
+    expect(renderBudgetPreamble(50)).toContain('roughly 50 and roughly 500 tool calls');
+  });
+
+  it('scales the batching example to a small cap instead of the hardcoded 50/500', () => {
+    const text = renderBudgetPreamble(7);
+    expect(text).toContain('roughly 7 and roughly 70 tool calls');
+    expect(text).not.toContain('roughly 50');
+  });
 });
 
 describe('injectToolBudgetPreamble', () => {

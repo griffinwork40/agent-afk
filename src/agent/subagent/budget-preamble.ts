@@ -9,27 +9,17 @@
  * therefore buys ~10x the evidence per unit budget compared with one that
  * calls tools one at a time.
  *
- * Until this module existed, nothing told the child any of that. The only
- * budget text that ever reached the model was `WIND_DOWN_NOTE`
- * (`providers/shared/tool-loop-cap.ts`), appended on the FINAL round — after
- * the budget was already spent. The per-round `round 7/50` label from
- * `formatRoundLabel` goes to a progress ProviderEvent consumed by terminal/UI
- * renderers and never enters model history. So children paced blind, averaged
- * 1.6-3.0 calls per round, and burned the full 50 rounds on ~50 calls' worth
- * of evidence. Measured cost of that gap: 296 of 4,671 forks capped (6.34%),
- * $990 in a single telemetry window, with the rate climbing week over week.
- *
  * This module is deliberately provider-agnostic and is applied at ONE site —
  * `SubagentManager.forkSubagent`, the sole path to a child `AgentSession`.
- * Injecting here rather than inside a provider is what keeps the two providers
- * from drifting apart; the repo has already been burned once by exactly that
- * failure (openai-compatible shipped without the graceful wind-down for a
- * while after anthropic-direct got it). Every provider must render
- * `systemPrompt`, so no provider has to cooperate for this to work.
  *
  * Shape handling mirrors `companion/primer-loader.ts:injectCompanionPrimer` —
  * same union, same shallow-copy discipline, same "no prompt set → the block
  * becomes the prompt" fallback.
+ *
+ * History: why the child was never told about the budget before this module
+ * existed, the measured cost of that gap, and why injection happens at this
+ * specific provider-neutral fork site (incl. the openai-compatible wind-down
+ * drift precedent that motivated it) live in docs/subagent-tool-budget.md.
  *
  * @module agent/subagent/budget-preamble
  */
@@ -54,7 +44,7 @@ export function renderBudgetPreamble(maxRounds: number): string {
     `You have ${maxRounds} tool-use rounds for this turn. A round is one reply that requests tools:`,
     'issuing five tool calls in a SINGLE reply costs 1 round, not 5. Batch independent reads,',
     'greps, and commands into one reply instead of calling them one at a time — it is the',
-    'difference between roughly 50 and roughly 500 tool calls on the same budget.',
+    `difference between roughly ${maxRounds} and roughly ${maxRounds * 10} tool calls on the same budget.`,
     '',
     `${maxRounds} is a hard ceiling, not a target. Aim to finish well under it. When the budget is`,
     'spent you get one final reply with tools removed and must answer from what you already',
@@ -71,7 +61,14 @@ export function renderBudgetPreamble(maxRounds: number): string {
  * with no ceiling has no budget to disclose.
  *
  * Appends AFTER any existing prompt so the child's actual instructions keep
- * top salience and this sits last, as operational trailer rather than mission.
+ * top salience and this sits last within the caller's prompt — operational
+ * trailer rather than mission. That is "last" only within the prompt this
+ * config supplies: provider assembly (`assembleSystemPrompt` in
+ * `providers/anthropic-direct/query/system-prompt.ts`, mirrored in
+ * `providers/openai-compatible/index.ts`) places this prompt at position 2 of
+ * 6 and appends further sections — memory instructions, hot memory, the
+ * environment fragment, and the skill manifest — after it in what the model
+ * actually receives.
  *
  * Does not mutate the input — returns a shallow copy.
  */

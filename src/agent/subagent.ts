@@ -480,10 +480,12 @@ export class SubagentManager {
     // agent-tool, compose/DAG, skill forks, and in-process callers all converge
     // on forkSubagent, while `tools/subagent/child-config.ts` is reached only by
     // the agent-tool paths. It wraps rather than sits inside the literal so it
-    // reads the FINAL resolved `maxToolUseIterations` (line ~571 below), not the
-    // caller's pre-default value. Injecting at this provider-neutral site is
-    // also what stops the two providers from drifting on it — see the module
-    // header on ./subagent/budget-preamble.js.
+    // reads the FINAL resolved `maxToolUseIterations` — the
+    // `options.config.maxToolUseIterations ?? SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS`
+    // default applied further down in this same literal — not the caller's
+    // pre-default value. Injecting at this provider-neutral site is also what
+    // stops the two providers from drifting on it — see the module header on
+    // ./subagent/budget-preamble.js.
     const childConfig: AgentConfig = injectToolBudgetPreamble({
       ...options.config,
       // Invariant (trace seal ownership): mark this session as a fork so it
