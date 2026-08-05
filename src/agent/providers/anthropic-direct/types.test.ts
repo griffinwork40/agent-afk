@@ -221,4 +221,67 @@ describe('toProviderUsage — cache-write TTL attribution', () => {
     const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
     expect(out.totalCostUsd).toBeCloseTo(3.75, 8);
   });
+
+  it('bills a breakdown residual (issue #912): total exceeds ephemeral5m + ephemeral1h', () => {
+    // A third TTL tier the two known buckets don't cover — 1_000_000 total,
+    // only 700_000 attributed across 5m/1h. The 300_000 residual must be
+    // priced (at the 1h rate), not silently dropped.
+    const usage = makeUsage({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 1_000_000,
+      cache_creation: {
+        ephemeral_5m_input_tokens: 500_000,
+        ephemeral_1h_input_tokens: 200_000,
+      },
+    } as Partial<Usage>);
+    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
+    const expected = (500_000 / 1e6) * 3.75 + (200_000 / 1e6) * 6.0 + (300_000 / 1e6) * 6.0;
+    expect(out.totalCostUsd).toBeCloseTo(expected, 8);
+  });
+});
+
+describe('resolveCacheWriteSplit boundary — finite/non-negative guard (issue #912)', () => {
+  it('clamps a negative breakdown field to 0 instead of poisoning totalCostUsd', () => {
+    const usage = makeUsage({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 1_000_000,
+      cache_creation: {
+        ephemeral_5m_input_tokens: -500_000,
+        ephemeral_1h_input_tokens: 200_000,
+      },
+    } as Partial<Usage>);
+    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
+    expect(out.totalCostUsd).toBeDefined();
+    expect(Number.isFinite(out.totalCostUsd)).toBe(true);
+    expect(out.totalCostUsd!).not.toBeLessThan(0);
+  });
+
+  it('clamps a NaN breakdown field to 0 instead of propagating NaN', () => {
+    const usage = makeUsage({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 1_000_000,
+      cache_creation: {
+        ephemeral_5m_input_tokens: NaN,
+        ephemeral_1h_input_tokens: 200_000,
+      },
+    } as Partial<Usage>);
+    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
+    expect(out.totalCostUsd).toBeDefined();
+    expect(Number.isNaN(out.totalCostUsd)).toBe(false);
+  });
+
+  it('clamps a negative cache_creation_input_tokens total on the fallback path', () => {
+    const usage = makeUsage({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: -1_000_000,
+    });
+    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
+    expect(out.totalCostUsd).toBeDefined();
+    expect(Number.isFinite(out.totalCostUsd)).toBe(true);
+    expect(out.totalCostUsd!).not.toBeLessThan(0);
+  });
 });
