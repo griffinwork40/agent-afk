@@ -692,6 +692,27 @@ describe('renderEvalCaseMarkdown', () => {
     expect(md).not.toContain('later sprint');
   });
 
+  it('describes eval-run coverage honestly for replay, presence-only, and unsupported patterns', () => {
+    const { card } = setupSession();
+    const renderFor = (patternId: typeof card.pattern): string => {
+      const { evalCase } = buildEvalCase(
+        { ...card, pattern: patternId },
+        { evalCaseId: `coverage-${patternId}`, evidenceRowIndex: 0, now: FIXED_NOW },
+      );
+      return renderEvalCaseMarkdown(evalCase);
+    };
+
+    expect(renderFor('repeated-tool-use')).toContain(
+      're-drives this recorded failure and tests neutralisation',
+    );
+    expect(renderFor('tool-failure-density')).toContain(
+      'it does not prove this recorded failure is fixed',
+    );
+    expect(renderFor('subagent-read-denial')).toContain(
+      'reports `unsupported` (exit 3); this assertion is not enforced',
+    );
+  });
+
   it('renders all required sections', () => {
     const { card } = setupSession();
     const { evalCase } = buildEvalCase(card, {

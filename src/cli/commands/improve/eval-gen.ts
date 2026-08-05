@@ -12,8 +12,15 @@ import {
   renderEvalCaseMarkdown,
   writeEvalCase,
 } from '../../../improve/eval-gen/writer.js';
-import type { EvalCaseStatus, FailurePattern } from '../../../improve/schemas.js';
+import type { EvalCase, EvalCaseStatus, FailurePattern } from '../../../improve/schemas.js';
 import { VALID_PATTERNS } from './shared.js';
+
+export function findEvalCaseForEvidenceRow(
+  existing: readonly EvalCase[],
+  evidenceRowIndex: number,
+): EvalCase | undefined {
+  return existing.find((evalCase) => evalCase.replay.evidenceRowIndex === evidenceRowIndex);
+}
 
 const VALID_EVAL_STATUSES: readonly EvalCaseStatus[] = [
   'draft',
@@ -71,25 +78,6 @@ export function registerEvalGenSubcommand(improve: Command): void {
             process.exit(1);
           }
 
-          // 1b. Same duplicate guard as `propose`: an eval-case slices a
-          //     fixture from a specific evidence row, so a second one for the
-          //     same card is only meaningful with an explicit --evidence-row
-          //     (or --force). Preview mode persists nothing and is never gated.
-          if (opts.write !== false && !opts.force && opts.evidenceRow === undefined) {
-            const existing = getEvalCasesForCard(cardSlug);
-            if (existing.length > 0) {
-              const ids = existing.map((e) => e.evalCaseId);
-              console.error(
-                `Card '${cardSlug}' already has ${existing.length} eval-case(s):\n` +
-                  ids.map((id) => `  ${id}`).join('\n') +
-                  `\nRe-run with --force, target a different row with ` +
-                  `--evidence-row <n>, or --no-write to preview. ` +
-                  `Run the existing one: 'afk improve eval-run ${ids[0]}'.`,
-              );
-              process.exit(1);
-            }
-          }
-
           // 2. Validate --proposal existence if provided. The eval-case writer
           //    does not mutate the proposal; we only verify the back-reference
           //    points at a real artifact so the link is meaningful.
@@ -121,6 +109,26 @@ export function registerEvalGenSubcommand(improve: Command): void {
               process.exit(2);
             }
             evidenceRowIndex = parsed;
+          }
+
+          // Constraint: duplicate identity is the selected evidence row, so resolve
+          // the row before checking persisted cases. Preview mode writes nothing;
+          // --force is the explicit escape hatch for regenerating the same row.
+          if (opts.write !== false && !opts.force) {
+            const duplicate = findEvalCaseForEvidenceRow(
+              getEvalCasesForCard(cardSlug),
+              evidenceRowIndex,
+            );
+            if (duplicate) {
+              console.error(
+                `Card '${cardSlug}' already has an eval-case for evidence row ${evidenceRowIndex}:\n` +
+                  `  ${duplicate.evalCaseId}\n` +
+                  `Re-run with --force to regenerate that row, target a different row with ` +
+                  `--evidence-row <n>, or --no-write to preview. ` +
+                  `Run the existing one: 'afk improve eval-run ${duplicate.evalCaseId}'.`,
+              );
+              process.exit(1);
+            }
           }
 
           // 4. Generate or override the id.

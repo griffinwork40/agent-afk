@@ -66,6 +66,7 @@ import {
   getEvalCasesIndexPath,
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
+import { describeEvalRunCoverage } from './eval-run-coverage.js';
 import { EvalGenError, sha256Bytes, sliceTracePrefix } from './replay-fixture.js';
 
 // ---------------------------------------------------------------------------
@@ -256,18 +257,19 @@ function buildTitle(card: FailureCard, endSeq: number): string {
 }
 
 function buildAssertionRationale(args: {
-  patternId: string;
+  patternId: EvalCase['assertion']['patternId'];
   detectorVersion: string;
   endSeq: number;
   sliceLineCount: number;
   sessionId: string;
 }): string {
   const sidShort = args.sessionId.slice(0, 8);
+  const contract = describeEvalRunCoverage(args.patternId);
   return (
     `After the proposed fix lands, replaying the prefix [seq 0..${args.endSeq}] ` +
     `(${args.sliceLineCount} lines, session ${sidShort}…) through ${args.detectorVersion} ` +
     `must produce zero findings for '${args.patternId}' with the fingerprint at generation time. ` +
-    `**Enforced by \`afk improve eval-run\`.**`
+    contract
   );
 }
 
@@ -362,10 +364,8 @@ export function renderEvalCaseMarkdown(ec: EvalCase): string {
 
   out.push('> **How to run this.** This file is a CONTRACT; the fixture');
   out.push('> beside it is the executable input. Run it with');
-  out.push('> `afk improve eval-run ' + ec.evalCaseId + '` — the runner');
-  out.push('> replays the fixture through the live guardrail and asserts');
-  out.push('> the recorded failure is neutralised. Patterns with no');
-  out.push('> registered contract report status `unsupported` (exit 3).');
+  out.push('> `afk improve eval-run ' + ec.evalCaseId + '`.');
+  out.push('> ' + describeEvalRunCoverage(ec.assertion.patternId));
   out.push('');
 
   out.push('## Replay fixture');
