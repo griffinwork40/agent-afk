@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.4] - 2026-08-05
+
+### Fixed
+- tell a forked child its tool-round budget at dispatch (#910) (99827c6)
+
 ## [5.95.3] - 2026-08-05
 
 ### Fixed
