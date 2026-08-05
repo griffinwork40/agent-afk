@@ -28,7 +28,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { getEnvVarMeta, getEnvVarValue } from '../../config/env.js';
+import { getEnvVarMeta, getEnvVarValue, isEnvVarSet } from '../../config/env.js';
 import { getAtPath } from '../../config/settable-keys.js';
 import { maskSecret } from '../../config/mutate.js';
 import { parseJsonConfigFile, validatedValueView } from './json-tier-parse.js';
@@ -191,11 +191,25 @@ function readValidatedTier(file: string): Record<string, unknown> | undefined {
   }
 }
 
-/** The env var currently overriding `path`, if any (honors the parse gates). */
+/**
+ * The env var currently overriding `path`, if any (honors the parse gates).
+ *
+ * Invariant: a SET-but-empty var STOPS the walk instead of falling through to
+ * a lower-precedence alias. The loader binds multi-var chains with `??`
+ * (env-tier.ts:206, `env.AFK_MODEL ?? env.CLAUDE_MODEL`), and `??` does not
+ * fall through on '' — the truthiness gate then skips the override entirely.
+ * Falling through here would report a shadow (e.g. CLAUDE_MODEL) that the
+ * loader never applies. Unset vars, by contrast, DO fall through in both
+ * layers. Single-var entries are unaffected: stop and continue agree when no
+ * alias remains.
+ */
 export function activeEnvShadow(path: string): string | undefined {
   for (const name of CONFIG_ENV_SHADOWS[path] ?? []) {
+    if (!isEnvVarSet(name)) continue; // unset → the loader's `??` falls to the next alias
     const raw = getEnvVarValue(name);
-    if (raw === undefined) continue;
+    // Set-but-empty: the loader binds '' and its truthiness gate skips the
+    // override — no shadow, and no fall-through to a lower-precedence alias.
+    if (raw === undefined) return undefined;
     const gate = PARSE_GATED[name];
     if (gate && !gate(raw)) continue;
     return name;

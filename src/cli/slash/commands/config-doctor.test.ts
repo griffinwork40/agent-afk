@@ -182,6 +182,35 @@ describe('/config fast-paths', () => {
     }
   });
 
+  it('/config set warns before AND after a write shadowed by an env var', async () => {
+    const tmpHome = join(tmpdir(), `afk-cfg-set-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const originalAfkHome = process.env['AFK_HOME'];
+    const originalAfkModel = process.env['AFK_MODEL'];
+    process.env['AFK_HOME'] = tmpHome;
+    process.env['AFK_MODEL'] = 'opus';
+    try {
+      const { ctx, lines } = makeCtx();
+      ctx.session.current.setModel = vi.fn().mockResolvedValue(undefined);
+      const result = await configCmd.handler(ctx, 'set model haiku');
+      expect(result).toBe('continue');
+      const warnIdxs = lines
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => l.startsWith('WARN:') && l.includes('AFK_MODEL is set in the environment'))
+        .map(({ i }) => i);
+      const successIdx = lines.findIndex((l) => l.startsWith('SUCCESS:'));
+      expect(successIdx).toBeGreaterThanOrEqual(0);
+      expect(warnIdxs.length).toBe(2);
+      expect(Math.min(...warnIdxs)).toBeLessThan(successIdx);
+      expect(Math.max(...warnIdxs)).toBeGreaterThan(successIdx);
+    } finally {
+      if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+      if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+      else process.env['AFK_HOME'] = originalAfkHome;
+      if (originalAfkModel === undefined) delete process.env['AFK_MODEL'];
+      else process.env['AFK_MODEL'] = originalAfkModel;
+    }
+  });
+
   it('/config view renders the read-only dump', async () => {
     const { ctx, lines } = makeCtx();
     const result = await configCmd.handler(ctx, 'view');

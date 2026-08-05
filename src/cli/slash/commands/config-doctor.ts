@@ -148,6 +148,12 @@ async function handleConfigSet(ctx: SlashContext, rest: string): Promise<'contin
     return 'continue';
   }
   try {
+    // Warn BEFORE the write too, not only after (the interactive menu shows
+    // the same note in its edit header). The fast-path cannot abort a flagged
+    // write, but the user still learns it is inert before it lands rather
+    // than only after it has.
+    const shadow = shadowNote(resolveConfigProvenance(path));
+    if (shadow) ctx.out.warn(shadow);
     const r = setConfigValue(path, value);
     // Liveness is reported after the write and never downgrades it — the value
     // is on disk either way.
@@ -158,9 +164,9 @@ async function handleConfigSet(ctx: SlashContext, rest: string): Promise<'contin
     if (!live.applied && live.reason !== undefined) {
       ctx.out.warn(`saved, but not applied live: ${live.reason}`);
     }
-    // A write that lands beneath a higher-precedence tier is inert. Say so here
-    // rather than letting the user discover it after a restart.
-    const shadow = shadowNote(resolveConfigProvenance(path));
+    // A write that lands beneath a higher-precedence tier is inert. Repeat the
+    // pre-write warning so the confirmation does not read as success alone.
+    // (Computed once: a user-file write cannot change env/project shadowing.)
     if (shadow) ctx.out.warn(shadow);
   } catch (err) {
     ctx.out.error(err instanceof Error ? err.message : String(err));

@@ -38,6 +38,13 @@ function writeUserConfig(obj: unknown): void {
   writeFileSync(join(dir, 'afk.config.json'), JSON.stringify(obj), 'utf8');
 }
 
+/** Write raw bytes to the user-global config (for malformed-file cases). */
+function writeUserConfigRaw(raw: string): void {
+  const dir = join(tmpRoot, 'home', 'config');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'afk.config.json'), raw, 'utf8');
+}
+
 /** Write a project-local config in cwd (outranks the user file). */
 function writeProjectConfig(raw: string): void {
   writeFileSync(join(tmpRoot, 'project', 'afk.config.json'), raw, 'utf8');
@@ -146,6 +153,14 @@ describe('resolveConfigProvenance — tier precedence', () => {
     expect(p.source.kind).toBe('user');
   });
 
+  it('tolerates a malformed USER config: userValue drops out and the walk falls through', () => {
+    writeUserConfigRaw('{ not json');
+    const p = resolveConfigProvenance('model');
+    expect(p.userValue).toBeUndefined();
+    expect(p.source.kind).toBe('default');
+    expect(p.shadowedBy).toBeUndefined();
+  });
+
   it('resolves dotted paths', () => {
     writeUserConfig({ interactive: { thinkingUi: 'digest' } });
     const p = resolveConfigProvenance('interactive.thinkingUi');
@@ -158,6 +173,19 @@ describe('activeEnvShadow — the loader is truthiness- and parse-gated', () => 
   it('treats an empty env var as absent (the loader does)', () => {
     process.env['AFK_MODEL'] = '';
     expect(activeEnvShadow('model')).toBeUndefined();
+  });
+
+  it('stops at a set-but-empty primary: the loader binds "" and applies NO override', () => {
+    // env-tier.ts:206 — `env.AFK_MODEL ?? env.CLAUDE_MODEL` binds '' (`??` does
+    // not fall through on empty string), then `if (modelRaw)` skips the
+    // override. So NO env shadow exists here; reporting CLAUDE_MODEL would lie
+    // about what the loader does.
+    process.env['AFK_MODEL'] = '';
+    process.env['CLAUDE_MODEL'] = 'haiku';
+    expect(activeEnvShadow('model')).toBeUndefined();
+    const p = resolveConfigProvenance('model');
+    expect(p.source.kind).not.toBe('env');
+    expect(p.shadowedBy).toBeUndefined();
   });
 
   it('ignores an unparseable AFK_MAX_TOKENS, which the loader also skips', () => {
