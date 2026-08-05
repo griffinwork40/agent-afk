@@ -22,10 +22,10 @@ import {
  * site — one compose/DAG layer, or one `runWave` call. Each unit is a forked
  * `AgentSession` (the real memory + provider-rate-limit cost), so an unbounded
  * layer — e.g. a 20-node `compose` — could exhaust memory or storm the 429
- * ceiling. 4 covers the common parallel-wave width while bounding a runaway
- * one; the dispatcher safe-batch ceiling remains 8 and the background-job
- * ceiling remains 10. Operators can tune it with
- * AFK_MAX_CONCURRENT_SUBAGENT_CALLS;
+ * ceiling. 8 sits above typical parallel-wave width (2–6 nodes/critics) so
+ * ordinary fan-outs are never throttled, while bounding a runaway one; it
+ * mirrors the dispatcher's safe-batch ceiling and the background-job ceiling
+ * of 10. Operators can tune it with AFK_MAX_CONCURRENT_SUBAGENT_CALLS;
  * injectable per site (DAGRunOptions.maxConcurrency /
  * RunWaveOptions.maxConcurrency) for tuning and tests.
  *

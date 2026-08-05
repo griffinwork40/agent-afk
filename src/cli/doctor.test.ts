@@ -82,7 +82,7 @@ describe('afk doctor', () => {
       detail: expect.stringContaining('effective value 8 (fallback)'),
     });
     expect(concurrency.find((check: { name: string }) =>
-      check.name === 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS').detail).toContain('effective value 4');
+      check.name === 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS').detail).toContain('effective value 8');
     expect(concurrency.find((check: { name: string }) =>
       check.name === 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS').detail).toContain('effective value 10');
   });

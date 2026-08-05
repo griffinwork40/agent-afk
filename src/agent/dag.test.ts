@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runDAG, validateDAG, type DAGNode } from './dag.js';
 import { TimeoutError } from '../utils/errors.js';
+import { DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } from './concurrency-pool.js';
 
 function node(id: string, fn?: (inputs: Record<string, unknown>) => unknown): DAGNode {
   return {
@@ -635,6 +636,24 @@ describe('runDAG — maxConcurrency', () => {
     expect(Object.keys(result.outputs).sort()).toEqual(['a', 'b', 'c', 'd', 'e']);
     expect(result.failed).toEqual([]);
     expect(t.peak).toBe(2);
+  });
+
+  it('zero-config default: no maxConcurrency and no env override does not throttle a typical layer', async () => {
+    // Stubs NO env var — this is the true observed default-concurrency path
+    // (DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS, currently 8), which is exactly
+    // what silently regressed to 4 without CI catching it once the only
+    // zero-config test was replaced by an env-stubbed one.
+    const t = { live: 0, peak: 0 };
+    const nodes = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((id) => trackedNode(id, 20, t));
+
+    // No maxConcurrency, no env override → defaults to
+    // DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS, which sits at/above this 8-node
+    // layer, so all eight run at once (peak === DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS).
+    const result = await runDAG({ nodes, edges: [] }, new AbortController().signal);
+
+    expect(result.failed).toEqual([]);
+    expect(t.peak).toBe(DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS);
+    expect(DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS).toBe(8);
   });
 
   it('uses the operator env ceiling when maxConcurrency is omitted', async () => {

@@ -209,7 +209,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS',
-    description: 'Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; positive integers only.',
+    description: 'Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.',
     type: 'number',
     required: false,
     default: '8',
@@ -218,16 +218,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS',
-    description: 'Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 4; positive integers only.',
+    description: 'Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.',
     type: 'number',
     required: false,
-    default: '4',
+    default: '8',
     example: '2',
     category: 'model',
   },
   {
     name: 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS',
-    description: 'Maximum background subagent jobs running simultaneously in one registry. Default 10; positive integers only.',
+    description: 'Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default.',
     type: 'number',
     required: false,
     default: '10',
