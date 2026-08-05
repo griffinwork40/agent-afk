@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.3] - 2026-08-05
+
+### Fixed
+- correct prompt-cache cost accounting and surface hit rate (#909) (c80e004)
+
 ## [5.95.2] - 2026-08-05
 
 ### Fixed
