@@ -228,7 +228,10 @@ export interface SlashContext {
    * during normal turns. Absent (`undefined`) on non-TTY surfaces
    * (Telegram, daemon) — the renderer treats this as a no-op.
    */
-  onStageChange?: (stage: import('../commands/interactive/loop-stage.js').LoopStage) => void;
+  onStageChange?: (
+    stage: import('../commands/interactive/loop-stage.js').LoopStage,
+    signals?: import('../commands/interactive/loop-stage.js').StageSignals,
+  ) => void;
   /**
    * Fired mid-turn on tool_result events during a skill-dispatch turn so
    * the REPL can refresh the context sampler and repaint the status line

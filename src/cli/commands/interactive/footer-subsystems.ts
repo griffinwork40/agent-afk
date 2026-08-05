@@ -3,6 +3,7 @@ import { createContextPane } from './context-pane.js';
 import { createVerdictLedger } from './verdict-ledger.js';
 import { BackgroundStatusBar } from '../../background-status-bar.js';
 import { LoopStageBar } from './loop-stage.js';
+import { MascotBar } from './mascot-bar.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
@@ -18,6 +19,7 @@ export interface FooterSubsystems {
   contextPane: ReturnType<typeof createContextPane>;
   bgStatusBar: BackgroundStatusBar;
   loopStageBar: LoopStageBar;
+  mascotBar: MascotBar;
   verdictLedger: ReturnType<typeof createVerdictLedger>;
   shellPassthrough: ShellPassthrough;
   bgResultNotifier: BgResultNotifier;
@@ -36,7 +38,8 @@ export interface FooterSubsystems {
  * any reserved-row painter starts.
  *
  * Teardown is the orchestrator's responsibility (the `finally` block): it must
- * stop the painters top → bottom (loopStageBar → bgStatusBar → verdictLedger)
+ * stop the painters top → bottom (loopStageBar → mascotBar → bgStatusBar →
+ * verdictLedger)
  * so each clears the exact row it painted before the counts below it change.
  */
 export function setupFooterSubsystems(
@@ -76,20 +79,26 @@ export function setupFooterSubsystems(
   //   row N                                  StatusLine
   //   row N-1                                verdict ledger rail (0 or 1 row)
   //   rows [N-1-ledgerRows-bgRows .. N-2]    BackgroundStatusBar (0+ rows)
+  //   rows above those                       MascotBar (0 or 3 rows, transient)
   //   row N - extraRows (topmost reserved)   LoopStageBar (always 1 row)
   //
   //   reserved band = 1 (status) + extraRows, where
-  //   extraRows = loopStageRows + bgBarRowCount + ledgerRowCount
+  //   extraRows = loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount
   //
   // Each painter positions itself from the live counts: the verdict rail sits
   // at the bottom (getAdjacentRows: () => 0), the bg bar floats just above it
-  // (getAdjacentRows: () => ledgerRowCount), and the loop-stage bar reads the
-  // full extraRows so it always lands on the topmost reserved row.
+  // (getAdjacentRows: () => ledgerRowCount), the mascot band floats above the
+  // bg bar (getAdjacentRows: () => ledgerRowCount + bgBarRowCount), and the
+  // loop-stage bar reads the full extraRows so it always lands on the topmost
+  // reserved row.
   let bgBarRowCount = 0;
   let ledgerRowCount = 0;
+  let mascotRowCount = 0;
   const loopStageRows = 1; // LoopStageBar always occupies exactly 1 row.
   const syncExtraRows = () =>
-    ctx.statusLine.setExtraRows(loopStageRows + bgBarRowCount + ledgerRowCount);
+    ctx.statusLine.setExtraRows(
+      loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount,
+    );
 
   // Hoisted so the verdict-ledger row-count handler (registered before the
   // bars are constructed) can reference them via closure. Both are assigned
@@ -97,6 +106,7 @@ export function setupFooterSubsystems(
   // assignment (the handler only fires once a count actually changes).
   let bgStatusBar: BackgroundStatusBar | undefined;
   let loopStageBar: LoopStageBar | undefined;
+  let mascotBar: MascotBar | undefined;
 
   // Register the verdict ledger row-count handler BEFORE constructing the bg
   // bar so its getAdjacentRows closure reads a consistent ledgerRowCount.
@@ -110,6 +120,7 @@ export function setupFooterSubsystems(
     // loop-stage bar otherwise only repaints on a stage change, which has
     // already stopped by the time an end-of-turn terminal-state verdict pushes.
     bgStatusBar?.redraw();
+    mascotBar?.redraw();
     loopStageBar?.redraw();
   });
 
@@ -122,6 +133,34 @@ export function setupFooterSubsystems(
   bgStatusBar.setRowCountChangeHandler((rows) => {
     bgBarRowCount = rows;
     syncExtraRows();
+    // The mascot band sits directly ABOVE the bg bar and derives its paint rows
+    // from bgBarRowCount, so a bg-bar growth/shrink moves it. It has no other
+    // reason to repaint mid-turn (its own animation tick only fires while the
+    // agent is working), so nudge it here or it keeps a stale row.
+    mascotBar?.redraw();
+    // The loop-stage rail positions from the full extraRows (which just moved),
+    // but only repaints on its own on a stage change — a bg-bar-only resize
+    // between transitions would otherwise leave it at its old row, overlapping
+    // the displaced rows below it or orphaning a gap above them. Mirrors the
+    // same nudge in the verdict-ledger handler above. (PR #900 review.)
+    loopStageBar?.redraw();
+  });
+
+  // Reacting goblin mini-sprite (issue #336) - opt-in via AFK_GOBLIN_MASCOT=1;
+  // inert otherwise, in which case it reserves no rows and never paints, so the
+  // sum above is unchanged for every operator who has not asked for it.
+  mascotBar = new MascotBar({
+    // Rows between the mascot band and the status line: the bg bar plus the
+    // verdict rail. (LoopStageBar is ABOVE the mascot, so it is not counted.)
+    getAdjacentRows: () => ledgerRowCount + bgBarRowCount,
+  });
+  mascotBar.setRowCountChangeHandler((rows) => {
+    mascotRowCount = rows;
+    syncExtraRows();
+    // The loop-stage rail positions from the full extraRows, so it must reflow
+    // when the mascot claims or releases its band - otherwise it keeps the row
+    // the mascot just took (or leaves a gap where it used to be).
+    loopStageBar?.redraw();
   });
 
   loopStageBar = new LoopStageBar({
@@ -150,9 +189,14 @@ export function setupFooterSubsystems(
   ctx.statusLine.setAfterScrollRestore(() => {
     verdictLedger.repaint();
     bgStatusBar?.redraw();
+    mascotBar?.redraw();
     loopStageBar?.redraw();
   });
   bgStatusBar.start();
+  // Start the mascot before the loop-stage bar for the same reason the bg bar
+  // goes first: LoopStageBar must read a fully-initialized extraRows. (The
+  // mascot starts idle at 0 rows, so this is ordering hygiene, not a fix.)
+  mascotBar.start();
   // LoopStageBar must start AFTER bgStatusBar so it reads a fully-initialized
   // extraRows from StatusLine and paints at the correct row.  The bg bar may
   // start with 0 rows (no jobs yet), in which case the loop-stage bar sits
@@ -203,6 +247,7 @@ export function setupFooterSubsystems(
     contextPane,
     bgStatusBar,
     loopStageBar,
+    mascotBar,
     verdictLedger,
     shellPassthrough,
     bgResultNotifier,

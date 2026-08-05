@@ -1044,7 +1044,7 @@ describe('Bug #2 dispatch-site invariant: agentType propagates from SubagentExec
 //
 //   After fix (checkpoint 2e, checkStalledEntries replaces checkPauseAnnotations):
 //     At stalledTicks === 2K: calls toolLane.addResult(syntheticAgentToolUseId,
-//     syntheticResult('[no-result — timed out]', false)) and sets source.done = true.
+//     syntheticResult('[no-result — timed out]', true)) and sets source.done = true.
 
 describe('Bug #3 — stuck paused state: checkPauseAnnotations must have bounded exit', () => {
   afterEach(() => {
@@ -1106,7 +1106,7 @@ describe('Bug #3 — stuck paused state: checkPauseAnnotations must have bounded
     //
     // After fix (checkpoint 2e, checkStalledEntries replaces checkPauseAnnotations):
     //   At stalledTicks === 2K: calls toolLane.addResult(syntheticAgentToolUseId,
-    //   syntheticResult('[no-result — timed out]', false)) and sets source.done = true.
+    //   syntheticResult('[no-result — timed out]', true)) and sets source.done = true.
     //   The 2K+1th call sees source.done === true and skips.
     //   Assertion below PASSES.
     expect(source.done).toBe(true);

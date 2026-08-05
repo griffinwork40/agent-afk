@@ -172,7 +172,10 @@ export async function readWithAutocompleteTty(
         }
         if (ac.trigger && ac.suppressedSignature === null) {
           if (ac.trigger.kind === 'slash') {
-            ac.candidates = filterSlashCandidates(ac.trigger.query).slice(0, 12);
+            ac.candidates = filterSlashCandidates(
+              ac.trigger.query,
+              opts.history?.getEntries?.() ?? [],
+            ).slice(0, 12);
           } else if (ac.trigger.kind === 'file') {
             // File candidates are bounded upstream (MAX_FILE_MATCHES) and the
             // dropdown scrolls; do NOT re-cap to 12, or entries past the 12th

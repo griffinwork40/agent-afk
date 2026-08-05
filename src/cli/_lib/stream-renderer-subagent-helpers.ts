@@ -10,6 +10,7 @@ import type { SubagentCtx } from './stream-renderer-subagent.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { wrapToWidth } from '../wrap.js';
 import { palette } from '../palette.js';
+import { capToMeasure } from '../render/measure.js';
 
 /**
  * Pull the latest "clause" out of a thinking buffer for the live tail.
@@ -87,7 +88,9 @@ export function formatSubagentTextLines(text: string): string[] {
   if (!text) return [];
   const prefix = palette.dim('│ ');
   const indent = '    '; // one level indent
-  const maxWidth = Math.max(1, getTerminalWidth() - indent.length - 2 - 2);
+  // Clamped to the shared reading measure so subagent text keeps the same
+  // right edge as adjacent prose (see `render/measure.ts`).
+  const maxWidth = Math.max(1, capToMeasure(getTerminalWidth() - indent.length - 2 - 2));
   const out: string[] = [];
   for (const para of text.split('\n')) {
     const wrapped = wrapToWidth(para, maxWidth);

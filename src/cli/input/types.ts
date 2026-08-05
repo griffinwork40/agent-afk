@@ -25,6 +25,14 @@ export interface IHistoryRing {
   forward(): string | null;
   resetRecall(): void;
   readonly inRecall: boolean;
+  /**
+   * Newest-first snapshot of all entries, used to rank slash-command
+   * completions by recency (`cli/input/suggest-rank`). Optional so existing
+   * lightweight test doubles implementing only the recall surface stay valid;
+   * callers must treat an absent implementation as "no history available"
+   * and fall back to alphabetical ordering.
+   */
+  getEntries?(): readonly string[];
 }
 
 /**

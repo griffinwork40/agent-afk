@@ -32,15 +32,23 @@ import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { getTerminalWidth, ResizeBus } from '../../terminal-size.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
 
-/** Compact glyph + tone for a terminal kind on the ledger rail. */
+/**
+ * Compact glyph + tone for a terminal kind on the ledger rail.
+ *
+ * Invariant: each `color` MUST be a thunk that reads `palette.<role>` when
+ * called, never the chalk instance itself. `palette` is a live view swapped
+ * in place by `applyTheme()` (palette.ts); this map is built at module scope,
+ * which ESM hoists above the first `applyTheme()` call, so a direct capture
+ * would freeze the rail on the dark tones for the whole process.
+ */
 const KIND_PILL: Record<TerminalKind, { glyph: string; color: (s: string) => string; label: string }> = {
-  done: { glyph: '✓', color: palette.success, label: 'done' },
-  blocked: { glyph: '⊘', color: palette.error, label: 'blocked' },
-  asking: { glyph: '?', color: palette.warning, label: 'asking' },
+  done: { glyph: '✓', color: (s) => palette.success(s), label: 'done' },
+  blocked: { glyph: '⊘', color: (s) => palette.error(s), label: 'blocked' },
+  asking: { glyph: '?', color: (s) => palette.warning(s), label: 'asking' },
   // Interrupted is a neutral terminal state — the user stopped the agent.
   // Use meta-grey, not info-sky: it's not an informational event, it's a
   // low-salience "the user halted me" marker.
-  interrupted: { glyph: '⏸', color: palette.meta, label: 'interrupted' },
+  interrupted: { glyph: '⏸', color: (s) => palette.meta(s), label: 'interrupted' },
 };
 
 export interface VerdictLedger {

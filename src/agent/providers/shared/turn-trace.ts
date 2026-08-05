@@ -1,7 +1,13 @@
 /**
- * Witness-layer bracket around one turn of the anthropic-direct loop:
- * `loop_start` on entry, `interrupt_halt` + `loop_end` on every exit path, and
- * the interrupt-timestamp bookkeeping the halt-latency measurement needs.
+ * Witness-layer bracket around one provider turn: `loop_start` on entry,
+ * `interrupt_halt` + `loop_end` on every exit path, and the
+ * interrupt-timestamp bookkeeping the halt-latency measurement needs.
+ *
+ * Shared by both providers — promoted from `anthropic-direct/loop/turn-trace.ts`
+ * after confirming `openai-compatible/query.ts`'s inline equivalent (its own
+ * comments describe it as mirroring this one) has no anthropic-SDK-specific
+ * coupling and only one behavioral parameter: the `provider` label stamped on
+ * the `interrupt_halt` metadata, which each caller now passes explicitly.
  *
  * Contract: this owns a lifetime that belongs to NO single loop phase. The
  * abort listener can fire during any phase (or before the loop starts), and its
@@ -11,11 +17,11 @@
  * Every emit is fire-and-forget: a broken or slow trace writer must never stall
  * tool dispatch, nor an already-returning turn.
  *
- * @module agent/providers/anthropic-direct/loop/turn-trace
+ * @module agent/providers/shared/turn-trace
  */
 
-import type { TraceWriter } from '../../../trace/index.js';
-import { emitSessionPhase } from '../../../trace/emit.js';
+import type { TraceWriter } from '../../trace/index.js';
+import { emitSessionPhase } from '../../trace/emit.js';
 
 /**
  * Brackets a turn with its witness events. Construct at loop entry (which emits
@@ -27,16 +33,20 @@ export class TurnTrace {
   /**
    * @param signal      - The turn's abort signal. Watched for the ESC soft-stop.
    * @param traceWriter - Absent on a no-trace session; every method no-ops safely.
+   * @param provider    - Stamped onto the `interrupt_halt` metadata so the two
+   *                      providers' halt-latency events stay distinguishable.
    */
   constructor(
     private readonly signal: AbortSignal,
     private readonly traceWriter: TraceWriter | undefined,
+    private readonly provider: 'anthropic-direct' | 'openai-compatible',
   ) {
     // Invariant: emit order matches the pre-split loop prologue — `loop_start`
     // is the first witness event of the turn, and the interrupt listener is
     // registered after it. Both are synchronous with respect to each other
-    // (the emit is fire-and-forget), so this ordering is about keeping the
-    // trace stream byte-comparable with pre-split sessions, not correctness.
+    // (the emit is fire-and-forget, and neither statement awaits), so no abort
+    // can land between them — this ordering is about keeping the trace stream
+    // byte-comparable with pre-split sessions, not correctness.
 
     // Mark loop entry once for this turn.
     void emitSessionPhase(traceWriter, { phase: 'loop_start' });
@@ -81,7 +91,7 @@ export class TurnTrace {
       void emitSessionPhase(this.traceWriter, {
         phase: 'interrupt_halt',
         durationMs: Date.now() - this.interruptedAt,
-        metadata: { provider: 'anthropic-direct' },
+        metadata: { provider: this.provider },
       });
     }
 

@@ -28,6 +28,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
+import { formatCacheUsage } from './trace-usage-format.js';
 import { getAfkStateDir, getTraceDir } from '../../paths.js';
 import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
@@ -412,9 +413,12 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
       // stops (a turn that ends with no output and no error) diagnosable only
       // by reading the raw trace.jsonl. See docs: silent-model-loop debugging.
       const stop = p.lastStopReason ? `  stop=${p.lastStopReason}` : '';
+      // Prompt-cache hit rate was recorded but never rendered — see
+      // trace-usage-format.ts for why that made cache regressions invisible.
+      const cache = formatCacheUsage(p.finalTokens);
       return line(
         'closure',
-        `${p.reason}  turns=${p.finalTurnCount}${stop}  ${fmtUsd(p.finalCostUsd)}${guidance}`,
+        `${p.reason}  turns=${p.finalTurnCount}${stop}  ${fmtUsd(p.finalCostUsd)}${cache}${guidance}`,
       );
     }
 

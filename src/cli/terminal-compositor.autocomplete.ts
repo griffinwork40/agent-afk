@@ -19,6 +19,7 @@ import {
 } from './input/trigger.js';
 import { stripGhostControlChars } from './input/suggest.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
+import type { IHistoryRing } from './input/types.js';
 import type { SuggestContext, SuggestEngine } from './terminal-compositor.types.js';
 
 /** Maximum dropdown rows to show inside the compositor frame. */
@@ -40,6 +41,13 @@ export interface AutocompleteHost {
   activeGhost: string | null;
   readonly ghostEngine: SuggestEngine | undefined;
   readonly ghostGetContext: (() => SuggestContext) | undefined;
+  /**
+   * Input history, read newest-first to rank slash candidates by recency.
+   * Deliberately NOT sourced from `ghostGetContext`: dropdown ordering must
+   * stay correct when ghost text is disabled (`AFK_SUGGEST_GHOST=0`), which
+   * leaves that context undefined.
+   */
+  readonly history?: IHistoryRing;
   repaint(): void;
 }
 
@@ -87,7 +95,10 @@ export function updateAutocomplete(self: AutocompleteHost): void {
   }
   if (ac.trigger && ac.suppressedSignature === null) {
     if (ac.trigger.kind === 'slash') {
-      commitCandidates(ac, filterSlashCandidates(ac.trigger.query).slice(0, 12));
+      commitCandidates(
+        ac,
+        filterSlashCandidates(ac.trigger.query, self.history?.getEntries?.() ?? []).slice(0, 12),
+      );
     } else if (ac.trigger.kind === 'file') {
       updateFileCandidates(self, ac, ac.trigger.query);
     } else {

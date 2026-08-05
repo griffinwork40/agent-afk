@@ -8,6 +8,7 @@
 
 import { readdirSync, promises as fsp, type Dirent } from 'fs';
 import { list as listSlashCommands, aliasEntries, lookup } from '../slash/registry.js';
+import { buildRecencyRanks, compareByRecency } from './suggest-rank.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import type { Candidate, Trigger } from './types.js';
 import type { SlashCommand } from '../slash/types.js';
@@ -87,13 +88,21 @@ function isSubsequence(needle: string, haystack: string): boolean {
  * Filter slash commands for the autocomplete dropdown.
  *
  * Ranking: prefix matches first (preserving the historical `startsWith`
- * behaviour and its alphabetical ordering), then subsequence matches — e.g.
- * `cfg` → `/config` — appended below, so abbreviations resolve without
- * displacing the common prefix case. Matching is case-insensitive. Canonical
- * commands and aliases (e.g. `/quit` → `/exit`, which borrow their canonical
- * command's summary) share the same ranking. Capped at 20.
+ * behaviour), then subsequence matches — e.g. `cfg` → `/config` — appended
+ * below, so abbreviations resolve without displacing the common prefix case.
+ * Matching is case-insensitive. Canonical commands and aliases (e.g. `/quit` →
+ * `/exit`, which borrow their canonical command's summary) share the same
+ * ranking. Capped at 20.
+ *
+ * Within each bucket, candidates are ordered by how recently the user ran them
+ * (`recentHistory`, newest-first), falling back to alphabetical. Omitting
+ * `recentHistory` — or passing an empty array — yields exactly the previous
+ * alphabetical ordering, so every existing caller and test is unaffected.
  */
-export function filterSlashCandidates(query: string): Candidate[] {
+export function filterSlashCandidates(
+  query: string,
+  recentHistory: readonly string[] = [],
+): Candidate[] {
   const cmds = listSlashCommands();
   const q = query.toLowerCase();
 
@@ -124,8 +133,9 @@ export function filterSlashCandidates(query: string): Candidate[] {
       ? []
       : universe.filter((u) => !prefixValues.has(u.cand.value) && isSubsequence(q, u.key));
 
+  const ranks = buildRecencyRanks(recentHistory);
   const byValue = (a: { cand: Candidate }, b: { cand: Candidate }): number =>
-    a.cand.value.localeCompare(b.cand.value);
+    compareByRecency(a.cand.value, b.cand.value, ranks);
   prefix.sort(byValue);
   subseq.sort(byValue);
   return [...prefix, ...subseq].map((u) => u.cand).slice(0, 20);

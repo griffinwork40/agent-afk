@@ -273,9 +273,19 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
             `[stream-renderer] auto_settle_timeout ${JSON.stringify({ sourceId, elapsedMs: elapsed, syntheticAgentToolUseId: source.syntheticAgentToolUseId })}\n`,
           );
         }
+        // Invariant: isError MUST be true. This row is a renderer-side give-up,
+        // not a result. Nothing here touches the sub-agent's AbortController —
+        // it may still be running, and often is: a forge qualify sub-agent has
+        // been observed auto-settling here at ~90s and then failing for real
+        // ~18 minutes later. Passing false makes doneGlyph() paint a green
+        // success check on a row whose own label reads "[no-result — timed
+        // out]", so a 20-minute failure renders as a 90-second success. The
+        // glyph must agree with the label. If a real result arrives later,
+        // finalizeSubagent overwrites this row, so a transient error mark
+        // self-heals; a false success does not.
         ctx.toolLane.addResult(
           source.syntheticAgentToolUseId,
-          syntheticResult('[no-result — timed out]', false),
+          syntheticResult('[no-result — timed out]', true),
         );
         source.done = true;
         changed = true;

@@ -4,6 +4,7 @@ import { get as httpsGet } from 'https';
 import { join } from 'path';
 import { getAfkCacheDir } from '../paths.js';
 import { getVersion } from './version.js';
+import { palette } from './palette.js';
 import { env } from '../config/env.js';
 
 /** Maximum response body size accepted from the registry (64 KB). */
@@ -195,13 +196,13 @@ export async function coldStartUpdateCheck(
 }
 
 export function printUpdateBanner(info: UpdateInfo): void {
-  const yellow = '\x1b[33m';
-  const bold = '\x1b[1m';
-  const dim = '\x1b[2m';
-  const reset = '\x1b[0m';
+  // Invariant: style through the palette, never hand-rolled SGR literals. Raw
+  // escapes bypass chalk's level gate, so they printed color even under
+  // NO_COLOR / CI / a piped stderr, and they were invisible to `applyTheme()`.
   process.stderr.write(
-    `\n${yellow}${bold}Update available:${reset} ${dim}${info.currentVersion}${reset} → ${bold}${info.latestVersion}${reset}\n` +
-    `${dim}Run \`npm install -g agent-afk\` to update${reset}\n`,
+    `\n${palette.warning(palette.bold('Update available:'))} ` +
+    `${palette.dim(info.currentVersion)} → ${palette.bold(info.latestVersion)}\n` +
+    `${palette.dim('Run `npm install -g agent-afk` to update')}\n`,
   );
 }
 
@@ -370,10 +371,9 @@ export function checkPendingUpdate(): void {
     if (current === pending.targetVersion) {
       // Install landed: announce once, then clear the marker.
       unlinkSync(pendingPath());
-      const green = '\x1b[32m';
-      const bold = '\x1b[1m';
-      const reset = '\x1b[0m';
-      process.stderr.write(`${green}${bold}Updated to agent-afk v${current}${reset}\n`);
+      process.stderr.write(
+        `${palette.success(palette.bold(`Updated to agent-afk v${current}`))}\n`,
+      );
       return;
     }
 
