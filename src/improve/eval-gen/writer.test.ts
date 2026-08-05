@@ -675,7 +675,7 @@ describe('renderEvalCaseMarkdown', () => {
     expect(renderEvalCaseMarkdown(evalCase)).toBe(renderEvalCaseMarkdown(evalCase));
   });
 
-  it('renders the Sprint 3 "contract, not executable" disclaimer', () => {
+  it('renders a "how to run this" block naming the eval-run command', () => {
     const { card } = setupSession();
     const { evalCase } = buildEvalCase(card, {
       evalCaseId: 'disclaimer',
@@ -683,8 +683,34 @@ describe('renderEvalCaseMarkdown', () => {
       now: FIXED_NOW,
     });
     const md = renderEvalCaseMarkdown(evalCase);
-    expect(md).toContain('CONTRACT, not an');
-    expect(md).toContain('No runner consumes it yet');
+    expect(md).toContain('This file is a CONTRACT');
+    // The runner exists. Pin that the artifact names it and does NOT revert to
+    // claiming otherwise — the old copy said "No runner consumes it yet" for
+    // weeks after `afk improve eval-run` shipped.
+    expect(md).toContain('afk improve eval-run');
+    expect(md).not.toContain('No runner consumes it yet');
+    expect(md).not.toContain('later sprint');
+  });
+
+  it('describes eval-run coverage honestly for replay, presence-only, and unsupported patterns', () => {
+    const { card } = setupSession();
+    const renderFor = (patternId: typeof card.pattern): string => {
+      const { evalCase } = buildEvalCase(
+        { ...card, pattern: patternId },
+        { evalCaseId: `coverage-${patternId}`, evidenceRowIndex: 0, now: FIXED_NOW },
+      );
+      return renderEvalCaseMarkdown(evalCase);
+    };
+
+    expect(renderFor('repeated-tool-use')).toContain(
+      're-drives this recorded failure and tests neutralisation',
+    );
+    expect(renderFor('tool-failure-density')).toContain(
+      'it does not prove this recorded failure is fixed',
+    );
+    expect(renderFor('subagent-read-denial')).toContain(
+      'reports `unsupported` (exit 3); this assertion is not enforced',
+    );
   });
 
   it('renders all required sections', () => {

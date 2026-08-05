@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { VALID_PATTERNS } from './improve.js';
+import { VALID_PATTERNS } from './improve/index.js';
 import { FailurePatternSchema } from '../../improve/schemas.js';
 
 describe('improve --pattern accepted values', () => {
