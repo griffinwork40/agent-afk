@@ -9,6 +9,7 @@
  */
 
 import { env, getMissingRequiredEnvVars } from '../../config/env.js';
+import { getConcurrencyStatuses } from '../../config/concurrency.js';
 import { access, constants, mkdir, readFile } from 'fs/promises';
 import { execSync } from 'child_process';
 import { getApiKey, getCodexApiKey } from '../shared-helpers.js';
@@ -213,6 +214,19 @@ export async function checkImportAvailable(
   };
 }
 
+export function checkConcurrencySettings(): Check[] {
+  return getConcurrencyStatuses(false).map((status) => ({
+    name: status.key,
+    state: status.valid ? 'pass' : 'warn',
+    detail: status.valid
+      ? `effective value ${status.effectiveValue} (${status.source})`
+      : `invalid value ${JSON.stringify(status.rawValue)}; effective value ${status.effectiveValue} (fallback)`,
+    ...(status.valid
+      ? {}
+      : { fix: `Set ${status.key} to a positive integer or unset it to use the default.` }),
+  }));
+}
+
 /** Run all checks and return the full list (nulls filtered out). */
 export async function runDoctorChecks(): Promise<Check[]> {
   const results: Check[] = [];
@@ -224,6 +238,7 @@ export async function runDoctorChecks(): Promise<Check[]> {
   results.push(await checkDirWritable('State Directory', getAfkStateDir));
   results.push(await checkDirWritable('Logs Directory', getLogsDir));
   results.push(await checkConfigFile());
+  results.push(...checkConcurrencySettings());
 
   const envCheck = await checkRequiredEnvVars();
   if (envCheck !== null) results.push(envCheck);

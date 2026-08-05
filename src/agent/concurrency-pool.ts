@@ -12,17 +12,20 @@
  * @module agent/concurrency-pool
  */
 
-import { env } from '../config/env.js';
+import {
+  DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+  resolveMaxConcurrentSubagentCalls,
+} from '../config/concurrency.js';
 
 /**
  * Ceiling on subagent forks dispatched simultaneously from a SINGLE fan-out
  * site — one compose/DAG layer, or one `runWave` call. Each unit is a forked
  * `AgentSession` (the real memory + provider-rate-limit cost), so an unbounded
  * layer — e.g. a 20-node `compose` — could exhaust memory or storm the 429
- * ceiling. 8 sits above typical parallel-wave width (2–6 nodes/critics) so
- * ordinary fan-outs are never throttled, while bounding a runaway one; it
- * mirrors the dispatcher's safe-batch ceiling and the background-job ceiling
- * of 10. Operators can lower it with AFK_MAX_CONCURRENT_SUBAGENT_CALLS;
+ * ceiling. 4 covers the common parallel-wave width while bounding a runaway
+ * one; the dispatcher safe-batch ceiling remains 8 and the background-job
+ * ceiling remains 10. Operators can tune it with
+ * AFK_MAX_CONCURRENT_SUBAGENT_CALLS;
  * injectable per site (DAGRunOptions.maxConcurrency /
  * RunWaveOptions.maxConcurrency) for tuning and tests.
  *
@@ -33,14 +36,7 @@ import { env } from '../config/env.js';
  * deadlock (a parent holds a permit while awaiting a child that needs one);
  * the per-site design avoids that hold-and-wait cycle.
  */
-export const DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS = 8;
-
-export function resolveMaxConcurrentSubagentCalls(): number {
-  const parsed = Number(env.AFK_MAX_CONCURRENT_SUBAGENT_CALLS);
-  return Number.isInteger(parsed) && parsed >= 1
-    ? parsed
-    : DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS;
-}
+export { DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS, resolveMaxConcurrentSubagentCalls };
 
 /**
  * Run `worker` over every `items` element with at most `limit` invocations in

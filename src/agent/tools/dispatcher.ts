@@ -10,7 +10,10 @@
  * @module agent/tools/dispatcher
  */
 
-import { env } from '../../config/env.js';
+import {
+  DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS,
+  resolveMaxConcurrentSafeToolCalls,
+} from '../../config/concurrency.js';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
@@ -94,14 +97,7 @@ const REPEAT_BREAKER_EXEMPT_TOOLS: ReadonlySet<string> = new Set<string>();
  * regress. Operators can lower it with AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS;
  * injectable via SessionToolDispatcherOptions.maxConcurrentSafeCalls.
  */
-export const DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS = 8;
-
-export function resolveMaxConcurrentSafeToolCalls(): number {
-  const parsed = Number(env.AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS);
-  return Number.isInteger(parsed) && parsed >= 1
-    ? parsed
-    : DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS;
-}
+export { DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS, resolveMaxConcurrentSafeToolCalls };
 
 export interface SessionToolDispatcherOptions {
   handlers: Map<string, ToolHandler>;

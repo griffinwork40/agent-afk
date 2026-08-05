@@ -333,6 +333,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_MAX_CONCURRENT_BACKGROUND_JOBS",
+      "description": "Maximum background subagent jobs running simultaneously in one registry. Default 10; positive integers only.",
+      "type": "number",
+      "required": false,
+      "default": "10",
+      "example": "5",
+      "category": "model"
+    },
+    {
       "name": "AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS",
       "description": "Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; positive integers only.",
       "type": "number",
@@ -343,11 +352,11 @@
     },
     {
       "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS",
-      "description": "Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; positive integers only.",
+      "description": "Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 4; positive integers only.",
       "type": "number",
       "required": false,
-      "default": "8",
-      "example": "4",
+      "default": "4",
+      "example": "2",
       "category": "model"
     },
     {
