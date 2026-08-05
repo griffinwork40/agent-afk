@@ -529,7 +529,11 @@ describe('query() characterization (#824) — shared roots and grants', () => {
       }),
     );
 
-    const firstRead = (provider as any)._sharedReadRoots;
+    // The shared root arrays moved from a provider field to `ProviderGrantState`
+    // in the #824 split; the reference-sharing contract they encode is unchanged,
+    // so this reads the new owner rather than the retired `_sharedReadRoots`.
+    const grantState = (provider as any).grants as { readRoots: string[] | undefined };
+    const firstRead = grantState.readRoots;
     expect(firstRead).toEqual(['/work', '/extra']);
     expect(provider.getGrants().readRoots).toEqual(['/work', '/extra']);
 
@@ -537,7 +541,7 @@ describe('query() characterization (#824) — shared roots and grants', () => {
       provider.query({ prompt: singleInput('again'), config: { ...BASE_CONFIG, cwd: '/work' } }),
     );
     // Same array instance across turns — grants must survive by reference.
-    expect((provider as any)._sharedReadRoots).toBe(firstRead);
+    expect(grantState.readRoots).toBe(firstRead);
   });
 
   it('tracks the permission mode for getGrants().allowAll', async () => {

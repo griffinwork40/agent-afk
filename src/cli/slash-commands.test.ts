@@ -15,6 +15,7 @@ import {
 } from './slash/plugin-skills.js';
 import { registerPluginAgents } from './slash/plugin-agents.js';
 import type { SlashContext, SessionStats } from './slash/types.js';
+import { FastModeController } from '../agent/fast-mode.js';
 
 function makeStats(): SessionStats {
   return {
@@ -79,6 +80,8 @@ function makeCtx(overrides: Partial<SlashContext> = {}): { ctx: SlashContext; li
       error: (t) => lines.push(`ERROR:${t}`),
     },
     ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+    ...(overrides.fastMode !== undefined ? { fastMode: overrides.fastMode } : {}),
+    ...(overrides.getFastModeContext !== undefined ? { getFastModeContext: overrides.getFastModeContext } : {}),
   };
   return { ctx, lines };
 }
@@ -101,7 +104,7 @@ describe('slash commands — registration', () => {
     for (const expected of [
       '/exit', '/clear', '/compact', '/help',
       '/cost', '/tokens', '/history', '/model', '/tools', '/mcp', '/limits',
-      '/plan', '/todo',
+      '/plan', '/todo', '/fast',
       '/skills', '/reload-plugins', '/agents',
     ]) {
       expect(names).toContain(expected);
@@ -149,6 +152,58 @@ describe('slash commands — registration', () => {
     expect(lines.join('\n')).toContain('Conversation history cleared');
 
     expect(lookup('/mint')).toBeDefined();
+  });
+});
+
+describe('/fast', () => {
+  beforeEach(() => { resetRegistry(); registerAll(); });
+
+  function fastContext(model = 'claude-opus-5') {
+    const controller = new FastModeController();
+    const { ctx, lines } = makeCtx({
+      fastMode: controller,
+      getFastModeContext: () => ({
+        resolvedModelId: model,
+        providerFamily: 'anthropic-direct',
+        hasCustomEndpoint: false,
+        executionPath: 'top-level',
+      }),
+    });
+    return { controller, ctx, lines };
+  }
+
+  it('reports off, mutates on/off, and says changes apply next turn', async () => {
+    const { controller, ctx, lines } = fastContext();
+    await dispatch('/fast', ctx);
+    expect(lines.join('\n')).toContain('preference: off');
+
+    await dispatch('/fast on', ctx);
+    expect(controller.getPreference()).toBe('on');
+    expect(lines.join('\n')).toContain('next turn');
+    await dispatch('/fast', ctx);
+    expect(lines.join('\n')).toContain('Fast mode: active');
+
+    await dispatch('/fast off', ctx);
+    expect(controller.getPreference()).toBe('off');
+  });
+
+  it('reports enabled-but-inactive status without disabling the preference', async () => {
+    const { controller, ctx, lines } = fastContext('claude-sonnet-5');
+    controller.setPreference('on');
+    await dispatch('/fast', ctx);
+    expect(lines.join('\n')).toContain('inactive');
+    expect(lines.join('\n')).toContain('not a supported Opus');
+    expect(controller.getPreference()).toBe('on');
+  });
+
+  it('rejects invalid arguments without mutation and has no effort coupling', async () => {
+    const { controller, ctx, lines } = fastContext();
+    const statsBefore = { ...ctx.stats };
+    await dispatch('/fast turbo', ctx);
+    expect(lines.join('\n')).toContain('Usage: /fast [on|off]');
+    expect(controller.getPreference()).toBe('off');
+    expect(ctx.stats).toEqual(statsBefore);
+    expect('effort' in controller).toBe(false);
   });
 });
 

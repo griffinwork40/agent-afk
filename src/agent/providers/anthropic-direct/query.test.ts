@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { FastModeController } from '../../fast-mode.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent, ProviderUserTurn } from '../../provider.js';
@@ -156,6 +157,33 @@ describe('AnthropicDirectQuery — opts.subagentId threading into RunTurnInput (
       if (tc.kind !== 'tool_call') throw new Error('unreachable');
       expect(tc.payload.subagentId).toBe('research-agent-1700000000000-3');
     }
+  });
+
+  it('annotates caught ProviderEvent request errors for effective Fast requests with no fallback', async () => {
+    const client = {
+      messages: { create: vi.fn(() => { throw new Error('upstream rejected speed'); }) },
+    } as unknown as Anthropic;
+    const query = new AnthropicDirectQuery({
+      client,
+      authMode: 'oauth',
+      promptStream: singleInput('fast please'),
+      toolDispatcher: okDispatcher,
+      model: 'claude-opus-5',
+      maxTokens: 1024,
+      tools: null,
+      userSystem: null,
+      systemPrefix: null,
+      fastModeController: new FastModeController('on'),
+    });
+
+    const events = await collect(query);
+    const error = events.find((e) => e.type === 'error');
+    expect(error?.type).toBe('error');
+    if (error?.type !== 'error') throw new Error('expected error event');
+    expect(error.error.message).toContain('Fast mode requested');
+    expect(error.error.message).toContain('no standard-mode fallback');
+    expect(error.error.message).toContain('upstream rejected speed');
+    expect((error.error as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
   });
 
   it('omits subagentId from tool_call trace events when opts.subagentId is absent (top-level session)', async () => {

@@ -259,12 +259,12 @@ export function prepareSources() {
 
   walk(tmpSrc, srcRoot);
 
-  // Pattern C: inline the root-level system prompt in shared-helpers.ts
-  // The code uses a two-line pattern: resolve(...) into a variable, then readFileSync(variable)
-  const sharedHelpersPath = join(tmpSrc, 'cli', 'shared-helpers.ts');
+  // Pattern C: inline the root-level system prompt in system-prompt.ts.
+  // The code uses a two-line pattern: resolve(...) into a variable, then readFileSync(variable).
+  const systemPromptSourcePath = join(tmpSrc, 'cli', 'system-prompt.ts');
   const systemPromptPath = join(repoRoot, 'prompts', 'system-prompt.md');
-  if (existsSync(sharedHelpersPath) && existsSync(systemPromptPath)) {
-    let shContent = readFileSync(sharedHelpersPath, 'utf-8');
+  if (existsSync(systemPromptSourcePath) && existsSync(systemPromptPath)) {
+    let shContent = readFileSync(systemPromptSourcePath, 'utf-8');
     const systemPrompt = readFileSync(systemPromptPath, 'utf-8');
     const escaped = escapeForTemplate(systemPrompt);
     // Find and replace the exact function body using string search
@@ -281,13 +281,13 @@ export function prepareSources() {
     const newFn = 'export function loadSystemPrompt(): string | undefined {\n  return `' + escaped + '`;\n}';
     if (shContent.includes(oldFn)) {
       shContent = shContent.replace(oldFn, newFn);
-      writeFileSync(sharedHelpersPath, shContent);
+      writeFileSync(systemPromptSourcePath, shContent);
       console.log(`  [inline-prompts] Inlined prompts/system-prompt.md into loadSystemPrompt()`);
       stats.inlinedFiles++;
       stats.replacedCalls++;
     } else {
       throw new Error(
-        '[inline-prompts] Could not find loadSystemPrompt() in shared-helpers.ts\n' +
+        '[inline-prompts] Could not find loadSystemPrompt() in system-prompt.ts\n' +
         '  Pattern C replacement failed. The function body may have changed.\n' +
         '  Update the oldFn string in prepareSources() to match the current code.'
       );

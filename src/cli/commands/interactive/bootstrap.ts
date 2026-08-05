@@ -78,6 +78,8 @@ export async function bootstrapSession(
   });
 
   const sharedMemoryStore = new MemoryStore();
+  const { FastModeController } = await import('../../../agent/fast-mode.js');
+  const fastModeController = new FastModeController();
 
   // MCP — load `~/.afk/config/mcp.json` and connect every enabled server
   // BEFORE provider construction so the provider sees the MCP-bridged
@@ -96,7 +98,7 @@ export async function bootstrapSession(
   // builder closes over `mcpManager`.
   const { providerFactory, startupProvider } = createReplProviders({
     options, cliConfig, sessionModel, subagentExecutor, skillExecutor, composeExecutor,
-    memoryStore: sharedMemoryStore, mcpManager,
+    memoryStore: sharedMemoryStore, mcpManager, fastModeController,
   });
 
   // Stats, permission/thinking-UI seeding, startup banners (`trace:` /
@@ -156,7 +158,10 @@ export async function bootstrapSession(
 
   const slashCtx: SlashContext = createReplSlashContext({
     sessionRef, stats, writer, statusLine, contextSampler, gitStatusSampler,
-    ledger: trustedSkillLedger, mcpManager,
+    ledger: trustedSkillLedger, mcpManager, fastModeController,
+    ...(cliConfig.baseUrl !== undefined ? { anthropicBaseUrl: cliConfig.baseUrl } : {}),
+    ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
+    ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 
   // requestResume delegates to performResumeSwap (resume-swap.ts).

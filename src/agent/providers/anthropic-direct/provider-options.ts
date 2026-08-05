@@ -31,6 +31,7 @@ import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
+import type { FastModeController } from '../../fast-mode.js';
 
 /** Test/factory hook: lets tests inject a stub Anthropic client.
  *
@@ -68,6 +69,8 @@ export function getClientFactory(): AnthropicClientFactory | null {
 
 /** Construction options for {@link AnthropicDirectProvider}. */
 export interface AnthropicDirectProviderOptions {
+  /** Session-scoped Fast preference; top-level interactive providers only. */
+  fastModeController?: FastModeController;
   /** Pluggable tool dispatcher. When set, overrides the built-in SessionToolDispatcher. */
   tools?: ToolDispatcher;
   /** Hook registry for PreToolUse/PostToolUse integration. */

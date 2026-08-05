@@ -8,6 +8,9 @@ import type { TrustedSkillLedger } from '../../trusted-skill-ledger.js';
 import type { McpManager } from '../../../agent/mcp/index.js';
 import type { createConsoleWriter } from '../../slash/writer.js';
 import { formatStatusFields } from './shared.js';
+import type { FastModeController } from '../../../agent/fast-mode.js';
+import { resolveModelId } from '../../../agent/session/model-resolution.js';
+import { providerForModel } from '../../../agent/providers/index.js';
 
 /**
  * Assemble the `SlashContext` every slash command dispatches through.
@@ -35,6 +38,10 @@ export function createReplSlashContext(a: {
   gitStatusSampler: GitStatusSampler;
   ledger: TrustedSkillLedger;
   mcpManager: McpManager | undefined;
+  fastModeController: FastModeController;
+  anthropicBaseUrl?: string;
+  openaiBaseUrl?: string;
+  explicitProvider?: string;
 }): SlashContext {
   const slashCtx: SlashContext = {
     session: a.sessionRef,
@@ -73,6 +80,19 @@ export function createReplSlashContext(a: {
       repaintStatusLine: () => a.statusLine.repaint(formatStatusFields(a.stats, a.contextSampler, a.gitStatusSampler)),
     },
     ledger: a.ledger,
+    fastMode: a.fastModeController,
+    getFastModeContext: () => {
+      const model = String(a.stats.model);
+      return {
+        resolvedModelId: resolveModelId(a.stats.model) ?? model,
+        providerFamily: providerForModel(model, {
+          ...(a.explicitProvider ? { explicit: a.explicitProvider } : {}),
+          ...(a.openaiBaseUrl ? { openaiBaseUrl: a.openaiBaseUrl } : {}),
+        }),
+        hasCustomEndpoint: a.anthropicBaseUrl !== undefined,
+        executionPath: 'top-level',
+      };
+    },
     // Expose mcpManager so `/mcp auth complete` can call completeAuth().
     ...(a.mcpManager !== undefined ? { mcpManager: a.mcpManager } : {}),
   };

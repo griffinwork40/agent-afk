@@ -20,9 +20,11 @@ import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent } from '../../provider.js';
 import {
   AnthropicDirectProvider,
+  AnthropicDirectQuery,
   __setAnthropicClientFactory,
 } from './index.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
+import { FastModeController } from '../../fast-mode.js';
 
 // --- Mock SDK plumbing ---
 
@@ -483,6 +485,47 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     // Both calls should carry the OAuth headers (oauth mode).
     expect(opts1?.headers?.['anthropic-beta']).toBeTruthy();
     expect(opts2?.headers?.['anthropic-beta']).toBeTruthy();
+  });
+
+  it('401 retry preserves immutable per-turn effort and Fast beta intent with speed body', async () => {
+    const fastController = new FastModeController('on');
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make401Error();
+      return fromArray(makeTextStream('Fast retry succeeded'));
+    });
+
+    const query = new AnthropicDirectQuery({
+      client: new MockAnthropic({ authToken: 'sk-ant-oat01-old' }) as unknown as Anthropic,
+      authMode: 'oauth',
+      promptStream: singleInput('test'),
+      toolDispatcher: { async execute() { return { content: 'ok' }; } },
+      model: 'claude-opus-5',
+      maxTokens: 1024,
+      tools: null,
+      userSystem: null,
+      systemPrefix: null,
+      effort: 'medium',
+      fastModeController: fastController,
+    });
+    const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
+    queryAny.retry.tokenRefresher = vi.fn(async () => new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic);
+
+    const events = await collect(query);
+    expect(events.filter((e) => e.type === 'error').map((e) => e.error.message)).toEqual([]);
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+
+    const [params1, opts1] = messagesCreateMock.mock.calls[0] as CreateArgs;
+    const [params2, opts2] = messagesCreateMock.mock.calls[1] as CreateArgs;
+    expect(params1.speed).toBe('fast');
+    expect(params2.speed).toBe('fast');
+    expect(params1.output_config).toEqual({ effort: 'medium' });
+    expect(params2.output_config).toEqual({ effort: 'medium' });
+    expect(opts1?.headers?.['anthropic-beta']).toContain('effort-2025-11-24');
+    expect(opts1?.headers?.['anthropic-beta']).toContain('fast-mode-2026-02-01');
+    expect(opts2?.headers?.['anthropic-beta']).toContain('effort-2025-11-24');
+    expect(opts2?.headers?.['anthropic-beta']).toContain('fast-mode-2026-02-01');
   });
 
   it('multiple turns where only the second turn gets 401', async () => {
