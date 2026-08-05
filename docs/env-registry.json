@@ -796,6 +796,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_TEXT_MEASURE",
+      "description": "Maximum line length (columns) for unbordered streamed text in the interactive REPL: assistant prose, thinking blocks, tool-lane text, and subagent text. Display-only — affects wrapping, never behavior. Bordered elements (cards, error boxes) already cap at 100; this applies the same ceiling to the unbordered surfaces, which previously scaled to the full terminal width. Accepts a positive integer (minimum 20), or full | off | none | 0 to disable capping and restore full-width wrapping. Unparseable or below-minimum values fall back to the default. No-op on terminals at or below the measure, so narrow terminals are unaffected.",
+      "type": "string",
+      "required": false,
+      "default": "100",
+      "example": "full",
+      "category": "misc"
+    },
+    {
       "name": "AFK_THEME",
       "description": "TUI color palette for the interactive REPL and all CLI rendering: dark | light | umber | auto. Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). auto detects from COLORFGBG and falls back to dark; umber matches the Umber terminal, is dark-only, and is never chosen by auto. Overridden per-launch by --theme and mutable mid-session via /theme. Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark).",
       "type": "string",
