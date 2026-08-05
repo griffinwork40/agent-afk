@@ -32,6 +32,8 @@ interface ContextUsageSource {
       output_tokens: number;
       cache_creation_input_tokens: number;
       cache_read_input_tokens: number;
+      /** Last round's true window occupancy. Never sum the fields above. */
+      context_window_tokens?: number;
     } | null;
     percentage?: number;
     totalTokens?: number;
@@ -145,7 +147,7 @@ export class ContextSampler {
       // Discard results from a superseded source (generation mismatch).
       if (this.generation !== capturedGeneration) return;
 
-      const used = computeTotalTokens(payload.apiUsage);
+      const used = resolveUsedTokens(payload);
       const limit = payload.maxTokens ?? 0;
       const percentage = payload.percentage;
 
@@ -163,19 +165,29 @@ export class ContextSampler {
   }
 }
 
-function computeTotalTokens(
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_creation_input_tokens: number;
-    cache_read_input_tokens: number;
-  } | null | undefined,
-): number {
-  if (!usage) return 0;
-  return (
-    usage.input_tokens +
-    usage.output_tokens +
-    usage.cache_creation_input_tokens +
-    usage.cache_read_input_tokens
-  );
+/**
+ * Contract: return the context-window footprint the status line should show
+ * next to the percentage, using the same basis the percentage is derived from.
+ *
+ * Must NOT sum the `apiUsage` fields. They are a mixed basis — cumulative
+ * input/output alongside last-round-only cache counts — so adding them
+ * double-counts every prior round's tokens (the latest `cache_read` already
+ * contains them). That is what this function used to do, which rendered an
+ * inflated absolute count beside a correctly-computed ratio.
+ *
+ * Prefers the provider-computed `totalTokens` (the last round's true
+ * occupancy), then the explicit `context_window_tokens` breakdown field. The
+ * last resort is `input + output` — deliberately cache-excluded, mirroring
+ * `contextWindowTokensUsed`'s own fallback in providers/shared/auto-compact.ts
+ * so both paths degrade identically. Never adds the cache counts back in.
+ */
+function resolveUsedTokens(payload: {
+  totalTokens?: number;
+  apiUsage?: { input_tokens?: number; output_tokens?: number; context_window_tokens?: number } | null;
+}): number {
+  if (typeof payload.totalTokens === 'number') return payload.totalTokens;
+  const api = payload.apiUsage;
+  if (!api) return 0;
+  if (typeof api.context_window_tokens === 'number') return api.context_window_tokens;
+  return (api.input_tokens ?? 0) + (api.output_tokens ?? 0);
 }

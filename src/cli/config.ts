@@ -122,7 +122,7 @@ export function resolveAutoResumeOnUsageLimit(): boolean {
   return loadJsonConfig().config.autoResumeOnUsageLimit ?? true;
 }
 
-export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
+export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process.cwd()): CliConfig {
   const envConfig = loadEnvConfig();
   const { config: jsonConfig, sourcePath: jsonSourcePath, modelsPartial } = loadJsonConfig();
 
@@ -150,7 +150,7 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     // Strict `=== undefined`: an explicit empty-string override (`systemPrompt: ""`)
     // is treated as "unset" and falls through to AFK.md discovery. Callers that
     // truly want "no prompt" should omit the field rather than pass "".
-    const afkMd = loadAfkMd();
+    const afkMd = loadAfkMd(cwd);
     if (afkMd !== null) {
       merged.systemPrompt = afkMd.content;
       // Each contributing path gets its own `afk-md:` prefix, joined with the

@@ -62,5 +62,10 @@ agent-afk@*
 # Test artifacts
 .test-temp-edit-file/
 
+# Local scratch space — scratch clones of OTHER repos (incl. the private
+# awa-private moat) land here. Must stay ignored: this is a public repo and an
+# unignored tmp/ would stage private plugin source into it.
+tmp/
+
 # Internal roadmap (not for public repo)
 todo.md

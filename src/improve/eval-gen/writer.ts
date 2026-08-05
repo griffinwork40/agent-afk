@@ -66,6 +66,7 @@ import {
   getEvalCasesIndexPath,
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
+import { describeEvalRunCoverage } from './eval-run-coverage.js';
 import { EvalGenError, sha256Bytes, sliceTracePrefix } from './replay-fixture.js';
 
 // ---------------------------------------------------------------------------
@@ -256,18 +257,19 @@ function buildTitle(card: FailureCard, endSeq: number): string {
 }
 
 function buildAssertionRationale(args: {
-  patternId: string;
+  patternId: EvalCase['assertion']['patternId'];
   detectorVersion: string;
   endSeq: number;
   sliceLineCount: number;
   sessionId: string;
 }): string {
   const sidShort = args.sessionId.slice(0, 8);
+  const contract = describeEvalRunCoverage(args.patternId);
   return (
     `After the proposed fix lands, replaying the prefix [seq 0..${args.endSeq}] ` +
     `(${args.sliceLineCount} lines, session ${sidShort}…) through ${args.detectorVersion} ` +
     `must produce zero findings for '${args.patternId}' with the fingerprint at generation time. ` +
-    `**Sprint 3 ships eval-case-as-contract; the runner that enforces this lands in a later sprint.**`
+    contract
   );
 }
 
@@ -360,10 +362,10 @@ export function renderEvalCaseMarkdown(ec: EvalCase): string {
   );
   out.push('');
 
-  out.push('> **Sprint 3 disclaimer.** This file is a CONTRACT, not an');
-  out.push('> executable. No runner consumes it yet. A future sprint will');
-  out.push('> replay the fixture through the detector and assert the');
-  out.push('> pattern is absent. Until then this artifact captures intent.');
+  out.push('> **How to run this.** This file is a CONTRACT; the fixture');
+  out.push('> beside it is the executable input. Run it with');
+  out.push('> `afk improve eval-run ' + ec.evalCaseId + '`.');
+  out.push('> ' + describeEvalRunCoverage(ec.assertion.patternId));
   out.push('');
 
   out.push('## Replay fixture');

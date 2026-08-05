@@ -708,8 +708,13 @@ export interface AgentConfig {
    * - `{ threshold: 0.85 }` — enabled with a custom fraction (0–1 exclusive).
    *
    * The threshold is evaluated against
-   * `(inputTokens + outputTokens + cachedInputTokens + cacheCreationTokens) / contextLimit`
-   * from the last completed turn. Auto-compaction is guarded by
+   * `contextWindowTokensUsed(usage) / contextLimit` from the last completed
+   * turn — i.e. the LAST ROUND's window occupancy (input + output + cache_read
+   * + cache_creation for that single call), not a sum across the turn's
+   * rounds. Summing the accumulated fields would double-count: input/output
+   * accumulate across rounds while the cache counts are last-round-only, and
+   * the latest cache_read already contains the earlier rounds' tokens.
+   * Auto-compaction is guarded by
    * `abort.isIdle()` so it never fires while a turn is in flight, and
    * by the existing re-entrance lock in `compact-handler.ts`.
    */

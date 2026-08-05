@@ -60,6 +60,22 @@ export type ContextUsageApiBreakdown = {
   output_tokens: number;
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
+  /**
+   * Invariant: the four fields above are a MIXED BASIS and must never be
+   * summed. `sumProviderUsage` accumulates input/output cumulatively across
+   * every tool-loop round of a turn, but keeps the two cache fields at their
+   * latest (last-round) value. By round N the latest `cache_read` already
+   * contains everything the earlier rounds sent, so adding the cumulative
+   * input/output back on top double-counts them — inflation that grows with
+   * round count and can push a displayed total past the context limit while
+   * the separately-derived percentage stays correct.
+   *
+   * This field is the single safe scalar: the provider-computed context-window
+   * footprint of the LAST round only (input + output + cache_read +
+   * cache_creation for that one call). Display code wanting "how full is the
+   * context" reads this, not a sum. See turn-accumulator.ts `addRoundUsage`.
+   */
+  context_window_tokens: number;
 };
 
 /** Consumer-facing context-usage fields derived from a completed turn. */
@@ -104,6 +120,7 @@ export function buildContextUsageFields(
       output_tokens: last.outputTokens ?? 0,
       cache_read_input_tokens: last.cachedInputTokens ?? 0,
       cache_creation_input_tokens: last.cacheCreationTokens ?? 0,
+      context_window_tokens: contextWindowTokensUsed(last),
     },
   };
 }

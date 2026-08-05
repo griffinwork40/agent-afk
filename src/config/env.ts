@@ -1027,6 +1027,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_GOBLIN_MASCOT',
+    description: 'Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_TERM_TITLE',
     description: 'Set the terminal/tab title (OSC 2) to reflect afk state — "afk — <cwd> · running" during a turn, "afk — <cwd>" when idle, cleared on exit. 1 = on (default when stdout is a TTY), 0 = leave the title alone. TTY-only.',
     type: 'boolean',
@@ -1085,6 +1093,22 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     default: 'dark',
     example: 'light',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_TEXT_MEASURE',
+    description:
+      'Maximum line length (columns) for unbordered streamed text in the interactive REPL: assistant prose, ' +
+      'thinking blocks, tool-lane text, and subagent text. Display-only — affects wrapping, never behavior. ' +
+      'Bordered elements (cards, error boxes) already cap at 100; this applies the same ceiling to the ' +
+      'unbordered surfaces, which previously scaled to the full terminal width. ' +
+      'Accepts a positive integer (minimum 20), or full | off | none | 0 to disable capping and restore ' +
+      'full-width wrapping. Unparseable or below-minimum values fall back to the default. ' +
+      'No-op on terminals at or below the measure, so narrow terminals are unaffected.',
+    type: 'string',
+    required: false,
+    default: '100',
+    example: 'full',
     category: 'misc',
   },
   {
@@ -1581,6 +1605,7 @@ export const env = {
   get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
   get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
+  get AFK_GOBLIN_MASCOT(): string | undefined { return process.env['AFK_GOBLIN_MASCOT']; },
   get AFK_TERM_TITLE(): string | undefined { return process.env['AFK_TERM_TITLE']; },
   get AFK_NOTIFY(): string | undefined { return process.env['AFK_NOTIFY']; },
   get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
@@ -1588,6 +1613,7 @@ export const env = {
   get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
   get NO_COLOR(): string | undefined { return process.env['NO_COLOR']; },
   get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
+  get AFK_TEXT_MEASURE(): string | undefined { return process.env['AFK_TEXT_MEASURE']; },
   get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
 
   // Debug

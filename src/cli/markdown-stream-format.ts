@@ -1,6 +1,7 @@
 import { getTerminalWidth } from './terminal-size.js';
 import { renderMarkdownToTerminal } from './formatter.js';
 import { wrapToWidth } from './wrap.js';
+import { capToMeasure } from './render/measure.js';
 
 /**
  * Pure markdown formatting and analysis helpers for StreamingMarkdownRenderer.
@@ -9,11 +10,13 @@ import { wrapToWidth } from './wrap.js';
 
 /**
  * Calculate content width for text wrapping based on indentation.
- * Accounts for terminal width and indent offset.
+ * Accounts for terminal width and indent offset, then clamps to the shared
+ * reading measure so prose does not span an arbitrarily wide terminal
+ * (see `render/measure.ts`; no-op at or below the measure).
  */
 export function calculateContentWidth(indentLength: number): number {
   const termWidth = Math.max(1, getTerminalWidth() - 2);
-  return Math.max(1, termWidth - indentLength);
+  return Math.max(1, capToMeasure(termWidth - indentLength));
 }
 
 /**

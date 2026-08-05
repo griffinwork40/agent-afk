@@ -63,6 +63,39 @@ describe('resolveAndContain', () => {
       resolveAndContain('/tmp/other/x.txt', ctx({ readRoots: [BASE, '/tmp/other'] }), 'write'),
     ).toThrow(/outside the allowed write roots/);
   });
+
+  // Contract: a granted root may be a single FILE, and it grants EXACTLY that
+  // file (`path.relative(root, target) === ''`). This is load-bearing, not
+  // incidental: home-root dotfiles (~/.zshrc, ~/.gitconfig) sit directly at
+  // $HOME, and $HOME is refused as a grant by the breadth guard
+  // (subagent/root-validation.ts), so file-granular grants are the ONLY
+  // least-privilege way to read them. The agent-tool schema + its home-rejection
+  // error both now tell callers to do this, so the behavior must stay pinned.
+  describe('file-granular read roots', () => {
+    const dotfile = '/tmp/other/.zshrc';
+
+    it('admits the exact granted file', () => {
+      expect(resolveAndContain(dotfile, ctx({ readRoots: [BASE, dotfile] }))).toBe(dotfile);
+    });
+
+    it('does not admit a sibling of the granted file', () => {
+      expect(() =>
+        resolveAndContain('/tmp/other/.netrc', ctx({ readRoots: [BASE, dotfile] })),
+      ).toThrow(/outside the allowed read roots/);
+    });
+
+    it('does not admit the granted file\u2019s parent directory', () => {
+      expect(() => resolveAndContain('/tmp/other', ctx({ readRoots: [BASE, dotfile] }))).toThrow(
+        /outside the allowed read roots/,
+      );
+    });
+
+    it('does not admit a path that merely shares the file name prefix', () => {
+      expect(() =>
+        resolveAndContain('/tmp/other/.zshrc.bak', ctx({ readRoots: [BASE, dotfile] })),
+      ).toThrow(/outside the allowed read roots/);
+    });
+  });
 });
 
 describe('wouldBeRestricted', () => {
