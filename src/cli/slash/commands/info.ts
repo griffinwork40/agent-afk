@@ -114,7 +114,14 @@ function renderSdkBreakdown(
   const output = api?.output_tokens ?? 0;
   const cacheRead = api?.cache_read_input_tokens ?? 0;
   const cacheCreate = api?.cache_creation_input_tokens ?? 0;
-  const lastTurnTotal = input + output + cacheRead + cacheCreate;
+  // Contract: never sum the four fields above — they are a mixed basis
+  // (cumulative input/output vs. last-round-only cache counts), so adding them
+  // double-counts every prior round. `context_window_tokens` is the
+  // provider-computed footprint of the last round; fall back to the
+  // authoritative cumulative total rather than reconstructing a bad sum.
+  const lastTurnTotal = api?.context_window_tokens ?? usage.totalTokens ?? 0;
+  const cacheTotal = cacheRead + cacheCreate;
+  const hitRate = cacheTotal > 0 ? Math.round((cacheRead / cacheTotal) * 100) : undefined;
 
   out.line();
   out.line(palette.bold('Token usage') + palette.dim('  (SDK breakdown)'));
@@ -129,11 +136,14 @@ function renderSdkBreakdown(
   // Last-turn API usage (what Anthropic billed for the most recent call).
   out.line();
   out.line(palette.dim('  Last turn (API):'));
-  out.line(`    input       ${palette.meta(formatTokens(input))}`);
-  out.line(`    output      ${palette.meta(formatTokens(output))}`);
-  out.line(`    cache read  ${palette.meta(formatTokens(cacheRead))}`);
-  out.line(`    cache creat ${palette.meta(formatTokens(cacheCreate))}`);
-  out.line(`    total       ${palette.meta(formatTokens(lastTurnTotal))}`);
+  out.line(`    input       ${palette.meta(formatTokens(input))}  ${palette.dim('(turn total)')}`);
+  out.line(`    output      ${palette.meta(formatTokens(output))}  ${palette.dim('(turn total)')}`);
+  out.line(`    cache read  ${palette.meta(formatTokens(cacheRead))}  ${palette.dim('(last call)')}`);
+  out.line(`    cache creat ${palette.meta(formatTokens(cacheCreate))}  ${palette.dim('(last call)')}`);
+  if (hitRate !== undefined) {
+    out.line(`    cache hit   ${palette.meta(`${hitRate}%`)}  ${palette.dim('(of cached tokens, last call)')}`);
+  }
+  out.line(`    window      ${palette.meta(formatTokens(lastTurnTotal))}  ${palette.dim('(last call occupancy)')}`);
 
   // Top categories by tokens.
   const cats = usage.categories ?? [];
