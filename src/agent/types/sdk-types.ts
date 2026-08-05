@@ -425,5 +425,14 @@ export type SDKControlGetContextUsageResponse = {
     output_tokens: number;
     cache_creation_input_tokens: number;
     cache_read_input_tokens: number;
+    /**
+     * Last round's true context-window occupancy. Optional for back-compat
+     * with providers that predate the field. Display code wanting "how full
+     * is the context" reads THIS — never the sum of the four fields above,
+     * which are a mixed basis (cumulative input/output vs. last-round-only
+     * cache counts) and double-count when added. See
+     * `providers/shared/auto-compact.ts` for the full invariant.
+     */
+    context_window_tokens?: number;
   } | null;
 };

@@ -211,7 +211,26 @@ describe('buildContextUsageFields', () => {
       output_tokens: 700,
       cache_read_input_tokens: 3000,
       cache_creation_input_tokens: 200,
+      // The one field display code may safely read as a scalar. With no
+      // provider-supplied footprint this falls back to input + output (2200),
+      // deliberately NOT the 4700 sum — the mixed basis is why this field
+      // exists. See the invariant on ContextUsageApiBreakdown.
+      context_window_tokens: 2200,
     });
+  });
+
+  it('carries the provider footprint into context_window_tokens when present', () => {
+    const { apiUsage } = buildContextUsageFields({
+      inputTokens: 50_000,
+      outputTokens: 10_000,
+      cachedInputTokens: 399_000,
+      cacheCreationTokens: 1_000,
+      contextWindowTokens: 410_000,
+    });
+    expect(apiUsage?.context_window_tokens).toBe(410_000);
+    // Summing the mixed-basis fields would give 460_000 — the double-count
+    // this field exists to prevent.
+    expect(apiUsage?.context_window_tokens).not.toBe(460_000);
   });
 
   it('derives totalTokens from inputTokens + outputTokens (matches the context-% formula, excludes cache)', () => {
@@ -245,6 +264,7 @@ describe('buildContextUsageFields', () => {
       output_tokens: 42,
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
+      context_window_tokens: 42,
     });
   });
 
