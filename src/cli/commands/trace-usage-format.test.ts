@@ -5,7 +5,25 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatCacheUsage } from './trace-usage-format.js';
+import { formatCacheUsage, cacheHitRate } from './trace-usage-format.js';
+
+describe('cacheHitRate', () => {
+  it('computes a 90% hit rate', () => {
+    expect(cacheHitRate(9000, 1000)).toBe(90);
+  });
+
+  it('computes a 0% hit rate for a cold, write-only session', () => {
+    expect(cacheHitRate(0, 50_000)).toBe(0);
+  });
+
+  it('computes a 100% hit rate for a fully warm call', () => {
+    expect(cacheHitRate(50_000, 0)).toBe(100);
+  });
+
+  it('returns undefined rather than NaN when both inputs are zero', () => {
+    expect(cacheHitRate(0, 0)).toBeUndefined();
+  });
+});
 
 describe('formatCacheUsage', () => {
   it('renders read, write, and hit rate when cache activity exists', () => {

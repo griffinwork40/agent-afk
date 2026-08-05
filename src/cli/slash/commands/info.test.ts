@@ -167,6 +167,92 @@ describe('/model', () => {
   });
 });
 
+const tokensCmd = infoCommands.find((c) => c.name === '/tokens')!;
+
+/** Minimal getContextUsage() stub — only the fields renderSdkBreakdown reads. */
+function makeUsagePayload(overrides: {
+  totalTokens?: number;
+  contextWindowTokens?: number;
+  cacheRead?: number;
+  cacheCreate?: number;
+}): unknown {
+  return {
+    totalTokens: overrides.totalTokens,
+    maxTokens: 200_000,
+    percentage: 10,
+    isAutoCompactEnabled: false,
+    apiUsage: {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_read_input_tokens: overrides.cacheRead ?? 0,
+      cache_creation_input_tokens: overrides.cacheCreate ?? 0,
+      ...(overrides.contextWindowTokens !== undefined
+        ? { context_window_tokens: overrides.contextWindowTokens }
+        : {}),
+    },
+  };
+}
+
+function makeTokensCtx(usagePayload: unknown): { ctx: SlashContext; lines: string[] } {
+  const lines: string[] = [];
+  const ctx = {
+    session: {
+      current: {
+        getContextUsage: vi.fn(async () => usagePayload),
+      } as unknown as SlashContext['session']['current'],
+    } as SlashContext['session'],
+    stats: makeStats(),
+    out: {
+      line: (t = ''): void => { lines.push(t); },
+      raw: (t: string): void => { lines.push(t); },
+      success: (t: string): void => { lines.push(`SUCCESS:${t}`); },
+      info: (t: string): void => { lines.push(`INFO:${t}`); },
+      warn: (t: string): void => { lines.push(`WARN:${t}`); },
+      error: (t: string): void => { lines.push(`ERROR:${t}`); },
+    },
+    ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+  } as unknown as SlashContext;
+  return { ctx, lines };
+}
+
+describe('/tokens — cache hit rate', () => {
+  it('renders a 90% hit rate via the shared cacheHitRate formula', async () => {
+    const { ctx, lines } = makeTokensCtx(makeUsagePayload({ cacheRead: 9000, cacheCreate: 1000 }));
+    await tokensCmd.handler(ctx, '');
+    expect(lines.join('\n')).toMatch(/cache hit\s+90%/);
+  });
+
+  it('reports 0% for a cold, write-only call rather than omitting the line', async () => {
+    const { ctx, lines } = makeTokensCtx(makeUsagePayload({ cacheRead: 0, cacheCreate: 50_000 }));
+    await tokensCmd.handler(ctx, '');
+    expect(lines.join('\n')).toMatch(/cache hit\s+0%/);
+  });
+
+  it('omits the cache-hit line entirely when there is no cacheable activity', async () => {
+    const { ctx, lines } = makeTokensCtx(makeUsagePayload({ cacheRead: 0, cacheCreate: 0 }));
+    await tokensCmd.handler(ctx, '');
+    expect(lines.join('\n')).not.toMatch(/cache hit/);
+  });
+});
+
+describe('/tokens — last-turn window precedence', () => {
+  it('prefers totalTokens over context_window_tokens when both are present', async () => {
+    const { ctx, lines } = makeTokensCtx(
+      makeUsagePayload({ totalTokens: 42_000, contextWindowTokens: 99_000 }),
+    );
+    await tokensCmd.handler(ctx, '');
+    expect(lines.join('\n')).toMatch(/window\s+42k/);
+  });
+
+  it('falls back to context_window_tokens when totalTokens is absent', async () => {
+    const { ctx, lines } = makeTokensCtx(
+      makeUsagePayload({ totalTokens: undefined, contextWindowTokens: 77_000 }),
+    );
+    await tokensCmd.handler(ctx, '');
+    expect(lines.join('\n')).toMatch(/window\s+77k/);
+  });
+});
+
 const usageCmd = infoCommands.find((c) => c.name === '/usage')!;
 const mockFetchUsage = vi.mocked(fetchSubscriptionUsage);
 
