@@ -111,6 +111,28 @@ export interface CacheWriteSplit {
   ephemeral1h: number;
 }
 
+/** Trailing `-YYYYMMDD` wire-id date suffix, e.g. the `-20260528` in
+ * `claude-opus-4-8-20260528`. Exactly 8 digits so a short version segment
+ * (`-4-8`) or a non-numeric alias suffix (`-latest`) never matches. */
+const DATE_SUFFIX = /-\d{8}$/;
+
+/**
+ * Contract: exact match first; on a miss, strip one trailing `-YYYYMMDD`
+ * suffix and retry against the same table. Some {@link MODEL_PRICING} rows
+ * are keyed dateless (e.g. `claude-opus-4-8`) while the wire ids Anthropic
+ * actually sends are dated (`claude-opus-4-8-20260528`); this fixes that
+ * whole class in one place instead of enumerating dated keys per row, with
+ * no new imports and no env reads. A model with neither an exact nor a
+ * stripped match still returns `undefined` — this only retries the same
+ * table with a shorter key, it never invents a mapping.
+ */
+function lookupPricing(model: string): ModelPricing | undefined {
+  const exact = MODEL_PRICING.get(model);
+  if (exact) return exact;
+  const base = model.replace(DATE_SUFFIX, '');
+  return base === model ? undefined : MODEL_PRICING.get(base);
+}
+
 /**
  * Contract: returns the USD cost of ONE API call, or `undefined` when the
  * model is absent from {@link MODEL_PRICING} — callers must treat `undefined`
@@ -133,7 +155,7 @@ export function deriveCallCostUsd(
   cacheCreationTokens: number,
   cacheWriteSplit?: CacheWriteSplit,
 ): number | undefined {
-  const pricing = MODEL_PRICING.get(model);
+  const pricing = lookupPricing(model);
   if (!pricing) return undefined;
 
   const M = 1_000_000;

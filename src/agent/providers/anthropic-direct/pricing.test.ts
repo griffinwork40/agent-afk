@@ -117,3 +117,34 @@ describe('deriveCallCostUsd — published rate goldens', () => {
     }
   });
 });
+
+describe('deriveCallCostUsd — dated wire ids fall back to dateless rows (#911)', () => {
+  // #909 added Opus 4.6/4.7/4.8 and Sonnet 4.6 rows keyed dateless
+  // (`claude-opus-4-8`), but the wire ids the API actually sends are dated
+  // (`claude-opus-4-8-20260528` — see resolve-effort.test.ts:32,44,49 for the
+  // production-verified ids). The exact-match lookup missed those, silently
+  // dropping cost for exactly the models the dateless rows were added to
+  // price. Each case below pins a dated id against its dateless twin.
+  it.each([
+    ['claude-opus-4-8', 'claude-opus-4-8-20260528'],
+    ['claude-opus-4-7', 'claude-opus-4-7-20250901'],
+    ['claude-opus-4-6', 'claude-opus-4-6-20250901'],
+    ['claude-sonnet-4-6', 'claude-sonnet-4-6-20250901'],
+  ])('%s dated as %s resolves to the same defined cost', (dateless, dated) => {
+    const datelessCost = deriveCallCostUsd(dateless, M, M, 0, 0);
+    const datedCost = deriveCallCostUsd(dated, M, M, 0, 0);
+    expect(datelessCost).toBeDefined();
+    expect(datedCost).toBeDefined();
+    expect(datedCost).toBeCloseTo(datelessCost!, 8);
+  });
+
+  it('does not let normalization match an unrelated row', () => {
+    // A genuinely unknown model — even one that looks date-suffixed — must
+    // still return undefined rather than falling back to some other row.
+    expect(deriveCallCostUsd('claude-unknown-99-20260528', 1000, 500, 0, 0)).toBeUndefined();
+  });
+
+  it('still returns undefined for an unknown model with no date suffix', () => {
+    expect(deriveCallCostUsd('claude-unknown-99', 1000, 500, 0, 0)).toBeUndefined();
+  });
+});
