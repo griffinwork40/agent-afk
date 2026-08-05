@@ -5,29 +5,17 @@
  * on-screen during a turn. This module carries its compact cousin — the same
  * palette, the same half-block renderer (`renderHalfBlockGrid`), the same
  * fallback ladder — sized to fit the `extraRows` footer band that
- * `MascotBand` (commands/interactive/mascot-band.ts) reserves for it.
- *
- * Three character rows is the art's floor, not a style choice. Half-blocks give
- * two pixel rows per character row, and the goblin needs six to read as a
- * goblin: a pointed cap (tip over body), the gold hatband over the brow, and
- * the face (eye band over grin). Squeezed into one row the cap and hatband are
- * the pixels that have to go, which is why the one-row variant read as a
- * generic head. So the sprite keeps its rows — and `MascotBand` pays for them
- * ONCE, at REPL start, right-aligned and out of the reading path: a constant
- * reservation shifts the transcript exactly as often as the loop-stage rail
- * does, which is never.
+ * `MascotBar` (commands/interactive/mascot-bar.ts) reserves while the agent
+ * runs tools.
  *
  * Three states, matching {@link MascotState}:
- *   - `idle`    — eyes forward, mouth closed. One frame (no animation, no timer).
- *   - `working` — rest-dominant cackle cycle: a blink, a glint, an open grin,
- *     and a resting face between each. Punctuation on a still sprite, not a
- *     second spinner.
+ *   - `idle`    — eyes forward, mouth closed. One frame (no animation).
+ *   - `working` — four-frame cackle cycle: eyes blink and glint, grin opens.
  *   - `alert`   — two-frame red-eyed pulse; used when a tool returns an error.
  *
  * Deliberately no emoji and no Geometric-Shapes glyphs: half-blocks (▀▄) are
  * the only characters with dependable cross-terminal cell metrics, so every
- * row is exactly MINI_MASCOT_WIDTH columns wide in any font — which is what
- * lets the band budget its right edge arithmetically.
+ * row is exactly MINI_MASCOT_WIDTH columns wide in any font.
  */
 
 import { renderHalfBlockGrid, mascotSuppressed, type MascotState } from './mascot.js';
@@ -37,16 +25,15 @@ export const MINI_MASCOT_WIDTH = 13;
 /** Character rows. Issue #336 caps the live sprite at 3. */
 export const MINI_MASCOT_HEIGHT = 3;
 
-/*
+/**
  * Invariant: every grid below is MINI_MASCOT_WIDTH columns × MINI_MASCOT_HEIGHT*2
  * pixel rows, and every row is a left-right palindrome. The width/height rule is
- * what lets `MascotBand` reserve a fixed 3-row band, right-align it against a
- * known width, and clear exactly what it painted; the palindrome rule is what
- * keeps a 13-column face from reading as lopsided (at this scale a single
- * off-centre pixel is a visible defect, unlike the 27-column banner sprite where
- * the cap can lean). `mascot-mini.test.ts` pins both mechanically for all frames
- * of all states, so a new frame that breaks either rule fails the suite rather
- * than corrupting the band geometry.
+ * what lets `MascotBar` reserve a fixed 3-row band and clear exactly what it
+ * painted; the palindrome rule is what keeps a 13-column face from reading as
+ * lopsided (at this scale a single off-centre pixel is a visible defect, unlike
+ * the 27-column banner sprite where the cap can lean). `mascot-mini.test.ts`
+ * pins both mechanically for all frames of all states, so a new frame that
+ * breaks either rule fails the suite rather than corrupting the band geometry.
  *
  * Pixel rows pair into character rows top/bottom (see renderHalfBlockGrid):
  *   char row 0 = cap tip over cap body     (pixel rows 0,1) -> pointed cone
@@ -65,30 +52,9 @@ const CAP_ROWS: readonly string[] = [
   'DDKMMMMMMMKDD', // brow, ears at their widest
 ];
 
-/**
- * Compose a full grid from the shared cap/brow rows + a face pair.
- *
- * Invariant: every pixel row is exactly MINI_MASCOT_WIDTH columns. MascotBand
- * places the sprite at `columns - MINI_MASCOT_WIDTH` and trusts that arithmetic
- * instead of measuring the rendered line, so a row WIDER than the constant
- * writes the terminal's final column, arms DECAWM's pending wrap, and lets the
- * next write scroll the reserved band out from under the reservation; a
- * narrower one leaves a ragged right edge. `renderHalfBlockGrid` only checks
- * that a row PAIR is self-consistent (top.length === bot.length), so two
- * equally-wrong rows pass it — this is the check that catches them. Every frame
- * is a module-scope constant built through here, so a violation throws at
- * import, never mid-paint.
- */
+/** Compose a full grid from the shared cap/brow rows + a face pair. */
 function grid(eyeRow: string, grinRow: string): readonly string[] {
-  const rows = [...CAP_ROWS, eyeRow, grinRow];
-  for (const row of rows) {
-    if (row.length !== MINI_MASCOT_WIDTH) {
-      throw new Error(
-        `mini mascot pixel row must be ${MINI_MASCOT_WIDTH} columns, got ${row.length}: ${row}`,
-      );
-    }
-  }
-  return rows;
+  return [...CAP_ROWS, eyeRow, grinRow];
 }
 
 /*
@@ -123,25 +89,18 @@ const GRIN_CLOSED = '..KMMKKKMMK..'; // narrow closed grin
 const GRIN_OPEN = '..KMKKKKKMK..'; // open cackle
 const GRIN_GRIMACE = '..KKKKKKKKK..'; // full-width grimace (alert)
 
-/** The resting face — `idle`'s only frame and `working`'s majority. */
-const REST = grid(EYES_OPEN, GRIN_CLOSED);
-const BLINK = grid(EYES_SHUT, GRIN_OPEN);
-const GLINT = grid(EYES_GLINT, GRIN_CLOSED);
-const CACKLE = grid(EYES_OPEN, GRIN_OPEN);
-
 /**
  * Frames per state. `idle` is a single frame so a resting mascot costs no
- * timer ticks; `working`/`alert` cycle at MascotBand's frame interval.
+ * timer ticks; `working`/`alert` cycle at MascotBar's frame interval.
  */
 const FRAMES: Record<MascotState, readonly (readonly string[])[]> = {
-  idle: [REST],
-  /*
-   * Rhythm, not churn: the resting face is the majority of the cycle and every
-   * expressive frame is followed by it, so the sprite reads as a creature that
-   * occasionally twitches rather than as a second spinner next to the real one.
-   * At MascotBand's frame interval this is a ~2.4s loop carrying three beats.
-   */
-  working: [REST, REST, CACKLE, REST, BLINK, REST, GLINT, REST],
+  idle: [grid(EYES_OPEN, GRIN_CLOSED)],
+  working: [
+    grid(EYES_OPEN, GRIN_CLOSED),
+    grid(EYES_SHUT, GRIN_OPEN),
+    grid(EYES_GLINT, GRIN_CLOSED),
+    grid(EYES_OPEN, GRIN_OPEN),
+  ],
   alert: [grid(EYES_RED, GRIN_GRIMACE), grid(EYES_WINCE, GRIN_OPEN)],
 };
 

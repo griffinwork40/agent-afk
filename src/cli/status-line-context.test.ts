@@ -158,7 +158,12 @@ describe('ContextSampler', () => {
     expect(detail).toBeDefined();
     expect(detail?.percentage).toBe(50);
     expect(detail?.limit).toBe(100000);
-    expect(detail?.used).toBe(1000); // 250+250+500
+    // 500 = input 250 + output 250. The 500 cache_read tokens are NOT added:
+    // this stub predates `context_window_tokens`, so the sampler falls back to
+    // the cache-excluded input+output basis (same policy as
+    // contextWindowTokensUsed). Previously this asserted 1000 — the mixed-basis
+    // sum that double-counts prior rounds already contained in cache_read.
+    expect(detail?.used).toBe(500);
     sampler.dispose();
   });
 });

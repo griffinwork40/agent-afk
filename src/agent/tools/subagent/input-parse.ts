@@ -12,6 +12,12 @@ import { isAbsolute, resolve as resolvePath } from 'node:path';
 import { isReadDenied } from '../handlers/read-denylist.js';
 import { realpathSafe } from '../handlers/_cwd-utils.js';
 import { isTooBroadRoot } from './root-validation.js';
+import {
+  readOptional,
+  readOptionalAliasString,
+  readOptionalNumber,
+  readOptionalString,
+} from './optional-input.js';
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
@@ -107,6 +113,13 @@ export interface AgentInput {
    * even attempt to shadow secrets. This is defense-in-depth ON TOP of the
    * read-time floor in `resolveAndContain` / the path-approval hook.
    *
+   * An entry may be a DIRECTORY or a single FILE. A file grants exactly that
+   * file (containment compares `path.relative(root, target) === ''`), which is
+   * the only least-privilege way to reach home-ROOT dotfiles — `~/.zshrc`,
+   * `~/.gitconfig`, `~/.tmux.conf` sit directly at `$HOME`, and `$HOME` itself
+   * is refused by rule (a). Granting the enclosing dir is not an option there,
+   * so file-granular grants are the intended shape, not a workaround.
+   *
    * Deliberately NOT mutually exclusive with `isolation:'worktree'` — widening a
    * confined worktree fork's READS is legitimate (only WRITES break isolation).
    */
@@ -147,8 +160,13 @@ export function parseAgentInput(input: unknown): AgentInput {
     throw new Error('Agent tool prompt cannot be empty');
   }
 
+  // Every OPTIONAL field below is read through `optional-input.ts`, so a blank
+  // (`undefined` / `null` / whitespace-only) value means "not supplied" rather
+  // than "supplied invalidly" — model serializers pad optionals they do not
+  // want, and reading that padding as intent trapped callers behind
+  // contradictory errors (see that module's Contract note).
   let attachments: string[] | undefined;
-  const attachmentsValue = agentInput['attachments'];
+  const attachmentsValue = readOptional(agentInput, 'attachments');
   if (attachmentsValue !== undefined) {
     if (!Array.isArray(attachmentsValue)) {
       throw new Error('Agent tool attachments must be an array of absolute image paths');
@@ -171,73 +189,43 @@ export function parseAgentInput(input: unknown): AgentInput {
     if (paths.length > 0) attachments = paths;
   }
 
-  let model: string | undefined;
-  const modelValue = agentInput['model'];
-  if (modelValue !== undefined) {
-    if (typeof modelValue !== 'string') {
-      throw new Error('Agent tool model must be a string');
-    }
-    model = modelValue;
-  }
+  const model = readOptionalString(agentInput, 'model');
 
   // Turn budget: default 0 = unlimited (matches AgentSession's falsy-maxTurns
   // = no-cap check in assertCanSend). A positive value caps conversation
   // turns; 0/negatives mean unlimited. No upper ceiling — the caller, or a
   // named agent's `maxTurns` frontmatter, owns any cap it wants.
-  let max_turns = 0;
-  let max_turns_explicit = false;
-  const maxTurnsValue = agentInput['max_turns'];
-  if (maxTurnsValue !== undefined) {
-    if (typeof maxTurnsValue !== 'number') {
-      throw new Error('Agent tool max_turns must be a number');
-    }
-    max_turns = Math.max(0, Math.floor(maxTurnsValue));
-    max_turns_explicit = true;
-  }
+  const maxTurnsValue = readOptionalNumber(agentInput, 'max_turns');
+  const max_turns_explicit = maxTurnsValue !== undefined;
+  const max_turns = maxTurnsValue === undefined ? 0 : Math.max(0, Math.floor(maxTurnsValue));
 
   // Tool-use-round budget within the single child turn (anti-hang ceiling).
   // Default 0 = unlimited on the agent-tool path; a positive value caps
   // rounds. Honored uniformly by both providers (see config-types.ts
   // maxToolUseIterations and providers/shared/tool-loop-cap.ts).
-  let max_tool_use_iterations = 0;
-  let max_tool_use_iterations_explicit = false;
-  const maxToolIterValue = agentInput['max_tool_use_iterations'];
-  if (maxToolIterValue !== undefined) {
-    if (typeof maxToolIterValue !== 'number') {
-      throw new Error('Agent tool max_tool_use_iterations must be a number');
-    }
-    max_tool_use_iterations = Math.max(0, Math.floor(maxToolIterValue));
-    max_tool_use_iterations_explicit = true;
-  }
+  const maxToolIterValue = readOptionalNumber(agentInput, 'max_tool_use_iterations');
+  const max_tool_use_iterations_explicit = maxToolIterValue !== undefined;
+  const max_tool_use_iterations =
+    maxToolIterValue === undefined ? 0 : Math.max(0, Math.floor(maxToolIterValue));
 
   // agent_type: canonical param; `subagent_type` accepted as an alias for
-  // Claude Code-ported prompts (bundled SKILL.mds already write it). When
-  // both are present the canonical name wins.
-  let agent_type: string | undefined;
-  const agentTypeValue = agentInput['agent_type'] ?? agentInput['subagent_type'];
-  if (agentTypeValue !== undefined) {
-    if (typeof agentTypeValue !== 'string') {
-      throw new Error('Agent tool agent_type must be a string');
-    }
-    const trimmed = agentTypeValue.trim();
-    if (trimmed.length > 0) agent_type = trimmed;
-  }
+  // Claude Code-ported prompts (bundled SKILL.mds already write it). When both
+  // are present the canonical name wins — but a BLANK canonical no longer
+  // shadows a real alias (plain `??` kept `''` because `'' !== undefined`).
+  const agent_type = readOptionalAliasString(
+    agentInput,
+    ['agent_type', 'subagent_type'],
+    'agent_type',
+  )?.trim();
 
-  let id_prefix = 'agent-tool';
-  const idPrefixValue = agentInput['id_prefix'];
-  if (idPrefixValue !== undefined) {
-    if (typeof idPrefixValue !== 'string') {
-      throw new Error('Agent tool id_prefix must be a string');
-    }
-    id_prefix = idPrefixValue;
-  }
+  const id_prefix = readOptionalString(agentInput, 'id_prefix') ?? 'agent-tool';
 
   // mode: default 'foreground'. Unknown strings reject loudly rather than
   // silently coercing — a typo like "back" would be silently downgraded
   // to a foreground run, exactly the surprise this feature is built to
   // avoid.
   let mode: AgentExecutionMode = 'foreground';
-  const modeValue = agentInput['mode'];
+  const modeValue = readOptional(agentInput, 'mode');
   if (modeValue !== undefined) {
     if (modeValue !== 'foreground' && modeValue !== 'background') {
       throw new Error(
@@ -255,7 +243,9 @@ export function parseAgentInput(input: unknown): AgentInput {
   // cwd: optional absolute path. Existence is not checked because the call
   // site is sync and any ENOENT surfaces cleanly through the child's first
   // tool call. Rules:
-  //   1. Must be a non-empty string when present.
+  //   1. Must be a string when meaningfully present. A BLANK value ('', '  ',
+  //      null) reads as ABSENT, not invalid (see optional-input.ts), so padded
+  //      input cannot fabricate a conflict with `isolation` below.
   //   2. Must be absolute (`path.isAbsolute`) — relative paths would otherwise
   //      resolve against `process.cwd()` and silently land somewhere
   //      unrelated to the caller's intent.
@@ -276,16 +266,8 @@ export function parseAgentInput(input: unknown): AgentInput {
   //      (isReadDenied) rejection here — that is a separate, deliberately
   //      out-of-scope hardening decision; this is breadth-only.
   let cwd: string | undefined;
-  const cwdValue = agentInput['cwd'];
+  const cwdValue = readOptionalString(agentInput, 'cwd');
   if (cwdValue !== undefined) {
-    if (typeof cwdValue !== 'string') {
-      throw new Error(
-        `Agent tool cwd must be a string, got: ${JSON.stringify(cwdValue)}`,
-      );
-    }
-    if (cwdValue.length === 0) {
-      throw new Error('Agent tool cwd must be a non-empty string');
-    }
     if (!isAbsolute(cwdValue)) {
       throw new Error(
         `Agent tool cwd must be an absolute path, got: ${JSON.stringify(cwdValue)}`,
@@ -303,7 +285,9 @@ export function parseAgentInput(input: unknown): AgentInput {
       throw new Error(
         `Agent tool cwd must not be a filesystem root, your home directory, ` +
           `or an ancestor of it (checked after resolving symlinks) — pass a ` +
-          `specific subdirectory instead, got: ${JSON.stringify(cwdValue)}`,
+          `specific subdirectory instead. If the child only needs to READ files ` +
+          `outside its tree (dotfiles, ~/.config), do NOT move cwd there: leave ` +
+          `cwd alone and grant those paths via readRoots. Got: ${JSON.stringify(cwdValue)}`,
       );
     }
     cwd = cwdValue;
@@ -321,7 +305,7 @@ export function parseAgentInput(input: unknown): AgentInput {
   // rejection here — out of scope, see readRoots below. An empty array
   // normalizes to undefined (no-op grant).
   let writeRoots: string[] | undefined;
-  const writeRootsValue = agentInput['writeRoots'];
+  const writeRootsValue = readOptional(agentInput, 'writeRoots');
   if (writeRootsValue !== undefined) {
     if (!Array.isArray(writeRootsValue)) {
       throw new Error(
@@ -383,7 +367,7 @@ export function parseAgentInput(input: unknown): AgentInput {
   // An empty array normalizes to undefined (no-op grant). Deliberately NOT
   // mutually exclusive with isolation:'worktree' (that constraint is write-only).
   let readRoots: string[] | undefined;
-  const readRootsValue = agentInput['readRoots'];
+  const readRootsValue = readOptional(agentInput, 'readRoots');
   if (readRootsValue !== undefined) {
     if (!Array.isArray(readRootsValue)) {
       throw new Error(
@@ -420,8 +404,11 @@ export function parseAgentInput(input: unknown): AgentInput {
       if (isTooBroadRoot(resolved) || isTooBroadRoot(realResolved)) {
         throw new Error(
           `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
-            `or an ancestor of it (checked after resolving symlinks) — grant a specific ` +
-            `subdirectory instead, got: ${JSON.stringify(entry)}`,
+            `or an ancestor of it (checked after resolving symlinks) — grant specific ` +
+            `subdirectories, or the individual FILES you need: a single file is a valid ` +
+            `read root and grants exactly that file, which is how to reach home-root ` +
+            `dotfiles (e.g. "<home>/.zshrc", "<home>/.gitconfig") without granting the ` +
+            `home directory. Got: ${JSON.stringify(entry)}`,
         );
       }
       // (b) Denylist rejection — never let a grant target the credential floor.
@@ -449,21 +436,31 @@ export function parseAgentInput(input: unknown): AgentInput {
   //     foreground teardown that removes the worktree, so nothing would reclaim
   //     it in-turn (proposal Open Q1). Reject rather than leak.
   let isolation: 'worktree' | undefined;
-  const isolationValue = agentInput['isolation'];
+  const isolationValue = readOptional(agentInput, 'isolation');
   if (isolationValue !== undefined && isolationValue !== 'none') {
     if (isolationValue !== 'worktree') {
       throw new Error(
         `Agent tool isolation must be "none" or "worktree", got: ${JSON.stringify(isolationValue)}`,
       );
     }
+    // Every mutual-exclusion message below names the ESCAPE, not just the
+    // conflict. The model gets another tool round after a validation throw
+    // (subagent-executor returns `isError`, it does not abort the turn), so a
+    // message that states only the rule leaves the caller guessing which field
+    // to drop — and the observed failure mode is dropping `isolation`, i.e.
+    // silently giving up the capability instead of retrying.
     if (cwd !== undefined) {
       throw new Error(
-        'Agent tool cwd and isolation are mutually exclusive — pass one or the other',
+        'Agent tool cwd and isolation are mutually exclusive — pass one or the other. ' +
+          'To isolate, OMIT cwd entirely (the runtime creates and owns the worktree). ' +
+          'To run in a specific directory, omit isolation instead.',
       );
     }
     if (writeRoots !== undefined) {
       throw new Error(
-        'Agent tool writeRoots and isolation are mutually exclusive — a worktree-isolated child is fully confined by design',
+        'Agent tool writeRoots and isolation are mutually exclusive — a worktree-isolated ' +
+          'child is fully confined by design. Omit writeRoots to isolate, or omit isolation ' +
+          'to keep the extra write grants.',
       );
     }
     if (mode === 'background') {

@@ -1,13 +1,12 @@
 /**
  * Tests for src/cli/mascot-mini.ts — the 3-row reacting goblin (issue #336).
  *
- * The band painter (`MascotBand`) reserves a FIXED number of rows and clears
+ * The band painter (`MascotBar`) reserves a FIXED number of rows and clears
  * exactly what it painted, so the sprite's shape is load-bearing geometry, not
  * decoration: a frame with the wrong row count or an over-wide row would leave
  * the reserved band and corrupt the DECSTBM accounting. These tests pin the
- * shape mechanically for every frame of every state, the rest-dominant rhythm
- * that keeps the sprite from reading as a second spinner, and the fallback
- * ladder (truecolor → uncoloured silhouette → suppressed).
+ * shape mechanically for every frame of every state, plus the fallback ladder
+ * (truecolor → uncoloured silhouette → suppressed).
  */
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
@@ -85,33 +84,9 @@ describe('mini mascot grids', () => {
     expect(miniMascotFrameCount('alert')).toBeGreaterThan(1);
   });
 
-  it('working animates, and its resting frame dominates the cycle', () => {
-    // Rhythm, not churn (see FRAMES): the sprite must actually change, but the
-    // resting face has to be the majority of the cycle or the goblin reads as a
-    // second spinner beside the real one. A future frame list that animates on
-    // every beat fails here on purpose.
+  it('working frames are all distinct (the animation actually animates)', () => {
     const rendered = FRAMES['working'].map((g) => g.join('|'));
-    expect(new Set(rendered).size).toBeGreaterThan(1);
-    const rest = FRAMES['idle'][0]!.join('|');
-    const restBeats = rendered.filter((f) => f === rest).length;
-    expect(restBeats * 2).toBeGreaterThan(rendered.length);
-    // Pin the cycle LENGTH too, not just its shape: the documented "~2.4s loop,
-    // three beats" is 8 frames x the 300ms interval. The ratio and adjacency
-    // assertions above are both scale-free, so without this a 4- or 16-frame
-    // list preserving rest-majority would silently halve or double the loop.
-    expect(rendered).toHaveLength(8);
-    expect(restBeats).toBe(5);
-  });
-
-  it('every expressive working frame is followed by the resting face', () => {
-    // The beats are punctuation: no two twitches run back to back.
-    const rest = FRAMES['idle'][0]!.join('|');
-    const rendered = FRAMES['working'].map((g) => g.join('|'));
-    for (let i = 0; i < rendered.length; i++) {
-      if (rendered[i] === rest) continue;
-      const next = rendered[(i + 1) % rendered.length];
-      expect(next, `frame ${i} is followed by another twitch`).toBe(rest);
-    }
+    expect(new Set(rendered).size).toBe(rendered.length);
   });
 
   it('only alert uses the alarm-red token', () => {
@@ -167,11 +142,11 @@ describe('renderMiniMascotLines', () => {
     expect(renderMiniMascotLines('working', -1)).toHaveLength(MINI_MASCOT_HEIGHT);
   });
 
-  it('working renders more than one distinct frame', () => {
+  it('working frames differ from each other once rendered', () => {
     const frames = Array.from({ length: miniMascotFrameCount('working') }, (_, f) =>
       renderMiniMascotLines('working', f).join('|'),
     );
-    expect(new Set(frames).size).toBeGreaterThan(1);
+    expect(new Set(frames).size).toBe(frames.length);
   });
 
   it('alert carries the alarm-red channel; idle does not', () => {

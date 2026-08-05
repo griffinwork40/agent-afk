@@ -18,6 +18,8 @@ import type {
 } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent, ProviderUsage } from '../../provider.js';
 import type { ToolFailureClass } from '../../trace/types.js';
+import { getCacheTtl } from './cache-policy.js';
+import { deriveCallCostUsd, type CacheWriteSplit } from './pricing.js';
 
 /**
  * Auth mode is selected by token shape. OAuth-mode tokens (`sk-ant-oat01-*`)
@@ -457,87 +459,49 @@ export interface ToolDispatcherLike {
 }
 
 /**
- * Static pricing table for known Claude models.
- * Rates are in USD per 1 million tokens.
- *
- * Sources: https://www.anthropic.com/pricing (checked 2025-07)
- *
- * MAINTENANCE: update when Anthropic revises list prices.
- * Units: USD / 1 000 000 tokens (MTok).
- *
- * Cache-write tokens are billed at 1.25× the base input rate;
- * cache-read tokens are billed at 0.1× the base input rate.
+ * Re-export of the pricing table and per-call cost derivation from their new
+ * home at `./pricing.ts`. Backward-compatibility shim — the pricing concern
+ * moved into its own file to keep this module under the repo's file-size
+ * ceiling. Existing call sites and tests import from here unchanged.
  */
-interface ModelPricing {
-  inputPerMTok: number;
-  outputPerMTok: number;
-  /** Cache-write surcharge per MTok (default: 1.25 × input rate). */
-  cacheWritePerMTok?: number;
-  /** Cache-read rate per MTok (default: 0.10 × input rate). */
-  cacheReadPerMTok?: number;
-}
-
-/** @internal exported only for unit tests */
-export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map([
-  // Claude Sonnet 5 (GA 2026-06): standard $3 / $15 per MTok. Introductory
-  // $2 / $10 pricing applies through 2026-08-31; the standard rate is used here
-  // for post-intro durability of long-lived persisted cost reports.
-  ['claude-sonnet-5', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
-  // Claude Opus 5 (GA 2026-07-24): $5 / $25 per MTok (input/output) per
-  // Anthropic's models/pricing docs. Cache write/read follow the standard
-  // 1.25× / 0.10× multipliers.
-  ['claude-opus-5', { inputPerMTok: 5.0, outputPerMTok: 25.0, cacheWritePerMTok: 6.25, cacheReadPerMTok: 0.50 }],
-  // Claude 4.5 family (kept for backward compat with persisted sessions)
-  ['claude-sonnet-4-5-20250929', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
-  ['claude-opus-4-5-20250929',   { inputPerMTok: 15.0, outputPerMTok: 75.0, cacheWritePerMTok: 18.75, cacheReadPerMTok: 1.50 }],
-  // Haiku 4.5: $1.00 input / $5.00 output per MTok per https://www.anthropic.com/pricing
-  // The previous $0.80/$4.00 values were the Haiku 3.5 rates accidentally
-  // copied to the 4.5 row, causing per-turn cost under-reporting by ~20%.
-  // Cache rates follow the standard 1.25× / 0.10× multipliers.
-  ['claude-haiku-4-5-20250929',  { inputPerMTok: 1.00, outputPerMTok: 5.0,  cacheWritePerMTok: 1.25,  cacheReadPerMTok: 0.10 }],
-  ['claude-haiku-4-5-20251001',  { inputPerMTok: 1.00, outputPerMTok: 5.0,  cacheWritePerMTok: 1.25,  cacheReadPerMTok: 0.10 }],
-  // Claude 3.7 family (kept for backward compat with persisted sessions)
-  ['claude-3-7-sonnet-20250219', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
-  // Claude 3.5 family
-  ['claude-3-5-sonnet-20241022', { inputPerMTok: 3.0,  outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
-  ['claude-3-5-sonnet-20240620', { inputPerMTok: 3.0,  outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
-  ['claude-3-5-haiku-20241022',  { inputPerMTok: 0.80, outputPerMTok: 4.0,  cacheWritePerMTok: 1.0,   cacheReadPerMTok: 0.08 }],
-  // Claude 3 family
-  ['claude-3-opus-20240229',     { inputPerMTok: 15.0, outputPerMTok: 75.0, cacheWritePerMTok: 18.75, cacheReadPerMTok: 1.50 }],
-  ['claude-3-sonnet-20240229',   { inputPerMTok: 3.0,  outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
-  ['claude-3-haiku-20240307',    { inputPerMTok: 0.25, outputPerMTok: 1.25, cacheWritePerMTok: 0.30,  cacheReadPerMTok: 0.03 }],
-]);
+export { MODEL_PRICING } from './pricing.js';
+export { deriveCallCostUsd };
+export type { ModelPricing, CacheWriteSplit } from './pricing.js';
 
 /**
- * Derive the USD cost of a single API call given token counts and a model id.
+ * Contract: split this call's cache-write tokens by the TTL they were billed
+ * at, so `deriveCallCostUsd` can apply 1.25× (5m) vs 2× (1h) correctly.
  *
- * Returns `undefined` when the model is unknown (not in the pricing table) —
- * callers must treat `undefined` as "cost unavailable" and avoid treating it
- * as zero.
+ * Prefers the API's own `usage.cache_creation` breakdown — that is what was
+ * actually billed, and it is the only source that stays right when a request
+ * mixes TTLs. Falls back to attributing every write token to the locally
+ * configured TTL (`getCacheTtl()`), which is correct for this provider because
+ * `cache-policy.ts` stamps every breakpoint in a request with that one TTL.
+ * The fallback matters: without it an endpoint that omits `cache_creation`
+ * would be priced at 5m rates while `AFK_PROMPT_CACHE_TTL` defaults to `1h`.
  *
- * @internal exported for unit tests
+ * This is the single env-reading boundary for pricing — `pricing.ts` stays
+ * pure so its golden-rate tests cannot drift with ambient config.
  */
-export function deriveCallCostUsd(
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-  cachedInputTokens: number,
-  cacheCreationTokens: number,
-): number | undefined {
-  const pricing = MODEL_PRICING.get(model);
-  if (!pricing) return undefined;
-
-  const M = 1_000_000;
-  // Plain (non-cached, non-creation) input tokens
-  const plainInput = Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens);
-  const inputCost = (plainInput / M) * pricing.inputPerMTok;
-  const outputCost = (outputTokens / M) * pricing.outputPerMTok;
-  const cacheWriteRate = pricing.cacheWritePerMTok ?? pricing.inputPerMTok * 1.25;
-  const cacheReadRate = pricing.cacheReadPerMTok ?? pricing.inputPerMTok * 0.10;
-  const cacheWriteCost = (cacheCreationTokens / M) * cacheWriteRate;
-  const cacheReadCost = (cachedInputTokens / M) * cacheReadRate;
-
-  return inputCost + outputCost + cacheWriteCost + cacheReadCost;
+function resolveCacheWriteSplit(usage: Usage): CacheWriteSplit {
+  // Invariant: the SDK types every field read below as a required `number`,
+  // but that is a compile-time guarantee only — a malformed response (or a
+  // hand-built fixture) could still carry a negative or NaN count, which
+  // would propagate into a negative/NaN totalCostUsd downstream. Clamp here
+  // so both branches below (explicit breakdown vs. total-only fallback)
+  // return only finite, non-negative counts.
+  const clampCount = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
+  const breakdown = usage.cache_creation;
+  if (breakdown) {
+    return {
+      ephemeral5m: clampCount(breakdown.ephemeral_5m_input_tokens ?? 0),
+      ephemeral1h: clampCount(breakdown.ephemeral_1h_input_tokens ?? 0),
+    };
+  }
+  const total = clampCount(usage.cache_creation_input_tokens ?? 0);
+  return getCacheTtl() === '1h'
+    ? { ephemeral5m: 0, ephemeral1h: total }
+    : { ephemeral5m: total, ephemeral1h: 0 };
 }
 
 /**
@@ -577,6 +541,7 @@ export function toProviderUsage(
       usage.output_tokens ?? 0,
       usage.cache_read_input_tokens ?? 0,
       usage.cache_creation_input_tokens ?? 0,
+      resolveCacheWriteSplit(usage),
     );
     if (cost !== undefined) out.totalCostUsd = cost;
   }

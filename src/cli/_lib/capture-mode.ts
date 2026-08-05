@@ -115,18 +115,14 @@ export function detectGoblinSpinner(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /**
- * Decide whether the reacting goblin sprite claims its reserved footer band —
- * three rows, right-aligned, present for the whole session (issue #336,
- * `MascotBand` + `LiveMascot`).
+ * Decide whether the reacting goblin mini-sprite claims a reserved footer band
+ * while the agent runs tools (issue #336, `MascotBar`).
  *
  * OFF by default; `AFK_GOBLIN_MASCOT=1` (or `true`) opts IN. Unlike the goblin
  * spinner — a pure reskin of a row that already existed — this one *claims
  * terminal rows* from the transcript, so it defaults to off and the operator
- * asks for it. What it does not do is claim them intermittently: the
- * reservation is constant for the session, so saying yes costs three rows once,
- * not a transcript that jumps per tool call. `0`/unset/anything else stays off.
- * Kept here beside the other CLI UX-preference detectors, read via the same
- * `env`-parameter pattern.
+ * asks for it. `0`/unset/anything else stays off. Kept here beside the other
+ * CLI UX-preference detectors, read via the same `env`-parameter pattern.
  *
  * Reads `process.env` at call time. Pure function with no side effects.
  */

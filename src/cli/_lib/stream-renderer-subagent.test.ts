@@ -365,6 +365,61 @@ describe('handleSubagentEvent — thinking-tail throttle (Item #6)', () => {
     }
   });
 
+  it('caps the visible TTY content tail at the shared reading measure', () => {
+    vi.useFakeTimers();
+    const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+    try {
+      Object.defineProperty(process.stdout, 'columns', { value: 200, configurable: true });
+      const lane = new ToolLane();
+      const setThinkingTailSpy = vi.spyOn(lane, 'setThinkingTail');
+      const compositor = makeCompositor();
+      const ctx = makeCtx(lane, { isTTY: true, compositor });
+      const source: SourceState = freshSourceState('measure-tail');
+      source.agentType = 'verifier';
+      synthesizeAgentEntry('src-measure-tail', source, ctx, undefined);
+
+      handleSubagentEvent(
+        { type: 'chunk', chunk: { type: 'content', content: 'word '.repeat(80) } } as OutputEvent,
+        'src-measure-tail', source, ctx,
+      );
+
+      const visibleTail = setThinkingTailSpy.mock.calls.findLast(
+        ([id, value]) => id === source.syntheticAgentToolUseId && value !== undefined,
+      )?.[1];
+      expect(visibleTail).toBeDefined();
+      expect(stripAnsi(visibleTail ?? '').length).toBeLessThanOrEqual(100);
+    } finally {
+      if (originalColumns) Object.defineProperty(process.stdout, 'columns', originalColumns);
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes the shared reading measure to TTY subagent tool rows', () => {
+    const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+    try {
+      Object.defineProperty(process.stdout, 'columns', { value: 200, configurable: true });
+      const lane = new ToolLane();
+      const addStartSpy = vi.spyOn(lane, 'addStartWithAgentContext');
+      const compositor = makeCompositor();
+      const ctx = makeCtx(lane, { isTTY: true, compositor });
+      const source: SourceState = freshSourceState('measure-tool');
+      source.agentType = 'verifier';
+      synthesizeAgentEntry('src-measure-tool', source, ctx, undefined);
+
+      handleSubagentEvent(
+        {
+          type: 'chunk',
+          chunk: { type: 'tool_use_detail', toolUseId: 'tool-1', toolName: 'bash', toolInput: '{}' },
+        } as OutputEvent,
+        'src-measure-tool', source, ctx,
+      );
+
+      expect(addStartSpy.mock.calls.find(([id]) => id === 'tool-1')?.[4]).toBe(100);
+    } finally {
+      if (originalColumns) Object.defineProperty(process.stdout, 'columns', originalColumns);
+    }
+  });
+
   it('suppresses setThinkingTail calls within 1500ms window (no sentence boundary)', () => {
     vi.useFakeTimers();
     try {

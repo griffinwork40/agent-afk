@@ -280,6 +280,54 @@ describe('SubagentManager', () => {
     expect((shared.lastConfig as unknown as Record<string, unknown>)['maxToolUseIterations']).toBe(0);
   });
 
+  // Regression (cap-burn): a child used to learn its tool-round budget ONLY from
+  // WIND_DOWN_NOTE, on the final round, after the budget was already spent — so
+  // it could not pace itself and averaged 1.6-3.0 calls per round against a
+  // meter that charges per ROUND. Disclosure happens at forkSubagent because
+  // that is the sole path to a child AgentSession; asserting on the config the
+  // child session is actually constructed with is what pins the chokepoint
+  // rather than any one dispatch path.
+  it('discloses the resolved tool-round budget in the child systemPrompt', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', systemPrompt: 'You are the research agent.' },
+    });
+    const sp = (shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'];
+    expect(typeof sp).toBe('string');
+    // The DEFAULT cap is disclosed even though no caller passed one.
+    expect(sp as string).toContain(`${SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS} tool-use rounds`);
+    // The caller's own prompt survives, and keeps top salience.
+    expect(sp as string).toMatch(/^You are the research agent\./);
+  });
+
+  it('discloses an explicitly overridden budget rather than the default', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', maxToolUseIterations: 7 },
+    });
+    const sp = (shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'];
+    expect(sp as string).toContain('7 tool-use rounds');
+    expect(sp as string).not.toContain(
+      `${SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS} tool-use rounds`,
+    );
+  });
+
+  it('discloses no budget to an explicitly unbounded child', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', systemPrompt: 'untouched', maxToolUseIterations: 0 },
+    });
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt']).toBe(
+      'untouched',
+    );
+  });
+
   // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth
   // usage-limit 429 must FAIL FAST with the classified error, not silently
   // auto-pause and poll for reset (up to 2h in retry-layer.ts) while its

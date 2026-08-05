@@ -14,6 +14,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { emitMarkdown } from './stream-renderer-orchestrator-emit.js';
 import { displayWidth } from '../display.js';
+import { DEFAULT_TEXT_MEASURE } from '../render/measure.js';
 import type { Writer } from '../slash/types.js';
 
 function captureWriter(): { lines: string[]; out: Writer } {
@@ -59,6 +60,17 @@ describe('emitMarkdown width capping', () => {
     // contentWidth budget is terminal − 2 = 38. No emitted line may exceed it.
     for (const line of lines) {
       expect(displayWidth(line)).toBeLessThanOrEqual(38);
+    }
+  });
+
+  it('applies the shared reading measure on a wide TTY', () => {
+    stubTerminal(true, 200);
+    const { lines, out } = captureWriter();
+    emitMarkdown('wide fallback prose '.repeat(30), out);
+
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(displayWidth(line)).toBeLessThanOrEqual(DEFAULT_TEXT_MEASURE);
     }
   });
 

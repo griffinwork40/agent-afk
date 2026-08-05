@@ -5,6 +5,7 @@ import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { wrapToWidth } from '../../wrap.js';
 import { truncateDisplayWidth } from '../../display.js';
+import { capToMeasure } from '../../render/measure.js';
 import { sanitizeTextParagraph } from './tool-lane-format.js';
 
 /**
@@ -267,7 +268,9 @@ export function renderTextChildLines(text: string, indent: string, g: Readonly<G
   if (!text || !text.trim()) return [];
   const prefix = palette.dim(g.textPrefix);
   // 2 cols for the text prefix, plus a small safety margin for ANSI widths.
-  const maxWidth = Math.max(1, getTerminalWidth() - indent.length - 2 - 2);
+  // Clamped to the shared reading measure so tool-lane text keeps the same
+  // right edge as adjacent prose (see `render/measure.ts`).
+  const maxWidth = Math.max(1, capToMeasure(getTerminalWidth() - indent.length - 2 - 2));
   const colored = colorizeIndent(indent, g);
   const out: string[] = [];
   for (const para of text.split('\n')) {

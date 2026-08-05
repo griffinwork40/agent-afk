@@ -274,7 +274,7 @@
     },
     {
       "name": "AFK_GOBLIN_MASCOT",
-      "description": "Reacting goblin sprite in a reserved footer band, right-aligned and present for the whole session (3 rows; animated while the agent runs tools, resting otherwise). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.",
+      "description": "Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.",
       "type": "boolean",
       "required": false,
       "example": "1",
@@ -334,7 +334,7 @@
     },
     {
       "name": "AFK_MAX_CONCURRENT_BACKGROUND_JOBS",
-      "description": "Maximum background subagent jobs running simultaneously in one registry. Default 10; positive integers only.",
+      "description": "Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default.",
       "type": "number",
       "required": false,
       "default": "10",
@@ -343,7 +343,7 @@
     },
     {
       "name": "AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS",
-      "description": "Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; positive integers only.",
+      "description": "Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.",
       "type": "number",
       "required": false,
       "default": "8",
@@ -352,10 +352,10 @@
     },
     {
       "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS",
-      "description": "Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 4; positive integers only.",
+      "description": "Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.",
       "type": "number",
       "required": false,
-      "default": "4",
+      "default": "8",
       "example": "2",
       "category": "model"
     },
@@ -820,6 +820,15 @@
       "type": "boolean",
       "required": false,
       "example": "0",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_TEXT_MEASURE",
+      "description": "Maximum line length (columns) for unbordered streamed text in the interactive REPL: assistant prose, thinking blocks, tool-lane text, and subagent text. Display-only — affects wrapping, never behavior. Bordered elements (cards, error boxes) already cap at 100; this applies the same ceiling to the unbordered surfaces, which previously scaled to the full terminal width. Accepts a positive integer (minimum 20), or full | off | none | 0 to disable capping and restore full-width wrapping. Unparseable or below-minimum values fall back to the default. No-op on terminals at or below the measure, so narrow terminals are unaffected.",
+      "type": "string",
+      "required": false,
+      "default": "100",
+      "example": "full",
       "category": "misc"
     },
     {
