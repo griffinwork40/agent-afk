@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.5] - 2026-08-05
+
+### Fixed
+- dedupe cache hit-rate formula, fix cumulative-total mislabel, align field precedence (#916) (b283bfd)
+
 ## [5.95.4] - 2026-08-05
 
 ### Fixed
