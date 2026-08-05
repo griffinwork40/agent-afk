@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.7] - 2026-08-05
+
+### Fixed
+- remove wrap-boundary leading spaces (#903) (3a8054a)
+
 ## [5.95.6] - 2026-08-05
 
 ### Fixed
