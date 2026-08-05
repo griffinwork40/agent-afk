@@ -126,8 +126,11 @@ export function isValidPromptSuggestion(reply: string): boolean {
   if (reply !== reply.trimStart()) return false;
   if (reply.trim().length === 0) return false;
   if (reply.length > MAX_SUGGESTION_CHARS) return false;
-  // Multi-line replies cannot render on the single input row.
-  if (/[\r\n]/.test(reply)) return false;
+  // Multi-line replies cannot render on the single input row. U+2028/U+2029 are
+  // line terminators too — outside /[\r\n]/ but rendered as breaks by many
+  // terminals — so they are rejected here rather than left to the scrubber,
+  // which would silently strip them and accept a reply that was never valid.
+  if (/[\r\n\u2028\u2029]/.test(reply)) return false;
 
   const lowered = reply.trim().toLowerCase();
   for (const prefix of REFUSAL_PREFIXES) {

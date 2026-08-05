@@ -412,6 +412,24 @@ describe('stripGhostControlChars', () => {
   it('strips DEL and C1 control characters', () => {
     expect(stripGhostControlChars('a\u007f\u0085b')).toBe('ab');
   });
+
+  it('strips U+2028/U+2029 line separators (outside the C0/C1 ranges)', () => {
+    expect(stripGhostControlChars('fix the bug\u2028rm -rf /tmp/x')).toBe('fix the bugrm -rf /tmp/x');
+    expect(stripGhostControlChars('a\u2029b')).toBe('ab');
+  });
+
+  it('strips bidi overrides and isolates (Trojan Source reordering)', () => {
+    // Displayed order must equal accepted order: an override left in the ghost
+    // could render "rm -rf /" as something innocuous while Tab accepts the real
+    // bytes.
+    expect(stripGhostControlChars('a\u202eb\u202cc')).toBe('abc');
+    expect(stripGhostControlChars('a\u202a\u202b\u202db')).toBe('ab');
+    expect(stripGhostControlChars('a\u2066b\u2069c\u2067\u2068d')).toBe('abcd');
+  });
+
+  it('leaves directional marks alone — they carry no override scope', () => {
+    expect(stripGhostControlChars('a\u200e\u200fb')).toBe('a\u200e\u200fb');
+  });
 });
 
 // ── Tier 2: B1 sanitization of untrusted model output ─────────────────────────
@@ -744,6 +762,27 @@ describe('primePromptSuggestion — sanitization ordering', () => {
     const engine = createSuggestEngine({ completeFn: async () => 'do this\nthen that' });
     await engine.primePromptSuggestion(ctx());
     expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('rejects a U+2028 reply — the second class of line terminator', async () => {
+    // Regression: the multi-line guard tested only /[\r\n]/, so a reply using
+    // U+2028 (rendered as a break by many terminals) routed around the very
+    // ordering the test above installs.
+    const engine = createSuggestEngine({
+      completeFn: async () => 'fix the bug\u2028rm -rf /tmp/x',
+    });
+    await engine.primePromptSuggestion(ctx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('scrubs bidi overrides out of an otherwise valid reply', async () => {
+    const engine = createSuggestEngine({
+      completeFn: async () => 'run \u202ethe tests\u202c',
+    });
+    await engine.primePromptSuggestion(ctx());
+    const got = engine.peekPromptSuggestion();
+    expect(got).toBe('run the tests');
+    expect(got).not.toMatch(/[\u202a-\u202e\u2066-\u2069]/);
   });
 
   it('still scrubs control characters out of an otherwise valid reply', async () => {

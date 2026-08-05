@@ -38,5 +38,14 @@ export function stripGhostControlChars(text: string): string {
     // Other two-byte Fe escapes (ESC followed by one byte in @–_)
     .replace(/\u001b[@-_]/g, '')
     // Remaining C0 controls (incl. \n \r \t \b), DEL, and C1 controls
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+    // Unicode line terminators and bidi overrides/isolates. These sit outside
+    // the C0/C1 ranges above, yet many terminals render U+2028/U+2029 as a line
+    // break (breaking the single-line invariant the C0 strip protects), and the
+    // bidi controls reorder the visible run so the ghost text a user SEES can
+    // differ from the bytes Tab accepts into the buffer (Trojan Source, CVE-
+    // 2021-42574). Directional marks (U+200E/U+200F/U+061C) are deliberately
+    // NOT stripped: they carry no override scope and can be legitimate in RTL
+    // text.
+    .replace(/[\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '');
 }

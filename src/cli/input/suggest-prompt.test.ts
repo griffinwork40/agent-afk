@@ -117,6 +117,8 @@ describe('isValidPromptSuggestion', () => {
     ['   ', 'whitespace only'],
     [' leading space', 'leading whitespace would render detached from the caret'],
     ['line one\nline two', 'multi-line cannot render on one input row'],
+    ['fix the bug\u2028rm -rf /tmp/x', 'U+2028 is a line terminator many terminals render as a break'],
+    ['para one\u2029para two', 'U+2029 is a line terminator many terminals render as a break'],
     ['a'.repeat(121), 'over the length ceiling'],
     ["I cannot suggest anything useful", 'refusal'],
     ['Sorry, there is nothing to do', 'refusal'],
