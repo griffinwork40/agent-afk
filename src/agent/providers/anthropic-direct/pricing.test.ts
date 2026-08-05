@@ -63,6 +63,68 @@ describe('deriveCallCostUsd — cache-write TTL rates', () => {
   });
 });
 
+describe('deriveCallCostUsd — cache-creation residual outside known TTL buckets', () => {
+  it('bills the residual at the 1h rate instead of dropping it (issue #912)', () => {
+    // cacheCreationTokens (1000) exceeds ephemeral5m+ephemeral1h (700) by 300 —
+    // a hypothetical third TTL tier the two known buckets don't cover. Before
+    // the fix, those 300 tokens cost $0 with no error anywhere.
+    const cost = deriveCallCostUsd('claude-sonnet-5', 0, 0, 0, 1000, {
+      ephemeral5m: 500,
+      ephemeral1h: 200,
+    })!;
+    const expected = (500 / M) * 3.75 + (200 / M) * 6.0 + (300 / M) * 6.0;
+    expect(cost).toBeCloseTo(expected, 8);
+    // Equivalent: the residual is billed at the same rate as an explicit 1h
+    // write of the same size (300 tokens), confirming which rate was used.
+    const explicit1hOnly = deriveCallCostUsd('claude-sonnet-5', 0, 0, 0, 700, {
+      ephemeral5m: 500,
+      ephemeral1h: 200,
+    })!;
+    expect(cost - explicit1hOnly).toBeCloseTo((300 / M) * 6.0, 8);
+  });
+
+  it('is unchanged when the split already sums to the full total (regression guard)', () => {
+    // A consistent split (today's only reachable shape, per the SDK's
+    // required, non-nullable CacheCreation fields) must cost exactly what it
+    // did before the residual logic was added.
+    const cost = deriveCallCostUsd('claude-sonnet-5', 0, 0, 0, 1000, {
+      ephemeral5m: 600,
+      ephemeral1h: 400,
+    });
+    const expected = (600 / M) * 3.75 + (400 / M) * 6.0;
+    expect(cost).toBeCloseTo(expected, 8);
+  });
+
+  it('does not double-bill when no split is supplied and the fallback already equals the total', () => {
+    const cost = deriveCallCostUsd('claude-sonnet-5', 0, 0, 0, 1000);
+    expect(cost).toBeCloseTo((1000 / M) * 3.75, 8);
+  });
+
+  it('negative token counts do not produce a negative cost', () => {
+    const cost = deriveCallCostUsd('claude-sonnet-5', -1000, -500, -200, -300)!;
+    expect(cost).toBe(0);
+    expect(cost).not.toBeLessThan(0);
+  });
+
+  it('NaN token counts do not produce a NaN cost', () => {
+    const cost = deriveCallCostUsd('claude-sonnet-5', NaN, 500, 0, 0)!;
+    expect(Number.isNaN(cost)).toBe(false);
+    expect(cost).toBeCloseTo((500 / M) * 15.0, 8);
+  });
+
+  it('a negative or NaN split field does not poison the residual or go negative', () => {
+    const cost = deriveCallCostUsd('claude-sonnet-5', 0, 0, 0, 1000, {
+      ephemeral5m: NaN,
+      ephemeral1h: -200,
+    })!;
+    // Both split fields clamp to 0, so the full 1000 becomes residual, billed
+    // at the 1h rate — and the result must be finite and non-negative.
+    expect(Number.isFinite(cost)).toBe(true);
+    expect(cost).not.toBeLessThan(0);
+    expect(cost).toBeCloseTo((1000 / M) * 6.0, 8);
+  });
+});
+
 describe('deriveCallCostUsd — plain input is cache-exclusive', () => {
   it('does not subtract cache counts from input_tokens', () => {
     // Per the Messages API docs, `input_tokens` counts only tokens neither

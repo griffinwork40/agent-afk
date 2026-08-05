@@ -484,14 +484,21 @@ export type { ModelPricing, CacheWriteSplit } from './pricing.js';
  * pure so its golden-rate tests cannot drift with ambient config.
  */
 function resolveCacheWriteSplit(usage: Usage): CacheWriteSplit {
+  // Invariant: the SDK types every field read below as a required `number`,
+  // but that is a compile-time guarantee only — a malformed response (or a
+  // hand-built fixture) could still carry a negative or NaN count, which
+  // would propagate into a negative/NaN totalCostUsd downstream. Clamp here
+  // so both branches below (explicit breakdown vs. total-only fallback)
+  // return only finite, non-negative counts.
+  const clampCount = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
   const breakdown = usage.cache_creation;
   if (breakdown) {
     return {
-      ephemeral5m: breakdown.ephemeral_5m_input_tokens ?? 0,
-      ephemeral1h: breakdown.ephemeral_1h_input_tokens ?? 0,
+      ephemeral5m: clampCount(breakdown.ephemeral_5m_input_tokens ?? 0),
+      ephemeral1h: clampCount(breakdown.ephemeral_1h_input_tokens ?? 0),
     };
   }
-  const total = usage.cache_creation_input_tokens ?? 0;
+  const total = clampCount(usage.cache_creation_input_tokens ?? 0);
   return getCacheTtl() === '1h'
     ? { ephemeral5m: 0, ephemeral1h: total }
     : { ephemeral5m: total, ephemeral1h: 0 };

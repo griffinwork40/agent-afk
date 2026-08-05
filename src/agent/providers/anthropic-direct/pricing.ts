@@ -140,10 +140,17 @@ function lookupPricing(model: string): ModelPricing | undefined {
  *
  * Pure: no env reads, no clock. `cacheWriteSplit` is supplied by the caller so
  * this stays deterministic under test; when omitted, every cache-write token
- * is priced at the 5-minute rate (the API's own default TTL).
+ * is priced at the 5-minute rate (the API's own default TTL). Any portion of
+ * `cacheCreationTokens` not covered by `split.ephemeral5m + split.ephemeral1h`
+ * (a TTL tier this module doesn't yet know about) is billed as a residual at
+ * the 1h rate — see the inline Invariant comment for why.
  *
  * `inputTokens` must be the raw `usage.input_tokens` — already cache-exclusive
  * per fact 1 in the module header. Do not pre-subtract cache counts from it.
+ *
+ * All five numeric parameters are clamped to finite, non-negative values
+ * before use — a negative or NaN wire-sourced count cannot produce a
+ * negative or NaN result.
  *
  * @internal exported for unit tests
  */
@@ -160,9 +167,22 @@ export function deriveCallCostUsd(
 
   const M = 1_000_000;
 
+  // Guard: every count below is wire-sourced (Messages API `usage.*` fields,
+  // or a hand-built fixture in a direct test call). A negative or NaN value
+  // must not produce a negative or NaN totalCostUsd. `resolveCacheWriteSplit`
+  // (types.ts) clamps the split fields on the production call path, but this
+  // function is also called directly (see pricing.test.ts), so it re-clamps
+  // everything itself rather than trusting the caller. No import needed —
+  // `Number.isFinite` is a global — so this keeps the module pure.
+  const clamp = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
+  const safeInput = clamp(inputTokens);
+  const safeOutput = clamp(outputTokens);
+  const safeCachedInput = clamp(cachedInputTokens);
+  const safeCacheCreation = clamp(cacheCreationTokens);
+
   // `input_tokens` already excludes cache reads and writes — use it verbatim.
-  const inputCost = (inputTokens / M) * pricing.inputPerMTok;
-  const outputCost = (outputTokens / M) * pricing.outputPerMTok;
+  const inputCost = (safeInput / M) * pricing.inputPerMTok;
+  const outputCost = (safeOutput / M) * pricing.outputPerMTok;
 
   const write5mRate =
     pricing.cacheWrite5mPerMTok ?? pricing.inputPerMTok * CACHE_WRITE_5M_MULTIPLIER;
@@ -173,12 +193,27 @@ export function deriveCallCostUsd(
   // Absent an explicit split, attribute all writes to the 5m rate. Callers
   // that know the request asked for 1h pass the split (see toProviderUsage).
   const split: CacheWriteSplit = cacheWriteSplit ?? {
-    ephemeral5m: cacheCreationTokens,
+    ephemeral5m: safeCacheCreation,
     ephemeral1h: 0,
   };
+  const safe5m = clamp(split.ephemeral5m);
+  const safe1h = clamp(split.ephemeral1h);
+
+  // Invariant: `cacheCreationTokens` is the API's authoritative billed total;
+  // `ephemeral5m + ephemeral1h` is only the sum of the two TTL tiers this
+  // module currently knows how to price. A positive gap between them means a
+  // tier this code doesn't recognize was billed (e.g. Anthropic adds a third
+  // TTL the way it added 1h alongside 5m) — price the gap instead of letting
+  // it default to $0. An unrecognized future tier is more likely to be a
+  // longer-lived cache than a shorter one (the trend so far is 5m -> 1h), so
+  // the residual bills at the 1h rate: the conservative choice, since it
+  // risks overcounting a still-hypothetical short tier rather than
+  // undercounting real spend.
+  const residual = Math.max(0, safeCacheCreation - (safe5m + safe1h));
+
   const cacheWriteCost =
-    (split.ephemeral5m / M) * write5mRate + (split.ephemeral1h / M) * write1hRate;
-  const cacheReadCost = (cachedInputTokens / M) * readRate;
+    (safe5m / M) * write5mRate + (safe1h / M) * write1hRate + (residual / M) * write1hRate;
+  const cacheReadCost = (safeCachedInput / M) * readRate;
 
   return inputCost + outputCost + cacheWriteCost + cacheReadCost;
 }
