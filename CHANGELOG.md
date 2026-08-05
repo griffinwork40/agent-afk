@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.0] - 2026-08-05
+
+### Added
+- cap unbordered text at a reading measure instead of full terminal width (#899) (17cf472)
+
 ## [5.94.0] - 2026-08-04
 
 ### Added
