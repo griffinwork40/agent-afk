@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.95.2] - 2026-08-05
+
+### Fixed
+- normalize blank optional arguments (#908) (0fea95c)
+
 ## [5.95.1] - 2026-08-05
 
 ### Fixed
