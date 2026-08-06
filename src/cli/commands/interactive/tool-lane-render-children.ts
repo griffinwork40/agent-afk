@@ -1,6 +1,5 @@
 import { palette } from '../../palette.js';
 import { NESTING_TOOLS } from '../../tool-category.js';
-import { getTerminalWidth } from '../../terminal-size.js';
 import {
   MAX_VISIBLE_CHILDREN,
   inProgressVerb,
@@ -16,6 +15,7 @@ import {
   colorizeIndent,
   renderTextChildLines,
   getGlyphs,
+  toolLaneWidth,
 } from './tool-lane-render.js';
 import {
   groupSiblings,
@@ -94,7 +94,7 @@ function renderOverlayChildren(
   // Default at the parameter site keeps external callers signature-compatible
   // (they call with no cols, get a fresh read); recursive call below threads
   // the captured value to avoid repeated reads.
-  cols: number = getTerminalWidth(),
+  cols: number = toolLaneWidth(),
   // `ancestorIsLast[i]` = true iff the ancestor column at slot i has closed
   // (its branch ended above this row) → render `g.spineClosed`; false →
   // render an open `g.spine` (`│`). Default `[]` for the depth-1 entrypoint
@@ -354,7 +354,7 @@ function renderFlushChildren(
   agentResultSummary?: string,
   // Hoist getTerminalWidth() to a single read per top-level invocation.
   // Recursive call below threads the captured value through.
-  cols: number = getTerminalWidth(),
+  cols: number = toolLaneWidth(),
   // Mirror {@link renderOverlayChildren}: track last-ness of each ancestor
   // so the spine column closes correctly when a parent was last at its level.
   ancestorIsLast: readonly boolean[] = [],

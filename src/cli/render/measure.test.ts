@@ -9,8 +9,11 @@ import { calculateContentWidth } from '../markdown-stream-format.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import {
   renderTextChildLines,
+  toolLaneWidth,
   UNICODE_GLYPHS,
+  type ToolEntry,
 } from '../commands/interactive/tool-lane-render.js';
+import { renderGroupedRootTools } from '../commands/interactive/tool-lane-render-grouped-root.js';
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -136,6 +139,15 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
   const LONG = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do '.repeat(12);
   const CHROME_SLACK = 12; // indent + prefix + spine glyph budget
 
+  /** A single root tool entry whose composed row far exceeds any test width. */
+  const longToolEntry = (): ToolEntry => ({
+    kind: 'tool',
+    toolUseId: 'tu_measure_1',
+    toolName: 'bash',
+    toolInput: JSON.stringify({ command: LONG }),
+    prefix: `bash(${LONG})`,
+  });
+
   for (const cols of [120, 200]) {
     it(`bounds prose, thinking, and tool-lane text at ${cols} cols`, () => {
       withMeasureEnv(undefined, () =>
@@ -152,16 +164,30 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
           const laneLines = renderTextChildLines(LONG, '  ', UNICODE_GLYPHS);
           const laneMax = Math.max(...laneLines.map((l) => stripAnsi(l).length));
 
+          // Composed tool ROWS, not just the lane's wrapped text. These are
+          // built by string concatenation (prefix + args + outcome) and clamped
+          // as a unit, so they need their own coverage: capping the lane's text
+          // while its sibling rows ran to the screen edge was the exact
+          // discontinuity this describe() exists to catch, and it went
+          // unnoticed because only the text path was pinned here.
+          const rowLines = renderGroupedRootTools(
+            new Map([['bash', [longToolEntry()]]]),
+            ['bash'],
+          );
+          const rowMax = Math.max(...rowLines.map((l) => stripAnsi(l).length));
+
           const ceiling = DEFAULT_TEXT_MEASURE + CHROME_SLACK;
           expect(proseWidth).toBeLessThanOrEqual(ceiling);
           expect(thinkingMax).toBeLessThanOrEqual(ceiling);
           expect(laneMax).toBeLessThanOrEqual(ceiling);
+          expect(rowMax).toBeLessThanOrEqual(ceiling);
 
           // And crucially: they do not scale with the terminal.
           if (cols > ceiling) {
             expect(proseWidth).toBeLessThan(cols);
             expect(thinkingMax).toBeLessThan(cols);
             expect(laneMax).toBeLessThan(cols);
+            expect(rowMax).toBeLessThan(cols);
           }
         }),
       );

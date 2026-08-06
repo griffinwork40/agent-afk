@@ -30,6 +30,35 @@ export function clampLineToTerminal(line: string, cols: number): string {
   return truncateDisplayWidth(line, cols);
 }
 
+/**
+ * Invariant: every composed tool-lane row shares ONE width budget, and that
+ * budget is the shared reading measure — not the raw terminal width.
+ *
+ * The budget is load-bearing twice over, which is why it has a name instead of
+ * being inlined at each call site:
+ *
+ *  1. Wrap prevention. A composed row that exceeds the terminal hard-wraps to
+ *     column 0 with no spine glyph, splitting the tree (see
+ *     {@link clampLineToTerminal}). Every row must be clamped to at most the
+ *     terminal width.
+ *  2. Reading measure. `renderTextChildLines` below already caps wrapped
+ *     tool-lane *text* at the shared measure, and prose, thinking, and
+ *     subagent text do the same (see `render/measure.ts`). Composed tool rows
+ *     did not, so on a terminal wider than the measure the lane's own text
+ *     stopped at one column while its tool rows ran to the screen edge —
+ *     exactly the "adjacent unbordered blocks stop at different columns"
+ *     discontinuity the measure invariant exists to prevent.
+ *
+ * `capToMeasure` is a pure `min`, never a widen, so (2) strictly strengthens
+ * (1): the wrap guarantee still holds, and on terminals at or below the
+ * measure this is a no-op. Callers that must agree on a width (the
+ * `formatAgentSummary` / `formatAgentHeader` head-row encoding pair) agree by
+ * calling this, not by both happening to read the terminal.
+ */
+export function toolLaneWidth(): number {
+  return capToMeasure(getTerminalWidth());
+}
+
 interface ToolEntryFields {
   toolUseId: string;
   toolName: string;
