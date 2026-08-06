@@ -46,7 +46,7 @@ import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
-import { gateDerivedCarveOuts } from './read-denylist-carveout.js';
+import { gateDerivedCarveOuts, gateStaticCarveOuts } from './read-denylist-carveout.js';
 import { pathIsWithin } from '../fs-case.js';
 
 /**
@@ -343,21 +343,15 @@ function resolveLists(): {
   const builtins = [
     ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots]),
   ];
-  // Invariant: the derived carve-outs are gated against the builtin deny
-  // prefixes BEFORE they are unioned in, because `allow` is consulted ahead of
+  // Invariant: every carve-out is gated against the builtin deny prefixes
+  // BEFORE it is unioned into `allow`, because `allow` is consulted ahead of
   // the builtin loop in isReadDenied. Ungated, a home relocated UNDER another
   // denied root (AFK_HOME=~/.ssh/afk) punched an exact-file hole straight
   // through that root's floor (#779). The gate is applied here rather than via
-  // isReadDenied because that function reads the list being built.
-  const defaultCarvedRoot = resolvedBuiltinEntries.find(
-    ({ source }) => source === DEFAULT_AFK_CONFIG,
-  )?.root;
-  const defaultGateRoots = [
-    ...resolvedBuiltinEntries
-      .filter(({ source }) => source !== DEFAULT_AFK_CONFIG)
-      .map(({ root }) => root),
-    ...derivedCarvedRoots.filter((root) => root !== defaultCarvedRoot),
-  ];
+  // isReadDenied because that function reads the list being built. The static
+  // entries are gated PER-ENTRY (see gateStaticCarveOuts) — never through one
+  // shared root set — because different entries pierce different roots and a
+  // single shared exclusion silently dropped the ssh entries (#815 review).
   const derivedGateRoots = resolvedBuiltinEntries
     .filter(
       ({ source, root }) =>
@@ -370,9 +364,12 @@ function resolveLists(): {
     extras,
     allow: [
       ...new Set([
-        ...gateDerivedCarveOuts(
-          BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
-          defaultGateRoots,
+        ...gateStaticCarveOuts(
+          READ_ALLOWLIST_REL.map((rel) => ({
+            rel,
+            resolved: resolveExceptionEntry(`${homedir()}/${rel}`),
+          })),
+          resolvedBuiltinEntries,
         ),
         ...gateDerivedCarveOuts(derivedAfkHomeAllowEntries(), derivedGateRoots),
       ]),

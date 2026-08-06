@@ -10,7 +10,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { gateDerivedCarveOuts } from './read-denylist-carveout.js';
-import { isReadDenied } from './read-denylist.js';
+import { isReadDenied, READ_ALLOWLIST_REL } from './read-denylist.js';
 
 /** A builtin-denied credential root other than the AFK home. */
 const OTHER_DENIED_ROOT = join(homedir(), '.gnupg');
@@ -107,5 +107,21 @@ describe('read denylist — relocated AFK_HOME under a denied root (#779)', () =
     const target = join(homedir(), '.afk', 'config', 'mcp.json');
     process.env['AFK_READ_DENYLIST'] = target;
     expect(isReadDenied(target).denied).toBe(true);
+  });
+});
+
+// #815 review (F2): the suite above pins ONLY the `.afk/config/mcp.json`
+// carve-out by name, so it could not have caught a regression in any OTHER
+// entry of READ_ALLOWLIST_REL — which is exactly what happened when
+// `.ssh/config` / `.ssh/known_hosts` were routed through a gate scoped to
+// exclude only the `.afk/config` root. Iterating the exported constant
+// (rather than hardcoding each entry) means a FUTURE carve-out added without
+// a matching exclusion in `CARVEOUT_PIERCED_SOURCE` fails this test instead
+// of silently shipping denied.
+describe('read denylist — every static carve-out survives its own gate', () => {
+  it('keeps every READ_ALLOWLIST_REL entry allowed under the default AFK_HOME', () => {
+    for (const rel of READ_ALLOWLIST_REL) {
+      expect(isReadDenied(join(homedir(), rel)).denied, `regressed: ${rel}`).toBe(false);
+    }
   });
 });
