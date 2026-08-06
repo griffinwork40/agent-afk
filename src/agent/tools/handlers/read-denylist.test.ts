@@ -29,7 +29,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import {
   isReadDenied,
@@ -589,6 +589,30 @@ describe('parseReadDenylistEntries — the single parser both surfaces share', (
   it('expands a bare ~ and a leading ~/', () => {
     expect(parseReadDenylistEntries('~')).toEqual([homedir()]);
     expect(parseReadDenylistEntries('~/.netrc')).toEqual([join(homedir(), '.netrc')]);
+  });
+
+  // Regression guard (#921): PR #893 swapped the hand-rolled
+  // `join(homedir(), p.slice(1))` expansion for the shared `expandHome`,
+  // which builds `resolve(homedir(), input.slice(2))`. `resolve()` lets an
+  // ABSOLUTE second argument win, and `'~//x'.slice(2)` is `/x` (absolute) —
+  // so a doubled leading slash silently un-denied the path the operator
+  // meant to floor (`/x` instead of `$HOME/x`). The parser now collapses a
+  // leading `~/+` to `~/` before expanding, so the doubled-slash spelling
+  // resolves the same as the single-slash one.
+  it('collapses a doubled leading slash instead of falling through resolve() to an absolute path (#921)', () => {
+    expect(parseReadDenylistEntries('~//x')).toEqual([join(homedir(), 'x')]);
+    expect(parseReadDenylistEntries('~///x')).toEqual([join(homedir(), 'x')]);
+  });
+
+  // Same regression guard, the other direction: fixing the doubled-slash
+  // case must not perturb any spelling that already worked.
+  it('leaves already-correct tilde spellings unchanged (#921)', () => {
+    expect(parseReadDenylistEntries('~')).toEqual([homedir()]);
+    expect(parseReadDenylistEntries('~/')).toEqual([homedir()]);
+    expect(parseReadDenylistEntries('~/x')).toEqual([join(homedir(), 'x')]);
+    // `~user/…` is NOT expanded (no portable home lookup) — it falls through
+    // to a plain `resolve()` relative to cwd, same as any non-tilde entry.
+    expect(parseReadDenylistEntries('~user/x')).toEqual([resolve('~user/x')]);
   });
 });
 

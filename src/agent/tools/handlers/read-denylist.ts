@@ -248,6 +248,18 @@ let cached:
  * `resolve()` alone turns that into a literal `./~/…` directory that matches
  * nothing — a security control silently protecting no path. `~user/…` is NOT
  * expanded (no portable home lookup); spell those absolutely.
+ *
+ * A doubled leading slash (`~//x`, `~///x`) is collapsed to `~/x` BEFORE
+ * calling {@link expandHome}. `expandHome` builds the expansion with
+ * `resolve(homedir(), input.slice(2))`, and `resolve()` lets an ABSOLUTE
+ * second argument win over the first — `~//x`.slice(2) is `/x` (absolute),
+ * so unnormalized it resolves to `/x` instead of `$HOME/x`, silently
+ * un-denying the path the operator meant to floor (issue #921, regressed by
+ * PR #893's switch from a hand-rolled `join(homedir(), …)` expander, which
+ * does not have this failure mode, to the shared `expandHome`). Normalizing
+ * here — rather than in `expandHome` itself — keeps the fix scoped to this
+ * parser; `expandHome` has other adopters (plugin source resolution) this
+ * denylist parser must not risk widening.
  */
 export function parseReadDenylistEntries(raw: string | undefined): string[] {
   if (!raw) return [];
@@ -255,7 +267,7 @@ export function parseReadDenylistEntries(raw: string | undefined): string[] {
     .split(':')
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => (p === '~' || p.startsWith('~/') ? expandHome(p) : p))
+    .map((p) => (p === '~' || p.startsWith('~/') ? expandHome(p.replace(/^~\/+/, '~/')) : p))
     .map((p) => resolve(p));
 }
 
