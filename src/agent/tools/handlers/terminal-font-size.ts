@@ -19,8 +19,7 @@
 
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, rename } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { expandHome } from '../../plugins/source.js';
 import type { ToolHandler } from '../types.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -42,12 +41,6 @@ export interface TerminalFontSizeHandlerOpts {
 }
 
 // ── Editor discovery ─────────────────────────────────────────────────────────
-
-const HOME = homedir();
-
-function expandHome(p: string): string {
-  return p.startsWith('~/') ? join(HOME, p.slice(2)) : p;
-}
 
 /**
  * Returns the list of `EditorTarget`s whose settings.json files exist on disk.

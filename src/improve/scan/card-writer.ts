@@ -40,7 +40,7 @@
  * @module improve/scan/card-writer
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
   CardIndexEventSchema,
@@ -57,6 +57,7 @@ import {
   getFailureCardsDir,
   getFailureCardsIndexPath,
 } from '../paths.js';
+import { atomicWriteFile } from '../../utils/envFile.js';
 
 /** Outcome of a single writeCard call. */
 export interface WriteCardOutcome {
@@ -98,8 +99,8 @@ export function writeCard(detection: DetectorResult): WriteCardOutcome {
   // a malformed JSON on disk.
   const validated = FailureCardSchema.parse(merged);
 
-  atomicWriteJson(jsonPath, validated);
-  atomicWriteText(mdPath, renderMarkdown(validated));
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
+  atomicWriteFile(mdPath, renderMarkdown(validated), 0o666);
   appendIndex({
     timestamp: nowIso(),
     event,
@@ -298,18 +299,6 @@ function appendIndex(event: CardIndexEvent): void {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-function atomicWriteJson(path: string, data: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, path);
-}
-
-function atomicWriteText(path: string, text: string): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
-}
 
 function nowIso(): string {
   return new Date().toISOString();

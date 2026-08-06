@@ -8,8 +8,20 @@
  * orchestrator, and the output isn't a verifier response itself.
  */
 import { describe, expect, it } from 'vitest';
-import type { SubagentStopContext } from './hooks.js';
-import { createShadowVerifyNudge, shadowVerifyNudge } from './shadow-verify-nudge.js';
+import type { HookContext, HookDecision, SubagentStopContext } from './hooks.js';
+import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
+
+/**
+ * Local single-shot wrapper (no dedup state) — the production export is
+ * `createShadowVerifyNudge()`, which carries a per-turn/per-child dedup
+ * latch (see the nested describe block below). Most of the heuristic tests
+ * in this file don't exercise that latch and read cleanest against a fresh
+ * handler per call, so this inlines a fresh factory invocation per call
+ * directly here rather than depending on a bare stateless export.
+ */
+function shadowVerifyNudge(context: HookContext): HookDecision {
+  return createShadowVerifyNudge()(context);
+}
 
 function stopCtx(
   lastMessage: string | undefined,
