@@ -735,6 +735,13 @@
       "category": "model"
     },
     {
+      "name": "AFK_SUGGEST_PROMPT",
+      "description": "Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).",
+      "type": "boolean",
+      "required": false,
+      "category": "model"
+    },
+    {
       "name": "AFK_SYSTEM_PROMPT",
       "description": "Raw operator-overlay prompt. Highest-priority overlay (over afk.config.json and AFK.md). Appended on top of the framework base (prompts/system-prompt.md) under an \"# Operator configuration\" header — it augments, never replaces, the base.",
       "type": "string",

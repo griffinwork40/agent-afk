@@ -11,8 +11,6 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
-import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
-import type { SdkPluginConfig } from '../types/sdk-types.js';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 
@@ -391,73 +389,6 @@ function resolveKnownToolNames(
   // 'compose' is excluded from CHILD_ALLOWED_TOOLS (unbounded fan-out) and is
   // not grantable to child sessions — accepting it produces a phantom allowlist entry.
   return new Set([...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill']);
-}
-
-/**
- * Convert a skill into an Anthropic tool definition.
- *
- * Skills are CLI-side constructs that dispatch to subagents. In the context
- * of the direct provider, we expose them as tools that allow the model to
- * invoke skills via the subagent execution system.
- *
- * The tool schema is generic: skill name, description, and optional arguments.
- *
- * @param skill - Skill metadata
- * @param pluginName - Name of the plugin containing the skill
- * @returns Anthropic tool definition
- */
-function skillToToolDef(skill: PluginSkillMetadata, pluginName: string): AnthropicToolDef {
-  const skillName = skill.name || 'unknown-skill';
-  return {
-    name: `plugin_${pluginName}_${skillName}`.replace(/[^a-z0-9_]/g, '_').toLowerCase(),
-    description:
-      skill.description ||
-      `Invoke the ${skillName} skill from the ${pluginName} plugin.`,
-    input_schema: {
-      type: 'object',
-      properties: {
-        arguments: {
-          type: 'string',
-          description: skill.argumentHint || 'Arguments to pass to the skill',
-        },
-      },
-      required: [],
-    },
-  };
-}
-
-/**
- * Extract all tool definitions from a plugin.
- *
- * Discovers all SKILL.md files within the plugin and converts them to
- * Anthropic tool definitions.
- *
- * @param pluginPath - Absolute path to the plugin directory
- * @param pluginName - Name of the plugin (for tool naming)
- * @returns Array of Anthropic tool definitions
- */
-export function extractPluginTools(pluginPath: string, pluginName: string): AnthropicToolDef[] {
-  const skills = extractPluginSkills(pluginPath);
-  return skills.map((skill) => skillToToolDef(skill, pluginName));
-}
-
-/**
- * Extract all tool definitions from a set of plugins.
- *
- * @param plugins - Array of plugin configurations
- * @returns Array of Anthropic tool definitions from all plugins
- */
-export function extractAllPluginTools(plugins: SdkPluginConfig[]): AnthropicToolDef[] {
-  const allTools: AnthropicToolDef[] = [];
-
-  for (const plugin of plugins) {
-    if (plugin.type !== 'local') continue;
-    const pluginName = extractPluginName(plugin.path);
-    const tools = extractPluginTools(plugin.path, pluginName);
-    allTools.push(...tools);
-  }
-
-  return allTools;
 }
 
 /**

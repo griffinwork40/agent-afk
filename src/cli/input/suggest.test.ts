@@ -412,6 +412,24 @@ describe('stripGhostControlChars', () => {
   it('strips DEL and C1 control characters', () => {
     expect(stripGhostControlChars('a\u007f\u0085b')).toBe('ab');
   });
+
+  it('strips U+2028/U+2029 line separators (outside the C0/C1 ranges)', () => {
+    expect(stripGhostControlChars('fix the bug\u2028rm -rf /tmp/x')).toBe('fix the bugrm -rf /tmp/x');
+    expect(stripGhostControlChars('a\u2029b')).toBe('ab');
+  });
+
+  it('strips bidi overrides and isolates (Trojan Source reordering)', () => {
+    // Displayed order must equal accepted order: an override left in the ghost
+    // could render "rm -rf /" as something innocuous while Tab accepts the real
+    // bytes.
+    expect(stripGhostControlChars('a\u202eb\u202cc')).toBe('abc');
+    expect(stripGhostControlChars('a\u202a\u202b\u202db')).toBe('ab');
+    expect(stripGhostControlChars('a\u2066b\u2069c\u2067\u2068d')).toBe('abcd');
+  });
+
+  it('leaves directional marks alone — they carry no override scope', () => {
+    expect(stripGhostControlChars('a\u200e\u200fb')).toBe('a\u200e\u200fb');
+  });
 });
 
 // ── Tier 2: B1 sanitization of untrusted model output ─────────────────────────
@@ -546,5 +564,240 @@ describe('getGhost – Tier 2 provider lifecycle', () => {
     expect(result).toBeNull();
     expect(resolveProviderFn).not.toHaveBeenCalled();
     engine.dispose();
+  });
+});
+
+// ── Empty-prompt suggestion ───────────────────────────────────────────────────
+
+describe('primePromptSuggestion', () => {
+  function enabledCtx(overrides: Partial<SuggestContext> = {}): SuggestContext {
+    return makeCtx({
+      llmEnabled: () => true,
+      promptSuggestEnabled: () => true,
+      getTranscriptTail: () => 'user: fix the parser\nassistant: fixed',
+      ...overrides,
+    });
+  }
+
+  it('is a no-op when promptSuggestEnabled is absent (legacy context)', async () => {
+    const completeFn = vi.fn();
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(makeCtx({ llmEnabled: () => true }));
+    expect(completeFn).not.toHaveBeenCalled();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('is a no-op when promptSuggestEnabled is false', async () => {
+    const completeFn = vi.fn();
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(
+      enabledCtx({ promptSuggestEnabled: () => false }),
+    );
+    expect(completeFn).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the LLM tier itself is disabled', async () => {
+    const completeFn = vi.fn();
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(enabledCtx({ llmEnabled: () => false }));
+    expect(completeFn).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op at the startup prompt — no turn has completed yet', async () => {
+    // Regression: the first readLine() of a session primes like any other turn
+    // handoff, so without this gate the very first prompt showed a ghost
+    // invented from the cwd name plus the PREVIOUS session's history ring.
+    // No transcript => no provider call at all, not merely a discarded reply.
+    const completeFn = vi.fn(async () => 'run the failing parser test');
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(
+      enabledCtx({
+        getTranscriptTail: () => '',
+        getRecentCommands: () => ['/review', '/ship'],
+      }),
+    );
+    expect(completeFn).not.toHaveBeenCalled();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    engine.dispose();
+  });
+
+  it('stores a valid suggestion for peek', async () => {
+    const engine = createSuggestEngine({
+      completeFn: async () => 'run the failing parser test',
+    });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBe('run the failing parser test');
+  });
+
+  it('normalizes a quoted, period-terminated reply', async () => {
+    const engine = createSuggestEngine({ completeFn: async () => '"run the tests."' });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBe('run the tests');
+  });
+
+  it('discards a refusal', async () => {
+    const engine = createSuggestEngine({
+      completeFn: async () => 'I cannot determine a next step',
+    });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('discards a multi-line reply', async () => {
+    const engine = createSuggestEngine({ completeFn: async () => 'do this\nthen that' });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('never throws and reports the error when the provider rejects', async () => {
+    const error = new Error('provider exploded');
+    const onError = vi.fn();
+    const engine = createSuggestEngine({
+      completeFn: async () => {
+        throw error;
+      },
+      onError,
+    });
+    await expect(engine.primePromptSuggestion(enabledCtx())).resolves.toBeUndefined();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(error);
+  });
+
+  it('keeps the newer suggestion when an older completion resolves last', async () => {
+    let resolveFirst: ((value: string) => void) | undefined;
+    let resolveSecond: ((value: string) => void) | undefined;
+    const completeFn = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => { resolveFirst = resolve; }),
+      )
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => { resolveSecond = resolve; }),
+      );
+    const engine = createSuggestEngine({ completeFn });
+
+    const first = engine.primePromptSuggestion(enabledCtx());
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf('function'));
+    const second = engine.primePromptSuggestion(enabledCtx());
+    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf('function'));
+
+    resolveSecond?.('newer action');
+    await second;
+    expect(engine.peekPromptSuggestion()).toBe('newer action');
+
+    resolveFirst?.('stale action');
+    await first;
+    expect(engine.peekPromptSuggestion()).toBe('newer action');
+  });
+
+  it('dispose aborts the current prompt-suggestion request', async () => {
+    let signal: AbortSignal | undefined;
+    const engine = createSuggestEngine({
+      completeFn: (req) => {
+        signal = req.signal;
+        return new Promise<string>(() => {});
+      },
+    });
+
+    const prime = engine.primePromptSuggestion(enabledCtx());
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    expect(signal?.aborted).toBe(false);
+
+    engine.dispose();
+    expect(signal?.aborted).toBe(true);
+    await prime;
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('sends the transcript tail as context', async () => {
+    const completeFn = vi.fn(async () => 'ship it');
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(enabledCtx());
+    const arg = completeFn.mock.calls[0]?.[0] as { user: string } | undefined;
+    expect(arg?.user).toContain('fix the parser');
+  });
+
+  it('clearPromptSuggestion drops the stored value', async () => {
+    const engine = createSuggestEngine({ completeFn: async () => 'run the tests' });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).not.toBeNull();
+    engine.clearPromptSuggestion();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('dispose drops the stored value', async () => {
+    const engine = createSuggestEngine({ completeFn: async () => 'run the tests' });
+    await engine.primePromptSuggestion(enabledCtx());
+    engine.dispose();
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('does not poison the Tier-2 completion cache', async () => {
+    // The empty-prompt suggestion is deliberately uncached; it must also not
+    // land in the buffer-keyed Tier-2 cache under the '' key.
+    const completeFn = vi.fn(async () => 'run the tests');
+    const engine = createSuggestEngine({ completeFn });
+    await engine.primePromptSuggestion(enabledCtx());
+    const ghost = await engine.getGhost('', enabledCtx());
+    expect(ghost).toBeNull();
+  });
+});
+
+describe('primePromptSuggestion — sanitization ordering', () => {
+  // A transcript tail is required grounding — without it the startup gate
+  // short-circuits before the provider call and these cases would pass for
+  // the wrong reason (null from the gate, not from the sanitizer).
+  const ctx = () =>
+    makeCtx({
+      llmEnabled: () => true,
+      promptSuggestEnabled: () => true,
+      getTranscriptTail: () => 'user: fix the parser\nassistant: fixed',
+    });
+
+  it('rejects a multi-line reply even though the scrubber would remove newlines', async () => {
+    // Regression: stripGhostControlChars deletes \n. Scrubbing before
+    // validating turned "do this\nthen that" into the plausible-looking
+    // "do thisthen that" and let it through.
+    const engine = createSuggestEngine({ completeFn: async () => 'do this\nthen that' });
+    await engine.primePromptSuggestion(ctx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('rejects a U+2028 reply — the second class of line terminator', async () => {
+    // Regression: the multi-line guard tested only /[\r\n]/, so a reply using
+    // U+2028 (rendered as a break by many terminals) routed around the very
+    // ordering the test above installs.
+    const engine = createSuggestEngine({
+      completeFn: async () => 'fix the bug\u2028rm -rf /tmp/x',
+    });
+    await engine.primePromptSuggestion(ctx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('scrubs bidi overrides out of an otherwise valid reply', async () => {
+    const engine = createSuggestEngine({
+      completeFn: async () => 'run \u202ethe tests\u202c',
+    });
+    await engine.primePromptSuggestion(ctx());
+    const got = engine.peekPromptSuggestion();
+    expect(got).toBe('run the tests');
+    expect(got).not.toMatch(/[\u202a-\u202e\u2066-\u2069]/);
+  });
+
+  it('still scrubs control characters out of an otherwise valid reply', async () => {
+    const engine = createSuggestEngine({
+      completeFn: async () => '\u001b[31mrun the tests\u001b[0m',
+    });
+    await engine.primePromptSuggestion(ctx());
+    const got = engine.peekPromptSuggestion();
+    expect(got).toBe('run the tests');
+    expect(got).not.toMatch(/\u001b/);
+  });
+
+  it('discards a reply that scrubs down to nothing', async () => {
+    const engine = createSuggestEngine({ completeFn: async () => '\u001b[0m\u001b[0m' });
+    await engine.primePromptSuggestion(ctx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
   });
 });

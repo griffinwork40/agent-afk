@@ -57,7 +57,7 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
-import { refreshEnvironmentDate } from './query/date-rollover.js';
+import { refreshEnvironmentDate } from '../shared/date-rollover.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';

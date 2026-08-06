@@ -32,7 +32,7 @@
  * @module improve/triage
  */
 
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import {
   type CardStatus,
@@ -48,6 +48,7 @@ import {
   readCardIfExists,
   renderMarkdown,
 } from './scan/card-writer.js';
+import { atomicWriteFile } from '../utils/envFile.js';
 
 export class TriageError extends Error {
   constructor(
@@ -136,8 +137,8 @@ export function triageCard(slug: string, options: TriageOptions): TriageOutcome 
   // Atomic writes — mirror card-writer.ts. Helpers are local so triage
   // doesn't reach into card-writer's privates.
   ensureDir(jsonPath);
-  atomicWriteJson(jsonPath, validated);
-  atomicWriteText(mdPath, renderMarkdown(validated));
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
+  atomicWriteFile(mdPath, renderMarkdown(validated), 0o666);
 
   return {
     slug,
@@ -158,16 +159,4 @@ export function triageCard(slug: string, options: TriageOptions): TriageOutcome 
 function ensureDir(filePath: string): void {
   const dir = dirname(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-}
-
-function atomicWriteJson(path: string, data: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, path);
-}
-
-function atomicWriteText(path: string, text: string): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
 }

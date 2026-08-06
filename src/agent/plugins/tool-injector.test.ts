@@ -16,8 +16,6 @@ import { mkdtempSync, writeFileSync, rmdirSync } from 'fs';
 import { join } from 'path';
 import {
   extractPluginSkills,
-  extractPluginTools,
-  extractAllPluginTools,
   extractPluginName,
   normalizeToolToken,
   parseToolsField,
@@ -107,107 +105,6 @@ Content`
     const skills = extractPluginSkills(tmpDir);
     expect(skills).toHaveLength(2);
     expect(skills.map((s) => s.name).sort()).toEqual(['skill-one', 'skill-two']);
-  });
-
-  it('should convert skills to tool definitions', () => {
-    const skillDir = join(tmpDir, 'skills');
-    const fs = require('fs');
-    fs.mkdirSync(skillDir, { recursive: true });
-
-    writeFileSync(
-      join(skillDir, 'SKILL.md'),
-      `---
-name: my-skill
-description: My skill description
----
-Content`
-    );
-
-    const tools = extractPluginTools(tmpDir, 'my-plugin');
-    expect(tools).toHaveLength(1);
-    expect(tools[0]).toMatchObject({
-      name: 'plugin_my_plugin_my_skill',
-      description: 'My skill description',
-      input_schema: {
-        type: 'object',
-        properties: expect.objectContaining({
-          arguments: expect.objectContaining({
-            type: 'string',
-          }),
-        }),
-      },
-    });
-  });
-
-  it('should handle special characters in skill names', () => {
-    const skillDir = join(tmpDir, 'skills');
-    const fs = require('fs');
-    fs.mkdirSync(skillDir, { recursive: true });
-
-    writeFileSync(
-      join(skillDir, 'SKILL.md'),
-      `---
-name: my-special-skill_123
-description: Test
----
-Content`
-    );
-
-    const tools = extractPluginTools(tmpDir, 'test-plugin');
-    expect(tools[0].name).toBe('plugin_test_plugin_my_special_skill_123');
-  });
-
-  it('should handle missing argumentHint gracefully', () => {
-    const skillDir = join(tmpDir, 'skills');
-    const fs = require('fs');
-    fs.mkdirSync(skillDir, { recursive: true });
-
-    writeFileSync(
-      join(skillDir, 'SKILL.md'),
-      `---
-name: no-hint-skill
-description: A skill without argumentHint
----
-Content`
-    );
-
-    const tools = extractPluginTools(tmpDir, 'plugin');
-    expect(tools[0].input_schema.properties.arguments.description).toBe(
-      'Arguments to pass to the skill'
-    );
-  });
-
-  it('should extract multiple plugin tools', () => {
-    const plugins = [
-      { type: 'local' as const, path: tmpDir },
-    ];
-
-    const skillDir = join(tmpDir, 'skills');
-    const fs = require('fs');
-    fs.mkdirSync(skillDir, { recursive: true });
-
-    writeFileSync(
-      join(skillDir, 'SKILL.md'),
-      `---
-name: multi-skill
-description: Multiple plugins test
----
-Content`
-    );
-
-    const tools = extractAllPluginTools(plugins);
-    expect(tools.length).toBeGreaterThan(0);
-    expect(tools[0].name).toContain('plugin_');
-  });
-
-  it('should skip non-local plugins gracefully', () => {
-    const plugins = [
-      // @ts-expect-error Testing edge case
-      { type: 'marketplace', path: '/some/path' },
-    ];
-
-    const tools = extractAllPluginTools(plugins);
-    expect(tools).toHaveLength(0);
   });
 
   it('should handle plugin paths that do not exist', () => {

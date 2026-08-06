@@ -327,6 +327,11 @@ export async function runInputLoop(
         const result = await surface.readLine({
           promptFn: () => buildPrompt(ctx.stats.permissionMode),
           ...(initialBuffer !== undefined ? { initialBuffer } : {}),
+          // This is THE turn-boundary prompt — the one "what should I do next"
+          // moment in the loop, and the only read that opts into an
+          // empty-prompt ghost. Borrowed sub-prompts (elicitation confirms,
+          // form fields) call readLine() too and deliberately leave it off.
+          primePromptSuggestion: true,
           onSigint: sigintHandler,
           onShiftTab: () => {
             // Shift+Tab is the keyboard speed lane: it advances the permission-
