@@ -184,3 +184,69 @@ describe('transcript — default directory resolution (state-tier placement)', (
     expect(p.startsWith(join(tmpHome, '.afk', 'transcripts') + '/')).toBe(false);
   });
 });
+
+describe('transcript — Ctrl+B queued flush lands inside the open turn (PR #891 regression)', () => {
+  let tmpDir: string;
+  let savedEnv: string | undefined;
+
+  async function makeHandle() {
+    tmpDir = mkdtempSync(join(tmpdir(), 'afk-transcript-test-'));
+    savedEnv = process.env['AFK_STATE_DIR'];
+    process.env['AFK_STATE_DIR'] = tmpDir;
+    const { initTranscript } = await import('./transcript.js');
+    return initTranscript(() => 'test-model');
+  }
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env['AFK_STATE_DIR'];
+    else process.env['AFK_STATE_DIR'] = savedEnv;
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const count = (body: string, needle: string) => body.split(needle).length - 1;
+
+  // The bug this pins: routing the flush through appendUser() force-closed the
+  // in-flight turn (false "no response recorded"), repointed `openUser` to the
+  // flushed text, and so made appendTurn miss its match and re-emit the
+  // turn's prompt. Full sequence: submit P, flush Q mid-turn, complete with A.
+  it('does not close the in-flight turn or duplicate its prompt', async () => {
+    const handle = await makeHandle();
+    await handle.appendUser('the original prompt');
+    await handle.appendQueuedUser('actually use sonnet');
+    await handle.appendTurn('the original prompt', 'the answer');
+
+    const body = readFileSync(handle.path(), 'utf8');
+    expect(body).not.toContain('_(no response recorded)_');
+    expect(count(body, 'the original prompt')).toBe(1);
+    expect(count(body, '## Assistant')).toBe(1);
+    expect(body).toContain('actually use sonnet');
+    expect(body).toContain('## Assistant\n\nthe answer');
+    // Two separators total: the file header's own (startTranscript) plus the
+    // single turn closed here. A third would mean the flush closed a turn.
+    expect(count(body, '\n---\n')).toBe(2);
+    expect(body.trimEnd().endsWith('---')).toBe(true);
+  });
+
+  it('orders the flushed directive after the prompt and before the answer', async () => {
+    const handle = await makeHandle();
+    await handle.appendUser('P');
+    await handle.appendQueuedUser('Q');
+    await handle.appendTurn('P', 'A');
+
+    const body = readFileSync(handle.path(), 'utf8');
+    expect(body.indexOf('P')).toBeLessThan(body.indexOf('Q'));
+    expect(body.indexOf('Q')).toBeLessThan(body.indexOf('## Assistant'));
+  });
+
+  it('leaves no dangling open turn: the next turn needs no self-heal', async () => {
+    const handle = await makeHandle();
+    await handle.appendUser('first');
+    await handle.appendQueuedUser('mid-turn note');
+    await handle.appendTurn('first', 'first answer');
+    await handle.appendUser('second');
+
+    const body = readFileSync(handle.path(), 'utf8');
+    // A dangling turn would make appendUser('second') emit the self-heal block.
+    expect(body).not.toContain('_(no response recorded)_');
+  });
+});

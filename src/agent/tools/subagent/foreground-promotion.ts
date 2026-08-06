@@ -23,10 +23,13 @@ import type { SubagentManager } from '../../subagent.js';
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
+import type { TraceWriter } from '../../trace/index.js';
+import { emitQueuedUserMessage } from '../../trace/emit.js';
 import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, measurePartial, buildFailurePayload } from './failure-payload.js';
 import { appendInjectContext } from './inject-context.js';
+import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
@@ -36,9 +39,15 @@ type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
  * resolves the executor's promotion signal (winning the race); `ready` resolves
  * with the created job once the handoff completes, or `null` if promotion could
  * not happen. Shared shape with `SubagentExecutor.promotionTriggers`.
+ *
+ * `fire()` optionally carries a {@link QueuedNoteClaim} — the REPL user's
+ * typed-ahead messages, flushed into this turn by the same Ctrl+B keypress that
+ * triggered promotion. The claim is shared across every trigger fired by one
+ * keypress; whichever promotion succeeds first claims it, so the note is
+ * delivered exactly once (and not at all if none succeed).
  */
 export interface PromotionTrigger {
-  fire: () => void;
+  fire: (queuedNote?: QueuedNoteClaim) => void;
   ready: Promise<PromotedSubagentInfo | null>;
 }
 
@@ -65,6 +74,7 @@ export interface RunForegroundArgs {
   childManager: SubagentManager | undefined;
   /** Routing-decision identity fields (empty when this executor lacks a surface). */
   identity: { origin?: TraceOrigin; actor?: TraceActor };
+  traceWriter?: TraceWriter;
   depth: number;
   /** Optional: `IAgentSession.sessionId` is `string | undefined`; forwarded as-is into telemetry + registry (preserves the pre-extraction contract). */
   parentSessionId: string | undefined;
@@ -117,6 +127,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     parentModel,
     childManager,
     identity,
+    traceWriter,
     depth,
     parentSessionId,
     registry,
@@ -154,8 +165,8 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
   // natively-backgrounded job.
   // ------------------------------------------------------------------
   let promoted = false;
-  let firePromotion!: () => void;
-  const promotionSignal = new Promise<void>((resolve) => {
+  let firePromotion!: (queuedNote?: QueuedNoteClaim) => void;
+  const promotionSignal = new Promise<QueuedNoteClaim | undefined>((resolve) => {
     firePromotion = resolve;
   });
   let resolveJob!: (info: PromotedSubagentInfo | null) => void;
@@ -191,10 +202,10 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
   try {
     const outcome = await Promise.race<
       | { kind: 'result'; result: Awaited<typeof runPromise> }
-      | { kind: 'promote' }
+      | { kind: 'promote'; queuedNote: QueuedNoteClaim | undefined }
     >([
       runPromise.then((result) => ({ kind: 'result' as const, result })),
-      promotionSignal.then(() => ({ kind: 'promote' as const })),
+      promotionSignal.then((queuedNote) => ({ kind: 'promote' as const, queuedNote })),
     ]);
 
     // Promotion path: hand the in-flight handle to the background registry
@@ -216,19 +227,41 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // outlive the turn that spawned it, exactly like mode:'background'.
           signal.removeEventListener('abort', abortListener);
           resolveJob({ jobId: job.jobId, label: job.label });
-          return {
-            content: JSON.stringify({
-              status: 'running' as const,
+          const promotedPayload: Record<string, unknown> = {
+            status: 'running' as const,
+            jobId: job.jobId,
+            subagentId: job.subagentId,
+            label: job.label,
+            message:
+              `Subagent backgrounded by user (jobId=${job.jobId}). ` +
+              `It keeps running detached; its result will be delivered into ` +
+              `this context automatically with the next user message once it ` +
+              `finishes. /bgsub:join ${job.jobId} remains available for manual replay.`,
+          };
+          // Ordering: claim the queued note only AFTER `adoptRunning` succeeded
+          // and `promoted` is set. The cap-hit / registry-refusal path below
+          // throws out of `adoptRunning` and falls through to a normal
+          // foreground await — there is no promotion tool_result for the note to
+          // ride there, so leaving the claim unclaimed is what tells the REPL to
+          // keep the message queued instead of dropping it.
+          const queuedUserMessage = claimQueuedNote(outcome.queuedNote);
+          if (queuedUserMessage !== undefined) {
+            // Ordering invariant: claim → witness → structural carrier. The trace
+            // records only size/job identity (never raw user text), and the model
+            // receives authority outside child-controlled `content`.
+            await emitQueuedUserMessage(traceWriter, {
               jobId: job.jobId,
               subagentId: job.subagentId,
-              label: job.label,
-              message:
-                `Subagent backgrounded by user (jobId=${job.jobId}). ` +
-                `It keeps running detached; its result will be delivered into ` +
-                `this context automatically with the next user message once it ` +
-                `finishes. /bgsub:join ${job.jobId} remains available for manual replay.`,
-            }),
+              byteLength: Buffer.byteLength(queuedUserMessage, 'utf8'),
+            });
+          }
+          const promotedResult: ToolResult = {
+            content: JSON.stringify(promotedPayload),
+            ...(queuedUserMessage !== undefined
+              ? { harnessUserMessage: { kind: 'queued_user_message' as const, text: queuedUserMessage } }
+              : {}),
           };
+          return promotedResult;
         } catch (e) {
           // Cap hit (or registry refusal): stay foreground. Mark the trigger
           // "not promoted" and await the run normally below.

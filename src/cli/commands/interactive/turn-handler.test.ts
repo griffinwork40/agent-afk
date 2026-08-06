@@ -1123,6 +1123,120 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     expect(writerCalls.some((l) => l.includes('backgrounded as bg-7'))).toBe(true);
   });
 
+  // Queued-message flush: Ctrl+B with typed-ahead pending delivers the message
+  // into the turn that is still running, instead of the next-turn drain.
+  it('Ctrl+B flushes a queued message into the running turn and drops it from the queue', async () => {
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+
+    const dropQueued = vi.fn(() => 1);
+    const comp = Object.assign(makeFakeCompositor(), {
+      peekQueuedText: () => ({
+        text: 'actually check the tests first',
+        preview: '[Pasted text: 30 chars]',
+        payloads: [{}],
+      }),
+      dropQueued,
+    });
+
+    // Mimics the agent layer folding the note into the promotion tool_result.
+    const promoteActiveForeground = vi.fn(
+      async (note?: { readonly text: string; claimed: boolean }) => {
+        if (note) note.claimed = true;
+        return [{ jobId: 'bg-9', label: 'deep dive' }];
+      },
+    );
+    const subagentControl = {
+      hasPromotableForeground: () => true,
+      promoteActiveForeground,
+      hasActiveForeground: () => false,
+      cancelActiveForeground: vi.fn().mockResolvedValue(0),
+    };
+
+    const { h } = makeHandles();
+    const onUserMessage = vi.fn();
+    const onQueuedUserMessage = vi.fn();
+    const handles: TurnHandles = {
+      ...h,
+      onUserMessage,
+      onQueuedUserMessage,
+      subagentControl,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+      setBackgroundHandler: (handler) => { handler?.(); },
+    };
+
+    const session = streamFrom([
+      { type: 'chunk', chunk: { type: 'content', content: 'working' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ]);
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      session,
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
+    );
+    await new Promise((r) => setImmediate(r));
+
+    // The queued text was handed to promotion...
+    expect(promoteActiveForeground).toHaveBeenCalledTimes(1);
+    expect(promoteActiveForeground.mock.calls[0]![0]?.text).toBe('actually check the tests first');
+    // ...and dropped only after the claim confirmed delivery.
+    expect(dropQueued).toHaveBeenCalledTimes(1);
+    // Persisted through the mid-turn seam, NOT appendUser's turn-opening one:
+    // routing the flush through onUserMessage force-closed the running turn
+    // and duplicated its prompt in the transcript (PR #891 review finding).
+    expect(onQueuedUserMessage).toHaveBeenCalledWith('actually check the tests first');
+    expect(onUserMessage).not.toHaveBeenCalledWith('actually check the tests first');
+    expect(writerCalls.some((l) => l.includes('[Pasted text: 30 chars]'))).toBe(true);
+    expect(writerCalls.some((l) => l.includes('queued message sent to this turn'))).toBe(true);
+  });
+
+  it('Ctrl+B leaves the queued message queued when promotion does not claim it', async () => {
+    // Cap-hit / no-registry: the subagent stayed foreground, so there is no
+    // promotion tool_result for the note to ride. Losing it here was the whole
+    // reason the flush is confirm-then-drain rather than drain-then-promote.
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+
+    const dropQueued = vi.fn(() => 0);
+    const comp = Object.assign(makeFakeCompositor(), {
+      peekQueuedText: () => ({ text: 'must not be lost', preview: 'must not be lost', payloads: [{}] }),
+      dropQueued,
+    });
+
+    const subagentControl = {
+      hasPromotableForeground: () => true,
+      // Resolves with no jobs and never sets `claimed`.
+      promoteActiveForeground: vi.fn().mockResolvedValue([]),
+      hasActiveForeground: () => false,
+      cancelActiveForeground: vi.fn().mockResolvedValue(0),
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = {
+      ...h,
+      subagentControl,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+      setBackgroundHandler: (handler) => { handler?.(); },
+    };
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      streamFrom([{ type: 'done', metadata: { durationMs: 5 } }]),
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(dropQueued).not.toHaveBeenCalled();
+    expect(writerCalls.some((l) => l.includes('queued message sent'))).toBe(false);
+  });
+
   it('Ctrl+B is a no-op when no subagent is promotable (no whole-turn detach)', async () => {
     const writerCalls: string[] = [];
     const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };

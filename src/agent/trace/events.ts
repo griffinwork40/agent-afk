@@ -369,6 +369,12 @@ export const BrowserEventTargetSchema = z.object({
   selectorHash: z.string().regex(/^[0-9a-f]{8}$/).optional(),
 });
 
+export const QueuedUserMessagePayloadSchema = z.object({
+  jobId: z.string(),
+  subagentId: z.string(),
+  byteLength: z.number().int().nonnegative(),
+});
+
 export const BrowserEventPayloadSchema = z.object({
   tool: BrowserEventToolSchema,
   action: BrowserActActionSchema.optional(),
@@ -491,6 +497,7 @@ export const TraceEventInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('closure'), payload: ClosurePayloadSchema }),
   z.object({ kind: z.literal('claim'), payload: ClaimPayloadSchema }),
   z.object({ kind: z.literal('browser_event'), payload: BrowserEventPayloadSchema }),
+  z.object({ kind: z.literal('queued_user_message'), payload: QueuedUserMessagePayloadSchema }),
   z.object({ kind: z.literal('session_phase'), payload: SessionPhasePayloadSchema }),
 ]);
 
@@ -555,6 +562,12 @@ export const TraceEventSchema = z.discriminatedUnion('kind', [
     seq: z.number().int().nonnegative(),
     kind: z.literal('browser_event'),
     payload: BrowserEventPayloadSchema,
+  }),
+  z.object({
+    ts: z.string().datetime(),
+    seq: z.number().int().nonnegative(),
+    kind: z.literal('queued_user_message'),
+    payload: QueuedUserMessagePayloadSchema,
   }),
   z.object({
     ts: z.string().datetime(),

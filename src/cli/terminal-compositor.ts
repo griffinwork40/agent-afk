@@ -47,6 +47,7 @@ import * as InputMode from './terminal-compositor.input-mode.js';
 import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import * as Lifecycle from './terminal-compositor.lifecycle.js';
 import * as Reset from './terminal-compositor.reset.js';
+import * as QueuedAccess from './terminal-compositor.queued-access.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
@@ -324,6 +325,8 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces.
    */
   pendingSubmissions: SubmissionPayload[] = [];
+  /** Payload identities owned by an in-flight Ctrl+B flush on this compositor. */
+  readonly queuedReservations = new Set<SubmissionPayload>();
 
   /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
   handleKeypress: ((char: string | undefined, key: KeyInfo) => void) | null = null;
@@ -895,6 +898,34 @@ export class TerminalCompositor {
    */
   getPendingCount(): number {
     return this.pendingSubmissions.length;
+  }
+
+  /**
+   * Snapshot of every queued message (FIFO, newline-joined) without
+   * consuming the queue — `undefined` when nothing is queued or any queued
+   * payload carries image attachments (those must drain as their own turn).
+   * Paired with {@link dropQueued} for the Ctrl+B flush: peek, deliver, then
+   * drop only once delivery is confirmed.
+   */
+  peekQueuedText(): QueuedAccess.QueuedSnapshot | undefined {
+    return QueuedAccess.peekQueuedText(this);
+  }
+
+  reserveQueued(snapshot: QueuedAccess.QueuedSnapshot): void {
+    QueuedAccess.reserveQueued(this, snapshot);
+  }
+
+  releaseQueued(snapshot: QueuedAccess.QueuedSnapshot): void {
+    QueuedAccess.releaseQueued(this, snapshot);
+  }
+
+  /**
+   * Drop the snapshotted queued messages after their text was delivered out-of-band.
+   * Returns the number dropped. Maintains the `queued` mirror and clears the
+   * post-ESC coalesce epoch — see the invariant on the underlying helper.
+   */
+  dropQueued(snapshot: QueuedAccess.QueuedSnapshot): number {
+    return QueuedAccess.dropQueued(this, snapshot);
   }
 
   /**

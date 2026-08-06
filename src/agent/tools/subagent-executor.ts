@@ -31,6 +31,7 @@ import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
+import type { QueuedNoteClaim } from './subagent/queued-note.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { debugLog } from '../../utils/debug.js';
@@ -255,8 +256,16 @@ export interface SubagentControl {
    * Resolves once each promotion has been handed to the registry. Entries that
    * could not be promoted (the subagent completed in the same tick, or the
    * background-job cap was hit) are omitted from the returned array.
+   *
+   * `queuedNote` optionally carries the REPL user's typed-ahead messages so they
+   * reach the parent's still-running turn on the same keypress that backgrounded
+   * the subagent (riding the synthetic promotion `tool_result`). The ticket is
+   * shared across every trigger, so the note is folded in at most once. The
+   * caller MUST re-read `queuedNote.claimed` after this resolves and keep its
+   * message queued when it is still `false` — an unclaimed note means nothing
+   * was promoted and the text has nowhere to ride.
    */
-  promoteActiveForeground(): Promise<PromotedSubagentInfo[]>;
+  promoteActiveForeground(queuedNote?: QueuedNoteClaim): Promise<PromotedSubagentInfo[]>;
   /**
    * True iff at least one foreground subagent dispatched by this executor is
    * currently in flight. Unlike {@link hasPromotableForeground} this does NOT
@@ -373,11 +382,14 @@ export class SubagentExecutor implements SubagentControl {
     return handles.length;
   }
 
-  async promoteActiveForeground(): Promise<PromotedSubagentInfo[]> {
+  async promoteActiveForeground(queuedNote?: QueuedNoteClaim): Promise<PromotedSubagentInfo[]> {
     // Snapshot first: firing a trigger may settle and remove its entry from
     // the map (via execute()'s finally) while we iterate.
     const triggers = [...this.promotionTriggers.values()];
-    triggers.forEach((t) => t.fire());
+    // The SAME claim ticket goes to every trigger: the first promotion that
+    // actually reaches the registry claims it, so N subagents backgrounded by
+    // one keypress deliver the user's queued text exactly once.
+    triggers.forEach((t) => t.fire(queuedNote));
     const settled = await Promise.all(triggers.map((t) => t.ready));
     return settled.filter((j): j is PromotedSubagentInfo => j !== null);
   }
@@ -832,6 +844,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
       childManager,
       identity,
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       depth,
       parentSessionId: this.ctx.parentSession.sessionId,
       registry: this.ctx.backgroundRegistry,

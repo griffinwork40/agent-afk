@@ -29,6 +29,7 @@ export interface ResetStateHost {
   input: InputCoreState;
   queued: boolean;
   pendingSubmissions: SubmissionPayload[];
+  readonly queuedReservations: Set<SubmissionPayload>;
   canceled: boolean;
   backgrounded: boolean;
   softStopped: boolean;
@@ -65,6 +66,7 @@ export function resetState(self: ResetStateHost): void {
   // dispatchers, tests, session swap) must not carry stale type-ahead into
   // the next compose window.
   self.pendingSubmissions = [];
+  self.queuedReservations.clear();
   self.canceled = false;
   self.backgrounded = false;
   self.softStopped = false;
