@@ -59,10 +59,39 @@ const compactCmd: SlashCommand = {
   summary: 'Compact history (summarize older messages)',
   hint: 'When context is filling up but you want to keep the thread — summarizes old turns and keeps the recent ones intact.',
   async handler(ctx) {
-    const spinner = ora({
-      text: palette.meta('Summarizing earlier turns...'),
-      ...REPL_SPINNER_OPTIONS,
-    }).start();
+    // When the persistent TerminalCompositor is armed (TTY REPL), route the
+    // progress indicator through its in-frame spinner instead of a bare ora:
+    // ora's imperative cursor writes race the compositor's frame repaints on
+    // the same physical rows (see terminal-compositor.ts:~800), which is why
+    // a user typing during compaction couldn't see their own keystrokes.
+    // Non-TTY surfaces (Telegram, daemon, tests) have no compositor to race
+    // with, so they keep the original bare-ora behavior unchanged.
+    const compositor = ctx.getCompositor?.() ?? null;
+    const spinner = compositor
+      ? null
+      : ora({
+          text: palette.meta('Summarizing earlier turns...'),
+          ...REPL_SPINNER_OPTIONS,
+        }).start();
+    if (compositor) {
+      // The in-frame spinner carries no caller-supplied label — it rotates
+      // work-derived/flavour verbs (see input/work-derived-verb.ts), and there
+      // is no 'compact' tool category to map onto. Commit the intent line above
+      // the frame instead, so the operator still learns WHAT is running; unlike
+      // a spinner label it also survives into scrollback next to the result.
+      ctx.out.info('Summarizing earlier turns...');
+      compositor.setSpinner({ enabled: true });
+    }
+    // Single stop point reused on every exit path below (success and catch)
+    // so the two flavors of "turn the spinner off" can never drift out of
+    // sync — a spinner left enabled is a worse bug than the race it replaces.
+    const stopSpinner = (): void => {
+      if (compositor) {
+        compositor.setSpinner({ enabled: false });
+      } else {
+        spinner?.stop();
+      }
+    };
     try {
       // Invariant: fire PreCompact before compaction so registered handlers can
       // block or observe the operation. block -> HookBlockedError -> skip.
@@ -76,7 +105,7 @@ const compactCmd: SlashCommand = {
         });
       }
       const result = await session.compact();
-      spinner.stop();
+      stopSpinner();
       if (!result.compacted) {
         const reason = result.reason ?? 'unknown';
         if (reason === 'aborted') {
@@ -114,7 +143,7 @@ const compactCmd: SlashCommand = {
         );
       }
     } catch (err) {
-      spinner.stop();
+      stopSpinner();
       if (err instanceof AbortError) throw err;
       if (err instanceof HookBlockedError) {
         ctx.out.info(`Compaction skipped: ${err.reason ?? 'blocked by hook'}`);
