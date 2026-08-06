@@ -19,7 +19,7 @@ import { randomBytes } from 'node:crypto';
 
 import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
 import { detectShellFromEnv } from '../shell-init.js';
-import { hasNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
+import { probeNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
 import { registerWorktreeRoot } from '../../../agent/worktree-root-registry.js';
 import type { WorktreeDisposition } from './worktree-disposition.js';
 
@@ -728,9 +728,18 @@ async function createWorktreeAt(
       // Rebuildable output (node_modules/, dist/) stays non-protective on
       // purpose: treating it as protective would strand every worktree the
       // user ever finished with.
-      if (await hasNonRebuildableIgnoredFiles(execFile, currentPath)) {
+      // Contract: name the entry that ACTUALLY protected the tree. The old
+      // wording ("non-rebuildable ignored files (e.g. .env)") read as a
+      // finding, so a user who had no `.env` went hunting for a secret that
+      // did not exist while the real cause — leftover test detritus, a
+      // scratch dir — stayed invisible and the tree was preserved on every
+      // single exit with nothing in the message to explain why.
+      const ignoredProbe = await probeNonRebuildableIgnoredFiles(execFile, currentPath);
+      if (ignoredProbe.protect) {
         preserveWorktree(
-          'non-rebuildable ignored files (e.g. .env) that `git status` cannot see',
+          ignoredProbe.because === 'git-failed'
+            ? `the ignored-file probe failed (${ignoredProbe.detail}), so removal would be a guess`
+            : `ignored local state \`git status\` cannot see: ${ignoredProbe.detail}`,
         );
         return;
       }

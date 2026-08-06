@@ -2,14 +2,24 @@
  * Tests for the edit_file tool handler.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { rm } from 'fs/promises';
+import os from 'os';
 import path from 'path';
+import { randomBytes } from 'crypto';
 import { editFileHandler } from './edit-file.js';
 
-// Use a temporary directory for test files
-const tempDir = path.join(process.cwd(), '.test-temp-edit-file');
+// Invariant: this scratch dir must live OUTSIDE the repo working tree. Rooted
+// at `process.cwd()` it landed as `.test-temp-edit-file/` in whatever checkout
+// ran the suite, and any run that did not reach `afterEach` (Ctrl+C, OOM, a
+// killed worker) left it behind. Being gitignored, `git status` reports it
+// clean while the worktree ignored-file probe classifies the unrecognised name
+// as non-rebuildable — so every worktree that had ever run the tests was
+// preserved on session exit, forever, citing local state the user never
+// created. Under os.tmpdir() the same abandoned run leaks nothing into a
+// checkout. The random suffix keeps two concurrent suite runs from sharing it.
+const tempDir = path.join(os.tmpdir(), `afk-edit-file-test-${process.pid}-${randomBytes(4).toString('hex')}`);
 
 async function createTempFile(filename: string, content: string): Promise<string> {
   await mkdir(tempDir, { recursive: true });
@@ -21,6 +31,14 @@ async function createTempFile(filename: string, content: string): Promise<string
 async function readTempFile(filePath: string): Promise<string> {
   return readFile(filePath, 'utf-8');
 }
+
+// File-scoped, not describe-scoped: the second describe below mkdirs tempDir
+// inside its cases and registers no afterEach, so the per-test cleanup in the
+// first block is not the last writer and the dir outlives the run. That is
+// what left one behind on every suite invocation.
+afterAll(async () => {
+  await rm(tempDir, { recursive: true, force: true });
+});
 
 describe('editFileHandler', () => {
   beforeEach(async () => {

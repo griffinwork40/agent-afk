@@ -57,8 +57,16 @@ const PROBE_EXEC_OPTS = { maxBuffer: 64 * 1024 * 1024, timeout: 10_000 } as cons
 /** Why the probe says a tree must be preserved. */
 export type IgnoredProbeVerdict =
   | { protect: false }
-  /** Found an ignored entry a rebuild would not restore. */
-  | { protect: true; because: 'non-rebuildable-entry' }
+  /**
+   * Found an ignored entry a rebuild would not restore. `detail` is the
+   * repo-relative path of that entry, and carrying it is not cosmetic: a
+   * verdict that only says "something protected this" leaves the caller to
+   * describe the find generically ("e.g. `.env`"), which reads as a FINDING.
+   * A user then hunts for a secret that does not exist while the real cause —
+   * test detritus, a scratch dir — stays invisible and the tree is preserved
+   * on every exit with no way to learn why.
+   */
+  | { protect: true; because: 'non-rebuildable-entry'; detail: string }
   /**
    * git itself failed, so the answer is unknown and we protect on principle.
    * Distinguished from a real find so callers can SAY SO: a silent protect here
@@ -123,7 +131,7 @@ async function inspectableDirHidesLocalState(
   for (const entry of nested.entries) {
     if (entry === dirEntry) continue; // git echoed the directory — no new information
     if (classifyIgnoredEntry(entry) === 'protected') {
-      return { protect: true, because: 'non-rebuildable-entry' };
+      return { protect: true, because: 'non-rebuildable-entry', detail: entry };
     }
   }
   return { protect: false };
@@ -149,7 +157,9 @@ export async function probeNonRebuildableIgnoredFiles(
   if ('failure' in top) return { protect: true, because: 'git-failed', detail: top.failure };
   for (const entry of top.entries) {
     const verdict = classifyIgnoredEntry(entry);
-    if (verdict === 'protected') return { protect: true, because: 'non-rebuildable-entry' };
+    if (verdict === 'protected') {
+      return { protect: true, because: 'non-rebuildable-entry', detail: entry };
+    }
     if (verdict === 'inspectable' && entry.endsWith('/')) {
       const nested = await inspectableDirHidesLocalState(execFile, worktreePath, entry);
       if (nested.protect) return nested;
