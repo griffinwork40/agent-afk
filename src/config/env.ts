@@ -1774,3 +1774,21 @@ export function getMissingRequiredEnvVars(category?: EnvVarCategory): EnvVarMeta
 export function isEnvVarSet(name: string): boolean {
   return process.env[name] !== undefined;
 }
+
+/**
+ * Read an env var's value by a name known only at runtime.
+ *
+ * Contract: returns `undefined` for both unset AND empty-string, because every
+ * config-overriding read site in the loader is truthiness-gated (`if
+ * (env.AFK_MODEL)`, env-tier.ts:206) — an empty var does NOT override config, so
+ * reporting it as a live override would be a lie. This deliberately differs from
+ * {@link isEnvVarSet}, which answers presence (`!== undefined`) and would call an
+ * empty var "set".
+ *
+ * Same rationale as `isEnvVarSet` for living here: the dynamic `process.env` read
+ * stays inside env.ts, preserving the invariant enforced by `pnpm audit:env:check`.
+ */
+export function getEnvVarValue(name: string): string | undefined {
+  const raw = process.env[name];
+  return raw === undefined || raw === '' ? undefined : raw;
+}
