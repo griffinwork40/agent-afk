@@ -510,6 +510,13 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_SUGGEST_PROMPT',
+    description: 'Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).',
+    type: 'boolean',
+    required: false,
+    category: 'model',
+  },
+  {
     name: 'AFK_SUGGEST_GHOST',
     description: 'Enable REPL ghost-text inline suggestions (Tier-1 history/dropdown + optional Tier-2 LLM). 1 = on (default), 0 = off. Set 0/false/off/no to disable all ghost text. Tier-2 LLM is separately gated by AFK_SUGGEST_ENABLED.',
     type: 'boolean',
@@ -1516,6 +1523,7 @@ export const env = {
   get AFK_OVERLOAD_PAUSE_MS(): string | undefined { return process.env['AFK_OVERLOAD_PAUSE_MS']; },
   get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
+  get AFK_SUGGEST_PROMPT(): string | undefined { return process.env['AFK_SUGGEST_PROMPT']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
   get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
   get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
