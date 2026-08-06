@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.1] - 2026-08-06
+
+### Fixed
+- grant research-agent memory_search so the ground-state surveyor can reach the archive (#925) (5f227a4)
+- normalize doubled-slash tilde before expandHome in read-denylist parser (#924) (cec3e51)
+- gate the relocated mcp.json carve-out on builtin denies (#779) (#815) (b89148c)
+- route /compact spinner through the compositor so typed input stays visible (#922) (1e485fa)
+
 ## [5.97.0] - 2026-08-06
 
 ### Added
