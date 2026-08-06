@@ -341,38 +341,6 @@ export interface TerminalCompositorOptions {
    */
   formatInputBuffer?: (segment: string) => string;
   /**
-   * Loop-stage rail content, as a pre-styled single line (or `null` to omit
-   * the row entirely).
-   *
-   * Invariant (row ownership): the rail is a FRAME line, not a reserved
-   * DECSTBM row. It renders directly above the input cluster, so the input
-   * sits below it — the deliberate inverse of the pre-#336 layout, where the
-   * rail was the topmost reserved row and therefore always *below* the
-   * prompt. Because it is a frame line it costs nothing in `getExtraRows()`
-   * and cannot desynchronize from the prompt during a scroll: log-update
-   * repaints both in one atomic frame.
-   *
-   * Supplied by `LoopStageBar` in inline mode. Read fresh on every repaint —
-   * the bar never pushes; the compositor pulls.
-   */
-  getRailRow?: () => string | null;
-  /**
-   * Mascot sprite frame: exactly {@link MINI_MASCOT_HEIGHT} pre-styled lines,
-   * each {@link MINI_MASCOT_WIDTH} display columns wide, or `[]` when the
-   * mascot is inert/disabled.
-   *
-   * Invariant (right gutter): these are composited onto the RIGHT EDGE of the
-   * frame's last N lines rather than painted into reserved rows. The sprite
-   * therefore owns no rows of its own, and its animation can never reach
-   * `setExtraRows`/DECSTBM — the property the reserved-band design existed to
-   * guarantee, now obtained structurally instead of by convention.
-   *
-   * Read fresh on every repaint. Safe at any cadence: the mascot animates at
-   * 300ms only while working, and the spinner already drives an 80ms repaint
-   * in exactly that state, so the sprite adds no repaint class of its own.
-   */
-  getMascotLines?: () => readonly string[];
-  /**
    * When provided, `commitAbove` wraps its raw `stdout.write(text + '\n')`
    * in `scrollRegion.withFullScrollRegion(...)` so the scrollback-bound
    * write happens under full-screen scroll semantics instead of inside
