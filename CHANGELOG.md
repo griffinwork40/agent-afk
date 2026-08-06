@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.96.0] - 2026-08-06
+
+### Added
+- show config provenance and apply hot keys live in /config (#906) (522d4ba)
+- AI-generated ghost-text suggestion at an empty prompt (#895) (a35bdaa)
+
+### Changed
+- Revert "refactor(cli): swap prompt and stage rail; goblin flanks the prompt (…" (#920) (6a8853f)
+- swap prompt and stage rail; goblin flanks the prompt (#336) (#905) (febb3a8)
+
 ## [5.95.7] - 2026-08-05
 
 ### Fixed
