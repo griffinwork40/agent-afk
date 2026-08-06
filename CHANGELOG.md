@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.96.1] - 2026-08-06
+
+### Changed
+- 9 low-risk /simplify --all cleanups (dead code + dedup + one tilde-expansion bugfix) (#893) (c9374cd)
+
 ## [5.96.0] - 2026-08-06
 
 ### Added
