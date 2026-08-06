@@ -46,6 +46,7 @@ import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+import { gateDerivedCarveOuts, gateStaticCarveOuts } from './read-denylist-carveout.js';
 import { pathIsWithin } from '../fs-case.js';
 import { expandHome } from '../../plugins/source.js';
 
@@ -183,6 +184,8 @@ export const READ_ALLOWLIST_REL: readonly string[] = [
   '.ssh/config',
   '.ssh/known_hosts',
 ];
+
+const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
@@ -330,20 +333,46 @@ function resolveLists(): {
   const extras: string[] = parseReadDenylistEntries(env.AFK_READ_DENYLIST)
     .map((p) => safeRealpath(p))
     .filter(Boolean);
+  // Keep source identity until carve-out gating is complete. Canonical paths
+  // alone are insufficient: the designated AFK config root and an independent
+  // credential root can resolve to the same string through a symlink.
+  const resolvedBuiltinEntries = BUILTIN_READ_DENYLIST.map((source) => ({
+    source,
+    root: safeRealpath(resolve(source)),
+  }));
+  const derivedCarvedRoots = derivedAfkHomeReadEntry();
   const builtins = [
-    ...new Set([
-      ...BUILTIN_READ_DENYLIST.map((p) => safeRealpath(resolve(p))),
-      ...derivedAfkHomeReadEntry(),
-    ]),
+    ...new Set([...resolvedBuiltinEntries.map(({ root }) => root), ...derivedCarvedRoots]),
   ];
+  // Invariant: every carve-out is gated against the builtin deny prefixes
+  // BEFORE it is unioned into `allow`, because `allow` is consulted ahead of
+  // the builtin loop in isReadDenied. Ungated, a home relocated UNDER another
+  // denied root (AFK_HOME=~/.ssh/afk) punched an exact-file hole straight
+  // through that root's floor (#779). The gate is applied here rather than via
+  // isReadDenied because that function reads the list being built. The static
+  // entries are gated PER-ENTRY (see gateStaticCarveOuts) — never through one
+  // shared root set — because different entries pierce different roots and a
+  // single shared exclusion silently dropped the ssh entries (#815 review).
+  const derivedGateRoots = resolvedBuiltinEntries
+    .filter(
+      ({ source, root }) =>
+        source !== DEFAULT_AFK_CONFIG || !derivedCarvedRoots.includes(root),
+    )
+    .map(({ root }) => root);
   cached = {
     key,
     builtins,
     extras,
     allow: [
       ...new Set([
-        ...BUILTIN_READ_ALLOWLIST.map(resolveExceptionEntry),
-        ...derivedAfkHomeAllowEntries(),
+        ...gateStaticCarveOuts(
+          READ_ALLOWLIST_REL.map((rel) => ({
+            rel,
+            resolved: resolveExceptionEntry(`${homedir()}/${rel}`),
+          })),
+          resolvedBuiltinEntries,
+        ),
+        ...gateDerivedCarveOuts(derivedAfkHomeAllowEntries(), derivedGateRoots),
       ]),
     ],
   };
