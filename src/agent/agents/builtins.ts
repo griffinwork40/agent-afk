@@ -116,7 +116,23 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // `nestedAgentTypes`, and the subagent executor mechanically restricts
         // research-agent to dispatching ONLY git-investigator (no bare/other
         // dispatch), so the read-only contract can't be escalated.
-        tools: [...researchAgent.allowedTools, 'Agent(git-investigator)'],
+        //
+        // `memory_search` is granted by the same registry-entry mechanism, for
+        // the same reason it must not go in the shared const. Without it the
+        // cross-session fact archive is unreachable from a research-agent, and
+        // the failure is SILENT: `/ground-state` dispatches its memory surveyor
+        // as this type and instructs it to "call the memory_search tool", so the
+        // surveyor degrades to reading HOT.md/AFK.md off disk and then truthfully
+        // reports which stores it consulted — a report that looks satisfied while
+        // a third of the recon wave never happened (issue #883). The tool is
+        // read-only by construction and already trusted by the MOST restricted
+        // role in the system (READ_ONLY_PHASE_TOOLS, mint's spec/research/plan
+        // phases) and by RECON_ALLOWED_TOOLS, so withholding it from a read-only
+        // research agent was incoherent rather than protective — the same
+        // argument CHILD_ALLOWED_TOOLS already makes at nesting.ts:124-131.
+        // Note `memory_update`/`procedure_write` are deliberately NOT granted:
+        // those mutate, and target:"hot" reaches every future session's prompt.
+        tools: [...researchAgent.allowedTools, 'memory_search', 'Agent(git-investigator)'],
         // Anti-runaway bound (see READONLY_AGENT_MAX_TOOL_USE_ITERATIONS): a
         // read-only research/review agent that keeps tool-calling without ever
         // emitting a final message otherwise runs unbounded on the (uncapped)
