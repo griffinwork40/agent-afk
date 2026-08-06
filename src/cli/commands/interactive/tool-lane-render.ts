@@ -297,9 +297,10 @@ export function renderTextChildLines(text: string, indent: string, g: Readonly<G
   if (!text || !text.trim()) return [];
   const prefix = palette.dim(g.textPrefix);
   // 2 cols for the text prefix, plus a small safety margin for ANSI widths.
-  // Clamped to the shared reading measure so tool-lane text keeps the same
-  // right edge as adjacent prose (see `render/measure.ts`).
-  const maxWidth = Math.max(1, capToMeasure(getTerminalWidth() - indent.length - 2 - 2));
+  // Derived from `toolLaneWidth()` — the same row budget `clampLineToTerminal`
+  // enforces on the composed line below — so the wrapped text can never
+  // exceed the clamp that will later be applied to it (see `render/measure.ts`).
+  const maxWidth = Math.max(1, toolLaneWidth() - indent.length - 2 - 2);
   const colored = colorizeIndent(indent, g);
   const out: string[] = [];
   for (const para of text.split('\n')) {

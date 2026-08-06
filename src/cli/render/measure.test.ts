@@ -10,6 +10,7 @@ import { formatThinkingParagraph } from '../commands/interactive/thinking-paragr
 import {
   renderTextChildLines,
   toolLaneWidth,
+  clampLineToTerminal,
   UNICODE_GLYPHS,
   type ToolEntry,
 } from '../commands/interactive/tool-lane-render.js';
@@ -204,4 +205,28 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
       }),
     );
   });
+
+  // Regression: PR #923 fed the RAW terminal width into `capToMeasure` when
+  // computing the text-wrap budget, then separately clamped the composed
+  // line to `toolLaneWidth()` (the row budget). Both are capped to the same
+  // measure constant, but wrap budget included chrome (indent/prefix) that
+  // the row clamp did not budget for, so the composed line (indent + prefix
+  // + wrapped text) could exceed the row clamp and get its tail silently
+  // truncated by `clampLineToTerminal`. The `rowMax <= ceiling` assertion
+  // above does not catch this: it only bounds the max width, not whether the
+  // clamp actually altered any line. Pin the real invariant instead — for
+  // every wrapped line, re-applying the row clamp must be a no-op.
+  for (const cols of [120, 200]) {
+    it(`clamping wrapped tool-lane text at the row budget is a no-op at ${cols} cols`, () => {
+      withMeasureEnv(undefined, () =>
+        withCols(cols, () => {
+          const laneLines = renderTextChildLines(LONG, '  ', UNICODE_GLYPHS);
+          const rowBudget = toolLaneWidth();
+          for (const line of laneLines) {
+            expect(clampLineToTerminal(line, rowBudget)).toBe(line);
+          }
+        }),
+      );
+    });
+  }
 });
