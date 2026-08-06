@@ -208,6 +208,33 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS',
+    description: 'Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.',
+    type: 'number',
+    required: false,
+    default: '8',
+    example: '4',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS',
+    description: 'Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.',
+    type: 'number',
+    required: false,
+    default: '8',
+    example: '2',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS',
+    description: 'Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default.',
+    type: 'number',
+    required: false,
+    default: '10',
+    example: '5',
+    category: 'model',
+  },
+  {
     name: 'AFK_MAX_NESTING_DEPTH',
     description:
       'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +
@@ -505,6 +532,13 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_SUGGEST_ENABLED',
     description: 'Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default.',
+    type: 'boolean',
+    required: false,
+    category: 'model',
+  },
+  {
+    name: 'AFK_SUGGEST_PROMPT',
+    description: 'Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).',
     type: 'boolean',
     required: false,
     category: 'model',
@@ -1020,6 +1054,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_GOBLIN_MASCOT',
+    description: 'Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_TERM_TITLE',
     description: 'Set the terminal/tab title (OSC 2) to reflect afk state — "afk — <cwd> · running" during a turn, "afk — <cwd>" when idle, cleared on exit. 1 = on (default when stdout is a TTY), 0 = leave the title alone. TTY-only.',
     type: 'boolean',
@@ -1078,6 +1120,22 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     default: 'dark',
     example: 'light',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_TEXT_MEASURE',
+    description:
+      'Maximum line length (columns) for unbordered streamed text in the interactive REPL: assistant prose, ' +
+      'thinking blocks, tool-lane text, and subagent text. Display-only — affects wrapping, never behavior. ' +
+      'Bordered elements (cards, error boxes) already cap at 100; this applies the same ceiling to the ' +
+      'unbordered surfaces, which previously scaled to the full terminal width. ' +
+      'Accepts a positive integer (minimum 20), or full | off | none | 0 to disable capping and restore ' +
+      'full-width wrapping. Unparseable or below-minimum values fall back to the default. ' +
+      'No-op on terminals at or below the measure, so narrow terminals are unaffected.',
+    type: 'string',
+    required: false,
+    default: '100',
+    example: 'full',
     category: 'misc',
   },
   {
@@ -1466,6 +1524,9 @@ export const env = {
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
   get AFK_FORCE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_FORCE_BASH_INTERPRETER_GUARD']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
+  get AFK_MAX_CONCURRENT_BACKGROUND_JOBS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_BACKGROUND_JOBS']; },
+  get AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS']; },
+  get AFK_MAX_CONCURRENT_SUBAGENT_CALLS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_SUBAGENT_CALLS']; },
   get AFK_MAX_NESTING_DEPTH(): string | undefined { return process.env['AFK_MAX_NESTING_DEPTH']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
@@ -1492,6 +1553,7 @@ export const env = {
   get AFK_OVERLOAD_PAUSE_MS(): string | undefined { return process.env['AFK_OVERLOAD_PAUSE_MS']; },
   get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
+  get AFK_SUGGEST_PROMPT(): string | undefined { return process.env['AFK_SUGGEST_PROMPT']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
   get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
   get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
@@ -1573,6 +1635,7 @@ export const env = {
   get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
   get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
+  get AFK_GOBLIN_MASCOT(): string | undefined { return process.env['AFK_GOBLIN_MASCOT']; },
   get AFK_TERM_TITLE(): string | undefined { return process.env['AFK_TERM_TITLE']; },
   get AFK_NOTIFY(): string | undefined { return process.env['AFK_NOTIFY']; },
   get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
@@ -1580,6 +1643,7 @@ export const env = {
   get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
   get NO_COLOR(): string | undefined { return process.env['NO_COLOR']; },
   get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
+  get AFK_TEXT_MEASURE(): string | undefined { return process.env['AFK_TEXT_MEASURE']; },
   get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
 
   // Debug
@@ -1739,4 +1803,22 @@ export function getMissingRequiredEnvVars(category?: EnvVarCategory): EnvVarMeta
  */
 export function isEnvVarSet(name: string): boolean {
   return process.env[name] !== undefined;
+}
+
+/**
+ * Read an env var's value by a name known only at runtime.
+ *
+ * Contract: returns `undefined` for both unset AND empty-string, because every
+ * config-overriding read site in the loader is truthiness-gated (`if
+ * (env.AFK_MODEL)`, env-tier.ts:206) — an empty var does NOT override config, so
+ * reporting it as a live override would be a lie. This deliberately differs from
+ * {@link isEnvVarSet}, which answers presence (`!== undefined`) and would call an
+ * empty var "set".
+ *
+ * Same rationale as `isEnvVarSet` for living here: the dynamic `process.env` read
+ * stays inside env.ts, preserving the invariant enforced by `pnpm audit:env:check`.
+ */
+export function getEnvVarValue(name: string): string | undefined {
+  const raw = process.env[name];
+  return raw === undefined || raw === '' ? undefined : raw;
 }

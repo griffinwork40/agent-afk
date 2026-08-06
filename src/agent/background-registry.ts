@@ -60,6 +60,7 @@ import type { BgJobMeta } from './bg-job-log.js';
 import { getBgJobsRoot, getBgJobDir } from '../paths.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { truncate } from './tools/subagent/failure-payload.js';
+import { resolveMaxConcurrentBackgroundJobs } from '../config/concurrency.js';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -142,16 +143,13 @@ function boundedStopReason(stopReason: string | undefined): string | undefined {
  */
 const CANCEL_DRAIN_TIMEOUT_MS = 5000; // 5 seconds
 
-/** Default maximum number of concurrently running background jobs. */
-const DEFAULT_MAX_CONCURRENT_JOBS = 10;
-
 export interface BackgroundRegistryOptions {
   /** Optional trace writer. Witness events become no-ops when undefined. */
   traceWriter?: TraceWriter | undefined;
   /**
    * Maximum number of concurrently *running* background jobs.
    * `register()` throws `BackgroundJobCapError` when this limit is reached.
-   * Defaults to {@link DEFAULT_MAX_CONCURRENT_JOBS} (10).
+   * Defaults to AFK_MAX_CONCURRENT_BACKGROUND_JOBS, or 10 when unset/invalid.
    */
   maxConcurrentJobs?: number;
 }
@@ -204,7 +202,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   constructor(options: BackgroundRegistryOptions = {}) {
     super();
     this.traceWriter = options.traceWriter;
-    this.maxConcurrentJobs = options.maxConcurrentJobs ?? DEFAULT_MAX_CONCURRENT_JOBS;
+    this.maxConcurrentJobs = options.maxConcurrentJobs ?? resolveMaxConcurrentBackgroundJobs();
 
     // 7-day eviction sweep: fire after 5 seconds so it doesn't block startup.
     // `.unref()` prevents the timer from keeping the Node process alive.

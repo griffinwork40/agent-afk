@@ -442,13 +442,21 @@ describe('SubagentExecutor', () => {
       expect(result.content).toContain('cwd must be a string');
     });
 
-    it('rejects empty-string cwd', async () => {
+    it('treats empty-string cwd as absent and dispatches with the parent fallback', async () => {
+      // Was: rejected with "cwd must be a non-empty string". A model padding
+      // the optional with '' saw a required-field error it could not satisfy
+      // alongside isolation, and abandoned isolation rather than retrying.
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
       const result = await executor.execute(
         makeCall({ input: { prompt: 'test', cwd: '' } }),
       );
 
-      expect(result.isError).toBe(true);
-      expect(result.content).toContain('non-empty');
+      expect(result.isError).toBeFalsy();
+      const call = (mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(call).toBeDefined();
+      expect(Object.prototype.hasOwnProperty.call(call.config, 'cwd')).toBe(false);
     });
 
     it('rejects relative cwd', async () => {

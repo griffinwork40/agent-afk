@@ -111,10 +111,15 @@ export function renderInputLine(self: RenderHost): string {
   const ac = self.autocompleteState;
   let ghostSuffix = '';
   const ghost = self.activeGhost;
+  // Invariant: an EMPTY buffer is a legitimate ghost state — that is the
+  // empty-prompt suggestion (see cli/input/suggest-prompt), the one source
+  // allowed to propose a whole next action rather than complete a prefix. The
+  // remaining conditions still hold at length 0: the cursor is trivially at
+  // end-of-buffer and every string `startsWith('')`, so the prefix-extension
+  // guarantee that makes Tab/Right-arrow acceptance safe is unchanged.
   if (
     ghost !== null &&
     !suffix &&
-    self.input.buffer.length > 0 &&
     self.input.cursor === self.input.buffer.length &&
     ghost.startsWith(self.input.buffer) &&
     ghost.length > self.input.buffer.length &&

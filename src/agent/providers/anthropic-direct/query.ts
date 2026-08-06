@@ -57,7 +57,7 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
-import { refreshEnvironmentDate } from './query/date-rollover.js';
+import { refreshEnvironmentDate } from '../shared/date-rollover.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
@@ -180,6 +180,17 @@ export interface AnthropicDirectQueryOptions {
    */
   cwdDependentsFactory?: (cwd: string) => { userSystem: string; dispatcher: ToolDispatcher };
   /**
+   * Factory for re-assembling `userSystem` around a NEW composed base prompt
+   * when `setSystemPrompt()` is called mid-session (the `/afk-md` hot-reload
+   * path). When absent, `setSystemPrompt()` reports `false` and changes
+   * nothing — same degradation contract as `cwdDependentsFactory`.
+   *
+   * Supplied by `AnthropicDirectProvider.query()` as a closure over the same
+   * shared `stableSystemPrefix` the cwd factory uses, so the two rebuild paths
+   * compose rather than overwrite each other. See `query/overlay-rebuild.ts`.
+   */
+  systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
+  /**
    * Provider callback invoked by `setPermissionMode()` to update the
    * provider-level `_currentPermissionMode` — the field the path-approval hook
    * reads via the provider's `getGrants().allowAll`. This is the path-approval
@@ -283,6 +294,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
    */
   private readonly retry: RetryLayer;
   private readonly cwdDependentsFactory?: (cwd: string) => { userSystem: string; dispatcher: ToolDispatcher };
+  private readonly systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly mcpManager?: import('../../mcp/index.js').McpManager;
   private readonly hookRegistry?: HookRegistry;
@@ -303,6 +315,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
+    this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
     this.onPermissionMode = opts.onPermissionMode;
     this.mcpManager = opts.mcpManager;
     if (opts.hookRegistry !== undefined) this.hookRegistry = opts.hookRegistry;
@@ -733,6 +746,28 @@ export class AnthropicDirectQuery implements ProviderQuery {
     const { userSystem, dispatcher } = this.cwdDependentsFactory(cwd);
     this.state.userSystem = userSystem;
     this.state.toolDispatcher = dispatcher;
+  }
+
+  /**
+   * Swap the composed base system prompt for all subsequent turns.
+   *
+   * Contract: `basePrompt` is the FULL composed prompt (framework doctrine +
+   * `# Operator configuration` overlay), not the bare overlay — see the
+   * `ProviderQuery.setSystemPrompt` doc. Returns `true` when the live prompt
+   * was rebuilt, `false` when no rebuild factory is wired (external-dispatcher
+   * callers), so the caller can report honestly instead of claiming a reload
+   * that never happened.
+   *
+   * Safe between turns and idempotent: `composeSystem()` re-reads
+   * `state.userSystem` fresh on every turn (it already mutates it per-turn for
+   * date rollover), so writing a newly assembled string here is the same
+   * established mechanism `setCwd()` uses — no session reset, no history loss.
+   * Synchronous for the same reason `setCwd` is: it is called between turns.
+   */
+  setSystemPrompt(basePrompt: string | undefined): boolean {
+    if (!this.systemPromptRebuildFactory) return false;
+    this.state.userSystem = this.systemPromptRebuildFactory(basePrompt);
+    return true;
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {

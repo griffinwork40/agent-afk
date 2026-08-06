@@ -17,10 +17,15 @@
  * OpenAI/gpt target the session is already using — so the child runs instead of
  * dying. It is applied at `SubagentManager.forkSubagent`, the single choke point
  * through which every fork path converges.
+ *
+ * Issue #869: the Claude-family check must run on the TIER-RESOLVED id, not the
+ * raw pin — see {@link isClaudeFamilyAfterTierResolution}, the sole difference
+ * from the original #652 shape.
  */
 
 import { providerForModel } from '../providers/index.js';
 import { isClaudeFamilyModel } from '../providers/openai-compatible/responses-config.js';
+import { resolveModelInput } from '../session/model-slots.js';
 
 export interface ChildModelCoercion {
   /** The model the child should actually run — the substitute when coerced. */
@@ -34,11 +39,30 @@ export interface ChildModelCoercion {
 }
 
 /**
+ * True when `model`, once resolved past a bare capability-tier alias
+ * (`local`/`small`/`medium`/`large`, or a custom tier name — see
+ * `model-slots.ts`), is a Claude-family id.
+ *
+ * Issue #869: `isClaudeFamilyModel` pattern-matches the literal string and has
+ * no notion of tier indirection by design (it stays self-contained to avoid an
+ * import cycle through the provider registry). A child pinned to the bare tier
+ * name `medium` reads as "not Claude-family" even when that tier is BOUND to
+ * `claude-sonnet-5` — so the raw predicate misses exactly the case this module
+ * exists to catch. `resolveModelInput` is a no-op on an already-concrete id or
+ * a fixed identity alias (`sonnet`/`opus`/`haiku`/`claude-*`/`local-*`), so this
+ * changes nothing for those pre-#869 paths.
+ */
+function isClaudeFamilyAfterTierResolution(model: string | undefined): boolean {
+  return isClaudeFamilyModel(resolveModelInput(model));
+}
+
+/**
  * Decide the effective model for a forked child, substituting a Claude-family
  * model that would starve on this session's `openai-compatible` routing.
  *
  * Coerces iff ALL hold:
- *   1. `childModel` is a Claude-family id (`isClaudeFamilyModel`), AND
+ *   1. `childModel` is a Claude-family id once tier-resolved
+ *      (`isClaudeFamilyAfterTierResolution`), AND
  *   2. it currently ROUTES to `openai-compatible` — i.e. a global
  *      `AFK_PROVIDER` force (or a chatgpt-oauth/openai slot) has overridden the
  *      id's natural anthropic-direct routing, AND
@@ -66,14 +90,14 @@ export function coerceCrossProviderChildModel(
 ): ChildModelCoercion {
   if (
     childModel === undefined ||
-    !isClaudeFamilyModel(childModel) ||
+    !isClaudeFamilyAfterTierResolution(childModel) ||
     providerForModel(childModel) !== 'openai-compatible'
   ) {
     return { model: childModel };
   }
   if (
     parentModel === undefined ||
-    isClaudeFamilyModel(parentModel) ||
+    isClaudeFamilyAfterTierResolution(parentModel) ||
     providerForModel(parentModel) !== 'openai-compatible'
   ) {
     return { model: childModel };

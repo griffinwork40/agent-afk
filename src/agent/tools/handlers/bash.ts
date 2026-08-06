@@ -227,6 +227,9 @@ export function createBashHandler(
       // Combined with process.kill(-proc.pid, 'SIGKILL') below, this lets us kill
       // the entire group atomically — including backgrounded grandchildren — so no
       // orphan processes leak after a timeout or abort (process-group orphan fix).
+      // Lifecycle note: ownership ends when this tool call settles. Intentionally
+      // backgrounded work may outlive the session and cannot be reaped safely
+      // without an explicit background-job contract, so cleanup is deferred.
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Effective cwd priority:

@@ -26,14 +26,16 @@
  *
  * ## Caveats
  *
- *   - As of the runtime version this detector ships against, only
- *     `model_end_turn` is emitted in practice. The other reasons are
- *     declared in `src/agent/trace/types.ts:303–310` and validated by
- *     `ClosureReasonSchema` (`src/agent/trace/events.ts:250–258`) but the
- *     emission sites for `iteration_cap` / `hook_blocked` /
- *     `max_turns_exceeded` are not yet wired (see the closure handler in
- *     `agent-session.ts:690–706`). The detector is correct against the
- *     schema; it will start producing cards as those reasons get wired.
+ *   - Emission is live for every reason this detector groups on. The
+ *     reasons are declared in `src/agent/trace/types.ts:303–310` and
+ *     validated by `ClosureReasonSchema` (`src/agent/trace/events.ts:250–258`).
+ *     `hook_blocked` / `max_turns_exceeded` were wired by 78c40833 and
+ *     `iteration_cap` by 1ba29e7e; `timeout` closures began appearing
+ *     2026-07-07. An earlier revision of this comment claimed those sites
+ *     were "not yet wired" and that only `model_end_turn` was emitted in
+ *     practice — that was already false when written, and it kept this
+ *     detector opt-in long after it had real signal. Do not re-add that
+ *     caveat without re-checking `agent-session.ts` emission sites first.
  *   - A single anomalous closure is meaningful but noisy. Default
  *     threshold is 1 — every anomalous closure is flagged — but
  *     `minOccurrences` lifts the bar when desired.

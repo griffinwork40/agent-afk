@@ -22,7 +22,31 @@ import { runDoctorChecks } from '../../commands/doctor-checks.js';
 import { getConfigKeySpec } from '../../../config/settable-keys.js';
 import { setConfigValue, RESTART_NOTE } from '../../../config/mutate.js';
 import { runConfigMenu, overlaysFromCompositor, defaultIo } from '../../render/config-menu.js';
+import { resolveConfigProvenance, shadowNote } from '../../config/provenance.js';
+import { applyConfigLive, type LiveApplyHandle } from '../../config/live-apply.js';
+import type { AgentModelInput } from '../../../agent/types.js';
 import type { SlashCommand, SlashContext, Writer } from '../types.js';
+
+/**
+ * The running session's live-apply capability, in the shape `live-apply.ts`
+ * expects. Mirrors what `/model` and `/theme` already do by hand
+ * (info.ts:287-289, theme.ts:64-69) so `/config` applies a hot key the same way
+ * the dedicated command would.
+ */
+function liveHandle(ctx: SlashContext): LiveApplyHandle {
+  return {
+    setModel: async (id) => {
+      await ctx.session.current.setModel(id as AgentModelInput);
+    },
+    noteModel: (id) => {
+      ctx.stats.model = id as AgentModelInput;
+    },
+    repaint: () => {
+      ctx.ui.repaintStatusLine();
+      ctx.getCompositor?.()?.repaint();
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // /config — read-only view (shared by `/config view`, the non-TTY fallback,
@@ -102,7 +126,7 @@ function renderConfigView(out: Writer): void {
  * refuses human-tier keys (they require the interactive confirm or the CLI) and
  * unknown keys. Works on every surface (no compositor needed).
  */
-function handleConfigSet(ctx: SlashContext, rest: string): 'continue' {
+async function handleConfigSet(ctx: SlashContext, rest: string): Promise<'continue'> {
   const trimmed = rest.trim();
   const sp = trimmed.indexOf(' ');
   if (sp === -1) {
@@ -124,8 +148,26 @@ function handleConfigSet(ctx: SlashContext, rest: string): 'continue' {
     return 'continue';
   }
   try {
+    // Warn BEFORE the write too, not only after (the interactive menu shows
+    // the same note in its edit header). The fast-path cannot abort a flagged
+    // write, but the user still learns it is inert before it lands rather
+    // than only after it has.
+    const shadow = shadowNote(resolveConfigProvenance(path));
+    if (shadow) ctx.out.warn(shadow);
     const r = setConfigValue(path, value);
-    ctx.out.success(`✓ set ${path} = ${String(r.value)} — ${RESTART_NOTE}`);
+    // Liveness is reported after the write and never downgrades it — the value
+    // is on disk either way.
+    const live = await applyConfigLive(path, value, liveHandle(ctx));
+    ctx.out.success(
+      `✓ set ${path} = ${String(r.value)} — ${live.applied ? live.note : RESTART_NOTE}`,
+    );
+    if (!live.applied && live.reason !== undefined) {
+      ctx.out.warn(`saved, but not applied live: ${live.reason}`);
+    }
+    // A write that lands beneath a higher-precedence tier is inert. Repeat the
+    // pre-write warning so the confirmation does not read as success alone.
+    // (Computed once: a user-file write cannot change env/project shadowing.)
+    if (shadow) ctx.out.warn(shadow);
   } catch (err) {
     ctx.out.error(err instanceof Error ? err.message : String(err));
   }
@@ -140,7 +182,7 @@ const configCmd: SlashCommand = {
   name: '/config',
   summary: 'View or edit configuration — interactive settings menu on a TTY',
   usage: '/config [view | set <key> <value>]',
-  hint: 'Browse and edit config mid-session in an arrow-key settings menu. `/config view` prints the resolved configuration; `/config set <key> <value>` sets one agent-tier key. Changes apply on the next restart — same store as `afk config`.',
+  hint: 'Browse and edit config mid-session in an arrow-key settings menu. Rows show the value the loader will actually use and name the tier it came from, so an env var or project-local afk.config.json that overrides your change is visible before you make it. `model` and `theme` apply immediately; other keys apply on the next restart. Same store as `afk config`.',
   async handler(ctx, args) {
     const a = args.trim();
 
@@ -149,7 +191,7 @@ const configCmd: SlashCommand = {
       return 'continue';
     }
     if (a === 'set' || a.startsWith('set ')) {
-      return handleConfigSet(ctx, a === 'set' ? '' : a.slice(4));
+      return await handleConfigSet(ctx, a === 'set' ? '' : a.slice(4));
     }
     if (a.length > 0 && a !== 'edit' && a !== 'menu') {
       ctx.out.warn(`Unknown argument: ${a}  (usage: /config [view | set <key> <value>])`);
@@ -177,7 +219,7 @@ const configCmd: SlashCommand = {
     // (registry.ts) into the REPL loop, which has no catch and would tear the
     // session down.
     try {
-      await runConfigMenu(overlaysFromCompositor(compositor), defaultIo());
+      await runConfigMenu(overlaysFromCompositor(compositor), defaultIo(liveHandle(ctx)));
     } catch (err) {
       ctx.out.error(
         `Could not open the settings menu: ${err instanceof Error ? err.message : String(err)}`,

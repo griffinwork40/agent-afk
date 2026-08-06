@@ -72,6 +72,7 @@ import { env } from '../../../config/env.js';
 import { resolveQueryToken } from './query/token-resolution.js';
 import { getRuntimeStateTool } from '../../awareness/index.js';
 import { createCwdDependentsFactory } from './query/cwd-dependents.js';
+import { createSystemPromptRebuildFactory } from './query/overlay-rebuild.js';
 import { wireQueryDispatcher } from './query/dispatcher-wiring.js';
 import { setUpQueryClient } from './query/client-setup.js';
 import { assembleQueryPrompt } from './query/prompt-assembly.js';
@@ -556,6 +557,24 @@ export class AnthropicDirectProvider implements ModelProvider {
           buildDispatcher: (mode, opts) => this.buildDispatcher(mode, opts),
         });
 
+    // Invariant: this factory MUST close over the SAME `stableSystemPrefix`
+    // object passed to `createCwdDependentsFactory` above — not a copy. The
+    // overlay rebuild writes the new base prompt back into that shared object
+    // so a later `setCwd()` re-assembly inherits it instead of resurrecting the
+    // launch-time prompt. See the Invariant block in query/overlay-rebuild.ts.
+    // Gated on `externalTools` for the same reason the cwd factory is: those
+    // callers own their own prompt/dispatcher lifecycle.
+    const systemPromptRebuildFactory = this.externalTools
+      ? undefined
+      : createSystemPromptRebuildFactory({
+          stableSystemPrefix,
+          config,
+          surface: this.surface,
+          runtimeStateSource,
+          getCurrentCwd: () => this._currentCwd,
+          fallbackCwd: cwd,
+        });
+
     const resolvedEffort = resolveEffort(config.effort, model);
     return new AnthropicDirectQuery({
       client,
@@ -609,6 +628,7 @@ export class AnthropicDirectProvider implements ModelProvider {
         ? { maxToolUseIterations: config.maxToolUseIterations }
         : {}),
       ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
+      ...(systemPromptRebuildFactory !== undefined ? { systemPromptRebuildFactory } : {}),
       // Path-approval half of the live `/bypass` toggle: keep the provider's
       // `_currentPermissionMode` (read by getGrants().allowAll) in sync with
       // the query handle's mode. The file-tool half is the dispatcher's

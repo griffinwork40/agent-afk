@@ -11,6 +11,103 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.96.1] - 2026-08-06
+
+### Changed
+- 9 low-risk /simplify --all cleanups (dead code + dedup + one tilde-expansion bugfix) (#893) (c9374cd)
+
+## [5.96.0] - 2026-08-06
+
+### Added
+- show config provenance and apply hot keys live in /config (#906) (522d4ba)
+- AI-generated ghost-text suggestion at an empty prompt (#895) (a35bdaa)
+
+### Changed
+- Revert "refactor(cli): swap prompt and stage rail; goblin flanks the prompt (…" (#920) (6a8853f)
+- swap prompt and stage rail; goblin flanks the prompt (#336) (#905) (febb3a8)
+
+## [5.95.7] - 2026-08-05
+
+### Fixed
+- remove wrap-boundary leading spaces (#903) (3a8054a)
+
+## [5.95.6] - 2026-08-05
+
+### Fixed
+- bill cache-creation residual outside known TTL buckets, clamp wire-sourced counts (#915) (f09c5bc)
+- resolve dated wire ids for Opus 4.6/4.7/4.8 and Sonnet 4.6 (#914) (7a8a57d)
+
+## [5.95.5] - 2026-08-05
+
+### Fixed
+- dedupe cache hit-rate formula, fix cumulative-total mislabel, align field precedence (#916) (b283bfd)
+
+## [5.95.4] - 2026-08-05
+
+### Fixed
+- tell a forked child its tool-round budget at dispatch (#910) (99827c6)
+
+## [5.95.3] - 2026-08-05
+
+### Fixed
+- correct prompt-cache cost accounting and surface hit rate (#909) (c80e004)
+
+## [5.95.2] - 2026-08-05
+
+### Fixed
+- normalize blank optional arguments (#908) (0fea95c)
+
+## [5.95.1] - 2026-08-05
+
+### Fixed
+- make the pipeline's own signals honest + split improve.ts under the 350 ceiling (#901) (acba4f9)
+
+## [5.95.0] - 2026-08-05
+
+### Added
+- cap unbordered text at a reading measure instead of full terminal width (#899) (17cf472)
+
+## [5.94.0] - 2026-08-04
+
+### Added
+- add /afk-md to edit AFK.md overlays with live hot-reload (#887) (274ffc1)
+
+## [5.93.3] - 2026-08-04
+
+### Fixed
+- render auto-settle timeout as an error, not a green success (#902) (acfc8d4)
+
+## [5.93.2] - 2026-08-04
+
+### Fixed
+- resolve palette at call time so theme swaps actually reach the UI (#898) (4d09deb)
+
+## [5.93.1] - 2026-08-04
+
+### Changed
+- return the goblin mini-sprite to the transient left band (#336) (#900) (f0d78d6)
+
+## [5.93.0] - 2026-08-04
+
+### Added
+- reacting goblin mini-sprite in a constant right-aligned band (#336) (#888) (2f8bf9c)
+
+## [5.92.1] - 2026-08-03
+
+### Changed
+- extract shared runPreDispatchGates from execute/executeBatch (#896) (722cfcd)
+- promote TurnTrace to providers/shared (#897) (e69dc3a)
+
+## [5.92.0] - 2026-08-03
+
+### Added
+- rank slash-command completions by recency, not alphabetically (#892) (a57ebdb)
+
+## [5.91.1] - 2026-08-03
+
+### Fixed
+- resolve tier-name pins before the cross-provider Claude-family check (#879) (2a19470)
+
 ## [5.91.0] - 2026-08-03
 
 ### Added

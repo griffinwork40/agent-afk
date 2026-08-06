@@ -8,11 +8,15 @@
  * rejection capture without failing siblings.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   settleWithConcurrencyLimit,
   DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+  resolveMaxConcurrentSubagentCalls,
 } from './concurrency-pool.js';
+
+const concurrencyEnv = 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS';
+afterEach(() => vi.unstubAllEnvs());
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -90,5 +94,17 @@ describe('settleWithConcurrencyLimit', () => {
   it('DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS is a positive integer >= 2', () => {
     expect(Number.isInteger(DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS)).toBe(true);
     expect(DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('resolveMaxConcurrentSubagentCalls', () => {
+  it('uses a positive integer env override', () => {
+    vi.stubEnv(concurrencyEnv, '3');
+    expect(resolveMaxConcurrentSubagentCalls()).toBe(3);
+  });
+
+  it.each(['', '0', '-1', '1.5', 'nope'])('falls back for invalid value %j', (value) => {
+    vi.stubEnv(concurrencyEnv, value);
+    expect(resolveMaxConcurrentSubagentCalls()).toBe(DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS);
   });
 });

@@ -154,12 +154,3 @@ export function createShadowVerifyNudge(): (context: HookContext) => HookDecisio
     return { injectContext: CONTEXT_MESSAGE };
   };
 }
-
-/**
- * Stateless single-shot evaluation (no dedup) — retained for callers/tests
- * that check the heuristics in isolation. Production registration should use
- * {@link createShadowVerifyNudge} so the dedup latch is session-scoped.
- */
-export function shadowVerifyNudge(context: HookContext): HookDecision {
-  return createShadowVerifyNudge()(context);
-}

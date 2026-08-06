@@ -128,6 +128,49 @@ export function classifyEnvKey(name: string): EnvKeyClass {
 
 export type CoerceResult = { ok: true; value: string } | { ok: false; error: string };
 
+// ── Shared coercion primitives ──────────────────────────────────────────────
+//
+// coerceEnvValue and coerceConfigValue each run their own boolean/number
+// type-coercion switch, and the two had drifted into two independent
+// implementations of the same underlying checks. The literal SETS are
+// identical (env validates against one flat list; config validates against
+// a true-list and a false-list that together cover exactly the same
+// literals) — only the shape of the accepted input and the returned value
+// differ per caller. Factored here so both call the same literal sets;
+// a future accepted-literal change is made once, not independently at each
+// call site (which is how they drifted apart in the first place).
+
+/** Recognized boolean literal spellings, lowercased — the union both callers accept. */
+const BOOLEAN_TRUE_LITERALS: readonly string[] = ['true', '1', 'yes', 'on'];
+const BOOLEAN_FALSE_LITERALS: readonly string[] = ['false', '0', 'no', 'off'];
+
+/**
+ * Parse a boolean literal (case-insensitive, trimmed) against the given
+ * true/false literal sets. Returns undefined — not an error — if `raw`
+ * matches neither, so each caller can shape its own error message.
+ */
+function parseBooleanLiteral(
+  raw: string,
+  trueLiterals: readonly string[] = BOOLEAN_TRUE_LITERALS,
+  falseLiterals: readonly string[] = BOOLEAN_FALSE_LITERALS,
+): boolean | undefined {
+  const v = raw.trim().toLowerCase();
+  if (trueLiterals.includes(v)) return true;
+  if (falseLiterals.includes(v)) return false;
+  return undefined;
+}
+
+/**
+ * Parse `raw` (already a number, or a string to parse) into a finite
+ * number. Returns undefined — not an error — for anything that is not a
+ * finite number (NaN, Infinity, non-numeric strings), so each caller can
+ * shape its own error message.
+ */
+function parseFiniteNumber(raw: string | number): number | undefined {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 /**
  * Validate + normalise a raw string value for an env var against its declared
  * registry type. afk.env stores everything as strings, so the returned `value`
@@ -140,15 +183,14 @@ export function coerceEnvValue(meta: EnvVarMeta, raw: string): CoerceResult {
   }
   switch (meta.type) {
     case 'number': {
-      const n = Number(raw);
-      if (!Number.isFinite(n)) {
+      if (parseFiniteNumber(raw) === undefined) {
         return { ok: false, error: `${meta.name} expects a number, got ${JSON.stringify(raw)}` };
       }
       return { ok: true, value: raw.trim() };
     }
     case 'boolean': {
       const v = raw.trim().toLowerCase();
-      if (!['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(v)) {
+      if (parseBooleanLiteral(v) === undefined) {
         return {
           ok: false,
           error: `${meta.name} expects a boolean (true/false/1/0/yes/no/on/off), got ${JSON.stringify(raw)}`,
@@ -278,15 +320,14 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
     case 'boolean': {
       if (typeof raw === 'boolean') return { ok: true, value: raw };
       if (typeof raw === 'string') {
-        const v = raw.trim().toLowerCase();
-        if (['true', '1', 'yes', 'on'].includes(v)) return { ok: true, value: true };
-        if (['false', '0', 'no', 'off'].includes(v)) return { ok: true, value: false };
+        const parsed = parseBooleanLiteral(raw);
+        if (parsed !== undefined) return { ok: true, value: parsed };
       }
       return { ok: false, error: `${spec.path} expects a boolean` };
     }
     case 'number': {
-      const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-      if (!Number.isFinite(n)) return { ok: false, error: `${spec.path} expects a number` };
+      const n = typeof raw === 'number' || typeof raw === 'string' ? parseFiniteNumber(raw) : undefined;
+      if (n === undefined) return { ok: false, error: `${spec.path} expects a number` };
       if (spec.clamp) {
         if (spec.clamp.integer && !Number.isInteger(n)) {
           return { ok: false, error: `${spec.path} expects an integer` };

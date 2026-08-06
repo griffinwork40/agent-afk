@@ -769,7 +769,10 @@ export interface TurnHandles {
    *
    * Best-effort; absent on non-interactive callers and non-TTY surfaces.
    */
-  onStageChange?(stage: import('./loop-stage.js').LoopStage): void;
+  onStageChange?(
+    stage: import('./loop-stage.js').LoopStage,
+    signals?: import('./loop-stage.js').StageSignals,
+  ): void;
 }
 
 // `discardStdin: false` is load-bearing — ora's default wraps process.stdin

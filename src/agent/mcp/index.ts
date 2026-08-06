@@ -34,7 +34,6 @@ export {
 export { expandEnvString, expandEnvRecord, type EnvExpansionResult } from './env.js';
 export {
   createTransport,
-  createTransportWithFallbackHint,
   expandHeaders,
   type CreateTransportResult,
 } from './transport.js';

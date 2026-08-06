@@ -24,7 +24,7 @@ process.env['AFK_HOME'] = bgTestTmpDir;
 const appendRoutingDecision = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('./routing-telemetry.js', () => ({ appendRoutingDecision }));
 
-import { BackgroundAgentRegistry } from './background-registry.js';
+import { BackgroundAgentRegistry, BackgroundJobCapError } from './background-registry.js';
 import { InMemoryTraceWriter } from './trace/writer.js';
 import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.js';
 import type { Message } from './types.js';
@@ -115,6 +115,24 @@ describe('BackgroundAgentRegistry', () => {
   beforeEach(() => {
     writer = new InMemoryTraceWriter();
     registry = new BackgroundAgentRegistry({ traceWriter: writer });
+  });
+
+  it('uses the background concurrency env limit when no programmatic override is provided', () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_BACKGROUND_JOBS', '1');
+    const envRegistry = new BackgroundAgentRegistry();
+    envRegistry.register({ handle: createStubHandle('env-1'), prompt: 'a', model: 'sonnet' });
+    expect(() => envRegistry.register({
+      handle: createStubHandle('env-2'), prompt: 'b', model: 'sonnet',
+    })).toThrow(BackgroundJobCapError);
+  });
+
+  it('gives a programmatic maxConcurrentJobs override precedence over env', () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_BACKGROUND_JOBS', '1');
+    const overridden = new BackgroundAgentRegistry({ maxConcurrentJobs: 2 });
+    overridden.register({ handle: createStubHandle('override-1'), prompt: 'a', model: 'sonnet' });
+    expect(() => overridden.register({
+      handle: createStubHandle('override-2'), prompt: 'b', model: 'sonnet',
+    })).not.toThrow();
   });
 
   it('register() returns a snapshot with status=running and a fresh jobId', () => {

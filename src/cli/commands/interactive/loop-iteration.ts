@@ -110,7 +110,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, verdictLedger, shellPassthrough, bgResultNotifier } =
+  const { contextPane, loopStageBar, mascotBar, verdictLedger, shellPassthrough, bgResultNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -327,6 +327,11 @@ export async function runInputLoop(
         const result = await surface.readLine({
           promptFn: () => buildPrompt(ctx.stats.permissionMode),
           ...(initialBuffer !== undefined ? { initialBuffer } : {}),
+          // This is THE turn-boundary prompt — the one "what should I do next"
+          // moment in the loop, and the only read that opts into an
+          // empty-prompt ghost. Borrowed sub-prompts (elicitation confirms,
+          // form fields) call readLine() too and deliberately leave it off.
+          primePromptSuggestion: true,
           onSigint: sigintHandler,
           onShiftTab: () => {
             // Shift+Tab is the keyboard speed lane: it advances the permission-
@@ -713,7 +718,17 @@ export async function runInputLoop(
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is
         // safe to call on non-TTY (LoopStageBar.repaint() TTY-gates itself).
-        ...(loopStageBar ? { onStageChange: (stage) => loopStageBar!.repaint(stage) } : {}),
+        // The mascot band rides the same transition (issue #336): it maps the
+        // stage onto idle/working itself and is inert unless opted in, so this
+        // stays a single call regardless of whether the sprite is enabled.
+        ...(loopStageBar
+          ? {
+              onStageChange: (stage, signals) => {
+                loopStageBar!.repaint(stage);
+                mascotBar?.onStage(stage, signals);
+              },
+            }
+          : {}),
       }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()

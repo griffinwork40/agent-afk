@@ -27,7 +27,7 @@
 
 import type { SubagentHandle } from './handle.js';
 import type { SubagentResult } from './result.js';
-import { settleWithConcurrencyLimit, DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } from '../concurrency-pool.js';
+import { settleWithConcurrencyLimit, resolveMaxConcurrentSubagentCalls } from '../concurrency-pool.js';
 
 export interface WaveTask<T = unknown> {
   handle: SubagentHandle<T>;
@@ -66,7 +66,7 @@ export async function runWave<T = unknown>(
   tasks: ReadonlyArray<WaveTask<T>>,
   options: RunWaveOptions = {},
 ): Promise<SubagentResult<T>[]> {
-  const { failFast = true, teardown = true, maxConcurrency = DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } = options;
+  const { failFast = true, teardown = true, maxConcurrency = resolveMaxConcurrentSubagentCalls() } = options;
   if (tasks.length === 0) return [];
 
   const results = new Array<SubagentResult<T>>(tasks.length);

@@ -76,6 +76,8 @@ export interface KeyDispatchHost {
   updateAutocomplete(): void;
   /** Refresh the active ghost suggestion for the current buffer (Tier-1 sync + Tier-2 async kick-off). */
   updateGhost(): void;
+  /** Drop a primed empty-prompt suggestion; true when one was dismissed. */
+  dismissPromptGhost(): boolean;
   /** Apply the highlighted dropdown candidate; false when the dropdown is closed/empty. */
   applyDropdownSelection(): boolean;
   /** Accept the active ghost text; false when no ghost is showing. */
@@ -355,6 +357,13 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
     // draft disarms — ESC stays a no-op and leaves the typed text untouched
     // (same "graceful stop preserves the draft" contract as streaming mode).
     if (self.input.buffer.length === 0) {
+      // ESC is the UI-dismissal key, and an empty-prompt suggestion is exactly
+      // a UI element the user may want gone. Drop it in the ENGINE, not just
+      // from `activeGhost` — the proposal is re-read on every edit that lands
+      // at an empty buffer, so a ghost-only clear would resurface it on the
+      // next keystroke-and-backspace. Does not consume the ESC: the double-tap
+      // window below still arms, so Esc-Esc keeps opening the rewind picker.
+      if (self.dismissPromptGhost()) self.repaint();
       const now = Date.now();
       if (
         self.lastIdleEscAt !== 0 &&

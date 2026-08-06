@@ -325,6 +325,44 @@ describe('runWave', () => {
     expect(peak).toBe(2);
   });
 
+  it('uses the operator env ceiling when maxConcurrency is omitted', async () => {
+    // Mirrors dag.test.ts's "uses the operator env ceiling when maxConcurrency
+    // is omitted" — runWave is the OTHER fan-out site named by the PR's stated
+    // intent ("skill waves"), and must respect the same env-resolved default.
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '2');
+    try {
+      const mgr = new SubagentManager();
+      shared.sessions.length = 0;
+      const handles = await Promise.all(
+        [0, 1, 2, 3].map(() =>
+          mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+        ),
+      );
+
+      let live = 0;
+      let peak = 0;
+      for (const s of shared.sessions) {
+        s.sendMessage.mockImplementation(async (content: string): Promise<Message> => {
+          live++;
+          peak = Math.max(peak, live);
+          await new Promise((r) => setTimeout(r, 20));
+          live--;
+          return { role: 'assistant', content: `ok:${content}`, timestamp: new Date() };
+        });
+      }
+
+      // No explicit maxConcurrency — runWave must resolve the ceiling from
+      // AFK_MAX_CONCURRENT_SUBAGENT_CALLS rather than defaulting unbounded.
+      const results = await runWave(handles.map((handle, i) => ({ handle, prompt: `p${i}` })));
+
+      expect(results).toHaveLength(4);
+      expect(results.every((r) => r?.status === 'succeeded')).toBe(true);
+      expect(peak).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('fail-fast skips still-QUEUED peers behind maxConcurrency — no wasted provider call', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;

@@ -17,6 +17,7 @@ import { card } from '../render.js';
 import { commitBlockAbove } from './commit-block.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import { getTerminalWidth } from '../terminal-size.js';
+import { capToMeasure } from '../render/measure.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { syntheticResult, formatDoneSummary } from './stream-renderer-source.js';
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
@@ -185,7 +186,7 @@ export function handleSubagentEvent(
         ctx.toolLane.setThinkingTail(parentId, undefined);
 
         const cols = getTerminalWidth();
-        const maxWidth = Math.max(20, cols - 14);  // 14 = indent + glyph/spinner budget
+        const maxWidth = capToMeasure(Math.max(20, cols - 14));  // 14 = indent + glyph/spinner budget
         ctx.toolLane.addStartWithAgentContext(
           chunk.toolUseId,
           chunk.toolName,
@@ -242,7 +243,7 @@ export function handleSubagentEvent(
           // thinking-tail before any substantive text has rendered.
           if (chunk.content.trim()) {
             const cols = getTerminalWidth();
-            const maxTail = Math.max(20, cols - 14); // 14 = indent + glyph budget
+            const maxTail = capToMeasure(Math.max(20, cols - 14)); // 14 = indent + glyph budget
             const tail = extractLatestThinkingClause(source.contentBuffer, maxTail);
             // Item #6: Throttle setThinkingTail to ≥1500ms per parentId OR a
             // sentence-boundary arrival. External constraint: the gate is on
@@ -306,7 +307,7 @@ export function handleSubagentEvent(
         source.thinkingLane.push(chunk.content);
         if (ctx.thinkingMode === 'live' && ctx.isTTY && ctx.orchestratorCtx) {
           const cols = getTerminalWidth();
-          const maxTail = Math.max(20, cols - 14);
+          const maxTail = capToMeasure(Math.max(20, cols - 14));
           const tail = extractLatestThinkingClause(source.thinkingLane.peek(), maxTail);
           if (tail) ctx.toolLane.setThinkingTail(parentId, tail);
           // H2 fix: gate setComposedOverlay behind the same 1500ms throttle to

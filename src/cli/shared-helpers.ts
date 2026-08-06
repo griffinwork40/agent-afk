@@ -108,9 +108,9 @@ export function composeSystemPrompt(
  * overlay is (framework absent), or `none`. The plain overlay source remains
  * available unchanged via `loadConfig().systemPromptSource`.
  */
-export function resolveBaseSystemPrompt(): { prompt: string | undefined; source: string } {
+export function resolveBaseSystemPrompt(cwd: string = process.cwd()): { prompt: string | undefined; source: string } {
   const framework = loadSystemPrompt();
-  const cfg = loadConfig();
+  const cfg = loadConfig(undefined, cwd);
   const overlay = cfg.systemPrompt;
   const overlaySource = cfg.systemPromptSource;
   const hasFw = framework !== undefined && framework.trim().length > 0;

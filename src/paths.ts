@@ -418,6 +418,31 @@ export function getProjectSettingsPath(cwd: string = process.cwd()): string {
   return join(cwd, '.afk', 'settings.json');
 }
 
+/**
+ * Path to the user-scope AFK.md system-prompt overlay (`$AFK_HOME/AFK.md`).
+ *
+ * Contract: this is the BROADEST tier — it applies to every project on the
+ * machine and is concatenated FIRST by `loadAfkMd()`. Note it sits at the
+ * `$AFK_HOME` root, NOT under `config/` like afk.env / afk.config.json, so it
+ * stays hand-editable next to the other top-level operator files.
+ */
+export function getUserAfkMdPath(): string {
+  return join(getAfkHome(), 'AFK.md');
+}
+
+/**
+ * Path to the project-scope AFK.md system-prompt overlay (`<cwd>/AFK.md`).
+ *
+ * The most-specific tier: concatenated SECOND by `loadAfkMd()` and documented
+ * as taking precedence on conflict. Accepts an explicit `cwd` so tests can
+ * inject a temp directory without mutating `process.cwd()` — same rationale as
+ * `getProjectSettingsPath()`. Deliberately NOT under `.afk/`: an AFK.md is a
+ * repo-root document a human is expected to read and commit.
+ */
+export function getProjectAfkMdPath(cwd: string = process.cwd()): string {
+  return join(cwd, 'AFK.md');
+}
+
 export function getLegacyEnvConfigPath(): string {
   return join(homedir(), '.afk.env');
 }

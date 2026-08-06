@@ -752,6 +752,11 @@ export class ComposeExecutor {
         };
       });
 
+      // Invariant: SubagentDAGOptions exposes no maxConcurrency field, so the
+      // model-facing compose tool has no way to widen its own fan-out — width is
+      // governed solely by the operator's AFK_MAX_CONCURRENT_SUBAGENT_CALLS
+      // ceiling. Adding such a field would let the agent override an operator
+      // safety limit, which is why it is absent rather than merely unset here.
       const result = await runSubagentDAG({
         manager,
         parentSession: this.ctx.parentSession,

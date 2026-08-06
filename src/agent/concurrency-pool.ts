@@ -12,6 +12,11 @@
  * @module agent/concurrency-pool
  */
 
+import {
+  DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+  resolveMaxConcurrentSubagentCalls,
+} from '../config/concurrency.js';
+
 /**
  * Ceiling on subagent forks dispatched simultaneously from a SINGLE fan-out
  * site — one compose/DAG layer, or one `runWave` call. Each unit is a forked
@@ -20,7 +25,8 @@
  * ceiling. 8 sits above typical parallel-wave width (2–6 nodes/critics) so
  * ordinary fan-outs are never throttled, while bounding a runaway one; it
  * mirrors the dispatcher's safe-batch ceiling and the background-job ceiling
- * of 10. Injectable per site (DAGRunOptions.maxConcurrency /
+ * of 10. Operators can tune it with AFK_MAX_CONCURRENT_SUBAGENT_CALLS;
+ * injectable per site (DAGRunOptions.maxConcurrency /
  * RunWaveOptions.maxConcurrency) for tuning and tests.
  *
  * Deadlock-free by construction: each fan-out site drains its OWN fresh pool
@@ -30,7 +36,7 @@
  * deadlock (a parent holds a permit while awaiting a child that needs one);
  * the per-site design avoids that hold-and-wait cycle.
  */
-export const DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS = 8;
+export { DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS, resolveMaxConcurrentSubagentCalls };
 
 /**
  * Run `worker` over every `items` element with at most `limit` invocations in

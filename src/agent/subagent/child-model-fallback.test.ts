@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { coerceCrossProviderChildModel } from './child-model-fallback.js';
+import {
+  CLAUDE_SONNET_ID,
+  DEFAULT_SLOT_BINDINGS,
+  resetSlotBindings,
+  setSlotBindings,
+} from '../session/model-slots.js';
 
 /**
  * `coerceCrossProviderChildModel` reads `AFK_PROVIDER` (and `AFK_OPENAI_BASE_URL`)
@@ -80,5 +86,63 @@ describe('coerceCrossProviderChildModel (#652)', () => {
 
   it('passes an undefined child through unchanged', () => {
     expect(coerceCrossProviderChildModel(undefined, 'gpt-5.5')).toEqual({ model: undefined });
+  });
+
+  /**
+   * #869: a bare capability-tier pin (`small`/`medium`/`large`/`local`, or a
+   * custom tier name — e.g. an agent definition's `model: medium`) must be
+   * resolved to its bound concrete id before the Claude-family check, not
+   * checked as a literal string. `resetSlotBindings()` in `afterEach` prevents
+   * the explicit `setSlotBindings` calls below from leaking into other tests.
+   */
+  describe('bare tier-name pins (#869)', () => {
+    afterEach(() => {
+      resetSlotBindings();
+    });
+
+    describe('no global force (normal Anthropic routing)', () => {
+      it.each(['small', 'medium', 'large'])(
+        'leaves tier %s untouched — its default binding routes anthropic-direct',
+        (tier) => {
+          expect(coerceCrossProviderChildModel(tier, 'gpt-5.5')).toEqual({ model: tier });
+        },
+      );
+    });
+
+    describe('AFK_PROVIDER=openai-compatible force', () => {
+      beforeEach(() => {
+        process.env['AFK_PROVIDER'] = 'openai-compatible';
+      });
+
+      it.each(['small', 'medium', 'large'])(
+        'coerces bare tier %s — default-bound to a Claude id, so it would otherwise hard-error',
+        (tier) => {
+          expect(coerceCrossProviderChildModel(tier, 'gpt-5.5')).toEqual({
+            model: 'gpt-5.5',
+            coercedFrom: tier,
+          });
+        },
+      );
+
+      it('does NOT coerce the bare "local" tier when unconfigured (empty id — nothing to protect)', () => {
+        expect(coerceCrossProviderChildModel('local', 'gpt-5.5')).toEqual({ model: 'local' });
+      });
+
+      it('does NOT coerce a tier explicitly rebound to a non-Claude id', () => {
+        setSlotBindings({ ...DEFAULT_SLOT_BINDINGS, small: { id: 'gpt-4o-mini' } });
+        expect(coerceCrossProviderChildModel('small', 'gpt-5.5')).toEqual({ model: 'small' });
+      });
+
+      it('coerces a custom tier NAME that resolves onto a Claude-bound slot', () => {
+        setSlotBindings({
+          ...DEFAULT_SLOT_BINDINGS,
+          medium: { id: CLAUDE_SONNET_ID, name: 'general' },
+        });
+        expect(coerceCrossProviderChildModel('general', 'gpt-5.5')).toEqual({
+          model: 'gpt-5.5',
+          coercedFrom: 'general',
+        });
+      });
+    });
   });
 });
