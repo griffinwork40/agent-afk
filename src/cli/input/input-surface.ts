@@ -210,16 +210,6 @@ export interface InputSurfaceArmOpts {
     engine: SuggestEngine;
     getContext: () => SuggestContext;
   };
-  /**
-   * Loop-stage rail content, pulled by the compositor each repaint and placed
-   * directly above the input. See `TerminalCompositorOptions.getRailRow`.
-   */
-  getRailRow?: () => string | null;
-  /**
-   * Mascot sprite rows, composited onto the right edge of the frame's last
-   * rows. See `TerminalCompositorOptions.getMascotLines`.
-   */
-  getMascotLines?: () => readonly string[];
 }
 
 export class InputSurface {
@@ -374,8 +364,6 @@ export class InputSurface {
       ...(opts.scrollRegion ? { scrollRegion: opts.scrollRegion } : {}),
       ...(opts.anchorRow !== undefined ? { anchorRow: opts.anchorRow } : {}),
       ...(opts.suggest ? { suggest: opts.suggest } : {}),
-      ...(opts.getRailRow ? { getRailRow: opts.getRailRow } : {}),
-      ...(opts.getMascotLines ? { getMascotLines: opts.getMascotLines } : {}),
     });
     await compositor.arm();
     compositor.setInputMode('idle');

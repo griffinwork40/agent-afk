@@ -110,7 +110,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, liveMascot, verdictLedger, shellPassthrough, bgResultNotifier } =
+  const { contextPane, loopStageBar, mascotBar, verdictLedger, shellPassthrough, bgResultNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -720,7 +720,7 @@ export async function runInputLoop(
           ? {
               onStageChange: (stage, signals) => {
                 loopStageBar!.repaint(stage);
-                liveMascot.onStage(stage, signals);
+                mascotBar?.onStage(stage, signals);
               },
             }
           : {}),
