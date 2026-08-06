@@ -390,7 +390,7 @@ describe('/compact spinner routing (H1: compositor vs. bare ora)', () => {
     expect(lines.find((l) => l.startsWith('ERROR:'))).toContain('compact blew up');
   });
 
-  it('disables the in-frame spinner when the PreCompact hook blocks (HookBlockedError path)', async () => {
+  it('does not announce or start the in-frame spinner when the PreCompact hook blocks', async () => {
     const session = fakeSession();
     const registry = createHookRegistry();
     registry.register('PreCompact', async () => ({
@@ -398,15 +398,16 @@ describe('/compact spinner routing (H1: compositor vs. bare ora)', () => {
       reason: 'frozen',
     }));
     const sessionWithRegistry = { ...session, hookRegistry: registry, sessionId: 'test-sess' };
-    const { ctx, setSpinner } = makeCtxWithCompositor(sessionWithRegistry as unknown as typeof session);
+    const { ctx, setSpinner, lines } = makeCtxWithCompositor(sessionWithRegistry as unknown as typeof session);
 
     const result = await getCompactCmd().handler(ctx, '');
 
     expect(result).toBe('continue');
     expect(session.compact).not.toHaveBeenCalled();
-    expect(setSpinner).toHaveBeenCalledTimes(2);
-    expect(setSpinner).toHaveBeenNthCalledWith(1, { enabled: true });
-    expect(setSpinner).toHaveBeenNthCalledWith(2, { enabled: false });
+    expect(setSpinner).not.toHaveBeenCalled();
+    expect(lines).not.toContain('INFO:Summarizing earlier turns...');
+    expect(lines).toContain('INFO:Compaction skipped: frozen');
+    expect(oraFactory).not.toHaveBeenCalled();
   });
 
   it('disables the in-frame spinner and rethrows on AbortError', async () => {
