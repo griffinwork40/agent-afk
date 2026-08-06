@@ -65,6 +65,28 @@ describe('afk doctor', () => {
     expect(output.toLowerCase()).toMatch(/api/);
   });
 
+  it('shows effective concurrency values and invalid fallback status', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS', 'bad');
+    let jsonOutput = '';
+    logSpy.mockImplementation((msg: string) => { jsonOutput = msg; });
+
+    await program.parseAsync(['node', 'afk', 'doctor', '--format', 'json']);
+
+    const parsed = JSON.parse(jsonOutput);
+    const concurrency = parsed.checks.filter((check: { name: string }) =>
+      check.name.startsWith('AFK_MAX_CONCURRENT_'));
+    expect(concurrency).toHaveLength(3);
+    expect(concurrency.find((check: { name: string }) =>
+      check.name === 'AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS')).toMatchObject({
+      state: 'warn',
+      detail: expect.stringContaining('effective value 8 (fallback)'),
+    });
+    expect(concurrency.find((check: { name: string }) =>
+      check.name === 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS').detail).toContain('effective value 8');
+    expect(concurrency.find((check: { name: string }) =>
+      check.name === 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS').detail).toContain('effective value 10');
+  });
+
   it('should produce valid JSON with --format json', async () => {
     let jsonOutput: string = '';
     const captureLog = vi.fn((msg: string) => {
