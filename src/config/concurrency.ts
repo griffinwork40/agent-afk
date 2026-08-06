@@ -110,8 +110,13 @@ export function getConcurrencyStatus(
     };
   }
 
-  const parsed = Number(rawValue);
-  const isPositiveInteger = rawValue.trim() !== '' && Number.isInteger(parsed) && parsed > 0;
+  // Digit-anchored before Number(), matching resolveMaxNestingDepth
+  // (src/agent/tools/nesting.ts): bare Number() also accepts "0x8", "1e1", and
+  // "8.0", so an operator typo in an unfamiliar grammar would silently resolve
+  // to a number they did not write instead of falling back and warning.
+  const trimmed = rawValue.trim();
+  const parsed = Number(trimmed);
+  const isPositiveInteger = /^\d+$/.test(trimmed) && Number.isInteger(parsed) && parsed > 0;
   // A value above maxValue takes the SAME path as any other invalid input
   // (fall back to the default, valid: false, source: 'fallback', warn-once) —
   // it is not a distinct outcome, just another reason the raw value is rejected.

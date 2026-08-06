@@ -95,4 +95,24 @@ describe('concurrency settings', () => {
       expect(resolveMaxConcurrentBackgroundJobs()).toBe(DEFAULT_MAX_CONCURRENT_BACKGROUND_JOBS);
     });
   });
+
+  describe('accepted grammar', () => {
+    // Bare Number() would coerce every one of these to an in-range integer.
+    // resolveMaxNestingDepth anchors on /^\d+$/ for the same reason: an operator
+    // typo must fall back and warn, never silently resolve to a different number.
+    it.each(['0x8', '1e1', '8.0', '+8', ' '])(
+      'rejects %j — a non-decimal grammar Number() would otherwise accept',
+      (raw) => {
+        const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', raw);
+        expect(resolveMaxConcurrentSubagentCalls()).toBe(DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS);
+        expect(write).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('accepts surrounding whitespace and leading zeros', () => {
+      vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', ' 06 ');
+      expect(resolveMaxConcurrentSubagentCalls()).toBe(6);
+    });
+  });
 });
