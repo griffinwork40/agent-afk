@@ -155,6 +155,10 @@ export class TerminalCompositor {
   readonly autocompleteState?: AutocompleteState;
   /** @internal Relaxed from `private` — read by sibling free-function modules via Host interfaces. */
   readonly formatInputBuffer?: (segment: string) => string;
+  /** @internal Relaxed from `private` — read by the frame module each repaint. */
+  readonly getRailRow?: () => string | null;
+  /** @internal Relaxed from `private` — read by the frame module each repaint. */
+  readonly getMascotLines?: () => readonly string[];
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   readonly scrollRegion?: CompositorScrollRegionGuard;
   /**
@@ -570,6 +574,8 @@ export class TerminalCompositor {
     this.history = opts.history;
     this.autocompleteState = opts.autocompleteState;
     this.formatInputBuffer = opts.formatInputBuffer;
+    this.getRailRow = opts.getRailRow;
+    this.getMascotLines = opts.getMascotLines;
     this.scrollRegion = opts.scrollRegion;
     this.spinnerController = new SpinnerController({
       captureMode: opts.captureMode ?? false,

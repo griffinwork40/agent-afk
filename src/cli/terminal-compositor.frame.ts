@@ -20,6 +20,7 @@
  */
 
 import { palette } from './palette.js';
+import { overlayMascotGutter } from './terminal-compositor.footer-inline.js';
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
 import type {
@@ -69,6 +70,10 @@ export interface FrameHost {
   readonly spinnerController: SpinnerController;
   attachments: ImageAttachment[];
   clipboardFailureMsg: string | null;
+  /** Loop-stage rail line, pulled fresh each repaint. See the option doc. */
+  readonly getRailRow?: () => string | null;
+  /** Mascot sprite rows, pulled fresh each repaint. See the option doc. */
+  readonly getMascotLines?: () => readonly string[];
   // ── committed-band tracking (mutated by preserveRowsBeforeFrameRender) ──
   committedBand: string[];
   /** #540: per-physical-row logical provenance, index-aligned 1:1 with committedBand. */
@@ -152,6 +157,12 @@ export function repaint(self: FrameHost): void {
   }
   const dropdownRows = self.renderDropdownRows();
   const hintRow = self.renderHintRow();
+  // Loop-stage rail as a frame line. Deliberately NOT folded into
+  // `hasFixedChrome` below: the rail is always present, so counting it as
+  // chrome would render the breathing-room gap unconditionally and burn a
+  // viewport row on every idle prompt. It sits directly above the input
+  // cluster instead, which is what puts the prompt BELOW its own stage rail.
+  const railRow = self.getRailRow?.() ?? null;
   // Visual breathing room: when ANY chrome sits above the input cluster
   // (overlay, spinner, tip, or attachment row), insert a blank line so
   // the input has its own visual region instead of getting glued to the
@@ -184,7 +195,7 @@ export function repaint(self: FrameHost): void {
   const gapRows = hasContentAboveInput ? 1 : 0;
   const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
     + (attachmentRow ? 1 : 0) + gapRows + dropdownRows.length
-    + (hintRow !== null ? 1 : 0) + 1;
+    + (hintRow !== null ? 1 : 0) + (railRow !== null ? 1 : 0) + 1;
   const overlayBudget = Math.max(0, maxLines - fixedRows);
   const trimmedOverlay = overlayLines.length > overlayBudget
     ? overlayLines.slice(-overlayBudget)
@@ -221,12 +232,36 @@ export function repaint(self: FrameHost): void {
   // "input pinned, content rises" invariant above). With no chrome, no
   // gap — keeps the prompt flush against the top of an idle viewport.
   if (renderGap) frameLines.push('');
+  // Rail above the (dropdown→hint→input) cluster: at idle the frame is
+  // [rail, input] so the rail sits flush on top of the prompt; with the
+  // completion menu open it stays above the menu rather than wedging between
+  // the hint and the input, preserving the "hint is adjacent to input" rule.
+  if (railRow !== null) frameLines.push(railRow);
   frameLines.push(...dropdownRows);
   // `hintRow !== null` keeps the reserved blank-row slot for
   // un-hinted candidates so the dropdown above doesn't shift up by 1
   // row when the user navigates across a hinted ↔ un-hinted boundary.
   if (hintRow !== null) frameLines.push(hintRow);
   frameLines.push(inputLine);
+  // External constraint (frame ordering): the mascot gutter is composited only
+  // AFTER the frame is fully assembled, because it right-aligns against each
+  // target line's final display width — measuring before the last push would
+  // align the sprite to a line that does not exist yet. It pads UPWARD when the
+  // frame is shorter than the sprite, which is why it cannot run before the
+  // `maxLines` budget above is known either.
+  const spriteLines = self.getMascotLines?.() ?? [];
+  if (spriteLines.length > 0) {
+    const overlaid = overlayMascotGutter(
+      frameLines,
+      spriteLines,
+      self.stdout.columns ?? 80,
+      maxLines,
+    );
+    // Mutate in place rather than rebinding: every downstream consumer below
+    // (frame join, `frameLines.length` in the top-row math) reads this binding.
+    frameLines.length = 0;
+    frameLines.push(...overlaid);
+  }
   // Invariant: absoluteBottom is the maximum row the compositor may ever write
   // to — the row just above the bg-status-bar DECSTBM reservation. It is the
   // hard upper bound for targetBottomRow in ALL branches below.

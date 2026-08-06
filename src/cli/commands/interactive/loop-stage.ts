@@ -238,6 +238,8 @@ export function formatStageRail(
 export class LoopStageBar {
   private readonly stream: NodeJS.WriteStream;
   private readonly getExtraRows: () => number;
+  private readonly inline: boolean;
+  private readonly requestRepaint: (() => void) | undefined;
   private started = false;
   private currentStage: LoopStage = 'observing';
   private resizeUnsub: (() => void) | null = null;
@@ -248,10 +250,46 @@ export class LoopStageBar {
    *   from the StatusLine (including this bar's own 1 row). Used to compute
    *   the absolute paint row. Typically `() => ctx.statusLine.getExtraRows()`.
    * @param opts.stream - Write stream (defaults to `process.stdout`).
+   * @param opts.inline - Render as a COMPOSITOR FRAME LINE instead of a
+   *   reserved DECSTBM row. In inline mode the bar owns no rows, performs no
+   *   CUP writes, and publishes a row count of 0; the compositor pulls
+   *   {@link railLine} on each repaint and places it directly above the input.
+   *   This is what puts the prompt BELOW its own stage rail — in reserved-row
+   *   mode the rail is necessarily below the prompt, because every reserved
+   *   row pushes the bottom-pinned input frame upward.
+   * @param opts.requestRepaint - Inline mode only: asks the compositor to
+   *   repaint so a stage change becomes visible. Ignored in reserved-row mode,
+   *   where the bar paints its own row directly.
    */
-  constructor(opts: { getExtraRows: () => number; stream?: NodeJS.WriteStream }) {
+  constructor(opts: {
+    getExtraRows: () => number;
+    stream?: NodeJS.WriteStream;
+    inline?: boolean;
+    requestRepaint?: () => void;
+  }) {
     this.stream = opts.stream ?? process.stdout;
     this.getExtraRows = opts.getExtraRows;
+    this.inline = opts.inline ?? false;
+    this.requestRepaint = opts.requestRepaint;
+  }
+
+  /**
+   * The rail as a single pre-styled frame line, or `null` when the bar is
+   * inert (never started, or `--plain`) or is running in reserved-row mode.
+   *
+   * Contract: pure read — safe to call at the compositor's repaint cadence.
+   * Returning `null` omits the row entirely rather than emitting a blank one.
+   */
+  railLine(): string | null {
+    if (!this.started || !this.inline) return null;
+    return (
+      '  ' +
+      formatStageRail(this.currentStage, {
+        dim: palette.dim,
+        accent: palette.brand,
+        bold: palette.bold,
+      })
+    );
   }
 
   setRowCountChangeHandler(handler: (rows: number) => void): void {
@@ -267,6 +305,15 @@ export class LoopStageBar {
     // input gates on `isPlainOutputRequested` (config/env.ts).
     if (isPlainOutputRequested()) return;
     this.started = true;
+    if (this.inline) {
+      // Inline mode owns no rows. Publish 0 so the shared extraRows
+      // accumulator in footer-subsystems stays authoritative, and skip the
+      // ResizeBus subscription: the compositor already repaints its own frame
+      // on resize, and the rail is now part of that frame.
+      this.onRowCountChange?.(0);
+      this.requestRepaint?.();
+      return;
+    }
     // Reserve 1 row first so the DECSTBM is updated before we paint.
     this.onRowCountChange?.(1);
     this.resizeUnsub = ResizeBus.subscribe(() => this.repaint(this.currentStage));
@@ -280,6 +327,14 @@ export class LoopStageBar {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+    if (this.inline) {
+      // Nothing to erase — the compositor drops the row on its next frame the
+      // moment railLine() starts returning null (which `started = false`
+      // above already guarantees). No reservation was ever taken.
+      this.onRowCountChange?.(0);
+      this.requestRepaint?.();
+      return;
+    }
     this.clearRow();
     // Release our 1-row reservation.
     this.onRowCountChange?.(0);
@@ -291,7 +346,15 @@ export class LoopStageBar {
    * stage tracker advances.
    */
   repaint(stage: LoopStage): void {
-    if (!this.started || !this.stream.isTTY) return;
+    if (!this.started) return;
+    if (this.inline) {
+      // Record the stage and let the compositor pull it via railLine(). No
+      // isTTY gate: the compositor owns that decision for the whole frame.
+      this.currentStage = stage;
+      this.requestRepaint?.();
+      return;
+    }
+    if (!this.stream.isTTY) return;
     this.currentStage = stage;
     const totalRows = this.stream.rows ?? 24;
     const extraRows = this.getExtraRows();
@@ -322,6 +385,11 @@ export class LoopStageBar {
    * the ResizeBus subscriber, which already does `repaint(currentStage)`.
    */
   redraw(): void {
+    // Inline mode: the rail lives in the compositor frame, which already
+    // self-heals after a full-screen scroll via its own repaint path. Forcing
+    // a frame repaint from the scroll-restore hook would be redundant work on
+    // the hottest path in the REPL.
+    if (this.inline) return;
     this.repaint(this.currentStage);
   }
 
