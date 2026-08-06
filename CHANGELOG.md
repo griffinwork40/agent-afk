@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.0] - 2026-08-06
+
+### Added
+- flush queued messages into the running turn on Ctrl+B (#891) (ba80f40)
+- make concurrency ceilings operator-configurable (#904) (189854b)
+
 ## [5.96.1] - 2026-08-06
 
 ### Changed
