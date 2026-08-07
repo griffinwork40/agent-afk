@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.2] - 2026-08-07
+
+### Fixed
+- name the ignored entry that preserved a tree, and stop the test that manufactured them (#926) (6b9ef12)
+
 ## [5.97.1] - 2026-08-06
 
 ### Fixed
