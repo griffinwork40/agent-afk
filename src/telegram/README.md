@@ -46,6 +46,25 @@ afk telegram logs -f
    to `~/.afk/config/afk.env` via the same atomic `upsertEnvVar` helper
    the credential wizard uses.
 
+### Entrypoint
+
+`src/telegram.ts` is a **thin shim** — it exists only because that exact path
+is an esbuild entry point (`scripts/build-dist.mjs` → `dist/telegram.mjs`) and
+the last candidate in `manager.ts`'s `resolveEntrypoint` spawn ladder. All the
+logic lives here in the directory, so importing any of it in a test does not
+boot a daemon:
+
+| Module | Concern |
+|---|---|
+| `entry.ts` | `main()`: config load, credential + token + allowlist validation, bot construction, startup/shutdown. Exported, never self-invoked. |
+| `credentials.ts` | The auth matrix, split into a pure `planTelegramCredential()` and a narrow `applyTelegramCredentialPlan()`. |
+| `env-file-overrides.ts` | Telegram-authoritative config keys where the **file** beats a disagreeing shell env var (inverts dotenv precedence). |
+| `create-session.ts` | Per-chat session factory: resolves everything provider-agnostic, then delegates to one branch. Owns the failure/cleanup path. |
+| `session-anthropic.ts` / `session-openai.ts` | The two provider branches. |
+| `session-context.ts` | The shape passed from the factory into a branch. |
+| `daemon-version.ts` | On-disk version read for drift detection. Depth-agnostic — esbuild flattens it into `dist/telegram.mjs`, so `import.meta.url` does not track the source path. |
+| `stats-ticker.ts` | The 5-minute tick: session stats + the version-drift deferral state machine. |
+
 ### Auth
 
 The Telegram entrypoint resolves Claude credentials through the **same**
