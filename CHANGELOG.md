@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.7] - 2026-08-07
+
+### Fixed
+- bound every raw REPL write to the terminal width (#931) (d467583)
+
 ## [5.97.6] - 2026-08-07
 
 ### Fixed
