@@ -16,6 +16,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ProviderEvent, ProviderUsage } from '../provider.js';
 import type { Message, SessionMetadata } from '../types.js';
+import type { BudgetExceededError } from '../../utils/errors.js';
 import { transformProviderEvent, type TransformDeps } from '../session/stream-consumer.js';
 import { InMemoryTraceWriter } from './writer.js';
 
@@ -29,7 +30,7 @@ function makeSessionMetadata(): SessionMetadata {
 
 function makeDeps(opts: {
   maxBudgetUsd?: number;
-  abortBudget?: (reason: string) => void;
+  abortBudget?: (reason: BudgetExceededError) => void;
   traceWriter?: InMemoryTraceWriter;
 }): TransformDeps {
   let sessionMeta = makeSessionMetadata();

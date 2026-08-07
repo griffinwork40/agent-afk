@@ -19,6 +19,7 @@
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserObservation } from '../../../browser/types.js';
 import { env } from '../../../config/env.js';
+import { abortFailureClass } from '../../abort-reason.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 
 import {
@@ -101,7 +102,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
     if (signal.aborted) {
       const reason = signal.reason;
       const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
-      return { content: `browser_open aborted: ${msg}`, isError: true, failureClass: 'abort' };
+      return { content: `browser_open aborted: ${msg}`, isError: true, failureClass: abortFailureClass(signal) };
     }
 
     const parsed = parseInput(input);

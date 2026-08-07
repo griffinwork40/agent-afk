@@ -133,7 +133,7 @@ describe('doneGlyph — benign rejection vs real fault (#75)', () => {
     },
   );
 
-  it.each(['timeout', 'denial-breaker', 'repeat-failure'] as const)(
+  it.each(['timeout', 'budget', 'denial-breaker', 'repeat-failure'] as const)(
     'keeps the error glyph for `%s`, which is a real fault',
     (cls) => {
       expect(stripAnsi(doneGlyph(true, cls))).toBe('✗');
@@ -164,7 +164,7 @@ describe('doneGlyph — benign rejection vs real fault (#75)', () => {
     expect([...benign].sort()).toEqual(
       ['abort', 'elicitation-declined', 'hook-block', 'permission-denied', 'policy-refusal'].sort(),
     );
-    expect([...real].sort()).toEqual(['denial-breaker', 'repeat-failure', 'timeout'].sort());
+    expect([...real].sort()).toEqual(['budget', 'denial-breaker', 'repeat-failure', 'timeout'].sort());
   });
 
   it('resolves the benign glyph tone from `palette` at call time (no theme-swap freeze)', () => {

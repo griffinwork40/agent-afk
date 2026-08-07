@@ -638,8 +638,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
     return withSystemBreakpoint(blocks, getCacheTtl());
   }
 
-  async interrupt(): Promise<void> {
-    this.abort.requestAbort('interrupted');
+  async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
+    this.abort.requestAbort(reason);
   }
 
   /**

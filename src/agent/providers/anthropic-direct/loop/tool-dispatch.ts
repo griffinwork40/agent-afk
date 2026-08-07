@@ -17,6 +17,7 @@
 import type { ContentBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput, ToolCall, ToolResult, TurnResult } from '../types.js';
+import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import { extractRawToolInput } from '../../../facets/raw-input.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
@@ -115,17 +116,11 @@ export async function* dispatchToolCalls(
   } else {
     results = [];
     for (const call of calls) {
-      // `abort` here covers ANY signal-fired teardown — deliberate user
-      // cancel, session timeout, or budget exhaustion all funnel through the
-      // same AbortSignal (requestAbort() only tracks 'interrupted' | 'closed',
-      // see abort-coordinator.ts:56), so the original cause is lost by the
-      // time this dispatch site sees `signal.aborted`. Widening AbortReason
-      // to carry the origin is the real fix; out of scope here.
       if (input.signal.aborted) {
         results.push({
           content: 'Tool call aborted',
           isError: true,
-          failureClass: 'abort',
+          failureClass: abortFailureClass(input.signal),
         });
         continue;
       }
