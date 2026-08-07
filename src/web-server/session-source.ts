@@ -143,7 +143,18 @@ function compareByUpdatedAtDesc(a: WebSessionSummary, b: WebSessionSummary): num
 }
 
 /**
+ * Default cap on foreign sessions returned by {@link listWebSessions}.
+ * Sized for a sidebar, not an archive browser.
+ */
+export const DEFAULT_SESSION_LIMIT = 100;
+
+/**
  * Enumerate agent sessions the web UI can show.
+ *
+ * `limit` caps how many FOREIGN (on-disk) sessions are returned, newest first;
+ * owned sessions are always included regardless. A long-lived install
+ * accumulates tens of thousands of session dirs, and an uncapped listing is
+ * both slow and useless in a sidebar.
  *
  * `owned` are session ids created inside this process: they get
  * `mode: 'live'` (full duplex — elicitations can resolve here). Every other
@@ -155,10 +166,29 @@ function compareByUpdatedAtDesc(a: WebSessionSummary, b: WebSessionSummary): num
  * failure, or an unreadable presence directory degrades that one entry's
  * fields (or the `alive` annotation) — it never fails the whole listing.
  */
-export async function listWebSessions(owned: Set<string>): Promise<WebSessionSummary[]> {
+export async function listWebSessions(
+  owned: Set<string>,
+  limit: number = DEFAULT_SESSION_LIMIT,
+): Promise<WebSessionSummary[]> {
   const [onDisk, aliveIds] = await Promise.all([scanLedgerSessions(), readAliveIds()]);
 
-  const ids = new Set<string>([...onDisk.keys(), ...owned]);
+  // Invariant: select BEFORE reading ledger heads, not after. Head-reading is a
+  // file open per session; ordering by the mtime already gathered during the
+  // cheap stat scan and truncating first turns an O(all sessions) cost into
+  // O(limit). On a real machine this is the difference between ~810ms and a
+  // 2.4MB payload (10.5k sessions) and a few ms — and the history only grows.
+  // Owned sessions are exempt from the cap: they are live and always listable.
+  const ownedIds = [...owned];
+  const foreignIds = [...onDisk.keys()]
+    .filter((id) => !owned.has(id))
+    .sort((a, b) => {
+      const at = onDisk.get(a)?.getTime() ?? 0;
+      const bt = onDisk.get(b)?.getTime() ?? 0;
+      return bt - at;
+    })
+    .slice(0, Math.max(0, limit));
+
+  const ids = new Set<string>([...ownedIds, ...foreignIds]);
 
   const summaries = await Promise.all(
     [...ids].map(async (id): Promise<WebSessionSummary> => {

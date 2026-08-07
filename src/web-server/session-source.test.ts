@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listWebSessions } from './session-source.js';
+import { listWebSessions, DEFAULT_SESSION_LIMIT } from './session-source.js';
 import { getSessionsDir } from '../paths.js';
 import { writePresenceFileSync } from '../agent/awareness/presence.js';
 
@@ -169,5 +169,37 @@ describe('listWebSessions', () => {
 
     expect(entry?.mode).toBe('live');
     expect(entry?.alive).toBeUndefined();
+  });
+  // A long-lived install accumulates tens of thousands of session dirs. Before
+  // the cap, listing them took ~810ms and produced a 2.4MB payload on a real
+  // machine — per sidebar load, growing without bound.
+  it('caps foreign sessions at the default limit, newest first', async () => {
+    for (let i = 0; i < DEFAULT_SESSION_LIMIT + 25; i++) {
+      writeLedger(`bulk-${String(i).padStart(4, '0')}`, [metaLine(`bulk-${i}`)]);
+    }
+
+    const results = await listWebSessions(new Set());
+    expect(results.length).toBe(DEFAULT_SESSION_LIMIT);
+
+    const times = results.map((r) => r.updatedAt ?? '');
+    expect([...times].sort().reverse()).toEqual(times);
+  });
+
+  it('honours an explicit limit', async () => {
+    for (let i = 0; i < 10; i++) writeLedger(`lim-${i}`, [metaLine(`lim-${i}`)]);
+
+    expect((await listWebSessions(new Set(), 3)).length).toBe(3);
+  });
+
+  // Owned sessions are live and always actionable — the cap must never hide one.
+  it('always includes owned sessions regardless of the limit', async () => {
+    for (let i = 0; i < 10; i++) writeLedger(`f-${i}`, [metaLine(`f-${i}`)]);
+    writeLedger('my-live-session', [metaLine('my-live-session')]);
+
+    const results = await listWebSessions(new Set(['my-live-session']), 2);
+    const mine = results.find((r) => r.id === 'my-live-session');
+
+    expect(mine).toBeDefined();
+    expect(mine?.mode).toBe('live');
   });
 });
