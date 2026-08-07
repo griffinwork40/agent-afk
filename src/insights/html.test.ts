@@ -102,7 +102,12 @@ function makeNonZeroAgg(): InsightAggregates {
       totalOutputTokens: 120000,
       totalCacheReadTokens: 800000,
       totalCacheCreationTokens: 40000,
-      totalCostUsd: 3.1415,
+      // Deliberately ~3x sessions.totalCostUsd (3.1415, above) — mirrors the
+      // real-world undercount from issue #864, where trace-derived cost is
+      // authoritative and the narrower session-sidecar total is not.
+      // Diverging the two fixture values lets a test pin which source the
+      // rendered cost actually came from.
+      totalCostUsd: 9.4245,
       sessionsWithCost: 12,
     },
     daemon: {
@@ -191,7 +196,21 @@ describe('generateHtml', () => {
 
   it('non-zero aggregates: totalCostUsd rendered correctly', () => {
     const html = generateHtml(makeNonZeroAgg(), SOME_RECS, OPTS);
-    expect(html).toContain('3.1415'); // cost value
+    expect(html).toContain('9.4245'); // cost value — trace-sourced, see below
+  });
+
+  it('regression #864: Cost and Sessions cost cards render the trace aggregate, not the narrower session sidecar', () => {
+    // The headline previously read `sessions.totalCostUsd` (sidecar), whose
+    // coverage is narrower than the witness-trace aggregate on real
+    // datasets (sessions with no sidecar still have a trace) — undercounting
+    // spend by ~3x. The fixture deliberately diverges the two totals
+    // (traces: 9.4245 vs. sessions: 3.1415) so a regression to the sidecar
+    // source is provably caught here rather than passing silently.
+    const agg = makeNonZeroAgg();
+    const html = generateHtml(agg, SOME_RECS, OPTS);
+    expect(agg.traces.totalCostUsd).not.toBe(agg.sessions.totalCostUsd); // fixture sanity
+    expect(html).toContain('9.4245'); // traces.totalCostUsd — authoritative, must be present
+    expect(html).not.toContain('3.1415'); // sessions.totalCostUsd — narrower value must not leak as a displayed cost
   });
 
   it('output does NOT contain string "responseExcerpt"', () => {

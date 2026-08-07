@@ -108,10 +108,14 @@ function renderSessions(agg: InsightAggregates): string {
       ? `<p style="color:#8a93a3;font-size:13px;margin-top:10px">Cost is recorded only for paid-API sessions — ${htmlEscape(safeNum(t.sessionsWithCost))} of ${htmlEscape(safeNum(t.totalTracedSessions))} traced sessions had a non-zero cost. Sessions on local models report $0.</p>`
       : '';
 
+  // Cost is sourced from the witness trace closure aggregate, not the
+  // session sidecar — the sidecar's coverage is narrower (sessions with no
+  // sidecar still have a trace), so `s.totalCostUsd` alone undercounts
+  // spend. Same rationale as tokenCards above.
   const topContent = hasData
     ? `<div class="metrics-grid">
         <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(s.totalSessions))}</div><div class="metric-label">Sessions</div></div>
-        <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(s.totalCostUsd))}</div><div class="metric-label">Total Cost</div></div>
+        <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(t.totalCostUsd))}</div><div class="metric-label">Total Cost</div></div>
         ${tokenCards}
       </div>${costNote}`
     : noData('session');
@@ -133,18 +137,24 @@ function renderSessions(agg: InsightAggregates): string {
 }
 
 function renderCost(agg: InsightAggregates): string {
-  const s = agg.sessions;
-  const hasData = s.totalCostUsd > 0;
+  // Trace-sourced (`t`), not the session sidecar (`s`): the sidecar only
+  // covers sessions that wrote a sidecar JSON, which is a narrower set than
+  // sessions with a witness trace closure event. Rendering `s.totalCostUsd`
+  // here undercounted real spend by ~3x on datasets where trace coverage
+  // exceeds sidecar coverage (see issue #864). Numerator and denominator
+  // are both trace-sourced so the average stays internally consistent.
+  const t = agg.traces;
+  const hasData = t.totalCostUsd > 0;
 
   const avgCostPerSession =
-    s.totalSessions > 0 ? s.totalCostUsd / s.totalSessions : 0;
+    t.totalTracedSessions > 0 ? t.totalCostUsd / t.totalTracedSessions : 0;
 
   return `
   <section id="cost">
     <h2>Cost</h2>
     ${hasData
       ? `<div class="metrics-grid">
-          <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(s.totalCostUsd))}</div><div class="metric-label">Total Cost (${htmlEscape(safeNum(agg.windowDays))}d)</div></div>
+          <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(t.totalCostUsd))}</div><div class="metric-label">Total Cost (${htmlEscape(safeNum(agg.windowDays))}d)</div></div>
           <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(avgCostPerSession))}</div><div class="metric-label">Avg Cost/Session</div></div>
         </div>`
       : noData('cost')}
