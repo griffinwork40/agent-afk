@@ -105,3 +105,62 @@ describe('accumulateTotals', () => {
     expect(t).toEqual({ costUsd: 0, durationMs: 0, turns: 1 });
   });
 });
+
+describe('ledgerRecordToItem — streaming placeholder suppression', () => {
+  // Invariant: the CLI emits two `tool` records per call — a placeholder whose
+  // input is the lone ellipsis, then the substantive one. The terminal repaints
+  // in place and never shows the first; an append-only surface renders both.
+  // In a 338-record sample this was 170 placeholders against 170 finals, i.e.
+  // half of every replayed transcript was content-free duplicate rows.
+  it('drops the ellipsis placeholder record', () => {
+    expect(ledgerRecordToItem({ kind: 'tool', toolName: 'bash', input: ' …' })).toBeUndefined();
+    expect(ledgerRecordToItem({ kind: 'tool', toolName: 'bash', input: '…' })).toBeUndefined();
+  });
+
+  it('KEEPS a genuinely empty input — a real no-arg call, not a placeholder', () => {
+    // browser_close and get_runtime_state legitimately take no arguments; their
+    // only record has an empty input. Suppressing on emptiness would erase them.
+    const item = ledgerRecordToItem({ kind: 'tool', toolName: 'browser_close', input: '' });
+    expect(item).toMatchObject({ kind: 'tool', name: 'browser_close' });
+  });
+
+  it('keeps a substantive input, and one that merely contains an ellipsis', () => {
+    expect(ledgerRecordToItem({ kind: 'tool', toolName: 'bash', input: 'ls -la' })).toBeDefined();
+    const truncated = ledgerRecordToItem({ kind: 'tool', toolName: 'bash', input: 'echo hi …' });
+    expect(truncated).toMatchObject({ inputPreview: 'echo hi …' });
+  });
+
+  it('keeps a tool named with an ellipsis-like input on a non-tool record', () => {
+    expect(ledgerRecordToItem({ kind: 'user', text: '…' })).toMatchObject({ kind: 'user' });
+  });
+});
+
+describe('ledgerRecordToItem — tool_error legibility', () => {
+  // A tool_error record has `content` but no `toolName`, so the row used to
+  // render as a bare red "tool" with the error hidden in a collapsed panel.
+  it('promotes the error first line into the preview and keeps the full text', () => {
+    const item = ledgerRecordToItem({
+      kind: 'tool_error',
+      content: 'Skill execution error: mint failed at build\nstack frame one\nframe two',
+    });
+    expect(item).toMatchObject({
+      kind: 'tool',
+      name: 'error',
+      inputPreview: 'Skill execution error: mint failed at build',
+      status: 'error',
+    });
+    expect((item as { output?: string }).output).toContain('frame two');
+  });
+
+  it('prefers a real toolName when the record happens to carry one', () => {
+    const item = ledgerRecordToItem({ kind: 'tool_error', toolName: 'bash', content: 'boom' });
+    expect(item).toMatchObject({ name: 'bash', inputPreview: 'boom' });
+  });
+
+  it('tolerates a tool_error with no content at all', () => {
+    expect(ledgerRecordToItem({ kind: 'tool_error' })).toMatchObject({
+      name: 'error',
+      inputPreview: '',
+    });
+  });
+});

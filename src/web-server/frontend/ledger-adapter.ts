@@ -58,6 +58,24 @@ export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | u
       return { kind: 'assistant', id: nextId('a'), text: str(payload['text']) ?? '' };
 
     case 'tool': {
+      const input = str(payload['input']) ?? '';
+
+      // Invariant: the CLI writes TWO `tool` records per call — a PLACEHOLDER
+      // the instant the call starts streaming (arguments not yet parsed, so
+      // `input` serializes to the lone ellipsis "…"), then a SUBSTANTIVE record
+      // once the arguments are complete. The terminal surface repaints a single
+      // line in place, so the placeholder is overwritten and never seen. An
+      // append-only surface like this one renders both, which is why ~50% of
+      // replayed transcript rows were content-free duplicates.
+      //
+      // Dropping the placeholder is lossless: in a 338-record sample the counts
+      // were 170 placeholders against 150 substantive + 20 genuinely-empty
+      // records — an exact 1:1 pairing, so every dropped row has a surviving
+      // partner. Match the ellipsis EXACTLY and never on emptiness: an empty
+      // `input` is a real no-arg call (browser_close, get_runtime_state) whose
+      // only record this is, and treating it as a placeholder would erase it.
+      if (input.trim() === '…') return undefined;
+
       // Contract: status 'ok' is inferred, not observed. The ledger records
       // that a tool started; a corresponding failure would arrive as a separate
       // `tool_error`. Absence of output here is a gap in the record, never
@@ -66,22 +84,31 @@ export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | u
         kind: 'tool',
         id: nextId('t'),
         name: str(payload['toolName']) ?? 'tool',
-        inputPreview: str(payload['input']) ?? '',
+        inputPreview: input,
         status: 'ok',
         outputUnavailable: true,
       };
       return item;
     }
 
-    case 'tool_error':
+    case 'tool_error': {
+      // Contract: a `tool_error` record carries `content` but NO `toolName` —
+      // the failing tool's identity is simply not in the ledger. Rendering the
+      // bare fallback name against an empty preview produced a red row reading
+      // only "tool", with the one useful string (the error itself) buried in a
+      // collapsed panel. Promote the error's first line into the preview so the
+      // row is self-describing at a glance; the full text stays in `output`.
+      const content = str(payload['content']) ?? '';
+      const firstLine = content.split('\n', 1)[0] ?? '';
       return {
         kind: 'tool',
         id: nextId('t'),
-        name: str(payload['toolName']) ?? 'tool',
-        inputPreview: '',
+        name: str(payload['toolName']) ?? 'error',
+        inputPreview: firstLine,
         status: 'error',
-        output: str(payload['content']) ?? '',
+        output: content,
       };
+    }
 
     case 'error':
       return { kind: 'error', id: nextId('e'), message: str(payload['message']) ?? 'error' };

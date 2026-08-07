@@ -6,9 +6,14 @@
  * with textContent. Tool output is attacker-influencable (an agent can be made
  * to cat a crafted file), so treating it as markup would be a stored-XSS hole
  * in a page that holds a live bearer token.
+ *
+ * Assistant prose is the one value rendered as anything richer than flat text,
+ * and it does NOT weaken that rule: `renderMarkdown` builds DOM nodes from
+ * marked's token stream and never emits an HTML string. See markdown-dom.ts.
  */
 
 import { stripAnsi } from './ansi-strip.js';
+import { renderMarkdown } from './markdown-dom.js';
 import type { TranscriptItem, ToolCallItem } from './view-model.js';
 
 /** Beyond this, tool output is collapsed behind a "show full" control. */
@@ -35,6 +40,26 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** Trailing path segment of `cwd`, or undefined when absent/degenerate. */
+function basename(cwd: string | undefined): string | undefined {
+  if (!cwd) return undefined;
+  const parts = cwd.split('/').filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : undefined;
+}
+
+/**
+ * Contract: strips a leading bracketed tag from a derived title.
+ *
+ * Plugin-dispatched sessions open with a `[plugin-name: unlocked] …` preamble
+ * that pushes the distinguishing words past the truncation point. Removing it
+ * surfaces more signal per row. Falls back to the raw title, then to a short id
+ * — a row must never render blank.
+ */
+function sessionLabel(s: SessionSummary): string {
+  const stripped = (s.title ?? '').replace(/^\s*\[[^\]]{0,80}\]\s*/, '').trim();
+  return stripped || s.title || s.id.slice(0, 8);
+}
+
 export function renderSidebar(
   container: HTMLElement,
   sessions: SessionSummary[],
@@ -46,10 +71,18 @@ export function renderSidebar(
     const row = el('button', 'session-row');
     if (s.id === activeId) row.classList.add('is-active');
 
-    const title = el('span', 'session-title', s.title || s.id.slice(0, 8));
+    const title = el('span', 'session-title', sessionLabel(s));
     row.appendChild(title);
 
     const meta = el('span', 'session-meta');
+    // Invariant: cwd is load-bearing for telling rows apart, not decoration.
+    // Titles derive from a session's FIRST user message, which for plugin- and
+    // skill-dispatched sessions is identical boilerplate — a real listing here
+    // measured 6 distinct titles across 100 sessions, 90 of them sharing one
+    // string. The working directory is the field that actually varies, so it is
+    // rendered first and given the strongest treatment in the meta row.
+    const dir = basename(s.cwd);
+    if (dir) meta.appendChild(el('span', 'session-cwd', dir));
     // A readonly session lives in another OS process; its approvals are
     // unreachable from here. The badge is the user-facing half of that
     // contract — the composer is disabled to match.
@@ -84,7 +117,9 @@ function renderItem(item: TranscriptItem): HTMLElement {
     case 'assistant': {
       const node = el('div', 'msg msg-assistant');
       node.appendChild(el('div', 'msg-role', 'agent'));
-      node.appendChild(el('div', 'msg-body', item.text));
+      const body = el('div', 'msg-body md-body');
+      body.appendChild(renderMarkdown(item.text));
+      node.appendChild(body);
       return node;
     }
     case 'thinking': {

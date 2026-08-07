@@ -16,6 +16,7 @@ import {
   type SessionTotals,
 } from './ledger-adapter.js';
 import { moveDown, moveUp, removeAt } from './queue-reorder.js';
+import { isPinnedToBottom } from './scroll-pin.js';
 import type { TranscriptItem } from './view-model.js';
 
 const token = readAndScrubToken();
@@ -51,6 +52,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return (await res.json()) as T;
+}
+
+function scrollToBottom(node: HTMLElement): void {
+  node.scrollTop = node.scrollHeight;
 }
 
 function activeSession(): SessionSummary | undefined {
@@ -90,8 +95,15 @@ function selectSession(id: string): void {
       totals = accumulateTotals(totals, record);
       if (item) {
         items.push(item);
+        // Invariant: sample the scroll position BEFORE re-rendering. The render
+        // replaces the container's children, which resets scrollHeight, so a
+        // read taken afterwards cannot distinguish "user was at the bottom"
+        // from "user had scrolled up to read". Unconditional scrolling made
+        // history unreadable on a live session: every arriving event yanked the
+        // viewport back to the newest row mid-sentence.
+        const wasPinned = isPinnedToBottom($('transcript'));
         renderTranscript($('transcript'), items);
-        $('transcript').scrollTop = $('transcript').scrollHeight;
+        if (wasPinned) scrollToBottom($('transcript'));
       }
       renderMeter();
     },
