@@ -44,11 +44,46 @@ const SENSITIVE_LEAF_PATTERNS: readonly RegExp[] = [
   /^id_rsa/,
   /^id_ed25519/,
   /^\.netrc$/,
-  /credential/,
-  /secret/,
   /\.sqlite3?$/,
   /\.db$/,
 ];
+
+/**
+ * Sensitive by NAME rather than by FORMAT, and the distinction is the whole
+ * point: the table above says "this IS a credential", these say "this is ABOUT
+ * credentials". Inside generated output the second claim is worthless, because
+ * every build artifact echoes the name of the source file it came from.
+ *
+ * Invariant: suppressed only at the INTERSECTION of two conditions — the entry
+ * sits under a rebuildable directory ({@link isUnderGeneratedOutput}) AND its
+ * leaf carries a {@link GENERATED_ARTIFACT_EXTENSIONS} suffix. A repo holding
+ * `src/agent/auth/credential-resolver.ts` emits
+ * `dist/agent/auth/credential-resolver.d ts` and a coverage page of the same
+ * name; both matched `/credential/`, protected the tree, and made every
+ * worktree that had ever run a build or a coverage pass permanently unreapable
+ * — the same immortality the module docblock exists to prevent, arriving
+ * through the sensitivity table instead of the rebuildable one.
+ *
+ * Neither condition alone is enough. Directory alone would reap a hand-placed
+ * `dist/nested/app-credentials.json`, which #759 deliberately protects and
+ * pins with a test. Extension alone would reap an authored `credentials.html`
+ * at the repo root. Requiring both isolates the actual false positive: a
+ * compiled or rendered artifact whose name is an echo of the source module it
+ * was generated from.
+ */
+const SENSITIVE_NAME_HINTS: readonly RegExp[] = [/credential/, /secret/];
+
+/**
+ * Suffixes a compiler or report generator produces. Paired with the directory
+ * gate above, never used alone.
+ *
+ * Contract: data formats are deliberately absent. `.json`, `.yaml`, `.txt` and
+ * friends are where a real credential file plausibly lives even inside `dist/`,
+ * and no toolchain name-mirrors a source module into them — so excluding them
+ * costs nothing against the false positive and keeps #759's guarantee intact.
+ */
+const GENERATED_ARTIFACT_EXTENSIONS =
+  /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|map|html?|css|svg)$/;
 
 /**
  * Dependency trees and caches: machine-owned, never hand-authored, and often
@@ -171,10 +206,38 @@ export function leafOf(normalizedPath: string): string {
     : withoutTrailingSlash.slice(lastSlash + 1);
 }
 
-/** True when the entry's final segment names something unrecoverable. */
+/**
+ * True when the entry is a compiled or rendered artifact sitting inside build
+ * output — the one place a credential-shaped NAME carries no information,
+ * because the name was inherited from the source module it was generated from.
+ * Both directory tables count: `dist/` (inspectable) and `node_modules/`
+ * (opaque) are equally generated, differing only in expansion cost.
+ */
+function isGeneratedArtifact(normalizedPath: string, leaf: string): boolean {
+  if (!GENERATED_ARTIFACT_EXTENSIONS.test(leaf)) return false;
+  return (
+    OPAQUE_REBUILDABLE_DIRS.some((re) => re.test(normalizedPath)) ||
+    INSPECTABLE_REBUILDABLE_DIRS.some((re) => re.test(normalizedPath))
+  );
+}
+
+/**
+ * True when the entry's final segment names something unrecoverable, judged on
+ * the leaf alone. Format anchors and name hints both count here — callers with
+ * path context should prefer {@link classifyIgnoredEntry}, which additionally
+ * suppresses the name hints inside generated output.
+ */
 export function isSensitiveLeaf(relPath: string): boolean {
   const leaf = leafOf(normalizeIgnoredPath(relPath)).toLowerCase();
   if (leaf === '') return false;
+  return (
+    SENSITIVE_LEAF_PATTERNS.some((re) => re.test(leaf)) ||
+    SENSITIVE_NAME_HINTS.some((re) => re.test(leaf))
+  );
+}
+
+/** Leaf matches a table entry naming a credential FORMAT, wherever it sits. */
+function isSensitiveFormat(leaf: string): boolean {
   return SENSITIVE_LEAF_PATTERNS.some((re) => re.test(leaf));
 }
 
@@ -191,11 +254,21 @@ export function isSensitiveLeaf(relPath: string): boolean {
  * directory name is only meaningful as a prefix, so leaf-matching those would
  * classify a bare file named `dist` as build output — and would collapse the
  * deliberate `logs/` asymmetry documented above.
+ *
+ * Sensitivity splits along the same seam. A credential FORMAT protects the tree
+ * from anywhere; a credential-shaped NAME protects everywhere except on a
+ * generated artifact, where the name is an echo of the source module it was
+ * built from rather than evidence of a secret (see
+ * {@link SENSITIVE_NAME_HINTS}).
  */
 export function classifyIgnoredEntry(relPath: string): IgnoredEntryClass {
   const normalized = normalizeIgnoredPath(relPath);
   if (normalized === '') return 'protected';
-  if (isSensitiveLeaf(normalized)) return 'protected';
+  const leaf = leafOf(normalized).toLowerCase();
+  if (isSensitiveFormat(leaf)) return 'protected';
+  if (!isGeneratedArtifact(normalized, leaf) && SENSITIVE_NAME_HINTS.some((re) => re.test(leaf))) {
+    return 'protected';
+  }
   const isDirectory = normalized.endsWith('/');
   if (!isDirectory && REBUILDABLE_FILE_PATTERNS.some((re) => re.test(leafOf(normalized)))) {
     return 'opaque';

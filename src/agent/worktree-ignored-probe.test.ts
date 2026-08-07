@@ -6,7 +6,10 @@
  * make every worktree immortal and stop the sweep reclaiming anything at all.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   isRebuildableIgnoredEntry,
   hasNonRebuildableIgnoredFiles,
@@ -294,5 +297,69 @@ describe('probeNonRebuildableIgnoredFiles — verdict provenance', () => {
   it('still collapses to a boolean for the legacy surface', async () => {
     expect(await hasNonRebuildableIgnoredFiles(mockExec('!! local-notes.md\n'), '/tmp/wt')).toBe(true);
     expect(await hasNonRebuildableIgnoredFiles(mockExec('!! node_modules/\n'), '/tmp/wt')).toBe(false);
+  });
+});
+
+/**
+ * Git appends a trailing slash only for a REAL directory, so a symlinked
+ * dependency tree — the standard way a worktree avoids a duplicate install —
+ * arrives as a bare `node_modules`, matches no directory pattern, and used to
+ * fall through to `protected`, making that worktree permanently unreapable.
+ * These use the real filesystem because the disambiguation IS a stat: the
+ * string is identical to a hand-authored file of the same name, which must
+ * keep protecting the tree.
+ */
+describe('probeNonRebuildableIgnoredFiles — symlinked directories', () => {
+  let root: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'afk-symlink-probe-'));
+    await mkdir(join(root, 'real-deps'), { recursive: true });
+    await mkdir(join(root, 'wt'), { recursive: true });
+    await symlink('../real-deps', join(root, 'wt', 'node_modules'), 'dir');
+    await symlink('../real-deps', join(root, 'wt', 'dist'), 'dir');
+    // Same names, but authored FILES — the case that must stay protected.
+    await mkdir(join(root, 'wt-files'), { recursive: true });
+    await writeFile(join(root, 'wt-files', 'dist'), 'hand-authored, not a build dir');
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('treats a symlinked node_modules as reapable despite the missing slash', async () => {
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! node_modules\n'),
+      join(root, 'wt'),
+    );
+    expect(verdict).toEqual({ protect: false });
+  });
+
+  it('treats a symlinked build dir as inspectable, expanding rather than protecting', async () => {
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! dist\n'),
+      join(root, 'wt'),
+    );
+    expect(verdict).toEqual({ protect: false });
+  });
+
+  it('still protects a hand-authored FILE sharing a build-directory name', async () => {
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! dist\n'),
+      join(root, 'wt-files'),
+    );
+    expect(verdict).toEqual({ protect: true, because: 'non-rebuildable-entry', detail: 'dist' });
+  });
+
+  it('protects when the entry cannot be stat-ed at all (broken link, race)', async () => {
+    const verdict = await probeNonRebuildableIgnoredFiles(
+      mockExec('!! node_modules\n'),
+      join(root, 'does-not-exist'),
+    );
+    expect(verdict).toEqual({
+      protect: true,
+      because: 'non-rebuildable-entry',
+      detail: 'node_modules',
+    });
   });
 });

@@ -90,6 +90,67 @@ describe('classifyIgnoredEntry — leaf-matching does not over-reach', () => {
       expect(isSensitiveLeaf(entry)).toBe(true);
     });
   }
+
+  // Regression: every build artifact echoes the name of the source file it was
+  // produced from. A repo holding `src/agent/auth/credential-resolver.ts` emits
+  // `dist/agent/auth/credential-resolver.d.ts` and a coverage page of the same
+  // name — both matched `/credential/`, protected the tree, and made every
+  // worktree that had run a build or a coverage pass permanently unreapable,
+  // citing a "secret" that was compiler output. The suppression is scoped to
+  // the DIRECTORY, not to an extension list: the mirror follows the toolchain.
+  const generatedMirrors = [
+    'dist/agent/auth/credential-resolver.d.ts',
+    'dist/agent/auth/credential-resolver.js',
+    'dist/agent/auth/credential-resolver.d.ts.map',
+    'coverage/src/agent/auth/credential-resolver.ts.html',
+    'coverage/src/agent/redact-secrets.ts.html',
+    'node_modules/@scope/secret-box/index.js',
+    'dist/docs/secret-handling.css',
+  ];
+  for (const entry of generatedMirrors) {
+    it(`treats ${entry} as generated output, not a secret`, () => {
+      expect(classifyIgnoredEntry(entry)).not.toBe('protected');
+    });
+  }
+
+  // The suppression reaches ONLY the name hints, and only on an artifact
+  // extension. A credential FORMAT protects the tree from anywhere, and a data
+  // file under build output keeps the guarantee #759 pinned — no toolchain
+  // name-mirrors a source module into `.json`, so excluding it costs nothing.
+  const formatAnchored = [
+    'coverage/prod.env',
+    'dist/app.env',
+    'coverage/src/tls.pem',
+    'dist/deploy.key',
+    'coverage/secret.db',
+    'dist/cache/store.sqlite3',
+  ];
+  for (const entry of formatAnchored) {
+    it(`still protects ${entry} despite living under generated output`, () => {
+      expect(isSensitiveLeaf(entry)).toBe(true);
+      expect(classifyIgnoredEntry(entry)).toBe('protected');
+    });
+  }
+
+  const dataUnderBuildOutput = [
+    'dist/nested/app-credentials.json',
+    'dist/secrets.yaml',
+    'coverage/credentials.txt',
+  ];
+  for (const entry of dataUnderBuildOutput) {
+    it(`keeps ${entry} protected — a data file is not a generated mirror`, () => {
+      expect(classifyIgnoredEntry(entry)).toBe('protected');
+    });
+  }
+
+  // Outside generated output the name hints are untouched — that is where a
+  // credential-shaped name is actually evidence of one.
+  const authoredHints = ['credentials.json', 'src/secrets.txt', 'credentials.html', '.secrets'];
+  for (const entry of authoredHints) {
+    it(`keeps ${entry} protected outside generated output`, () => {
+      expect(classifyIgnoredEntry(entry)).toBe('protected');
+    });
+  }
 });
 
 /**

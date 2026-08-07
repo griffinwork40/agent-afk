@@ -25,8 +25,10 @@
  * @module agent/worktree-ignored-probe
  */
 
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ExecFileFn } from './worktree-sweep.js';
-import { classifyIgnoredEntry } from './worktree-ignored-patterns.js';
+import { classifyIgnoredEntry, type IgnoredEntryClass } from './worktree-ignored-patterns.js';
 
 export {
   classifyIgnoredEntry,
@@ -80,6 +82,42 @@ export function isRebuildableIgnoredEntry(relPath: string): boolean {
 }
 
 /**
+ * Classify one entry, resolving the one ambiguity git leaves in its output.
+ *
+ * Invariant: `git status --ignored` appends a trailing slash only for a real
+ * DIRECTORY. A SYMLINKED one — `node_modules -> ../../node_modules`, the
+ * standard way a worktree avoids a duplicate install — is printed as
+ * `!! node_modules`, matching no directory pattern (all of which require the
+ * slash) and falling through to `protected`. That made the worktree permanently
+ * unreapable over a symlink whose removal loses nothing.
+ *
+ * The patterns module cannot fix this: from the string alone, a symlinked
+ * `dist` and a hand-authored FILE named `dist` are identical, and the latter
+ * must stay protected. Only the filesystem can tell them apart, so the
+ * disambiguation lives here, on the IO side of the split.
+ *
+ * Contract: the `stat` is paid ONLY by an entry that would otherwise be
+ * protected — the rare path — so expanding a populated `dist/` does not become
+ * thousands of syscalls. `stat` follows the link deliberately (a symlink TO a
+ * directory is what we are detecting); a broken link or a vanished entry throws
+ * and keeps the protective verdict, matching the module's fail-safe direction.
+ */
+async function classifyResolvingSymlinkedDirs(
+  worktreePath: string,
+  entry: string,
+): Promise<IgnoredEntryClass> {
+  const verdict = classifyIgnoredEntry(entry);
+  if (verdict !== 'protected' || entry.endsWith('/')) return verdict;
+  try {
+    const stats = await stat(join(worktreePath, entry));
+    if (stats.isDirectory()) return classifyIgnoredEntry(`${entry}/`);
+  } catch {
+    /* broken symlink, race, or permission error — keep the protective verdict */
+  }
+  return verdict;
+}
+
+/**
  * Ignored entries git reports for the worktree, or `undefined` when git failed.
  * `scopePath` restricts the walk to one directory and expands it per-file
  * (`--untracked-files=all`) instead of collapsing it to a single line.
@@ -130,7 +168,7 @@ async function inspectableDirHidesLocalState(
   }
   for (const entry of nested.entries) {
     if (entry === dirEntry) continue; // git echoed the directory — no new information
-    if (classifyIgnoredEntry(entry) === 'protected') {
+    if ((await classifyResolvingSymlinkedDirs(worktreePath, entry)) === 'protected') {
       return { protect: true, because: 'non-rebuildable-entry', detail: entry };
     }
   }
@@ -156,7 +194,7 @@ export async function probeNonRebuildableIgnoredFiles(
   // Unreadable → never force-remove on a guess.
   if ('failure' in top) return { protect: true, because: 'git-failed', detail: top.failure };
   for (const entry of top.entries) {
-    const verdict = classifyIgnoredEntry(entry);
+    const verdict = await classifyResolvingSymlinkedDirs(worktreePath, entry);
     if (verdict === 'protected') {
       return { protect: true, because: 'non-rebuildable-entry', detail: entry };
     }
