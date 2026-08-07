@@ -88,10 +88,35 @@ function barChart(
 // Section renderers
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve the authoritative cost total + session count for cost cards.
+ *
+ * Prefers the witness-trace aggregate (the #864 fix — wider, authoritative
+ * coverage), but falls back to the session-sidecar aggregate when there is
+ * NO trace coverage at all (`totalTracedSessions === 0`). That is an
+ * absence of signal, not a legitimate zero-cost result: it happens when an
+ * operator sets `AFK_TRACE_DISABLED=1` (see `createDefaultTraceWriter()` in
+ * src/agent/trace/factory.ts, which then writes no trace.jsonl at all) or on
+ * a legacy install that predates the witness-trace system. Rendering the
+ * trace aggregate unconditionally in that case would silently discard real,
+ * still-recorded sidecar spend. When trace coverage exists it stays
+ * authoritative/primary — do not revert this to trace-only.
+ */
+function resolveCost(agg: InsightAggregates): { totalCostUsd: number; costSessionCount: number } {
+  const t = agg.traces;
+  const s = agg.sessions;
+  const useTraceCost = t.totalTracedSessions > 0;
+  return {
+    totalCostUsd: useTraceCost ? t.totalCostUsd : s.totalCostUsd,
+    costSessionCount: useTraceCost ? t.totalTracedSessions : s.totalSessions,
+  };
+}
+
 function renderSessions(agg: InsightAggregates): string {
   const s = agg.sessions;
   const t = agg.traces;
   const hasData = s.totalSessions > 0;
+  const { totalCostUsd: sessionsCardCostUsd } = resolveCost(agg);
 
   // Tokens are sourced from witness trace closure events (authoritative
   // input/output/cache split). The session sidecar only stores a single
@@ -108,14 +133,15 @@ function renderSessions(agg: InsightAggregates): string {
       ? `<p style="color:#8a93a3;font-size:13px;margin-top:10px">Cost is recorded only for paid-API sessions — ${htmlEscape(safeNum(t.sessionsWithCost))} of ${htmlEscape(safeNum(t.totalTracedSessions))} traced sessions had a non-zero cost. Sessions on local models report $0.</p>`
       : '';
 
-  // Cost is sourced from the witness trace closure aggregate, not the
-  // session sidecar — the sidecar's coverage is narrower (sessions with no
-  // sidecar still have a trace), so `s.totalCostUsd` alone undercounts
-  // spend. Same rationale as tokenCards above.
+  // Cost prefers the witness trace closure aggregate over the session
+  // sidecar — the sidecar's coverage is narrower (sessions with no sidecar
+  // still have a trace), so `s.totalCostUsd` alone undercounts spend. Same
+  // rationale as tokenCards above. Falls back to the sidecar total when
+  // there is no trace coverage at all — see `resolveCost()`.
   const topContent = hasData
     ? `<div class="metrics-grid">
         <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(s.totalSessions))}</div><div class="metric-label">Sessions</div></div>
-        <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(t.totalCostUsd))}</div><div class="metric-label">Total Cost</div></div>
+        <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(sessionsCardCostUsd))}</div><div class="metric-label">Total Cost</div></div>
         ${tokenCards}
       </div>${costNote}`
     : noData('session');
@@ -137,24 +163,27 @@ function renderSessions(agg: InsightAggregates): string {
 }
 
 function renderCost(agg: InsightAggregates): string {
-  // Trace-sourced (`t`), not the session sidecar (`s`): the sidecar only
-  // covers sessions that wrote a sidecar JSON, which is a narrower set than
-  // sessions with a witness trace closure event. Rendering `s.totalCostUsd`
-  // here undercounted real spend by ~3x on datasets where trace coverage
-  // exceeds sidecar coverage (see issue #864). Numerator and denominator
-  // are both trace-sourced so the average stays internally consistent.
-  const t = agg.traces;
-  const hasData = t.totalCostUsd > 0;
+  // Trace-sourced (`t`), not the session sidecar (`s`), whenever trace
+  // coverage exists: the sidecar only covers sessions that wrote a sidecar
+  // JSON, which is a narrower set than sessions with a witness trace
+  // closure event. Rendering `s.totalCostUsd` here undercounted real spend
+  // by ~3x on datasets where trace coverage exceeds sidecar coverage (see
+  // issue #864). Numerator and denominator share the same source so the
+  // average stays internally consistent. `resolveCost()` falls back to the
+  // sidecar total when `totalTracedSessions === 0` (no trace coverage at
+  // all — e.g. AFK_TRACE_DISABLED=1 or a legacy install), which is an
+  // absence of signal, not a legitimate zero-cost result.
+  const { totalCostUsd, costSessionCount } = resolveCost(agg);
+  const hasData = totalCostUsd > 0;
 
-  const avgCostPerSession =
-    t.totalTracedSessions > 0 ? t.totalCostUsd / t.totalTracedSessions : 0;
+  const avgCostPerSession = costSessionCount > 0 ? totalCostUsd / costSessionCount : 0;
 
   return `
   <section id="cost">
     <h2>Cost</h2>
     ${hasData
       ? `<div class="metrics-grid">
-          <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(t.totalCostUsd))}</div><div class="metric-label">Total Cost (${htmlEscape(safeNum(agg.windowDays))}d)</div></div>
+          <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(totalCostUsd))}</div><div class="metric-label">Total Cost (${htmlEscape(safeNum(agg.windowDays))}d)</div></div>
           <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(avgCostPerSession))}</div><div class="metric-label">Avg Cost/Session</div></div>
         </div>`
       : noData('cost')}

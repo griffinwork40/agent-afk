@@ -137,6 +137,22 @@ function makeNonZeroAgg(): InsightAggregates {
   };
 }
 
+/**
+ * Simulates AFK_TRACE_DISABLED=1 (or a legacy install predating the
+ * witness-trace system): no trace coverage at all — `traces.totalTracedSessions`
+ * and `traces.totalCostUsd` are both 0, since no trace.jsonl is ever written
+ * for that population — but the session sidecar still recorded real spend.
+ * Exercises the sidecar-cost fallback in html.ts (review comment on PR #933 /
+ * issue #864 follow-up).
+ */
+function makeSidecarOnlyAgg(): InsightAggregates {
+  const agg = makeZeroAgg();
+  agg.sessions.totalSessions = 10;
+  agg.sessions.totalCostUsd = 4.2;
+  agg.sessions.totalTokens = 5000;
+  return agg;
+}
+
 const NO_RECS: Recommendation[] = [];
 const OPTS = { days: 30 };
 
@@ -211,6 +227,28 @@ describe('generateHtml', () => {
     expect(agg.traces.totalCostUsd).not.toBe(agg.sessions.totalCostUsd); // fixture sanity
     expect(html).toContain('9.4245'); // traces.totalCostUsd — authoritative, must be present
     expect(html).not.toContain('3.1415'); // sessions.totalCostUsd — narrower value must not leak as a displayed cost
+  });
+
+  it('fallback: no trace coverage (AFK_TRACE_DISABLED=1 / legacy install) falls back to sidecar cost instead of hiding it', () => {
+    // totalTracedSessions === 0 is absence of trace signal, not a genuine
+    // zero-cost result — the Cost section must not render "No cost data"
+    // and the Sessions card must not render "$0.00" while the sidecar still
+    // holds real spend.
+    const agg = makeSidecarOnlyAgg();
+    const html = generateHtml(agg, NO_RECS, OPTS);
+
+    expect(agg.traces.totalTracedSessions).toBe(0); // fixture sanity
+    expect(agg.traces.totalCostUsd).toBe(0); // fixture sanity
+
+    // Cost section: sidecar total rendered, not the "no cost data" placeholder.
+    const costSection = html.slice(html.indexOf('id="cost"'), html.indexOf('id="tool-usage"'));
+    expect(costSection).not.toContain('No cost data');
+    expect(costSection).toContain('$4.2000');
+
+    // Sessions section's "Total Cost" card: sidecar total, not $0.00.
+    const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
+    expect(sessionsSection).toContain('$4.2000');
+    expect(sessionsSection).not.toContain('$0.00');
   });
 
   it('output does NOT contain string "responseExcerpt"', () => {
