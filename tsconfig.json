@@ -52,6 +52,7 @@
     "tests",
     "src/**/*.test.ts",
     "src/**/__fixtures__/**",
-    "src/**/__test-utils__/**"
+    "src/**/__test-utils__/**",
+    "src/web-server/frontend/**"
   ]
 }

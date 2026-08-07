@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**149 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**152 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -105,6 +105,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DAEMON_TASK` | string |  |  |  | Default task description for the daemon. Falls back to afk.config.json daemon.task. |
 | `AFK_DAEMON_TASK_ID` | string |  |  |  | Task identifier the daemon uses to scope its state directory and telemetry. |
 | `AFK_SESSIONSTART_COOLDOWN_MS` | number |  |  |  | Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts. |
+| `AFK_WEB_HOST` | string |  |  | `127.0.0.1` | Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host. |
+| `AFK_WEB_PORT` | number |  |  | `4141` | Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port. |
+| `AFK_WEB_TOKEN` | string |  |  |  | Bearer token for the `afk web` surface. When unset, a random per-run token is minted and printed in the startup URL. Setting this explicitly is also what permits a non-loopback bind. |
 
 ## Worktree
 

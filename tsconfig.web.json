@@ -1,0 +1,16 @@
+{
+  // Invariant: the root tsconfig has no "dom" lib — it targets Node. The browser
+  // entry points therefore cannot type-check there and are excluded from it.
+  // This project supplies the DOM lib for exactly those files. `pnpm lint` runs
+  // BOTH projects, so neither half can rot unnoticed.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "noEmit": true,
+    "moduleResolution": "bundler",
+    "module": "esnext"
+  },
+  "include": ["src/web-server/frontend/**/*.ts"],
+  "exclude": ["src/web-server/frontend/**/*.test.ts"]
+}
