@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.4] - 2026-08-07
+
+### Changed
+- dissolve the src/telegram.ts monolith into src/telegram/ (#825) (#930) (79d8642)
+
 ## [5.97.3] - 2026-08-07
 
 ### Fixed
