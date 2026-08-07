@@ -139,6 +139,39 @@ describe('loadAgentRegistry', () => {
     }
   });
 
+  // The other half of #883. The test above proves the grant is mechanically
+  // REACHABLE; this proves the agent is TOLD it has it. The vendored body is
+  // byte-pinned upstream and asserts a closed allowlist ("Your tool surface is
+  // a hard allowlist enforced by Claude Code: Read, Grep, Glob, WebFetch,
+  // WebSearch"), so a grant made only in `tools:` is inert — the surveyor reads
+  // its prompt, believes it has five tools, and never calls the sixth. That is
+  // exactly what shipped: #883 was verified at the tool-access layer only, and
+  // the observable behaviour did not change.
+  it('tells research-agent about every registry grant beyond its vendored allowlist (#883)', async () => {
+    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
+    const entry = registry.get('research-agent');
+    expect(entry).toBeDefined();
+
+    const { researchAgent } = await import('../../skills/_agents/index.js');
+    const prompt = entry!.definition.prompt;
+
+    // Anything granted at the registry entry but absent from the vendored
+    // allowlist is a tool the prompt does not otherwise account for.
+    const extras = (entry!.definition.tools ?? []).filter(
+      (t) => !researchAgent.allowedTools.includes(t as never),
+    );
+    expect(extras.length).toBeGreaterThan(0);
+    for (const tool of extras) {
+      expect(prompt, `prompt never mentions granted tool ${tool}`).toContain(tool);
+    }
+
+    // The reconciliation must explicitly override the body's closed-allowlist
+    // claim, not merely append a name the earlier sentence still contradicts.
+    expect(prompt).toMatch(/superseded by this section/);
+    // And it must not have relaxed the read-only contract on the way through.
+    expect(prompt).toMatch(/no Edit, no Write, no Bash, no mutation/);
+  });
+
   it('strips vendored frontmatter from builtin prompts (body-only system prompt)', () => {
     const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
     for (const name of ['research-agent', 'git-investigator']) {
