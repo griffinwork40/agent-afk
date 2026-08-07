@@ -166,8 +166,8 @@ agent-afk/
 │   │   ├── _lib/                   # prompt-loader, shared helpers
 │   │   └── user-skills.ts          # lazy scan of ~/.afk/skills
 │   ├── telemetry/                  # shared telemetry schemas
-│   ├── telegram/                   # telegram bridge
-│   ├── telegram.ts                 # telegram bot entry
+│   ├── telegram/                   # telegram bridge (incl. entry.ts — the real entrypoint)
+│   ├── telegram.ts                 # thin shim: calls telegram/entry.ts's main()
 │   ├── utils/
 │   ├── paths.ts
 │   └── index.ts
