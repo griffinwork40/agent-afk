@@ -514,18 +514,20 @@ describe('detectToolFailureDensity — failureClass exclusion', () => {
     expect(r.detail['excludedByClass']).toEqual({ 'elicitation-declined': 5 });
   });
 
-  it("counts 'timeout' as a real failure (not excluded) and surfaces it in the breakdown", () => {
-    resetSeq();
-    // 4 timeouts out of 4 calls → 100% → fires. timeout is NOT excluded.
-    const lines: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      lines.push(...toolPair(`t-${i}`, 'browser_open', { isError: true, failureClass: 'timeout' }));
-    }
-    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
-    expect(r.detail['failureCount']).toBe(4);
-    expect(r.detail['totalCalls']).toBe(4);
-    expect(r.detail['failureClassBreakdown']).toEqual({ timeout: 4 });
-  });
+  it.each(['timeout', 'budget'] as const)(
+    "counts '%s' as a real failure (not excluded) and surfaces it in the breakdown",
+    (failureClass) => {
+      resetSeq();
+      const lines: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        lines.push(...toolPair(`t-${i}`, 'browser_open', { isError: true, failureClass }));
+      }
+      const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+      expect(r.detail['failureCount']).toBe(4);
+      expect(r.detail['totalCalls']).toBe(4);
+      expect(r.detail['failureClassBreakdown']).toEqual({ [failureClass]: 4 });
+    },
+  );
 
   it('reports a mixed failureClassBreakdown including unclassified failures', () => {
     resetSeq();

@@ -16,6 +16,7 @@ import {
 } from '../../config/concurrency.js';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
+import { abortFailureClass } from '../abort-reason.js';
 import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
 import type { HookRegistry, PreToolUseContext, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
@@ -909,7 +910,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
-      return { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
+      return { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
     }
 
     const gateResult = await this.runPreDispatchGates(call);
@@ -951,7 +952,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       const call = calls[i]!;
 
       if (call.signal.aborted) {
-        results[i] = { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
+        results[i] = { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
         blocked.add(i);
         continue;
       }
@@ -1030,7 +1031,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
                   result: {
                     content: 'Tool call aborted',
                     isError: true,
-                    failureClass: 'abort',
+                    failureClass: abortFailureClass(call.signal),
                   } as ToolResult,
                   originalIndex,
                 };
@@ -1068,7 +1069,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         for (const batchIdx of batch.indices) {
           const { call, originalIndex } = executableCalls[batchIdx]!;
           if (call.signal.aborted) {
-            results[originalIndex] = { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
+            results[originalIndex] = { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
             continue;
           }
           const refusal = this.checkRepeatFailureGuard(call);
