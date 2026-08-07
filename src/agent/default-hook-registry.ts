@@ -326,5 +326,6 @@ export function createDefaultHookRegistry(
 function mapSurface(surface: string | undefined): PathApprovalSurface {
   if (surface === 'telegram') return 'telegram';
   if (surface === 'cli' || surface === 'repl') return 'repl';
+  if (surface === 'web') return 'web';
   return 'unknown';
 }

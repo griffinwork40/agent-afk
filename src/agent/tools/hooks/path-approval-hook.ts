@@ -77,7 +77,7 @@ const TYPED_FILE_TOOLS = new Set([
 const WRITE_TOOLS = new Set(['write_file', 'edit_file']);
 
 /** Surface label threaded into the persisted grant for audit. */
-export type PathApprovalSurface = 'repl' | 'telegram' | 'unknown';
+export type PathApprovalSurface = 'repl' | 'telegram' | 'web' | 'unknown';
 
 export interface PathApprovalHookOptions {
   /**
