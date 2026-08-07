@@ -31,6 +31,7 @@
  */
 
 import { palette } from '../palette.js';
+import { boundLineToTerminal } from '../render/bounded-line.js';
 import type { Writer } from './types.js';
 
 /**
@@ -54,9 +55,17 @@ export function createConsoleWriter(sink?: WriterSink): Writer {
   // `sink.fn` fresh so REPL hot-swaps (between console.log and
   // compositor.commitAbove) take effect immediately, even on writers
   // that outlive a single turn (cf. bootstrap.ts's long-lived slashCtx.out).
+  // Invariant: the sinkless path is a RAW write to the terminal, so it is
+  // bounded here — slash tables are composed with fixed column widths
+  // (`/worktree list` alone is ~100 columns) and would otherwise auto-wrap to
+  // column 0 on a narrower terminal, detaching every continuation row from
+  // its table. The sink path is deliberately NOT bounded: its owner
+  // (`CompletionWriter` / `compositor.commitAbove`) already wraps at the live
+  // width and re-wraps the retained band on resize, and pre-wrapping here
+  // would freeze rows at today's width so a later widen could not rejoin them.
   const writeLine = sink !== undefined
     ? (text: string) => { sink.fn(text); }
-    : (text: string) => { console.log(text); };
+    : (text: string) => { console.log(boundLineToTerminal(text)); };
   const writeRaw = (sink !== undefined && sink.rawFn !== undefined)
     ? (text: string) => { sink.rawFn!(text); }
     : (text: string) => { process.stdout.write(text); };

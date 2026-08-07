@@ -25,6 +25,7 @@
 import { palette } from '../../palette.js';
 import { formatDuration } from '../../format-utils.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { truncateDisplayWidth } from '../../display.js';
 import type { SlashCommand } from '../types.js';
 import type { BackgroundAgentRegistry, BackgroundJob } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
@@ -93,7 +94,9 @@ function formatJobLine(job: BackgroundJob): string {
   const elapsed = job.endedAt !== undefined
     ? formatDuration(job.endedAt - job.startedAt)
     : formatDuration(Date.now() - job.startedAt);
-  const label = job.label.length > 60 ? `${job.label.slice(0, 60)}…` : job.label;
+  // Display-width truncation, not code-unit: `slice(0, 60) + '…'` measured 61
+  // cells (and mis-measured every wide/emoji/combining grapheme it cut).
+  const label = truncateDisplayWidth(job.label, 60);
   const mainLine = `  ${glyph} ${palette.bold(job.jobId)}  ${label}  ${palette.dim(`(${job.status} · ${elapsed} · ${job.model})`)}`;
 
   if (!summarizerRef || job.status !== 'running') return mainLine;
