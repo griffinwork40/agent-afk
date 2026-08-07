@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.3] - 2026-08-07
+
+### Fixed
+- hold composed tool-lane rows to the shared reading measure (#923) (e922483)
+
 ## [5.97.2] - 2026-08-07
 
 ### Fixed
