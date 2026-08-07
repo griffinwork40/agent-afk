@@ -143,6 +143,37 @@ describe('classifyIgnoredEntry — leaf-matching does not over-reach', () => {
     });
   }
 
+  // `logs/` is rebuildable-listed but is RUNTIME output, not compiler output:
+  // nothing regenerates it, so a file a human kept there survives builds and
+  // must survive the sweep. Suppressing name hints inside it traded a permanent
+  // false positive for a permanent data-loss risk.
+  const runtimeOutput = ['logs/credentials.js', 'logs/secret-audit.html', 'logs/secret.map'];
+  for (const entry of runtimeOutput) {
+    it(`protects ${entry} — logs/ is runtime output, not a generated mirror`, () => {
+      expect(classifyIgnoredEntry(entry)).toBe('protected');
+    });
+  }
+
+  // Invariant: the accepted blast radius of the name-hint suppression, pinned
+  // so it can never widen silently. Each of these was `protected` before the
+  // suppression existed and is reapable now. They are compiler output — the
+  // next build deletes them regardless, so the sweep is not what destroys
+  // them — but the set is asserted rather than incidental, and a credential in
+  // a DATA format stays protected everywhere (see dataUnderBuildOutput above).
+  const acceptedReapable = [
+    'dist/secret-notes.js',
+    'out/client_secret.js',
+    'dist/.secrets.js',
+    'coverage/credentials.css',
+    'dist/my-secret.ts',
+    'dist/secret.env.html',
+  ];
+  for (const entry of acceptedReapable) {
+    it(`accepts ${entry} as reapable compiler output (pinned blast radius)`, () => {
+      expect(classifyIgnoredEntry(entry)).not.toBe('protected');
+    });
+  }
+
   // Outside generated output the name hints are untouched — that is where a
   // credential-shaped name is actually evidence of one.
   const authoredHints = ['credentials.json', 'src/secrets.txt', 'credentials.html', '.secrets'];

@@ -207,14 +207,37 @@ export function leafOf(normalizedPath: string): string {
 }
 
 /**
- * True when the entry is a compiled or rendered artifact sitting inside build
- * output — the one place a credential-shaped NAME carries no information,
- * because the name was inherited from the source module it was generated from.
- * Both directory tables count: `dist/` (inspectable) and `node_modules/`
- * (opaque) are equally generated, differing only in expansion cost.
+ * Rebuildable directories holding RUNTIME output rather than COMPILER output.
+ *
+ * Invariant: name-hint suppression must never reach inside these. The seam is
+ * survivability of a hand-placed file: everything in `dist/`, `out/`,
+ * `coverage/` and friends is regenerated wholesale by the next build, so a file
+ * a human dropped there is already doomed independently of the sweep — reaping
+ * the checkout destroys nothing the toolchain was not about to destroy anyway.
+ * `logs/` is the one member of {@link INSPECTABLE_REBUILDABLE_DIRS} where that
+ * is false: nothing regenerates it, and the table's own docblock admits it
+ * plausibly holds "a captured transcript" a human kept. Suppressing there
+ * traded a permanent false positive for a permanent data-loss risk.
+ */
+const RUNTIME_OUTPUT_DIRS: readonly RegExp[] = [/(?:^|\/)logs\//];
+
+/**
+ * True when the entry is a compiled or rendered artifact sitting inside
+ * COMPILER output — the one place a credential-shaped NAME carries no
+ * information, because the name was inherited from the source module it was
+ * generated from. Both rebuildable tables count (`dist/` inspectable,
+ * `node_modules/` opaque — they differ only in expansion cost), minus the
+ * runtime-output exclusion above.
+ *
+ * Residual accepted risk, stated because it is real: a hand-placed
+ * `dist/secret-notes.js` or `out/client_secret.js` is reapable under this rule.
+ * Such a file does not survive the next `pnpm build` either, so the sweep is
+ * not what destroys it — but a credential in a DATA format (`.json`, `.yaml`,
+ * `.txt`) stays protected everywhere, which is the #759 guarantee.
  */
 function isGeneratedArtifact(normalizedPath: string, leaf: string): boolean {
   if (!GENERATED_ARTIFACT_EXTENSIONS.test(leaf)) return false;
+  if (RUNTIME_OUTPUT_DIRS.some((re) => re.test(normalizedPath))) return false;
   return (
     OPAQUE_REBUILDABLE_DIRS.some((re) => re.test(normalizedPath)) ||
     INSPECTABLE_REBUILDABLE_DIRS.some((re) => re.test(normalizedPath))
