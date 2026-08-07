@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.5] - 2026-08-07
+
+### Fixed
+- tell research-agent about its registry grants, not just grant them (#928) (5e8da4f)
+- preserve abort origins across provider teardown (#929) (69d0d57)
+
 ## [5.97.4] - 2026-08-07
 
 ### Changed
