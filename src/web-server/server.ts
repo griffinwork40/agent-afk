@@ -22,8 +22,11 @@ import {
   tokensMatch,
 } from './auth.js';
 import { WebElicitationBridge } from './elicitation-web.js';
+import type { CreateSessionRequest, SessionOwner } from './session-owner.js';
 import {
   handleApprove,
+  handleCreateSession,
+  handleInterrupt,
   handleListSessions,
   handlePrompt,
   handleStream,
@@ -46,6 +49,16 @@ export interface WebServerOptions {
   /** Session ids this process owns. Shared by reference with the caller. */
   owned?: Set<string>;
   submitPrompt?: (sessionId: string, text: string) => Promise<void>;
+  /**
+   * Supplies the drivable-session capability. When present it provides `owned`,
+   * `submitPrompt`, session creation, and interrupt in one object.
+   *
+   * Contract: the explicit `owned`/`submitPrompt` options still win when both
+   * are given, so tests can inject fakes without constructing a real owner.
+   * When NO owner is supplied the surface is attach-only — every session is
+   * read-only and `POST /api/sessions` reports 501 rather than pretending.
+   */
+  owner?: SessionOwner;
 }
 
 export interface WebServerHandle {
@@ -64,7 +77,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   if (!bind.ok) throw new Error(bind.reason ?? 'refusing to bind');
 
   const token = tokenExplicit ? (options.token as string) : mintToken();
-  const owned = options.owned ?? new Set<string>();
+  const owned = options.owned ?? options.owner?.owned ?? new Set<string>();
   const bridge = new WebElicitationBridge();
   bridge.install();
 
@@ -73,9 +86,17 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     bridge,
     submitPrompt:
       options.submitPrompt ??
-      (async () => {
-        throw new Error('no prompt handler wired');
-      }),
+      (options.owner
+        ? (id, text) => options.owner!.submitPrompt(id, text)
+        : async () => {
+            throw new Error('no prompt handler wired');
+          }),
+    ...(options.owner
+      ? {
+          createSession: (req: CreateSessionRequest) => options.owner!.create(req),
+          interrupt: (id: string) => options.owner!.interrupt(id),
+        }
+      : {}),
   };
 
   const server = createServer((req, res) => {
@@ -180,6 +201,17 @@ async function dispatch(
   const promptMatch = /^\/api\/sessions\/([^/]+)\/prompt$/.exec(path);
   if (promptMatch?.[1] && method === 'POST') {
     await handlePrompt(ctx, res, decodeURIComponent(promptMatch[1]), await readBody(req));
+    return;
+  }
+
+  if (path === '/api/sessions' && method === 'POST') {
+    await handleCreateSession(ctx, res, await readBody(req));
+    return;
+  }
+
+  const interruptMatch = /^\/api\/sessions\/([^/]+)\/interrupt$/.exec(path);
+  if (interruptMatch?.[1] && method === 'POST') {
+    await handleInterrupt(ctx, res, decodeURIComponent(interruptMatch[1]));
     return;
   }
 

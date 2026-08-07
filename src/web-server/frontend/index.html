@@ -29,16 +29,21 @@
 
     <main class="layout">
       <aside id="sidebar" class="sidebar">
-        <div class="sidebar-head">Sessions</div>
+        <div class="sidebar-head">
+          <span>Sessions</span>
+          <button id="new-session" class="new-session" title="Start a new session">+ New</button>
+        </div>
         <div id="sessions" class="sessions"></div>
       </aside>
 
       <section class="main">
         <div id="transcript" class="transcript"></div>
+        <div id="approvals" class="approvals"></div>
         <div id="composer" class="composer">
           <div id="queue" class="queue"></div>
           <div class="composer-row">
             <textarea id="prompt" rows="2" placeholder="Message the agent…"></textarea>
+            <button id="stop" class="stop" hidden>Stop</button>
             <button id="send" class="send">Send</button>
           </div>
         </div>

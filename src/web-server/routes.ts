@@ -13,6 +13,7 @@ import { jsonDateReplacer } from '../cli/json-date-replacer.js';
 import { listWebSessions } from './session-source.js';
 import { formatSseFrame } from './sse-protocol.js';
 import type { WebElicitationBridge } from './elicitation-web.js';
+import type { CreateSessionRequest, OwnedSessionInfo } from './session-owner.js';
 
 /** Heartbeat cadence; keeps intermediaries from idling out a quiet stream. */
 const HEARTBEAT_MS = 15_000;
@@ -23,6 +24,13 @@ export interface RouteContext {
   bridge: WebElicitationBridge;
   /** Submit a prompt to an owned session. */
   submitPrompt: (sessionId: string, text: string) => Promise<void>;
+  /**
+   * Start a new session in this process. Absent when the server was started
+   * without an owner, in which case the surface is attach-only.
+   */
+  createSession?: (request: CreateSessionRequest) => Promise<OwnedSessionInfo>;
+  /** Soft-interrupt an in-flight turn on an owned session. */
+  interrupt?: (sessionId: string) => Promise<void>;
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -182,4 +190,72 @@ function readStringField(body: unknown, field: string): string | undefined {
   if (!isRecord(body)) return undefined;
   const value = body[field];
   return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * `POST /api/sessions` — start a session this process can drive.
+ *
+ * Contract: 501 when the server was started without an owner. That is the
+ * attach-only configuration, and it is a capability gap rather than a client
+ * error — reporting 400 or 404 would suggest the request was malformed.
+ */
+export async function handleCreateSession(
+  ctx: RouteContext,
+  res: ServerResponse,
+  body: unknown,
+): Promise<void> {
+  if (!ctx.createSession) {
+    sendJson(res, 501, {
+      error: 'sessions_not_supported',
+      message:
+        'this server is attach-only and cannot start sessions. ' +
+        'Run `afk web` (which wires a session owner) rather than embedding startWebServer without one.',
+    });
+    return;
+  }
+
+  const request: CreateSessionRequest = {};
+  const cwd = readStringField(body, 'cwd');
+  const model = readStringField(body, 'model');
+  if (cwd !== undefined) request.cwd = cwd;
+  if (model !== undefined) request.model = model;
+
+  try {
+    const info = await ctx.createSession(request);
+    sendJson(res, 201, { session: info });
+  } catch (error) {
+    sendJson(res, 500, {
+      error: 'session_start_failed',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * `POST /api/sessions/:id/interrupt` — soft-stop an in-flight turn.
+ *
+ * Contract: interrupt is idempotent from the browser's point of view. Stopping
+ * an idle session is a no-op that still reports 200, because the alternative is
+ * a race — a turn can finish between the browser rendering Stop and the click
+ * arriving, and surfacing that as an error would be noise, not information.
+ */
+export async function handleInterrupt(
+  ctx: RouteContext,
+  res: ServerResponse,
+  sessionId: string,
+): Promise<void> {
+  if (!requireOwned(ctx, res, sessionId)) return;
+  if (!ctx.interrupt) {
+    sendJson(res, 501, { error: 'interrupt_not_supported', message: 'no interrupt handler wired' });
+    return;
+  }
+  try {
+    await ctx.interrupt(sessionId);
+    sendJson(res, 200, { ok: true });
+  } catch (error) {
+    sendJson(res, 500, {
+      error: 'interrupt_failed',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

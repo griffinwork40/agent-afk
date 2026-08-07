@@ -75,7 +75,16 @@ html, body {
 .sidebar-head {
   padding: 12px 16px 8px; font-size: 11px; text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--text-faint);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+.new-session {
+  font: inherit; letter-spacing: inherit; text-transform: inherit;
+  color: var(--accent); background: transparent;
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 9px; cursor: pointer; white-space: nowrap;
+}
+.new-session:hover:not(:disabled) { border-color: var(--accent); background: var(--bg-raised); }
+.new-session:disabled { opacity: 0.5; cursor: default; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
 /* ── sessions ────────────────────────────────────────────────────────────── */
@@ -270,3 +279,55 @@ html, body {
   .transcript { padding: 14px; }
   .composer { padding: 10px 14px; }
 }
+
+/*
+ * Approvals.
+ *
+ * Invariant: a pending approval BLOCKS the agent's turn, so these cards must be
+ * impossible to miss — they sit directly above the composer (the region the
+ * operator is already looking at) rather than in the transcript, where new
+ * output would scroll them out of view while the turn stays stuck.
+ */
+.approvals:empty { display: none; }
+.approvals {
+  border-top: 1px solid var(--border); background: var(--bg-sunken);
+  padding: 10px 16px; display: flex; flex-direction: column; gap: 8px;
+  max-height: 42vh; overflow-y: auto;
+}
+.approval-card {
+  border: 1px solid var(--warning); border-radius: var(--radius);
+  background: var(--bg-raised); padding: 11px 13px;
+}
+.approval-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.approval-badge {
+  font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--warning);
+  border: 1px solid var(--warning); border-radius: 4px; padding: 1px 6px;
+}
+.approval-source { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.approval-title { font-size: 13px; line-height: 1.5; color: var(--text); }
+.approval-desc { font-size: 12px; line-height: 1.5; color: var(--text-dim); margin-top: 4px; }
+.approval-input {
+  width: 100%; margin-top: 8px; padding: 7px 9px;
+  font-family: var(--mono); font-size: 12px;
+  color: var(--text); background: var(--bg-sunken);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.approval-input:focus { outline: none; border-color: var(--accent); }
+.approval-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.approval-btn {
+  font: inherit; font-size: 12px; cursor: pointer;
+  color: var(--text); background: var(--bg-sunken);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px;
+}
+.approval-btn:hover { border-color: var(--text-dim); }
+.approval-primary { color: var(--bg); background: var(--success); border-color: var(--success); }
+.approval-primary:hover { filter: brightness(1.08); }
+.approval-danger { color: var(--error); border-color: var(--error); background: transparent; }
+.approval-danger:hover { background: rgba(248, 113, 113, 0.12); }
+.stop {
+  font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+  color: var(--error); background: transparent;
+  border: 1px solid var(--error); border-radius: 6px; padding: 0 14px;
+}
+.stop:hover { background: rgba(248, 113, 113, 0.12); }

@@ -8,7 +8,14 @@
  */
 
 import { SessionStream } from './sse-client.js';
-import { renderSidebar, renderTranscript, type SessionSummary } from './render.js';
+import {
+  renderApprovals,
+  renderSidebar,
+  renderTranscript,
+  type ApprovalAnswer,
+  type PendingApproval,
+  type SessionSummary,
+} from './render.js';
 import {
   accumulateTotals,
   ledgerRecordToItem,
@@ -27,6 +34,17 @@ let items: TranscriptItem[] = [];
 let queue: string[] = [];
 let totals: SessionTotals = { costUsd: 0, durationMs: 0, turns: 0 };
 let stream: SessionStream | undefined;
+let pending: PendingApproval[] = [];
+let pendingTimer: ReturnType<typeof setInterval> | undefined;
+/**
+ * Whether a turn is in flight on the active session.
+ *
+ * Contract: this is tracked from TURN boundaries (a prompt accepted, then a
+ * terminal `done`/`error` ledger record), NOT from the SSE connection status —
+ * that reports transport state ('open', 'reconnecting'), which stays 'open'
+ * across an entire idle session and would leave Stop showing forever.
+ */
+let turnActive = false;
 
 function readAndScrubToken(): string {
   const params = new URLSearchParams(location.search);
@@ -79,18 +97,26 @@ async function loadSessions(): Promise<void> {
 function selectSession(id: string): void {
   activeId = id;
   items = [];
+  queue = [];
+  renderQueue();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
   stream?.stop();
 
+  turnActive = false;
   renderSidebar($('sessions'), sessions, activeId, selectSession);
   renderTranscript($('transcript'), items);
   syncComposer();
+  syncStop();
 
   stream = new SessionStream(id, token, {
     onEvent: (data) => {
       const frame = data as { record?: LedgerRecordLike };
       const record = frame.record;
       if (!record) return;
+      if (record.kind === 'done' || record.kind === 'error') {
+        turnActive = false;
+        syncStop();
+      }
       const item = ledgerRecordToItem(record);
       totals = accumulateTotals(totals, record);
       if (item) {
@@ -111,6 +137,7 @@ function selectSession(id: string): void {
       const node = $('status');
       node.textContent = status;
       node.className = `status status-${status}`;
+      syncStop();
     },
   });
   stream.start();
@@ -139,6 +166,16 @@ function syncComposer(): void {
     ? 'Message the agent…  (queues while it works)'
     : 'Read-only — this session runs in another process';
   $('composer').classList.toggle('is-readonly', !live);
+}
+
+/**
+ * Show Stop only when it would do something: a turn running on a session this
+ * process owns. A readonly session's turn lives in another process and cannot
+ * be interrupted from here (the same 409 boundary the composer respects), so
+ * offering the control would promise an action that always fails.
+ */
+function syncStop(): void {
+  ($('stop') as HTMLButtonElement).hidden = !(turnActive && isLive());
 }
 
 function renderQueue(): void {
@@ -180,6 +217,8 @@ async function flushQueue(): Promise<void> {
       method: 'POST',
       body: JSON.stringify({ text: next }),
     });
+    turnActive = true;
+    syncStop();
   }
 }
 
@@ -201,11 +240,89 @@ function wireComposer(): void {
   });
 }
 
+/**
+ * Start a session this process owns, then select it.
+ *
+ * Contract: the sidebar is refreshed BEFORE selecting, because `selectSession`
+ * reads mode/cwd out of the cached `sessions` array to decide whether the
+ * composer is live. Selecting an id the cache has never seen would render the
+ * new session as read-only until the next 10s poll happened to correct it.
+ */
+async function createSession(): Promise<void> {
+  const button = $('new-session') as HTMLButtonElement;
+  button.disabled = true;
+  button.textContent = 'starting…';
+  try {
+    const { session } = await api<{ session: { id: string } }>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    await loadSessions();
+    selectSession(session.id);
+  } catch (err: unknown) {
+    $('status').textContent = err instanceof Error ? err.message : 'could not start session';
+  } finally {
+    button.disabled = false;
+    button.textContent = '+ New';
+  }
+}
+
+/**
+ * Poll for elicitations awaiting an answer.
+ *
+ * Invariant: polling runs process-wide rather than per-session, because a
+ * blocked turn is blocked whichever session the operator happens to be looking
+ * at. Scoping this to the active session would let a background session hang
+ * silently on an approval nobody was shown.
+ */
+async function pollPending(): Promise<void> {
+  const next = await api<{ pending: PendingApproval[] }>('/api/pending');
+  const changed =
+    next.pending.length !== pending.length ||
+    next.pending.some((p, i) => p.id !== pending[i]?.id);
+  pending = next.pending;
+  if (changed) renderApprovals($('approvals'), pending, answerApproval);
+}
+
+function answerApproval(id: string, answer: ApprovalAnswer): void {
+  const sessionId = pending.find((p) => p.id === id)?.sessionId ?? activeId;
+  if (sessionId === undefined) return;
+  // Optimistic removal is deliberate: the card's only job is to unblock the
+  // turn, and the poll re-adds it within a second if the POST failed.
+  pending = pending.filter((p) => p.id !== id);
+  renderApprovals($('approvals'), pending, answerApproval);
+  void api(`/api/sessions/${encodeURIComponent(sessionId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ requestId: id, response: answer }),
+  }).catch((err: unknown) => {
+    $('status').textContent = err instanceof Error ? err.message : 'approval failed';
+  });
+}
+
+async function stopTurn(): Promise<void> {
+  if (activeId === undefined) return;
+  await api(`/api/sessions/${encodeURIComponent(activeId)}/interrupt`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 async function main(): Promise<void> {
   wireComposer();
+  $('new-session').addEventListener('click', () => void createSession());
+  $('stop').addEventListener('click', () => {
+    void stopTurn().catch((err: unknown) => {
+      $('status').textContent = err instanceof Error ? err.message : 'stop failed';
+    });
+  });
   renderMeter();
   await loadSessions();
   setInterval(() => void loadSessions().catch(() => {}), 10_000);
+  pendingTimer = setInterval(() => void pollPending().catch(() => {}), 1_000);
+  void pollPending().catch(() => {});
+  window.addEventListener('beforeunload', () => {
+    if (pendingTimer) clearInterval(pendingTimer);
+  });
 }
 
 void main().catch((err: unknown) => {

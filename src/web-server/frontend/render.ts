@@ -212,3 +212,102 @@ export function relativeTime(iso: string): string {
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
   return `${Math.floor(secs / 86400)}d ago`;
 }
+
+/** One request from the agent awaiting a human answer. */
+export interface PendingApproval {
+  id: string;
+  sessionId?: string;
+  createdAt?: string;
+  request: {
+    message?: string;
+    title?: string;
+    description?: string;
+    serverName?: string;
+    origin?: string;
+    type?: 'text' | 'confirm' | 'choice' | 'multi_choice' | 'number';
+    choices?: string[];
+    questionDefault?: string | boolean | number;
+  };
+}
+
+/** How the browser answered — mirrors ElicitationResult's action union. */
+export type ApprovalAnswer =
+  | { action: 'accept'; content?: Record<string, unknown> }
+  | { action: 'decline' };
+
+/**
+ * Render pending approvals as actionable cards.
+ *
+ * Invariant: a turn BLOCKS on these. The agent is suspended inside a tool call
+ * until the bridge resolves, so an approval that renders but cannot be answered
+ * hangs the session with no visible cause. Every card therefore always offers a
+ * terminal action — the typed inputs are conveniences layered on top of an
+ * Approve/Deny pair that is present regardless of request shape.
+ */
+export function renderApprovals(
+  container: HTMLElement,
+  pending: PendingApproval[],
+  onAnswer: (id: string, answer: ApprovalAnswer) => void,
+): void {
+  container.textContent = '';
+  container.classList.toggle('has-pending', pending.length > 0);
+
+  for (const item of pending) {
+    const req = item.request ?? {};
+    const card = el('div', 'approval-card');
+
+    const head = el('div', 'approval-head');
+    head.appendChild(el('span', 'approval-badge', req.origin === 'agent' ? 'question' : 'approval'));
+    if (req.serverName) head.appendChild(el('span', 'approval-source', req.serverName));
+    card.appendChild(head);
+
+    const title = req.title ?? req.message ?? 'The agent is waiting for a response.';
+    card.appendChild(el('div', 'approval-title', title));
+    if (req.description && req.description !== title) {
+      card.appendChild(el('div', 'approval-desc', req.description));
+    }
+
+    const actions = el('div', 'approval-actions');
+
+    if (req.type === 'choice' && Array.isArray(req.choices) && req.choices.length > 0) {
+      for (const choice of req.choices) {
+        const btn = el('button', 'approval-btn', choice);
+        btn.addEventListener('click', () =>
+          onAnswer(item.id, { action: 'accept', content: { value: choice } }),
+        );
+        actions.appendChild(btn);
+      }
+    } else if (req.type === 'text' || req.type === 'number') {
+      const input = document.createElement('input');
+      input.className = 'approval-input';
+      input.type = req.type === 'number' ? 'number' : 'text';
+      if (req.questionDefault !== undefined) input.value = String(req.questionDefault);
+      const submit = (): void =>
+        onAnswer(item.id, {
+          action: 'accept',
+          content: { value: req.type === 'number' ? Number(input.value) : input.value },
+        });
+      input.addEventListener('keydown', (e) => {
+        if ((e as KeyboardEvent).key === 'Enter') submit();
+      });
+      card.appendChild(input);
+      const send = el('button', 'approval-btn approval-primary', 'Submit');
+      send.addEventListener('click', submit);
+      actions.appendChild(send);
+    } else {
+      const yes = el('button', 'approval-btn approval-primary', 'Approve');
+      yes.addEventListener('click', () =>
+        onAnswer(item.id, { action: 'accept', content: { value: true } }),
+      );
+      actions.appendChild(yes);
+    }
+
+    // Always present, whatever the request shape — see the invariant above.
+    const no = el('button', 'approval-btn approval-danger', 'Deny');
+    no.addEventListener('click', () => onAnswer(item.id, { action: 'decline' }));
+    actions.appendChild(no);
+
+    card.appendChild(actions);
+    container.appendChild(card);
+  }
+}

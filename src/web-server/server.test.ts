@@ -210,3 +210,106 @@ describe('routing', () => {
     expect((await res.json()).pending).toEqual([]);
   });
 });
+
+/**
+ * Invariant: these cover the boundary that makes the surface safe to expose —
+ * a session this process did NOT create can never be driven from a browser,
+ * because its elicitation handler lives in another process's memory and any
+ * prompt sent to it would block forever with no way to answer.
+ */
+describe('startWebServer — owned sessions', () => {
+  const post = async (h: WebServerHandle, path: string, body: unknown) =>
+    fetch(api(h, path), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${h.token}`,
+        'content-type': 'application/json',
+        origin: `http://127.0.0.1:${h.port}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+  it('reports 501 for session creation when attach-only (no owner wired)', async () => {
+    const h = await start();
+    const res = await post(h, '/api/sessions', {});
+    expect(res.status).toBe(501);
+    expect((await res.json()).error).toBe('sessions_not_supported');
+  });
+
+  it('creates a session through an injected owner and marks it owned', async () => {
+    const owned = new Set<string>();
+    const fake = {
+      owned,
+      create: async () => {
+        owned.add('sess-1');
+        return { id: 'sess-1', cwd: '/tmp', model: 'm', createdAt: 'now' };
+      },
+      submitPrompt: async () => {},
+      interrupt: async () => {},
+    };
+    const h = await start({ owner: fake as never });
+
+    const res = await post(h, '/api/sessions', {});
+    expect(res.status).toBe(201);
+    expect((await res.json()).session.id).toBe('sess-1');
+
+    // Now owned, so a prompt is accepted rather than 409'd. 202, not 200: the
+    // turn runs asynchronously and streams over SSE, so the POST acknowledges
+    // acceptance rather than completion.
+    const prompt = await post(h, '/api/sessions/sess-1/prompt', { text: 'hi' });
+    expect(prompt.status).toBe(202);
+  });
+
+  it('409s a prompt to a session this process does not own', async () => {
+    const h = await start({ owner: { owned: new Set<string>() } as never });
+    const res = await post(h, '/api/sessions/foreign-id/prompt', { text: 'hi' });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('session_not_owned');
+  });
+
+  it('409s an interrupt to a foreign session, and 200s an owned one', async () => {
+    let interrupted: string | undefined;
+    const owned = new Set<string>(['mine']);
+    const h = await start({
+      owner: {
+        owned,
+        create: async () => ({ id: 'mine', cwd: '/tmp', model: 'm', createdAt: 'now' }),
+        submitPrompt: async () => {},
+        interrupt: async (id: string) => {
+          interrupted = id;
+        },
+      } as never,
+    });
+
+    expect((await post(h, '/api/sessions/theirs/interrupt', {})).status).toBe(409);
+    expect(interrupted).toBeUndefined();
+
+    expect((await post(h, '/api/sessions/mine/interrupt', {})).status).toBe(200);
+    expect(interrupted).toBe('mine');
+  });
+
+  it('surfaces a session-start failure as 500 rather than a silent hang', async () => {
+    const h = await start({
+      owner: {
+        owned: new Set<string>(),
+        create: async () => {
+          throw new Error('no api key');
+        },
+        submitPrompt: async () => {},
+        interrupt: async () => {},
+      } as never,
+    });
+    const res = await post(h, '/api/sessions', {});
+    expect(res.status).toBe(500);
+    expect((await res.json()).message).toContain('no api key');
+  });
+
+  it('exposes pending elicitations so a blocked turn is visible to the browser', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/pending'), {
+      headers: { authorization: `Bearer ${h.token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ pending: [] });
+  });
+});
