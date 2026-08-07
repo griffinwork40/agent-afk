@@ -1,6 +1,5 @@
 import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
-import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
 import {
   batchBadge,
@@ -12,7 +11,7 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry } from './tool-lane-render.js';
-import { clampLineToTerminal } from './tool-lane-render.js';
+import { clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
 
 function groupedResultSuffix(
   entries: ToolEntry[],
@@ -115,7 +114,7 @@ export function renderGroupedRootTools(
   // clamp here is the only thing standing between a 350-column bash command
   // and a wrapped scrollback row. The live overlay already clamps its
   // equivalents (tool-lane.ts); flush must not be the lone exception.
-  const cols = getTerminalWidth();
+  const cols = toolLaneWidth();
   for (const toolName of groupOrder) {
     const entries = groups.get(toolName)!;
     if (entries.length === 1) {

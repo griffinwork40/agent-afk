@@ -1,9 +1,8 @@
 import { palette } from '../../palette.js';
-import { getTerminalWidth } from '../../terminal-size.js';
 import { formatToolCallStat } from '../../format-utils.js';
 import { MAX_VISIBLE_CHILDREN, batchBadge } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
-import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
+import { getGlyphs, clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
 
 /**
@@ -126,7 +125,7 @@ function formatAgentSummary(
   // Invariant: ONE width read per render frame, shared by the head row below
   // and the recursive child frame. Two reads could straddle a resize and emit
   // a head row clamped to the old width above children clamped to the new one.
-  const cols = getTerminalWidth();
+  const cols = toolLaneWidth();
   // Clamped for the same reason every child row is: a root nesting entry
   // arrives with an unbounded prefix (the root dispatch path passes no
   // maxWidth), and the stats tail adds ~28 columns on top — a depth-0 `agent`
@@ -209,7 +208,7 @@ function formatAgentHeader(agent: ToolEntry, ancestorIsLast: readonly boolean[] 
   // encoding constraint above. formatAgentSummary clamps its head row, so this
   // one must too, or the same entry committed through the two paths would
   // differ whenever the row exceeds the terminal width.
-  return clampLineToTerminal(ancestorPrefix + head + agent.prefix, getTerminalWidth());
+  return clampLineToTerminal(ancestorPrefix + head + agent.prefix, toolLaneWidth());
 }
 
 /**
@@ -254,7 +253,7 @@ function formatAgentChildren(
     // committed eagerly by formatAgentHeader without the badge (batchSize was
     // unknown then), so the closer is the only completion-time anchor.
     summaryWithBatchBadge(agent),
-    getTerminalWidth(),
+    toolLaneWidth(),
     externalAncestors,
     g,
   );
