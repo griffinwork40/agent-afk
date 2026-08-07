@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.6] - 2026-08-07
+
+### Fixed
+- stop generated build artifacts and symlinked dep trees from making worktrees immortal (#927) (8d9b6a0)
+
 ## [5.97.5] - 2026-08-07
 
 ### Fixed
