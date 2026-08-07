@@ -233,9 +233,13 @@ describe('hasNonRebuildableIgnoredFiles — collapsed-directory expansion', () =
 describe('probeNonRebuildableIgnoredFiles — verdict provenance', () => {
   it('reports a real find as non-rebuildable-entry', async () => {
     const exec = mockExec('!! local-notes.md\n');
+    // `detail` names the offending entry: without it the caller can only say
+    // "non-rebuildable ignored files (e.g. .env)", which reads as a finding
+    // and sends the user hunting for a file that is not there.
     expect(await probeNonRebuildableIgnoredFiles(exec, '/tmp/wt')).toEqual({
       protect: true,
       because: 'non-rebuildable-entry',
+      detail: 'local-notes.md',
     });
   });
 

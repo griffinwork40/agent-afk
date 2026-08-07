@@ -56,7 +56,11 @@ type DirtyReason =
   | 'clean'
   | 'uncommitted changes'
   | 'git status failed'
-  | 'non-rebuildable ignored files'
+  // Carries the offending path. Naming it is the difference between a warning
+  // the reader can act on and one that sends them hunting for a secret that
+  // is not there: the entry holding a tree is as often leftover test detritus
+  // as it is a real `.env`.
+  | `non-rebuildable ignored files: ${string}`
   | 'ignored-file probe failed';
 
 interface WorktreeMeta {
@@ -720,7 +724,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           dirtyReason =
             probe.because === 'git-failed'
               ? 'ignored-file probe failed'
-              : 'non-rebuildable ignored files';
+              : `non-rebuildable ignored files: ${probe.detail}`;
         }
         // A protect-on-failure is indistinguishable from a real find at the
         // verdict level, so surface it: otherwise a worktree that git can no
