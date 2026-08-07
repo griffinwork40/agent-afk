@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyOrphanDir } from './worktree-orphan-guard.js';
@@ -116,5 +116,53 @@ describe('classifyOrphanDir — failure and bounds', () => {
     await writeFile(filePath, 'x');
     const verdict = await classifyOrphanDir(filePath, AGED_MS, HOUR_MS);
     expect(verdict.remove).toBe(false);
+  });
+});
+
+/**
+ * `readdir` does not follow links, so `Dirent.isDirectory()` is false for a
+ * SYMLINKED directory regardless of target. A symlinked `node_modules` — the
+ * standard way a worktree avoids a duplicate install — therefore fell to the
+ * file branch, matched no directory pattern (all require a trailing slash) and
+ * classified `protected`, pinning the orphan on disk forever. The ignored probe
+ * already resolved this via `stat`; these pin that the two production consumers
+ * of the shared policy now agree on the identical on-disk layout.
+ */
+describe('classifyOrphanDir — symlinked directories', () => {
+  it('reclaims an orphan whose node_modules is a symlink to a dependency tree', async () => {
+    const target = await mkdtemp(join(tmpdir(), 'afk-orphan-deps-'));
+    try {
+      // Content behind the link is irrelevant: removing the orphan unlinks the
+      // symlink and never traverses it, so an opaque tree is reapable whatever
+      // it holds. Populated anyway, so a descent would be observable.
+      await writeFile(join(target, 'prod.env'), 'API_TOKEN=live\n');
+      await symlink(target, join(root, 'node_modules'), 'dir');
+      const verdict = await classifyOrphanDir(root, AGED_MS, HOUR_MS);
+      expect(verdict).toEqual({ remove: true });
+    } finally {
+      await rm(target, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves an orphan holding a symlinked directory that is NOT rebuildable', async () => {
+    const target = await mkdtemp(join(tmpdir(), 'afk-orphan-src-'));
+    try {
+      await symlink(target, join(root, 'my-notes'), 'dir');
+      const verdict = await classifyOrphanDir(root, AGED_MS, HOUR_MS);
+      expect(verdict).toEqual({
+        remove: false,
+        because: 'non-rebuildable-content',
+        detail: 'my-notes',
+      });
+    } finally {
+      await rm(target, { recursive: true, force: true });
+    }
+  });
+
+  it('fails SAFE on a broken symlink — unresolvable means protected', async () => {
+    await symlink(join(root, 'nowhere'), join(root, 'node_modules'), 'dir');
+    const verdict = await classifyOrphanDir(root, AGED_MS, HOUR_MS);
+    expect(verdict.remove).toBe(false);
+    if (!verdict.remove) expect(verdict.because).toBe('non-rebuildable-content');
   });
 });

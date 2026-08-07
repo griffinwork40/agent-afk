@@ -24,7 +24,8 @@
  * @module agent/worktree-orphan-guard
  */
 
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { classifyIgnoredEntry } from './worktree-ignored-patterns.js';
 
@@ -38,6 +39,33 @@ import { classifyIgnoredEntry } from './worktree-ignored-patterns.js';
  */
 function isRebuildable(relPath: string): boolean {
   return classifyIgnoredEntry(relPath) !== 'protected';
+}
+
+/**
+ * True when `entry` names a directory, resolving symlinks the way the ignored
+ * probe does.
+ *
+ * Invariant: `Dirent.isDirectory()` is false for a SYMLINK regardless of its
+ * target, because `readdir` does not follow links. A symlinked `node_modules`
+ * — the standard way a worktree avoids a duplicate install — therefore fell to
+ * the file branch, matched no directory pattern (all of which require a
+ * trailing slash), and classified `protected`, pinning the orphan on disk
+ * forever. The probe already resolves this case via `stat`; mirroring it here
+ * keeps the two production consumers of the shared policy from disagreeing on
+ * an identical on-disk layout.
+ *
+ * Fail-safe direction is unchanged: a broken link, a race, or a permission
+ * error throws and answers `false`, which routes the entry to the file branch
+ * where an unrecognised name still protects the tree.
+ */
+async function resolvesToDirectory(entry: Dirent, fullPath: string): Promise<boolean> {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await stat(fullPath)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Why an orphaned directory must be left on disk. */
@@ -124,6 +152,20 @@ export async function classifyOrphanDir(
       }
 
       const rel = dir.rel === '' ? entry.name : `${dir.rel}/${entry.name}`;
+      const fullPath = join(dir.abs, entry.name);
+      const isDirLike = await resolvesToDirectory(entry, fullPath);
+
+      // Invariant: a SYMLINKED directory is classified but never descended
+      // into. Removing the orphan unlinks the symlink and never traverses it,
+      // so its target's contents are not at risk and walking them would only
+      // duplicate work already owned by another tree — or cycle, if the link
+      // points at an ancestor. Classifying it is still required: an opaque
+      // symlinked `node_modules` must clear the way for reclamation instead of
+      // falling to the file branch and protecting the orphan forever.
+      if (isDirLike && !entry.isDirectory()) {
+        if (classifyIgnoredEntry(`${rel}/`) === 'opaque') continue;
+        return { remove: false, because: 'non-rebuildable-content', detail: rel };
+      }
 
       if (entry.isDirectory()) {
         // Invariant: only an `opaque` directory may be skipped wholesale. The
@@ -141,7 +183,7 @@ export async function classifyOrphanDir(
         if (dir.depth + 1 > maxDepth) {
           return { remove: false, because: 'scan-failed', detail: `depth limit at ${rel}` };
         }
-        pending.push({ abs: join(dir.abs, entry.name), rel, depth: dir.depth + 1 });
+        pending.push({ abs: fullPath, rel, depth: dir.depth + 1 });
         continue;
       }
 

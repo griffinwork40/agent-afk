@@ -25,8 +25,10 @@
  * @module agent/worktree-ignored-probe
  */
 
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ExecFileFn } from './worktree-sweep.js';
-import { classifyIgnoredEntry } from './worktree-ignored-patterns.js';
+import { classifyIgnoredEntry, type IgnoredEntryClass } from './worktree-ignored-patterns.js';
 
 export {
   classifyIgnoredEntry,
@@ -80,6 +82,54 @@ export function isRebuildableIgnoredEntry(relPath: string): boolean {
 }
 
 /**
+ * Classify one entry, resolving the one ambiguity git leaves in its output.
+ *
+ * Invariant: `git status --ignored` appends a trailing slash only for a real
+ * DIRECTORY. A SYMLINKED one — `node_modules -> ../../node_modules`, the
+ * standard way a worktree avoids a duplicate install — is printed as
+ * `!! node_modules`, matching no directory pattern (all of which require the
+ * slash) and falling through to `protected`. That made the worktree permanently
+ * unreapable over a symlink whose removal loses nothing.
+ *
+ * The patterns module cannot fix this: from the string alone, a symlinked
+ * `dist` and a hand-authored FILE named `dist` are identical, and the latter
+ * must stay protected. Only the filesystem can tell them apart, so the
+ * disambiguation lives here, on the IO side of the split.
+ *
+ * Contract: the `stat` is paid ONLY by an entry that would otherwise be
+ * protected — the rare path — so expanding a populated `dist/` does not become
+ * thousands of syscalls. `stat` follows the link deliberately (a symlink TO a
+ * directory is what we are detecting); a broken link or a vanished entry throws
+ * and keeps the protective verdict, matching the module's fail-safe direction.
+ *
+ * Invariant: `resolvedEntry` is returned ALONGSIDE the verdict, not discarded,
+ * and callers must gate directory-shaped follow-up work on it rather than on
+ * the raw loop variable. The verdict is derived from the slash-appended string
+ * (`dist` -> `dist/`), so re-testing the original bare `entry` for a trailing
+ * slash asks a question the resolution already answered — and always answers
+ * `false` for exactly the symlinked directory this function exists to detect.
+ * That mismatch silently skipped the `inspectable` expansion, returning
+ * "reapable" for a symlinked `dist/` WITHOUT ever looking inside it.
+ */
+async function classifyResolvingSymlinkedDirs(
+  worktreePath: string,
+  entry: string,
+): Promise<{ verdict: IgnoredEntryClass; resolvedEntry: string }> {
+  const verdict = classifyIgnoredEntry(entry);
+  if (verdict !== 'protected' || entry.endsWith('/')) return { verdict, resolvedEntry: entry };
+  try {
+    const stats = await stat(join(worktreePath, entry));
+    if (stats.isDirectory()) {
+      const resolvedEntry = `${entry}/`;
+      return { verdict: classifyIgnoredEntry(resolvedEntry), resolvedEntry };
+    }
+  } catch {
+    /* broken symlink, race, or permission error — keep the protective verdict */
+  }
+  return { verdict, resolvedEntry: entry };
+}
+
+/**
  * Ignored entries git reports for the worktree, or `undefined` when git failed.
  * `scopePath` restricts the walk to one directory and expands it per-file
  * (`--untracked-files=all`) instead of collapsing it to a single line.
@@ -130,7 +180,8 @@ async function inspectableDirHidesLocalState(
   }
   for (const entry of nested.entries) {
     if (entry === dirEntry) continue; // git echoed the directory — no new information
-    if (classifyIgnoredEntry(entry) === 'protected') {
+    const { verdict } = await classifyResolvingSymlinkedDirs(worktreePath, entry);
+    if (verdict === 'protected') {
       return { protect: true, because: 'non-rebuildable-entry', detail: entry };
     }
   }
@@ -156,12 +207,16 @@ export async function probeNonRebuildableIgnoredFiles(
   // Unreadable → never force-remove on a guess.
   if ('failure' in top) return { protect: true, because: 'git-failed', detail: top.failure };
   for (const entry of top.entries) {
-    const verdict = classifyIgnoredEntry(entry);
+    const { verdict, resolvedEntry } = await classifyResolvingSymlinkedDirs(worktreePath, entry);
     if (verdict === 'protected') {
       return { protect: true, because: 'non-rebuildable-entry', detail: entry };
     }
-    if (verdict === 'inspectable' && entry.endsWith('/')) {
-      const nested = await inspectableDirHidesLocalState(execFile, worktreePath, entry);
+    // Invariant: gate on `resolvedEntry`, never on `entry` — see
+    // `classifyResolvingSymlinkedDirs`. A symlinked `dist` arrives slash-less
+    // from git, so testing the raw entry skips the expansion that finds a
+    // secret inside it.
+    if (verdict === 'inspectable' && resolvedEntry.endsWith('/')) {
+      const nested = await inspectableDirHidesLocalState(execFile, worktreePath, resolvedEntry);
       if (nested.protect) return nested;
     }
   }
