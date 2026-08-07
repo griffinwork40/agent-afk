@@ -15,6 +15,7 @@ import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import { truncateDisplayWidth } from '../../display.js';
 import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
@@ -259,7 +260,9 @@ export async function runInputLoop(
         const seconds = job.endedAt !== undefined
           ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
           : 0;
-        const label = job.label.length > 60 ? `${job.label.slice(0, 60)}…` : job.label;
+        // Display-width truncation, not code-unit — see the same fix in
+        // slash/commands/bgsub.ts: `slice(0, 60) + '…'` measured 61 cells.
+        const label = truncateDisplayWidth(job.label, 60);
         ctx.replRenderer.writeLine(
           palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
         );

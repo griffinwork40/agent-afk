@@ -26,6 +26,7 @@
  */
 
 import { isPlainOutputRequested } from '../../../config/env.js';
+import { boundLineToTerminal } from '../../render/bounded-line.js';
 
 interface CompositorRef {
   isArmed(): boolean;
@@ -91,12 +92,19 @@ export function createReplRenderer(
       // xterm/iTerm2/Apple Terminal — and the displaced top line does not
       // enter the terminal's scrollback buffer. Route through the guard
       // so the write happens with full-screen scroll semantics instead.
+      //
+      // Invariant: this is the disarmed path, i.e. a RAW write with no
+      // compositor to wrap it — bound it here so an over-wide row is wrapped
+      // with its indent hanging rather than auto-wrapped by the terminal to
+      // column 0. The armed path above needs no bounding: commitAbove wraps
+      // at the live width and reflows the retained band on resize.
+      const bounded = boundLineToTerminal(text, stdout);
       if (guard) {
         guard.withFullScrollRegion(() => {
-          stdout.write(text + '\n');
+          stdout.write(bounded + '\n');
         });
       } else {
-        stdout.write(text + '\n');
+        stdout.write(bounded + '\n');
       }
     },
     setCompositor(c) {

@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createConsoleWriter, type WriterSink } from './writer.js';
+import { displayWidth, stripAnsi } from '../display.js';
 
 describe('createConsoleWriter — sink routing', () => {
   describe('without a sink (default)', () => {
@@ -143,5 +144,76 @@ describe('createConsoleWriter — sink routing', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+});
+
+describe('createConsoleWriter — width bounding', () => {
+  const originalColumns = process.stdout.columns;
+  const originalIsTTY = process.stdout.isTTY;
+  const setTerminal = (cols: number, isTTY: boolean): void => {
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, writable: true, value: cols });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, writable: true, value: isTTY });
+  };
+
+  afterEach(() => {
+    setTerminal(originalColumns as number, originalIsTTY as boolean);
+    vi.restoreAllMocks();
+  });
+
+  /** The real `/worktree list` row shape — ~100 columns of fixed padEnd(). */
+  const wideTableRow =
+    '  ' + 'some/path'.padEnd(45) + '  ' + 'owner'.padEnd(12) + '  ' + '3d'.padEnd(5) +
+    '  ' + 'stale-dirty'.padEnd(22) + '  ' + 'warn';
+
+  it('wraps a sinkless over-wide row so nothing exits the right edge on a TTY', () => {
+    setTerminal(62, true);
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const w = createConsoleWriter();
+
+    w.line(wideTableRow);
+
+    const emitted = spy.mock.calls[0]?.[0] as string;
+    const rows = emitted.split('\n');
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(displayWidth(row), `row exceeds 62: ${JSON.stringify(stripAnsi(row))}`).toBeLessThanOrEqual(62);
+    }
+  });
+
+  it('bounds the prefixed helpers (info/warn/error/success) too', () => {
+    setTerminal(40, true);
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const w = createConsoleWriter();
+
+    w.info('i'.repeat(120));
+    w.warn('w'.repeat(120));
+    w.error('e'.repeat(120));
+    w.success('s'.repeat(120));
+
+    for (const call of spy.mock.calls) {
+      for (const row of (call[0] as string).split('\n')) {
+        expect(displayWidth(row)).toBeLessThanOrEqual(40);
+      }
+    }
+  });
+
+  it('leaves non-TTY output byte-identical so piped rows stay whole', () => {
+    setTerminal(62, false);
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const w = createConsoleWriter();
+
+    w.line(wideTableRow);
+
+    expect(spy).toHaveBeenCalledWith(wideTableRow);
+  });
+
+  it('does not bound the sink path — the sink owner wraps and reflows', () => {
+    setTerminal(62, true);
+    const calls: string[] = [];
+    const w = createConsoleWriter({ fn: (line) => calls.push(line) });
+
+    w.line(wideTableRow);
+
+    expect(calls).toEqual([wideTableRow]);
   });
 });
