@@ -58,7 +58,7 @@ const SENSITIVE_LEAF_PATTERNS: readonly RegExp[] = [
  * sits under a rebuildable directory ({@link isUnderGeneratedOutput}) AND its
  * leaf carries a {@link GENERATED_ARTIFACT_EXTENSIONS} suffix. A repo holding
  * `src/agent/auth/credential-resolver.ts` emits
- * `dist/agent/auth/credential-resolver.d ts` and a coverage page of the same
+ * `dist/agent/auth/credential-resolver.d.ts` and a coverage page of the same
  * name; both matched `/credential/`, protected the tree, and made every
  * worktree that had ever run a build or a coverage pass permanently unreapable
  * — the same immortality the module docblock exists to prevent, arriving

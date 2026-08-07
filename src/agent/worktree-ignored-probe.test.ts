@@ -25,6 +25,27 @@ const throwingExec: ExecFileFn = (async () => {
   throw new Error('fatal: not a git repository');
 }) as unknown as ExecFileFn;
 
+/**
+ * Records every git argv so a test can assert which calls were made.
+ *
+ * Module-scoped rather than local to one describe: the symlink suite needs the
+ * same recording to prove an expansion was ISSUED. A fixed-stdout mock cannot —
+ * it answers identically whether the scoped call happened or was skipped, which
+ * is exactly how a skipped expansion stayed green.
+ */
+function recordingExec(
+  responder: (args: readonly string[]) => string,
+): { exec: ExecFileFn; calls: string[][] } {
+  const calls: string[][] = [];
+  const exec = (async (_cmd: string, args: string[]) => {
+    calls.push([...args]);
+    return { stdout: responder(args), stderr: '' };
+  }) as unknown as ExecFileFn;
+  return { exec, calls };
+}
+
+const isScoped = (args: readonly string[]): boolean => args.includes('--untracked-files=all');
+
 describe('isRebuildableIgnoredEntry', () => {
   const rebuildable = [
     'node_modules/', 'node_modules/foo/index.js', '.pnpm/', '.yarn/',
@@ -154,20 +175,6 @@ describe('hasNonRebuildableIgnoredFiles', () => {
  * for dependency trees.
  */
 describe('hasNonRebuildableIgnoredFiles — collapsed-directory expansion', () => {
-  /** Records every git argv so a test can assert which calls were made. */
-  function recordingExec(
-    responder: (args: readonly string[]) => string,
-  ): { exec: ExecFileFn; calls: string[][] } {
-    const calls: string[][] = [];
-    const exec = (async (_cmd: string, args: string[]) => {
-      calls.push([...args]);
-      return { stdout: responder(args), stderr: '' };
-    }) as unknown as ExecFileFn;
-    return { exec, calls };
-  }
-
-  const isScoped = (args: readonly string[]): boolean => args.includes('--untracked-files=all');
-
   it('expands a collapsed build dir and protects when it hides a secret', async () => {
     const { exec, calls } = recordingExec((args) =>
       isScoped(args) ? '!! dist/cli/index.js\n!! dist/secrets.env\n' : '!! dist/\n',
@@ -315,9 +322,17 @@ describe('probeNonRebuildableIgnoredFiles — symlinked directories', () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'afk-symlink-probe-'));
     await mkdir(join(root, 'real-deps'), { recursive: true });
+    // A real secret BEHIND the link. The expansion assertions below are only
+    // meaningful if the target actually holds something worth finding — an
+    // empty target makes "expanded and found nothing" indistinguishable from
+    // "never expanded at all", which is how the skipped-expansion bug survived.
+    await writeFile(join(root, 'real-deps', 'prod.env'), 'API_TOKEN=live\n');
+    await mkdir(join(root, 'real-build'), { recursive: true });
+    await writeFile(join(root, 'real-build', 'index.js'), 'console.log(1)\n');
     await mkdir(join(root, 'wt'), { recursive: true });
     await symlink('../real-deps', join(root, 'wt', 'node_modules'), 'dir');
     await symlink('../real-deps', join(root, 'wt', 'dist'), 'dir');
+    await symlink('../real-build', join(root, 'wt', 'build'), 'dir');
     // Same names, but authored FILES — the case that must stay protected.
     await mkdir(join(root, 'wt-files'), { recursive: true });
     await writeFile(join(root, 'wt-files', 'dist'), 'hand-authored, not a build dir');
@@ -335,11 +350,47 @@ describe('probeNonRebuildableIgnoredFiles — symlinked directories', () => {
     expect(verdict).toEqual({ protect: false });
   });
 
-  it('treats a symlinked build dir as inspectable, expanding rather than protecting', async () => {
-    const verdict = await probeNonRebuildableIgnoredFiles(
-      mockExec('!! dist\n'),
-      join(root, 'wt'),
+  /**
+   * Regression (the bug this suite failed to catch): `classifyResolvingSymlinkedDirs`
+   * built the slash-appended `dist/` to reach its verdict but returned only the
+   * verdict, so the caller's gate re-tested the ORIGINAL slash-less `dist` —
+   * always false for a symlink, since git never appends a slash to one. The
+   * expansion was skipped and the tree read reapable WITHOUT the inside ever
+   * being inspected. A fixed-stdout mock could not see the difference; these
+   * assert on the recorded argv.
+   */
+  it('ISSUES the scoped expansion for a symlinked build dir and protects on what it finds', async () => {
+    const { exec, calls } = recordingExec((args) =>
+      isScoped(args) ? '!! dist/prod.env\n' : '!! dist\n',
     );
+    const verdict = await probeNonRebuildableIgnoredFiles(exec, join(root, 'wt'));
+
+    // (a) the expansion actually happened, scoped to the resolved directory
+    const scoped = calls.filter(isScoped);
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]).toContain('dist/');
+
+    // (b) and its result drove the verdict
+    expect(verdict).toEqual({
+      protect: true,
+      because: 'non-rebuildable-entry',
+      detail: 'dist/prod.env',
+    });
+  });
+
+  it('expands a symlinked build dir and still reaps when it holds only output', async () => {
+    const { exec, calls } = recordingExec((args) =>
+      isScoped(args) ? '!! build/index.js\n' : '!! build\n',
+    );
+    const verdict = await probeNonRebuildableIgnoredFiles(exec, join(root, 'wt'));
+    expect(calls.filter(isScoped)).toHaveLength(1);
+    expect(verdict).toEqual({ protect: false });
+  });
+
+  it('never pays for an expansion of a symlinked dependency tree', async () => {
+    const { exec, calls } = recordingExec(() => '!! node_modules\n');
+    const verdict = await probeNonRebuildableIgnoredFiles(exec, join(root, 'wt'));
+    expect(calls.filter(isScoped)).toHaveLength(0);
     expect(verdict).toEqual({ protect: false });
   });
 

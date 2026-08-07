@@ -96,19 +96,28 @@ describe('classifyIgnoredEntry — leaf-matching does not over-reach', () => {
   // `dist/agent/auth/credential-resolver.d.ts` and a coverage page of the same
   // name — both matched `/credential/`, protected the tree, and made every
   // worktree that had run a build or a coverage pass permanently unreapable,
-  // citing a "secret" that was compiler output. The suppression is scoped to
-  // the DIRECTORY, not to an extension list: the mirror follows the toolchain.
+  // citing a "secret" that was compiler output. The suppression fires only at
+  // the INTERSECTION of both conditions — the entry sits under a rebuildable
+  // DIRECTORY *and* its leaf carries an artifact EXTENSION — so the mirror
+  // follows the toolchain without reaching a data file dropped alongside it.
   const generatedMirrors = [
     'dist/agent/auth/credential-resolver.d.ts',
     'dist/agent/auth/credential-resolver.js',
     'dist/agent/auth/credential-resolver.d.ts.map',
     'coverage/src/agent/auth/credential-resolver.ts.html',
     'coverage/src/agent/redact-secrets.ts.html',
-    'node_modules/@scope/secret-box/index.js',
+    'node_modules/@scope/box/secret-loader.js',
     'dist/docs/secret-handling.css',
   ];
   for (const entry of generatedMirrors) {
+    // Both assertions together, on the SAME entry, pin the intentional
+    // divergence between the two exported surfaces: the leaf really does read
+    // as sensitive, and the path context is what overrides it. Asserting only
+    // the classification would stay green if `isSensitiveLeaf` quietly stopped
+    // matching the hint, which would make the suppression a no-op rather than
+    // a deliberate override.
     it(`treats ${entry} as generated output, not a secret`, () => {
+      expect(isSensitiveLeaf(entry)).toBe(true);
       expect(classifyIgnoredEntry(entry)).not.toBe('protected');
     });
   }
