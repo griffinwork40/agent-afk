@@ -471,7 +471,14 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const srcBit = src !== undefined ? `  (${String(src)})` : '';
         const waited =
           p.durationMs !== undefined ? ` after ${fmtDuration(p.durationMs)}` : '';
-        return line('ttfb-stall', `no first token${waited} — request re-driven once${srcBit}`);
+        // `attempt` is the 1-based index of the re-drive being served, so it
+        // distinguishes the 1st stall from the 2nd within one round. Omitted
+        // (not defaulted) when absent: traces written before the counted budget
+        // carry no `attempt`, and inventing "#1" would assert a fact the event
+        // does not record.
+        const nth = p.metadata?.['attempt'];
+        const nthBit = nth !== undefined ? ` #${String(nth)}` : '';
+        return line('ttfb-stall', `no first token${waited} — request re-driven${nthBit}${srcBit}`);
       }
       // Usage-limit park/unpark is the highest-signal stall of all — a
       // multi-hour subscription pause, not a per-minute backoff. Render in the
