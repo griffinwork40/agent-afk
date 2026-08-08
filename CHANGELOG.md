@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.100.2] - 2026-08-08
+
+### Fixed
+- split severity from disposition and make medium blocking by default (#936) (70baf31)
+
 ## [5.100.1] - 2026-08-08
 
 ### Fixed
