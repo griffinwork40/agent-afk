@@ -18,6 +18,7 @@ import {
   checkBind,
   mintToken,
   originAllowed,
+  tokenFromCookie,
   tokenFromQuery,
   tokensMatch,
 } from './auth.js';
@@ -136,7 +137,17 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       // controller ends its response, which lets `close()` complete promptly.
       for (const controller of [...streams]) controller.abort();
       streams.clear();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // Invariant: abort -> close() -> closeAllConnections(), in that order.
+      // Aborting ends the event-stream RESPONSE, but this route sets
+      // `connection: keep-alive`, so the SOCKET survives the response and
+      // `server.close()` keeps waiting on it — shutdown still stalled for
+      // seconds. `close()` must be called before reaping sockets so the server
+      // stops accepting new ones first; `closeAllConnections()` then destroys
+      // the lingering keep-alive sockets. Forcible destruction is correct here:
+      // this runs only on an explicit stop/SIGINT.
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+      server.closeAllConnections();
+      await closed;
     },
   };
 }
@@ -252,14 +263,24 @@ async function dispatch(
  * running from a source checkout without `pnpm build:web-ui` is a normal state.
  */
 async function serveStatic(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse,
   path: string,
   rawUrl: string,
   token: string,
 ): Promise<void> {
   const isDocument = path === '/' || path === '/index.html';
-  if (isDocument && !tokensMatch(token, tokenFromQuery(rawUrl))) {
+  // Invariant: the document accepts the query token OR the session cookie, and
+  // NOTHING ELSE accepts either. The frontend strips `?token=` from the visible
+  // URL on first load, so without a credential the browser replays on its own,
+  // a refresh requested `/` bare and got 401 — which broke the refresh/resume
+  // flow that motivated this surface's whole transport choice. The cookie is
+  // only ever honoured here: `/api/*` is gated on the bearer header well before
+  // this function is reachable, so a cookie alone can never drive the agent.
+  const fromQuery = tokenFromQuery(rawUrl);
+  const documentAuthed =
+    tokensMatch(token, fromQuery) || tokensMatch(token, tokenFromCookie(header(req, 'cookie')));
+  if (isDocument && !documentAuthed) {
     res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('Missing or invalid token. Use the URL printed by `afk web`.');
     return;

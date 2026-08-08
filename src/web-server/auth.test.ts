@@ -1,13 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  mintToken,
-  tokensMatch,
-  bearerFromHeader,
-  tokenFromQuery,
-  originAllowed,
-  allowedOrigins,
-  checkBind,
-} from './auth.js';
+import { mintToken, tokensMatch, bearerFromHeader, tokenFromQuery, originAllowed, allowedOrigins, checkBind, tokenFromCookie } from './auth.js';
 
 describe('mintToken', () => {
   it('returns 64 hex chars', () => {
@@ -130,5 +122,50 @@ describe('checkBind', () => {
 
   it('allows a non-loopback bind once a token is explicit', () => {
     expect(checkBind('0.0.0.0', true).ok).toBe(true);
+  });
+});
+
+describe('allowedOrigins — wildcard binds', () => {
+  // History: `--host 0.0.0.0` is advertised and auto-opened as 127.0.0.1
+  // because http://0.0.0.0:<port> is not a usable browser URL, but Origin
+  // validation allowed only the literal bind host — so every POST from the
+  // printed URL was rejected with 403 and the UI could not be used at all.
+  it('allows the loopback origins a wildcard bind actually serves', () => {
+    const origins = allowedOrigins('0.0.0.0', 4141);
+    expect(origins).toContain('http://127.0.0.1:4141');
+    expect(origins).toContain('http://localhost:4141');
+  });
+
+  it('accepts a loopback Origin on a wildcard bind', () => {
+    expect(originAllowed('http://127.0.0.1:4141', '0.0.0.0', 4141)).toBe(true);
+  });
+
+  it('still rejects a foreign Origin on a wildcard bind', () => {
+    expect(originAllowed('http://evil.example.com', '0.0.0.0', 4141)).toBe(false);
+    expect(originAllowed('http://127.0.0.1.evil.com:4141', '0.0.0.0', 4141)).toBe(false);
+  });
+
+  it('leaves a specific non-loopback bind restricted to that host', () => {
+    expect(allowedOrigins('10.0.0.5', 4141)).toEqual(['http://10.0.0.5:4141']);
+  });
+});
+
+describe('tokenFromCookie', () => {
+  it('extracts the token from a cookie header', () => {
+    expect(tokenFromCookie('afk_web_token=abc123')).toBe('abc123');
+  });
+
+  it('finds it among other cookies', () => {
+    expect(tokenFromCookie('theme=dark; afk_web_token=abc123; other=1')).toBe('abc123');
+  });
+
+  it('returns undefined when absent or empty', () => {
+    expect(tokenFromCookie(undefined)).toBeUndefined();
+    expect(tokenFromCookie('theme=dark')).toBeUndefined();
+    expect(tokenFromCookie('afk_web_token=')).toBeUndefined();
+  });
+
+  it('does not confuse a cookie whose name merely ends with the token name', () => {
+    expect(tokenFromCookie('not_afk_web_token=abc123')).toBeUndefined();
   });
 });

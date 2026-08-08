@@ -66,6 +66,34 @@ export function tokenFromQuery(rawUrl: string): string | undefined {
   return params.get('token') ?? undefined;
 }
 
+/** Name of the reload-safe session cookie mirroring the bearer token. */
+export const TOKEN_COOKIE_NAME = 'afk_web_token';
+
+/**
+ * Extract the web token from a `Cookie` header value.
+ *
+ * Contract: callers must only consult this for the initial document GET, for
+ * the same reason `tokenFromQuery` is so restricted. A cookie is replayed by
+ * the browser automatically, which is precisely what makes it usable for a
+ * refresh and precisely what would make it a CSRF vector on a mutating route —
+ * so `/api/*` authenticates on the `Authorization` header alone.
+ */
+export function tokenFromCookie(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== TOKEN_COOKIE_NAME) continue;
+    const raw = part.slice(eq + 1).trim();
+    try {
+      return decodeURIComponent(raw) || undefined;
+    } catch {
+      return raw || undefined;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Whether an Origin header is acceptable for a mutating request.
  *

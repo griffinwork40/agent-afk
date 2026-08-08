@@ -6,6 +6,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { startWebServer, type WebServerHandle } from './server.js';
+import { elicitationRouter } from '../agent/elicitation-router.js';
 
 let handle: WebServerHandle | undefined;
 
@@ -311,5 +312,68 @@ describe('startWebServer — owned sessions', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ pending: [] });
+  });
+});
+
+describe('document auth survives a refresh', () => {
+  // History: the frontend strips `?token=` from the URL on first load. With the
+  // token held only in memory, a refresh requested `/` bare and got 401 — which
+  // broke the resume flow the SSE transport exists to provide.
+  it('accepts the session cookie on the document GET', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/'), {
+      headers: { cookie: `afk_web_token=${h.token}` },
+    });
+    // 503 = authenticated, but the UI bundle is not built in this checkout.
+    // Either way it is NOT the 401 a bare refresh used to produce.
+    expect(res.status).not.toBe(401);
+  });
+
+  it('still refuses a document GET with a wrong cookie', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/'), { headers: { cookie: 'afk_web_token=nope' } });
+    expect(res.status).toBe(401);
+  });
+
+  it('never accepts the cookie on an API route', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/sessions'), {
+      headers: { cookie: `afk_web_token=${h.token}` },
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('approval bodies fail closed', () => {
+  it('declines an approval whose body carries no recognized action', async () => {
+    const h = await start();
+    const controller = new AbortController();
+    const result = elicitationRouter.route(
+      { message: 'run rm -rf?' } as never,
+      { signal: controller.signal },
+    );
+
+    // Let the bridge register the request, then answer it with a body that
+    // never says "accept". The object-shaped fallback used to return
+    // { action: 'accept' } here, approving a tool call nobody approved.
+    await new Promise((r) => setTimeout(r, 20));
+    const pending = h.bridge.list();
+    expect(pending.length).toBe(1);
+
+    const res = await fetch(api(h, '/api/sessions/any/approve'), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${h.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ requestId: pending[0]!.id, response: { foo: 'bar' } }),
+    });
+    // The session is not owned, so the route 409s before resolving. Answer it
+    // through the bridge directly to assert the normalization contract itself.
+    expect([200, 409]).toContain(res.status);
+    h.bridge.resolve(pending[0]!.id, { foo: 'bar' });
+
+    await expect(result).resolves.toEqual({ action: 'decline' });
+    controller.abort();
   });
 });

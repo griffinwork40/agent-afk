@@ -2,9 +2,21 @@
  * `afk web` browser entry point.
  *
  * Contract: the token arrives as `?token=` on the document URL (the only place
- * a query token is accepted). It is stashed in memory and stripped from the
- * visible URL immediately, so it does not linger in the address bar, get
- * copy-pasted into a bug report, or land in the browser history entry.
+ * a query token is accepted). It is stripped from the visible URL immediately,
+ * so it does not linger in the address bar, get copy-pasted into a bug report,
+ * or land in the browser history entry.
+ *
+ * Invariant: it is then mirrored into a session cookie, because stripping the
+ * URL while holding the token ONLY in memory made refresh impossible — the
+ * reload requested `/` with no query token and `serveStatic` answered 401,
+ * which defeated the refresh/resume flow this surface is built around (and
+ * which is the reason the transport is SSE rather than a WebSocket at all).
+ *
+ * A cookie rather than `sessionStorage` specifically because the 401 fires on
+ * the DOCUMENT request, before any script runs — so the credential has to be
+ * one the browser replays automatically. `SameSite=Strict` keeps it off every
+ * cross-site request, and it is never sufficient on its own: `/api/*` still
+ * demands the bearer header, so the cookie cannot be used to forge an API call.
  */
 
 import { SessionStream } from './sse-client.js';
@@ -46,11 +58,26 @@ let pendingTimer: ReturnType<typeof setInterval> | undefined;
  */
 let turnActive = false;
 
+const TOKEN_COOKIE = 'afk_web_token';
+
 function readAndScrubToken(): string {
   const params = new URLSearchParams(location.search);
-  const t = params.get('token') ?? '';
-  if (t) history.replaceState(null, '', location.pathname);
-  return t;
+  const fromQuery = params.get('token') ?? '';
+  if (fromQuery) {
+    // Persist BEFORE scrubbing so a reload has something to authenticate with.
+    document.cookie = `${TOKEN_COOKIE}=${encodeURIComponent(fromQuery)}; Path=/; SameSite=Strict`;
+    history.replaceState(null, '', location.pathname);
+    return fromQuery;
+  }
+  return readTokenCookie();
+}
+
+function readTokenCookie(): string {
+  for (const part of document.cookie.split(';')) {
+    const [rawName, ...rest] = part.split('=');
+    if (rawName?.trim() === TOKEN_COOKIE) return decodeURIComponent(rest.join('=').trim());
+  }
+  return '';
 }
 
 function $(id: string): HTMLElement {
@@ -209,14 +236,20 @@ function renderQueue(): void {
 async function flushQueue(): Promise<void> {
   if (activeId === undefined || !isLive()) return;
   while (queue.length > 0) {
-    const [next, ...rest] = queue;
-    queue = rest;
-    renderQueue();
+    const next = queue[0];
     if (next === undefined) break;
+    // Invariant: the entry leaves the queue only after the POST is CONFIRMED.
+    // Dequeuing first destroyed the user's typed prompt on any transient
+    // network error, 5xx, or expired token — the caller's catch only writes
+    // status text, so there was nothing left to retry or reorder. Holding the
+    // entry until success is also what the repo's no-optimistic-rendering rule
+    // requires: no UI update ahead of its dependent write's result.
     await api(`/api/sessions/${encodeURIComponent(activeId)}/prompt`, {
       method: 'POST',
       body: JSON.stringify({ text: next }),
     });
+    queue = queue.slice(1);
+    renderQueue();
     turnActive = true;
     syncStop();
   }
