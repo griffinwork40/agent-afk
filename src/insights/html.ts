@@ -91,21 +91,23 @@ function barChart(
 /**
  * Resolve the authoritative cost total + session count for cost cards.
  *
- * Prefers the witness-trace aggregate (the #864 fix — wider, authoritative
- * coverage), but falls back to the session-sidecar aggregate when there is
- * NO trace coverage at all (`totalTracedSessions === 0`). That is an
- * absence of signal, not a legitimate zero-cost result: it happens when an
- * operator sets `AFK_TRACE_DISABLED=1` (see `createDefaultTraceWriter()` in
- * src/agent/trace/factory.ts, which then writes no trace.jsonl at all) or on
- * a legacy install that predates the witness-trace system. Rendering the
- * trace aggregate unconditionally in that case would silently discard real,
- * still-recorded sidecar spend. When trace coverage exists it stays
- * authoritative/primary — do not revert this to trace-only.
+ * Invariant: prefers the witness-trace aggregate (the #864 fix) whenever it
+ * reports a non-zero cost (`t.totalCostUsd > 0`); falls back to the
+ * session-sidecar aggregate otherwise. Keys on the cost VALUE, not
+ * `totalTracedSessions`, because trace coverage existing is not the same as
+ * trace coverage being priced — a window can have `totalTracedSessions > 0`
+ * while every traced session ran on a local ($0) model, e.g. a --days 90
+ * window straddling the witness-trace rollout. Keying on
+ * `totalTracedSessions > 0` alone would render that legitimate trace-zero
+ * and silently discard real sidecar spend — the same bug class #864 fixed,
+ * one layer down. This subsumes the old no-coverage-at-all case
+ * (`totalTracedSessions === 0` implies `totalCostUsd === 0`). Numerator and
+ * denominator always come from the SAME source — never mix them.
  */
 function resolveCost(agg: InsightAggregates): { totalCostUsd: number; costSessionCount: number } {
   const t = agg.traces;
   const s = agg.sessions;
-  const useTraceCost = t.totalTracedSessions > 0;
+  const useTraceCost = t.totalCostUsd > 0;
   return {
     totalCostUsd: useTraceCost ? t.totalCostUsd : s.totalCostUsd,
     costSessionCount: useTraceCost ? t.totalTracedSessions : s.totalSessions,
@@ -134,10 +136,12 @@ function renderSessions(agg: InsightAggregates): string {
       : '';
 
   // Cost prefers the witness trace closure aggregate over the session
-  // sidecar — the sidecar's coverage is narrower (sessions with no sidecar
-  // still have a trace), so `s.totalCostUsd` alone undercounts spend. Same
-  // rationale as tokenCards above. Falls back to the sidecar total when
-  // there is no trace coverage at all — see `resolveCost()`.
+  // sidecar — the sidecar's coverage is narrower because subagent forks have
+  // no sidecar concept at all (sidecars are written only by saveSession() /
+  // forkStoredSession() on the CLI/telegram paths, never by subagent.ts's
+  // fork construction), so `s.totalCostUsd` alone undercounts spend. Same
+  // rationale as tokenCards above. Falls back to the sidecar total when the
+  // trace aggregate reports no cost — see `resolveCost()`.
   const topContent = hasData
     ? `<div class="metrics-grid">
         <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(s.totalSessions))}</div><div class="metric-label">Sessions</div></div>
@@ -145,6 +149,13 @@ function renderSessions(agg: InsightAggregates): string {
         ${tokenCards}
       </div>${costNote}`
     : noData('session');
+
+  // The two cost breakdowns are sidecar-scoped (`s.byModel` / `s.byDay`) while
+  // the "Total Cost" card above is trace-scoped, so they can legitimately
+  // disagree — and did so by ~3x on the datasets behind #864. TraceAggregates
+  // carries no per-model/per-day cost split, so these cannot simply be
+  // re-sourced; caption them instead so the gap reads as scope, not error.
+  const costScopeNote = `<p style="color:#8a93a3;font-size:13px;margin-top:6px">Sidecar-recorded sessions only — may not sum to Total Cost above.</p>`;
 
   const modelEntries = Object.entries(s.byModel).map(([k, v]) => ({ label: k, value: v.costUsd }));
   const surfaceEntries = Object.entries(s.bySurface).map(([k, v]) => ({ label: k, value: v.sessions }));
@@ -156,23 +167,23 @@ function renderSessions(agg: InsightAggregates): string {
   <section id="sessions">
     <h2>Sessions</h2>
     ${topContent}
-    ${hasData && modelEntries.length > 0 ? `<h3>Cost by Model</h3>${barChart(modelEntries.sort((a, b) => b.value - a.value))}` : ''}
+    ${hasData && modelEntries.length > 0 ? `<h3>Cost by Model</h3>${barChart(modelEntries.sort((a, b) => b.value - a.value))}${costScopeNote}` : ''}
     ${hasData && surfaceEntries.length > 0 ? `<h3>Sessions by Surface</h3>${barChart(surfaceEntries.sort((a, b) => b.value - a.value), 300, '#6dbf67')}` : ''}
-    ${hasData && dayEntries.length > 0 ? `<h3>Cost by Day</h3>${barChart(dayEntries, 300, '#f7a14f')}` : ''}
+    ${hasData && dayEntries.length > 0 ? `<h3>Cost by Day</h3>${barChart(dayEntries, 300, '#f7a14f')}${costScopeNote}` : ''}
   </section>`;
 }
 
 function renderCost(agg: InsightAggregates): string {
-  // Trace-sourced (`t`), not the session sidecar (`s`), whenever trace
-  // coverage exists: the sidecar only covers sessions that wrote a sidecar
-  // JSON, which is a narrower set than sessions with a witness trace
-  // closure event. Rendering `s.totalCostUsd` here undercounted real spend
-  // by ~3x on datasets where trace coverage exceeds sidecar coverage (see
-  // issue #864). Numerator and denominator share the same source so the
-  // average stays internally consistent. `resolveCost()` falls back to the
-  // sidecar total when `totalTracedSessions === 0` (no trace coverage at
-  // all — e.g. AFK_TRACE_DISABLED=1 or a legacy install), which is an
-  // absence of signal, not a legitimate zero-cost result.
+  // Trace-sourced (`t`), not the session sidecar (`s`), whenever the trace
+  // aggregate reports cost: the sidecar misses whole populations — subagent
+  // forks have no sidecar concept at all (sidecars are written only by
+  // saveSession() / forkStoredSession() on the CLI/telegram paths, never by
+  // subagent.ts). So `s.totalCostUsd` undercounted real spend by ~3x on
+  // datasets where trace coverage exceeds sidecar coverage (issue #864).
+  // `resolveCost()` keeps numerator and denominator on the SAME source; note
+  // that means the Avg Cost/Session denominator population follows the chosen
+  // source (traced sessions on the trace path, all sidecar sessions on the
+  // fallback), so that average is not comparable across a rollout boundary.
   const { totalCostUsd, costSessionCount } = resolveCost(agg);
   const hasData = totalCostUsd > 0;
 

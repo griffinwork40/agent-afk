@@ -107,6 +107,12 @@ function makeNonZeroAgg(): InsightAggregates {
       // authoritative and the narrower session-sidecar total is not.
       // Diverging the two fixture values lets a test pin which source the
       // rendered cost actually came from.
+      //
+      // Keep BOTH literals at exactly 4 decimals: `formatCost` renders via
+      // `safeNum(usd, 4)` → `toFixed(4)`, so the sentinel assertion
+      // `not.toContain('3.1415')` only works while the fixture value matches
+      // the rendered string byte-for-byte. A 3- or 5-decimal value here would
+      // silently make that assertion vacuous rather than failing loudly.
       totalCostUsd: 9.4245,
       sessionsWithCost: 12,
     },
@@ -150,6 +156,24 @@ function makeSidecarOnlyAgg(): InsightAggregates {
   agg.sessions.totalSessions = 10;
   agg.sessions.totalCostUsd = 4.2;
   agg.sessions.totalTokens = 5000;
+  return agg;
+}
+
+/**
+ * Trace coverage EXISTS but is entirely unpriced: `totalTracedSessions > 0`
+ * while `traces.totalCostUsd === 0`, and the sidecar still holds real spend.
+ * Realistic trigger is a wide `--days` window straddling the witness-trace
+ * rollout, where every traced session ran on a local ($0) model. Distinct
+ * from makeSidecarOnlyAgg (no trace coverage at all): this is the branch a
+ * `totalTracedSessions > 0` predicate would misread as a genuine zero.
+ */
+function makeZeroTraceCostAgg(): InsightAggregates {
+  const agg = makeZeroAgg();
+  agg.sessions.totalSessions = 8;
+  agg.sessions.totalCostUsd = 7.5;
+  agg.sessions.totalTokens = 4000;
+  agg.traces.totalTracedSessions = 12;
+  agg.traces.totalCostUsd = 0;
   return agg;
 }
 
@@ -249,6 +273,43 @@ describe('generateHtml', () => {
     const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
     expect(sessionsSection).toContain('$4.2000');
     expect(sessionsSection).not.toContain('$0.00');
+  });
+
+  it('fallback: traced sessions exist but report zero cost — sidecar spend is still rendered, not hidden', () => {
+    // Guards the predicate itself: keying the source on `totalTracedSessions > 0`
+    // (rather than on the trace COST) would treat this unpriced-but-traced
+    // window as a genuine $0 and discard real sidecar spend — the same failure
+    // class as #864, one layer down. Only branch of resolveCost() that
+    // distinguishes the two predicates, so it is the regression guard.
+    const agg = makeZeroTraceCostAgg();
+    const html = generateHtml(agg, NO_RECS, OPTS);
+
+    expect(agg.traces.totalTracedSessions).toBeGreaterThan(0); // fixture sanity
+    expect(agg.traces.totalCostUsd).toBe(0); // fixture sanity
+    expect(agg.sessions.totalCostUsd).toBeGreaterThan(0); // fixture sanity
+
+    const costSection = html.slice(html.indexOf('id="cost"'), html.indexOf('id="tool-usage"'));
+    expect(costSection).not.toContain('No cost data');
+    expect(costSection).toContain('$7.5000');
+
+    const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
+    expect(sessionsSection).toContain('$7.5000');
+    expect(sessionsSection).not.toContain('$0.00');
+  });
+
+  it('sidecar-scoped cost breakdowns are captioned so they cannot be misread as contradicting the trace-sourced total', () => {
+    // The "Total Cost" card is trace-sourced while "Cost by Model" / "Cost by
+    // Day" remain sidecar-sourced (TraceAggregates has no per-model/per-day
+    // split), so the two can legitimately disagree — 9.4245 vs 3.14 on this
+    // fixture. Without the caption that reads as the #864 bug, relocated.
+    const html = generateHtml(makeNonZeroAgg(), NO_RECS, OPTS);
+    const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
+
+    expect(sessionsSection).toContain('Cost by Model');
+    expect(sessionsSection).toContain('Cost by Day');
+    // One caption per cost chart, and none attached to the session-count chart.
+    const captions = sessionsSection.split('may not sum to Total Cost above').length - 1;
+    expect(captions).toBe(2);
   });
 
   it('output does NOT contain string "responseExcerpt"', () => {
