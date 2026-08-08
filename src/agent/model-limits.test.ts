@@ -123,3 +123,36 @@ describe('maxOutputTokensFor — retired-but-Active Opus pin', () => {
     expect(contextLimitFor('claude-opus-4-8')).toBe(200_000);
   });
 });
+
+describe('claude-sonnet-4-6 — explicit limit pins (A/B baseline vs claude-sonnet-5)', () => {
+  // Invariant: 4.6 is not a first-class alias but IS reachable by raw wire id and
+  // already priced (providers/anthropic-direct/pricing.ts). Both values below
+  // equal the fallbacks they replace, so these tests pin INTENT, not a behaviour
+  // change: they fail if someone edits DEFAULT_MAX_OUTPUT / DEFAULT_CONTEXT_LIMIT
+  // or "upgrades" 4.6 to Sonnet 5's 1M window, either of which would silently
+  // invalidate a 4.6-vs-5 A/B comparison.
+  it('pins the 64k output ceiling (first-party: the Sonnet 5 entry says "up from 64k on Sonnet 4.6")', () => {
+    expect(maxOutputTokensFor('claude-sonnet-4-6')).toBe(64_000);
+    // Contrast: the Sonnet 5 sibling is double. An A/B that silently gave 4.6
+    // Sonnet 5's ceiling would compare two different output budgets.
+    expect(maxOutputTokensFor('claude-sonnet-5')).toBe(128_000);
+  });
+
+  it('pins the 200k context window — NOT Sonnet 5 1M (this repo sends no 1M beta header)', () => {
+    // 1M on the 4.x line requires a `context-1m` beta this codebase never sends:
+    // composeBetaHeader (providers/anthropic-direct/beta-headers.ts) emits a
+    // closed set (OAuth, effort, extended-cache-ttl, fast-mode). Over-reporting
+    // here would suppress auto-compaction and cause hard API errors mid-run.
+    expect(contextLimitFor('claude-sonnet-4-6')).toBe(200_000);
+    expect(contextLimitFor('claude-sonnet-5')).toBe(1_000_000);
+  });
+
+  it('takes NO auto-compact budget entry: 200k is its real window, not a cap (haiku precedent)', () => {
+    // MODEL_AUTOCOMPACT_BUDGET exists to cap a 1M window down to a 200k working
+    // budget. 4.6's window IS 200k, so an entry would be Math.min(200k, 200k) —
+    // a no-op that falsely implies a larger window is being throttled. Same
+    // reasoning as haiku above, which is deliberately absent from the table.
+    expect(autoCompactLimitFor('claude-sonnet-4-6')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-sonnet-4-6')).toBe(contextLimitFor('claude-sonnet-4-6'));
+  });
+});

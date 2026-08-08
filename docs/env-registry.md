@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**149 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**150 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -150,6 +150,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_CAPTURE_SUBAGENT_OUTPUT` | boolean |  |  | `1` | Opt-in: when set to 1, a subagent's conversational OUTPUT (assistant text plus each tool call with its arguments) is appended incrementally to a redacted markdown transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, so a child killed by a timeout still leaves a usable partial record — the case where final-message capture yields nothing. Off by default for the same reasons as AFK_CAPTURE_SUBAGENT_PROMPTS (unpruned witness tree, best-effort regex redaction). |
 | `AFK_CAPTURE_SUBAGENT_PROMPTS` | boolean |  |  | `1` | Opt-in: when set to 1, every prompt a parent session sends to a subagent is written as a redacted markdown file under state/witness/<label>/prompts/. Off by default because nothing prunes the witness tree and prompts may carry secrets the regex redactor cannot catch (connection strings, PEM blocks, PII). |
 | `AFK_DEBUG` | boolean |  |  | `1` | Enable verbose debug logging across the codebase. Accepts 1 to enable. |
 | `AFK_DEBUG_CLIPBOARD` | boolean |  |  |  | Debug bracketed-paste and image-paste handling in the interactive REPL. |

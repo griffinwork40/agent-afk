@@ -107,6 +107,11 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
     case 'chunk': {
       const chunk = event.chunk;
       if (chunk.type === 'tool_use_detail') {
+        // Skip the pending paint: anthropic-direct announces each call twice and
+        // the first carries a placeholder for `toolInput`, so recording it wrote
+        // every tool twice at rest — once as ' …'. openai-compatible emits only
+        // the completed event and is unaffected.
+        if (chunk.pending) return null;
         // `toolInput` is redacted at its source (summarizeToolInput) before it
         // ever reaches this at-rest sink, so no secret-scrub is needed here.
         return {
