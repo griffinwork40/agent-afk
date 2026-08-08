@@ -103,7 +103,29 @@ Returns a combined verification manifest: `[{type: citation|absence, claim, stat
 
 Sort overall: critical → high → medium → low → nit; security first within tier; semantic/invariant findings above mechanical findings within tier. Template-fill summary block.
 
-**Merge-decision rule (mandatory — do not improvise a threshold).** Emit **DO NOT MERGE** when one or more `critical`, `high`, or `medium` findings survive Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `low` or `nit`. `medium` is **blocking by default** — a medium is an unfixed defect the author has not yet seen, not a nice-to-have. A `security`-dimension `medium` is always blocking and must be named as such in the decision line — today's narrow reachability is tomorrow's incident. State the counts that drove the decision on the same line, **with a dimension breakdown for any medium**, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium (1 security, 1 correctness).` or `Decision: MERGE — 0 blocking (3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts.
+**Merge-decision rule (mandatory — do not improvise a threshold).**
+
+Severity and disposition are **separate axes**. `severity` answers "how bad is this defect?" — it is a property of the finding. `blocking` answers "does this prevent merge?" — it is policy. Never let one silently encode the other.
+
+Every finding carries an explicit `blocking: true|false`, assigned from this default table:
+
+| severity | default `blocking` |
+|---|---|
+| `critical` | true |
+| `high` | true |
+| `medium` | true |
+| `low` | false |
+| `nit` | false |
+
+**Overrides (each requires a one-clause justification appended to the finding):**
+- A `medium` may be marked `blocking: false` when it is a bounded, non-data-affecting defect the author can reasonably land and follow up — e.g. a rare-input formatting error with no downstream consumer.
+- A `medium` in the `security` dimension is **never** overridable to `false`; today's narrow reachability is tomorrow's incident.
+- A `medium` representing a material data-integrity risk or a likely production failure under normal usage is **never** overridable to `false` — a race that intermittently loses user state stays blocking even when its blast radius keeps it out of `high`.
+- A `low` or `nit` may be marked `blocking: true` only for a stated external constraint (release gate, compliance requirement). Do not use this to smuggle a preference.
+
+Emit **DO NOT MERGE** when one or more findings carry `blocking: true` after Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `blocking: false`.
+
+State the counts that drove the decision on the same line, **with a dimension breakdown for any blocking medium**, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium blocking (1 security, 1 correctness); 1 medium waived, 3 low.` or `Decision: MERGE — 0 blocking (2 medium waived, 3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts, and never waive a finding silently — a waived medium must appear in the count with its justification.
 
 This is the terminal step — after emitting the decision, STOP. Do not act on any finding: no edits, commits, pushes, or PR/MR mutations. A blocking bug is a finding to report, not a fix to apply.
 
@@ -123,7 +145,7 @@ Confidence `low` → auto-downgrade one tier + append `[low confidence — verif
 
 **Output per dimension:** if you have read the relevant file(s) and have either real findings or a confirmed clean read, emit findings or `no issues found — read <file>`. If evidence is insufficient — you could not read the file, the tool was unavailable, no production importers were found for the symbol, or no test file exists at the asserted path — emit `unverified — <reason>` naming the missing evidence rather than invent a finding to fill the slot. Banned words from the hedging list (`ensure`, `consider`, `may`, `could`) remain banned **inside findings**; the `unverified` channel is the sanctioned path for uncertainty.
 
-**Finding schema:** `severity · confidence · dimension · file:line_range · ref:<sha> · citation-type:(diff-context|file-state) · finding (one concrete sentence naming the failure mode) · evidence (verbatim code ≤4 lines) · suggestion (one concrete fix)`.
+**Finding schema:** `severity · blocking:(true|false) · confidence · dimension · file:line_range · ref:<sha> · citation-type:(diff-context|file-state) · finding (one concrete sentence naming the failure mode) · evidence (verbatim code ≤4 lines) · suggestion (one concrete fix)`. When `blocking` departs from the default table, append `· waived: <one clause>` (or `· escalated: <one clause>`) naming the reason.
 
 **Epistemic scope disclosure (required in synthesis output).** The "What was not checked" section must include:
 - Which ref citations were verified against in Wave 1.5 (list the SHA or `unknown` if patch-file input). Example: `Citations verified inline against branch HEAD abc1234.`
