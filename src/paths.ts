@@ -345,6 +345,19 @@ export function getPromptsDir(sessionId: string): string {
 }
 
 /**
+ * Directory for opt-in captured subagent conversational OUTPUT — the mirror of
+ * {@link getPromptsDir}, which captures only what a child was *asked*.
+ *
+ * Same session-label keying and same fork semantics: a child resumes its
+ * parent's sessionId, so one directory holds every child transcript a session
+ * produced, keyed by `subagentId` filename. Pure path helper: the caller owns
+ * `mkdir` (see `agent/session/subagent-output-capture.ts`).
+ */
+export function getSubagentOutputsDir(sessionId: string): string {
+  return join(getTraceDir(sessionId), 'outputs');
+}
+
+/**
  * Inverse of {@link getTraceDir}: recover the witness `sessionLabel` from a
  * trace-file path (`.../witness/<label>/trace.jsonl`).
  *

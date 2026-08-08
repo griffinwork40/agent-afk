@@ -362,6 +362,7 @@ export function transformProviderEvent(
           toolName: event.toolName,
           toolInput: event.toolInput,
           toolInputRaw: event.toolInputRaw,
+          ...(event.pending ? { pending: true as const } : {}),
         },
       };
 

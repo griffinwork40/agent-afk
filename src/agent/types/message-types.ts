@@ -89,6 +89,12 @@ export interface ToolUseDetailChunk {
   toolInput: string;
   /** Raw JSON-serialized tool input object — used by facet derivation for exact field extraction. */
   toolInputRaw?: string;
+  /**
+   * `true` when this chunk is a pending paint whose `toolInput` is a placeholder
+   * (arguments still streaming). Mirrors `pending` on the `tool.use.start`
+   * provider event — consumers that PERSIST a record must skip these.
+   */
+  pending?: true;
   metadata?: Record<string, unknown>;
 }
 

@@ -191,6 +191,10 @@ export async function* translateMessageStream(
                 toolUseId: cb.id,
                 toolName: cb.name,
                 toolInput: ' …',
+                // Arguments stream in after this frame via `input_json_delta`, so
+                // `toolInput` above is a placeholder. `dispatchToolCalls` emits the
+                // completed twin before execution; persisting consumers skip this one.
+                pending: true,
                 sessionId: ctx.sessionId,
               },
             };

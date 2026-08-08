@@ -101,6 +101,33 @@ describe('projectOutputEvent', () => {
     }
   });
 
+  it('skips the pending tool paint — anthropic-direct announces each call twice', () => {
+    // The first announcement fires while arguments are still streaming, so its
+    // `toolInput` is a placeholder. Projecting it wrote every tool call twice at
+    // rest, the duplicate reading ' …'.
+    const pending: OutputEvent = {
+      type: 'chunk',
+      chunk: {
+        type: 'tool_use_detail',
+        toolUseId: 'tu2',
+        toolName: 'bash',
+        toolInput: ' …',
+        pending: true,
+      },
+    };
+    expect(projectOutputEvent(pending)).toBeNull();
+    const complete: OutputEvent = {
+      type: 'chunk',
+      chunk: {
+        type: 'tool_use_detail',
+        toolUseId: 'tu2',
+        toolName: 'bash',
+        toolInput: 'ls -la',
+      },
+    };
+    expect(projectOutputEvent(complete)).toMatchObject({ kind: 'tool', input: 'ls -la' });
+  });
+
   it('projects failed tool results but skips successful ones', () => {
     const failed: OutputEvent = {
       type: 'chunk',
