@@ -33,8 +33,8 @@ export interface StoredSession {
   /** Human-readable session name (kebab-case). Optional — absent on legacy
    * sidecars saved before naming existed; those resolve by id/sessionId. */
   name?: string;
-  /** Origin surface ('cli' | 'telegram' | 'daemon'). Absent on legacy sidecars → 'cli'. */
-  source?: 'cli' | 'telegram' | 'daemon';
+  /** Origin surface ('cli' | 'telegram' | 'daemon' | 'web'). Absent on legacy sidecars → 'cli'. */
+  source?: 'cli' | 'telegram' | 'daemon' | 'web';
   /** Telegram chat id when source === 'telegram' (reverse lookup). */
   telegramChatId?: number;
   model: AgentModelInput;
@@ -70,7 +70,7 @@ export interface SessionListEntry {
   id: string;   // derived from the filename
   sessionId?: string;
   name?: string;
-  source?: 'cli' | 'telegram' | 'daemon';
+  source?: 'cli' | 'telegram' | 'daemon' | 'web';
   actor?: TraceActor;
   /** Telegram chat id for telegram-sourced sidecars — lets a surface filter a chat's sessions (the /sessions switcher). */
   telegramChatId?: number;

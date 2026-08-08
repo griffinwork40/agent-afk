@@ -54,3 +54,29 @@ export function copyBundledPlugins(srcRoot, distRoot) {
   const fileCount = copyTree(src, dest);
   return { copied: true, fileCount, src, dest };
 }
+
+/**
+ * Copy <srcRoot>/web-ui-assets → <distRoot>/web-ui-assets (recursively).
+ *
+ * Mirrors {@link copyBundledPlugins}'s signature and no-throw-on-absence
+ * contract exactly: `scripts/build-web-ui.mjs` (esbuild) produces the source
+ * tree at `src/web-ui-assets/`; this copies that compiled output into
+ * whichever dist root is building (`pnpm build` / `pnpm build:dist`). The
+ * runtime resolves these files from `<dist>/web-ui-assets/` — see
+ * `src/paths.ts` `getWebUiAssetsDir()`.
+ *
+ * @param {string} srcRoot   Absolute path to the dir CONTAINING `web-ui-assets/` (e.g. <repo>/src).
+ * @param {string} distRoot  Absolute path to the dir that SHOULD contain `web-ui-assets/` (e.g. <repo>/dist).
+ * @returns {{ copied: boolean, fileCount: number, src: string, dest: string }}
+ *          `copied` is false (fileCount 0) when the source tree is absent — a
+ *          no-op that never throws, so callers can decide whether absence is fatal.
+ */
+export function copyWebUiAssets(srcRoot, distRoot) {
+  const src = join(srcRoot, 'web-ui-assets');
+  const dest = join(distRoot, 'web-ui-assets');
+  if (!existsSync(src)) {
+    return { copied: false, fileCount: 0, src, dest };
+  }
+  const fileCount = copyTree(src, dest);
+  return { copied: true, fileCount, src, dest };
+}

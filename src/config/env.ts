@@ -889,6 +889,32 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'daemon',
   },
 
+  // ── Web UI (`afk web`) ────────────────────────────────────────────────────
+  {
+    name: 'AFK_WEB_PORT',
+    description: 'Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port.',
+    type: 'number',
+    required: false,
+    example: '4141',
+    category: 'daemon',
+  },
+  {
+    name: 'AFK_WEB_HOST',
+    description: 'Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host.',
+    type: 'string',
+    required: false,
+    example: '127.0.0.1',
+    category: 'daemon',
+  },
+  {
+    name: 'AFK_WEB_TOKEN',
+    description: 'Bearer token for the `afk web` surface. When unset, a random per-run token is minted and printed in the startup URL. Setting this explicitly is also what permits a non-loopback bind.',
+    type: 'string',
+    required: false,
+    category: 'daemon',
+    secret: true,
+  },
+
   // ── Worktree management ───────────────────────────────────────────────────
   {
     name: 'AFK_WORKTREE_AUTONAME',
@@ -1608,6 +1634,11 @@ export const env = {
   get AFK_DAEMON_TASK_ID(): string | undefined { return process.env['AFK_DAEMON_TASK_ID']; },
   get AFK_DAEMON_HOST(): string | undefined { return process.env['AFK_DAEMON_HOST']; },
   get AFK_SESSIONSTART_COOLDOWN_MS(): string | undefined { return process.env['AFK_SESSIONSTART_COOLDOWN_MS']; },
+
+  // Web UI
+  get AFK_WEB_PORT(): string | undefined { return process.env['AFK_WEB_PORT']; },
+  get AFK_WEB_HOST(): string | undefined { return process.env['AFK_WEB_HOST']; },
+  get AFK_WEB_TOKEN(): string | undefined { return process.env['AFK_WEB_TOKEN']; },
 
   // Worktree
   get AFK_WORKTREE_AUTONAME(): string | undefined { return process.env['AFK_WORKTREE_AUTONAME']; },

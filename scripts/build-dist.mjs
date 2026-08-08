@@ -19,7 +19,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareSources } from './esbuild-plugin-inline-prompts.mjs';
 import { assertNoRemainingPromptReads } from './assert-inlined-prompts.mjs';
-import { copyBundledPlugins } from './lib/copy-bundled-plugins.mjs';
+import { copyBundledPlugins, copyWebUiAssets } from './lib/copy-bundled-plugins.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
@@ -150,6 +150,21 @@ try {
     );
   }
 
+  // The `afk web` browser bundle. Built here (not assumed pre-built) so a clean
+  // publish from a fresh checkout cannot ship a tarball whose `afk web` serves
+  // a 503. Fails closed for the same reason as bundled-plugins above.
+  execFileSync('node', [join(repoRoot, 'scripts/build-web-ui.mjs')], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  });
+  const webUi = copyWebUiAssets(join(repoRoot, 'src'), distDir);
+  if (!webUi.copied || webUi.fileCount === 0) {
+    throw new Error(
+      `build:dist did not copy any web-ui assets from ${webUi.src}. ` +
+        `The published tarball would ship an \`afk web\` that cannot serve its UI.`,
+    );
+  }
+
   // Final pass: drop test scaffolding (+ scrub any private names) from the
   // published artifact (see scrubPublishedArtifact).
   const scrub = scrubPublishedArtifact(distDir);
@@ -164,6 +179,7 @@ try {
   const postSize = statSync(join(distDir, 'postinstall.mjs')).size;
   console.log(`  dist/postinstall.mjs: ${(postSize / 1024).toFixed(1)} KB (copied)`);
   console.log(`  dist/bundled-plugins/: ${bundled.fileCount} files (copied)`);
+  console.log(`  dist/web-ui-assets/: ${webUi.fileCount} files (copied)`);
 } catch (error) {
   console.error('Build failed:', error.message);
   process.exit(1);

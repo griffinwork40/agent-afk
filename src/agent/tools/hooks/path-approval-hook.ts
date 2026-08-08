@@ -77,7 +77,7 @@ const TYPED_FILE_TOOLS = new Set([
 const WRITE_TOOLS = new Set(['write_file', 'edit_file']);
 
 /** Surface label threaded into the persisted grant for audit. */
-export type PathApprovalSurface = 'repl' | 'telegram' | 'unknown';
+export type PathApprovalSurface = 'repl' | 'telegram' | 'web' | 'unknown';
 
 export interface PathApprovalHookOptions {
   /**
@@ -624,7 +624,9 @@ async function promptForApproval(args: {
               ? 'elicit:telegram'
               : surface === 'repl'
                 ? 'elicit:repl'
-                : 'elicit:unknown',
+                : surface === 'web'
+                  ? 'elicit:web'
+                  : 'elicit:unknown',
           reason: `Approved via ${surface} prompt for ${toolName}`,
         });
       } catch (err) {

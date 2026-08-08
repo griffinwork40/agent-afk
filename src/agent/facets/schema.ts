@@ -54,7 +54,7 @@ export const StoredSessionInputSchema = z
   .object({
     sessionId: z.string().optional(),
     name: z.string().optional(),
-    source: z.enum(['cli', 'telegram']).optional(),
+    source: z.enum(['cli', 'telegram', 'web']).optional(),
     telegramChatId: z.number().optional(),
     model: z.string(),
     startedAt: z.number(),
@@ -117,7 +117,7 @@ export const SessionFacetSchema = z
     // provenance & identity
     facet_version: z.number().int(),
     session_id: z.string(),
-    source: z.enum(['cli', 'telegram', 'unknown']),
+    source: z.enum(['cli', 'telegram', 'web', 'unknown']),
     model: z.string(),
     derived_at: z.string(),
     derived_from: z.literal('afk-session'),

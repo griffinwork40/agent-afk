@@ -32,6 +32,7 @@ import { createSessionStats, recordTurn } from '../slash/session-stats.js';
 import { runReviewPostPublish, parsePostTargets, type PostTarget } from '../slash/_lib/review-post.js';
 import type { Writer } from '../slash/types.js';
 import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
+import { jsonDateReplacer } from '../json-date-replacer.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../../agent/trace/emit.js';
 
@@ -652,23 +653,13 @@ export function registerChatCommand(program: Command): void {
         // sequences do not corrupt the NDJSON stream on stdout.
         // ---------------------------------------------------------------------------
         if (options.format === 'stream-json') {
-          // Replacer: Date instances (e.g. paused.resetsAt) would serialize as {}
-          // without this; convert them to ISO-8601 strings instead.
-          const dateReplacer = (_k: string, v: unknown): unknown => {
-            if (v instanceof Date) return v.toISOString();
-            // Drop stack — V8 stack traces embed absolute filesystem paths and would
-            // leak host-machine layout to headless NDJSON consumers.
-            if (v instanceof Error) return { message: v.message, name: v.name };
-            return v;
-          };
-
           spinner.stop();
 
           let streamAssistantText = '';
           let streamErrored = false;
           const stream = session.sendMessageStream(message);
           for await (const event of stream) {
-            await writeAndDrain(process.stdout, JSON.stringify(event, dateReplacer) + '\n');
+            await writeAndDrain(process.stdout, JSON.stringify(event, jsonDateReplacer) + '\n');
             if (event.type === 'chunk' && event.chunk.type === 'content') {
               streamAssistantText += (event.chunk as { type: 'content'; content: string }).content;
             }
