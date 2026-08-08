@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.100.0] - 2026-08-08
+
+### Added
+- capture subagent conversational output incrementally (#935) (662628e)
+
 ## [5.99.0] - 2026-08-08
 
 ### Added
