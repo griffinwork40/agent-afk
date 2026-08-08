@@ -2,7 +2,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { getCacheTtl, isCacheEnabled, withSystemBreakpoint } from './cache-policy.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
-import { refreshEnvironmentDate } from './query/date-rollover.js';
+import { refreshEnvironmentDate } from '../shared/date-rollover.js';
 import type { SessionState } from './query/session-state.js';
 
 /**

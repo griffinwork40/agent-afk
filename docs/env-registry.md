@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**145 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**149 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -18,6 +18,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_EFFORT` | string |  |  | `medium` | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. |
 | `AFK_LOCAL_BASE_URL` | string |  |  | `http://127.0.0.1:8080` | Base URL for a self-hosted Anthropic-compatible server. When set, routes traffic away from api.anthropic.com. |
 | `AFK_MAX_BUDGET_USD` | number |  | `5.00` | `10.00` | Cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. |
+| `AFK_MAX_CONCURRENT_BACKGROUND_JOBS` | number |  | `10` | `5` | Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default. |
+| `AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS` | number |  | `8` | `4` | Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default. |
+| `AFK_MAX_CONCURRENT_SUBAGENT_CALLS` | number |  | `8` | `2` | Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default. |
 | `AFK_MAX_NESTING_DEPTH` | number |  | `3` | `2` | Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins. |
 | `AFK_MAX_OUTPUT_TOKENS` | number |  |  | `8192` | Cap on output tokens per turn. Falls back to provider default when unset. |
 | `AFK_MAX_TOKENS` | number |  | `4096` | `8192` | Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset. |
@@ -50,6 +53,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SUGGEST_ENABLED` | boolean |  |  |  | Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default. |
 | `AFK_SUGGEST_GHOST` | boolean |  | `1` | `0` | Enable REPL ghost-text inline suggestions (Tier-1 history/dropdown + optional Tier-2 LLM). 1 = on (default), 0 = off. Set 0/false/off/no to disable all ghost text. Tier-2 LLM is separately gated by AFK_SUGGEST_ENABLED. |
 | `AFK_SUGGEST_MODEL` | string |  |  |  | Override the small model used for REPL ghost-text suggestions. Falls back to AFK_COMPACT_MODEL or haiku-class for anthropic, or the session model for other providers. |
+| `AFK_SUGGEST_PROMPT` | boolean |  |  |  | Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider). |
 | `AFK_SYSTEM_PROMPT` | string |  |  | `You are a helpful agent.` | Raw operator-overlay prompt. Highest-priority overlay (over afk.config.json and AFK.md). Appended on top of the framework base (prompts/system-prompt.md) under an "# Operator configuration" header — it augments, never replaces, the base. |
 | `AFK_TASK_BUDGET` | number |  | `100000` | `200000` | Per-task token budget ceiling. Aborts when cumulative usage would exceed it. |
 | `AFK_TEMPERATURE` | number |  |  | `0.7` | Numeric temperature override for model sampling. Provider default if unset. |

@@ -29,6 +29,7 @@ import type {
   RewindTarget,
 } from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
+import { providerAbortReason } from '../abort-reason.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import {
@@ -880,7 +881,7 @@ export class AgentSession implements IAgentSession {
   private async onAbort(): Promise<void> {
     void this.ledger.seal('abort');
     try {
-      await this.providerQuery.interrupt();
+      await this.providerQuery.interrupt(providerAbortReason(this.abortController.signal.reason));
     } catch {
       // Provider interrupt may fail if session is already torn down; swallow.
     }

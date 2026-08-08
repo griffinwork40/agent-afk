@@ -9,8 +9,12 @@ import { calculateContentWidth } from '../markdown-stream-format.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import {
   renderTextChildLines,
+  toolLaneWidth,
+  clampLineToTerminal,
   UNICODE_GLYPHS,
+  type ToolEntry,
 } from '../commands/interactive/tool-lane-render.js';
+import { renderGroupedRootTools } from '../commands/interactive/tool-lane-render-grouped-root.js';
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -136,6 +140,15 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
   const LONG = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do '.repeat(12);
   const CHROME_SLACK = 12; // indent + prefix + spine glyph budget
 
+  /** A single root tool entry whose composed row far exceeds any test width. */
+  const longToolEntry = (): ToolEntry => ({
+    kind: 'tool',
+    toolUseId: 'tu_measure_1',
+    toolName: 'bash',
+    toolInput: JSON.stringify({ command: LONG }),
+    prefix: `bash(${LONG})`,
+  });
+
   for (const cols of [120, 200]) {
     it(`bounds prose, thinking, and tool-lane text at ${cols} cols`, () => {
       withMeasureEnv(undefined, () =>
@@ -152,16 +165,30 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
           const laneLines = renderTextChildLines(LONG, '  ', UNICODE_GLYPHS);
           const laneMax = Math.max(...laneLines.map((l) => stripAnsi(l).length));
 
+          // Composed tool ROWS, not just the lane's wrapped text. These are
+          // built by string concatenation (prefix + args + outcome) and clamped
+          // as a unit, so they need their own coverage: capping the lane's text
+          // while its sibling rows ran to the screen edge was the exact
+          // discontinuity this describe() exists to catch, and it went
+          // unnoticed because only the text path was pinned here.
+          const rowLines = renderGroupedRootTools(
+            new Map([['bash', [longToolEntry()]]]),
+            ['bash'],
+          );
+          const rowMax = Math.max(...rowLines.map((l) => stripAnsi(l).length));
+
           const ceiling = DEFAULT_TEXT_MEASURE + CHROME_SLACK;
           expect(proseWidth).toBeLessThanOrEqual(ceiling);
           expect(thinkingMax).toBeLessThanOrEqual(ceiling);
           expect(laneMax).toBeLessThanOrEqual(ceiling);
+          expect(rowMax).toBeLessThanOrEqual(ceiling);
 
           // And crucially: they do not scale with the terminal.
           if (cols > ceiling) {
             expect(proseWidth).toBeLessThan(cols);
             expect(thinkingMax).toBeLessThan(cols);
             expect(laneMax).toBeLessThan(cols);
+            expect(rowMax).toBeLessThan(cols);
           }
         }),
       );
@@ -178,4 +205,28 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
       }),
     );
   });
+
+  // Regression: PR #923 fed the RAW terminal width into `capToMeasure` when
+  // computing the text-wrap budget, then separately clamped the composed
+  // line to `toolLaneWidth()` (the row budget). Both are capped to the same
+  // measure constant, but wrap budget included chrome (indent/prefix) that
+  // the row clamp did not budget for, so the composed line (indent + prefix
+  // + wrapped text) could exceed the row clamp and get its tail silently
+  // truncated by `clampLineToTerminal`. The `rowMax <= ceiling` assertion
+  // above does not catch this: it only bounds the max width, not whether the
+  // clamp actually altered any line. Pin the real invariant instead — for
+  // every wrapped line, re-applying the row clamp must be a no-op.
+  for (const cols of [120, 200]) {
+    it(`clamping wrapped tool-lane text at the row budget is a no-op at ${cols} cols`, () => {
+      withMeasureEnv(undefined, () =>
+        withCols(cols, () => {
+          const laneLines = renderTextChildLines(LONG, '  ', UNICODE_GLYPHS);
+          const rowBudget = toolLaneWidth();
+          for (const line of laneLines) {
+            expect(clampLineToTerminal(line, rowBudget)).toBe(line);
+          }
+        }),
+      );
+    });
+  }
 });

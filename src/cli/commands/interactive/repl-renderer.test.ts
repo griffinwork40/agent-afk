@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createReplRenderer } from './repl-renderer.js';
+import { displayWidth, stripAnsi } from '../../display.js';
 
 function makeStdout(isTTY: boolean) {
   const write = vi.fn();
@@ -138,6 +139,61 @@ describe('createReplRenderer', () => {
 
       expect(commitAbove).toHaveBeenCalledWith('hello');
       expect(stdout.write).not.toHaveBeenCalled();
+    });
+  });
+  describe('width bounding (out-of-bounds guard)', () => {
+    const originalColumns = process.stdout.columns;
+    const setColumns = (n: number): void => {
+      Object.defineProperty(process.stdout, 'columns', {
+        configurable: true,
+        writable: true,
+        value: n,
+      });
+    };
+    afterEach(() => setColumns(originalColumns as number));
+
+    it('wraps an over-wide line on the disarmed TTY path so no row exits the right edge', () => {
+      setColumns(62);
+      const stdout = makeStdout(true);
+      const renderer = createReplRenderer(stdout);
+
+      renderer.writeLine('  ↳ ' + 'x'.repeat(300));
+
+      const written = stdout.write.mock.calls[0]?.[0] as string;
+      const rows = written.replace(/\n$/, '').split('\n');
+      expect(rows.length).toBeGreaterThan(1);
+      for (const row of rows) {
+        expect(
+          displayWidth(row),
+          `row exceeds 62: ${JSON.stringify(stripAnsi(row))}`,
+        ).toBeLessThanOrEqual(62);
+      }
+      // Continuation rows keep the source indent instead of snapping to col 0.
+      for (const row of rows.slice(1)) expect(row.startsWith('  ')).toBe(true);
+    });
+
+    it('does NOT pre-wrap on the armed path — commitAbove owns wrapping and band reflow', () => {
+      setColumns(62);
+      const stdout = makeStdout(true);
+      const commitAbove = vi.fn();
+      const renderer = createReplRenderer(stdout);
+      renderer.setCompositor({ isArmed: () => true, commitAbove });
+
+      const long = '  ↳ ' + 'x'.repeat(300);
+      renderer.writeLine(long);
+
+      expect(commitAbove).toHaveBeenCalledWith(long);
+    });
+
+    it('leaves non-TTY output byte-identical so piped rows stay whole', () => {
+      setColumns(62);
+      const stdout = makeStdout(false);
+      const renderer = createReplRenderer(stdout);
+
+      const long = 'x'.repeat(300);
+      renderer.writeLine(long);
+
+      expect(stdout.write).toHaveBeenCalledWith(long + '\n');
     });
   });
 });

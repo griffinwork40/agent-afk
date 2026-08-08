@@ -38,6 +38,7 @@ import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk
 import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
+import { promoteWithQueuedFlush, previewOneLine } from './queued-flush.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
@@ -124,16 +125,23 @@ export async function runTurn(
   // per operator decision; the main agent run is never backgrounded wholesale).
   // Promotion is async; we fire-and-forget and commit a confirmation line above
   // the live overlay via completionWriter when each job is adopted.
+  //
+  // Any typed-ahead message queued at keypress time rides along: the promotion
+  // tool_result is the one carrier that reaches this turn while it is still
+  // running, so flushing there beats waiting for the next-turn drain. The flush
+  // is confirm-then-drain (see queued-flush.ts) — an unpromotable or capped
+  // press leaves the queue untouched rather than eating the message.
   const handleBackgroundKey = (): void => {
     const control = h.subagentControl;
     if (!control?.hasPromotableForeground()) return;
-    void control
-      .promoteActiveForeground()
-      .then((jobs) => {
+    void promoteWithQueuedFlush(control, borrowedCompositor, h.onQueuedUserMessage)
+      .then(({ jobs, flushedText, flushedPreview }) => {
+        const write = (completionWriter ?? { fn: console.log }).fn;
         for (const job of jobs) {
-          (completionWriter ?? { fn: console.log }).fn(
-            palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`),
-          );
+          write(palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`));
+        }
+        if (flushedText !== undefined) {
+          write(palette.dim(`  → queued message sent to this turn: ${previewOneLine(flushedPreview ?? flushedText)}`));
         }
       })
       .catch(() => { /* best-effort UI note; promotion itself already happened */ });

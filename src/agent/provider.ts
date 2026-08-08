@@ -332,7 +332,7 @@ export interface ProviderQueryArgs {
  * harness having to widen a Claude-specific union.
  */
 export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
-  interrupt(): Promise<void>;
+  interrupt(reason?: import('./abort-reason.js').ProviderAbortReason): Promise<void>;
   setModel(model?: string): Promise<void>;
   setPermissionMode(mode: string): Promise<void>;
   supportedCommands(): Promise<ProviderCommandInfo[]>;

@@ -11,6 +11,97 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.7] - 2026-08-07
+
+### Fixed
+- bound every raw REPL write to the terminal width (#931) (d467583)
+
+## [5.97.6] - 2026-08-07
+
+### Fixed
+- stop generated build artifacts and symlinked dep trees from making worktrees immortal (#927) (8d9b6a0)
+
+## [5.97.5] - 2026-08-07
+
+### Fixed
+- tell research-agent about its registry grants, not just grant them (#928) (5e8da4f)
+- preserve abort origins across provider teardown (#929) (69d0d57)
+
+## [5.97.4] - 2026-08-07
+
+### Changed
+- dissolve the src/telegram.ts monolith into src/telegram/ (#825) (#930) (79d8642)
+
+## [5.97.3] - 2026-08-07
+
+### Fixed
+- hold composed tool-lane rows to the shared reading measure (#923) (e922483)
+
+## [5.97.2] - 2026-08-07
+
+### Fixed
+- name the ignored entry that preserved a tree, and stop the test that manufactured them (#926) (6b9ef12)
+
+## [5.97.1] - 2026-08-06
+
+### Fixed
+- grant research-agent memory_search so the ground-state surveyor can reach the archive (#925) (5f227a4)
+- normalize doubled-slash tilde before expandHome in read-denylist parser (#924) (cec3e51)
+- gate the relocated mcp.json carve-out on builtin denies (#779) (#815) (b89148c)
+- route /compact spinner through the compositor so typed input stays visible (#922) (1e485fa)
+
+## [5.97.0] - 2026-08-06
+
+### Added
+- flush queued messages into the running turn on Ctrl+B (#891) (ba80f40)
+- make concurrency ceilings operator-configurable (#904) (189854b)
+
+## [5.96.1] - 2026-08-06
+
+### Changed
+- 9 low-risk /simplify --all cleanups (dead code + dedup + one tilde-expansion bugfix) (#893) (c9374cd)
+
+## [5.96.0] - 2026-08-06
+
+### Added
+- show config provenance and apply hot keys live in /config (#906) (522d4ba)
+- AI-generated ghost-text suggestion at an empty prompt (#895) (a35bdaa)
+
+### Changed
+- Revert "refactor(cli): swap prompt and stage rail; goblin flanks the prompt (…" (#920) (6a8853f)
+- swap prompt and stage rail; goblin flanks the prompt (#336) (#905) (febb3a8)
+
+## [5.95.7] - 2026-08-05
+
+### Fixed
+- remove wrap-boundary leading spaces (#903) (3a8054a)
+
+## [5.95.6] - 2026-08-05
+
+### Fixed
+- bill cache-creation residual outside known TTL buckets, clamp wire-sourced counts (#915) (f09c5bc)
+- resolve dated wire ids for Opus 4.6/4.7/4.8 and Sonnet 4.6 (#914) (7a8a57d)
+
+## [5.95.5] - 2026-08-05
+
+### Fixed
+- dedupe cache hit-rate formula, fix cumulative-total mislabel, align field precedence (#916) (b283bfd)
+
+## [5.95.4] - 2026-08-05
+
+### Fixed
+- tell a forked child its tool-round budget at dispatch (#910) (99827c6)
+
+## [5.95.3] - 2026-08-05
+
+### Fixed
+- correct prompt-cache cost accounting and surface hit rate (#909) (c80e004)
+
+## [5.95.2] - 2026-08-05
+
+### Fixed
+- normalize blank optional arguments (#908) (0fea95c)
+
 ## [5.95.1] - 2026-08-05
 
 ### Fixed

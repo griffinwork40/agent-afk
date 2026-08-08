@@ -333,6 +333,33 @@
       "category": "model"
     },
     {
+      "name": "AFK_MAX_CONCURRENT_BACKGROUND_JOBS",
+      "description": "Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default.",
+      "type": "number",
+      "required": false,
+      "default": "10",
+      "example": "5",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS",
+      "description": "Maximum concurrency-safe tool calls run simultaneously within one dispatcher batch. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.",
+      "type": "number",
+      "required": false,
+      "default": "8",
+      "example": "4",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS",
+      "description": "Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default.",
+      "type": "number",
+      "required": false,
+      "default": "8",
+      "example": "2",
+      "category": "model"
+    },
+    {
       "name": "AFK_MAX_NESTING_DEPTH",
       "description": "Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins.",
       "type": "number",
@@ -704,6 +731,13 @@
       "name": "AFK_SUGGEST_MODEL",
       "description": "Override the small model used for REPL ghost-text suggestions. Falls back to AFK_COMPACT_MODEL or haiku-class for anthropic, or the session model for other providers.",
       "type": "string",
+      "required": false,
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUGGEST_PROMPT",
+      "description": "Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).",
+      "type": "boolean",
       "required": false,
       "category": "model"
     },

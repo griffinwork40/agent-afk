@@ -897,10 +897,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   // ---- ProviderQuery surface ------------------------------------------------
 
-  async interrupt(): Promise<void> {
+  async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
     // Aborts the in-flight turn, or parks the reason for the next begin()
     // when the interrupt lands between turns.
-    this.abort.requestAbort('interrupted');
+    this.abort.requestAbort(reason);
   }
 
   /**

@@ -14,6 +14,7 @@ import type { CliOptions } from './shared.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { palette } from '../../palette.js';
+import { boundLineToTerminal } from '../../render/bounded-line.js';
 
 /**
  * Seed session stats + permission/thinking-UI mode, print the `trace:` and
@@ -101,9 +102,15 @@ export function createReplSurface(a: {
   // after `armCompositor` resolves (when a borrowed compositor is available)
   // so between-turn slash output commits above the live overlay instead of
   // overlaying onto the input row. See CompletionWriter docs in shared.ts.
+  //
+  // Invariant: while these slots hold the raw `console.log` default there is
+  // no compositor to wrap what they emit, so each line is bounded to the
+  // terminal here. Once `runReplLoop` swaps in `compositor.commitAbove`, that
+  // sink owns wrapping (and band reflow on resize) and this bound is gone
+  // with the closure — the two must never both wrap the same line.
   const completionWriter: CompletionWriter = {
-    fn: (line) => console.log(line),
-    idleFn: (line) => console.log(line),
+    fn: (line) => console.log(boundLineToTerminal(line)),
+    idleFn: (line) => console.log(boundLineToTerminal(line)),
   };
   // Construct StatusLine BEFORE createReplRenderer so the renderer can route
   // its inter-turn raw writes through statusLine.withFullScrollRegion(...) —

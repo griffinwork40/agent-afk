@@ -1,0 +1,127 @@
+/**
+ * #779 — the `AFK_HOME`-relocated `mcp.json` carve-out must not punch a hole
+ * through a DIFFERENT builtin denied root.
+ *
+ * Contract under test: the carve-out reaches `<afkHome>/config/mcp.json` through
+ * the denied `<afkHome>/config` root, and nothing else. When the operator
+ * relocates the home underneath another floor, that floor still wins.
+ */
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { gateDerivedCarveOuts } from './read-denylist-carveout.js';
+import { isReadDenied, READ_ALLOWLIST_REL } from './read-denylist.js';
+
+/** A builtin-denied credential root other than the AFK home. */
+const OTHER_DENIED_ROOT = join(homedir(), '.gnupg');
+
+describe('gateDerivedCarveOuts — pure gate', () => {
+  const home = homedir();
+
+  it('keeps a carve-out whose only containing root is the one it pierces', () => {
+    const entry = join(home, '.afk', 'config', 'mcp.json');
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([entry]);
+  });
+
+  it('drops a carve-out that also sits under another builtin denied root', () => {
+    const entry = join(OTHER_DENIED_ROOT, 'afk', 'config', 'mcp.json');
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([]);
+  });
+
+  it('keeps a carve-out under a relocated home that is not denied elsewhere', () => {
+    const entry = join(home, 'scratch', 'afk', 'config', 'mcp.json');
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([entry]);
+  });
+
+  it('excludes the pierced root by EQUALITY, not by prefix', () => {
+    // The discriminator is load-bearing: the other denied root is a PREFIX of
+    // the relocated home but not equal to the pierced root, so it must stay in
+    // the gate. A prefix-based exclusion would re-open the hole.
+    const entry = join(OTHER_DENIED_ROOT, 'afk', 'config', 'mcp.json');
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([]);
+  });
+
+  it('does not treat a sibling path sharing a name prefix as contained', () => {
+    const entry = join(`${OTHER_DENIED_ROOT}-extra`, 'config', 'mcp.json');
+    expect(gateDerivedCarveOuts([entry], [OTHER_DENIED_ROOT])).toEqual([entry]);
+  });
+
+  it('fails closed when the carved root remains in the gate set', () => {
+    const entry = join(home, '.afk', 'config', 'mcp.json');
+    expect(gateDerivedCarveOuts([entry], [join(home, '.afk', 'config')])).toEqual([]);
+  });
+
+  it('preserves an independent root that canonicalizes to the carved root', () => {
+    const carved = join(home, 'canonical-config');
+    const entry = join(carved, 'mcp.json');
+    // The caller removes only the designated carved source; the independently
+    // configured root with the same canonical spelling remains in this list.
+    expect(gateDerivedCarveOuts([entry], [carved])).toEqual([]);
+  });
+});
+
+describe('read denylist — relocated AFK_HOME under a denied root (#779)', () => {
+  // The resolveLists() memo is keyed on AFK_HOME + AFK_READ_DENYLIST, so
+  // reassigning the env var is enough to rebuild it — no module reload needed.
+  // Matches the existing #740 relocation tests in read-denylist.test.ts.
+  beforeEach(() => {
+    delete process.env['AFK_HOME'];
+    delete process.env['AFK_READ_DENYLIST'];
+  });
+
+  afterEach(() => {
+    delete process.env['AFK_HOME'];
+    delete process.env['AFK_READ_DENYLIST'];
+  });
+
+  it('refuses the derived mcp.json carve-out when AFK_HOME is under another floor', () => {
+    process.env['AFK_HOME'] = join(OTHER_DENIED_ROOT, 'afk');
+    const target = join(OTHER_DENIED_ROOT, 'afk', 'config', 'mcp.json');
+    expect(isReadDenied(target).denied).toBe(true);
+  });
+
+  it('names the outer floor as the matching root, not the AFK config dir', () => {
+    process.env['AFK_HOME'] = join(OTHER_DENIED_ROOT, 'afk');
+    const verdict = isReadDenied(join(OTHER_DENIED_ROOT, 'afk', 'config', 'mcp.json'));
+    expect(verdict.matched).toBe(OTHER_DENIED_ROOT);
+  });
+
+  it('still allows the carve-out for the default AFK_HOME', () => {
+    const target = join(homedir(), '.afk', 'config', 'mcp.json');
+    expect(isReadDenied(target).denied).toBe(false);
+  });
+
+  it('still allows the carve-out for a relocated home outside every denied root', () => {
+    process.env['AFK_HOME'] = join(homedir(), 'afk-relocated-779');
+    const target = join(homedir(), 'afk-relocated-779', 'config', 'mcp.json');
+    expect(isReadDenied(target).denied).toBe(false);
+  });
+
+  it('keeps the sibling afk.env denied under a relocated home', () => {
+    process.env['AFK_HOME'] = join(homedir(), 'afk-relocated-779');
+    const target = join(homedir(), 'afk-relocated-779', 'config', 'afk.env');
+    expect(isReadDenied(target).denied).toBe(true);
+  });
+
+  it('lets an operator AFK_READ_DENYLIST entry still outrank the carve-out', () => {
+    const target = join(homedir(), '.afk', 'config', 'mcp.json');
+    process.env['AFK_READ_DENYLIST'] = target;
+    expect(isReadDenied(target).denied).toBe(true);
+  });
+});
+
+// #815 review (F2): the suite above pins ONLY the `.afk/config/mcp.json`
+// carve-out by name, so it could not have caught a regression in any OTHER
+// entry of READ_ALLOWLIST_REL — which is exactly what happened when
+// `.ssh/config` / `.ssh/known_hosts` were routed through a gate scoped to
+// exclude only the `.afk/config` root. Iterating the exported constant
+// (rather than hardcoding each entry) means a FUTURE carve-out added without
+// a matching exclusion in `CARVEOUT_PIERCED_SOURCE` fails this test instead
+// of silently shipping denied.
+describe('read denylist — every static carve-out survives its own gate', () => {
+  it('keeps every READ_ALLOWLIST_REL entry allowed under the default AFK_HOME', () => {
+    for (const rel of READ_ALLOWLIST_REL) {
+      expect(isReadDenied(join(homedir(), rel)).denied, `regressed: ${rel}`).toBe(false);
+    }
+  });
+});

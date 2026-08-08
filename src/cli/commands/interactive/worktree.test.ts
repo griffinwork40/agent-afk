@@ -263,7 +263,41 @@ describe('setupWorktree', () => {
     const logged = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
     expect(logged).toMatch(/preserved/);
     expect(logged).toMatch(/ignored/);
+    // The message must NAME the entry that protected the tree. A generic
+    // "(e.g. .env)" reads as a finding: a user whose tree was held by leftover
+    // test detritus went looking for a secret that did not exist, and the real
+    // cause stayed invisible across every exit.
+    expect(logged).toContain('.env');
+    expect(logged).not.toContain('e.g.');
     logSpy.mockRestore();
+  });
+
+  // Regression (this session): the tree was held by an unrecognised ignored
+  // entry that is NOT a secret — leftover `.test-temp-edit-file/` from the
+  // suite. The old wording claimed `.env`; the message must say what is
+  // actually there.
+  it('names the real offending entry when it is not a secret', async () => {
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('rev-parse')) {
+        return { stdout: `${repoRoot}/.git\n`, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--ignored')) {
+        return { stdout: '!! .test-temp-edit-file/\n!! node_modules/\n', stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const handle = await setupWorktree('feat-x', { execFile: mock });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await handle.cleanup();
+    const logged = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    logSpy.mockRestore();
+
+    expect(logged).toContain('.test-temp-edit-file/');
+    expect(logged).not.toContain('.env');
   });
 
   it('cleanup still removes a clean tree whose ignored content is only build output', async () => {

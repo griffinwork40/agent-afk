@@ -66,6 +66,7 @@ import {
   getEvalCasesIndexPath,
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
+import { atomicWriteFile } from '../../utils/envFile.js';
 import { describeEvalRunCoverage } from './eval-run-coverage.js';
 import { EvalGenError, sha256Bytes, sliceTracePrefix } from './replay-fixture.js';
 
@@ -326,8 +327,8 @@ export function writeEvalCase(
   }
 
   // 2. Write JSON + markdown (atomic) after fixture is durable.
-  atomicWriteJson(jsonPath, validated);
-  atomicWriteText(mdPath, renderEvalCaseMarkdown(validated));
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
+  atomicWriteFile(mdPath, renderEvalCaseMarkdown(validated), 0o666);
 
   // 3. Append the index event — best-effort, matching card-writer convention.
   appendIndex({
@@ -513,23 +514,13 @@ function appendIndex(event: EvalCaseIndexEvent): void {
 // Atomic write helpers
 // ---------------------------------------------------------------------------
 
-function atomicWriteJson(path: string, data: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, path);
-}
-
-function atomicWriteText(path: string, text: string): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
-}
-
 /**
  * Atomic write for a binary payload — keeps the bytes verbatim through the
  * tmp → rename dance. The fixture file is JSONL text in practice, but we
  * write the raw Buffer to preserve byte-fidelity guarantees the slicer
- * provides (no transcoding through string).
+ * provides (no transcoding through string). Kept local (rather than the
+ * shared `atomicWriteFile` in `utils/envFile.ts`, used below for the JSON/
+ * markdown writes) because that helper's signature is `string`-only.
  */
 function atomicWriteBinary(path: string, bytes: Buffer): void {
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;

@@ -3,7 +3,6 @@ import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
-import { getTerminalWidth } from '../../terminal-size.js';
 import { truncateDisplayWidth, stripAnsi } from '../../display.js';
 import {
   renderOverlayChildren,
@@ -12,6 +11,7 @@ import {
   formatAgentChildren,
   renderGroupedRootTools,
   getGlyphs,
+  toolLaneWidth,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -328,7 +328,7 @@ export class ToolLane {
     // `renderOverlayChildren` / `renderFlushChildren` in tool-lane-render.ts.
     // Read once per frame — `getTerminalWidth()` is a process.stdout.columns
     // lookup, but consistency across the frame matters more than a few µs.
-    const cols = getTerminalWidth();
+    const cols = toolLaneWidth();
     const clamp = (line: string): string => truncateDisplayWidth(line, cols);
 
     // Collect root-level tool entries (those rendered at the top of the

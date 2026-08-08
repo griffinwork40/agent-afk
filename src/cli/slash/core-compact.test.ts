@@ -11,7 +11,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SlashCommand, SlashContext, SessionStats } from './types.js';
 import { coreCommands } from './commands/core.js';
 import { createHookRegistry } from '../../agent/hooks.js';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, AbortError } from '../../utils/errors.js';
+
+// File-wide `ora` mock so the H1 spinner-routing tests below can assert
+// whether the bare-ora constructor was invoked at all (it must NOT be, on
+// the compositor path — that is the entire point of the fix: a bare ora
+// racing the persistent TerminalCompositor's frame repaints is the bug).
+// Mirrors the stop()-returns-inst mocking style used in
+// interactive-lifecycle.test.ts / interactive.boot-warnings.test.ts. Every
+// pre-existing test below (which predates this mock) is unaffected — it
+// only inspects `lines`, never `ora` internals — so the mocked start/stop
+// no-ops are behaviorally transparent to them.
+const oraFactory = vi.hoisted(() =>
+  vi.fn(() => {
+    const inst = { start: vi.fn(), stop: vi.fn() };
+    inst.start.mockReturnValue(inst);
+    return inst;
+  }),
+);
+vi.mock('ora', () => ({ default: oraFactory }));
 
 function makeStats(): SessionStats {
   return {
@@ -74,6 +92,24 @@ function getCompactCmd(): SlashCommand {
   const cmd = coreCommands.find((c) => c.name === '/compact');
   if (!cmd) throw new Error('compact command not registered');
   return cmd;
+}
+
+/**
+ * Extends `makeCtx` with a mock `getCompositor` — the H1 fix's TTY path.
+ * `setSpinner` is the only compositor method the handler calls; kept as a
+ * bare `vi.fn()` (structural typing satisfies `TerminalCompositor` for the
+ * handler's purposes, matching how `core-rewind.test.ts` mocks
+ * `suspendInput`/`resumeInput` with a `Mock`-cast object rather than a full
+ * compositor instance).
+ */
+function makeCtxWithCompositor(
+  session: FakeSession,
+): { ctx: SlashContext; lines: string[]; setSpinner: ReturnType<typeof vi.fn> } {
+  const { ctx, lines } = makeCtx(session);
+  const setSpinner = vi.fn();
+  ctx.getCompositor = () =>
+    ({ setSpinner }) as unknown as ReturnType<NonNullable<SlashContext['getCompositor']>>;
+  return { ctx, lines, setSpinner };
 }
 
 describe('/compact slash handler', () => {
@@ -273,5 +309,146 @@ describe('/compact PreCompact hook integration', () => {
     // HookBlockedError thrown by handler surfaces as a block (fail-safe) -> skipped.
     const info = lines.find((l) => l.startsWith('INFO:'));
     expect(info).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H1: route the progress indicator through the compositor's in-frame
+// spinner instead of a bare ora, so a single frame owns both the spinner
+// row and the input line (see terminal-compositor.ts:~800 for the ora-vs-
+// compositor region-tracking race this avoids).
+// ---------------------------------------------------------------------------
+
+describe('/compact spinner routing (H1: compositor vs. bare ora)', () => {
+  beforeEach(() => {
+    oraFactory.mockClear();
+  });
+
+  it('with a compositor: enables then disables the in-frame spinner and never constructs ora', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 10,
+      messagesAfter: 4,
+    });
+    const { ctx, setSpinner } = makeCtxWithCompositor(session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(setSpinner).toHaveBeenCalledTimes(2);
+    expect(setSpinner).toHaveBeenNthCalledWith(1, { enabled: true });
+    expect(setSpinner).toHaveBeenNthCalledWith(2, { enabled: false });
+    expect(oraFactory).not.toHaveBeenCalled();
+  });
+
+  it('without a compositor (getCompositor absent): falls back to the bare-ora path unchanged', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 10,
+      messagesAfter: 4,
+    });
+    const { ctx } = makeCtx(session); // no getCompositor at all
+    expect(ctx.getCompositor).toBeUndefined();
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(oraFactory).toHaveBeenCalledTimes(1);
+    const instance = oraFactory.mock.results[0]?.value as { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
+    expect(instance.start).toHaveBeenCalledTimes(1);
+    expect(instance.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('without a compositor (getCompositor returns null): falls back to the bare-ora path unchanged', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 10,
+      messagesAfter: 4,
+    });
+    const { ctx } = makeCtx(session);
+    ctx.getCompositor = () => null;
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(oraFactory).toHaveBeenCalledTimes(1);
+    const instance = oraFactory.mock.results[0]?.value as { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
+    expect(instance.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the in-frame spinner even when session.compact() rejects', async () => {
+    const session = fakeSession();
+    session.compact.mockRejectedValue(new Error('compact blew up'));
+    const { ctx, setSpinner, lines } = makeCtxWithCompositor(session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(setSpinner).toHaveBeenCalledTimes(2);
+    expect(setSpinner).toHaveBeenNthCalledWith(1, { enabled: true });
+    expect(setSpinner).toHaveBeenNthCalledWith(2, { enabled: false });
+    expect(oraFactory).not.toHaveBeenCalled();
+    expect(lines.find((l) => l.startsWith('ERROR:'))).toContain('compact blew up');
+  });
+
+  it('does not announce or start the in-frame spinner when the PreCompact hook blocks', async () => {
+    const session = fakeSession();
+    const registry = createHookRegistry();
+    registry.register('PreCompact', async () => ({
+      decision: 'block' as const,
+      reason: 'frozen',
+    }));
+    const sessionWithRegistry = { ...session, hookRegistry: registry, sessionId: 'test-sess' };
+    const { ctx, setSpinner, lines } = makeCtxWithCompositor(sessionWithRegistry as unknown as typeof session);
+
+    const result = await getCompactCmd().handler(ctx, '');
+
+    expect(result).toBe('continue');
+    expect(session.compact).not.toHaveBeenCalled();
+    expect(setSpinner).not.toHaveBeenCalled();
+    expect(lines).not.toContain('INFO:Summarizing earlier turns...');
+    expect(lines).toContain('INFO:Compaction skipped: frozen');
+    expect(oraFactory).not.toHaveBeenCalled();
+  });
+
+  it('disables the in-frame spinner and rethrows on AbortError', async () => {
+    const session = fakeSession();
+    session.compact.mockRejectedValue(new AbortError('user cancelled'));
+    const { ctx, setSpinner } = makeCtxWithCompositor(session);
+
+    await expect(getCompactCmd().handler(ctx, '')).rejects.toBeInstanceOf(AbortError);
+
+    expect(setSpinner).toHaveBeenCalledTimes(2);
+    expect(setSpinner).toHaveBeenNthCalledWith(1, { enabled: true });
+    expect(setSpinner).toHaveBeenNthCalledWith(2, { enabled: false });
+  });
+
+  it('with a compositor: still disables the spinner on every !result.compacted branch', async () => {
+    const reasons = [
+      'aborted',
+      'summarization-failed: x',
+      'microcompacted',
+      'nothing-to-summarize',
+      'not-supported',
+      'responses-compaction-unavailable',
+      'some-unknown-reason',
+    ];
+    for (const reason of reasons) {
+      oraFactory.mockClear();
+      const session = fakeSession();
+      session.compact.mockResolvedValue({
+        compacted: false,
+        reason,
+        messagesBefore: 2,
+        messagesAfter: 2,
+      });
+      const { ctx, setSpinner } = makeCtxWithCompositor(session);
+
+      await getCompactCmd().handler(ctx, '');
+
+      expect(setSpinner).toHaveBeenCalledTimes(2);
+      expect(setSpinner).toHaveBeenNthCalledWith(1, { enabled: true });
+      expect(setSpinner).toHaveBeenNthCalledWith(2, { enabled: false });
+      expect(oraFactory).not.toHaveBeenCalled();
+    }
   });
 });

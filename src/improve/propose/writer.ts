@@ -33,7 +33,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
@@ -49,6 +48,7 @@ import {
   getProposalsDir,
   getProposalsIndexPath,
 } from '../paths.js';
+import { atomicWriteFile } from '../../utils/envFile.js';
 
 export interface WriteProposalOutcome {
   proposalId: string;
@@ -69,8 +69,8 @@ export function writeProposal(proposal: ImprovementProposal): WriteProposalOutco
   const jsonPath = getProposalJsonPath(validated.proposalId);
   const mdPath = getProposalMarkdownPath(validated.proposalId);
 
-  atomicWriteJson(jsonPath, validated);
-  atomicWriteText(mdPath, renderProposalMarkdown(validated));
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
+  atomicWriteFile(mdPath, renderProposalMarkdown(validated), 0o666);
   appendIndex({
     timestamp: new Date().toISOString(),
     event: 'created',
@@ -290,20 +290,4 @@ function appendIndex(event: ProposalIndexEvent): void {
   } catch {
     // Best-effort, matching card-writer.
   }
-}
-
-// ---------------------------------------------------------------------------
-// Atomic write helpers (mirror card-writer.ts)
-// ---------------------------------------------------------------------------
-
-function atomicWriteJson(path: string, data: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, path);
-}
-
-function atomicWriteText(path: string, text: string): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
 }

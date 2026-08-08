@@ -441,8 +441,8 @@ export class ProviderRouter implements ProviderQuery {
 
   // ---- ProviderQuery delegation ------------------------------------------
 
-  async interrupt(): Promise<void> {
-    await this.active?.query.interrupt();
+  async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
+    await this.active?.query.interrupt(reason);
   }
 
   async setModel(model?: string): Promise<void> {

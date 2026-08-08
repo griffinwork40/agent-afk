@@ -12,7 +12,7 @@
  */
 
 import { TimeoutError } from '../utils/errors.js';
-import { settleWithConcurrencyLimit, DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } from './concurrency-pool.js';
+import { settleWithConcurrencyLimit, resolveMaxConcurrentSubagentCalls } from './concurrency-pool.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,7 +160,7 @@ export async function runDAG(
 
   validateDAG(graph);
 
-  const { failFast = true, nodeTimeoutMs, maxConcurrency = DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } = options;
+  const { failFast = true, nodeTimeoutMs, maxConcurrency = resolveMaxConcurrentSubagentCalls() } = options;
   const nodeTimeoutEnabled =
     nodeTimeoutMs !== undefined && Number.isFinite(nodeTimeoutMs) && nodeTimeoutMs > 0;
   const adj = buildAdjacency(graph);

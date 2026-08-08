@@ -23,6 +23,7 @@ import type { BrowserHandlerOptions } from './browser-open.js';
 import type { Target, ActAction } from '../../../browser/types.js';
 import { truncateTargetText, hashSelector } from '../../../browser/sanitize.js';
 import { env } from '../../../config/env.js';
+import { abortFailureClass } from '../../abort-reason.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 import type { BrowserEventTarget } from '../../trace/types.js';
 
@@ -171,7 +172,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
     if (signal.aborted) {
       const reason = signal.reason;
       const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
-      return { content: `browser_act aborted: ${msg}`, isError: true, failureClass: 'abort' };
+      return { content: `browser_act aborted: ${msg}`, isError: true, failureClass: abortFailureClass(signal) };
     }
 
     const parsed = parseInput(input);

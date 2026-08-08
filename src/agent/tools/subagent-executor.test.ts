@@ -442,13 +442,21 @@ describe('SubagentExecutor', () => {
       expect(result.content).toContain('cwd must be a string');
     });
 
-    it('rejects empty-string cwd', async () => {
+    it('treats empty-string cwd as absent and dispatches with the parent fallback', async () => {
+      // Was: rejected with "cwd must be a non-empty string". A model padding
+      // the optional with '' saw a required-field error it could not satisfy
+      // alongside isolation, and abandoned isolation rather than retrying.
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
       const result = await executor.execute(
         makeCall({ input: { prompt: 'test', cwd: '' } }),
       );
 
-      expect(result.isError).toBe(true);
-      expect(result.content).toContain('non-empty');
+      expect(result.isError).toBeFalsy();
+      const call = (mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(call).toBeDefined();
+      expect(Object.prototype.hasOwnProperty.call(call.config, 'cwd')).toBe(false);
     });
 
     it('rejects relative cwd', async () => {
@@ -2088,12 +2096,14 @@ describe('SubagentExecutor', () => {
 
     function promotableExecutor(
       registry: InstanceType<typeof BackgroundAgentRegistry>,
+      traceWriter?: { write(event: unknown): Promise<void> },
     ): SubagentExecutor {
       return new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
         backgroundRegistry: registry,
+        ...(traceWriter !== undefined ? { traceWriter: traceWriter as never } : {}),
         depth: 0,
       });
     }
@@ -2175,6 +2185,98 @@ describe('SubagentExecutor', () => {
       expect(r1.status).toBe('running');
       expect(r2.status).toBe('running');
       expect(new Set([r1.subagentId, r2.subagentId])).toEqual(new Set(['sub-a', 'sub-b']));
+    });
+
+    // -----------------------------------------------------------------------
+    // Queued-message flush (Ctrl+B with typed-ahead pending).
+    //
+    // The promotion tool_result is the only carrier that reaches the parent's
+    // STILL-RUNNING turn, so a queued REPL message rides it instead of waiting
+    // for the next-turn drain. Delivery is gated on a shared claim ticket: it
+    // happens exactly once across N promotions, or not at all (which is what
+    // tells the REPL to keep the message queued).
+    // -----------------------------------------------------------------------
+    it('queued note rides the structural carrier and emits a redacted witness event', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const traceWriter = { write: vi.fn(async () => undefined) };
+      const exec = promotableExecutor(registry, traceWriter);
+
+      const execPromise = exec.execute(makeCall({ input: { prompt: 'deep investigation' } }));
+      await tick();
+
+      const claim = { text: 'actually check the tests first', claimed: false };
+      const promoted = await exec.promoteActiveForeground(claim);
+      expect(promoted).toHaveLength(1);
+      expect(claim.claimed).toBe(true);
+
+      const result = await execPromise;
+      const payload = JSON.parse(result.content);
+      expect(payload.status).toBe('running');
+      expect(payload.queuedUserMessage).toBeUndefined();
+      expect(result.harnessUserMessage).toEqual({
+        kind: 'queued_user_message',
+        text: 'actually check the tests first',
+      });
+      expect(traceWriter.write).toHaveBeenCalledWith({
+        kind: 'queued_user_message',
+        payload: expect.objectContaining({
+          jobId: expect.any(String),
+          subagentId: expect.any(String),
+          byteLength: Buffer.byteLength('actually check the tests first'),
+        }),
+      });
+      expect(JSON.stringify(traceWriter.write.mock.calls)).not.toContain('actually check the tests first');
+    });
+
+    it('queued note is delivered EXACTLY ONCE across two promoted subagents', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const a = hangingHandle();
+      const b = hangingHandle();
+      (a.handle as any).id = 'sub-a';
+      (b.handle as any).id = 'sub-b';
+      const forks = [a.handle, b.handle];
+      let i = 0;
+      mockSubagentMgr.forkSubagent = vi.fn().mockImplementation(() => Promise.resolve(forks[i++]));
+      const exec = promotableExecutor(registry);
+
+      const p1 = exec.execute(makeCall({ id: 'call-a', input: { prompt: 'first' } }));
+      const p2 = exec.execute(makeCall({ id: 'call-b', input: { prompt: 'second' } }));
+      await tick();
+
+      const claim = { text: 'stop and read this', claimed: false };
+      expect(await exec.promoteActiveForeground(claim)).toHaveLength(2);
+
+      const r1 = await p1;
+      const r2 = await p2;
+      const carriers = [r1, r2].filter((result) => result.harnessUserMessage !== undefined);
+      expect(carriers).toHaveLength(1);
+    });
+
+    it('promotion without a queued note is byte-identical to the pre-feature result', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const exec = promotableExecutor(registry);
+
+      const execPromise = exec.execute(makeCall({ input: { prompt: 'no note' } }));
+      await tick();
+      await exec.promoteActiveForeground();
+
+      const content = (await execPromise).content as string;
+      expect(content).not.toContain('queuedUserMessage');
+      // Still pure JSON — nothing appended.
+      expect(() => JSON.parse(content)).not.toThrow();
+    });
+
+    it('nothing promotable: the claim stays unclaimed so the REPL keeps the message queued', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const exec = promotableExecutor(registry);
+      const claim = { text: 'must not be lost', claimed: false };
+
+      expect(await exec.promoteActiveForeground(claim)).toEqual([]);
+      expect(claim.claimed).toBe(false);
     });
 
     it('race: run completes before promotion — normal result, nothing promoted, torn down', async () => {

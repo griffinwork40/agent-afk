@@ -47,7 +47,7 @@
  */
 
 import { randomBytes } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
   EvalRunIndexEventSchema,
@@ -67,6 +67,7 @@ import {
   getEvalRunsIndexPath,
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
+import { atomicWriteFile } from '../../utils/envFile.js';
 import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import type { IdContext } from '../eval-gen/writer.js';
 import { makeCheck, resolveContract, snapshot, supportedContractPatterns } from './contracts.js';
@@ -371,8 +372,8 @@ export function writeEvalRun(evalRun: EvalRun): WriteEvalRunOutcome {
   const jsonPath = getEvalRunJsonPath(validated.evalRunId);
   const mdPath = getEvalRunMarkdownPath(validated.evalRunId);
 
-  atomicWriteJson(jsonPath, validated);
-  atomicWriteText(mdPath, renderEvalRunMarkdown(validated));
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
+  atomicWriteFile(mdPath, renderEvalRunMarkdown(validated), 0o666);
 
   appendIndex({
     timestamp: new Date().toISOString(),
@@ -559,16 +560,4 @@ function appendIndex(event: EvalRunIndexEvent): void {
   } catch {
     // Best-effort, matching the card / proposal / eval-case writers.
   }
-}
-
-function atomicWriteJson(path: string, data: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, path);
-}
-
-function atomicWriteText(path: string, text: string): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
 }

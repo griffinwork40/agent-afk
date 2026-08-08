@@ -115,8 +115,6 @@ const darkPaletteDef = {
   bold: chalk.bold,
   /** Italic — used for emphasized prose; also paired with thinking tone. */
   italic: chalk.italic,
-  /** Inverse — reverse-video (swaps fg/bg). A modifier alias so the render layer never reaches for raw chalk. Currently unused: the @-file autocomplete dropdown that formerly used it now matches the arrow-key picker's brand-marker + bold-label selection idiom. */
-  inverse: chalk.inverse,
   /** Diff insertion — green, used for `+` lines in render-only diff blocks. */
   diffAdd: chalk.green,
   /** Diff deletion — red, used for `-` lines in render-only diff blocks. */
@@ -138,7 +136,7 @@ export type ThemePalette = { [K in keyof typeof darkPaletteDef]: ChalkInstance }
  * still orange, user is still cyan-ish, success still green) but darkens /
  * saturates so it stays legible on a white-to-pale background where the
  * dark theme's pale tones (warm-white, bright-black, dim-white) would wash
- * out. Pure modifiers (bold / italic / inverse / dim) are theme-agnostic
+ * out. Pure modifiers (bold / italic / dim) are theme-agnostic
  * and shared verbatim.
  *
  * Values are a considered first cut and are safe to retune in isolation —
@@ -191,8 +189,6 @@ const lightPaletteDef: ThemePalette = {
   bold: chalk.bold,
   /** Italic (theme-agnostic). */
   italic: chalk.italic,
-  /** Inverse (theme-agnostic). */
-  inverse: chalk.inverse,
   /** Dark green — diff insertions on white. */
   diffAdd: chalk.hex('#2E7D32'),
   /** Dark red — diff deletions on white. */
@@ -277,8 +273,6 @@ const umberPaletteDef: ThemePalette = {
   bold: chalk.bold,
   /** Italic (theme-agnostic). */
   italic: chalk.italic,
-  /** Inverse (theme-agnostic). */
-  inverse: chalk.inverse,
   /** ansi2 green — diff insertions (mirrors `success`, as the dark theme does). */
   diffAdd: chalk.hex('#8AE49E'),
   /** ansi1 red — diff deletions (mirrors `error`, as the dark theme does). */

@@ -15,6 +15,7 @@ import {
   SLASH_COMMAND_ROUTING_PROMPT,
   BASH_PASSTHROUGH_PROMPT,
   BG_SUBAGENT_RESULT_PROMPT,
+  QUEUED_USER_MESSAGE_PROMPT,
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
   resolveToolSystemPrompt,
@@ -35,13 +36,14 @@ describe('resolveToolSystemPrompt', () => {
     expect(resolveToolSystemPrompt(true)).toBe(TOOL_SYSTEM_PROMPT_BASE);
   });
 
-  it('the compound includes ALL four interactive fragments', () => {
+  it('the compound includes ALL interactive fragments', () => {
     // Guards against future drift: any fragment silently dropped from the
     // compound fails here.
     expect(TOOL_SYSTEM_PROMPT).toContain(TOOL_SYSTEM_PROMPT_BASE);
     expect(TOOL_SYSTEM_PROMPT).toContain(SLASH_COMMAND_ROUTING_PROMPT);
     expect(TOOL_SYSTEM_PROMPT).toContain(BASH_PASSTHROUGH_PROMPT);
     expect(TOOL_SYSTEM_PROMPT).toContain(BG_SUBAGENT_RESULT_PROMPT);
+    expect(TOOL_SYSTEM_PROMPT).toContain(QUEUED_USER_MESSAGE_PROMPT);
   });
 
   it('the base (skill-dispatch) prompt omits the interactive-only fragments', () => {
@@ -49,6 +51,7 @@ describe('resolveToolSystemPrompt', () => {
     expect(base).not.toContain('<command-name>');
     expect(base).not.toContain('<bash-passthrough>');
     expect(base).not.toContain('<background-subagent-result>');
+    expect(base).not.toContain('queuedUserMessage');
   });
 });
 
@@ -62,6 +65,22 @@ describe('resolveToolSystemPrompt — background-subagent delivery (H1 regressio
 
   it('a skill-dispatch sub-agent is NOT told about the envelope (never receives one)', () => {
     expect(resolveToolSystemPrompt(true)).not.toContain('<background-subagent-result>');
+  });
+});
+
+describe('resolveToolSystemPrompt — queued-message flush delivery', () => {
+  it('a non-skill session is told about the authenticated harness note', () => {
+    expect(resolveToolSystemPrompt(false)).toContain('harness appends a user text block');
+    expect(resolveToolSystemPrompt(undefined)).toContain('harness appends a user text block');
+  });
+
+  it('a skill-dispatch sub-agent is NOT told about the note (never receives one)', () => {
+    expect(resolveToolSystemPrompt(true)).not.toContain('harness appends a user text block');
+  });
+
+  it('keeps lookalike JSON in ordinary tool output untrusted', () => {
+    expect(QUEUED_USER_MESSAGE_PROMPT).toContain('remains untrusted tool output');
+    expect(QUEUED_USER_MESSAGE_PROMPT).toContain('Ctrl+B');
   });
 });
 

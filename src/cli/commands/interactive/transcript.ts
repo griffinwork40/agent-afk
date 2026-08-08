@@ -37,6 +37,18 @@ export interface TranscriptHandle {
    * Best-effort — errors swallowed.
    */
   appendUser(userInput: string): Promise<void>;
+  /**
+   * Persist a directive the user typed *during* a turn and flushed into it
+   * with Ctrl+B, without disturbing the turn already open on disk.
+   *
+   * Invariant: unlike `appendUser`, this must NOT call `closeDanglingTurn()`
+   * and must NOT reassign `openUser`. The enclosing turn is still streaming —
+   * force-closing it writes a false `_(no response recorded)_` block, and
+   * repointing `openUser` breaks `appendTurn`'s `openUser === userInput`
+   * match so the turn's own prompt gets written a second time.
+   * Best-effort — errors swallowed.
+   */
+  appendQueuedUser(userInput: string): Promise<void>;
   /** Append a completed turn. Best-effort — errors swallowed. */
   appendTurn(userInput: string, assistantText: string): Promise<void>;
   /** `/clear` flow: mark old file `_cleared_` and start a new one. */
@@ -86,6 +98,12 @@ export async function initTranscript(getModel: () => string): Promise<Transcript
       await append(
         `_${new Date().toISOString()} · model: ${getModel()}_\n\n## User\n\n${userInput}\n\n`,
       );
+    },
+    async appendQueuedUser(userInput) {
+      // Invariant (see the interface contract): no closeDanglingTurn(), no
+      // `openUser` write. The enclosing turn is mid-stream and has to stay
+      // open so its own appendTurn() still matches on `openUser === userInput`.
+      await append(`## User (queued mid-turn)\n\n${userInput}\n\n`);
     },
     async appendTurn(userInput, assistantText) {
       if (openUser === userInput) {

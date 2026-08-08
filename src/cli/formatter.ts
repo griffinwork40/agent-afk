@@ -273,13 +273,12 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
                 : srcLine;
               const segs = wrapped.split('\n');
               for (let s = 0; s < segs.length; s++) {
-                // wrapToWidth runs wrap-ansi with trim:false, so a wrap at a
-                // space keeps that space at the START of the next segment.
-                // Strip it on wrap continuations (s > 0) only — otherwise the
-                // hanging indent sits one column past the item text. The first
-                // segment of each source line keeps its leading whitespace so
-                // nested-list indentation survives. Also drop trailing spaces so
-                // they don't inflate the line past the width budget.
+                // Normalize continuation whitespace defensively at this formatting
+                // boundary. wrapToWidth removes generated edge spaces while preserving
+                // source indentation, but this branch also accepts styled and nested
+                // list content whose first segment may intentionally begin with spaces.
+                // Only continuations are left-trimmed; all segments are right-trimmed
+                // so whitespace cannot inflate the line past the width budget.
                 let seg = segs[s]!;
                 if (s > 0) seg = seg.replace(/^ +/, '');
                 seg = seg.replace(/ +$/, '');

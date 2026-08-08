@@ -136,7 +136,7 @@ The effective default is resolved per surface, not in one global constant:
 | Surface | Default mode | Where it's set |
 |---------|--------------|----------------|
 | `afk chat`, `afk interactive` (REPL) | **`bypassPermissions`** | `DEFAULT_CLI_PERMISSION_MODE` in `src/cli/config.ts` — the `loadConfig()` resolution layer that both surfaces read. An `afk.config.json` `permissionMode` key overrides it. |
-| Telegram | `default` | `src/telegram.ts` omits `permissionMode`; relies on hook-based enforcement + the operator's `allowedTools`. |
+| Telegram | `default` | `src/telegram/session-anthropic.ts` and `session-openai.ts` omit `permissionMode`; relies on hook-based enforcement + the operator's `allowedTools`. |
 | `afk daemon` | `bypassPermissions` | `src/agent/daemon/scheduler.ts` sets it explicitly (no human to prompt). |
 | Embedded `new AgentSession(...)` / subagents inheriting no mode | `default` | The session-layer `?? 'default'` fallback in `src/agent/session/session-setup.ts`. |
 

@@ -34,6 +34,7 @@ export type TraceEventKind =
   | 'closure'
   | 'claim'
   | 'browser_event'
+  | 'queued_user_message'
   | 'session_phase'
   | 'session_sealed';
 
@@ -59,6 +60,7 @@ export interface ToolCallStartedPayload {
 export const TOOL_FAILURE_CLASSES = [
   'policy-refusal',
   'timeout',
+  'budget',
   'permission-denied',
   'hook-block',
   'abort',
@@ -83,6 +85,8 @@ export const TOOL_FAILURE_CLASSES = [
  *                              subagent_lifecycle `failed` payload (own-budget expiry)
  *                              and, for a cascaded ancestor-timeout, via the `cancelled`
  *                              payload's `timeout` flag.
+ *   - `budget`               — the session-wide cost ceiling aborted the call. Like `timeout`,
+ *                              this is deliberately non-benign and remains visible in stats.
  *   - `permission-denied`    — permission gate or read-only-skill bash gate denied the call.
  *   - `hook-block`           — a PreToolUse hook returned `decision: 'block'`.
  *   - `abort`                — the call's AbortSignal was already fired.
@@ -99,7 +103,7 @@ export const TOOL_FAILURE_CLASSES = [
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
  * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
- * excluded from failure stats entirely — while `timeout`, `denial-breaker`, and
+ * excluded from failure stats entirely — while `timeout`, `budget`, `denial-breaker`, and
  * unclassified failures still count. That split is `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
@@ -623,6 +627,13 @@ export interface BrowserEventTarget {
   selectorHash?: string;
 }
 
+export interface QueuedUserMessagePayload {
+  jobId: string;
+  subagentId: string;
+  /** UTF-8 bytes delivered; raw user text is deliberately never persisted. */
+  byteLength: number;
+}
+
 export interface BrowserEventPayload {
   /** Which browser tool ran. */
   tool: BrowserEventTool;
@@ -898,6 +909,7 @@ export type TraceEventInput =
   | { kind: 'closure'; payload: ClosurePayload }
   | { kind: 'claim'; payload: ClaimPayload }
   | { kind: 'browser_event'; payload: BrowserEventPayload }
+  | { kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
   | { kind: 'session_phase'; payload: SessionPhasePayload };
 
 /** What ends up on disk and in readers. `session_sealed` is terminal
@@ -914,5 +926,6 @@ export type TraceEvent =
   | { ts: string; seq: number; kind: 'closure'; payload: ClosurePayload }
   | { ts: string; seq: number; kind: 'claim'; payload: ClaimPayload }
   | { ts: string; seq: number; kind: 'browser_event'; payload: BrowserEventPayload }
+  | { ts: string; seq: number; kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
   | { ts: string; seq: number; kind: 'session_phase'; payload: SessionPhasePayload }
   | { ts: string; seq: number; kind: 'session_sealed'; payload: SessionSealedPayload };

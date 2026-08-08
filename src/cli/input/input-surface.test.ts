@@ -402,6 +402,37 @@ describe('InputSurface', () => {
    * fires it, and the promise resolves with the typed payload.
    */
   describe('readLine → onSubmit roundtrip (Stage 3e integration)', () => {
+    it('primes prompt suggestions only when the caller explicitly opts in', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+      await surface.armCompositor({
+        promptFn: () => 'afk › ',
+        onCancel: () => {},
+        stdout,
+        stdin,
+      });
+      const compositor = surface.getCompositor()!;
+      const primeSpy = vi.spyOn(compositor, 'primePromptGhost');
+
+      const elicitationRead = surface.readLine({ promptFn: () => 'Continue? [y/N] ' });
+      expect(primeSpy).not.toHaveBeenCalled();
+      surface.abortPendingRead();
+      await elicitationRead;
+
+      const turnRead = surface.readLine({
+        promptFn: () => 'afk › ',
+        primePromptSuggestion: true,
+      });
+      expect(primeSpy).toHaveBeenCalledOnce();
+      surface.abortPendingRead();
+      await turnRead;
+
+      primeSpy.mockRestore();
+      await surface.dispose();
+    });
+
     it('readLine resolves with the typed text when user presses Enter', async () => {
       const stdout = makeMockStdout();
       const stdin = makeMockStdin();

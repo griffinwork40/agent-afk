@@ -138,9 +138,16 @@ export async function* emitAndCommitToolResults(
     });
   }
 
+  // Harness notes are appended as genuine user text blocks, structurally outside
+  // tool_result content. Child output cannot forge this path by printing JSON.
+  const harnessNotes = results.flatMap((result) =>
+    result.harnessUserMessage?.kind === 'queued_user_message'
+      ? [{ type: 'text' as const, text: result.harnessUserMessage.text }]
+      : [],
+  );
   const toolResultTurn: MessageParam = {
     role: 'user',
-    content: toolResultBlocks as ContentBlockParam[],
+    content: [...toolResultBlocks, ...harnessNotes] as ContentBlockParam[],
   };
   input.messages.push(toolResultTurn);
 

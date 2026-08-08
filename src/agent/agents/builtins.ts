@@ -36,6 +36,47 @@ function vendoredPromptBody(raw: string): string {
   return parseAgentMarkdown(raw)?.definition.prompt ?? raw;
 }
 
+/**
+ * Invariant: a registry-entry tool grant and the agent's BELIEF about its tool
+ * surface are two separate systems, and both must be updated together.
+ *
+ * The vendored prompt bodies are byte-pinned to upstream
+ * (src/skills/_agents/vendored.test.ts), so they still name the tool allowlist
+ * upstream shipped with. research-agent's body asserts a CLOSED set —
+ * "Your tool surface is a hard allowlist enforced by Claude Code: `Read, Grep,
+ * Glob, WebFetch, WebSearch`" — which predates the grants the registry entries
+ * below add. An agent told it has a hard five-tool surface does not attempt a
+ * sixth, so a grant made only in `tools:` is INERT: #883 shipped the mechanical
+ * access (verified at the tool-access layer) while the surveyor kept correctly
+ * reporting `memory_search` as unavailable, because it was reading its prompt,
+ * not its grant.
+ *
+ * Reconciling at composition time (rather than editing the vendored file and
+ * re-pinning) keeps the vendored copy byte-equal with upstream and the pin
+ * green. Callers pass the SAME array they spread into `tools`, so the note and
+ * the grant cannot drift apart.
+ */
+function withRegistryGrants(body: string, grants: readonly string[]): string {
+  if (grants.length === 0) return body;
+  return `${body}
+
+## Tools granted by this runtime, beyond the list above
+
+This runtime additionally grants you: ${grants.join(', ')}.
+
+Any earlier statement in this prompt that your tool surface is a fixed or "hard"
+allowlist describes the upstream default, not your actual surface — it is
+superseded by this section. These tools are live; use them when relevant. Every
+other restriction above (no Edit, no Write, no Bash, no mutation) still holds.`;
+}
+
+/**
+ * Registry-entry grants for research-agent, beyond `researchAgent.allowedTools`.
+ * Single source of truth: spread into `tools` AND rendered into the prompt via
+ * `withRegistryGrants`, so mechanical access and stated access stay in lockstep.
+ */
+const RESEARCH_AGENT_REGISTRY_GRANTS = ['memory_search', 'Agent(git-investigator)'] as const;
+
 const GENERAL_PURPOSE_PROMPT = `You are a general-purpose sub-agent for complex, multi-step tasks that require both exploration and action.
 
 Work autonomously from the task prompt you were dispatched with: investigate, act, and verify. You have the parent session's full child tool surface. Keep intermediate exploration out of your reply.
@@ -103,7 +144,10 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       source: 'builtin',
       definition: {
         description: researchAgent.description,
-        prompt: vendoredPromptBody(researchAgent.systemPrompt),
+        prompt: withRegistryGrants(
+          vendoredPromptBody(researchAgent.systemPrompt),
+          RESEARCH_AGENT_REGISTRY_GRANTS,
+        ),
         // The scoped `Agent(git-investigator)` grant matches the vendored
         // prompt's frontmatter intent (`tools: …, Agent(git-investigator)`)
         // and lets research-agent nest a git-investigator when a finding needs
@@ -116,7 +160,23 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // `nestedAgentTypes`, and the subagent executor mechanically restricts
         // research-agent to dispatching ONLY git-investigator (no bare/other
         // dispatch), so the read-only contract can't be escalated.
-        tools: [...researchAgent.allowedTools, 'Agent(git-investigator)'],
+        //
+        // `memory_search` is granted by the same registry-entry mechanism, for
+        // the same reason it must not go in the shared const. Without it the
+        // cross-session fact archive is unreachable from a research-agent, and
+        // the failure is SILENT: `/ground-state` dispatches its memory surveyor
+        // as this type and instructs it to "call the memory_search tool", so the
+        // surveyor degrades to reading HOT.md/AFK.md off disk and then truthfully
+        // reports which stores it consulted — a report that looks satisfied while
+        // a third of the recon wave never happened (issue #883). The tool is
+        // read-only by construction and already trusted by the MOST restricted
+        // role in the system (READ_ONLY_PHASE_TOOLS, mint's spec/research/plan
+        // phases) and by RECON_ALLOWED_TOOLS, so withholding it from a read-only
+        // research agent was incoherent rather than protective — the same
+        // argument CHILD_ALLOWED_TOOLS already makes at nesting.ts:124-131.
+        // Note `memory_update`/`procedure_write` are deliberately NOT granted:
+        // those mutate, and target:"hot" reaches every future session's prompt.
+        tools: [...researchAgent.allowedTools, ...RESEARCH_AGENT_REGISTRY_GRANTS],
         // Anti-runaway bound (see READONLY_AGENT_MAX_TOOL_USE_ITERATIONS): a
         // read-only research/review agent that keeps tool-calling without ever
         // emitting a final message otherwise runs unbounded on the (uncapped)

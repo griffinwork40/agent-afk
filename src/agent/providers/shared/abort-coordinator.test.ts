@@ -82,16 +82,19 @@ describe('shared/abort-coordinator', () => {
   });
 
   describe('pending-abort drain (abort arrives between turns)', () => {
-    it('parks the reason and fires it on the next begin()', () => {
-      const abort = new AbortCoordinator();
-      // No scope in flight — this is the interrupt()-between-turns path.
-      abort.requestAbort('interrupted');
-      expect(abort.isIdle()).toBe(true);
+    it.each(['interrupted', 'timeout', 'budget'] as const)(
+      'parks the %s reason and fires it on the next begin()',
+      (reason) => {
+        const abort = new AbortCoordinator();
+        // No scope in flight — this is the interrupt()-between-turns path.
+        abort.requestAbort(reason);
+        expect(abort.isIdle()).toBe(true);
 
-      const controller = abort.begin();
-      expect(controller.signal.aborted).toBe(true);
-      expect(controller.signal.reason).toBe('interrupted');
-    });
+        const controller = abort.begin();
+        expect(controller.signal.aborted).toBe(true);
+        expect(controller.signal.reason).toBe(reason);
+      },
+    );
 
     it('drains the parked reason exactly once', () => {
       const abort = new AbortCoordinator();

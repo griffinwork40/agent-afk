@@ -15,6 +15,7 @@ import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import { truncateDisplayWidth } from '../../display.js';
 import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
@@ -259,7 +260,9 @@ export async function runInputLoop(
         const seconds = job.endedAt !== undefined
           ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
           : 0;
-        const label = job.label.length > 60 ? `${job.label.slice(0, 60)}…` : job.label;
+        // Display-width truncation, not code-unit — see the same fix in
+        // slash/commands/bgsub.ts: `slice(0, 60) + '…'` measured 61 cells.
+        const label = truncateDisplayWidth(job.label, 60);
         ctx.replRenderer.writeLine(
           palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
         );
@@ -327,6 +330,11 @@ export async function runInputLoop(
         const result = await surface.readLine({
           promptFn: () => buildPrompt(ctx.stats.permissionMode),
           ...(initialBuffer !== undefined ? { initialBuffer } : {}),
+          // This is THE turn-boundary prompt — the one "what should I do next"
+          // moment in the loop, and the only read that opts into an
+          // empty-prompt ghost. Borrowed sub-prompts (elicitation confirms,
+          // form fields) call readLine() too and deliberately leave it off.
+          primePromptSuggestion: true,
           onSigint: sigintHandler,
           onShiftTab: () => {
             // Shift+Tab is the keyboard speed lane: it advances the permission-
@@ -618,6 +626,11 @@ export async function runInputLoop(
           // Write the user's message to the transcript immediately — the
           // appendTurn below then closes the turn with the assistant block.
           await transcript.appendUser(userInput);
+        },
+        async onQueuedUserMessage(userInput) {
+          // Ctrl+B flush: lands INSIDE the open turn, so it must not open or
+          // close one (appendUser would do both).
+          await transcript.appendQueuedUser(userInput);
         },
         async onTurnComplete(userInput, assistantText) {
           await transcript.appendTurn(userInput, assistantText);

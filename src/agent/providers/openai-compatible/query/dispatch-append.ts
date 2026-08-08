@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import type { TraceWriter } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
@@ -123,18 +124,12 @@ export async function* dispatchAndAppendToolCalls({
 
   if (signal.aborted) {
     // Aborted before dispatch — synthesize aborted results and emit outputs.
-    // `abort` here (both the pushed result and the yielded event below) covers
-    // ANY signal-fired teardown — deliberate user cancel, session timeout, or
-    // budget exhaustion all funnel through the same AbortSignal
-    // (requestAbort() only tracks 'interrupted' | 'closed', see
-    // abort-coordinator.ts:56), so the original cause is lost by the time this
-    // dispatch site sees `signal.aborted`. Widening AbortReason to carry the
-    // origin is the real fix; out of scope here.
+    const failureClass = abortFailureClass(signal);
     for (const call of calls) {
       const result: ToolResult = {
         content: 'Tool call aborted',
         isError: true,
-        failureClass: 'abort',
+        failureClass,
       };
       results.push({ call, result });
       yield {
@@ -143,7 +138,7 @@ export async function* dispatchAndAppendToolCalls({
         toolName: call.name,
         content: result.content,
         isError: true,
-        failureClass: 'abort',
+        failureClass,
         sessionId,
       };
     }
@@ -156,13 +151,11 @@ export async function* dispatchAndAppendToolCalls({
       } else {
         dispatcherResults = [];
         for (const call of calls) {
-          // Same abort-origin caveat as the pre-dispatch branch above:
-          // `signal.aborted` cannot distinguish cancel/timeout/budget here either.
           if (signal.aborted) {
             dispatcherResults.push({
               content: 'Tool call aborted',
               isError: true,
-              failureClass: 'abort',
+              failureClass: abortFailureClass(signal),
             });
             continue;
           }
@@ -270,6 +263,13 @@ export async function* dispatchAndAppendToolCalls({
   );
   for (const m of toolResultsToMessages(results)) {
     priorTurns.push(m as unknown as OpenAIMessage);
+  }
+  // Provider-agnostic authority boundary: only the structural harness carrier
+  // becomes a user message; lookalike JSON inside tool content remains a tool result.
+  for (const { result } of results) {
+    if (result.harnessUserMessage?.kind === 'queued_user_message') {
+      priorTurns.push({ role: 'user', content: result.harnessUserMessage.text } as OpenAIMessage);
+    }
   }
   // Tool-result images (e.g. browser_screenshot) can't ride the `role:'tool'`
   // message (OpenAI carries only text there). On vision-capable models they

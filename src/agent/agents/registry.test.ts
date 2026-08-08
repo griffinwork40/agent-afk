@@ -10,6 +10,8 @@ import { join } from 'node:path';
 
 import { loadAgentRegistry } from './registry.js';
 import { builtinAgents } from './builtins.js';
+import { resolveAgentToolAccess } from './resolve.js';
+import { CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS } from '../tools/nesting.js';
 
 let tmp: string;
 let prevAfkHome: string | undefined;
@@ -42,16 +44,19 @@ describe('loadAgentRegistry', () => {
     expect(registry.get('git-investigator')?.bashReadOnly).toBe(true);
     expect(registry.get('general-purpose')?.source).toBe('builtin');
     expect(registry.get('Explore')?.source).toBe('builtin');
-    // research-agent keeps its vendored read-only contract PLUS the scoped
-    // git-investigator dispatch grant (matches the vendored prompt frontmatter;
-    // resolve.ts turns Agent(git-investigator) into nestedAgentTypes and the
-    // executor restricts research-agent to dispatching only git-investigator).
+    // research-agent keeps its vendored read-only contract PLUS two
+    // registry-entry grants: `memory_search` (read-only archive access — see
+    // the #883 test below) and the scoped git-investigator dispatch grant
+    // (matches the vendored prompt frontmatter; resolve.ts turns
+    // Agent(git-investigator) into nestedAgentTypes and the executor restricts
+    // research-agent to dispatching only git-investigator).
     expect(registry.get('research-agent')?.definition.tools).toEqual([
       'Read',
       'Grep',
       'Glob',
       'WebFetch',
       'WebSearch',
+      'memory_search',
       'Agent(git-investigator)',
     ]);
     // Anti-runaway bound: the read-only research/review builtins carry an
@@ -103,6 +108,68 @@ describe('loadAgentRegistry', () => {
     }
     expect(sawRestricted, 'expected ≥1 restricted read-only builtin').toBe(true);
     expect(sawInheritAll, 'expected the inherit-all worker (general-purpose)').toBe(true);
+  });
+
+  // Regression guard for #883. Asserting the registry's static `tools` array
+  // is not enough: what the dispatcher enforces is the RESOLVED access set,
+  // and resolution intersects the declared tokens with the child's runtime
+  // pool — so a tool can be declared and still be unreachable if the pool
+  // omits it. This pins the effective set on BOTH child surfaces a surveyor
+  // can actually land on. `/ground-state` is enforced read-only by name
+  // (RECON_ALLOWED_TOOLS); a research-agent dispatched from an ordinary parent
+  // gets CHILD_ALLOWED_TOOLS. memory_search must survive both, or the memory
+  // third of the recon wave silently degrades to reading files off disk.
+  it('research-agent can reach memory_search on every child surface it is dispatched from (#883)', () => {
+    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
+    const entry = registry.get('research-agent');
+    expect(entry).toBeDefined();
+
+    for (const [surface, pool] of [
+      ['read-only skill child (ground-state)', RECON_ALLOWED_TOOLS],
+      ['ordinary child', CHILD_ALLOWED_TOOLS],
+    ] as const) {
+      const resolved = resolveAgentToolAccess(entry!, [...pool]);
+      expect(resolved.allowedTools, `memory_search unreachable on ${surface}`).toContain(
+        'memory_search',
+      );
+      // The grant must not have widened the read-only contract on the way in.
+      for (const forbidden of ['write_file', 'edit_file', 'bash', 'memory_update']) {
+        expect(resolved.allowedTools, `${forbidden} leaked on ${surface}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  // The other half of #883. The test above proves the grant is mechanically
+  // REACHABLE; this proves the agent is TOLD it has it. The vendored body is
+  // byte-pinned upstream and asserts a closed allowlist ("Your tool surface is
+  // a hard allowlist enforced by Claude Code: Read, Grep, Glob, WebFetch,
+  // WebSearch"), so a grant made only in `tools:` is inert — the surveyor reads
+  // its prompt, believes it has five tools, and never calls the sixth. That is
+  // exactly what shipped: #883 was verified at the tool-access layer only, and
+  // the observable behaviour did not change.
+  it('tells research-agent about every registry grant beyond its vendored allowlist (#883)', async () => {
+    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
+    const entry = registry.get('research-agent');
+    expect(entry).toBeDefined();
+
+    const { researchAgent } = await import('../../skills/_agents/index.js');
+    const prompt = entry!.definition.prompt;
+
+    // Anything granted at the registry entry but absent from the vendored
+    // allowlist is a tool the prompt does not otherwise account for.
+    const extras = (entry!.definition.tools ?? []).filter(
+      (t) => !researchAgent.allowedTools.includes(t as never),
+    );
+    expect(extras.length).toBeGreaterThan(0);
+    for (const tool of extras) {
+      expect(prompt, `prompt never mentions granted tool ${tool}`).toContain(tool);
+    }
+
+    // The reconciliation must explicitly override the body's closed-allowlist
+    // claim, not merely append a name the earlier sentence still contradicts.
+    expect(prompt).toMatch(/superseded by this section/);
+    // And it must not have relaxed the read-only contract on the way through.
+    expect(prompt).toMatch(/no Edit, no Write, no Bash, no mutation/);
   });
 
   it('strips vendored frontmatter from builtin prompts (body-only system prompt)', () => {
