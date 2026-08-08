@@ -29,9 +29,13 @@ async function main() {
 
   mkdirSync(outDir, { recursive: true });
 
+  // `chrome.ts` is a second entry point, not an import of `app.ts`: it is the
+  // sidebar toggle that used to be an inline <script> in index.html, which the
+  // `script-src 'self'` CSP blocks. It must ship as its own /chrome.js file.
+  const chromeEntry = join(frontendDir, 'chrome.ts');
   await build({
-    entryPoints: [entry],
-    outfile: join(outDir, 'app.js'),
+    entryPoints: [entry, ...(existsSync(chromeEntry) ? [chromeEntry] : [])],
+    outdir: outDir,
     bundle: true,
     platform: 'browser',
     format: 'esm',

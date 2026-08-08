@@ -10,31 +10,22 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { join, normalize } from 'node:path';
-import { getWebUiAssetsDir } from '../paths.js';
-import {
-  bearerFromHeader,
-  checkBind,
-  mintToken,
-  originAllowed,
-  tokenFromCookie,
-  tokenFromQuery,
-  tokensMatch,
-} from './auth.js';
+import { bearerFromHeader, checkBind, mintToken, originAllowed, tokensMatch } from './auth.js';
+import { serveStatic } from './static-assets.js';
 import { WebElicitationBridge } from './elicitation-web.js';
 import type { CreateSessionRequest, SessionOwner } from './session-owner.js';
 import {
   handleApprove,
+  handleApproveByRequestId,
   handleCreateSession,
   handleInterrupt,
   handleListSessions,
   handlePrompt,
-  handleStream,
   header,
   sendJson,
   type RouteContext,
 } from './routes.js';
+import { handleStream } from './stream-route.js';
 
 export const DEFAULT_WEB_PORT = 4141;
 export const DEFAULT_WEB_HOST = '127.0.0.1';
@@ -47,6 +38,13 @@ export interface WebServerOptions {
   host?: string;
   /** Explicit token (flag/env). When absent one is minted. */
   token?: string;
+  /**
+   * Whether `token` was EXPLICITLY supplied by the operator (`--token`/env)
+   * rather than merely present. Load-bearing: `checkBind` refuses a
+   * non-loopback bind without it. Absent means "infer from the token", which
+   * preserves the behaviour of every caller that predates this field.
+   */
+  tokenExplicit?: boolean;
   /** Session ids this process owns. Shared by reference with the caller. */
   owned?: Set<string>;
   submitPrompt?: (sessionId: string, text: string) => Promise<void>;
@@ -73,11 +71,19 @@ export interface WebServerHandle {
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const host = options.host ?? DEFAULT_WEB_HOST;
-  const tokenExplicit = typeof options.token === 'string' && options.token.length > 0;
+  const hasToken = typeof options.token === 'string' && options.token.length > 0;
+  // Contract: `tokenExplicit` is the operator's real intent as computed by
+  // `resolveWebToken`; the presence check is the legacy fallback for callers
+  // that do not pass it. Inferring explicitness from a non-empty token is what
+  // made the documented "explicit token" invariant true only by coincidence.
+  const tokenExplicit = options.tokenExplicit ?? hasToken;
   const bind = checkBind(host, tokenExplicit);
   if (!bind.ok) throw new Error(bind.reason ?? 'refusing to bind');
 
-  const token = tokenExplicit ? (options.token as string) : mintToken();
+  // Invariant: keyed on token PRESENCE, never on `tokenExplicit`. They are no
+  // longer the same predicate — `tokenExplicit: true` with no token is now
+  // expressible, and reading the token off that flag would yield `undefined`.
+  const token = hasToken ? (options.token as string) : mintToken();
   const owned = options.owned ?? options.owner?.owned ?? new Set<string>();
   const bridge = new WebElicitationBridge();
   bridge.install();
@@ -246,83 +252,22 @@ async function dispatch(
     return;
   }
 
+  // Contract: session-agnostic approval. An elicitation record does not always
+  // carry a sessionId, and the old route's ownership check constrained nothing
+  // anyway — it resolved by requestId alone. The bridge only ever holds
+  // elicitations raised by sessions THIS process owns, and the bearer + Origin
+  // gates above already ran, so identity is established without the id.
+  if (path === '/api/approve' && method === 'POST') {
+    handleApproveByRequestId(ctx, res, await readBody(req));
+    return;
+  }
+
   if (path === '/api/pending' && method === 'GET') {
     sendJson(res, 200, { pending: ctx.bridge.list() });
     return;
   }
 
   sendJson(res, 404, { error: 'not_found', message: `no route for ${method} ${path}` });
-}
-
-/**
- * Serve the prebuilt browser bundle.
- *
- * Contract: the document GET may authenticate via `?token=` so the printed URL
- * works when pasted into a browser; API routes never accept a query token.
- * A missing bundle returns an actionable 503 rather than crashing the process —
- * running from a source checkout without `pnpm build:web-ui` is a normal state.
- */
-async function serveStatic(
-  req: IncomingMessage,
-  res: ServerResponse,
-  path: string,
-  rawUrl: string,
-  token: string,
-): Promise<void> {
-  const isDocument = path === '/' || path === '/index.html';
-  // Invariant: the document accepts the query token OR the session cookie, and
-  // NOTHING ELSE accepts either. The frontend strips `?token=` from the visible
-  // URL on first load, so without a credential the browser replays on its own,
-  // a refresh requested `/` bare and got 401 — which broke the refresh/resume
-  // flow that motivated this surface's whole transport choice. The cookie is
-  // only ever honoured here: `/api/*` is gated on the bearer header well before
-  // this function is reachable, so a cookie alone can never drive the agent.
-  const fromQuery = tokenFromQuery(rawUrl);
-  const documentAuthed =
-    tokensMatch(token, fromQuery) || tokensMatch(token, tokenFromCookie(header(req, 'cookie')));
-  if (isDocument && !documentAuthed) {
-    res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Missing or invalid token. Use the URL printed by `afk web`.');
-    return;
-  }
-
-  const rel = isDocument ? 'index.html' : path.replace(/^\/+/, '');
-  // Invariant: reject any traversal before touching the filesystem. `normalize`
-  // collapses `..` segments, so a normalized path that still escapes the assets
-  // root — or that was absolute to begin with — is refused outright.
-  const normalized = normalize(rel);
-  if (normalized.startsWith('..') || normalized.startsWith('/')) {
-    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Forbidden');
-    return;
-  }
-
-  const file = join(getWebUiAssetsDir(), normalized);
-  try {
-    const body = await readFile(file);
-    res.writeHead(200, {
-      'content-type': contentType(normalized),
-      'content-length': body.byteLength,
-      'cache-control': 'no-store',
-    });
-    res.end(body);
-  } catch {
-    if (isDocument) {
-      res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('Web UI bundle not built. Run `pnpm build:web-ui` and retry.');
-      return;
-    }
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Not found');
-  }
-}
-
-function contentType(file: string): string {
-  if (file.endsWith('.html')) return 'text/html; charset=utf-8';
-  if (file.endsWith('.js')) return 'text/javascript; charset=utf-8';
-  if (file.endsWith('.css')) return 'text/css; charset=utf-8';
-  if (file.endsWith('.svg')) return 'image/svg+xml';
-  return 'application/octet-stream';
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {

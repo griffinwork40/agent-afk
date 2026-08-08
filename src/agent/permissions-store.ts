@@ -56,7 +56,12 @@ export type GrantDecision = 'allow' | 'deny';
 // `elicit:unknown` covers persist grants approved on a surface that did not
 // identify itself as 'repl' or 'telegram' (PathApprovalSurface === 'unknown').
 // Stamping those as 'elicit:repl' produced an inaccurate audit label.
-export type GrantSource = 'elicit:repl' | 'elicit:telegram' | 'elicit:unknown' | 'manual';
+export type GrantSource =
+  | 'elicit:repl'
+  | 'elicit:telegram'
+  | 'elicit:web'
+  | 'elicit:unknown'
+  | 'manual';
 
 export interface PermissionGrant {
   /** ULID — sortable, opaque, unique per grant. */
@@ -169,6 +174,7 @@ function isValidGrant(value: unknown): value is PermissionGrant {
     typeof v['grantedAt'] === 'string' &&
     (v['source'] === 'elicit:repl' ||
       v['source'] === 'elicit:telegram' ||
+      v['source'] === 'elicit:web' ||
       v['source'] === 'elicit:unknown' ||
       v['source'] === 'manual')
   );

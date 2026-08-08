@@ -624,7 +624,9 @@ async function promptForApproval(args: {
               ? 'elicit:telegram'
               : surface === 'repl'
                 ? 'elicit:repl'
-                : 'elicit:unknown',
+                : surface === 'web'
+                  ? 'elicit:web'
+                  : 'elicit:unknown',
           reason: `Approved via ${surface} prompt for ${toolName}`,
         });
       } catch (err) {

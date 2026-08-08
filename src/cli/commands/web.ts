@@ -38,7 +38,7 @@ export function registerWebCommand(program: Command): void {
       try {
         const port = resolveWebPort(options.port);
         const host = resolveWebHost(options.host);
-        const { token } = resolveWebToken(options.token);
+        const { token, explicit: tokenExplicit } = resolveWebToken(options.token);
 
         // Invariant: the owner is what makes this surface more than a viewer.
         // Without it `owned` stays empty, every session reports read-only, and
@@ -62,6 +62,7 @@ export function registerWebCommand(program: Command): void {
           port,
           host,
           owner,
+          tokenExplicit,
           ...(token !== undefined ? { token } : {}),
         });
 

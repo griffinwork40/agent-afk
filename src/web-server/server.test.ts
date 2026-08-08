@@ -344,6 +344,252 @@ describe('document auth survives a refresh', () => {
   });
 });
 
+/**
+ * Invariant: the bearer token reaches the page through the SERVED HTML and the
+ * cookie is set BY THE SERVER as HttpOnly. It used to be written from JS, which
+ * made it readable via `document.cookie` — and because cookies are scoped by
+ * host and not by port, any page on any other 127.0.0.1:<port> origin could
+ * read it and drive the agent.
+ *
+ * These tests tolerate 503 (bundle not built in a source checkout) wherever the
+ * assertion needs the document BODY, but never where it needs the auth outcome.
+ */
+describe('document token delivery', () => {
+  it('sets an HttpOnly, non-Secure session cookie on the document response', async () => {
+    const h = await start();
+    const res = await fetch(api(h, `/?token=${h.token}`));
+    const cookie = res.headers.get('set-cookie');
+    expect(cookie).toBeTruthy();
+    expect(cookie).toContain(`afk_web_token=${h.token}`);
+    expect(cookie?.toLowerCase()).toContain('httponly');
+    expect(cookie?.toLowerCase()).toContain('samesite=strict');
+    // Secure would stop the browser storing it over plain-http loopback, which
+    // would silently reintroduce the 401-on-refresh bug the cookie prevents.
+    expect(cookie?.toLowerCase()).not.toContain('secure');
+    expect(cookie).not.toMatch(/__Host-/);
+  });
+
+  it('injects the token into the served HTML meta tag', async () => {
+    const h = await start();
+    const res = await fetch(api(h, `/?token=${h.token}`));
+    if (res.status === 503) return; // bundle not built in this checkout
+    const html = await res.text();
+    expect(html).toContain(`<meta name="afk-token" content="${h.token}"`);
+    expect(html).not.toContain('__AFK_WEB_TOKEN__');
+  });
+
+  it('does not set the token cookie on a non-document asset', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/styles.css'), {
+      headers: { cookie: `afk_web_token=${h.token}` },
+    });
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+});
+
+// The regression guard for the whole cookie design: the frontend strips
+// `?token=` from the visible URL, so a refresh arrives with the cookie alone.
+describe('refresh still authenticates', () => {
+  it('serves a bare / carrying only the cookie', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/'), { headers: { cookie: `afk_web_token=${h.token}` } });
+    expect(res.status).not.toBe(401);
+    expect([200, 503]).toContain(res.status);
+  });
+});
+
+describe('security headers', () => {
+  const assertHeaders = (res: Response): void => {
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    const csp = res.headers.get('content-security-policy');
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'self'");
+    // The document answers /favicon.ico with an inline data: URI.
+    expect(csp).toContain("img-src 'self' data:");
+    // fetch + EventSource are same-origin by construction.
+    expect(csp).toContain("connect-src 'self'");
+  };
+
+  it('sets them on a JSON response', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/sessions'), {
+      headers: { authorization: `Bearer ${h.token}` },
+    });
+    expect(res.status).toBe(200);
+    assertHeaders(res);
+  });
+
+  it('sets them on the document response', async () => {
+    const h = await start();
+    assertHeaders(await fetch(api(h, `/?token=${h.token}`)));
+  });
+
+  it('sets them on an unauthenticated 401 too', async () => {
+    const h = await start();
+    assertHeaders(await fetch(api(h, '/')));
+  });
+});
+
+// The document was gated but its subresources were not, so the bundle was
+// readable by any unauthenticated local client.
+describe('static assets require the same credential as the document', () => {
+  it('401s /app.js without credentials', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/app.js'));
+    expect(res.status).toBe(401);
+  });
+
+  it('401s /styles.css without credentials', async () => {
+    const h = await start();
+    expect((await fetch(api(h, '/styles.css'))).status).toBe(401);
+  });
+
+  it('serves an asset once the cookie is presented', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/styles.css'), {
+      headers: { cookie: `afk_web_token=${h.token}` },
+    });
+    // 404 = authenticated but unbuilt; the point is that it is NOT 401.
+    expect(res.status).not.toBe(401);
+  });
+});
+
+describe('session id validation', () => {
+  // A bad id used to open a 200 event-stream that never emitted a frame,
+  // because every ledger reader treats an unsafe id as "no such session".
+  it('400s a traversal-shaped session id on the stream route', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/sessions/..%2F..%2Fetc%2Fpasswd/stream'), {
+      headers: { authorization: `Bearer ${h.token}` },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('bad_session_id');
+  });
+
+  it('400s a malformed session id on the stream route', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/sessions/not%20a%20valid%20id/stream'), {
+      headers: { authorization: `Bearer ${h.token}` },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('400s a traversal-shaped session id on the prompt route', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/sessions/..%2F..%2Fetc/prompt'), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${h.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'hi' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * Invariant: the session-agnostic route is additive. The per-session route
+ * resolved by requestId alone anyway, so its id constrained nothing — but a
+ * user viewing a READ-ONLY session could never answer a prompt, because the
+ * frontend fell back to the active session id and got a permanent 409.
+ */
+describe('POST /api/approve — session-agnostic approval', () => {
+  const pend = async (h: WebServerHandle): Promise<string> => {
+    const controller = new AbortController();
+    void elicitationRouter
+      .route({ message: 'approve?' } as never, { signal: controller.signal })
+      .catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 20));
+    return h.bridge.list()[0]!.id;
+  };
+
+  it('resolves a pending elicitation with no session id in the path', async () => {
+    const h = await start();
+    const id = await pend(h);
+    const res = await fetch(api(h, '/api/approve'), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${h.token}`,
+        'content-type': 'application/json',
+        origin: `http://127.0.0.1:${h.port}`,
+      },
+      body: JSON.stringify({ requestId: id, response: { action: 'accept' } }),
+    });
+    expect(res.status).toBe(200);
+    expect(h.bridge.list()).toHaveLength(0);
+  });
+
+  it('404s an unknown requestId', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/approve'), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${h.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId: 'nope' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('still requires the bearer token', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/approve'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId: 'x' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('still rejects a foreign Origin', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/approve'), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${h.token}`,
+        'content-type': 'application/json',
+        origin: 'https://evil.example',
+      },
+      body: JSON.stringify({ requestId: 'x' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  // Backward compatibility: the per-session route keeps working.
+  it('leaves the per-session approve route working on an owned session', async () => {
+    const h = await start({ owned: new Set(['mine']) });
+    const id = await pend(h);
+    const res = await fetch(api(h, '/api/sessions/mine/approve'), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${h.token}`,
+        'content-type': 'application/json',
+        origin: `http://127.0.0.1:${h.port}`,
+      },
+      body: JSON.stringify({ requestId: id, response: { action: 'accept' } }),
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('tokenExplicit is threaded, not inferred', () => {
+  // The documented invariant held only by coincidence: server.ts re-derived
+  // explicitness from token presence rather than the caller's real intent.
+  it('refuses a non-loopback bind when the token was not explicit', async () => {
+    await expect(
+      startWebServer({ port: 0, host: '0.0.0.0', token: 'minted-not-chosen', tokenExplicit: false }),
+    ).rejects.toThrow(/refusing to bind/i);
+  });
+
+  it('allows a non-loopback bind when the caller reports an explicit token', async () => {
+    const h = await start({ host: '0.0.0.0', token: 'deliberate', tokenExplicit: true });
+    expect(h.token).toBe('deliberate');
+  });
+
+  it('falls back to token presence when the flag is omitted', async () => {
+    const h = await start({ host: '0.0.0.0', token: 'deliberate' });
+    expect(h.port).toBeGreaterThan(0);
+  });
+});
+
 describe('approval bodies fail closed', () => {
   it('declines an approval whose body carries no recognized action', async () => {
     const h = await start();

@@ -6,6 +6,12 @@
     <meta name="color-scheme" content="dark" />
     <!-- The page holds a live bearer token; keep it out of referrers entirely. -->
     <meta name="referrer" content="no-referrer" />
+    <!-- Server-templated on the document response only. The bearer token is
+         delivered HERE rather than in a JS-readable cookie: cookies are scoped
+         by host and not by port, so any page on another 127.0.0.1:<port> origin
+         could read a non-HttpOnly cookie and drive the agent. A <meta> tag (not
+         an inline <script>) because the CSP sets script-src 'self'. -->
+    <meta name="afk-token" content="__AFK_WEB_TOKEN__" />
     <title>afk web</title>
     <!-- Inline data-URI favicon: browsers request /favicon.ico unconditionally,
          and a 404 there logs a console error on every load. Inlining answers it
@@ -51,13 +57,8 @@
     </main>
 
     <script type="module" src="/app.js"></script>
-    <script type="module">
-      // Small-screen sidebar toggle. Inline because it is pure chrome and has
-      // no dependency on the bundle's state.
-      const btn = document.getElementById('menu-toggle');
-      btn?.addEventListener('click', () => {
-        document.getElementById('sidebar')?.classList.toggle('is-open');
-      });
-    </script>
+    <!-- Was an inline <script>; moved to a file because the document is served
+         under `script-src 'self'`, which blocks inline execution. -->
+    <script type="module" src="/chrome.js"></script>
   </body>
 </html>
