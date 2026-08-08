@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.98.0] - 2026-08-08
+
+### Added
+- add session-scoped Opus Fast mode (#907) (2e3339f)
+
 ## [5.97.8] - 2026-08-08
 
 ### Fixed
