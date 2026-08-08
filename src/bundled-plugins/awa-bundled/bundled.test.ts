@@ -101,7 +101,7 @@ const PINNED_HASHES = {
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726, #777).
   // Full rationale: docs/bundled-plugins.md#review-726
-  review: 'e40dbb244d3b0d074f366e6d3a7e27d053b00657571fb8d4d8027549350e0e81',
+  review: '827aa8f10c6de141bce19b5f7bac9394b319ca9cb68c108ed627a6d5f2c2df20',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
