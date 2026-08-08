@@ -33,9 +33,25 @@ function baseInput(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof shouldCaptureSubagentOutput>[0];
 }
 
-/** Give the recorder's internal write chain a turn to drain. */
-async function drain(): Promise<void> {
-  await new Promise((r) => setTimeout(r, 30));
+/**
+ * Writes are fire-and-forget through an internal promise chain, so the file is
+ * not guaranteed to exist the instant `observe()` returns. Poll for the record
+ * count rather than sleeping a fixed interval — a fixed sleep is a timing
+ * assumption that flakes on a loaded machine.
+ */
+async function waitForRecords(subagentId: string, count: number): Promise<string> {
+  const file = path.join(getSubagentOutputsDir(SESSION), `${subagentId}.md`);
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    if (fs.existsSync(file)) {
+      const body = fs.readFileSync(file, 'utf8');
+      if ((body.match(/^### /gm) ?? []).length >= count) return body;
+      if (Date.now() > deadline) return body;
+    } else if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${file}`);
+    }
+    await new Promise((r) => setTimeout(r, 10));
+  }
 }
 
 function contentEvent(text: string) {
@@ -129,10 +145,7 @@ describe('createSubagentOutputRecorder', () => {
     expect(rec).not.toBeNull();
     rec?.observe(contentEvent('I will list the directory.'));
     rec?.observe(toolEvent('bash', 'ls -la /tmp'));
-    await drain();
-
-    const file = path.join(getSubagentOutputsDir(SESSION), 'order-1.md');
-    const body = fs.readFileSync(file, 'utf8');
+    const body = await waitForRecords('order-1', 2);
     expect(body).toContain(OUTPUT_CAPTURE_BANNER);
     expect(body).toContain('I will list the directory.');
     expect(body).toContain('ls -la /tmp');
@@ -152,12 +165,7 @@ describe('createSubagentOutputRecorder', () => {
     rec?.observe(toolEvent('bash', 'wc -c huge.json'));
     // No 'done' event ever arrives — the child is aborted.
     rec?.end('aborted_or_incomplete');
-    await drain();
-
-    const body = fs.readFileSync(
-      path.join(getSubagentOutputsDir(SESSION), 'timeout-1.md'),
-      'utf8',
-    );
+    const body = await waitForRecords('timeout-1', 4);
     expect(body).toContain('find / -name SKILL.md');
     expect(body).toContain('wc -c huge.json');
     expect(body).toContain('aborted_or_incomplete');
@@ -168,9 +176,7 @@ describe('createSubagentOutputRecorder', () => {
     rec?.observe(toolEvent('bash', 'echo a'));
     rec?.observe(toolEvent('bash', 'echo b'));
     rec?.observe(toolEvent('bash', 'echo c'));
-    await drain();
-
-    const body = fs.readFileSync(path.join(getSubagentOutputsDir(SESSION), 'header-1.md'), 'utf8');
+    const body = await waitForRecords('header-1', 3);
     expect(body.match(/^---$/gm)?.length).toBe(2);
     expect(body.match(/subagentId:/g)?.length).toBe(1);
   });
@@ -187,9 +193,7 @@ describe('createSubagentOutputRecorder', () => {
         toolInputRaw: '{"command":"exact --value"}',
       },
     } as Parameters<Recorder['observe']>[0]);
-    await drain();
-
-    const body = fs.readFileSync(path.join(getSubagentOutputsDir(SESSION), 'raw-1.md'), 'utf8');
+    const body = await waitForRecords('raw-1', 1);
     expect(body).toContain('exact --value');
   });
 
