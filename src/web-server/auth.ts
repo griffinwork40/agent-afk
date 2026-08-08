@@ -83,14 +83,32 @@ export function originAllowed(
   return allowedOrigins(host, port).includes(origin);
 }
 
-/** The set of origins considered "this server". */
+/**
+ * The set of origins considered "this server".
+ *
+ * Invariant: a WILDCARD bind must include the loopback origins, not just the
+ * literal bind host. `startWebServer` advertises (and auto-opens) `127.0.0.1`
+ * when bound to `0.0.0.0`, because `http://0.0.0.0:<port>` is not a usable
+ * browser URL. Allowing only the bind host therefore 403'd every POST from the
+ * very URL the command printed. Loopback is enumerable and safe to allow; the
+ * LAN hostnames a wildcard listener also answers on are NOT enumerable here, so
+ * reaching a wildcard bind by LAN hostname still fails Origin validation by
+ * design — widening that would mean accepting arbitrary Origins, which is the
+ * CSRF hole this check exists to close.
+ */
 export function allowedOrigins(host: string, port: number): string[] {
-  const hosts = isLoopback(host) ? ['127.0.0.1', 'localhost', '[::1]'] : [host];
+  const hosts =
+    isLoopback(host) || isWildcard(host) ? ['127.0.0.1', 'localhost', '[::1]'] : [host];
   return hosts.map((h) => `http://${h}:${port}`);
 }
 
 function isLoopback(host: string): boolean {
   return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+/** Wildcard binds listen on every interface and are advertised as loopback. */
+function isWildcard(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '[::]';
 }
 
 /** Result of validating startup binding options. */

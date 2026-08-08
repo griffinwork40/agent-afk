@@ -137,9 +137,10 @@ export class WebElicitationBridge {
  * Coerce a browser-supplied response body into an ElicitationResult.
  *
  * Contract: `ElicitationResult.content` is a `Record<string, unknown>`, so a
- * bare scalar from the browser is wrapped rather than cast. An unrecognized
- * `action` falls back to 'accept' only when the payload is object-shaped;
- * anything else declines, so a malformed body can never be read as approval.
+ * bare scalar from the browser is wrapped rather than cast. An unrecognized or
+ * absent `action` DECLINES, whatever the payload shape — this surface approves
+ * file edits and shell commands, so refusal is the only safe default and a
+ * malformed body can never be read as approval.
  */
 function normalizeResult(response: unknown): ElicitationResult {
   if (typeof response !== 'object' || response === null) {
@@ -155,5 +156,5 @@ function normalizeResult(response: unknown): ElicitationResult {
       ? { action, content: content as Record<string, unknown> }
       : { action };
   }
-  return { action: 'accept', content: record };
+  return { action: 'decline' };
 }

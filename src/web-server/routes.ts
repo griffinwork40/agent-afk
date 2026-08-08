@@ -80,6 +80,7 @@ export async function handleStream(
   req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
+  streams?: Set<AbortController>,
 ): Promise<void> {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -95,6 +96,26 @@ export async function handleStream(
   if (!Number.isFinite(seq) || seq < 0) seq = 0;
   const resumeFrom = seq;
 
+  // Invariant: the SSE event id is the record's 1-based POSITION IN THE LEDGER
+  // FILE, never a per-connection emit counter. `Last-Event-ID` resume is
+  // implemented as `position <= resumeFrom -> skip`, so the id must mean the
+  // same thing on every connection. A counter that advanced only on emitted
+  // records made a single missed record permanently unreachable (its true
+  // position stayed <= resumeFrom forever) and simultaneously re-sent an
+  // already-seen record, because every later id sat one below its true
+  // position.
+  //
+  // Invariant: the tail is aborted through `controller`, and that abort is the
+  // ONLY thing that can stop `tailLedger`. Its loop guard is
+  // `while (!signal?.aborted && !sawClosed)`, so without a signal the sole exit
+  // was a terminal `closed` record: a client that disconnected from a quiet
+  // session leaked a 250ms poll timer plus an `fs.watch` handle for the life of
+  // the process, and because the response never ended, `server.close()` never
+  // completed either. The consumer-side `closed` check cannot substitute — it
+  // only runs once the generator yields, which a quiet session never does.
+  const controller = new AbortController();
+  streams?.add(controller);
+
   let closed = false;
   const heartbeat = setInterval(() => {
     if (!closed) res.write(': ping\n\n');
@@ -104,25 +125,44 @@ export async function handleStream(
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
+    controller.abort();
+    streams?.delete(controller);
     res.end();
   };
   req.on('close', finish);
 
   try {
-    // Phase 1 — replay everything the client has not seen.
-    let index = 0;
+    // Phase 1 — replay the history that exists right now, tracking how many
+    // records that was so the live phase can pick up at exactly that position.
+    let replayCount = 0;
     for await (const record of readLedger(sessionId)) {
-      index += 1;
-      if (index <= resumeFrom) continue;
+      replayCount += 1;
+      if (replayCount <= resumeFrom) continue;
       if (closed) return;
-      res.write(formatSseFrame({ id: String(index), data: { record, replay: true } }));
+      res.write(formatSseFrame({ id: String(replayCount), data: { record, replay: true } }));
     }
 
-    // Phase 2 — tail live.
-    for await (const record of tailLedger(sessionId)) {
+    // Phase 2 — tail from the START of the file, skipping the records phase 1
+    // already accounted for.
+    //
+    // Invariant: `fromStart: true` is what closes the replay-to-tail gap. The
+    // default (`fromStart: false`) re-stats the file and begins at whatever EOF
+    // happens to be at that instant, so any record appended after phase 1
+    // drained but before that stat was dropped — silently, and permanently once
+    // the positional id advanced past it. Re-reading from offset 0 with one
+    // continuous cursor cannot skip a record; a record written during the
+    // handoff simply lands past `replayCount` and is emitted live, which is
+    // what it is. The cost is one extra sequential read of an append-only file.
+    let position = 0;
+    for await (const record of tailLedger(sessionId, {
+      fromStart: true,
+      signal: controller.signal,
+    })) {
+      position += 1;
+      // Already delivered (or deliberately skipped) during replay.
+      if (position <= replayCount || position <= resumeFrom) continue;
       if (closed) return;
-      index += 1;
-      res.write(formatSseFrame({ id: String(index), data: { record, replay: false } }));
+      res.write(formatSseFrame({ id: String(position), data: { record, replay: false } }));
     }
   } catch (err) {
     if (!closed) {

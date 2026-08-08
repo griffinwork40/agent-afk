@@ -81,6 +81,9 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   const bridge = new WebElicitationBridge();
   bridge.install();
 
+  /** Abort controllers for in-flight SSE streams, so shutdown can end them. */
+  const streams = new Set<AbortController>();
+
   const ctx: RouteContext = {
     owned,
     bridge,
@@ -100,7 +103,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   };
 
   const server = createServer((req, res) => {
-    void dispatch(req, res, ctx, token, host, actualPort(server)).catch((err: unknown) => {
+    void dispatch(req, res, ctx, token, host, actualPort(server), streams).catch((err: unknown) => {
       if (res.headersSent) {
         res.end();
         return;
@@ -123,6 +126,16 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     bridge,
     stop: async () => {
       bridge.uninstall();
+      // Invariant: abort live SSE streams BEFORE awaiting `server.close()`.
+      // `close()` stops accepting new connections but waits for existing ones
+      // to end, and an event-stream response never ends on its own — it tails
+      // the ledger and heartbeats indefinitely. So with any browser attached,
+      // the SIGINT/SIGTERM path's `stop().then(() => process.exit(0))` never
+      // resolved, and the `stopping` guard swallowed every subsequent signal:
+      // the process could only be killed with SIGKILL. Aborting each stream's
+      // controller ends its response, which lets `close()` complete promptly.
+      for (const controller of [...streams]) controller.abort();
+      streams.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
@@ -163,6 +176,7 @@ async function dispatch(
   token: string,
   host: string,
   port: number,
+  streams: Set<AbortController>,
 ): Promise<void> {
   const rawUrl = req.url ?? '/';
   const path = rawUrl.split('?')[0] ?? '/';
@@ -194,7 +208,7 @@ async function dispatch(
 
   const streamMatch = /^\/api\/sessions\/([^/]+)\/stream$/.exec(path);
   if (streamMatch?.[1] && method === 'GET') {
-    await handleStream(req, res, decodeURIComponent(streamMatch[1]));
+    await handleStream(req, res, decodeURIComponent(streamMatch[1]), streams);
     return;
   }
 
