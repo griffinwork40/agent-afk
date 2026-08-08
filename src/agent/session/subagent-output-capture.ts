@@ -211,6 +211,15 @@ export function createSubagentOutputRecorder(
             return;
           }
           if (chunk.type === 'tool_use_detail') {
+            // Invariant: exactly ONE record per tool call, carrying real arguments.
+            // anthropic-direct announces each call twice — a pending paint at
+            // `content_block_start` whose args are still streaming, then the
+            // completed twin before dispatch. Recording both wrote a duplicate
+            // whose args were the literal placeholder ' …'. Skipping `pending`
+            // keeps the record incremental (the completed event still fires
+            // BEFORE execution, so a killed child leaves evidence) while making
+            // it truthful.
+            if (chunk.pending) return;
             // Invariant: flush prose BEFORE the tool record, so the transcript
             // preserves the causal order the child produced — reasoning, then
             // the call it justified.

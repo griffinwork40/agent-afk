@@ -197,6 +197,37 @@ describe('createSubagentOutputRecorder', () => {
     expect(body).toContain('exact --value');
   });
 
+  it('records a tool call ONCE — the pending paint is skipped, not written as a duplicate', async () => {
+    const rec = createSubagentOutputRecorder(baseInput({ subagentId: 'dup-1' }));
+    // anthropic-direct announces every call twice: the pending paint fires at
+    // `content_block_start` while arguments are still streaming (so `toolInput`
+    // is the literal placeholder), then the completed twin fires before dispatch.
+    // Before the fix both were written, producing a duplicate record whose args
+    // were ' …' — exactly what live transcripts showed.
+    rec?.observe({
+      type: 'chunk',
+      chunk: {
+        type: 'tool_use_detail',
+        toolUseId: 't42',
+        toolName: 'bash',
+        toolInput: ' …',
+        pending: true,
+      },
+    } as Parameters<Recorder['observe']>[0]);
+    rec?.observe({
+      type: 'chunk',
+      chunk: {
+        type: 'tool_use_detail',
+        toolUseId: 't42',
+        toolName: 'bash',
+        toolInput: 'find . -type d -iname skills',
+      },
+    } as Parameters<Recorder['observe']>[0]);
+    const body = await waitForRecords('dup-1', 1);
+    expect((body.match(/^### tool/gm) ?? []).length).toBe(1);
+    expect(body).toContain('find . -type d -iname skills');
+  });
+
   it('never throws on a malformed event', () => {
     const rec = createSubagentOutputRecorder(baseInput({ subagentId: 'safe-1' }));
     expect(() =>

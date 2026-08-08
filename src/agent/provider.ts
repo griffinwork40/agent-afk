@@ -123,6 +123,17 @@ export type ProviderEvent =
       toolInput: string;
       /** Raw JSON-serialized tool input object — used by facet derivation for exact field extraction. */
       toolInputRaw?: string;
+      /**
+       * Contract: `true` marks a PENDING paint — the block was announced but its
+       * arguments have not finished streaming, so `toolInput` is a placeholder
+       * rather than real content. anthropic-direct emits `tool.use.start` twice
+       * per call: once at `content_block_start` (pending, args still arriving via
+       * `input_json_delta`) and again before dispatch (complete). Live surfaces
+       * want the early paint; anything PERSISTING a record must skip `pending`
+       * or it writes a duplicate with placeholder args. Absent means complete —
+       * openai-compatible emits only the complete event and never sets this.
+       */
+      pending?: true;
       sessionId?: string;
     }
   | {
