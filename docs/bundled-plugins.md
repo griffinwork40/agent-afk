@@ -68,6 +68,32 @@ two never-overridable clauses and the ordering invariant are now guarded
 by a substring assertion, not the file hash alone (see 'review keeps the
 severity/disposition split' below).
 
+Re-bumped once more after /review of PR #936 itself, which found the
+assignment-order invariant under-scoped in two ways. First, it enumerated
+only two downgrade paths (confidence, Wave 1.5 `diff-only`) while the file
+has six; the three unnamed ones include the api-compat reachability rule,
+which drops a finding **two tiers in one step** (`medium` → `nit`) and so
+was not even described by the invariant's "downgraded a tier" wording. The
+invariant now covers every downgrade rule in the file explicitly. Second,
+preserving `blocking: true` across a downgrade collided head-on with the
+override rule that permits `blocking: true` on a `low`/`nit` only for a
+stated external constraint: every downgraded `medium` landed as a
+`low`/`nit` carrying `blocking: true` with no admissible justification to
+write, forcing the reviewer to fabricate an external constraint or emit a
+schema-violating finding. A downgrade-preserved disposition is now
+explicitly *not* an override — it records `· blocking preserved from
+pre-downgrade <severity>` and is exempt from that rule. The same review
+also found Wave 2's `receives` list still omitted the merge-decision rule
+it is the actor for, the exact gap that had just been closed for Wave 1's
+blocking table; it is now listed.
+
+That review additionally caught a consumer-side effect of the schema
+change that lives outside this file: `summarizeForTelegram`
+(`src/cli/slash/_lib/review-post.ts`) keyed its high-signal-line filter on
+the bare word `blocking`, and the new schema puts `blocking:(true|false)`
+on *every* finding line — so the filter matched 100% of findings and the
+8-line push cap filled with nits. It now matches `blocking: true` only.
+
 The bundled copy is the SOLE copy of /review: upstream deleted its own
 review skill on 2026-07-24 (ce27e45), a deliberate dedup of a skill that
 only ever shadowed this one. So #726 had nothing to back-port. The defect

@@ -179,7 +179,12 @@ export function summarizeForTelegram(review: string): string {
     const line = rawLine.trim();
     if (!line) continue;
     const hasCitation = /[\w./-]+:\d+/.test(line);
-    const hasSeverity = /\b(critical|high|blocking|medium)\b/i.test(line);
+    // Invariant: `blocking` is matched only in its `blocking: true` form. The
+    // /review finding schema puts a `blocking:(true|false)` field on EVERY
+    // finding line, so a bare `\bblocking\b` alternative matches 100% of them
+    // and this filter stops discriminating — low/nit findings would fill the
+    // 8-line cap. Only a blocking finding is high-signal for the push.
+    const hasSeverity = /\b(critical|high|medium)\b|\bblocking:\s*true\b/i.test(line);
     const isBullet = /^([-*]\s|#{1,6}\s)/.test(line);
     if ((hasCitation && hasSeverity) || (isBullet && hasSeverity)) {
       findingLines.push(line.replace(/^([-*]+|#{1,6})\s*/, '• '));

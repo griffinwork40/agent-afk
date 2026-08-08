@@ -102,9 +102,13 @@ const PINNED_HASHES = {
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit
   // `blocking` field, never-overridable security/data-integrity mediums, and a
-  // pre-downgrade assignment-order invariant (#937).
+  // pre-downgrade assignment-order invariant (#937). Review of #936 then
+  // widened that invariant to every downgrade path (not just the two it
+  // named), exempted a downgrade-preserved `blocking: true` from the low/nit
+  // external-constraint rule it contradicted, and put the merge-decision rule
+  // in Wave 2's receives list.
   // Full rationale: docs/bundled-plugins.md#review-726
-  review: '4bac29d1b06c80afde003094b77315c56f71aa39f04c7115da268cbafdde06db',
+  review: 'c457514e7576427dfe327dbdca347909f5ed34b321b9185c9f51663acac99295',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
@@ -244,6 +248,20 @@ describe('bundled skills', () => {
 
       // An overridden disposition gets an independent reader.
       expect(content).toContain('whose `blocking` value departs from the default table');
+
+      // The invariant covers EVERY downgrade path, not just the two it
+      // originally named — the reachability rule drops two tiers in one step.
+      expect(content).toContain('downgraded by **any** downgrade rule in this file');
+      expect(content).toContain('two tiers in one step');
+
+      // A downgrade-preserved `blocking: true` is not an override, so it is
+      // exempt from the low/nit external-constraint rule it would otherwise
+      // contradict.
+      expect(content).toContain('is **not** an override and needs no justification clause');
+      expect(content).toContain('· blocking preserved from pre-downgrade <severity>');
+
+      // Wave 2 emits the verdict, so its receives list carries the rule.
+      expect(content).toContain('**the merge-decision rule and its counts format below**');
     });
   });
 });
