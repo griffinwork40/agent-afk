@@ -223,6 +223,22 @@ describe('summarizeForTelegram', () => {
     expect(s).toContain('src/db/query.ts:42');
     expect(s).toContain('src/api/handler.ts:88');
   });
+
+  // Invariant: the /review finding schema carries `blocking:(true|false)` on
+  // EVERY finding line, so the severity filter must key on `blocking: true`
+  // rather than the bare word — otherwise every line matches and the 8-line
+  // cap fills with nits.
+  it('lifts blocking findings but not non-blocking ones', () => {
+    const review = [
+      'Decision: DO NOT MERGE',
+      '',
+      '- medium · blocking: true · correctness · src/a.ts:10 · real defect',
+      '- nit · blocking: false · naming · src/b.ts:20 · rename a variable',
+    ].join('\n');
+    const s = summarizeForTelegram(review);
+    expect(s).toContain('src/a.ts:10');
+    expect(s).not.toContain('src/b.ts:20');
+  });
 });
 
 // ---------------------------------------------------------------------------
