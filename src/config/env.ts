@@ -1216,6 +1216,20 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_CAPTURE_SUBAGENT_OUTPUT',
+    description:
+      'Opt-in: when set to 1, a subagent\'s conversational OUTPUT (assistant text plus each ' +
+      'tool call with its arguments) is appended incrementally to a redacted markdown ' +
+      'transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, ' +
+      'so a child killed by a timeout still leaves a usable partial record — the case where ' +
+      'final-message capture yields nothing. Off by default for the same reasons as ' +
+      'AFK_CAPTURE_SUBAGENT_PROMPTS (unpruned witness tree, best-effort regex redaction).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
     name: 'DEBUG',
     description: 'Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.',
     type: 'string',
@@ -1654,6 +1668,7 @@ export const env = {
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
   get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
+  get AFK_CAPTURE_SUBAGENT_OUTPUT(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_OUTPUT']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 
