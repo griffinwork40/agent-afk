@@ -103,16 +103,21 @@ Returns a combined verification manifest: `[{type: citation|absence, claim, stat
 
 Sort overall: critical → high → medium → low → nit; security first within tier; semantic/invariant findings above mechanical findings within tier. Template-fill summary block.
 
-**Merge-decision rule (mandatory — do not improvise a threshold).** Emit **DO NOT MERGE** when one or more `critical`, `high`, or `medium` findings survive Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `low` or `nit`. `medium` is **blocking by default** — a medium is an unfixed defect the author has not yet seen, not a nice-to-have. State the counts that drove the decision on the same line, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium outstanding.` or `Decision: MERGE — 0 blocking (3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts.
+**Merge-decision rule (mandatory — do not improvise a threshold).** Emit **DO NOT MERGE** when one or more `critical`, `high`, or `medium` findings survive Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `low` or `nit`. `medium` is **blocking by default** — a medium is an unfixed defect the author has not yet seen, not a nice-to-have. A `security`-dimension `medium` is always blocking and must be named as such in the decision line — today's narrow reachability is tomorrow's incident. State the counts that drove the decision on the same line, **with a dimension breakdown for any medium**, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium (1 security, 1 correctness).` or `Decision: MERGE — 0 blocking (3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts.
 
 This is the terminal step — after emitting the decision, STOP. Do not act on any finding: no edits, commits, pushes, or PR/MR mutations. A blocking bug is a finding to report, not a fix to apply.
 
-**Severity rubric:**
+**Severity rubric (impact axis only — severity measures blast radius and reachability, never category):**
 - `critical` — data loss, auth bypass, secret exposure, RCE. If it cannot cause unauthorized access or data loss, it is NOT critical.
-- `high` — wrong output under reachable conditions (reachable = called from production code, not tests-only)
-- `medium` — missing edge case, perf degraded under load, deprecated API
-- `low` — missing test, unclear error message
-- `nit` — naming, formatting
+- `high` — produces wrong output or an unsafe state under reachable conditions (reachable = called from production code, not tests-only)
+- `medium` — produces wrong output or an unsafe state, but only under narrow, rare, or hard-to-reach conditions
+- `low` — does not affect production behavior today: missing test, unclear error message, doc/PR-body mismatch, dead code, stale comment, deprecated API with no removal date, perf concern with no load evidence
+- `nit` — naming, formatting; no behavioral claim at stake
+
+**A category is never a tier by itself.** Re-home by impact, not by kind:
+- "missing edge case" → `high` if reachable in production and wrong; `medium` if reachable but rare; `low` if only reachable from tests.
+- "perf degraded under load" → `high` if unbounded or production-breaking; `medium` if bounded but measured; `low` if theoretical with no load evidence.
+- "deprecated API" → `low` by default; `high` only when a hard removal date will break a production call path.
 
 Confidence `low` → auto-downgrade one tier + append `[low confidence — verify with runtime context]`.
 
