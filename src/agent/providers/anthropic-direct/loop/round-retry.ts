@@ -33,8 +33,14 @@ import type { TurnAccumulator } from './turn-accumulator.js';
  * re-drive. Mirrors the mid-stream overload retry's signalling: a dedicated
  * `ttfb_timeout` trace phase (so the re-drive is legible in `afk trace show`)
  * plus a `stream.retry` event so surfaces discard any partial paint. No backoff
- * sleep — the point is to fail-fast off a stalled endpoint, and the single
- * retry is gated by the per-round `ttfbRetried` flag so it cannot stack.
+ * sleep — the point is to fail-fast off a stalled endpoint, and the re-drives
+ * are gated by the per-round `ttfbRetries` counter, whose per-attempt bound
+ * shrinks so more attempts cannot stack into a longer worst case.
+ *
+ * `metadata.attempt` carries the 1-based re-drive index, matching the overload
+ * and stream-incomplete phases, so a trace shows WHICH re-drive this was rather
+ * than just that one happened — the counted budget makes that distinction
+ * observable for the first time.
  *
  * The phase is NOT `rate_limit`: this timer is ours, fires with no server
  * throttle and no retry-after, and the two are otherwise indistinguishable in a
@@ -45,11 +51,17 @@ import type { TurnAccumulator } from './turn-accumulator.js';
 async function* emitTtfbRetry(
   input: RunTurnInput,
   requestStartedAt: number,
+  attempt: number,
 ): AsyncGenerator<ProviderEvent, void, void> {
   void emitSessionPhase(input.traceWriter, {
     phase: 'ttfb_timeout',
     durationMs: Date.now() - requestStartedAt,
-    metadata: { reason: 'ttfb-timeout', source: 'first-byte', resolvedModel: input.model },
+    metadata: {
+      reason: 'ttfb-timeout',
+      source: 'first-byte',
+      resolvedModel: input.model,
+      attempt,
+    },
   });
   yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
 }
@@ -78,8 +90,11 @@ export async function* handleRoundRetry(
   if (reason === 'ttfb') {
     // No backoff and no abort re-check: the re-drive is immediate by design, so
     // there is no window in which the signal could fire unobserved.
-    yield* emitTtfbRetry(input, requestStartedAt);
-    retry.ttfbRetried = true;
+    //
+    // Spend BEFORE emitting so `attempt` reads as the 1-based index of the
+    // re-drive being served (1, 2, …), matching the overload phase's numbering.
+    retry.ttfbRetries += 1;
+    yield* emitTtfbRetry(input, requestStartedAt, retry.ttfbRetries);
     return 'continue';
   }
 

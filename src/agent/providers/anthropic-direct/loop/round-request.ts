@@ -114,7 +114,7 @@ export interface OpenRoundTransport {
  *
  * - `opened` — a live stream; the caller owns watchdog disposal from here.
  * - `retry-ttfb` — first-byte stall before any content; watchdogs already
- *   disposed, caller should re-drive the round once.
+ *   disposed, caller should re-drive the round (budget permitting).
  * - `terminated` — a terminal event was already yielded; the turn is over.
  */
 export type OpenRoundResult =
@@ -126,8 +126,9 @@ export type OpenRoundResult =
 export interface OpenRoundContext {
   input: RunTurnInput;
   turn: TurnAccumulator;
-  /** Read-only here: consulted for the once-per-round TTFB allowance. */
+  /** Read-only here: consulted for the counted per-round TTFB allowance. */
   retry: RoundRetryBudget;
+  /** Per-ATTEMPT first-byte bound (already divided by TTFB_MAX_ATTEMPTS). */
   ttfbTimeoutMs: number;
   stallTimeoutMs: number;
 }
@@ -247,8 +248,9 @@ export async function* openRound({
     return { kind: 'opened', events, ttfb, stall, requestStartedAt };
   } catch (err) {
     // A TTFB timeout aborts before the first byte (connection-phase stall).
-    // Distinguish it from a user interrupt (input.signal) and, on the first
-    // occurrence this round, re-drive the request once instead of erroring.
+    // Distinguish it from a user interrupt (input.signal) and, while the
+    // round's counted TTFB budget holds allowance, re-drive instead of
+    // erroring.
     if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb()) {
       ttfb.dispose();
       stall.dispose();

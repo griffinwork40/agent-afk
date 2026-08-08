@@ -157,8 +157,9 @@ export async function* consumeRoundStream({
           // converts that throw into this in-band error event. `ttfb.timedOut()`
           // is true only while the timer is live (firstByteSeen clears it), and
           // ttfbEmitted is still false here (no content byte arrived) — so this
-          // is unambiguously a first-byte stall. Re-drive once, then fail fast.
-          if (ttfb.timedOut() && !input.signal.aborted && !retry.ttfbRetried && !ttfbEmitted) {
+          // is unambiguously a first-byte stall. Re-drive while the counted
+          // TTFB budget holds allowance, then fail fast.
+          if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb() && !ttfbEmitted) {
             retryTtfb = true;
             break;
           }
@@ -276,8 +277,9 @@ export async function* consumeRoundStream({
     // A TTFB timeout that fires AFTER response headers but BEFORE the first
     // streamed event aborts the stream iterator here. `ttfb.timedOut()` is only
     // true while the timer is live — firstByteSeen() above clears it, so this
-    // branch is unreachable once any event has streamed. Re-drive once.
-    if (ttfb.timedOut() && !input.signal.aborted && !retry.ttfbRetried && !ttfbEmitted) {
+    // branch is unreachable once any event has streamed. Re-drive while the
+    // counted TTFB budget holds allowance.
+    if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb() && !ttfbEmitted) {
       ttfb.dispose();
       stall.dispose();
       retryTtfb = true;
