@@ -10,8 +10,10 @@
 // The watchdog is PROGRESS-AWARE, so these tests must pin BOTH halves:
 //   - no progress for the window  → dies with a real terminal `error` event
 //   - progress, however slow      → survives indefinitely (the deliberate
-//     invariant `loop.ttfb.test.ts:179` protects; a total-round wall-clock cap
-//     would break it, which is why this is a sliding window instead)
+//     invariant `loop.ttfb.test.ts` pins in "does NOT abort a stream that
+//     yields a first byte within the bound, even if it then runs long"; a
+//     total-round wall-clock cap would break it, which is why this is a
+//     sliding window instead)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam } from '@anthropic-ai/sdk/resources';
@@ -128,7 +130,7 @@ describe('runTurn post-first-byte stall watchdog (#762)', () => {
     expect(events.find((e) => e.type === 'turn.completed')).toBeUndefined();
   });
 
-  it('does NOT fire on a slow stream that keeps making progress (preserves the loop.ttfb.test.ts:179 invariant)', async () => {
+  it('does NOT fire on a slow stream that keeps making progress (preserves the loop.ttfb.test.ts first-byte-within-bound invariant)', async () => {
     // Window deliberately SHORTER than the total stream duration: a naive
     // absolute per-round cap would kill this round. Each inter-token gap stays
     // under the window, so a progress-aware watchdog must let it finish.

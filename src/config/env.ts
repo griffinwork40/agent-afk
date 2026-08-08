@@ -330,13 +330,13 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_MODEL_TTFB_TIMEOUT_MS',
     description:
-      'Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. ' +
-      'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
+      'Per-ROUND time-to-first-token budget (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a round may stall BEFORE its first streamed CONTENT token ' +
       '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
       'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
       'the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, ' +
       'so a normal slow call (below the bound) and any actively-' +
-      'streaming extended-thinking response are never aborted. This is the per-ROUND budget: it ' +
+      'streaming extended-thinking response are never aborted. The budget ' +
       'is divided into 3 shorter first-byte ATTEMPTS (each ~2/3 of this value, so the ' +
       'worst-case wall time per round is unchanged from the previous 2-attempt regime while a ' +
       'transient stall gets 3 chances instead of 2). NOTE: a request whose FIRST token takes ' +

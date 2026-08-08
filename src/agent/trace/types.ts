@@ -731,8 +731,11 @@ export type SessionPhaseName =
   | 'interrupt_halt'
   | 'rate_limit'
   // Client-side time-to-first-byte watchdog re-drive: OUR timer fired because no
-  // content token arrived within `AFK_MODEL_TTFB_TIMEOUT_MS` (default 180s), so
-  // the request was aborted and re-driven once. Deliberately NOT `rate_limit`:
+  // content token arrived within the per-attempt bound (⌊2/3⌋ of
+  // `AFK_MODEL_TTFB_TIMEOUT_MS` — 120s at the 180s default), so the request was
+  // aborted and re-driven while the round's counted budget still had allowance.
+  // `metadata.attempt` is the 1-based index of the re-drive being served.
+  // Deliberately NOT `rate_limit`:
   // nothing throttled us and there is no server retry-after — conflating the two
   // made a self-inflicted 3-minute stall read as provider throttling in every
   // trace (5 such stalls in one `/ground-state` pre-flight were misattributed
