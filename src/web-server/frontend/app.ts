@@ -1,24 +1,14 @@
 /**
- * `afk web` browser entry point.
+ * `afk web` browser entry point — session selection, transcript, and approvals.
  *
- * Contract: the token arrives as `?token=` on the document URL (the only place
- * a query token is accepted). It is stripped from the visible URL immediately,
- * so it does not linger in the address bar, get copy-pasted into a bug report,
- * or land in the browser history entry.
- *
- * Invariant: it is then mirrored into a session cookie, because stripping the
- * URL while holding the token ONLY in memory made refresh impossible — the
- * reload requested `/` with no query token and `serveStatic` answered 401,
- * which defeated the refresh/resume flow this surface is built around (and
- * which is the reason the transport is SSE rather than a WebSocket at all).
- *
- * A cookie rather than `sessionStorage` specifically because the 401 fires on
- * the DOCUMENT request, before any script runs — so the credential has to be
- * one the browser replays automatically. `SameSite=Strict` keeps it off every
- * cross-site request, and it is never sufficient on its own: `/api/*` still
- * demands the bearer header, so the cookie cannot be used to forge an API call.
+ * Contract: the bearer token is read from the server-templated `<meta name=
+ * "afk-token">` tag and is never written to a JS-readable store; a refresh is
+ * authenticated by the server's HttpOnly cookie rather than by anything this
+ * script holds. See `web-token.ts` for why that replaced the cookie mirror.
+ * The queue/composer concern lives in `queue-panel.ts`.
  */
 
+import { readAndScrubToken } from './web-token.js';
 import { SessionStream } from './sse-client.js';
 import {
   renderApprovals,
@@ -34,7 +24,7 @@ import {
   type LedgerRecordLike,
   type SessionTotals,
 } from './ledger-adapter.js';
-import { moveDown, moveUp, removeAt } from './queue-reorder.js';
+import { QueuePanel } from './queue-panel.js';
 import { isPinnedToBottom } from './scroll-pin.js';
 import type { TranscriptItem } from './view-model.js';
 
@@ -43,7 +33,6 @@ const token = readAndScrubToken();
 let sessions: SessionSummary[] = [];
 let activeId: string | undefined;
 let items: TranscriptItem[] = [];
-let queue: string[] = [];
 let totals: SessionTotals = { costUsd: 0, durationMs: 0, turns: 0 };
 let stream: SessionStream | undefined;
 let pending: PendingApproval[] = [];
@@ -58,32 +47,44 @@ let pendingTimer: ReturnType<typeof setInterval> | undefined;
  */
 let turnActive = false;
 
-const TOKEN_COOKIE = 'afk_web_token';
-
-function readAndScrubToken(): string {
-  const params = new URLSearchParams(location.search);
-  const fromQuery = params.get('token') ?? '';
-  if (fromQuery) {
-    // Persist BEFORE scrubbing so a reload has something to authenticate with.
-    document.cookie = `${TOKEN_COOKIE}=${encodeURIComponent(fromQuery)}; Path=/; SameSite=Strict`;
-    history.replaceState(null, '', location.pathname);
-    return fromQuery;
-  }
-  return readTokenCookie();
-}
-
-function readTokenCookie(): string {
-  for (const part of document.cookie.split(';')) {
-    const [rawName, ...rest] = part.split('=');
-    if (rawName?.trim() === TOKEN_COOKIE) return decodeURIComponent(rest.join('=').trim());
-  }
-  return '';
-}
-
 function $(id: string): HTMLElement {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing #${id}`);
   return node;
+}
+
+/**
+ * Contract: constructed lazily on first use so this module can be imported
+ * before the DOM exists (the bundle is a `type="module"` script, but the
+ * queue-reorder tests and any future harness import it directly).
+ */
+let queuePanel: QueuePanel | undefined;
+
+function panel(): QueuePanel {
+  if (!queuePanel) {
+    queuePanel = new QueuePanel({
+      container: $('queue'),
+      input: $('prompt') as HTMLTextAreaElement,
+      send: $('send'),
+      submit: async (text: string) => {
+        if (activeId === undefined) throw new Error('no active session');
+        await api(`/api/sessions/${encodeURIComponent(activeId)}/prompt`, {
+          method: 'POST',
+          body: JSON.stringify({ text }),
+        });
+      },
+      isLive,
+      isTurnActive: () => turnActive,
+      onAccepted: () => {
+        turnActive = true;
+        syncStop();
+      },
+      onError: (message: string) => {
+        $('status').textContent = message;
+      },
+    });
+  }
+  return queuePanel;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -124,8 +125,7 @@ async function loadSessions(): Promise<void> {
 function selectSession(id: string): void {
   activeId = id;
   items = [];
-  queue = [];
-  renderQueue();
+  panel().clear();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
   stream?.stop();
 
@@ -143,6 +143,10 @@ function selectSession(id: string): void {
       if (record.kind === 'done' || record.kind === 'error') {
         turnActive = false;
         syncStop();
+        // The turn that was holding the queue just ended — release exactly one
+        // more entry. This is the only place the drain resumes, which is what
+        // keeps the queue a queue rather than a write-through.
+        void panel().flush();
       }
       const item = ledgerRecordToItem(record);
       totals = accumulateTotals(totals, record);
@@ -162,8 +166,14 @@ function selectSession(id: string): void {
     },
     onStatus: (status) => {
       const node = $('status');
-      node.textContent = status;
+      // Report the session's end honestly. 'ended' means the ledger reached its
+      // terminal record and no further frame can arrive, so the indicator must
+      // neither sit on 'reconnecting' (it is not retrying) nor read 'open' (the
+      // stream is gone). A turn cannot be in flight on a session that has
+      // ended, so the Stop control goes with it.
+      node.textContent = status === 'ended' ? 'session ended' : status;
       node.className = `status status-${status}`;
+      if (status === 'ended') turnActive = false;
       syncStop();
     },
   });
@@ -203,74 +213,6 @@ function syncComposer(): void {
  */
 function syncStop(): void {
   ($('stop') as HTMLButtonElement).hidden = !(turnActive && isLive());
-}
-
-function renderQueue(): void {
-  const container = $('queue');
-  container.textContent = '';
-  queue.forEach((text, i) => {
-    const row = document.createElement('div');
-    row.className = 'queue-row';
-    const label = document.createElement('span');
-    label.className = 'queue-text';
-    label.textContent = text;
-    row.appendChild(label);
-    for (const [glyph, fn] of [
-      ['↑', () => { queue = moveUp(queue, i); }],
-      ['↓', () => { queue = moveDown(queue, i); }],
-      ['✕', () => { queue = removeAt(queue, i); }],
-    ] as const) {
-      const btn = document.createElement('button');
-      btn.className = 'queue-btn';
-      btn.textContent = glyph;
-      btn.addEventListener('click', () => {
-        fn();
-        renderQueue();
-      });
-      row.appendChild(btn);
-    }
-    container.appendChild(row);
-  });
-}
-
-async function flushQueue(): Promise<void> {
-  if (activeId === undefined || !isLive()) return;
-  while (queue.length > 0) {
-    const next = queue[0];
-    if (next === undefined) break;
-    // Invariant: the entry leaves the queue only after the POST is CONFIRMED.
-    // Dequeuing first destroyed the user's typed prompt on any transient
-    // network error, 5xx, or expired token — the caller's catch only writes
-    // status text, so there was nothing left to retry or reorder. Holding the
-    // entry until success is also what the repo's no-optimistic-rendering rule
-    // requires: no UI update ahead of its dependent write's result.
-    await api(`/api/sessions/${encodeURIComponent(activeId)}/prompt`, {
-      method: 'POST',
-      body: JSON.stringify({ text: next }),
-    });
-    queue = queue.slice(1);
-    renderQueue();
-    turnActive = true;
-    syncStop();
-  }
-}
-
-function wireComposer(): void {
-  const input = $('prompt') as HTMLTextAreaElement;
-  const submit = (): void => {
-    const text = input.value.trim();
-    if (!text) return;
-    queue = [...queue, text];
-    input.value = '';
-    renderQueue();
-    void flushQueue().catch((err: unknown) => {
-      $('status').textContent = err instanceof Error ? err.message : 'send failed';
-    });
-  };
-  $('send').addEventListener('click', submit);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
-  });
 }
 
 /**
@@ -317,14 +259,26 @@ async function pollPending(): Promise<void> {
   if (changed) renderApprovals($('approvals'), pending, answerApproval);
 }
 
+/**
+ * Answer one pending elicitation.
+ *
+ * Invariant: addressed by REQUEST ID alone, never by session. An elicitation
+ * record does not always carry a sessionId, and this used to fall back to
+ * whichever session was SELECTED — so answering a prompt while viewing a
+ * read-only (foreign-process) session POSTed to that session and got a
+ * permanent 409, the 1s poll re-added the card, and the blocked agent turn
+ * never unblocked. The request id is what the bridge resolves on anyway, so the
+ * session segment constrained nothing it was ever protecting.
+ *
+ * Optimistic removal here is deliberate and survives that change: the card's
+ * only job is to unblock the turn, and the poll re-adds it within a second if
+ * the POST failed — so the row is restored by an observed server state rather
+ * than assumed away.
+ */
 function answerApproval(id: string, answer: ApprovalAnswer): void {
-  const sessionId = pending.find((p) => p.id === id)?.sessionId ?? activeId;
-  if (sessionId === undefined) return;
-  // Optimistic removal is deliberate: the card's only job is to unblock the
-  // turn, and the poll re-adds it within a second if the POST failed.
   pending = pending.filter((p) => p.id !== id);
   renderApprovals($('approvals'), pending, answerApproval);
-  void api(`/api/sessions/${encodeURIComponent(sessionId)}/approve`, {
+  void api('/api/approve', {
     method: 'POST',
     body: JSON.stringify({ requestId: id, response: answer }),
   }).catch((err: unknown) => {
@@ -341,7 +295,7 @@ async function stopTurn(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  wireComposer();
+  panel().wire();
   $('new-session').addEventListener('click', () => void createSession());
   $('stop').addEventListener('click', () => {
     void stopTurn().catch((err: unknown) => {

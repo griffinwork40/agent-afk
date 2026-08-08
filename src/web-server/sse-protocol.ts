@@ -59,6 +59,40 @@ export function formatSseFrame(frame: SseFrame): string {
   return lines.join('\n') + '\n\n';
 }
 
+/**
+ * Payload of the frame the server writes when a session has genuinely ENDED
+ * (its ledger reached a terminal `closed` record and the tail returned).
+ *
+ * Invariant: this frame carries NO `id:`. Every other frame's id is the
+ * record's 1-based position in the ledger file, which is what `Last-Event-ID`
+ * resume is computed against; giving a non-record frame an id would either
+ * duplicate a real position or push the client's cursor past a record it never
+ * received. It is also the reason the marker lives here rather than being
+ * spelled out at each end: writer and reader must agree on it exactly, and the
+ * client's only alternative signal — the socket closing — is indistinguishable
+ * from a network drop, which is precisely the ambiguity that pinned the page in
+ * a 500ms reconnect loop against every ended session.
+ */
+export interface SseEndFrame {
+  end: true;
+  reason: string;
+}
+
+/** The single terminal frame payload; see {@link SseEndFrame}. */
+export const SSE_END_FRAME: SseEndFrame = Object.freeze({
+  end: true,
+  reason: 'session_closed',
+});
+
+/** Whether a decoded frame payload is the terminal end-of-session marker. */
+export function isSseEndFrame(payload: unknown): payload is SseEndFrame {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { end?: unknown }).end === true
+  );
+}
+
 /** Result of parsing a (possibly partial) SSE text buffer. */
 export interface ParseSseChunkResult {
   /** Fully-terminated frames found in `buffer`, in arrival order. */

@@ -7,7 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readLedger, tailLedger } from '../agent/session-ledger.js';
-import { formatSseFrame } from './sse-protocol.js';
+import { formatSseFrame, SSE_END_FRAME } from './sse-protocol.js';
 import { header, requireValidSessionId, SECURITY_HEADERS } from './routes.js';
 
 /** Heartbeat cadence; keeps intermediaries from idling out a quiet stream. */
@@ -115,6 +115,23 @@ export async function handleStream(
       if (position <= replayCount || position <= resumeFrom) continue;
       if (closed) return;
       res.write(formatSseFrame({ id: String(position), data: { record, replay: false } }));
+    }
+
+    // Invariant: reaching here means `tailLedger` RETURNED, and there are only
+    // two ways it can. Its loop guard is `while (!signal?.aborted && !sawClosed)`,
+    // so either the session wrote a terminal `closed` record (a genuine end) or
+    // something aborted the signal (this client disconnected, or the server is
+    // shutting down). Only the first is a session end, and the two must not be
+    // conflated: the socket closing looks identical from the browser either way,
+    // so a client that treated every stream end as terminal would stop resuming
+    // after a network drop, while one that treated every end as a drop
+    // reconnected forever against an ended session — which is what shipped. The
+    // signal check is the discriminator, and it is checked ALONGSIDE `closed`
+    // because the two abort paths differ: `finish()` sets `closed` on client
+    // disconnect, whereas `server.stop()` aborts the controller directly and
+    // never touches it.
+    if (!closed && !controller.signal.aborted) {
+      res.write(formatSseFrame({ data: SSE_END_FRAME }));
     }
   } catch (err) {
     if (!closed) {

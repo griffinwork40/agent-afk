@@ -69,7 +69,9 @@ interface Frame {
 /**
  * Read SSE frames until `want` of them arrive or the deadline passes, then
  * abort. Returns the decoded frames. Deliberately does not wait for the stream
- * to end — a live tail never ends on its own.
+ * to end: a tail over a session that is still OPEN never ends on its own. A
+ * session whose ledger has reached its terminal `closed` record does end, and
+ * emits the end frame — see `readUntilEnd` and the terminal-frame suite below.
  */
 async function readFrames(
   h: WebServerHandle,
@@ -175,6 +177,105 @@ describe('handleStream — event ids are ledger positions', () => {
     const second = await readFrames(handle, 1, { lastEventId: first[0]?.id ?? '0' });
     expect(second.map((f) => f.text)).toEqual(['two']);
     expect(second.map((f) => f.id)).toEqual(['2']);
+  });
+});
+
+/** Append the terminal `closed` record that makes `tailLedger` return. */
+function appendClosed(sessionId = SESSION): void {
+  const file = ledgerPath(sessionId);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'closed' })}\n`);
+}
+
+/**
+ * Read a stream to its natural EOF (no abort), returning every decoded payload.
+ * Only safe against a session that will actually end — hence the deadline.
+ */
+async function readUntilEnd(
+  h: WebServerHandle,
+  timeoutMs = 3000,
+): Promise<{ payloads: unknown[]; endedNaturally: boolean }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const payloads: unknown[] = [];
+  let endedNaturally = false;
+  try {
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/sessions/${SESSION}/stream`, {
+      headers: { authorization: `Bearer ${h.token}` },
+      signal: controller.signal,
+    });
+    if (res.body === null) return { payloads, endedNaturally };
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        endedNaturally = true;
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const { events, remainder } = parseSseChunk(buffer);
+      buffer = remainder;
+      for (const evt of events) payloads.push(JSON.parse(evt.data) as unknown);
+    }
+  } catch {
+    // Deadline abort — endedNaturally stays false, which is the assertion.
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+  return { payloads, endedNaturally };
+}
+
+/**
+ * Invariant: a session that has ENDED must say so on the wire. Without this
+ * frame the response simply closed, which is byte-identical to a network drop
+ * from the browser's side — so the client reconnected, every 500ms, forever
+ * (a successful fetch resets its backoff), re-reading the whole ledger twice
+ * per cycle. The frame is what makes the two distinguishable.
+ */
+describe('handleStream — terminal frame on a closed session', () => {
+  it('emits an end frame after the ledger reaches its closed record', async () => {
+    appendRecord('one');
+    appendClosed();
+    handle = await startWebServer({ port: 0 });
+
+    const { payloads, endedNaturally } = await readUntilEnd(handle);
+    expect(endedNaturally).toBe(true);
+    expect(payloads.at(-1)).toEqual({ end: true, reason: 'session_closed' });
+  });
+
+  it('carries no id, so it cannot advance a resuming client past a real record', async () => {
+    appendRecord('one');
+    appendClosed();
+    handle = await startWebServer({ port: 0 });
+
+    const controller = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/sessions/${SESSION}/stream`, {
+      headers: { authorization: `Bearer ${handle.token}` },
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const { events } = parseSseChunk(text);
+    const endEvent = events.find((e) => (JSON.parse(e.data) as { end?: boolean }).end === true);
+    expect(endEvent).toBeDefined();
+    expect(endEvent?.id).toBeUndefined();
+    controller.abort();
+  });
+
+  it('does NOT emit an end frame to a client that merely disconnected', async () => {
+    // No `closed` record: this session is still open, so the only way this
+    // stream ends is the client going away — which must never be reported as a
+    // session end (that would stop a real browser from ever reconnecting).
+    appendRecord('one');
+    handle = await startWebServer({ port: 0 });
+
+    const frames = await readFrames(handle, 1, { timeoutMs: 500 });
+    expect(frames.map((f) => f.text)).toEqual(['one']);
+
+    const { endedNaturally } = await readUntilEnd(handle, 700);
+    expect(endedNaturally).toBe(false);
   });
 });
 
