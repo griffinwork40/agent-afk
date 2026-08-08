@@ -99,9 +99,12 @@ const PINNED_HASHES = {
   // ~/.afk/skills/ if it drifts back.
   refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
-  // History: /review Wave 1 no longer mandates a `git show` re-read (#726, #777).
+  // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
+  // #777); severity and disposition split into separate axes with an explicit
+  // `blocking` field, never-overridable security/data-integrity mediums, and a
+  // pre-downgrade assignment-order invariant (#937).
   // Full rationale: docs/bundled-plugins.md#review-726
-  review: '827aa8f10c6de141bce19b5f7bac9394b319ca9cb68c108ed627a6d5f2c2df20',
+  review: '4bac29d1b06c80afde003094b77315c56f71aa39f04c7115da268cbafdde06db',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
@@ -207,6 +210,40 @@ describe('bundled skills', () => {
       expect(content).toContain(
         '**Wave 1.5 — Citation + absence-claim verification (INLINE',
       );
+    });
+
+    // Invariant: severity and disposition are separate axes (#937). The two
+    // never-overridable medium classes and the pre-downgrade assignment order
+    // are the whole point of the split — a later edit that drops either one
+    // reopens the bypass it closed, and the file hash alone cannot say which
+    // clause went missing.
+    it('review keeps the severity/disposition split (#937)', () => {
+      const content = readBundled('review');
+
+      // Disposition is an explicit per-finding field, not a tier threshold.
+      expect(content).toContain('**Wave 1 assigns** an explicit `blocking: true|false`');
+      expect(content).toContain(
+        'Emit **DO NOT MERGE** when one or more findings carry `blocking: true`',
+      );
+
+      // Neither never-overridable medium class may be waived.
+      expect(content).toContain(
+        'A `medium` in the `security` dimension is **never** overridable to `false`',
+      );
+      expect(content).toContain(
+        'material data-integrity risk or a likely production failure under normal usage is **never** overridable to `false`',
+      );
+
+      // A downgrade lowers severity, never disposition — otherwise the two
+      // clauses above are bypassable without invoking an override at all.
+      expect(content).toContain('**Invariant — assignment order.**');
+      expect(content).toContain('assigned from the **pre-downgrade** severity');
+      expect(content).toContain(
+        'keeps the `blocking` value its pre-downgrade severity earned',
+      );
+
+      // An overridden disposition gets an independent reader.
+      expect(content).toContain('whose `blocking` value departs from the default table');
     });
   });
 });

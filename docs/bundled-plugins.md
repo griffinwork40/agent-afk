@@ -38,6 +38,36 @@ still saying "grep production source files", the one shell-implying verb the
 rest of this change removed, and Check B verified absence claims only at
 blocking/critical/high — the same severity-scope gap Check A had just closed.
 
+Re-bumped again (#937): severity and disposition are now **separate axes**.
+`severity` answers "how bad is this defect", `blocking` answers "does this
+prevent merge"; the old rubric welded them, defining `high` by impact
+("wrong output under reachable conditions") but `medium` by category
+("missing edge case, perf degraded under load, deprecated API"), so
+blocking on tier alone made "you used a deprecated API" a hard merge
+blocker. The rubric is now single-axis (impact), hygiene re-homes to
+`low`, and every finding carries an explicit `blocking: true|false` from a
+default table with per-finding overrides that each need a one-clause
+justification. Two medium classes are never overridable: the `security`
+dimension, and material data-integrity risk / likely production failure
+under normal usage. Reviewed by /review, which found the first cut
+incomplete in three ways, all fixed here: (1) the two pre-existing
+severity-downgrade rules (low confidence, Wave 1.5 `diff-only`) fed
+straight into the blocking default, so a security `medium` could reach
+`blocking: false` with no override and no justification — an "Invariant —
+assignment order" block now pins `blocking` to the pre-downgrade severity;
+(2) neither wave's dispatch contract transmitted the blocking table and no
+actor was named for the mapping, so Wave 1 was told to emit a field whose
+rules it never received — Wave 1 is now the named assigner and the table
+is in its `receives` list; (3) the shadow-verify trigger still keyed on
+tier while the gate keyed on `blocking`, leaving the newly-introduced
+waiver as the only pipeline decision with no independent reader —
+overridden findings are now routed to /shadow-verify, and the 3-claim
+concurrency bound is prioritised waiver-first because an unreviewed
+waiver removes a blocker while an unreviewed `critical` still blocks. The
+two never-overridable clauses and the ordering invariant are now guarded
+by a substring assertion, not the file hash alone (see 'review keeps the
+severity/disposition split' below).
+
 The bundled copy is the SOLE copy of /review: upstream deleted its own
 review skill on 2026-07-24 (ce27e45), a deliberate dedup of a skill that
 only ever shadowed this one. So #726 had nothing to back-port. The defect

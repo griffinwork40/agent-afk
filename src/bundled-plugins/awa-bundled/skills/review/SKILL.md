@@ -46,13 +46,13 @@ Never fabricate intent. When none is available the value is the literal `(none s
 
 **Concurrency floor — declared, conditional, and enforced.** *Through synthesis*, a full-regime review peaks at **2 concurrent sub-agent sessions** (Wave 1's two dimension agents) and dispatches **3 in total** (Wave 1 ×2, then Wave 2 ×1, sequential). Wave 1.5 runs inline in the orchestrator and dispatches nothing. **No wave nests a child**: the sub-agents are shell-less by design, and nothing in this skill requires them to run a command, so none of them needs to nest a `git-investigator` to comply. If you add a requirement here that needs a shell, you have silently doubled this floor — put that requirement in Wave 1.5 instead.
 
-**The post-synthesis tail is the conditional half of that budget.** A review that surfaces a `critical`/`high` finding invokes `/shadow-verify` (see **Post-synthesis** below), which dispatches one verifier per claim in parallel — so the whole-run budget is **peak 3 concurrent, 5–6 total**, and it lands on exactly the high-stakes reviews most likely to hit a rate ceiling. Bound it: **at most 3 claims in a single round, no repeat rounds**, and hand the verifiers Wave 1.5's manifest so each re-derives the *claim* instead of re-locating evidence Wave 1.5 already pinned at the ref. Wave 1.5 verifies that a citation is real; shadow-verify re-derives whether the inference drawn from it holds — never substitute one for the other.
+**The post-synthesis tail is the conditional half of that budget.** A review that surfaces a `critical`/`high` finding — or one whose `blocking` value departs from the default table (see **Post-synthesis** below) — invokes `/shadow-verify`, which dispatches one verifier per claim in parallel — so the whole-run budget is **peak 3 concurrent, 5–6 total**, and it lands on exactly the high-stakes reviews most likely to hit a rate ceiling. Bound it: **at most 3 claims in a single round, no repeat rounds**, and hand the verifiers Wave 1.5's manifest so each re-derives the *claim* instead of re-locating evidence Wave 1.5 already pinned at the ref. Wave 1.5 verifies that a citation is real; shadow-verify re-derives whether the inference drawn from it holds — never substitute one for the other.
 
 **Wave 1 — Full review (regime=full, 2 parallel agents, `subagent_type: "research-agent"`).** Dispatch:
 - **security · api-compat** — contracts, auth, injection, breaking changes, secret exposure.
 - **correctness · spec-compliance · test-coverage · perf-observability** — logic bugs, regressions, whether the change satisfies its **stated intent** (unmet requirement or unrequested scope creep), missing tests, hot-path perf, logging gaps.
 
-Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA)** + the **stated intent** (what the change is meant to accomplish, or `(none supplied)`), the severity rubric, and the finding schema.
+Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA)** + the **stated intent** (what the change is meant to accomplish, or `(none supplied)`), the severity rubric, **the `blocking` default table plus its overrides and assignment-order invariant**, and the finding schema. The blocking rules are not optional context: the finding schema mandates a `blocking` value per finding, so an agent that receives the schema without the table is being told to emit a field whose assignment rules it was never given.
 
 **Citation requirement (enforced per agent).** Wave 1 agents cite from the diff and from file reads available in their own session. They do **not** run git and do **not** re-read at the reviewed ref — that verification is centralized in Wave 1.5 below, which re-reads every `blocking`/`critical`/`high` citation **and every `file-state` citation at any severity** at the ref, then drops the fabricated ones. Each agent must:
 1. State the reviewed ref it was given in each finding: `ref: <sha>`.
@@ -103,22 +103,51 @@ Returns a combined verification manifest: `[{type: citation|absence, claim, stat
 
 Sort overall: critical → high → medium → low → nit; security first within tier; semantic/invariant findings above mechanical findings within tier. Template-fill summary block.
 
-**Merge-decision rule (mandatory — do not improvise a threshold).** Emit **DO NOT MERGE** when one or more `critical`, `high`, or `medium` findings survive Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `low` or `nit`. `medium` is **blocking by default** — a medium is an unfixed defect the author has not yet seen, not a nice-to-have. State the counts that drove the decision on the same line, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium outstanding.` or `Decision: MERGE — 0 blocking (3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts.
+**Merge-decision rule (mandatory — do not improvise a threshold).**
+
+Severity and disposition are **separate axes**. `severity` answers "how bad is this defect?" — it is a property of the finding. `blocking` answers "does this prevent merge?" — it is policy. Never let one silently encode the other.
+
+**Wave 1 assigns** an explicit `blocking: true|false` to every finding it emits, from this default table. Wave 2 carries each value through unchanged and never re-derives it — synthesis dedups and sorts, it does not re-adjudicate disposition:
+
+| severity | default `blocking` |
+|---|---|
+| `critical` | true |
+| `high` | true |
+| `medium` | true |
+| `low` | false |
+| `nit` | false |
+
+**Overrides (each requires a one-clause justification appended to the finding):**
+- A `medium` may be marked `blocking: false` when it is a bounded, non-data-affecting defect the author can reasonably land and follow up — e.g. a rare-input formatting error with no downstream consumer.
+- A `medium` in the `security` dimension is **never** overridable to `false`; today's narrow reachability is tomorrow's incident.
+- A `medium` representing a material data-integrity risk or a likely production failure under normal usage is **never** overridable to `false` — a race that intermittently loses user state stays blocking even when its blast radius keeps it out of `high`.
+- A `low` or `nit` may be marked `blocking: true` only for a stated external constraint (release gate, compliance requirement). Do not use this to smuggle a preference.
+
+**Invariant — assignment order.** `blocking` is assigned from the **pre-downgrade** severity. A finding later downgraded a tier — by the confidence rule below, or by Wave 1.5's `diff-only` citation rule — **keeps the `blocking` value its pre-downgrade severity earned**: a downgrade lowers severity, never disposition. Only an explicit, justified override from the list above may flip `blocking`. Without this ordering, a security or data-integrity `medium` would silently become non-blocking by being downgraded rather than waived, defeating the two never-overridable rules above through a path that requires no justification at all.
+
+Emit **DO NOT MERGE** when one or more findings carry `blocking: true` after Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `blocking: false`.
+
+State the counts that drove the decision on the same line, **with a dimension breakdown for any blocking medium**, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium blocking (1 security, 1 correctness); 1 medium waived, 3 low.` or `Decision: MERGE — 0 blocking (2 medium waived, 3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts, and never waive a finding silently — a waived medium must appear in the count with its justification.
 
 This is the terminal step — after emitting the decision, STOP. Do not act on any finding: no edits, commits, pushes, or PR/MR mutations. A blocking bug is a finding to report, not a fix to apply.
 
-**Severity rubric:**
+**Severity rubric (impact axis only — severity measures blast radius and reachability, never category):**
 - `critical` — data loss, auth bypass, secret exposure, RCE. If it cannot cause unauthorized access or data loss, it is NOT critical.
-- `high` — wrong output under reachable conditions (reachable = called from production code, not tests-only)
-- `medium` — missing edge case, perf degraded under load, deprecated API
-- `low` — missing test, unclear error message
-- `nit` — naming, formatting
+- `high` — produces wrong output or an unsafe state under reachable conditions (reachable = called from production code, not tests-only)
+- `medium` — produces wrong output or an unsafe state, but only under narrow, rare, or hard-to-reach conditions
+- `low` — does not affect production behavior today. **Absent an impact claim**, these land here: missing test, unclear error message, doc/PR-body mismatch, dead code, stale comment, deprecated API with no removal date, perf concern with no load evidence. An instance that *does* carry an impact claim re-homes upward per the rules below — no category pins a finding to this tier, and a `security`-dimension finding is never parked here just because its category appears in this list
+- `nit` — naming, formatting; no behavioral claim at stake
+
+**A category is never a tier by itself.** Re-home by impact, not by kind:
+- "missing edge case" → `high` if reachable in production and wrong; `medium` if reachable but rare; `low` if only reachable from tests.
+- "perf degraded under load" → `high` if unbounded or production-breaking; `medium` if bounded but measured; `low` if theoretical with no load evidence. "Measured" does not require running a benchmark — Wave 1 is shell-less by design — so a load number in the **stated intent**, or a committed benchmark or perf test `Read` from the diff or repo, qualifies.
+- "deprecated API" → `low` by default; `high` only when a hard removal date will break a production call path.
 
 Confidence `low` → auto-downgrade one tier + append `[low confidence — verify with runtime context]`.
 
 **Output per dimension:** if you have read the relevant file(s) and have either real findings or a confirmed clean read, emit findings or `no issues found — read <file>`. If evidence is insufficient — you could not read the file, the tool was unavailable, no production importers were found for the symbol, or no test file exists at the asserted path — emit `unverified — <reason>` naming the missing evidence rather than invent a finding to fill the slot. Banned words from the hedging list (`ensure`, `consider`, `may`, `could`) remain banned **inside findings**; the `unverified` channel is the sanctioned path for uncertainty.
 
-**Finding schema:** `severity · confidence · dimension · file:line_range · ref:<sha> · citation-type:(diff-context|file-state) · finding (one concrete sentence naming the failure mode) · evidence (verbatim code ≤4 lines) · suggestion (one concrete fix)`.
+**Finding schema:** `severity · blocking:(true|false) · confidence · dimension · file:line_range · ref:<sha> · citation-type:(diff-context|file-state) · finding (one concrete sentence naming the failure mode) · evidence (verbatim code ≤4 lines) · suggestion (one concrete fix)`. When `blocking` departs from the default table, append `· waived: <one clause>` (or `· escalated: <one clause>`) naming the reason.
 
 **Epistemic scope disclosure (required in synthesis output).** The "What was not checked" section must include:
 - Which ref citations were verified against in Wave 1.5 (list the SHA or `unknown` if patch-file input). Example: `Citations verified inline against branch HEAD abc1234.`
@@ -126,4 +155,6 @@ Confidence `low` → auto-downgrade one tier + append `[low confidence — verif
 - Any topical gaps (e.g. 'did not review Telegram surface', 'did not run tests').
 - Whether a **stated intent** was available and spec-compliance was assessed. Example: `Stated intent: PR #123 title+body — spec-compliance assessed.` or `Stated intent: (none supplied) — spec-compliance not assessed.`
 
-**Post-synthesis:** if any `critical` or `high` finding is present, invoke `/shadow-verify` on those findings before surfacing to the user. Shadow-verify independently re-derives each top-severity claim against source; fabricated or unsupportable findings drop here before they reach the merge decision. `medium` and below go straight through.
+**Post-synthesis:** if any `critical` or `high` finding is present, **or any finding whose `blocking` value departs from the default table** (a waived `medium`, an escalated `low`/`nit`), invoke `/shadow-verify` on those findings before surfacing to the user. Shadow-verify independently re-derives each claim against source; fabricated or unsupportable findings drop here before they reach the merge decision. An overridden finding is routed because the agent that found it also set its disposition and wrote its own justification — the waiver is otherwise the only judgement in this pipeline with no second reader. `medium` and below **at their default disposition** go straight through.
+
+The concurrency floor's bound still holds — **at most 3 claims in a single round, no repeat rounds**. When critical/high plus overridden findings exceed 3, verify the **overridden ones first**: an unreviewed waiver silently removes a blocker (fails open), while an unreviewed `critical` still blocks (fails closed). Name any claim that went unverified in the epistemic-scope section.
