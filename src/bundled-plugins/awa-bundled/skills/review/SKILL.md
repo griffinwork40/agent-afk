@@ -101,7 +101,11 @@ Returns a combined verification manifest: `[{type: citation|absence, claim, stat
 
 **Severity sort order within the blocking list:** findings tagged with semantics matching `invariant violation`, `defeats stated purpose`, `defeats refactor goal`, or `breaks stated contract` sort above all other `high` findings, even those with higher mechanical severity (e.g. test/build hygiene). Within that group, sort by tier (critical → high). Mechanical findings (missing test, build hygiene) sort last within their tier.
 
-Sort overall: critical → high → medium → low → nit; security first within tier; semantic/invariant findings above mechanical findings within tier. Template-fill summary block. Emit merge decision: **DO NOT MERGE**, **MERGE**. This is the terminal step — after emitting the decision, STOP. Do not act on any finding: no edits, commits, pushes, or PR/MR mutations. A blocking bug is a finding to report, not a fix to apply.
+Sort overall: critical → high → medium → low → nit; security first within tier; semantic/invariant findings above mechanical findings within tier. Template-fill summary block.
+
+**Merge-decision rule (mandatory — do not improvise a threshold).** Emit **DO NOT MERGE** when one or more `critical`, `high`, or `medium` findings survive Wave 1.5 filtering. Emit **MERGE** only when every surviving finding is `low` or `nit`. `medium` is **blocking by default** — a medium is an unfixed defect the author has not yet seen, not a nice-to-have. State the counts that drove the decision on the same line, e.g. `Decision: DO NOT MERGE — 1 high, 2 medium outstanding.` or `Decision: MERGE — 0 blocking (3 low, 1 nit).` If zero findings survived, say `Decision: MERGE — 0 findings.` Never emit a bare verdict with no counts.
+
+This is the terminal step — after emitting the decision, STOP. Do not act on any finding: no edits, commits, pushes, or PR/MR mutations. A blocking bug is a finding to report, not a fix to apply.
 
 **Severity rubric:**
 - `critical` — data loss, auth bypass, secret exposure, RCE. If it cannot cause unauthorized access or data loss, it is NOT critical.
