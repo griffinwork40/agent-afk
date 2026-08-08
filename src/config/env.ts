@@ -336,11 +336,15 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
       'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
       'the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, ' +
       'so a normal slow call (below the bound) and any actively-' +
-      'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
-      'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
-      'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
-      'trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. ' +
-      'Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
+      'streaming extended-thinking response are never aborted. This is the per-ROUND budget: it ' +
+      'is divided into 3 shorter first-byte ATTEMPTS (each ~2/3 of this value, so the ' +
+      'worst-case wall time per round is unchanged from the previous 2-attempt regime while a ' +
+      'transient stall gets 3 chances instead of 2). NOTE: a request whose FIRST token takes ' +
+      'longer than the per-attempt bound — e.g. a very large opus_1m prefill — is aborted and ' +
+      're-driven, then surfaces as an error once the budget is spent (raise this value or set 0 ' +
+      'for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang ' +
+      'on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb), i.e. 3 × 120s. ' +
+      'Set to 0 to disable.',
     type: 'number',
     required: false,
     default: '180000',

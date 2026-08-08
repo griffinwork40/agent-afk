@@ -54,7 +54,11 @@ import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
 import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
 import { resolveMaxToolIterations } from '../shared/tool-loop-cap.js';
 import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from './overload-pause.js';
-import { OVERLOAD_MAX_RETRIES, RoundRetryBudget } from './loop/retry-budget.js';
+import {
+  OVERLOAD_MAX_RETRIES,
+  RoundRetryBudget,
+  ttfbAttemptTimeoutMs,
+} from './loop/retry-budget.js';
 import { handleRoundRetry, type RoundRetryContext } from './loop/round-retry.js';
 import { openRound } from './loop/round-request.js';
 import { consumeRoundStream } from './loop/stream-consumer.js';
@@ -100,14 +104,18 @@ export async function* runTurn(
     requestStartedAt,
   });
 
-  // Per-round time-to-first-token stall bound (issue #583). A degrading upstream
-  // call that never streams a first CONTENT token (text/thinking delta or
-  // tool_use — message_start + pings do NOT count) is aborted at this bound and
-  // retried ONCE per round, then surfaces as an error — instead of hanging up to
-  // the SDK's ~10-min default. `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
-  // The single retry reuses the createWithRetry attempt budget model so it
-  // cannot stack on top of the overload backoff into a longer worst case.
-  const ttfbTimeoutMs = resolveTtfbTimeoutMs();
+  // Per-ATTEMPT time-to-first-token stall bound (issue #583). A degrading
+  // upstream call that never streams a first CONTENT token (text/thinking delta
+  // or tool_use — message_start + pings do NOT count) is aborted at this bound
+  // and re-driven while the round's counted TTFB budget holds allowance, then
+  // surfaces as an error — instead of hanging up to the SDK's ~10-min default.
+  // `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
+  //
+  // The env var stays the per-ROUND budget; `ttfbAttemptTimeoutMs` divides it
+  // into TTFB_MAX_ATTEMPTS shorter attempts so the worst case is bounded by the
+  // pre-count regime's (2 × configured) for EVERY configured value — see the
+  // arithmetic Invariant in loop/retry-budget.ts.
+  const ttfbTimeoutMs = ttfbAttemptTimeoutMs(resolveTtfbTimeoutMs());
   // Per-round POST-first-byte stall bound (issue #762). The TTFB bound above is
   // cleared by the first content token, so before this a stream that stalled
   // mid-flight had NO bound of any kind: two real sessions hung 38.9 and 63.5
@@ -142,8 +150,10 @@ export async function* runTurn(
     if (opened.kind === 'terminated') return;
 
     if (opened.kind === 'retry-ttfb') {
-      // Connection-phase TTFB timeout: re-drive once. Shares the once-per-round
-      // allowance with the mid-stream TTFB path via the same retry handler.
+      // Connection-phase TTFB timeout: re-drive. Shares ONE counted per-round
+      // allowance with the mid-stream TTFB path via the same retry handler, so a
+      // round that alternates between the two stall shapes still gets exactly
+      // TTFB_MAX_ATTEMPTS first-byte attempts in total.
       const redrive = yield* handleRoundRetry('ttfb', retryContext(opened.requestStartedAt));
       if (redrive === 'terminated') return;
       continue;
