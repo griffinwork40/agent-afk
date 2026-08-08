@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.100.1] - 2026-08-08
+
+### Fixed
+- counted TTFB retry budget with shorter per-attempt bound (#945) (6d90dd8)
+
 ## [5.100.0] - 2026-08-08
 
 ### Added
