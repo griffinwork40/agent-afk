@@ -10,18 +10,35 @@
 
 import type {
   ContentBlockParam,
-  MessageParam,
-  RawMessageStreamEvent,
-  ThinkingConfigParam,
   ToolUseBlock,
   Usage,
 } from '@anthropic-ai/sdk/resources';
-import type { ProviderEvent, ProviderUsage } from '../../provider.js';
+import type { ProviderEvent } from '../../provider.js';
 import type { ToolResult } from '../shared/tool-result.js';
-import { getCacheTtl } from './cache-policy.js';
-import { deriveCallCostUsd, type CacheWriteSplit } from './pricing.js';
 
 export type { ToolResult, RenderHints } from '../shared/tool-result.js';
+
+/**
+ * Re-export of the pricing table and per-call cost derivation from their new
+ * home at `./pricing.ts`, and of usage normalization from `./usage.ts`.
+ * Backward-compatibility shims — both concerns moved into their own files to
+ * keep this module under the repo's file-size ceiling. Existing call sites and
+ * tests import from here unchanged.
+ */
+export { MODEL_PRICING, deriveCallCostUsd } from './pricing.js';
+export type {
+  ModelPricing,
+  CacheWriteSplit,
+  AnthropicSpeed,
+  SpeedPricingContext,
+} from './pricing.js';
+export { toProviderUsage } from './usage.js';
+export type {
+  RunTurnInput,
+  AnthropicClientLike,
+  WireToolDef,
+  AnthropicMessagesCreateParams,
+} from './request-types.js';
 
 /**
  * Auth mode is selected by token shape. OAuth-mode tokens (`sk-ant-oat01-*`)
@@ -89,154 +106,6 @@ export interface TurnResult {
   usage: Usage | null;
   /** Concatenated text from all `text` blocks in this iteration. */
   text: string;
-}
-
-/**
- * Inputs to `runTurn` (the per-turn agentic loop). The loop is a pure async
- * generator over `ProviderEvent`s; it owns nothing stateful itself. The
- * caller (query.ts) holds the messages array across turns.
- */
-export interface RunTurnInput {
-  /** Anthropic SDK client, already constructed with the right auth mode. */
-  client: AnthropicClientLike;
-  /** Conversation history including the new user turn appended last. */
-  messages: MessageParam[];
-  /** Composed system prompt array (billing-header block prepended for oauth). */
-  system: ContentBlockParam[] | string | null;
-  /** Tool definitions exposed to the model (Anthropic tool-use shape). */
-  tools: AnthropicToolDef[] | null;
-  /** Pluggable dispatcher invoked when the model emits tool_use blocks. */
-  toolDispatcher: ToolDispatcherLike;
-  /** Model id (e.g. `claude-sonnet-5`). */
-  model: string;
-  /** Max tokens per `messages.create` call. */
-  maxTokens: number;
-  /** Per-request HTTP headers (oauth recipe headers for oauth mode, {} for api-key). */
-  headers: Record<string, string>;
-  /** Per-turn cancellation signal. */
-  signal: AbortSignal;
-  /** Translator context (session id for stamping events). */
-  ctx: TranslateCtx;
-  /** Hard cap on tool-use loop iterations within a single user turn. */
-  maxToolUseIterations?: number;
-  /** Extended thinking configuration. When set, forwarded to `messages.create`. */
-  thinking?: ThinkingConfigParam;
-  /**
-   * Effort level for adaptive thinking depth, forwarded as
-   * `output_config.effort` in the wire request.  Requires the
-   * `effort-2025-11-24` beta header to be present (see
-   * {@link buildRequestHeaders} `withEffort` flag).
-   *
-   * When set, the per-request `anthropic-beta` header is extended with the
-   * effort beta string.  The `resolveEffort` helper in `index.ts` defaults
-   * this to `'max'` for `claude-opus-4-{6,7,8}-*`, `claude-sonnet-4-{6,7}-*`,
-   * and `claude-sonnet-5` when the caller omits it.
-   */
-  effort?: import('../../types/sdk-types.js').EffortLevel;
-  /**
-   * Local-server base URL. When set, the per-turn cache breakpoint is
-   * suppressed (local shims rarely honor `cache_control`). Plumbed through
-   * `isCacheEnabled({baseUrl})` in loop.ts.
-   */
-  baseUrl?: string;
-  /** Witness-layer trace writer. When provided, the loop emits
-   *  `tool_call.started` before dispatch and `tool_call.completed`
-   *  after each result. See `docs/philosophy/afk-contract.md`. */
-  traceWriter?: import('../../trace/index.js').TraceWriter;
-  /**
-   * This loop's owning subagent id, present only when the loop runs inside a
-   * forked child (`AgentConfig.subagentId`). Stamped onto every `tool_call`
-   * started/completed event so a fork's tool calls are attributable in the
-   * shared parent trace. Absent for a top-level session — its tool calls stay
-   * untagged. See issue #612. */
-  subagentId?: string;
-  /**
-   * Optional hook fired once per completed round (both tool-use rounds
-   * and the terminal end_turn round) with the cumulative usage so far,
-   * so the REPL status line can show live mid-turn context usage. The
-   * final `turn.completed` event still carries the authoritative
-   * end-of-turn usage (including `durationMs`), which it sets immediately
-   * after this hook fires on the final round. Best-effort and synchronous;
-   * the loop never awaits it.
-   */
-  onUsageProgress?: (usage: ProviderUsage) => void;
-  /**
-   * Optional out-of-band mailbox for live throttle (rate-limit/backoff)
-   * signals pushed from the wrapped `fetch` (see `tracing-fetch.ts`). When
-   * present, the loop RACES its `messages.create` await against this queue so
-   * a 429/503/529 backoff observed INSIDE the SDK call surfaces as a
-   * `rate_limit` ProviderEvent LIVE — the loop is otherwise parked on the
-   * await and cannot yield during the wait. The same queue instance is wired
-   * to the client's fetch callback at query construction. Absent for the
-   * external-dispatcher / local-shim paths and in unit tests that don't
-   * exercise throttling.
-   */
-  throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
-}
-
-/**
- * Subset of `Anthropic` we actually call. Defining it structurally keeps
- * loop.ts unit-testable with a minimal stub instead of a full SDK mock.
- */
-export interface AnthropicClientLike {
-  messages: {
-    create(
-      params: AnthropicMessagesCreateParams,
-      options?: { headers?: Record<string, string>; signal?: AbortSignal },
-    ): Promise<AsyncIterable<RawMessageStreamEvent>> | AsyncIterable<RawMessageStreamEvent>;
-  };
-}
-
-/**
- * Wire-safe projection of `AnthropicToolDef`. The Anthropic Messages API
- * rejects extra fields on custom tool definitions (e.g. `category`,
- * `concurrencySafe`, `riskClass`) with a 400 `tools.0.custom.<field>:
- * Extra inputs are not permitted`. This narrow type is what we actually
- * hand to `messages.create`; the fat `AnthropicToolDef` carries internal
- * classification metadata that must NEVER cross the wire boundary.
- *
- * If you find yourself widening this type, you almost certainly want to
- * widen `AnthropicToolDef` instead and add a new field to `toWireTool`
- * in `loop/round-request.ts` only after confirming the SDK accepts it.
- */
-export interface WireToolDef {
-  name: string;
-  description?: string;
-  input_schema: {
-    type: 'object';
-    properties?: Record<string, unknown>;
-    required?: string[];
-    [k: string]: unknown;
-  };
-}
-
-/**
- * Minimal shape of params we hand to `messages.create`. Re-exporting from
- * the SDK directly gives us the full type but creates a circular hassle in
- * tests; this loose alias is intentional and matches how `messages.create`
- * accepts inputs at runtime.
- *
- * `tools` is typed as `WireToolDef[]` (not `AnthropicToolDef[]`) so the
- * compiler refuses to pass the fat internal struct directly — a projection
- * is required at every call site.
- */
-export interface AnthropicMessagesCreateParams {
-  model: string;
-  max_tokens: number;
-  messages: MessageParam[];
-  system?: ContentBlockParam[] | string;
-  tools?: WireToolDef[];
-  thinking?: ThinkingConfigParam;
-  /**
-   * Output configuration forwarded verbatim to the Anthropic Messages API.
-   * Currently used only for the `effort` field, which controls adaptive
-   * thinking depth on Opus 4.7+.  Requires the
-   * `effort-2025-11-24` beta header (see
-   * {@link buildRequestHeaders}).
-   */
-  output_config?: { effort?: import('../../types/sdk-types.js').EffortLevel };
-  stream: true;
-  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -328,97 +197,6 @@ export interface ToolDispatcherLike {
    * See `SessionToolDispatcher.setAllowAll` for the canonical implementation.
    */
   setAllowAll?(allow: boolean): void;
-}
-
-/**
- * Re-export of the pricing table and per-call cost derivation from their new
- * home at `./pricing.ts`. Backward-compatibility shim — the pricing concern
- * moved into its own file to keep this module under the repo's file-size
- * ceiling. Existing call sites and tests import from here unchanged.
- */
-export { MODEL_PRICING } from './pricing.js';
-export { deriveCallCostUsd };
-export type { ModelPricing, CacheWriteSplit } from './pricing.js';
-
-/**
- * Contract: split this call's cache-write tokens by the TTL they were billed
- * at, so `deriveCallCostUsd` can apply 1.25× (5m) vs 2× (1h) correctly.
- *
- * Prefers the API's own `usage.cache_creation` breakdown — that is what was
- * actually billed, and it is the only source that stays right when a request
- * mixes TTLs. Falls back to attributing every write token to the locally
- * configured TTL (`getCacheTtl()`), which is correct for this provider because
- * `cache-policy.ts` stamps every breakpoint in a request with that one TTL.
- * The fallback matters: without it an endpoint that omits `cache_creation`
- * would be priced at 5m rates while `AFK_PROMPT_CACHE_TTL` defaults to `1h`.
- *
- * This is the single env-reading boundary for pricing — `pricing.ts` stays
- * pure so its golden-rate tests cannot drift with ambient config.
- */
-function resolveCacheWriteSplit(usage: Usage): CacheWriteSplit {
-  // Invariant: the SDK types every field read below as a required `number`,
-  // but that is a compile-time guarantee only — a malformed response (or a
-  // hand-built fixture) could still carry a negative or NaN count, which
-  // would propagate into a negative/NaN totalCostUsd downstream. Clamp here
-  // so both branches below (explicit breakdown vs. total-only fallback)
-  // return only finite, non-negative counts.
-  const clampCount = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
-  const breakdown = usage.cache_creation;
-  if (breakdown) {
-    return {
-      ephemeral5m: clampCount(breakdown.ephemeral_5m_input_tokens ?? 0),
-      ephemeral1h: clampCount(breakdown.ephemeral_1h_input_tokens ?? 0),
-    };
-  }
-  const total = clampCount(usage.cache_creation_input_tokens ?? 0);
-  return getCacheTtl() === '1h'
-    ? { ephemeral5m: 0, ephemeral1h: total }
-    : { ephemeral5m: total, ephemeral1h: 0 };
-}
-
-/**
- * Convert a single Anthropic `Usage` into our normalized `ProviderUsage`.
- * Lives in types.ts because both `loop` and `query` need it.
- *
- * `model` is optional — when supplied, `totalCostUsd` is computed from the
- * static pricing table. When unknown or omitted, `totalCostUsd` is left
- * undefined so callers can detect "cost unavailable" vs. "cost is zero".
- */
-export function toProviderUsage(
-  usage: Usage | null,
-  stopReason: string | null,
-  model?: string,
-): ProviderUsage {
-  if (!usage) {
-    return { stopReason: stopReason ?? null };
-  }
-  const out: ProviderUsage = {
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    stopReason: stopReason ?? null,
-  };
-  if (usage.cache_read_input_tokens != null) {
-    out.cachedInputTokens = usage.cache_read_input_tokens;
-  }
-  if (usage.cache_creation_input_tokens != null) {
-    out.cacheCreationTokens = usage.cache_creation_input_tokens;
-  }
-  out.totalTokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
-
-  // Derive cost when model pricing is available.
-  if (model) {
-    const cost = deriveCallCostUsd(
-      model,
-      usage.input_tokens ?? 0,
-      usage.output_tokens ?? 0,
-      usage.cache_read_input_tokens ?? 0,
-      usage.cache_creation_input_tokens ?? 0,
-      resolveCacheWriteSplit(usage),
-    );
-    if (cost !== undefined) out.totalCostUsd = cost;
-  }
-
-  return out;
 }
 
 /**

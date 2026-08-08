@@ -15,6 +15,7 @@ import type { PermissionMode } from '../../agent/types/sdk-types.js';
 import type { TrustedSkillLedger } from '../trusted-skill-ledger.js';
 import type { ImageAttachment } from '../input/attachments.js';
 import type { ResolvedResumeTarget } from '../resume-session.js';
+import type { FastModeContext, FastModeController } from '../../agent/fast-mode.js';
 
 /**
  * Result of a mid-session resume swap attempt.
@@ -171,6 +172,8 @@ export interface SlashContext {
   out: Writer;
   ui: UiSurface;
   ledger?: TrustedSkillLedger;
+  fastMode?: FastModeController;
+  getFastModeContext?: () => FastModeContext;
   /**
    * Atomically swap the active session for a stored one. See
    * `InteractiveCtx.requestResume` for full semantics. Absent in contexts

@@ -16,6 +16,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createMemoizedProviderFactory } from './provider-factory.js';
 import { AnthropicDirectProvider, providerForModel } from '../../../agent/providers/index.js';
 import type { ModelProvider } from '../../../agent/provider.js';
+import { FastModeController } from '../../../agent/fast-mode.js';
 
 describe('createMemoizedProviderFactory', () => {
   const built: AnthropicDirectProvider[] = [];
@@ -67,6 +68,31 @@ describe('createMemoizedProviderFactory', () => {
 
     expect(openai).not.toBe(anthropic);
     expect(built).toHaveLength(2);
+  });
+
+  it('preserves one FastModeController across memoized family switching', () => {
+    const controller = new FastModeController('on');
+    const seen: FastModeController[] = [];
+    const factory = createMemoizedProviderFactory(
+      (model) => {
+        if (providerForModel(model) === 'anthropic-direct') {
+          seen.push(controller);
+          const p = new AnthropicDirectProvider({ fastModeController: controller });
+          built.push(p);
+          return p;
+        }
+        return { close() {} } as ModelProvider;
+      },
+      (model) => providerForModel(model),
+    );
+
+    const first = factory('claude-opus-5');
+    factory('gpt-4o');
+    const switchedBack = factory('claude-sonnet-5');
+
+    expect(switchedBack).toBe(first);
+    expect(seen).toEqual([controller]);
+    expect(controller.getPreference()).toBe('on');
   });
 
   it('honors a fixed key (--provider override) — every model shares one instance', () => {

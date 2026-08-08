@@ -258,7 +258,7 @@ export async function* runTurn(
     }
 
     turn.addRoundUsage(
-      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model),
+      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model, input.fastMode ? 'fast' : undefined),
     );
     // Surface per-round cumulative usage so getContextUsage() reflects mid-turn
     // growth on the status line. Fires on every round including the terminal

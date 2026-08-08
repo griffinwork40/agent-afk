@@ -11,6 +11,7 @@ import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
 import type { CliConfig } from '../../config.js';
 import type { CliOptions } from './shared.js';
+import type { FastModeController } from '../../../agent/fast-mode.js';
 
 /**
  * Build a fully-wired, per-family-memoized provider factory the
@@ -46,6 +47,7 @@ export function createReplProviders(a: {
   composeExecutor: ComposeExecutor;
   memoryStore: MemoryStore;
   mcpManager: McpManager | undefined;
+  fastModeController: FastModeController;
 }): { providerFactory: (m: string | undefined) => ModelProvider; startupProvider: ModelProvider } {
   // The MCP tool wire names are stable for the manager lifetime, so they can be
   // captured once in the closure without re-querying on every build.
@@ -59,6 +61,7 @@ export function createReplProviders(a: {
       model: model !== undefined ? model : String(a.sessionModel),
       ...(a.cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: a.cliConfig.openaiBaseUrl } : {}),
       ...(a.mcpManager !== undefined ? { mcpManager: a.mcpManager } : {}),
+      fastModeController: a.fastModeController,
     })
     ?? new AnthropicDirectProvider({
       permissions: {
@@ -69,6 +72,7 @@ export function createReplProviders(a: {
       composeExecutor: a.composeExecutor,
       memoryStore: a.memoryStore,
       surface: 'cli',
+      fastModeController: a.fastModeController,
       ...(a.mcpManager !== undefined ? { mcpManager: a.mcpManager } : {}),
     });
 

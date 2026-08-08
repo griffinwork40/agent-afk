@@ -21,6 +21,7 @@ import type {
   RunTurnInput,
   WireToolDef,
 } from '../types.js';
+import { annotateFastError } from '../query/turn-request.js';
 import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
@@ -131,6 +132,17 @@ export interface OpenRoundContext {
   stallTimeoutMs: number;
 }
 
+export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'fastMode'>): AnthropicMessagesCreateParams {
+  return {
+    model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
+    ...(input.system !== null ? { system: input.system } : {}),
+    ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
+    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
+    ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
+    ...(input.fastMode === true ? { speed: 'fast' as const } : {}),
+  };
+}
+
 /**
  * Build this round's request, send it, and hand back a live event stream.
  *
@@ -152,21 +164,12 @@ export async function* openRound({
     ? withMessagesBreakpoint(input.messages, getCacheTtl())
     : input.messages;
 
-  const params: AnthropicMessagesCreateParams = {
-    model: input.model,
-    max_tokens: input.maxTokens,
+  const params: AnthropicMessagesCreateParams = buildRoundParams({
+    ...input,
     messages: messagesForRequest,
-    stream: true,
-    ...(input.system !== null ? { system: input.system } : {}),
-    // Wind-down round (cap reached): omit tools so the model MUST answer in
-    // text — with no tools advertised it cannot emit another tool_use — which
-    // turns a capped turn into a final summary rather than a silent stop.
-    ...(input.tools !== null && input.tools.length > 0 && !turn.capReached
-      ? { tools: input.tools.map(toWireTool) }
-      : {}),
-    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
-    ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
-  };
+    // Wind-down round: omit tools so the model must produce text.
+    tools: turn.capReached ? null : input.tools,
+  });
 
   // Witness layer: stamp request-initiation time so the model_ttfb phase can
   // report time-to-first-byte for THIS model API call.
@@ -261,7 +264,7 @@ export async function* openRound({
       };
       return { kind: 'terminated' };
     }
-    const e = err instanceof Error ? err : new Error(String(err));
+    const e = annotateFastError(err, input.fastMode === true);
     if (e.message.includes('thinking')) {
       dumpThinkingDiagnostic(input.messages, e);
     }

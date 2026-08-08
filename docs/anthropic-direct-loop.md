@@ -45,6 +45,15 @@ which survived a `continue`. They now map to three objects:
 - **`TurnTrace`** — outlives any single phase. Its abort listener can fire at
   any moment and its timestamp is read only at teardown.
 
+## Immutable Fast-mode turn snapshot
+
+At the start of each top-level user turn, `query/turn-request.ts` resolves Fast
+eligibility once. That immutable decision builds both parts of the protocol pair:
+`fast-mode-2026-02-01` in the beta header and `speed: "fast"` in the body.
+`RunTurnInput` then carries the decision through every tool-loop round and retry, so
+a mid-turn preference or model change cannot split header and body or downgrade a
+retry. Excluded auxiliary/child paths never receive the controller.
+
 ## Retry classes
 
 Three distinct failure modes get three distinct budgets. They are deliberately
