@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.97.8] - 2026-08-08
+
+### Fixed
+- render cost from the trace aggregate, not the sidecar (#933) (6882a06)
+
 ## [5.97.7] - 2026-08-07
 
 ### Fixed
