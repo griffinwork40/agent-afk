@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.99.0] - 2026-08-08
+
+### Added
+- register claude-sonnet-4-6 limits explicitly (#946) (7b96075)
+
 ## [5.98.0] - 2026-08-08
 
 ### Added
