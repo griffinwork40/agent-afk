@@ -10,6 +10,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { normalizeSkillSource } from './source-guard.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
@@ -278,7 +279,10 @@ export function parseSkillMetadata(
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata {
   try {
-    const content = readFileSync(skillPath, 'utf-8');
+    // Normalise BOM + CRLF first: the delimiter test below is byte-exact, so a
+    // Windows-authored or BOM-prefixed file would otherwise be read as having
+    // no frontmatter at all.
+    const content = normalizeSkillSource(readFileSync(skillPath, 'utf-8'));
 
     if (!content.startsWith('---\n')) {
       return {};

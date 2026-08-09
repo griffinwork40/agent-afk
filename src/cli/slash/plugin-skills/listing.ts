@@ -17,9 +17,17 @@ import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import { harvestAllPluginSkillFlags, extractHintFromDescription } from './flags.js';
 import { state, bareName, type DiscoveredSkill } from './state.js';
+import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
 
-/** Where a listing row's skill came from. Drives the friendly source label. */
-type SkillSource = 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
+/**
+ * Where a listing row's skill came from. Drives the friendly source label.
+ *
+ * Invariant: derived from the canonical union rather than restated, so a new
+ * member added to `SkillManifestEntry['source']` is a compile error in
+ * `friendlySource` (which stays exhaustive, with no `default` arm) instead of
+ * a silent `undefined` label at runtime.
+ */
+type SkillSource = SkillManifestEntry['source'];
 
 /** A row in the unified `/skills` listing. */
 interface ListingRow {
@@ -117,6 +125,8 @@ function friendlySource(source: SkillSource): string {
       return 'plugin';
     case 'imported':
       return 'imported';
+    case 'command':
+      return 'command';
   }
 }
 

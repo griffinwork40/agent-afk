@@ -600,6 +600,27 @@ describe('plugin commands/*.md integration', () => {
     expect(matches[0]?.source).toBe('plugin');
     expect(matches[0]?.description).toBe('A skill');
   });
+
+  it("a SKILL.md wins over another PLUGIN's commands/*.md of the same name", () => {
+    // The same first-wins guard spans plugins, not just one plugin's own two
+    // directories — precedence must not depend on which plugin is scanned first.
+    const pluginA = join(tmpDir, 'a');
+    const pluginB = join(tmpDir, 'b');
+    mkdirSync(pluginA, { recursive: true });
+    mkdirSync(pluginB, { recursive: true });
+    writeSkillMd(pluginA, 'overlap');
+    writeCommand(pluginB, 'overlap.md', 'The command version');
+
+    const entries = collectSkillEntries([
+      { type: 'local', path: pluginA },
+      { type: 'local', path: pluginB },
+    ]);
+
+    const matches = entries.filter((e) => e.name === 'overlap');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.source).toBe('plugin');
+    expect(matches[0]?.description).toBe('A skill');
+  });
 });
 
 describe('discoverPluginSkillBodies', () => {

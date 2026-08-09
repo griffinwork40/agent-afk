@@ -51,6 +51,39 @@ describe('extractPluginCommands', () => {
       body: 'Review this pull request: $ARGUMENTS',
       origin: 'command',
     });
+    // A frontmatter-free file declares no description; collectSkillEntries
+    // supplies the plugin-path fallback downstream.
+    expect(found[0]?.description).toBeUndefined();
+  });
+
+  it('parses a CRLF-authored command instead of leaking its frontmatter into the body', () => {
+    // A Windows-authored file fails a byte-exact `---\n` test, so without
+    // normalisation the whole YAML block was handed to the model as the prompt.
+    writeCommand('crlf.md', '---\r\ndescription: Ship it\r\n---\r\n\r\nDeploy the app.\r\n');
+    const found = extractPluginCommands(pluginDir);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.description).toBe('Ship it');
+    expect(found[0]?.body).toBe('Deploy the app.');
+    expect(found[0]?.body).not.toContain('---');
+  });
+
+  it('parses a BOM-prefixed command instead of leaking its frontmatter into the body', () => {
+    writeCommand('bom.md', '\uFEFF---\ndescription: Ship it\n---\n\nDeploy the app.\n');
+    const found = extractPluginCommands(pluginDir);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.description).toBe('Ship it');
+    expect(found[0]?.body).toBe('Deploy the app.');
+    expect(found[0]?.body).not.toContain('---');
+  });
+
+  it('skips a path segment containing the namespace separator', () => {
+    // `a:b.md` would derive the same name as `a/b.md`; registering both lets
+    // the first-wins guard drop one at random.
+    writeCommand('a:b.md', '---\ndescription: d\n---\n\nBody.\n');
+    writeCommand('a/b.md', '---\ndescription: d\n---\n\nBody.\n');
+    const names = extractPluginCommands(pluginDir).map((c) => c.name);
+    expect(names).toEqual(['a:b']);
+    expect(names).toHaveLength(1);
   });
 
   it('namespaces a subdirectory with a colon (CC parity)', () => {
@@ -117,5 +150,7 @@ describe('extractPluginCommands', () => {
     writeCommand('bad.md', '---\ndescription: unterminated frontmatter');
     const names = extractPluginCommands(pluginDir).map((c) => c.name);
     expect(names).toContain('good');
+    // The malformed sibling must be dropped, not registered with a raw body.
+    expect(names).not.toContain('bad');
   });
 });

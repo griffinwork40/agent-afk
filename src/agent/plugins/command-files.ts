@@ -40,6 +40,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseSkillMetadata, type PluginSkillMetadata } from './tool-injector.js';
+import { normalizeSkillSource, resolveContained } from './source-guard.js';
 
 /** Mirrors the depth cap in `extractPluginSkills` — cycle/runaway guard. */
 const MAX_DEPTH = 10;
@@ -79,7 +80,14 @@ export function extractPluginCommands(
     }
     for (const entry of entries) {
       if (entry.startsWith('.')) continue;
+      // A path segment carrying the namespace separator is ambiguous:
+      // `commands/a:b.md` and `commands/a/b.md` would both derive `a:b`, and
+      // the first-wins guard downstream would silently drop one of them.
+      if (entry.includes(':')) continue;
       const full = join(dir, entry);
+      // Skip anything resolving outside the commands/ tree — a symlinked
+      // `help.md -> ~/.ssh/id_rsa` must never become a dispatchable prompt.
+      if (resolveContained(root, full) === undefined) continue;
       let stat;
       try {
         stat = statSync(full);
@@ -106,7 +114,7 @@ export function extractPluginCommands(
       // prompt as the body while continuing to reject malformed frontmatter.
       if (!parsed.body) {
         try {
-          const content = readFileSync(full, 'utf-8');
+          const content = normalizeSkillSource(readFileSync(full, 'utf-8'));
           if (!content.startsWith('---\n')) parsed.body = content.trim();
         } catch {
           continue;
@@ -128,6 +136,12 @@ export function extractPluginCommands(
   }
 
   walk(root, [], 0);
-  out.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+  // Codepoint order, not localeCompare: ICU collation varies by locale and
+  // build, and this ordering is what makes collision resolution reproducible.
+  out.sort((a, b) => {
+    const an = a.name ?? '';
+    const bn = b.name ?? '';
+    return an < bn ? -1 : an > bn ? 1 : 0;
+  });
   return out;
 }
