@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.100.4] - 2026-08-09
+
+### Fixed
+- surface plugin shadowing notices on default runs (#963) (150367f)
+
+### Changed
+- bump @types/react-dom from 19.2.3 to 19.2.4 in /website (#958) (fb90013)
+- bump @types/react from 19.2.17 to 19.2.18 in /website (#957) (5cce206)
+- bump next from 16.2.12 to 16.3.0 in /website (#956) (5afad74)
+
 ## [5.100.3] - 2026-08-09
 
 ### Fixed
