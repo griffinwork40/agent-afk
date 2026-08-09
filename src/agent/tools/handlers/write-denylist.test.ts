@@ -553,6 +553,44 @@ describe('write-denylist — AFK_HOME-relocated credential tree (#740)', () => {
       resetAfkHomeWarnLatchForTests();
     }
   });
+
+  // #780: the latch used to be a single process-wide boolean, so the FIRST
+  // malformed var consumed it and a second, independently-malformed var
+  // stayed silent. An operator who typo'd both AFK_HOME and AFK_STATE_DIR
+  // fixed one, re-ran, and only then learned about the other. The latch is
+  // now keyed per distinct rejected value, so both warn.
+  it('warns for BOTH vars when AFK_HOME and AFK_STATE_DIR are both malformed (#780)', () => {
+    resetAfkHomeWarnLatchForTests();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.stubEnv('AFK_HOME', 'relative/not-absolute-home');
+      vi.stubEnv('AFK_STATE_DIR', 'relative/not-absolute-state');
+
+      getWriteDenylist();
+
+      expect(warn).toHaveBeenCalledTimes(2);
+      const messages = warn.mock.calls.map((call) => call[0]);
+      expect(messages.some((m) => typeof m === 'string' && m.includes('AFK_HOME'))).toBe(true);
+      expect(messages.some((m) => typeof m === 'string' && m.includes('AFK_STATE_DIR'))).toBe(
+        true,
+      );
+      expect(
+        messages.some((m) => typeof m === 'string' && m.includes('relative/not-absolute-home')),
+      ).toBe(true);
+      expect(
+        messages.some((m) => typeof m === 'string' && m.includes('relative/not-absolute-state')),
+      ).toBe(true);
+
+      // Repeated reads must not re-warn for either already-seen value — the
+      // once-per-var de-duplication this fix must preserve.
+      getWriteDenylist();
+      getWriteDenylist();
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      resetAfkHomeWarnLatchForTests();
+    }
+  });
 });
 
 describe('assertNotDenylisted — case-variant spellings (#736)', () => {
