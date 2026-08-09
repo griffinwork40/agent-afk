@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildSkillManifest,
@@ -28,6 +28,7 @@ import {
 import { registerSkill, _resetRegistry } from '../../skills/index.js';
 import { _resetPluginScanCache } from '../plugins-scanner.js';
 import { getPluginsDir } from '../../paths.js';
+import type { RegisteredAgent } from '../agents/types.js';
 
 // ---------------------------------------------------------------------------
 // File-level isolation: redirect AFK_HOME + cwd before every test so the
@@ -742,6 +743,78 @@ describe('discoverPluginAgents', () => {
     writeAgentFile(pluginA, 'ok.md', 'works');
     const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
     expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+  });
+
+  // Regression (#752): parseAgentMarkdown's warn callback was never passed at
+  // this call site, so a malformed plugin agent file vanished with zero
+  // diagnostics — the agent simply didn't exist, and nothing said why. This
+  // pins that the discard is now audible (naming the file and the parser's
+  // reason) while remaining non-fatal: the rest of the plugin's agents still
+  // load and discovery never throws.
+  it('warns naming the file and parse reason when a plugin agent file is malformed, and still skips it non-fatally', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    const brokenPath = join(dir, 'broken.md');
+    writeFileSync(brokenPath, 'no frontmatter at all');
+    writeAgentFile(pluginA, 'ok.md', 'works');
+
+    const warn = vi.fn();
+    let agents: RegisteredAgent[] = [];
+    expect(() => {
+      agents = discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+    }).not.toThrow();
+
+    // Non-fatal: the valid sibling agent still loads.
+    expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+    // Audible: warn names the offending file and the parser's specific reason.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('missing frontmatter (file must start with ---)'),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(brokenPath));
+  });
+
+  it('warns rather than silently skipping an unreadable plugin agent file', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    const unreadablePath = join(dir, 'locked.md');
+    writeAgentFile(pluginA, 'ok.md', 'works');
+    writeFileSync(unreadablePath, '---\nname: locked\ndescription: d\n---\nbody\n');
+    chmodSync(unreadablePath, 0o000);
+
+    const warn = vi.fn();
+    try {
+      const agents = discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+      expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot read'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(unreadablePath));
+    } finally {
+      chmodSync(unreadablePath, 0o644); // restore so afterEach's rmSync can clean up
+    }
+  });
+
+  it('sanitizes an escape-sequence-bearing file path before it reaches warn', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    // ESC ] 0 ; ... BEL is an OSC window-title sequence — a real escape family
+    // sanitizeForDisplay strips (terminal-sanitize.ts), not just cosmetic text.
+    const escapeyName = '\x1B]0;pwned\x07evil.md';
+    writeFileSync(join(dir, escapeyName), 'no frontmatter at all');
+
+    const warn = vi.fn();
+    discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+
+    expect(warn).toHaveBeenCalled();
+    for (const call of warn.mock.calls) {
+      const message = call[0] as string;
+      expect(message).not.toContain('\x1B');
+      expect(message).not.toContain('\x07');
+    }
   });
 
   it('returns empty for a plugin with no agents/ dir', () => {

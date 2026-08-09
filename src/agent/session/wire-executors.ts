@@ -206,7 +206,10 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   //    dispatch at every depth.
   const agentRegistry = loadAgentRegistry({
     ...cwdOpt,
-    pluginAgents: discoverPluginAgents(),
+    // Same sink both scanners report through: a malformed plugin agent file
+    // now warns exactly like a malformed user/project one (#752) instead of
+    // vanishing silently ahead of the merge below.
+    pluginAgents: discoverPluginAgents(undefined, agentRegistryWarn),
     ...(agentRegistryWarn !== undefined ? { warn: agentRegistryWarn } : {}),
   });
 

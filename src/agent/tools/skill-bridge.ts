@@ -27,6 +27,7 @@ import { readPluginManifest } from '../plugins/plugin-manifest.js';
 import { parseAgentMarkdown } from '../agents/parser.js';
 import { collectMarkdownFiles } from '../agents/registry.js';
 import type { RegisteredAgent } from '../agents/types.js';
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import { SubagentManager } from '../subagent.js';
 import { describeFailure } from '../subagent/result.js';
 import {
@@ -350,10 +351,17 @@ export function discoverPluginSkillBodies(
  * Cross-scope precedence (plugin < user < project < config) is applied by
  * {@link import('../agents/registry.js').loadAgentRegistry}, which merges the
  * returned list just above the builtins. Read/parse failures are contained
- * per-file: one malformed agent never blocks the rest.
+ * per-file: one malformed agent never blocks the rest — but is reported via
+ * `warn`, mirroring {@link import('../agents/registry.js').loadAgentRegistry}'s
+ * scan-warning contract (`registry.ts`'s `scanScope`) so a broken plugin agent
+ * file fails as audibly as a broken user/project one instead of vanishing
+ * without a trace (#752). `filePath` is repo- or operator-controlled (plugins
+ * can live in a cloned project's tree), so it is routed through
+ * `sanitizeForDisplay` before interpolation rather than embedded raw.
  */
 export function discoverPluginAgents(
   pluginConfigs?: SdkPluginConfig[],
+  warn: (message: string) => void = () => {},
 ): RegisteredAgent[] {
   const plugins = pluginConfigs ?? scanAllPluginRoots();
   const agents: RegisteredAgent[] = [];
@@ -363,14 +371,16 @@ export function discoverPluginAgents(
     const pluginName = readPluginManifest(plugin.path).name;
     if (pluginName === null) continue;
     for (const filePath of collectMarkdownFiles(join(plugin.path, 'agents'))) {
+      const safePath = sanitizeForDisplay(filePath);
       let content: string;
       try {
         content = readFileSync(filePath, 'utf8');
-      } catch {
+      } catch (err) {
+        warn(`[afk] agents: cannot read ${safePath}: ${err instanceof Error ? err.message : String(err)}`);
         continue; // unreadable file — contained, skip
       }
-      const parsed = parseAgentMarkdown(content);
-      if (parsed === undefined) continue; // malformed frontmatter — skip
+      const parsed = parseAgentMarkdown(content, (msg) => warn(`[afk] agents: ${safePath}: ${msg}`));
+      if (parsed === undefined) continue; // malformed frontmatter — skip (warned above)
       const qualifiedName = `${pluginName}:${parsed.name}`;
       if (seen.has(qualifiedName)) continue; // first plugin wins
       seen.add(qualifiedName);
