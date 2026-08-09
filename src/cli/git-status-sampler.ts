@@ -41,8 +41,18 @@ export type GitStatusExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface GitStatusSamplerOptions {
-  /** Session working directory the git/gh calls run in. */
-  cwd: string;
+  /**
+   * Session working directory the git/gh calls run in. Accepts a fixed
+   * string (frozen for the sampler's lifetime — fine for tests and one-shot
+   * callers) or a live accessor `() => string`, resolved AT SAMPLE TIME on
+   * every `refresh()`. The accessor form is how a mid-session cwd re-anchor
+   * (the deferred `afk -w` worktree flow) is picked up without reconstructing
+   * the sampler: production wires it to the same `stats.cwd` signal that
+   * `ShellPassthrough.getCwd` and `footer-subsystems.ts` already read live
+   * for the identical reason (see `interactive.ts` — `stats.cwd` is stamped
+   * at the same re-anchor point that calls `session.setCwd()`).
+   */
+  cwd: string | (() => string);
   /** Injectable exec for tests. Defaults to a timeout-bounded `execFile`. */
   exec?: GitStatusExecFn;
   /**
@@ -86,7 +96,10 @@ function defaultExec(timeoutMs: number): GitStatusExecFn {
 }
 
 export class GitStatusSampler {
-  private readonly cwd: string;
+  /** Resolves the live cwd on every sample. Wraps a fixed string as `() => cwd`. */
+  private readonly getCwd: () => string;
+  /** cwd observed on the last completed sample; detects a re-anchor. */
+  private lastSampledCwd: string | undefined;
   private readonly exec: GitStatusExecFn;
   private readonly prTtlMs: number;
   private readonly branchTtlMs: number;
@@ -114,7 +127,11 @@ export class GitStatusSampler {
   private resetToken = 0;
 
   constructor(opts: GitStatusSamplerOptions) {
-    this.cwd = opts.cwd;
+    // Captured into a local const so the closure below keeps the narrowed
+    // `string` type (narrowing a captured `opts.cwd` property does not
+    // survive into a nested closure under strict mode).
+    const cwdOpt = opts.cwd;
+    this.getCwd = typeof cwdOpt === 'string' ? () => cwdOpt : cwdOpt;
     this.exec = opts.exec ?? defaultExec(opts.timeoutMs ?? 10_000);
     this.prTtlMs = opts.prTtlMs ?? 60_000;
     this.branchTtlMs = opts.branchTtlMs ?? 0;
@@ -184,6 +201,23 @@ export class GitStatusSampler {
   }
 
   private async updateBranch(): Promise<void> {
+    // Resolve the cwd LIVE, at sample time, rather than trusting a value
+    // frozen at construction (issue #877). A mid-session re-anchor (the
+    // deferred `afk -w` worktree flow, via `session.setCwd()` +
+    // `ctx.stats.cwd = outcome.path` in interactive.ts) changes what
+    // `getCwd()` returns on the very next sample — no re-point call needed.
+    const cwd = this.getCwd();
+    const cwdChanged = this.lastSampledCwd !== undefined && cwd !== this.lastSampledCwd;
+    if (cwdChanged) {
+      // The branch/PR cache is keyed on the OLD cwd's git state. Serving it
+      // (even within branchTtlMs/prTtlMs) would show the previous checkout's
+      // branch next to the new cwd — exactly the bug this fix closes. Force
+      // an immediate re-sample by clearing the TTL timestamps; branch/pr
+      // values themselves are left in place until the fresh read lands, to
+      // avoid a flicker to empty on every repaint between now and then.
+      this.branchFetchedAt = 0;
+      this.prFetchedAt = 0;
+    }
     // Skip if the branch was checked within branchTtlMs — guards per-turn
     // subprocess overhead on slow filesystems. Default 0 = always re-sample.
     if (
@@ -198,9 +232,10 @@ export class GitStatusSampler {
     // the result rather than writing stale state.
     const token = this.resetToken;
     this.branchFetchedAt = this.now();
-    const newBranch = await this.gitBranch();
+    const newBranch = await this.gitBranch(cwd);
     if (this.disposed || this.resetToken !== token) return;
-    const branchChanged = newBranch !== this.branch;
+    this.lastSampledCwd = cwd;
+    const branchChanged = newBranch !== this.branch || cwdChanged;
     this.branch = newBranch;
 
     if (newBranch === undefined) {
@@ -216,11 +251,15 @@ export class GitStatusSampler {
       // Drop the previous branch's PR immediately — showing it against the new
       // branch would be wrong. maybeFetchPr resolves the new branch's PR (or
       // confirms none) shortly after. Notify now so the new branch paints.
+      // Also covers the cwd-changed/same-branch-name case (e.g. both
+      // checkouts happen to be on `main`) — prBranch is reset below so the
+      // TTL guard in maybeFetchPr can't skip the re-fetch for the new cwd.
       this.pr = undefined;
+      this.prBranch = undefined;
       this.notify();
     }
     // Detached, non-blocking PR fetch — the only path that touches the network.
-    void this.maybeFetchPr(newBranch);
+    void this.maybeFetchPr(newBranch, cwd);
   }
 
   /** Fire the on-change callback; a throwing UI callback must not break sampling. */
@@ -233,9 +272,9 @@ export class GitStatusSampler {
   }
 
   /** `git symbolic-ref --short HEAD` → branch, or undefined on any failure. */
-  private async gitBranch(): Promise<string | undefined> {
+  private async gitBranch(cwd: string): Promise<string | undefined> {
     try {
-      const { stdout } = await this.exec('git', ['symbolic-ref', '--short', 'HEAD'], this.cwd);
+      const { stdout } = await this.exec('git', ['symbolic-ref', '--short', 'HEAD'], cwd);
       const b = stdout.trim();
       return b.length > 0 ? b : undefined;
     } catch {
@@ -248,8 +287,12 @@ export class GitStatusSampler {
    * Fetch the open PR for `branch` if stale, in a deduped background task.
    * Caches "no PR" (undefined) too, so a PR-less branch is not re-queried on
    * every repaint — only after `prTtlMs` elapses (to catch a PR opened later).
+   * `cwd` is the value observed by the `updateBranch()` call that resolved
+   * `branch`, threaded through explicitly rather than re-read via `getCwd()`
+   * so a re-anchor that happens while this fetch is in flight can't point
+   * the `gh` call at a directory that no longer matches `branch`.
    */
-  private maybeFetchPr(branch: string): Promise<void> {
+  private maybeFetchPr(branch: string, cwd: string): Promise<void> {
     if (this.prInFlight) return this.prInFlight;
     const stale = this.prBranch !== branch || this.now() - this.prFetchedAt >= this.prTtlMs;
     if (!stale) return Promise.resolve();
@@ -260,7 +303,7 @@ export class GitStatusSampler {
       // while gh is in flight, the token increments and we discard the result.
       const token = this.resetToken;
       // resolveCurrentBranchPr never throws — returns the number string or null.
-      const prStr = await resolveCurrentBranchPr((file, args) => this.exec(file, args, this.cwd));
+      const prStr = await resolveCurrentBranchPr((file, args) => this.exec(file, args, cwd));
       if (this.disposed || this.resetToken !== token) return;
       // Discard if the branch changed while the network call was in flight.
       if (this.branch !== branch) return;
@@ -274,10 +317,12 @@ export class GitStatusSampler {
       // If the branch changed while this fetch was in flight, the branch guard
       // above discarded the stale result. Kick a follow-up lookup for the
       // current branch so its PR resolves on the next settled repaint rather
-      // than waiting for the next turn's refresh() call.
+      // than waiting for the next turn's refresh() call. Re-read getCwd() live
+      // (rather than reusing `cwd`) since the re-anchor that invalidated this
+      // fetch may itself be what changed the branch.
       const currentBranch = this.branch;
       if (!this.disposed && currentBranch !== undefined && currentBranch !== branch) {
-        void this.maybeFetchPr(currentBranch);
+        void this.maybeFetchPr(currentBranch, this.getCwd());
       }
     });
     this.prInFlight = task;

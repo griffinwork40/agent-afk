@@ -274,4 +274,63 @@ describe('GitStatusSampler', () => {
     expect(sampler.getBranch()).toBeUndefined();
     expect(sampler.getPr()).toBeUndefined();
   });
+
+  it('follows a live cwd re-anchor instead of freezing the branch at construction (#877)', async () => {
+    // Two distinct checkouts with different branches, keyed by cwd path —
+    // stands in for the launch checkout vs. a born-named `afk -w` worktree.
+    const branchesByCwd: Record<string, string> = {
+      '/launch-checkout': 'main',
+      '/repo/.afk-worktrees/afk-foo': 'afk/foo',
+    };
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = vi.fn(async (file, _args, cwd) => {
+      if (file === 'git') {
+        const branch = branchesByCwd[cwd];
+        if (branch === undefined) throw new Error(`unmapped cwd in test: ${cwd}`);
+        return { stdout: branch + '\n', stderr: '' };
+      }
+      return { stdout: '\n', stderr: '' }; // no open PR for either branch
+    });
+    // `cwd` is a live accessor, matching how bootstrap-surface.ts wires it to
+    // `() => stats.cwd ?? process.cwd()` — NOT a string frozen at construction.
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec });
+
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getBranch()).toBe('main');
+
+    // Simulate the deferred `afk -w` re-anchor: production re-points this via
+    // `ctx.stats.cwd = outcome.path` in interactive.ts (the same site that
+    // calls `session.setCwd()`) — nothing calls back into the sampler
+    // directly. The next refresh() must pick up the new directory.
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getBranch()).toBe('afk/foo');
+  });
+
+  it('invalidates the cached PR (not just the branch) on a cwd re-anchor (#877)', async () => {
+    // Same branch NAME in both checkouts (e.g. both on 'main') so the branch-
+    // changed check alone can't be what forces the PR re-fetch — only the
+    // cwd-change detection can.
+    const prByCwd: Record<string, string> = {
+      '/launch-checkout': '10',
+      '/repo/.afk-worktrees/afk-foo': '20',
+    };
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = vi.fn(async (file, _args, cwd) => {
+      if (file === 'git') return { stdout: 'main\n', stderr: '' };
+      const pr = prByCwd[cwd];
+      if (pr === undefined) throw new Error(`unmapped cwd in test: ${cwd}`);
+      return { stdout: pr + '\n', stderr: '' };
+    });
+    // Long TTL so a naive fix (branch-only invalidation) would serve the
+    // launch checkout's cached PR number well past the re-anchor.
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec, prTtlMs: 60_000 });
+
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getPr()).toBe(10);
+
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getPr()).toBe(20);
+  });
 });
