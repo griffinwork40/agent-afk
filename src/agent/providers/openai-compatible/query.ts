@@ -122,6 +122,11 @@ import {
   shouldWindDown,
 } from '../shared/tool-loop-cap.js';
 import {
+  SOFT_DEADLINE_NOTE,
+  SOFT_DEADLINE_WIND_DOWN,
+  softDeadlineExpired,
+} from '../shared/soft-deadline.js';
+import {
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
@@ -508,12 +513,22 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     let finalReasoningText = '';
 
     const maxIterations = resolveMaxToolIterations(this.opts.config.maxToolUseIterations);
-    // Set once the tool-round cap fires; the loop then runs ONE tools-stripped
+    // TIME sibling of the round cap: `0`/unset means no soft deadline (the
+    // top-level default, where a human owns the turn); subagent forks arm it
+    // from their wall-clock budget. Taken RAW, deliberately — this value is
+    // already the OUTPUT of `resolveSoftDeadlineMs` at the arming site, and that
+    // function maps a HARD budget to a soft deadline, so re-applying it here
+    // would subtract a second reserve and fire the wind-down early.
+    // `softDeadlineExpired` already treats `<= 0` and NaN as "never fires".
+    const softDeadlineMs = this.opts.config.softDeadlineMs ?? 0;
+    // Non-null once a budget is spent; the loop then runs ONE tools-stripped
     // "wind-down" round (runIteration's `windDown` arg) so the model synthesizes
     // a final answer instead of stopping silently — a silent stop reads as a
-    // hang. `0` (the top-level default) means no cap. Shared with anthropic-direct
-    // via shared/tool-loop-cap.ts so the two providers cannot drift apart.
-    let capReached = false;
+    // hang. Holds the REASON (rounds vs. wall-clock) rather than a bare boolean
+    // so the terminal stopReason names which budget ran out. Shared with
+    // anthropic-direct via shared/tool-loop-cap.ts + shared/soft-deadline.ts so
+    // the two providers cannot drift apart.
+    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
     let round = 0;
     // Cumulative count of tool CALLS dispatched across the whole turn — distinct
     // from `round`. `result.state` is a FRESH StreamState per iteration (see
@@ -531,7 +546,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return;
       }
 
-      const result = yield* this.runIteration(controller, vision, capReached);
+      const result = yield* this.runIteration(controller, vision, windDownReason);
       if (result === null) {
         // runIteration bailed: either an abort/close (no event was yielded) or
         // a real stream error (an `error` event was already yielded). Mirror
@@ -564,15 +579,16 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       finalReasoningText = result.state.reasoningText;
 
       if (!result.needsToolDispatch) {
-        // Model answered in text: a normal completion, or — when capReached —
+        // Model answered in text: a normal completion, or — when winding down —
         // the wind-down round's synthesized final answer. Emit terminal events.
         break;
       }
 
-      if (capReached) {
+      if (windDownReason !== null) {
         // Pathological: the wind-down round (tools stripped) still asked for a
         // tool. With none advertised this is only reachable if the model
-        // fabricates a call. Honor the cap with a hard stop; do NOT dispatch.
+        // fabricates a call. Honor the spent budget with a hard stop; do NOT
+        // dispatch.
         break;
       }
 
@@ -641,12 +657,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return;
       }
 
-      if (shouldWindDown(round, maxIterations)) {
-        // Cap reached. Run ONE more round with tools stripped + the budget note
-        // (runIteration(windDown=true)) so the model produces a real final
-        // answer instead of a silent stop. `capReached` fires this at most once;
-        // the guard above hard-stops if the wind-down round still asks for a tool.
-        capReached = true;
+      // Two independent budgets trip the SAME wind-down: the tool-round cap and
+      // the soft wall-clock deadline. Round-cap wins a tie — it is the more
+      // specific budget. Either way the next round runs with tools stripped +
+      // the matching budget note (runIteration(windDown=reason)) so the model
+      // produces a real final answer instead of a silent stop. Setting the
+      // reason fires this at most once; the guard above hard-stops if the
+      // wind-down round still asks for a tool. Mirrors anthropic-direct's
+      // loop/tool-round.ts decision point exactly.
+      const roundsSpent = shouldWindDown(round, maxIterations);
+      const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
+      if (roundsSpent || timeSpent) {
+        windDownReason = roundsSpent ? TOOL_USE_LOOP_CAPPED : SOFT_DEADLINE_WIND_DOWN;
         continue;
       }
     }
@@ -669,12 +691,13 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       text: finalAssistantText,
       sessionId: this.initSessionId,
     };
-    // If the turn was cut short by the tool-round cap, preserve that signal for
-    // closure classification (session/closure-reason.ts → `iteration_cap`) and
-    // telemetry, even though the wind-down round itself ended naturally.
+    // If the turn was cut short by a spent budget, preserve that signal for
+    // closure classification (session/closure-reason.ts) and telemetry, even
+    // though the wind-down round itself ended naturally. The reason distinguishes
+    // rounds (`iteration_cap`) from wall-clock (`timeout`).
     yield* this.finishTurn(
-      capReached
-        ? { ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }
+      windDownReason !== null
+        ? { ...accumulatedUsage, stopReason: windDownReason }
         : accumulatedUsage,
       turnStartTime,
     );
@@ -751,7 +774,11 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private async *runIteration(
     controller: AbortController,
     vision: boolean,
-    windDown = false,
+    /**
+     * Non-null on the single wind-down round; names WHICH budget was spent so
+     * the appended note matches (tools vs. clock). `null` = a normal round.
+     */
+    windDown: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null,
   ): AsyncGenerator<ProviderEvent, IterationResult | null> {
     const messages = buildMessages({
       config: this.opts.config,
@@ -778,15 +805,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     }
 
     // Wind-down round: strip tools (with none advertised the model MUST answer
-    // in text — it cannot emit another tool call) and append the shared budget
-    // note to this REQUEST ONLY. `messages` is rebuilt from `priorTurns` each
-    // iteration, so the note never persists into stored history. Mirrors
-    // anthropic-direct/loop.ts's tools-stripped wind-down; see
-    // shared/tool-loop-cap.ts for the shared contract.
-    if (windDown) {
-      messages.push({ role: 'user', content: WIND_DOWN_NOTE });
+    // in text — it cannot emit another tool call) and append the budget note
+    // matching the trigger to this REQUEST ONLY — worded around clock rather
+    // than tools when TIME is what ran out, so the model never reports "I ran
+    // out of tool calls" when it did not. `messages` is rebuilt from
+    // `priorTurns` each iteration, so the note never persists into stored
+    // history. Mirrors anthropic-direct/loop/tool-round.ts's tools-stripped
+    // wind-down; see shared/tool-loop-cap.ts + shared/soft-deadline.ts.
+    if (windDown !== null) {
+      const note = windDown === TOOL_USE_LOOP_CAPPED ? WIND_DOWN_NOTE : SOFT_DEADLINE_NOTE;
+      messages.push({ role: 'user', content: note });
     }
-    const activeTools = windDown ? undefined : this.activeOpenAITools();
+    const activeTools = windDown !== null ? undefined : this.activeOpenAITools();
 
     // Shared context for the retry/stream-drive skeleton (query/stream-drive.ts).
     // Both wire branches build their request body, then hand off to driveStream
@@ -897,10 +927,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   // ---- ProviderQuery surface ------------------------------------------------
 
-  async interrupt(): Promise<void> {
+  async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
     // Aborts the in-flight turn, or parks the reason for the next begin()
     // when the interrupt lands between turns.
-    this.abort.requestAbort('interrupted');
+    this.abort.requestAbort(reason);
   }
 
   /**

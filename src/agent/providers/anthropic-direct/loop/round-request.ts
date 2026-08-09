@@ -21,6 +21,7 @@ import type {
   RunTurnInput,
   WireToolDef,
 } from '../types.js';
+import { annotateFastError } from '../query/turn-request.js';
 import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
@@ -113,7 +114,7 @@ export interface OpenRoundTransport {
  *
  * - `opened` — a live stream; the caller owns watchdog disposal from here.
  * - `retry-ttfb` — first-byte stall before any content; watchdogs already
- *   disposed, caller should re-drive the round once.
+ *   disposed, caller should re-drive the round (budget permitting).
  * - `terminated` — a terminal event was already yielded; the turn is over.
  */
 export type OpenRoundResult =
@@ -125,10 +126,22 @@ export type OpenRoundResult =
 export interface OpenRoundContext {
   input: RunTurnInput;
   turn: TurnAccumulator;
-  /** Read-only here: consulted for the once-per-round TTFB allowance. */
+  /** Read-only here: consulted for the counted per-round TTFB allowance. */
   retry: RoundRetryBudget;
+  /** Per-ATTEMPT first-byte bound (already divided by TTFB_MAX_ATTEMPTS). */
   ttfbTimeoutMs: number;
   stallTimeoutMs: number;
+}
+
+export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'fastMode'>): AnthropicMessagesCreateParams {
+  return {
+    model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
+    ...(input.system !== null ? { system: input.system } : {}),
+    ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
+    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
+    ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
+    ...(input.fastMode === true ? { speed: 'fast' as const } : {}),
+  };
 }
 
 /**
@@ -152,21 +165,12 @@ export async function* openRound({
     ? withMessagesBreakpoint(input.messages, getCacheTtl())
     : input.messages;
 
-  const params: AnthropicMessagesCreateParams = {
-    model: input.model,
-    max_tokens: input.maxTokens,
+  const params: AnthropicMessagesCreateParams = buildRoundParams({
+    ...input,
     messages: messagesForRequest,
-    stream: true,
-    ...(input.system !== null ? { system: input.system } : {}),
-    // Wind-down round (cap reached): omit tools so the model MUST answer in
-    // text — with no tools advertised it cannot emit another tool_use — which
-    // turns a capped turn into a final summary rather than a silent stop.
-    ...(input.tools !== null && input.tools.length > 0 && !turn.capReached
-      ? { tools: input.tools.map(toWireTool) }
-      : {}),
-    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
-    ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
-  };
+    // Wind-down round: omit tools so the model must produce text.
+    tools: turn.windDownReason !== null ? null : input.tools,
+  });
 
   // Witness layer: stamp request-initiation time so the model_ttfb phase can
   // report time-to-first-byte for THIS model API call.
@@ -244,8 +248,9 @@ export async function* openRound({
     return { kind: 'opened', events, ttfb, stall, requestStartedAt };
   } catch (err) {
     // A TTFB timeout aborts before the first byte (connection-phase stall).
-    // Distinguish it from a user interrupt (input.signal) and, on the first
-    // occurrence this round, re-drive the request once instead of erroring.
+    // Distinguish it from a user interrupt (input.signal) and, while the
+    // round's counted TTFB budget holds allowance, re-drive instead of
+    // erroring.
     if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb()) {
       ttfb.dispose();
       stall.dispose();
@@ -261,7 +266,7 @@ export async function* openRound({
       };
       return { kind: 'terminated' };
     }
-    const e = err instanceof Error ? err : new Error(String(err));
+    const e = annotateFastError(err, input.fastMode === true);
     if (e.message.includes('thinking')) {
       dumpThinkingDiagnostic(input.messages, e);
     }

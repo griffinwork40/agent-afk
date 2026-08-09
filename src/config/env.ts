@@ -330,17 +330,21 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_MODEL_TTFB_TIMEOUT_MS',
     description:
-      'Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. ' +
-      'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
+      'Per-ROUND time-to-first-token budget (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a round may stall BEFORE its first streamed CONTENT token ' +
       '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
       'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
       'the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, ' +
       'so a normal slow call (below the bound) and any actively-' +
-      'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
-      'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
-      'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
-      'trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. ' +
-      'Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
+      'streaming extended-thinking response are never aborted. The budget ' +
+      'is divided into 3 shorter first-byte ATTEMPTS (each ~2/3 of this value, so the ' +
+      'worst-case wall time per round is unchanged from the previous 2-attempt regime while a ' +
+      'transient stall gets 3 chances instead of 2). NOTE: a request whose FIRST token takes ' +
+      'longer than the per-attempt bound — e.g. a very large opus_1m prefill — is aborted and ' +
+      're-driven, then surfaces as an error once the budget is spent (raise this value or set 0 ' +
+      'for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang ' +
+      'on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb), i.e. 3 × 120s. ' +
+      'Set to 0 to disable.',
     type: 'number',
     required: false,
     default: '180000',
@@ -1242,6 +1246,20 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_CAPTURE_SUBAGENT_OUTPUT',
+    description:
+      'Opt-in: when set to 1, a subagent\'s conversational OUTPUT (assistant text plus each ' +
+      'tool call with its arguments) is appended incrementally to a redacted markdown ' +
+      'transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, ' +
+      'so a child killed by a timeout still leaves a usable partial record — the case where ' +
+      'final-message capture yields nothing. Off by default for the same reasons as ' +
+      'AFK_CAPTURE_SUBAGENT_PROMPTS (unpruned witness tree, best-effort regex redaction).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
     name: 'DEBUG',
     description: 'Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.',
     type: 'string',
@@ -1685,6 +1703,7 @@ export const env = {
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
   get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
+  get AFK_CAPTURE_SUBAGENT_OUTPUT(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_OUTPUT']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 

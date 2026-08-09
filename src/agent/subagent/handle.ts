@@ -22,6 +22,8 @@ import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { IdleWatchdog } from './idle-watchdog.js';
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
+import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
+import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import {
   buildResultFromMessage,
   buildResultFromError,
@@ -531,19 +533,34 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
     }
     // Anti-hang fallback (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
-    // subagent.ts): a child that hits its tool-use cap normally returns a real
-    // summary — the provider runs a tools-stripped wind-down round on the cap
-    // (see loop.ts) whose text lands as `finalMessage`/`lastStreamedContent`
-    // above. This branch is the RARE fallback for when that wind-down produced
-    // no text at all: surface the cap as a terminal "capped" message instead of
-    // throwing, so `runToResult` reports a capped *partial* result (status
-    // 'succeeded') rather than an opaque subagent failure.
-    if (this.lastStopReason === 'tool_use_loop_capped') {
+    // subagent.ts): a child that winds down normally returns a real summary —
+    // the provider runs a tools-stripped wind-down round (see loop.ts) whose
+    // text lands as `finalMessage`/`lastStreamedContent` above. This branch is
+    // the RARE fallback for when that wind-down produced no text at all:
+    // surface the wind-down as a terminal message instead of throwing, so
+    // `runToResult` reports a *partial* result (status 'succeeded') rather than
+    // an opaque subagent failure.
+    //
+    // Invariant: both wind-down triggers must land here, never just the
+    // round-budget one. `TOOL_USE_LOOP_CAPPED` (rounds spent) and
+    // `SOFT_DEADLINE_WIND_DOWN` (wall-clock nearly spent) run the identical
+    // tools-stripped round, so a textless outcome has to be salvaged
+    // identically — matching only the former would send a soft-deadline child
+    // down the StreamIncompleteError path and fail the fork loudly for the one
+    // condition this feature exists to handle gracefully.
+    if (
+      this.lastStopReason === TOOL_USE_LOOP_CAPPED ||
+      this.lastStopReason === SOFT_DEADLINE_WIND_DOWN
+    ) {
+      const budget =
+        this.lastStopReason === TOOL_USE_LOOP_CAPPED
+          ? 'tool-use iteration cap'
+          : 'wall-clock budget';
       return {
         role: 'assistant',
         content:
-          `[subagent ${this.id} reached its tool-use iteration cap before ` +
-          `producing a final message; returning a capped partial result]`,
+          `[subagent ${this.id} reached its ${budget} before producing a ` +
+          `final message; returning a partial result]`,
         timestamp: new Date(),
       };
     }

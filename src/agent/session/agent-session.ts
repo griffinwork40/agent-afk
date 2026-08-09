@@ -14,6 +14,10 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
 import { captureSubagentPrompt } from './subagent-prompt-capture.js';
+import {
+  createSubagentOutputRecorder,
+  type SubagentOutputRecorder,
+} from './subagent-output-capture.js';
 import { AbortError } from '../../utils/errors.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/writer.js';
@@ -29,6 +33,7 @@ import type {
   RewindTarget,
 } from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
+import { providerAbortReason } from '../abort-reason.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import {
@@ -105,6 +110,12 @@ export class AgentSession implements IAgentSession {
   /** Number of inbound messages submitted, including attempts that end in a
    * provider error and therefore never increment `turnCount`. */
   private inboundMessageCount = 0;
+  /**
+   * Opt-in subagent output recorder, created lazily on the first turn and
+   * reused for the life of the session so a multi-turn child produces ONE
+   * transcript. `undefined` = not yet attempted; `null` = capture disabled.
+   */
+  private subagentOutputRecorder: SubagentOutputRecorder | null | undefined;
   /**
    * Hook-generated context (e.g. SubagentStop `injectContext`) waiting to be
    * prepended to the next outbound user message. Never delivered as its own
@@ -694,6 +705,28 @@ export class AgentSession implements IAgentSession {
 
     const deps = this.buildTransformDeps();
 
+    // Opt-in forensics, mirror of the prompt capture above: record what this
+    // fork SAYS, incrementally. Null when disabled, so the disabled path costs
+    // one null check per event. See subagent-output-capture for why capture
+    // must flush at tool-call boundaries rather than at end-of-run.
+    //
+    // Invariant: the recorder is SESSION-scoped, not turn-scoped — one child
+    // gets one transcript. Constructing it per turn would re-emit the
+    // frontmatter header on every turn of a multi-turn child, because the
+    // writer appends. `undefined` means "not yet attempted"; `null` means
+    // "attempted and capture is disabled", so a disabled session evaluates the
+    // gate once rather than on every turn.
+    if (this.subagentOutputRecorder === undefined) {
+      this.subagentOutputRecorder = createSubagentOutputRecorder({
+        sessionId:
+          sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? this.sessionId,
+        subagentId: this.config.subagentId,
+        isSubagentFork: this.config.isSubagentFork === true,
+        model: this.config.model === undefined ? undefined : String(this.config.model),
+      });
+    }
+    const outputRecorder = this.subagentOutputRecorder;
+
     try {
       while (true) {
         const result = await this.providerIterator.next();
@@ -702,6 +735,7 @@ export class AgentSession implements IAgentSession {
         const output = transformProviderEvent(event, deps);
 
         if (output) {
+          outputRecorder?.observe(output);
           if (output.type === 'done') {
             this.turnCount++;
             // A completed turn clears a prior turn's provider error so the seal
@@ -719,8 +753,17 @@ export class AgentSession implements IAgentSession {
           if (output.type === 'done' || output.type === 'error') break;
         }
       }
+      outputRecorder?.end('stream_complete');
     } finally {
-      if (this.currentState === 'streaming') this.currentState = 'idle';
+      // Invariant: this `finally` is the ONLY path an aborted or timed-out child
+      // takes — closing the generator runs it while `break` above does not reach
+      // it. Recording terminal state here is what distinguishes "child was
+      // killed mid-flight" from "child finished" in the transcript. Records
+      // already on disk are unaffected: capture is incremental by design.
+      if (this.currentState === 'streaming') {
+        outputRecorder?.end('aborted_or_incomplete');
+        this.currentState = 'idle';
+      }
     }
   }
 
@@ -880,7 +923,7 @@ export class AgentSession implements IAgentSession {
   private async onAbort(): Promise<void> {
     void this.ledger.seal('abort');
     try {
-      await this.providerQuery.interrupt();
+      await this.providerQuery.interrupt(providerAbortReason(this.abortController.signal.reason));
     } catch {
       // Provider interrupt may fail if session is already torn down; swallow.
     }

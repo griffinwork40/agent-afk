@@ -15,7 +15,7 @@
  * built-in handlers) without involving Codex CLI or any harness-in-harness.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type OpenAI from 'openai';
 import type { ProviderEvent, ProviderUserTurn } from '../../provider.js';
 import type { AgentConfig } from '../../types/config-types.js';
@@ -29,6 +29,8 @@ import {
   type OpenAIClientFactory,
 } from './query.js';
 import type { OpenAIChunk } from './translate.js';
+import { WIND_DOWN_NOTE } from '../shared/tool-loop-cap.js';
+import { SOFT_DEADLINE_NOTE, SOFT_DEADLINE_WIND_DOWN } from '../shared/soft-deadline.js';
 
 // ---- mock OpenAI client ---------------------------------------------------
 
@@ -93,6 +95,8 @@ interface DispatcherFixture {
 function makeDispatcher(opts?: {
   allowedTools?: string[];
   concurrencyClassifier?: ConcurrencyClassifier;
+  /** Side effect run inside the echo handler — used to advance a fake clock mid-round. */
+  onHandlerCall?: () => void;
 }): DispatcherFixture {
   const handlerCalls: DispatcherFixture['handlerCalls'] = [];
   const preHookFired: string[] = [];
@@ -100,6 +104,7 @@ function makeDispatcher(opts?: {
 
   const echoHandler: ToolHandler = async (input) => {
     handlerCalls.push({ name: 'echo', input });
+    opts?.onHandlerCall?.();
     return { content: `echoed: ${JSON.stringify(input)}` };
   };
   const failingHandler: ToolHandler = async () => {
@@ -827,6 +832,153 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
       e.type === 'progress' ? e.progress.summary : undefined,
     );
     expect(summaries).toEqual(['round 1/3: echo', 'round 2/3: echo', 'round 3/3: echo']);
+  });
+
+  // --- SOFT WALL-CLOCK DEADLINE (issue #938) ---
+  //
+  // Parity with anthropic-direct's loop.test.ts soft-deadline suite. Keeping
+  // both providers pinned to the same behaviour is the whole reason the policy
+  // lives in shared/ — see the drift note atop shared/tool-loop-cap.ts.
+  // Time is INJECTED (fake timers advanced inside the tool handler); nothing sleeps.
+  describe('soft wall-clock deadline', () => {
+    // A turn where the model answers in text and stops — the wind-down round's shape.
+    const textTurn = (text: string): ScriptedTurn => ({
+      chunks: [
+        { choices: [{ delta: { content: text } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ],
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('winds down with SOFT_DEADLINE_WIND_DOWN when a round boundary falls past the deadline', async () => {
+      // Round 1 dispatches a tool that burns the whole budget; the boundary
+      // check then fires and round 2 is the tools-stripped wind-down.
+      const fixture = makeDispatcher({
+        onHandlerCall: () => {
+          vi.setSystemTime(Date.now() + 61_000);
+        },
+      });
+      scriptedTurns = [toolCallTurn('c0'), textTurn('Here is what I established.')];
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('go'),
+        // No round cap at all: TIME is the only trigger under test.
+        config: baseConfig({ softDeadlineMs: 60_000 }),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      // Exactly ONE tools-stripped extra round — not an unbounded loop.
+      expect(createCalls.length).toBe(2);
+      expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
+      expect(createCalls[1]!.args.tools).toBeUndefined();
+
+      // The model's synthesis is delivered rather than lost to a hard abort.
+      const assistantMsg = events.find((e) => e.type === 'assistant.message');
+      expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toContain(
+        'what I established',
+      );
+
+      // ... and the turn reports TIME, not rounds.
+      const completed = events.at(-1);
+      expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).toBe(
+        SOFT_DEADLINE_WIND_DOWN,
+      );
+
+      // The TIME-worded note went out on the wind-down request only.
+      const windDownMsgs = createCalls[1]!.args.messages as Array<{ role: string; content: unknown }>;
+      expect(windDownMsgs.some((m) => m.content === SOFT_DEADLINE_NOTE)).toBe(true);
+      expect(windDownMsgs.some((m) => m.content === WIND_DOWN_NOTE)).toBe(false);
+    });
+
+    it('does NOT wind down while the turn is inside its deadline', async () => {
+      const fixture = makeDispatcher({
+        onHandlerCall: () => {
+          vi.setSystemTime(Date.now() + 1_000);
+        },
+      });
+      scriptedTurns = [toolCallTurn('c0'), textTurn('Natural finish.')];
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('go'),
+        config: baseConfig({ softDeadlineMs: 600_000 }),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      expect(createCalls.length).toBe(2);
+      // Round 2 was a NORMAL round: tools still advertised, no note.
+      expect(createCalls[1]!.args.tools?.length ?? 0).toBeGreaterThan(0);
+      const completed = events.at(-1);
+      const stop = completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined;
+      expect(stop).not.toBe(SOFT_DEADLINE_WIND_DOWN);
+      expect(stop).not.toBe('tool_use_loop_capped');
+    });
+
+    it('is off when softDeadlineMs is 0, however long the turn takes', async () => {
+      const fixture = makeDispatcher({
+        onHandlerCall: () => {
+          vi.setSystemTime(Date.now() + 3 * 60 * 60_000); // three hours
+        },
+      });
+      scriptedTurns = [toolCallTurn('c0'), textTurn('Done.')];
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('go'),
+        config: baseConfig({ softDeadlineMs: 0 }),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      expect(createCalls.length).toBe(2);
+      expect(createCalls[1]!.args.tools?.length ?? 0).toBeGreaterThan(0); // natural, not wind-down
+      const completed = events.at(-1);
+      expect(
+        completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined,
+      ).not.toBe(SOFT_DEADLINE_WIND_DOWN);
+    });
+
+    it('gives the ROUND cap precedence when both budgets are spent in the same round', async () => {
+      const fixture = makeDispatcher({
+        onHandlerCall: () => {
+          vi.setSystemTime(Date.now() + 61_000);
+        },
+      });
+      scriptedTurns = [toolCallTurn('c0'), textTurn('Summary.')];
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('go'),
+        config: baseConfig({ maxToolUseIterations: 1, softDeadlineMs: 60_000 }),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      const completed = events.at(-1);
+      expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).toBe(
+        'tool_use_loop_capped',
+      );
+      const windDownMsgs = createCalls[1]!.args.messages as Array<{ role: string; content: unknown }>;
+      expect(windDownMsgs.some((m) => m.content === WIND_DOWN_NOTE)).toBe(true);
+      expect(windDownMsgs.some((m) => m.content === SOFT_DEADLINE_NOTE)).toBe(false);
+    });
   });
 
   it('runs uncapped at top level — past the former hard-coded 50-round limit (no maxToolUseIterations)', async () => {

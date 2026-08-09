@@ -51,7 +51,7 @@ function makeSessionMetadata(): SessionMetadata {
  */
 function makeDeps(opts: {
   maxBudgetUsd?: number;
-  abortBudget?: (reason: string) => void;
+  abortBudget?: (reason: BudgetExceededError) => void;
 } = {}): TransformDeps {
   let sessionMeta = makeSessionMetadata();
   const history: Message[] = [];
@@ -113,13 +113,14 @@ describe('transformProviderEvent — budget enforcement (C6)', () => {
     expect((result as { type: 'error'; error: Error }).error).toBeInstanceOf(BudgetExceededError);
 
     expect(abortBudget).toHaveBeenCalledOnce();
-    const reason = abortBudget.mock.calls[0]![0] as string;
+    const reason = abortBudget.mock.calls[0]![0] as BudgetExceededError;
+    expect(reason).toBeInstanceOf(BudgetExceededError);
 
     // Must contain the accumulated cost and the ceiling.
-    expect(reason).toContain('0.0500');
-    expect(reason).toContain('0.0200');
+    expect(reason.message).toContain('0.0500');
+    expect(reason.message).toContain('0.0200');
     // Must be readable — not just numbers.
-    expect(reason.toLowerCase()).toMatch(/budget|ceiling|limit/);
+    expect(reason.message.toLowerCase()).toMatch(/budget|ceiling|limit/);
   });
 
   it('accumulates cost across multiple turns before triggering', () => {
@@ -141,9 +142,9 @@ describe('transformProviderEvent — budget enforcement (C6)', () => {
     expect(r3?.type).toBe('error');
     expect(abortBudget).toHaveBeenCalledOnce();
 
-    const reason = abortBudget.mock.calls[0]![0] as string;
-    expect(reason).toContain('0.0900');
-    expect(reason).toContain('0.0800');
+    const reason = abortBudget.mock.calls[0]![0] as BudgetExceededError;
+    expect(reason.message).toContain('0.0900');
+    expect(reason.message).toContain('0.0800');
   });
 
   it('does NOT call abortBudget when total remains below ceiling', () => {

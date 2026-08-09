@@ -137,6 +137,71 @@ describe('runSubagentDAG', () => {
     expect(configs.filter((c) => 'maxToolUseIterations' in c)).toHaveLength(1);
   });
 
+  // --- SOFT WALL-CLOCK DEADLINE ARMING (issue #938) ---
+  // A DAG node is bounded by a SECOND wall-clock enforcer that does not route
+  // through agent/timeout.ts: runDAG's own per-node setTimeout, cascaded into
+  // handle.cancel(). It had the identical lossy-kill gap, so it is armed here.
+  it('arms softDeadlineMs on node forks from nodeTimeoutMs', async () => {
+    pushHandle('a');
+    const manager = managerFromQueue();
+
+    await runSubagentDAG({
+      manager,
+      parentSession: makeParent(),
+      nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+      // 8 min × 0.15 = 72s reserve (inside both clamps). Smaller than the
+      // 45-min fork default, so the node budget is the one that binds.
+      nodeTimeoutMs: 8 * 60_000,
+    });
+
+    const fork = manager.forkSubagent as unknown as ReturnType<typeof vi.fn>;
+    const config = (fork.mock.calls[0]![0] as { config: Record<string, unknown> }).config;
+    expect(config['softDeadlineMs']).toBe(8 * 60_000 - 72_000);
+  });
+
+  it('binds on the SMALLER of the node budget and the fork budget', async () => {
+    // A node timeout larger than the fork's own wall-clock budget must not
+    // place the soft deadline after the abort that will actually fire — that
+    // would arm a wind-down which can never run.
+    pushHandle('a');
+    const manager = managerFromQueue();
+
+    await runSubagentDAG({
+      manager,
+      parentSession: makeParent(),
+      nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+      nodeTimeoutMs: 10 * 60 * 60_000, // 10h, far beyond the 45-min fork default
+    });
+
+    const fork = manager.forkSubagent as unknown as ReturnType<typeof vi.fn>;
+    const config = (fork.mock.calls[0]![0] as { config: Record<string, unknown> }).config;
+    // Derived from the 45-min fork budget, not the 10h node budget.
+    expect(config['softDeadlineMs']).toBe(40 * 60_000);
+  });
+
+  it('omits softDeadlineMs when the node budget is short or unset', async () => {
+    // Unset → forkSubagent derives its own from the fork budget; short → the
+    // min-budget guard keeps prior behaviour exactly. Either way this layer
+    // must not stamp a value.
+    pushHandle('a');
+    pushHandle('b');
+    const manager = managerFromQueue();
+
+    await runSubagentDAG({
+      manager,
+      parentSession: makeParent(),
+      nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+      nodeTimeoutMs: 1_000, // below SOFT_DEADLINE_MIN_BUDGET_MS
+    });
+    const fork = manager.forkSubagent as unknown as ReturnType<typeof vi.fn>;
+    expect(
+      'softDeadlineMs' in (fork.mock.calls[0]![0] as { config: Record<string, unknown> }).config,
+    ).toBe(false);
+  });
+
   it('two-node chain: output of first feeds promptBuilder of second', async () => {
     pushHandle('first-output');
     pushHandle('second-output');

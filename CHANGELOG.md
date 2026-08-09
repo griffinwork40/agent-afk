@@ -11,6 +11,65 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.100.3] - 2026-08-09
+
+### Fixed
+- wind down gracefully on the wall-clock deadline instead of aborting (#950) (391a0db)
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#955) (70d3886)
+
+## [5.100.2] - 2026-08-08
+
+### Fixed
+- split severity from disposition and make medium blocking by default (#936) (70baf31)
+
+## [5.100.1] - 2026-08-08
+
+### Fixed
+- counted TTFB retry budget with shorter per-attempt bound (#945) (6d90dd8)
+
+## [5.100.0] - 2026-08-08
+
+### Added
+- capture subagent conversational output incrementally (#935) (662628e)
+
+## [5.99.0] - 2026-08-08
+
+### Added
+- register claude-sonnet-4-6 limits explicitly (#946) (7b96075)
+
+## [5.98.0] - 2026-08-08
+
+### Added
+- add session-scoped Opus Fast mode (#907) (2e3339f)
+
+## [5.97.8] - 2026-08-08
+
+### Fixed
+- render cost from the trace aggregate, not the sidecar (#933) (6882a06)
+
+## [5.97.7] - 2026-08-07
+
+### Fixed
+- bound every raw REPL write to the terminal width (#931) (d467583)
+
+## [5.97.6] - 2026-08-07
+
+### Fixed
+- stop generated build artifacts and symlinked dep trees from making worktrees immortal (#927) (8d9b6a0)
+
+## [5.97.5] - 2026-08-07
+
+### Fixed
+- tell research-agent about its registry grants, not just grant them (#928) (5e8da4f)
+- preserve abort origins across provider teardown (#929) (69d0d57)
+
+## [5.97.4] - 2026-08-07
+
+### Changed
+- dissolve the src/telegram.ts monolith into src/telegram/ (#825) (#930) (79d8642)
+
 ## [5.97.3] - 2026-08-07
 
 ### Fixed

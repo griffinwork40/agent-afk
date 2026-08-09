@@ -99,9 +99,16 @@ const PINNED_HASHES = {
   // ~/.afk/skills/ if it drifts back.
   refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
-  // History: /review Wave 1 no longer mandates a `git show` re-read (#726, #777).
+  // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
+  // #777); severity and disposition split into separate axes with an explicit
+  // `blocking` field, never-overridable security/data-integrity mediums, and a
+  // pre-downgrade assignment-order invariant (#937). Review of #936 then
+  // widened that invariant to every downgrade path (not just the two it
+  // named), exempted a downgrade-preserved `blocking: true` from the low/nit
+  // external-constraint rule it contradicted, and put the merge-decision rule
+  // in Wave 2's receives list.
   // Full rationale: docs/bundled-plugins.md#review-726
-  review: 'e40dbb244d3b0d074f366e6d3a7e27d053b00657571fb8d4d8027549350e0e81',
+  review: 'c457514e7576427dfe327dbdca347909f5ed34b321b9185c9f51663acac99295',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
@@ -207,6 +214,54 @@ describe('bundled skills', () => {
       expect(content).toContain(
         '**Wave 1.5 — Citation + absence-claim verification (INLINE',
       );
+    });
+
+    // Invariant: severity and disposition are separate axes (#937). The two
+    // never-overridable medium classes and the pre-downgrade assignment order
+    // are the whole point of the split — a later edit that drops either one
+    // reopens the bypass it closed, and the file hash alone cannot say which
+    // clause went missing.
+    it('review keeps the severity/disposition split (#937)', () => {
+      const content = readBundled('review');
+
+      // Disposition is an explicit per-finding field, not a tier threshold.
+      expect(content).toContain('**Wave 1 assigns** an explicit `blocking: true|false`');
+      expect(content).toContain(
+        'Emit **DO NOT MERGE** when one or more findings carry `blocking: true`',
+      );
+
+      // Neither never-overridable medium class may be waived.
+      expect(content).toContain(
+        'A `medium` in the `security` dimension is **never** overridable to `false`',
+      );
+      expect(content).toContain(
+        'material data-integrity risk or a likely production failure under normal usage is **never** overridable to `false`',
+      );
+
+      // A downgrade lowers severity, never disposition — otherwise the two
+      // clauses above are bypassable without invoking an override at all.
+      expect(content).toContain('**Invariant — assignment order.**');
+      expect(content).toContain('assigned from the **pre-downgrade** severity');
+      expect(content).toContain(
+        'keeps the `blocking` value its pre-downgrade severity earned',
+      );
+
+      // An overridden disposition gets an independent reader.
+      expect(content).toContain('whose `blocking` value departs from the default table');
+
+      // The invariant covers EVERY downgrade path, not just the two it
+      // originally named — the reachability rule drops two tiers in one step.
+      expect(content).toContain('downgraded by **any** downgrade rule in this file');
+      expect(content).toContain('two tiers in one step');
+
+      // A downgrade-preserved `blocking: true` is not an override, so it is
+      // exempt from the low/nit external-constraint rule it would otherwise
+      // contradict.
+      expect(content).toContain('is **not** an override and needs no justification clause');
+      expect(content).toContain('· blocking preserved from pre-downgrade <severity>');
+
+      // Wave 2 emits the verdict, so its receives list carries the rule.
+      expect(content).toContain('**the merge-decision rule and its counts format below**');
     });
   });
 });

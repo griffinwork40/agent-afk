@@ -22,6 +22,7 @@ import { initCmd } from './commands/init.js';
 import { statsCmd } from './commands/stats.js';
 import { fontSizeCmd } from './commands/font-size.js';
 import { thinkingCmd } from './commands/thinking.js';
+import { fastCmd } from './commands/fast.js';
 import { themeCmd } from './commands/theme.js';
 import { allowDirCmd } from './commands/allow-dir.js';
 import { keysCmd } from './commands/keys.js';
@@ -56,6 +57,7 @@ export function registerAll(): void {
   register(statsCmd);
   register(fontSizeCmd);
   register(thinkingCmd);
+  register(fastCmd);
   register(themeCmd);
   register(allowDirCmd);
   register(worktreeCmd);

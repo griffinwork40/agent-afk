@@ -10,6 +10,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AuthMode } from './types.js';
+import { composeBetaHeader } from './beta-headers.js';
 
 /**
  * Beta that activates the 1-hour prompt-cache TTL. Required in BOTH auth modes
@@ -118,22 +119,19 @@ export function buildRequestHeaders(
   requestId: string,
   withEffort?: boolean,
   extendedCacheTtl?: boolean,
+  withFast?: boolean,
 ): Record<string, string> {
-  if (mode !== 'oauth') {
-    // Invariant: api-key mode sends the extended-cache-ttl beta and NOTHING
-    // else. The cli-mimicry headers (x-app, CLI User-Agent, session id) are
-    // OAuth-only by design — `local-mode-oauth.test.ts` pins that a shim never
-    // sees them, and local mode reports `extendedCacheTtl: false` because
-    // `isCacheEnabled` force-disables caching whenever a baseUrl is set.
-    return extendedCacheTtl === true
-      ? { 'anthropic-beta': EXTENDED_CACHE_TTL_BETA }
-      : {};
-  }
-  const betaHeader = withEffort
-    ? `${OAUTH_BETA_HEADER},${EFFORT_BETA_HEADER}`
-    : OAUTH_BETA_HEADER;
+  const betaHeader = composeBetaHeader({
+    oauthEntries: mode === 'oauth' ? OAUTH_BETA_HEADER.split(',') : [],
+    effort: mode === 'oauth' && withEffort === true,
+    extendedCacheTtl,
+    fast: withFast,
+    effortEntry: EFFORT_BETA_HEADER,
+    extendedCacheEntry: EXTENDED_CACHE_TTL_BETA,
+  });
+  if (mode !== 'oauth') return betaHeader ? { 'anthropic-beta': betaHeader } : {};
   return {
-    'anthropic-beta': betaHeader,
+    'anthropic-beta': betaHeader!,
     'x-app': 'cli',
     'User-Agent': CLI_USER_AGENT,
     'X-Claude-Code-Session-Id': sessionId,

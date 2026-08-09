@@ -41,7 +41,7 @@ export type TransformDeps = {
    * Called when `maxBudgetUsd` is exceeded. Implementors should abort the
    * session's internal AbortController.
    */
-  abortBudget?: (reason: string) => void;
+  abortBudget?: (reason: BudgetExceededError) => void;
   /**
    * Internal accumulator for running session cost. Mutated by
    * `transformProviderEvent` on each `turn.completed` event. Callers should
@@ -362,6 +362,7 @@ export function transformProviderEvent(
           toolName: event.toolName,
           toolInput: event.toolInput,
           toolInputRaw: event.toolInputRaw,
+          ...(event.pending ? { pending: true as const } : {}),
         },
       };
 
@@ -476,7 +477,7 @@ export function transformProviderEvent(
             lastTurnCostUsd: metadata.totalCostUsd,
           });
           const err = new BudgetExceededError(deps._runningCostUsd, deps.maxBudgetUsd);
-          deps.abortBudget(err.message);
+          deps.abortBudget(err);
           return { type: 'error', error: err };
         }
       }

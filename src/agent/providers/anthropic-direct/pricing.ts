@@ -117,6 +117,77 @@ export interface CacheWriteSplit {
 const DATE_SUFFIX = /-\d{8}$/;
 
 /**
+ * Anthropic's per-request service tier. `fast` is the opt-in low-latency tier
+ * negotiated by the `fast-mode-2026-02-01` beta plus `speed: 'fast'` on the
+ * request body; `standard` is the default tier every other call is billed at.
+ */
+export type AnthropicSpeed = 'standard' | 'fast';
+
+/**
+ * Contract: which speed to price this call at. `responseSpeed` is what the API
+ * SAID it served (`usage.speed`) and wins when present; `requestSpeed` is only
+ * what we ASKED for. Anthropic may decline a Fast request and serve it at the
+ * standard tier — billing the request intent in that case would overstate cost,
+ * so the observed value is authoritative and the request value is the fallback
+ * for endpoints that omit `usage.speed`. Absent both, the call is `standard`.
+ */
+export interface SpeedPricingContext {
+  requestSpeed?: AnthropicSpeed;
+  responseSpeed?: AnthropicSpeed;
+}
+
+/**
+ * Invariant: Fast-tier Opus bills at exactly 2× every standard rate — input,
+ * output, both cache-write TTLs, and cache read
+ * (https://platform.claude.com/docs/en/build-with-claude/fast-mode, verified
+ * 2026-08-07). Expressed as a multiplier over the resolved standard row rather
+ * than as a second hardcoded rate table on purpose: a duplicate table would
+ * silently drift from {@link MODEL_PRICING} the next time list prices move,
+ * and would have to re-encode the 5m/1h write split and the dated-wire-id
+ * fallback that `lookupPricing` already handles. Scaling the resolved row
+ * inherits all of that for free.
+ */
+const FAST_TIER_MULTIPLIER = 2;
+
+/**
+ * Contract: only ANCHORED Opus 5 and Opus 4.8 are Fast-eligible — the two
+ * models Anthropic actually serves on the Fast tier. Matches both the dateless
+ * key (`claude-opus-5`) and the dated wire id (`claude-opus-4-8-20260528`) via
+ * the `(?:-|$)` boundary, which also stops `claude-opus-4-8` from matching a
+ * hypothetical `claude-opus-4-80`. Any other model asked to price as `fast`
+ * falls through to its standard rates rather than being billed 2× for a tier
+ * it was never served on.
+ */
+const FAST_ELIGIBLE_MODEL = /^claude-opus-(?:5|4-8)(?:-|$)/;
+
+/** Scale every rate on a resolved row by the Fast-tier multiplier. */
+function toFastTierRates(pricing: ModelPricing): ModelPricing {
+  const scale = (rate: number | undefined): number | undefined =>
+    rate === undefined ? undefined : rate * FAST_TIER_MULTIPLIER;
+  return {
+    inputPerMTok: pricing.inputPerMTok * FAST_TIER_MULTIPLIER,
+    outputPerMTok: pricing.outputPerMTok * FAST_TIER_MULTIPLIER,
+    ...(scale(pricing.cacheWrite5mPerMTok) !== undefined
+      ? { cacheWrite5mPerMTok: scale(pricing.cacheWrite5mPerMTok)! }
+      : {}),
+    ...(scale(pricing.cacheWrite1hPerMTok) !== undefined
+      ? { cacheWrite1hPerMTok: scale(pricing.cacheWrite1hPerMTok)! }
+      : {}),
+    ...(scale(pricing.cacheReadPerMTok) !== undefined
+      ? { cacheReadPerMTok: scale(pricing.cacheReadPerMTok)! }
+      : {}),
+  };
+}
+
+/**
+ * Resolve the effective speed tier for a call. Observed response speed beats
+ * requested speed; anything other than an explicit `fast` is `standard`.
+ */
+function effectiveSpeed(speed: SpeedPricingContext): AnthropicSpeed {
+  return speed.responseSpeed ?? speed.requestSpeed ?? 'standard';
+}
+
+/**
  * Contract: exact match first; on a miss, strip one trailing `-YYYYMMDD`
  * suffix and retry against the same table. Some {@link MODEL_PRICING} rows
  * are keyed dateless (e.g. `claude-opus-4-8`) while the wire ids Anthropic
@@ -152,6 +223,10 @@ function lookupPricing(model: string): ModelPricing | undefined {
  * before use — a negative or NaN wire-sourced count cannot produce a
  * negative or NaN result.
  *
+ * `speed` selects the service tier. Omitted (the default for every non-Fast
+ * caller) prices at standard rates, so existing call sites are unaffected;
+ * a Fast-tier Opus call scales every rate by {@link FAST_TIER_MULTIPLIER}.
+ *
  * @internal exported for unit tests
  */
 export function deriveCallCostUsd(
@@ -161,9 +236,19 @@ export function deriveCallCostUsd(
   cachedInputTokens: number,
   cacheCreationTokens: number,
   cacheWriteSplit?: CacheWriteSplit,
+  speed: SpeedPricingContext = {},
 ): number | undefined {
-  const pricing = lookupPricing(model);
-  if (!pricing) return undefined;
+  const standard = lookupPricing(model);
+  if (!standard) return undefined;
+
+  // Fast rates apply only when the effective tier is `fast` AND the model is
+  // one Anthropic actually serves on that tier — otherwise the standard row is
+  // used unchanged, so a stray `fast` flag can never inflate an ineligible
+  // model's cost.
+  const pricing =
+    effectiveSpeed(speed) === 'fast' && FAST_ELIGIBLE_MODEL.test(model)
+      ? toFastTierRates(standard)
+      : standard;
 
   const M = 1_000_000;
 

@@ -45,6 +45,15 @@ which survived a `continue`. They now map to three objects:
 - **`TurnTrace`** — outlives any single phase. Its abort listener can fire at
   any moment and its timestamp is read only at teardown.
 
+## Immutable Fast-mode turn snapshot
+
+At the start of each top-level user turn, `query/turn-request.ts` resolves Fast
+eligibility once. That immutable decision builds both parts of the protocol pair:
+`fast-mode-2026-02-01` in the beta header and `speed: "fast"` in the body.
+`RunTurnInput` then carries the decision through every tool-loop round and retry, so
+a mid-turn preference or model change cannot split header and body or downgrade a
+retry. Excluded auxiliary/child paths never receive the controller.
+
 ## Retry classes
 
 Three distinct failure modes get three distinct budgets. They are deliberately
@@ -121,13 +130,38 @@ bound and the two can never both be pending.
 ### Time-to-first-byte (#583)
 
 A call that never streams a first CONTENT token — text/thinking delta, tool_use,
-or the end-of-stream turn-result — is aborted at `AFK_MODEL_TTFB_TIMEOUT_MS` and
-re-driven ONCE per round, then surfaces as an error. Without it, a degrading
-endpoint hung up to the SDK's ~10-minute default.
+or the end-of-stream turn-result — is aborted at the per-ATTEMPT bound and
+re-driven while the round's counted TTFB budget holds allowance, then surfaces as
+an error. Without it, a degrading endpoint hung up to the SDK's ~10-minute
+default.
 
 `message_start` and keep-alive pings yield no translated output, so they do not
-count as a first byte. The retry is once-per-round (a boolean, not a counter) so
-it cannot stack on top of the overload backoff into a longer worst case.
+count as a first byte.
+
+**Counted budget, shorter attempts.** `AFK_MODEL_TTFB_TIMEOUT_MS` is the
+per-ROUND budget; `ttfbAttemptTimeoutMs` divides it into `TTFB_MAX_ATTEMPTS`
+(3) shorter attempts, so the worst case cannot rise:
+
+| | attempts | per-attempt bound | worst case per round |
+|---|---|---|---|
+| before | 2 | B | 2B |
+| after | 3 | ⌊2B/3⌋ | ≤ 2B |
+
+At the 180s default that is 3 × 120s = 360s, exactly the old 2 × 180s; at a 300s
+override, 3 × 200s = 600s vs the old 600s. Deriving the per-attempt bound from
+the configured value (rather than hardcoding one) is what keeps the guarantee
+true for EVERY configuration — a fixed constant would read the env var as a
+per-attempt bound and regress an operator who raised it.
+
+This replaces the original boolean, whose once-per-round rule existed to stop the
+TTFB retry stacking into a longer worst case; the arithmetic now provides that
+protection instead. Motivation: a measured child sub-agent made ~25 round trips
+with a ≈16% per-request stall rate — 4 stalls, >1,200s of dead time, and the
+turn lost because two consecutive stalls on one round exhausted the single
+re-drive. Three attempts drop P(round exhausts) from ≈2.6% to ≈0.4%. The shorter
+bound still sits well above the measured p99 TTFB (≈85s), so no legitimately slow
+prefill is newly cut, and the overload / stream-incomplete budgets are untouched.
+`metadata.attempt` on the trace phase records which re-drive fired.
 
 The trace phase is `ttfb_timeout`, deliberately NOT `rate_limit`: this timer is
 ours, fires with no server throttle and no retry-after, and the two were

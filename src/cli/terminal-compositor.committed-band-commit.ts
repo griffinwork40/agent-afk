@@ -22,6 +22,7 @@ import {
   snapFlushCountToLogicalBoundary,
 } from './terminal-compositor.scrollback.js';
 import { hardWrapToWidth } from './wrap.js';
+import { boundLineToTerminal } from './render/bounded-line.js';
 import { decideCommitMode } from './commit-mode.js';
 import {
   reflowCommittedBandToWidth,
@@ -96,8 +97,13 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   };
 
   if (!self.armed || !self.logUpdate) {
+    // Disarmed: no frame, no band, no reflow — this is a raw terminal write,
+    // so it is bounded here. The armed path below hard-wraps to `cols` as part
+    // of its row accounting (line-count math depends on it) and must not be
+    // pre-wrapped by this call.
+    const bounded = boundLineToTerminal(text, self.stdout);
     writeWithGuard(() => {
-      self.stdout.write(text + '\n');
+      self.stdout.write(bounded + '\n');
     });
     return;
   }

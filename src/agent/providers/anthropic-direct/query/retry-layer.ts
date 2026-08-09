@@ -1,19 +1,33 @@
 /**
  * OAuth-aware retry composition for {@link AnthropicDirectQuery}.
  *
- * Wraps `runTurn` with two retry layers (outer first, inner second):
+ * Wraps `runTurn` with three retry layers (outermost first):
  *
- *   1. **Usage-limit retry** (outer) — intercepts HTTP 429 errors carrying
+ *   1. **Overload pause** — parks and re-probes after a mid-stream 529
+ *      exhausts its in-loop budget. See `overload-pause-tier.ts`.
+ *   2. **Usage-limit retry** — intercepts HTTP 429 errors carrying
  *      a `|<unix-ts>` reset timestamp, emits `paused`, waits via
  *      `waitForReset` (polling for token hot-swap or deadline), emits
- *      `resumed`, and replays the turn. Bounded at 2h reset window.
- *   2. **Auth retry** (inner) — on a single 401 from the SDK, calls
+ *      `resumed`, and replays the turn. Bounded at 2h reset window. Also
+ *      honors transient `retry-after` backoff. See `usage-limit-tier.ts`
+ *      and `usage-limit-pause.ts`.
+ *   3. **Auth retry** (innermost) — on a single 401 from the SDK, calls
  *      `tokenRefresher` to obtain a fresh client, swaps it in, rebuilds
- *      headers, and replays the turn once. Subsequent 401s surface.
+ *      headers, and replays the turn once. Subsequent 401s surface. See
+ *      `auth-retry-tier.ts`.
  *
  * Both retry tiers deduplicate concurrent refresh / wait calls via
  * promise fields (`refreshPromise`, `usageLimitWaitPromise`) so multiple
  * sessions racing the same refresh see only one upstream call.
+ *
+ * # Structure
+ *
+ * This file is the orchestrator: it owns the mutable session state (client,
+ * dedup promises, the stale-credential flag) and composes the tiers. Each
+ * tier is a free async generator in a sibling module receiving a
+ * {@link RetryTierContext} of live accessors — a class cannot be physically
+ * split across files, and the tiers must observe post-construction mutations
+ * (tests assign `tokenRefresher` after the fact) rather than captured values.
  *
  * # Writable client
  *
@@ -36,52 +50,24 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'node:crypto';
 import type { ProviderEvent } from '../../../provider.js';
-import { runTurn } from '../loop.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
-import { classifyUsageLimitError, waitForReset, waitForHotSwap } from '../usage-limit.js';
-import {
-  classifyOverloadExhaustion,
-  nextProbeDelayMs,
-  resolveOverloadPauseCeilingMs,
-} from '../overload-pause.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../../cli/keychain.js';
-import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
-import { emitSessionPhase } from '../../../trace/emit.js';
-import type {
-  AnthropicClientLike,
-  AuthMode,
-  RunTurnInput,
-} from '../types.js';
+import type { AnthropicClientLike, AuthMode, RunTurnInput } from '../types.js';
+import type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
+import { turnWithAuthRetry } from './auth-retry-tier.js';
+import { turnWithUsageLimitRetry } from './usage-limit-tier.js';
+import { turnWithOverloadPause } from './overload-pause-tier.js';
 
-/**
- * Both the total usage-limit polling budget and the maximum reset lead time the
- * layer will wait out. Exported so surfaces that *describe* this behaviour to
- * the user (see `cli/quota-footer.ts`) can be drift-tested against the real
- * threshold instead of hardcoding a second copy of it.
- */
-export const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-
-// Transient rate-limit (429 + retry-after header, no `|ts`) replay budget.
-// The SDK has already auto-retried twice by the time the error surfaces here,
-// but on account-level RPM/ITPM collisions (e.g. several daemon cron sessions
-// firing at once) two quick retries are not enough — the correct behavior is
-// to honor `retry-after` patiently and replay the turn, instead of dying in
-// seconds. Bounded per turn so a persistent limit still surfaces as an error.
-export const RATE_LIMIT_TRANSIENT_MAX_RETRIES = 3;
-/** Cap on a single retry-after wait — a server hint beyond this surfaces the error path sooner. */
-export const RATE_LIMIT_RETRY_MAX_WAIT_MS = 120_000;
-/** Fallback wait when the classification carries no usable `retryAfterMs`. */
-const RATE_LIMIT_RETRY_DEFAULT_WAIT_MS = 5_000;
-/** Small random jitter added to each wait so concurrent sessions de-synchronize. */
-const RATE_LIMIT_RETRY_JITTER_MS = 1_000;
-
-// Invariant: a 429 with no reset timestamp gives no deadline to wait on, so the
-// no-ts path poll-retries the turn on this fixed cadence to probe whether the
-// limit has lifted (while still waking immediately on a keychain hot-swap).
-// Each probe is a single cheap rejected request; the loop is bounded at
-// TWO_HOURS_MS total so a never-resetting limit eventually surfaces the error.
-const NO_TS_RETRY_INTERVAL_MS = 60 * 1000;
+// Re-exported so the historical `from './retry-layer.js'` import paths stay
+// valid after the #824 split. `cli/quota-footer.ts` drift-tests against
+// TWO_HOURS_MS, and the tier modules read the rest.
+export {
+  TWO_HOURS_MS,
+  RATE_LIMIT_TRANSIENT_MAX_RETRIES,
+  RATE_LIMIT_RETRY_MAX_WAIT_MS,
+} from './retry-constants.js';
+export type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
 
 /** Constructor options for {@link RetryLayer}. */
 export interface RetryLayerOptions {
@@ -101,7 +87,7 @@ export interface RetryLayerOptions {
   /**
    * User-facing surface that produced this session (`AgentConfig.surface`,
    * plumbed index.ts → query.ts → here). The ONLY consumer is
-   * {@link resolveOverloadPauseCeilingMs}: interactive surfaces may park on an
+   * `resolveOverloadPauseCeilingMs`: interactive surfaces may park on an
    * upstream 529, daemon/cron must fail fast. Optional/back-compat — undefined
    * is treated as non-interactive (fail fast), which is the safe default.
    */
@@ -123,7 +109,7 @@ export class RetryLayer {
   private readonly surface?: string;
 
   private refreshPromise: Promise<Anthropic | null> | null = null;
-  private usageLimitWaitPromise: Promise<'aborted' | 'timer' | 'hot-swap'> | null = null;
+  private usageLimitWaitPromise: Promise<UsageLimitWaitResult> | null = null;
   /**
    * Contract: set on the three paths where an OAuth usage-limit error
    * (`oauth-limit` / `oauth-limit-no-ts`) is surfaced to the caller WITHOUT a
@@ -155,23 +141,60 @@ export class RetryLayer {
   }
 
   /** Auth mode the session was constructed with. Immutable. */
+  get authMode(): AuthMode {
+    return this._authMode;
+  }
+
   /**
    * Rebuild per-request headers for a replay (fresh request id). Re-evaluates
    * the 1h-cache beta rather than reusing the original header map, so a replay
    * never asks for a TTL whose activating beta it dropped.
    */
-  private rotateHeaders(): Record<string, string> {
+  private rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode'>): Record<string, string> {
     return buildRequestHeaders(
       this._authMode,
       this.initSessionId,
       randomUUID(),
-      undefined,
+      runInput.effort !== undefined,
       isExtendedCacheTtlActive({ ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) }),
+      runInput.fastMode === true,
     );
   }
 
-  get authMode(): AuthMode {
-    return this._authMode;
+  /**
+   * Live view handed to the extracted tiers.
+   *
+   * Invariant: every member is a getter or a method, never a captured value.
+   * `tokenRefresher` is assigned after construction by the OAuth retry suite,
+   * and `getClient()` must return the post-swap reference — snapshotting
+   * either would silently disable refresh-and-replay.
+   */
+  private tierContext(): RetryTierContext {
+    const layer = this;
+    return {
+      get authMode() {
+        return layer._authMode;
+      },
+      get surface() {
+        return layer.surface;
+      },
+      get autoResumeOnUsageLimit() {
+        return layer.autoResumeOnUsageLimit;
+      },
+      get tokenRefresher() {
+        return layer.tokenRefresher;
+      },
+      getClient: () => layer._client,
+      rotateHeaders: (runInput) => layer.rotateHeaders(runInput),
+      forceClientRefresh: () => layer.forceClientRefresh(),
+      getUsageLimitWait: () => layer.usageLimitWaitPromise,
+      setUsageLimitWait: (p) => {
+        layer.usageLimitWaitPromise = p;
+      },
+      markCredentialSnapshotStale: () => {
+        layer.credentialSnapshotStale = true;
+      },
+    };
   }
 
   /**
@@ -186,8 +209,8 @@ export class RetryLayer {
    * We have to construct a new client.
    *
    * Used by:
-   *   - The hot-swap branches of {@link turnWithUsageLimitRetry} (mid-turn,
-   *     after a keychain token change is detected by the wait loops).
+   *   - The hot-swap branches of the usage-limit tier (mid-turn, after a
+   *     keychain token change is detected by the wait loops).
    *   - The `/reauth` slash command (between turns, when the user manually
    *     requests an account swap or proactive refresh).
    *
@@ -235,7 +258,7 @@ export class RetryLayer {
   }
 
   /**
-   * Run a single turn through both retry tiers. `isClosed` is invoked
+   * Run a single turn through every retry tier. `isClosed` is invoked
    * between events; when it returns true the generator short-circuits
    * so a concurrent `close()` cuts the turn off cleanly.
    *
@@ -262,482 +285,16 @@ export class RetryLayer {
       const refreshed = await this.forceClientRefresh();
       if (refreshed) {
         runInput.client = this._client as unknown as AnthropicClientLike;
-        runInput.headers = this.rotateHeaders();
+        runInput.headers = this.rotateHeaders(runInput);
       }
       this.credentialSnapshotStale = false;
     }
-    yield* this.turnWithOverloadPause(runInput, isClosed);
-  }
-
-  /**
-   * Outermost tier: bounded pause + replay after a mid-stream overload (529)
-   * exhausts its in-loop retry budget (#762).
-   *
-   * Invariant: this tier keys on the CLEAN `turn.completed` sentinel
-   * {@link classifyOverloadExhaustion} matches, NOT on an `error` event. A
-   * mid-stream 529 is `new APIError(undefined, <SSE body>, …)` with
-   * `status === undefined`, so `classifyUsageLimitError` rejects it at
-   * `usage-limit.ts:111` and every pause branch in the usage-limit tier is
-   * structurally unreachable for it. Loosening that status check would let
-   * unrelated status-less errors into the 2-hour subscription park, so the
-   * sentinel is the classification arm instead.
-   *
-   * Ceilings are plain WALL CLOCK because a 529 carries no reset timestamp —
-   * there is nothing for `waitForReset` to key on. Interactive surfaces park up
-   * to {@link OVERLOAD_PAUSE_CEILING_MS}; daemon/cron default to 0 (fail fast).
-   *
-   * Every exit path re-yields the preserved terminal, so the session ALWAYS
-   * seals with a real `closure`: a pause that ends in silence would just
-   * re-create the 38-and-63-minute hangs this issue is about. Because the
-   * preserved terminal is the turn-committing `turn.completed`, even the
-   * ceiling-exhausted path keeps the session resumable.
-   */
-  private async *turnWithOverloadPause(
-    runInput: RunTurnInput,
-    isClosed: () => boolean,
-  ): AsyncGenerator<ProviderEvent, void, void> {
-    const ceilingMs = resolveOverloadPauseCeilingMs(this.surface);
-    // Invariant: the ceiling is measured from when the PARK begins, never from
-    // turn start — otherwise the initial turn's own duration silently eats the
-    // operator's pause budget, and a long turn could exhaust the ceiling before
-    // a single probe fires. Set on the first exhaustion, then held.
-    let pauseStartedAt: number | null = null;
-    let pauseEmitted = false;
-
-    for (;;) {
-      let exhausted: ProviderEvent | null = null;
-      for await (const event of this.turnWithUsageLimitRetry(runInput, isClosed)) {
-        if (classifyOverloadExhaustion(event)) {
-          exhausted = event;
-          break;
-        }
-        yield event;
-      }
-
-      // Invariant: `overload_resume` means GENUINE recovery, so it is emitted
-      // only once the inner stream has ended WITHOUT re-exhausting. A probe that
-      // re-exhausts still forwards `OVERLOAD_EXHAUSTED_NOTICE` and any partial
-      // deltas BEFORE its sentinel terminal, so gating the resume on "first
-      // forwarded event" logged a phantom `outcome: 'recovered'` on every probe
-      // — up to 9 per 10-minute park, each followed by a fresh `overload_pause`.
-      if (!exhausted) {
-        if (pauseEmitted && pauseStartedAt !== null) {
-          void emitSessionPhase(runInput.traceWriter, {
-            phase: 'overload_resume',
-            durationMs: Date.now() - pauseStartedAt,
-            metadata: { source: 'retry-layer', outcome: 'recovered' },
-          });
-        }
-        return;
-      }
-
-      // Fail-fast surfaces (daemon/cron by default) and an already-ended session
-      // surface the preserved terminal immediately. Abort is checked FIRST so a
-      // user interrupt always wins over a pause (AbortGraph precedence).
-      if (isClosed() || runInput.signal.aborted || ceilingMs === 0) {
-        yield exhausted;
-        return;
-      }
-
-      pauseStartedAt ??= Date.now();
-      const remainingMs = ceilingMs - (Date.now() - pauseStartedAt);
-      if (remainingMs <= 0) {
-        // Ceiling reached: stop probing and surface the preserved terminal so a
-        // real `closure` is emitted. Never exits silently.
-        if (pauseEmitted) {
-          void emitSessionPhase(runInput.traceWriter, {
-            phase: 'overload_resume',
-            durationMs: Date.now() - pauseStartedAt,
-            metadata: { source: 'retry-layer', outcome: 'ceiling-reached' },
-          });
-        }
-        yield exhausted;
-        return;
-      }
-
-      if (!pauseEmitted) {
-        void emitSessionPhase(runInput.traceWriter, {
-          phase: 'overload_pause',
-          metadata: {
-            reason: 'overloaded',
-            source: 'retry-layer',
-            hasResetTimestamp: false,
-            ceilingMs,
-            surface: this.surface ?? 'unknown',
-          },
-        });
-        pauseEmitted = true;
-      }
-
-      // Jittered probe interval — a 529 gives no deadline, so all we can do is
-      // re-probe capacity while spreading concurrent sessions apart. Clamped to
-      // the REMAINING budget: an unclamped sleep made `ceilingMs` advisory
-      // rather than a wall clock (a 1ms ceiling still parked a full 60s, and the
-      // 10-minute default overran by nearly two).
-      await sleepWithAbort(Math.min(nextProbeDelayMs(), remainingMs), runInput.signal);
-      if (isClosed() || runInput.signal.aborted) return;
-
-      runInput.headers = this.rotateHeaders();
-      // Invariant: reset the surface BEFORE replaying. The failed attempt's
-      // partial deltas and its notice were already forwarded, so without this a
-      // recovering probe's output renders appended to the dead attempt's text.
-      // Same contract as the in-round reset in `loop.ts`.
-      yield { type: 'stream.retry', sessionId: runInput.ctx.sessionId };
-    }
-  }
-
-  /**
-   * Outer tier: intercept 429 usage-limit errors and (when enabled)
-   * wait+replay. Deduplicates concurrent wait calls via
-   * {@link usageLimitWaitPromise}.
-   *
-   * Handles two sub-kinds:
-   *   - `oauth-limit`      — 429 with `|<unix-ts>` reset timestamp: wait for
-   *     the deadline (or a hot-swap), then replay. Reset windows beyond 2h are
-   *     surfaced immediately without waiting.
-   *   - `oauth-limit-no-ts` — 429 without a timestamp (API omitted it): emit
-   *     `paused` with no `resetsAt`, then poll-retry the turn on a fixed cadence
-   *     (and wake immediately on a hot-swap) until the limit lifts, the user
-   *     aborts, or the 2h cap is hit. Stays in the `paused` state across failed
-   *     probes and emits `resumed` only once the limit genuinely lifts.
-   *
-   * Additionally handles `rate-limit-transient` (429 + `retry-after` header,
-   * no `|ts`): wait out the server's backoff hint (clamped + jittered) and
-   * silently replay the turn, up to {@link RATE_LIMIT_TRANSIENT_MAX_RETRIES}
-   * attempts per turn, after which the error surfaces as before.
-   */
-  private async *turnWithUsageLimitRetry(
-    runInput: RunTurnInput,
-    isClosed: () => boolean,
-  ): AsyncGenerator<ProviderEvent, void, void> {
-    let pendingErrorEvent: ProviderEvent | null = null;
-    let resetsAt: Date | null = null;
-    let noTimestamp = false;
-    // Per-turn transient 429 replay budget. Local to this generator, so each
-    // user turn gets a fresh RATE_LIMIT_TRANSIENT_MAX_RETRIES attempts.
-    let rateLimitRetries = 0;
-
-    for (;;) {
-      let transientRetryAfterMs: number | undefined;
-      let sawTransient = false;
-
-      for await (const event of this.turnWithAuthRetry(runInput, isClosed)) {
-        if (event.type === 'error') {
-          const c = classifyUsageLimitError(event.error);
-          if (c && c.kind === 'oauth-limit') {
-            resetsAt = c.resetsAt;
-            pendingErrorEvent = event;
-            break;
-          }
-          if (c && c.kind === 'oauth-limit-no-ts') {
-            noTimestamp = true;
-            pendingErrorEvent = event;
-            break;
-          }
-          // `rate-limit-transient` (a standard API rate-limit 429, distinct
-          // from OAuth subscription exhaustion) does NOT enter the pause/
-          // wait paths below. The SDK has already auto-retried it twice, but
-          // on account-level RPM/ITPM collisions (several daemon sessions
-          // firing at once) that is not enough: honor `retry-after` here and
-          // replay the turn, bounded at RATE_LIMIT_TRANSIENT_MAX_RETRIES per
-          // turn. Once the budget is exhausted this branch stops matching
-          // and the error surfaces via `yield event` below — never parked in
-          // a 2-hour subscription-reset poll. See classifyUsageLimitError.
-          if (
-            c &&
-            c.kind === 'rate-limit-transient' &&
-            rateLimitRetries < RATE_LIMIT_TRANSIENT_MAX_RETRIES
-          ) {
-            sawTransient = true;
-            transientRetryAfterMs = c.retryAfterMs;
-            break;
-          }
-        }
-        yield event;
-      }
-
-      if (!sawTransient) break;
-
-      rateLimitRetries += 1;
-      if (isClosed() || runInput.signal.aborted) return;
-
-      // Honor the server's backoff hint, clamped so a pathological header
-      // cannot park the turn indefinitely; add jitter so concurrent sessions
-      // hitting the same account limit de-synchronize their replays.
-      const baseWaitMs = Math.min(
-        transientRetryAfterMs ?? RATE_LIMIT_RETRY_DEFAULT_WAIT_MS,
-        RATE_LIMIT_RETRY_MAX_WAIT_MS,
-      );
-      const waitMs = baseWaitMs + Math.floor(Math.random() * RATE_LIMIT_RETRY_JITTER_MS);
-      // Witness layer: record the backoff so the replayed round is legible in
-      // the trace (mirrors loop.ts's mid-stream overload phase). Fire-and-
-      // forget; trace latency must never stall the retry.
-      void emitSessionPhase(runInput.traceWriter, {
-        phase: 'rate_limit',
-        metadata: {
-          reason: 'retry-after',
-          source: 'retry-layer',
-          attempt: rateLimitRetries,
-          waitMs,
-        },
-      });
-      await sleepWithAbort(waitMs, runInput.signal);
-      if (isClosed() || runInput.signal.aborted) return;
-
-      // Rotate the request id before replaying (mirrors the oauth-limit
-      // resume paths). Same client, same token — only the headers refresh.
-      runInput.headers = this.rotateHeaders();
-      // Loop: replay the turn.
-    }
-
-    if (!pendingErrorEvent) {
-      return;
-    }
-
-    // ── oauth-limit-no-ts path ─────────────────────────────────────────────
-    // No reset timestamp available, so there is no authoritative deadline to
-    // wait on. We poll-retry the turn on NO_TS_RETRY_INTERVAL_MS — replaying to
-    // probe whether the limit has lifted — while still waking immediately on a
-    // keychain hot-swap. We stay in the `paused` state across failed probes and
-    // emit `resumed` only once the limit genuinely lifts, so the UI's
-    // "auto-resume when the limit resets" promise is actually kept on a
-    // same-account reset (previously this path waited on a hot-swap ONLY, so a
-    // same-account reset never resumed and the session hung forever). Bounded at
-    // TWO_HOURS_MS — past that the error surfaces instead of polling forever.
-    if (noTimestamp) {
-      const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
-      yield { type: 'paused', reason: 'usage-limit', accountId, autoResume: this.autoResumeOnUsageLimit };
-      // Witness layer: a usage-limit park is otherwise invisible in the trace —
-      // the turn simply stops emitting for up to two hours. Record it so the
-      // stall is legible (mirrors the `rate_limit` phase for transient backoff).
-      // Fire-and-forget; trace latency must never stall the pause/resume.
-      void emitSessionPhase(runInput.traceWriter, {
-        phase: 'usage_limit_pause',
-        metadata: {
-          reason: 'usage-limit',
-          source: 'retry-layer',
-          hasResetTimestamp: false,
-          autoResume: this.autoResumeOnUsageLimit,
-        },
-      });
-
-      if (!this.autoResumeOnUsageLimit) {
-        // Fail-fast (autoResumeOnUsageLimit=false, e.g. a subagent fork): no
-        // replay follows, so the operator's fix — logging into a different
-        // account — needs the NEXT turn to pick up the new credential
-        // without a manual `/reauth`. See `credentialSnapshotStale` above.
-        this.credentialSnapshotStale = true;
-        yield pendingErrorEvent;
-        return;
-      }
-
-      const startedAt = Date.now();
-      let resumeEmitted = false;
-      for (;;) {
-        let noTsResult: 'aborted' | 'hot-swap' | 'timer';
-        if (this.usageLimitWaitPromise) {
-          // A concurrent session already waiting — dedup by treating any
-          // resolve as 'aborted' since we can't share this wait.
-          noTsResult = 'aborted';
-        } else {
-          this.usageLimitWaitPromise = waitForHotSwap({
-            signal: runInput.signal,
-            retryAfterMs: NO_TS_RETRY_INTERVAL_MS,
-          });
-          try {
-            noTsResult = await this.usageLimitWaitPromise;
-          } finally {
-            this.usageLimitWaitPromise = null;
-          }
-        }
-
-        if (noTsResult === 'aborted') return;
-
-        let resumedAccountId = accountId;
-        if (noTsResult === 'hot-swap') {
-          // hot-swap: new token in keychain. The Anthropic SDK caches
-          // `authToken` at construction, so we MUST rebuild the client — not
-          // just the headers — or the replayed turn keeps sending the prior
-          // account's bearer token and re-hits the same 429. On refresh failure
-          // fall through with the existing client (mirrors the oauth-limit hot-
-          // swap path); the timer probe may still succeed once the same-account
-          // limit resets.
-          const refreshed = await this.forceClientRefresh();
-          if (refreshed) {
-            runInput.client = this._client as unknown as AnthropicClientLike;
-            resumedAccountId = refreshed.accountId;
-          }
-        }
-        runInput.headers = this.rotateHeaders();
-
-        // Replay the turn. Peek the stream: if the FIRST thing it does is
-        // re-hit a usage limit we are still limited — stay paused and wait
-        // again. Otherwise the limit lifted: emit `resumed` once, then stream.
-        let reLimited: ProviderEvent | null = null;
-        for await (const event of this.turnWithAuthRetry(runInput, isClosed)) {
-          if (!resumeEmitted && event.type === 'error') {
-            const c = classifyUsageLimitError(event.error);
-            if (c && (c.kind === 'oauth-limit' || c.kind === 'oauth-limit-no-ts')) {
-              reLimited = event;
-              break;
-            }
-          }
-          if (!resumeEmitted) {
-            yield { type: 'resumed', hotSwapped: noTsResult === 'hot-swap', accountId: resumedAccountId };
-            void emitSessionPhase(runInput.traceWriter, {
-              phase: 'usage_limit_resume',
-              durationMs: Date.now() - startedAt,
-              metadata: { source: 'retry-layer', hotSwapped: noTsResult === 'hot-swap' },
-            });
-            resumeEmitted = true;
-          }
-          yield event;
-        }
-
-        // Resumed (or the turn ended without re-limiting) — done.
-        if (!reLimited) return;
-
-        if (Date.now() - startedAt > TWO_HOURS_MS) {
-          // Limit never lifted within the cap — stop polling and surface it.
-          yield reLimited;
-          return;
-        }
-        // Still limited — loop and wait again (we remain in the paused state).
-      }
-    }
-
-    // ── oauth-limit path (has reset timestamp) ────────────────────────────
-    if (!resetsAt) {
-      return;
-    }
-
-    if (resetsAt.getTime() - Date.now() > TWO_HOURS_MS) {
-      // Reset too far in the future — surface the error without waiting.
-      // No replay follows this bail either, so mark the snapshot stale (see
-      // `credentialSnapshotStale`) — same reasoning as the no-ts fail-fast.
-      this.credentialSnapshotStale = true;
-      yield pendingErrorEvent;
-      return;
-    }
-
-    const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
-    const pausedAt = Date.now();
-    // External constraint: this event must carry `autoResume` BEFORE the
-    // autoResumeOnUsageLimit branch below decides what comes next, so the UI
-    // layer can render truthful copy on the very first paint of the panel.
-    // If we deferred this signal to the resumed/error event, the panel would
-    // briefly mislead the user with stale "send the message again" instructions.
-    yield {
-      type: 'paused',
-      reason: 'usage-limit',
-      resetsAt,
-      accountId,
-      autoResume: this.autoResumeOnUsageLimit,
-    };
-    // Witness layer: bracket the park so `afk trace show` explains the stall
-    // (see the no-ts pause above). Carries the reset deadline for context.
-    void emitSessionPhase(runInput.traceWriter, {
-      phase: 'usage_limit_pause',
-      metadata: {
-        reason: 'usage-limit',
-        source: 'retry-layer',
-        hasResetTimestamp: true,
-        autoResume: this.autoResumeOnUsageLimit,
-        resetsAt: resetsAt.toISOString(),
-      },
-    });
-
-    if (!this.autoResumeOnUsageLimit) {
-      // Fail-fast, has-resetsAt variant — same reasoning as the no-ts branch
-      // above: no replay follows, so the next turn must force a credential
-      // re-resolve instead of waiting on `/reauth`.
-      this.credentialSnapshotStale = true;
-      yield pendingErrorEvent;
-      return;
-    }
-
-    let result: 'aborted' | 'timer' | 'hot-swap';
-    if (this.usageLimitWaitPromise) {
-      result = await this.usageLimitWaitPromise;
-    } else {
-      this.usageLimitWaitPromise = waitForReset({ resetsAt, signal: runInput.signal });
-      try {
-        result = await this.usageLimitWaitPromise;
-      } finally {
-        this.usageLimitWaitPromise = null;
-      }
-    }
-
-    if (result === 'aborted') return;
-
-    let resumedAccountId = accountId;
-    if (result === 'hot-swap') {
-      // hot-swap: user logged into a different account during the wait. Same
-      // SDK-caches-authToken constraint as the no-ts path above — rebuild
-      // the client or the replayed turn keeps using the prior account's
-      // bearer token.
-      const refreshed = await this.forceClientRefresh();
-      if (refreshed) {
-        runInput.client = this._client as unknown as AnthropicClientLike;
-        resumedAccountId = refreshed.accountId;
-      }
-      // If refresh failed, fall through with the old client — the inner
-      // 401 path may still recover if the prior token has since expired.
-    }
-    // 'timer' resolution: deadline passed, same account, same token — no
-    // client rebuild needed. Headers still rotated to refresh the request-id.
-    runInput.headers = this.rotateHeaders();
-    yield { type: 'resumed', hotSwapped: result === 'hot-swap', accountId: resumedAccountId };
-    void emitSessionPhase(runInput.traceWriter, {
-      phase: 'usage_limit_resume',
-      durationMs: Date.now() - pausedAt,
-      metadata: { source: 'retry-layer', hotSwapped: result === 'hot-swap' },
-    });
-
-    yield* this.turnWithAuthRetry(runInput, isClosed);
-  }
-
-  /**
-   * Inner tier: on a single 401, refresh once and replay. Deduplicates
-   * concurrent refresh calls via {@link refreshPromise}.
-   */
-  private async *turnWithAuthRetry(
-    runInput: RunTurnInput,
-    isClosed: () => boolean,
-  ): AsyncGenerator<ProviderEvent, void, void> {
-    let authError: ProviderEvent | null = null;
-
-    for await (const event of runTurn(runInput)) {
-      if (isClosed()) return;
-      if (event.type === 'error' && this.isRetryableAuth(event.error)) {
-        authError = event;
-        break;
-      }
-      yield event;
-    }
-
-    if (!authError) return;
-
-    // Delegate to the shared refresh helper. Same dedup field
-    // (`refreshPromise`) coalesces this call with any concurrent
-    // `forceClientRefresh()` from `/reauth` or a hot-swap branch above.
-    const refreshed = await this.forceClientRefresh();
-    if (!refreshed) {
-      yield authError;
-      return;
-    }
-    runInput.client = this._client as unknown as AnthropicClientLike;
-    runInput.headers = this.rotateHeaders();
-
-    yield* runTurn(runInput);
-  }
-
-  private isRetryableAuth(error: Error): boolean {
-    return (
-      this._authMode === 'oauth' &&
-      this.tokenRefresher !== undefined &&
-      'status' in error &&
-      (error as unknown as { status: number }).status === 401
+    // Tier composition, outermost first: overload pause → usage limit → auth.
+    // Each tier receives the next as an explicit parameter, preserving the
+    // nesting the single-file version expressed through direct method calls.
+    const ctx = this.tierContext();
+    yield* turnWithOverloadPause(ctx, runInput, isClosed, (c, input, closed) =>
+      turnWithUsageLimitRetry(c, input, closed, turnWithAuthRetry),
     );
   }
 }

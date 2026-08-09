@@ -50,6 +50,9 @@ export function sumProviderUsage(a: ProviderUsage, b: ProviderUsage): ProviderUs
   };
   const out: ProviderUsage = {
     stopReason: b.stopReason ?? a.stopReason ?? null,
+    // Provider diagnostics describe the latest model call rather than a sum.
+    // Preserve them so Anthropic's observed `speed` reaches turn metadata.
+    ...(b.raw !== undefined ? { raw: b.raw } : a.raw !== undefined ? { raw: a.raw } : {}),
   };
   const inp = sumOptional(a.inputTokens, b.inputTokens);
   if (inp !== undefined) out.inputTokens = inp;

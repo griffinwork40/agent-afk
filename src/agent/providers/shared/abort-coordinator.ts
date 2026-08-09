@@ -53,7 +53,9 @@
  * @module agent/providers/shared/abort-coordinator
  */
 
-export type AbortReason = 'interrupted' | 'closed';
+import type { ProviderAbortReason } from '../../abort-reason.js';
+
+export type AbortReason = ProviderAbortReason;
 
 /** The sentinel resolved value of `closedPromise`. */
 export const CLOSED_SENTINEL = '__closed__' as const;

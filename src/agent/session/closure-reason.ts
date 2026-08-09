@@ -28,6 +28,12 @@
  *     `max_tool_use_iterations`). The provider runs a tools-stripped wind-down
  *     round first, so the session still carries the model's final summary; this
  *     reason records that the turn was nonetheless cut short by the cap.
+ *  6b. `lastStopReason === 'soft_deadline_wind_down'` → `timeout` — the SOFT
+ *     wall-clock deadline fired (subagent forks only). Same graceful shape as
+ *     the round cap: the provider ran a tools-stripped wind-down round first, so
+ *     the session carries the model's synthesized summary rather than dying
+ *     mid-work at the hard abort. Classified as `timeout` because the budget
+ *     that ran out WAS the clock — only the handling was gentler.
  *  7. a truncation stop reason (`max_tokens` / `length`) on an otherwise clean
  *     close → `truncated` — the model's final turn was cut off by the
  *     output-token ceiling, previously indistinguishable from a clean end.
@@ -38,6 +44,7 @@
 
 import type { ClosureReason } from '../trace/index.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
+import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 
 /**
  * Provider stop reasons that mean the response was cut off by the output-token
@@ -92,6 +99,16 @@ export function classifyClosureReason(i: ClosureReasonInputs): ClosureReason {
   // never `model_end_turn`: the turn did NOT end because the model was done.
   if (i.lastStopReason === OVERLOAD_EXHAUSTED) return 'abort';
   if (i.lastStopReason === 'tool_use_loop_capped') return 'iteration_cap';
+  // Sibling of the round cap above, keyed off the TIME trigger. Reuses the
+  // existing `timeout` reason rather than minting a new one: the session ended
+  // because its wall-clock budget ran out, which is exactly what `timeout`
+  // already records (see AbortOrigin/ClosureReason in trace/types.ts — "a
+  // subagent's wall-clock budget expired"). Only the HANDLING differs — the
+  // loop wound down gracefully instead of being killed mid-work by the hard
+  // abort — and handling is not what this field names. Keeping them unified
+  // also keeps the `closure-anomaly` detector correct: a child that ran out of
+  // clock is worth flagging either way.
+  if (i.lastStopReason === SOFT_DEADLINE_WIND_DOWN) return 'timeout';
   if (isTruncationStopReason(i.lastStopReason)) return 'truncated';
   return 'model_end_turn';
 }

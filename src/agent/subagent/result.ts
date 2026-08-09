@@ -12,6 +12,7 @@ import type { Message } from '../types.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
+import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -61,10 +62,19 @@ export const STREAM_INCOMPLETE = 'stream_incomplete';
  * salvage guard and the run resolves `succeeded` with the operator-facing
  * overload notice as its only content. Without this arm, mint's phase guards
  * accept that notice as a real spec/plan/research artifact.
+ *
+ * {@link SOFT_DEADLINE_WIND_DOWN} is included for exactly the same reason as
+ * {@link TOOL_USE_LOOP_CAPPED}, and the two must never be classified
+ * differently: they are the SAME mechanism (one tools-stripped synthesis round)
+ * fired by different budgets — rounds spent vs. wall-clock nearly spent. A
+ * wind-down answer is by construction "here is what I established and what
+ * remains unresolved", so omitting this arm would hand a parent model an
+ * explicitly-unfinished report as though it were a conclusion.
  */
 export function isIncompleteStopReason(stopReason: string | undefined): boolean {
   return (
     stopReason === TOOL_USE_LOOP_CAPPED ||
+    stopReason === SOFT_DEADLINE_WIND_DOWN ||
     stopReason === STREAM_INCOMPLETE ||
     stopReason === OVERLOAD_EXHAUSTED
   );
@@ -85,9 +95,11 @@ export function annotateIfIncomplete(content: string, stopReason: string | undef
   const why =
     stopReason === TOOL_USE_LOOP_CAPPED
       ? 'hit its tool-use iteration cap before finishing'
-      : stopReason === OVERLOAD_EXHAUSTED
-        ? 'was stopped by a sustained upstream overload (HTTP 529) before finishing'
-        : 'was cut off before finishing (its stream ended without a final message)';
+      : stopReason === SOFT_DEADLINE_WIND_DOWN
+        ? 'ran out of wall-clock budget and was asked to summarize early'
+        : stopReason === OVERLOAD_EXHAUSTED
+          ? 'was stopped by a sustained upstream overload (HTTP 529) before finishing'
+          : 'was cut off before finishing (its stream ended without a final message)';
   return (
     `[⚠ PARTIAL RESULT — the subagent ${why}. The text below is an incomplete ` +
     `intermediate finding, NOT a final answer; treat it as such.]\n\n${content}`

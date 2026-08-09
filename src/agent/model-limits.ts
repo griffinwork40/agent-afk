@@ -44,6 +44,15 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-opus-4-8': 128_000,
   // Claude Sonnet 5 (GA 2026-06): 128k max output (up from 64k on Sonnet 4.6).
   'claude-sonnet-5': 128_000,
+  // 'claude-sonnet-4-6' is not a first-class alias (MODEL_MAP.sonnet resolves to
+  // claude-sonnet-5) but stays reachable by its raw wire id (`--model
+  // claude-sonnet-4-6`, a config or env override) and is already priced in
+  // providers/anthropic-direct/pricing.ts. 64k is first-party per the Sonnet 5
+  // entry above — "up from 64k on Sonnet 4.6". That equals DEFAULT_MAX_OUTPUT,
+  // so this pin is a runtime no-op today; its value is making the number
+  // intentional and test-pinned rather than an accident of the fallback, so a
+  // future change to DEFAULT_MAX_OUTPUT cannot silently move 4.6's ceiling.
+  'claude-sonnet-4-6': 64_000,
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,
@@ -124,6 +133,18 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Claude Opus 5 (GA 2026-07-24): native 1M window. Base `opus` still
   // auto-compacts early via MODEL_AUTOCOMPACT_BUDGET (cost/latency policy).
   'claude-opus-5': 1_000_000,
+  // Claude Sonnet 4.6: 200k. Deliberately NOT 1M — the native-1M/"no smaller
+  // variant" claim above is specific to Sonnet 5. The 4.x line served 200k by
+  // default with 1M only behind a `context-1m` beta header, and this repo never
+  // sends one: composeBetaHeader (providers/anthropic-direct/beta-headers.ts)
+  // emits a closed set — OAuth entries, effort, extended-cache TTL, fast-mode —
+  // and no 1M beta string exists anywhere in src/. So 200k is correct BY
+  // CONSTRUCTION for every request this codebase can issue, regardless of what
+  // the API might serve behind a header we do not send. This equals the
+  // Anthropic DEFAULT_CONTEXT_LIMIT fallback, so the pin is a no-op today; it
+  // guards the asymmetry — under-reporting only compacts early, over-reporting
+  // suppresses compaction and yields hard API errors mid-run.
+  'claude-sonnet-4-6': 200_000,
   // OpenAI flagship + cost-tier models (windows per OpenAI platform docs
   // as of 2026-Q1). Listed here so the openai-compatible provider's
   // getContextUsage() returns an accurate percentage instead of the

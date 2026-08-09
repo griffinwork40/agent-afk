@@ -102,7 +102,18 @@ function makeNonZeroAgg(): InsightAggregates {
       totalOutputTokens: 120000,
       totalCacheReadTokens: 800000,
       totalCacheCreationTokens: 40000,
-      totalCostUsd: 3.1415,
+      // Deliberately ~3x sessions.totalCostUsd (3.1415, above) — mirrors the
+      // real-world undercount from issue #864, where trace-derived cost is
+      // authoritative and the narrower session-sidecar total is not.
+      // Diverging the two fixture values lets a test pin which source the
+      // rendered cost actually came from.
+      //
+      // Keep BOTH literals at exactly 4 decimals: `formatCost` renders via
+      // `safeNum(usd, 4)` → `toFixed(4)`, so the sentinel assertion
+      // `not.toContain('3.1415')` only works while the fixture value matches
+      // the rendered string byte-for-byte. A 3- or 5-decimal value here would
+      // silently make that assertion vacuous rather than failing loudly.
+      totalCostUsd: 9.4245,
       sessionsWithCost: 12,
     },
     daemon: {
@@ -130,6 +141,40 @@ function makeNonZeroAgg(): InsightAggregates {
       overflowKills: { web_scrape: 2 },
     },
   };
+}
+
+/**
+ * Simulates AFK_TRACE_DISABLED=1 (or a legacy install predating the
+ * witness-trace system): no trace coverage at all — `traces.totalTracedSessions`
+ * and `traces.totalCostUsd` are both 0, since no trace.jsonl is ever written
+ * for that population — but the session sidecar still recorded real spend.
+ * Exercises the sidecar-cost fallback in html.ts (review comment on PR #933 /
+ * issue #864 follow-up).
+ */
+function makeSidecarOnlyAgg(): InsightAggregates {
+  const agg = makeZeroAgg();
+  agg.sessions.totalSessions = 10;
+  agg.sessions.totalCostUsd = 4.2;
+  agg.sessions.totalTokens = 5000;
+  return agg;
+}
+
+/**
+ * Trace coverage EXISTS but is entirely unpriced: `totalTracedSessions > 0`
+ * while `traces.totalCostUsd === 0`, and the sidecar still holds real spend.
+ * Realistic trigger is a wide `--days` window straddling the witness-trace
+ * rollout, where every traced session ran on a local ($0) model. Distinct
+ * from makeSidecarOnlyAgg (no trace coverage at all): this is the branch a
+ * `totalTracedSessions > 0` predicate would misread as a genuine zero.
+ */
+function makeZeroTraceCostAgg(): InsightAggregates {
+  const agg = makeZeroAgg();
+  agg.sessions.totalSessions = 8;
+  agg.sessions.totalCostUsd = 7.5;
+  agg.sessions.totalTokens = 4000;
+  agg.traces.totalTracedSessions = 12;
+  agg.traces.totalCostUsd = 0;
+  return agg;
 }
 
 const NO_RECS: Recommendation[] = [];
@@ -191,7 +236,80 @@ describe('generateHtml', () => {
 
   it('non-zero aggregates: totalCostUsd rendered correctly', () => {
     const html = generateHtml(makeNonZeroAgg(), SOME_RECS, OPTS);
-    expect(html).toContain('3.1415'); // cost value
+    expect(html).toContain('9.4245'); // cost value — trace-sourced, see below
+  });
+
+  it('regression #864: Cost and Sessions cost cards render the trace aggregate, not the narrower session sidecar', () => {
+    // The headline previously read `sessions.totalCostUsd` (sidecar), whose
+    // coverage is narrower than the witness-trace aggregate on real
+    // datasets (sessions with no sidecar still have a trace) — undercounting
+    // spend by ~3x. The fixture deliberately diverges the two totals
+    // (traces: 9.4245 vs. sessions: 3.1415) so a regression to the sidecar
+    // source is provably caught here rather than passing silently.
+    const agg = makeNonZeroAgg();
+    const html = generateHtml(agg, SOME_RECS, OPTS);
+    expect(agg.traces.totalCostUsd).not.toBe(agg.sessions.totalCostUsd); // fixture sanity
+    expect(html).toContain('9.4245'); // traces.totalCostUsd — authoritative, must be present
+    expect(html).not.toContain('3.1415'); // sessions.totalCostUsd — narrower value must not leak as a displayed cost
+  });
+
+  it('fallback: no trace coverage (AFK_TRACE_DISABLED=1 / legacy install) falls back to sidecar cost instead of hiding it', () => {
+    // totalTracedSessions === 0 is absence of trace signal, not a genuine
+    // zero-cost result — the Cost section must not render "No cost data"
+    // and the Sessions card must not render "$0.00" while the sidecar still
+    // holds real spend.
+    const agg = makeSidecarOnlyAgg();
+    const html = generateHtml(agg, NO_RECS, OPTS);
+
+    expect(agg.traces.totalTracedSessions).toBe(0); // fixture sanity
+    expect(agg.traces.totalCostUsd).toBe(0); // fixture sanity
+
+    // Cost section: sidecar total rendered, not the "no cost data" placeholder.
+    const costSection = html.slice(html.indexOf('id="cost"'), html.indexOf('id="tool-usage"'));
+    expect(costSection).not.toContain('No cost data');
+    expect(costSection).toContain('$4.2000');
+
+    // Sessions section's "Total Cost" card: sidecar total, not $0.00.
+    const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
+    expect(sessionsSection).toContain('$4.2000');
+    expect(sessionsSection).not.toContain('$0.00');
+  });
+
+  it('fallback: traced sessions exist but report zero cost — sidecar spend is still rendered, not hidden', () => {
+    // Guards the predicate itself: keying the source on `totalTracedSessions > 0`
+    // (rather than on the trace COST) would treat this unpriced-but-traced
+    // window as a genuine $0 and discard real sidecar spend — the same failure
+    // class as #864, one layer down. Only branch of resolveCost() that
+    // distinguishes the two predicates, so it is the regression guard.
+    const agg = makeZeroTraceCostAgg();
+    const html = generateHtml(agg, NO_RECS, OPTS);
+
+    expect(agg.traces.totalTracedSessions).toBeGreaterThan(0); // fixture sanity
+    expect(agg.traces.totalCostUsd).toBe(0); // fixture sanity
+    expect(agg.sessions.totalCostUsd).toBeGreaterThan(0); // fixture sanity
+
+    const costSection = html.slice(html.indexOf('id="cost"'), html.indexOf('id="tool-usage"'));
+    expect(costSection).not.toContain('No cost data');
+    expect(costSection).toContain('$7.5000');
+
+    const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
+    expect(sessionsSection).toContain('$7.5000');
+    expect(sessionsSection).not.toContain('$0.00');
+  });
+
+  it('sidecar-scoped cost breakdowns are captioned so they cannot be misread as contradicting the trace-sourced total', () => {
+    // The "Total Cost" card is trace-sourced while "Cost by Model" / "Cost by
+    // Day" remain sidecar-sourced (TraceAggregates has no per-model/per-day
+    // split), so the two can legitimately disagree — 9.4245 vs 3.14 on this
+    // fixture. Without the caption that reads as the #864 bug, relocated.
+    const html = generateHtml(makeNonZeroAgg(), NO_RECS, OPTS);
+    const sessionsSection = html.slice(html.indexOf('id="sessions"'), html.indexOf('id="cost"'));
+
+    expect(sessionsSection).toContain('Cost by Model');
+    expect(sessionsSection).toContain('Cost by Day');
+    // One caption per cost chart, and none attached to the session-count chart.
+    const captions = sessionsSection.split('may not sum to Total Cost above').length - 1;
+    expect(captions).toBe(2);
   });
 
   it('output does NOT contain string "responseExcerpt"', () => {

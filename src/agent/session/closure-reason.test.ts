@@ -9,6 +9,7 @@ import {
   isTruncationStopReason,
   type ClosureReasonInputs,
 } from './closure-reason.js';
+import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 
 const base: ClosureReasonInputs = {
   dispatchReason: 'close',
@@ -47,6 +48,19 @@ describe('classifyClosureReason', () => {
     expect(
       classifyClosureReason({ ...base, lastStopReason: 'tool_use_loop_capped' }),
     ).toBe('iteration_cap');
+  });
+
+  it('reports timeout when the SOFT wall-clock deadline wound the turn down', () => {
+    // The graceful wall-clock path (#938). Classified as `timeout` because the
+    // budget that ran out WAS the clock — only the handling was gentler than
+    // the hard abort. Distinct from the round cap above, which stays
+    // `iteration_cap`, so the two budgets never get conflated in telemetry.
+    expect(
+      classifyClosureReason({ ...base, lastStopReason: SOFT_DEADLINE_WIND_DOWN }),
+    ).toBe('timeout');
+    expect(
+      classifyClosureReason({ ...base, lastStopReason: SOFT_DEADLINE_WIND_DOWN }),
+    ).not.toBe('iteration_cap');
   });
 
   it('an abort signal outranks the iteration cap', () => {

@@ -29,6 +29,14 @@
  * reaching the cap the loop runs ONE final wind-down round with tools stripped
  * so the model produces a real answer instead of stopping silently.
  *
+ * Deadline semantics: `softDeadlineMs` is the TIME sibling of that cap, armed
+ * by subagent forks from their wall-clock budget. Once a round boundary falls
+ * past it the loop enters the SAME wind-down, so a slow-but-working child
+ * synthesizes an answer instead of being killed mid-work by the hard
+ * `withTimeout` abort — which stays armed underneath as the backstop for a
+ * genuinely wedged one. Both triggers are checked per round; the round cap wins
+ * a tie. See providers/shared/soft-deadline.ts.
+ *
  * Mutation contract: `runTurn` mutates `input.messages` in place — appending
  * the assistant turn's content blocks and a follow-up user turn carrying
  * `tool_result` blocks for every tool-use round. Callers must read
@@ -54,7 +62,11 @@ import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
 import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
 import { resolveMaxToolIterations } from '../shared/tool-loop-cap.js';
 import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from './overload-pause.js';
-import { OVERLOAD_MAX_RETRIES, RoundRetryBudget } from './loop/retry-budget.js';
+import {
+  OVERLOAD_MAX_RETRIES,
+  RoundRetryBudget,
+  ttfbAttemptTimeoutMs,
+} from './loop/retry-budget.js';
 import { handleRoundRetry, type RoundRetryContext } from './loop/round-retry.js';
 import { openRound } from './loop/round-request.js';
 import { consumeRoundStream } from './loop/stream-consumer.js';
@@ -84,6 +96,14 @@ export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
+  // TIME sibling of the round cap: `0`/unset means no soft deadline (the
+  // top-level default, where a human owns the turn). Taken RAW, deliberately —
+  // this value is already the OUTPUT of `resolveSoftDeadlineMs` at the arming
+  // site (subagent.ts / dag-subagent.ts), and that function maps a HARD budget
+  // to a soft deadline, so re-applying it here would subtract a second reserve
+  // and fire the wind-down early. No sanitizing is needed: `softDeadlineExpired`
+  // already treats `<= 0` and NaN as "never fires".
+  const softDeadlineMs = input.softDeadlineMs ?? 0;
 
   // Three collaborators, three lifetimes — see each class for its reset
   // discipline. `turn` survives the whole turn, `retry` is released at every
@@ -100,14 +120,18 @@ export async function* runTurn(
     requestStartedAt,
   });
 
-  // Per-round time-to-first-token stall bound (issue #583). A degrading upstream
-  // call that never streams a first CONTENT token (text/thinking delta or
-  // tool_use — message_start + pings do NOT count) is aborted at this bound and
-  // retried ONCE per round, then surfaces as an error — instead of hanging up to
-  // the SDK's ~10-min default. `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
-  // The single retry reuses the createWithRetry attempt budget model so it
-  // cannot stack on top of the overload backoff into a longer worst case.
-  const ttfbTimeoutMs = resolveTtfbTimeoutMs();
+  // Per-ATTEMPT time-to-first-token stall bound (issue #583). A degrading
+  // upstream call that never streams a first CONTENT token (text/thinking delta
+  // or tool_use — message_start + pings do NOT count) is aborted at this bound
+  // and re-driven while the round's counted TTFB budget holds allowance, then
+  // surfaces as an error — instead of hanging up to the SDK's ~10-min default.
+  // `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
+  //
+  // The env var stays the per-ROUND budget; `ttfbAttemptTimeoutMs` divides it
+  // into TTFB_MAX_ATTEMPTS shorter attempts so the worst case is bounded by the
+  // pre-count regime's (2 × configured) for EVERY configured value — see the
+  // arithmetic Invariant in loop/retry-budget.ts.
+  const ttfbTimeoutMs = ttfbAttemptTimeoutMs(resolveTtfbTimeoutMs());
   // Per-round POST-first-byte stall bound (issue #762). The TTFB bound above is
   // cleared by the first content token, so before this a stream that stalled
   // mid-flight had NO bound of any kind: two real sessions hung 38.9 and 63.5
@@ -142,8 +166,10 @@ export async function* runTurn(
     if (opened.kind === 'terminated') return;
 
     if (opened.kind === 'retry-ttfb') {
-      // Connection-phase TTFB timeout: re-drive once. Shares the once-per-round
-      // allowance with the mid-stream TTFB path via the same retry handler.
+      // Connection-phase TTFB timeout: re-drive. Shares ONE counted per-round
+      // allowance with the mid-stream TTFB path via the same retry handler, so a
+      // round that alternates between the two stall shapes still gets exactly
+      // TTFB_MAX_ATTEMPTS first-byte attempts in total.
       const redrive = yield* handleRoundRetry('ttfb', retryContext(opened.requestStartedAt));
       if (redrive === 'terminated') return;
       continue;
@@ -258,7 +284,7 @@ export async function* runTurn(
     }
 
     turn.addRoundUsage(
-      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model),
+      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model, input.fastMode ? 'fast' : undefined),
     );
     // Surface per-round cumulative usage so getContextUsage() reflects mid-turn
     // growth on the status line. Fires on every round including the terminal
@@ -274,7 +300,7 @@ export async function* runTurn(
     // stopReason === 'tool_use' — dispatch the tools, commit the results, and
     // decide whether the turn keeps going. The whole history mutation contract
     // (assistant push, rollback on throw, tool_result commit) lives inside.
-    const round = yield* runToolRound(turnResult, input, turn, maxIterations);
+    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
   }
   } finally {

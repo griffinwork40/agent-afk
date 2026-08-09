@@ -210,3 +210,99 @@ describe('deriveCallCostUsd — dated wire ids fall back to dateless rows (#911)
     expect(deriveCallCostUsd('claude-unknown-99', 1000, 500, 0, 0)).toBeUndefined();
   });
 });
+
+describe('deriveCallCostUsd — Fast-tier Opus pricing', () => {
+  it('prices standard Opus 5 unchanged when no speed is supplied', () => {
+    // Guard: the Fast parameter is additive. Every pre-existing caller omits
+    // it and must bill exactly what it did before Fast mode existed.
+    expect(deriveCallCostUsd('claude-opus-5', M, M, 0, 0)).toBeCloseTo(30.0, 8);
+    expect(deriveCallCostUsd('claude-opus-5', M, M, 0, 0, undefined, {})).toBeCloseTo(30.0, 8);
+    expect(
+      deriveCallCostUsd('claude-opus-5', M, M, 0, 0, undefined, { requestSpeed: 'standard' }),
+    ).toBeCloseTo(30.0, 8);
+  });
+
+  it('bills Fast-tier Opus 5 at exactly 2x every standard rate', () => {
+    // $5/$25 standard -> $10/$50 fast. 1M in + 1M out = $60.
+    const fast = deriveCallCostUsd('claude-opus-5', M, M, 0, 0, undefined, {
+      requestSpeed: 'fast',
+    })!;
+    const standard = deriveCallCostUsd('claude-opus-5', M, M, 0, 0)!;
+    expect(fast).toBeCloseTo(60.0, 8);
+    expect(fast).toBeCloseTo(standard * 2, 8);
+  });
+
+  it('doubles cache read and BOTH cache-write TTL rates, not just input/output', () => {
+    // Regression guard for the interaction with #915: the Fast multiplier must
+    // ride on top of the 5m/1h split rather than collapsing it back to one rate.
+    const read = deriveCallCostUsd('claude-opus-5', 0, 0, M, 0, undefined, {
+      requestSpeed: 'fast',
+    })!;
+    expect(read).toBeCloseTo(1.0, 8); // 0.50 standard -> 1.00 fast
+
+    const w5m = deriveCallCostUsd('claude-opus-5', 0, 0, 0, M, { ephemeral5m: M, ephemeral1h: 0 }, {
+      requestSpeed: 'fast',
+    })!;
+    const w1h = deriveCallCostUsd('claude-opus-5', 0, 0, 0, M, { ephemeral5m: 0, ephemeral1h: M }, {
+      requestSpeed: 'fast',
+    })!;
+    expect(w5m).toBeCloseTo(12.5, 8); // 6.25 -> 12.5
+    expect(w1h).toBeCloseTo(20.0, 8); // 10.0 -> 20.0
+    expect(w1h).toBeGreaterThan(w5m);
+  });
+
+  it('bills the cache-creation residual at the doubled 1h rate under Fast', () => {
+    // #915's residual rule must survive the Fast multiplier.
+    const cost = deriveCallCostUsd('claude-opus-5', 0, 0, 0, 1000, {
+      ephemeral5m: 500,
+      ephemeral1h: 200,
+    }, { requestSpeed: 'fast' })!;
+    const expected = (500 / M) * 12.5 + (200 / M) * 20.0 + (300 / M) * 20.0;
+    expect(cost).toBeCloseTo(expected, 8);
+  });
+
+  it('lets the observed response speed override the requested speed', () => {
+    // Anthropic may decline a Fast request and serve standard — bill what was
+    // served, not what was asked for.
+    expect(
+      deriveCallCostUsd('claude-opus-5', M, 0, 0, 0, undefined, {
+        requestSpeed: 'fast',
+        responseSpeed: 'standard',
+      }),
+    ).toBeCloseTo(5.0, 8);
+    expect(
+      deriveCallCostUsd('claude-opus-5', M, 0, 0, 0, undefined, {
+        requestSpeed: 'standard',
+        responseSpeed: 'fast',
+      }),
+    ).toBeCloseTo(10.0, 8);
+  });
+
+  it('applies Fast rates to Opus 4.8, including its dated wire id', () => {
+    // Fast eligibility must compose with #914's dated-id fallback.
+    expect(
+      deriveCallCostUsd('claude-opus-4-8', M, M, 0, 0, undefined, { requestSpeed: 'fast' }),
+    ).toBeCloseTo(60.0, 8);
+    expect(
+      deriveCallCostUsd('claude-opus-4-8-20260528', M, M, 0, 0, undefined, {
+        requestSpeed: 'fast',
+      }),
+    ).toBeCloseTo(60.0, 8);
+  });
+
+  it('ignores a fast flag on models Anthropic does not serve on the Fast tier', () => {
+    // Only anchored Opus 5 / 4.8 are Fast-eligible. A stray flag must never
+    // inflate an ineligible model's cost.
+    for (const model of ['claude-sonnet-5', 'claude-opus-4-6', 'claude-opus-4-5-20250929']) {
+      const fast = deriveCallCostUsd(model, M, M, 0, 0, undefined, { requestSpeed: 'fast' });
+      const standard = deriveCallCostUsd(model, M, M, 0, 0);
+      expect(fast, `fast must not change ${model}`).toBeCloseTo(standard!, 8);
+    }
+  });
+
+  it('still returns undefined for an unknown model asked to price as fast', () => {
+    expect(
+      deriveCallCostUsd('claude-unknown-99', 1000, 500, 0, 0, undefined, { requestSpeed: 'fast' }),
+    ).toBeUndefined();
+  });
+});

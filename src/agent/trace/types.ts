@@ -60,6 +60,7 @@ export interface ToolCallStartedPayload {
 export const TOOL_FAILURE_CLASSES = [
   'policy-refusal',
   'timeout',
+  'budget',
   'permission-denied',
   'hook-block',
   'abort',
@@ -84,6 +85,8 @@ export const TOOL_FAILURE_CLASSES = [
  *                              subagent_lifecycle `failed` payload (own-budget expiry)
  *                              and, for a cascaded ancestor-timeout, via the `cancelled`
  *                              payload's `timeout` flag.
+ *   - `budget`               — the session-wide cost ceiling aborted the call. Like `timeout`,
+ *                              this is deliberately non-benign and remains visible in stats.
  *   - `permission-denied`    — permission gate or read-only-skill bash gate denied the call.
  *   - `hook-block`           — a PreToolUse hook returned `decision: 'block'`.
  *   - `abort`                — the call's AbortSignal was already fired.
@@ -100,7 +103,7 @@ export const TOOL_FAILURE_CLASSES = [
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
  * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
- * excluded from failure stats entirely — while `timeout`, `denial-breaker`, and
+ * excluded from failure stats entirely — while `timeout`, `budget`, `denial-breaker`, and
  * unclassified failures still count. That split is `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
@@ -728,8 +731,11 @@ export type SessionPhaseName =
   | 'interrupt_halt'
   | 'rate_limit'
   // Client-side time-to-first-byte watchdog re-drive: OUR timer fired because no
-  // content token arrived within `AFK_MODEL_TTFB_TIMEOUT_MS` (default 180s), so
-  // the request was aborted and re-driven once. Deliberately NOT `rate_limit`:
+  // content token arrived within the per-attempt bound (⌊2/3⌋ of
+  // `AFK_MODEL_TTFB_TIMEOUT_MS` — 120s at the 180s default), so the request was
+  // aborted and re-driven while the round's counted budget still had allowance.
+  // `metadata.attempt` is the 1-based index of the re-drive being served.
+  // Deliberately NOT `rate_limit`:
   // nothing throttled us and there is no server retry-after — conflating the two
   // made a self-inflicted 3-minute stall read as provider throttling in every
   // trace (5 such stalls in one `/ground-state` pre-flight were misattributed
