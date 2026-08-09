@@ -40,6 +40,7 @@ import {
 } from './index.js';
 import { harvestFlagsFromSkillMd, parseSkillMd } from '../cli/slash/_lib/flag-harvest.js';
 import { SubagentManager } from '../agent/subagent.js';
+import { substituteSkillArgs } from '../agent/tools/skill-executor/arg-substitution.js';
 import type { IAgentSession } from '../agent/types.js';
 
 interface ParsedSkillMd {
@@ -190,7 +191,16 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
       },
       config: {
         model: subagentModel,
-        systemPrompt: parsed.body,
+        // Invariant: $ARGUMENT/$ARGUMENTS/$N placeholders are substituted before
+        // the fork is configured, matching the plugin fork path
+        // (fork-dispatch.ts) and the load paths. Args are ALSO carried on the
+        // child's user message above; that is deliberate and symmetric with
+        // plugins — the message anchors "which skill and what was asked", while
+        // the body placeholder lets an author position the args precisely.
+        // Without this, a user- or project-authored SKILL.md using `context:
+        // fork` received its own placeholders verbatim while an identical
+        // plugin-authored skill got them expanded.
+        systemPrompt: substituteSkillArgs(parsed.body, typeof input === 'string' ? input : undefined),
         env: { SKILL_ROOT: parsed.dir },
         // Invariant: like the plugin/registry dispatch paths in
         // skill-executor.ts, a user-authored skill is dispatched AS a specific
