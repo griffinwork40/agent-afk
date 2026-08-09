@@ -14,9 +14,11 @@
  * src/agent/model-limits.ts.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from './model-limits.js';
 import { resolveEffectiveMaxOutputTokens } from './providers/openai-compatible/query/model-params.js';
+import { resolveMaxTokens } from './providers/anthropic-direct/resolve-params.js';
+import type { AgentConfig } from './types/config-types.js';
 
 describe('autoCompactLimitFor', () => {
   it('caps the default sonnet alias at the 200k working budget (not its 1M window)', () => {
@@ -99,6 +101,79 @@ describe('maxOutputTokensFor — GPT-5.6 family output ceiling', () => {
 
   it('still honours an explicit config.maxOutputTokens override', () => {
     expect(resolveEffectiveMaxOutputTokens('gpt-5.6', 8_000)).toBe(8_000);
+  });
+});
+
+describe('resolveEffectiveMaxOutputTokens — over-ceiling clamp + cross-provider parity (#953)', () => {
+  // The openai-compatible path used to forward an over-ceiling cap verbatim and
+  // let the provider 400 it, while anthropic-direct clamped down to the ceiling.
+  // Same config key, same intent, two outcomes. These pin the fixed contract:
+  // both providers resolve the SAME number for the same (model, cap) — for
+  // models with a KNOWN ceiling. See the "does NOT clamp ... unknown/
+  // provider-prefixed model id" test below for the deliberate exception (no
+  // guessed-ceiling clamp).
+  const cfg = (maxOutputTokens?: number): AgentConfig =>
+    ({ maxOutputTokens } as unknown as AgentConfig);
+
+  it('clamps an over-ceiling cap down to the model ceiling, warning exactly once', () => {
+    const model = 'gpt-5.6'; // 128k ceiling, known
+    const ceiling = maxOutputTokensFor(model);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(resolveEffectiveMaxOutputTokens(model, ceiling + 500_000)).toBe(ceiling);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      // The dedupe Set is keyed by (model, requested) and is module-scope, so a
+      // second call with the SAME pair must not warn again — order matters:
+      // this asserts it within one test (two calls, same args) rather than
+      // relying on cross-test ordering, so it can't flake against test order.
+      expect(resolveEffectiveMaxOutputTokens(model, ceiling + 500_000)).toBe(ceiling);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('falls back to the 64k DEFAULT_MAX_OUTPUT guess for unlisted local runners when no explicit cap is given', () => {
+    const local = 'mlx-community/some-local-model'; // unlisted → 64k guess
+    const ceiling = maxOutputTokensFor(local);
+    expect(ceiling).toBe(64_000);
+    expect(resolveEffectiveMaxOutputTokens(local, undefined)).toBe(64_000);
+  });
+
+  it('does NOT clamp an explicit over-64k cap for an unknown/provider-prefixed model id (regression guard)', () => {
+    // Any `/`-prefixed id routes to this provider (providers/index.ts) but most
+    // are NOT in MODEL_MAX_OUTPUT_TOKENS — so the 64k DEFAULT_MAX_OUTPUT is a
+    // guess, not a documented ceiling. Before this guard, an explicit
+    // --max-output-tokens above 64k on e.g. mlx-community/<model> was silently
+    // clamped down to the guess; the fix forwards it unchanged instead, since
+    // clamping to a guessed limit doesn't prevent a provider 400 — it just
+    // silently degrades a request the provider might actually honour.
+    for (const model of ['mlx-community/some-model', 'openrouter/gpt-5.5']) {
+      expect(resolveEffectiveMaxOutputTokens(model, 128_000), model).toBe(128_000);
+    }
+  });
+
+  it('returns the same number as anthropic-direct resolveMaxTokens for the same (model, cap)', () => {
+    const model = 'gpt-5.6';
+    const ceiling = maxOutputTokensFor(model);
+    for (const cap of [undefined, 8_000, ceiling, ceiling + 500_000, Number.POSITIVE_INFINITY]) {
+      expect(resolveEffectiveMaxOutputTokens(model, cap), `cap=${cap}`).toBe(
+        resolveMaxTokens(cfg(cap), model),
+      );
+    }
+  });
+
+  it('returns the same number as anthropic-direct resolveMaxTokens for a non-adaptive Anthropic model (haiku)', () => {
+    // The test above only exercised gpt-5.6 (openai-compatible-routed). This
+    // covers the non-adaptive Anthropic family on the SAME openai-compatible
+    // helper, pinning that the parity invariant isn't accidentally gpt-5.x-only.
+    const model = 'claude-haiku-4-5-20251001'; // known 64k ceiling, non-adaptive
+    const ceiling = maxOutputTokensFor(model);
+    for (const cap of [undefined, 8_000, ceiling, ceiling + 500_000, Number.POSITIVE_INFINITY]) {
+      expect(resolveEffectiveMaxOutputTokens(model, cap), `cap=${cap}`).toBe(
+        resolveMaxTokens(cfg(cap), model),
+      );
+    }
   });
 });
 

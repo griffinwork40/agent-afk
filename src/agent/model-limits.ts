@@ -73,21 +73,31 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
 const DEFAULT_MAX_OUTPUT = 64_000;
 
 /**
- * Look up the max-output-tokens cap for a given model identifier.
- * Accepts short aliases and full IDs; unknown models fall back to 64k.
+ * Look up the max-output-tokens cap for a model identifier, but ONLY when it
+ * is explicitly listed in {@link MODEL_MAX_OUTPUT_TOKENS}. Returns `undefined`
+ * for unknown ids instead of the {@link DEFAULT_MAX_OUTPUT} guess, so callers
+ * can tell a documented ceiling apart from a fallback — e.g. deciding whether
+ * clamping an explicit user-supplied cap is safe (see
+ * `providers/openai-compatible/query/model-params.ts:resolveEffectiveMaxOutputTokens`,
+ * which must not clamp a `mlx-community/…` or `openrouter/…` id down to a
+ * guessed number the provider may not actually enforce).
  */
-export function maxOutputTokensFor(model: ClaudeModel | string): number {
+export function maxOutputTokensForKnown(model: ClaudeModel | string): number | undefined {
   const lowered = String(model).trim().toLowerCase();
   // Preserve explicit *_1m aliases (a context-window choice) before resolution.
   const oneM = MODEL_MAX_OUTPUT_TOKENS[lowered];
   if (lowered.endsWith('_1m') && oneM !== undefined) return oneM;
   // Resolve slot alias → bound id so a rebound tier gets the correct cap.
   const id = resolveModelInput(model) ?? String(model);
-  return (
-    MODEL_MAX_OUTPUT_TOKENS[id] ??
-    MODEL_MAX_OUTPUT_TOKENS[id.toLowerCase()] ??
-    DEFAULT_MAX_OUTPUT
-  );
+  return MODEL_MAX_OUTPUT_TOKENS[id] ?? MODEL_MAX_OUTPUT_TOKENS[id.toLowerCase()];
+}
+
+/**
+ * Look up the max-output-tokens cap for a given model identifier.
+ * Accepts short aliases and full IDs; unknown models fall back to 64k.
+ */
+export function maxOutputTokensFor(model: ClaudeModel | string): number {
+  return maxOutputTokensForKnown(model) ?? DEFAULT_MAX_OUTPUT;
 }
 
 /**

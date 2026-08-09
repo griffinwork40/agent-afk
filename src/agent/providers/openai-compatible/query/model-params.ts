@@ -8,8 +8,17 @@
  */
 
 import type { EffortLevel } from '../../../types/sdk-types.js';
-import { maxOutputTokensFor } from '../../../model-limits.js';
+import { maxOutputTokensFor, maxOutputTokensForKnown } from '../../../model-limits.js';
 import { isOSeriesModel, isReasoningModel } from '../../../model-capabilities.js';
+
+/**
+ * Module-scope dedupe for over-ceiling clamp warnings, keyed so a single
+ * misconfiguration warns once per process rather than once per turn. Parallel
+ * to — but independent of — `warnedTokenClamps` in the anthropic-direct
+ * `resolve-params.ts`: same key format, separate module scope, so the same
+ * misconfiguration warns once per PROVIDER, not once per process.
+ */
+const warnedTokenClamps = new Set<string>();
 
 /**
  * Resolve the effective output-token cap (a plain number).
@@ -18,6 +27,20 @@ import { isOSeriesModel, isReasoningModel } from '../../../model-capabilities.js
  * to the model's output ceiling (matching Anthropic's resolveMaxTokens).  Uses
  * maxOutputTokensFor (output ceiling), not contextLimitFor (context window),
  * because the cap bounds *output*, not the full context window.
+ *
+ * An over-ceiling value is clamped down to the model's limit with a one-time
+ * warning — the same contract as anthropic-direct's `resolveMaxTokens` (#953).
+ * Without this, an over-large cap reached the wire verbatim and the provider
+ * rejected it; the asymmetry hit hardest on local runners (MLX/llama.cpp/vLLM)
+ * whose real output limit is below the 64k `DEFAULT_MAX_OUTPUT` fallback. The
+ * invariant: both providers return the same number for the same `(model, cap)`
+ * — but ONLY when the model's ceiling is actually known. The clamp is skipped
+ * for ids `maxOutputTokensForKnown` doesn't recognize (any `/`-prefixed id —
+ * OpenRouter, mlx-community, Qwen, … — routes to this provider per
+ * `providers/index.ts`): `maxOutputTokensFor`'s 64k `DEFAULT_MAX_OUTPUT` is a
+ * guess for those ids, not a documented ceiling, and clamping an explicit
+ * user-supplied cap down to a guess doesn't prevent a provider 400 — it just
+ * silently degrades a request the provider might actually honour.
  *
  * Field-name selection (`max_tokens` vs `max_completion_tokens` vs
  * `max_output_tokens`) is the caller's concern — it differs by wire mode:
@@ -29,9 +52,22 @@ export function resolveEffectiveMaxOutputTokens(
   configMaxOutput: number | undefined,
 ): number {
   const ceiling = maxOutputTokensFor(model);
-  return typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0
-    ? Math.floor(configMaxOutput)
-    : ceiling;
+  if (typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0) {
+    const requested = Math.floor(configMaxOutput);
+    const knownCeiling = maxOutputTokensForKnown(model);
+    if (knownCeiling !== undefined && requested > knownCeiling) {
+      const key = `max:${model}:${requested}`;
+      if (!warnedTokenClamps.has(key)) {
+        warnedTokenClamps.add(key);
+        console.warn(
+          `[afk] maxOutputTokens ${requested} exceeds the ${model} output ceiling (${knownCeiling}); clamping to ${knownCeiling}.`,
+        );
+      }
+      return knownCeiling;
+    }
+    return requested;
+  }
+  return ceiling;
 }
 
 /**

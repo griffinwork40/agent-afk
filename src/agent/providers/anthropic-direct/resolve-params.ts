@@ -112,6 +112,11 @@ export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined
  *    produced server-side but stripped before delivery), so this field is
  *    *required* to surface visible reasoning.  On earlier models it is
  *    harmless — the server already defaults to visible delivery.
+ *
+ * @throws when thinking resolves to `enabled` (non-adaptive model) and
+ *   `maxTokens <= 1024`: no `budget_tokens` can satisfy the API's
+ *   `1024 <= budget < max_tokens`, so the request is unsatisfiable and we fail
+ *   fast with a legible message rather than taking a per-turn HTTP 400 (#951).
  */
 export function resolveThinkingParam(
   tc: ThinkingConfig,
@@ -133,13 +138,33 @@ export function resolveThinkingParam(
         // These models reject {type:'enabled'}; silently promote to adaptive.
         return { type: 'adaptive', display: 'summarized' } as ThinkingConfigParam;
       }
+      // Contract: the Messages API requires `1024 <= budget_tokens < max_tokens`
+      // for enabled thinking. That interval is empty once `max_tokens <= 1024`
+      // (the 1024 floor can no longer satisfy the strict `< max_tokens` upper
+      // bound), so no valid budget exists — unlike the over-ceiling case there
+      // is nothing to clamp *to*. Fail fast with a legible error naming both
+      // escape hatches instead of emitting `budget_tokens == max_tokens` and
+      // taking an opaque HTTP 400 on every turn (#951). Reachable by default,
+      // not opt-in: `--thinking` defaults to `enabled:max` on both `afk chat`
+      // and `afk interactive`, so the real trigger is an explicit output cap
+      // <= 1024 — `--max-output-tokens` or a stale `AFK_MAX_OUTPUT_TOKENS` —
+      // on a non-adaptive model (haiku, fable-5, raw sonnet-4-6); opus-5 and
+      // sonnet-5 still route to adaptive above regardless of the cap.
+      if (maxTokens <= 1024) {
+        throw new Error(
+          `[afk] Extended thinking requires max_tokens > 1024 (the API constraint is ` +
+            `1024 <= budget_tokens < max_tokens), but the resolved output cap is ${maxTokens}. ` +
+            `Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS above 1024, or disable thinking ` +
+            `with --thinking disabled.`,
+        );
+      }
       // Thinking tokens share the `max_tokens` budget, so reserve a slice for
       // the visible reply and cap the thinking budget to fit. The cap applies
       // to caller-supplied budgets too — an oversized explicit budget is
       // clamped (with a one-time warning) rather than honoured blindly.
-      // `budget_tokens` must satisfy 1024 <= budget < max_tokens; when the
-      // reserve cannot be honoured (very small max_tokens) the upper bound
-      // wins so the request still clears the `< max_tokens` constraint.
+      // `budget_tokens` must satisfy 1024 <= budget < max_tokens; the guard
+      // above guarantees `max_tokens > 1024`, so the 1024 floor here always
+      // clears the strict upper bound.
       const reserve = Math.floor(maxTokens * THINKING_OUTPUT_RESERVE_FRACTION);
       const maxBudget = Math.max(1024, maxTokens - 1 - reserve);
       const explicit =

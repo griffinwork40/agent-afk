@@ -186,6 +186,40 @@ describe('resolveThinkingParam', () => {
     }
   });
 
+  // #951: max_tokens <= 1024 leaves no valid budget (the API needs
+  // 1024 <= budget < max_tokens, an empty interval here). Fail fast with a
+  // legible error instead of emitting budget == max_tokens and 400ing every turn.
+  it('throws for max_tokens <= 1024 on an enabled (non-adaptive) model', () => {
+    for (const max of [1_024, 512, 100, 1]) {
+      expect(() => resolveThinkingParam(enabled(), max, RESERVE_MODEL), `max=${max}`).toThrow(
+        /Extended thinking requires max_tokens > 1024/,
+      );
+    }
+  });
+
+  it('does NOT throw at max_tokens = 1025 (smallest satisfiable) and keeps budget < max_tokens', () => {
+    const p = resolveThinkingParam(enabled(), 1_025, RESERVE_MODEL) as {
+      budget_tokens?: number;
+    };
+    expect(p.budget_tokens).toBe(1_024);
+    expect(p.budget_tokens ?? 0).toBeLessThan(1_025);
+  });
+
+  it('does NOT throw for a tiny max_tokens on adaptive-promoted models (guard runs after promotion)', () => {
+    // opus-5 / sonnet-5 promote enabled → adaptive before the budget math, so a
+    // tiny cap never reaches the #951 guard — no throw, no budget leak.
+    for (const m of ['claude-sonnet-5', 'claude-opus-5']) {
+      const p = resolveThinkingParam(enabled(), 512, m) as { type: string; budget_tokens?: number };
+      expect(p.type, m).toBe('adaptive');
+      expect(p.budget_tokens, m).toBeUndefined();
+    }
+  });
+
+  it('never throws for adaptive or disabled configs regardless of max_tokens', () => {
+    expect(() => resolveThinkingParam({ type: 'adaptive' }, 100, RESERVE_MODEL)).not.toThrow();
+    expect(() => resolveThinkingParam({ type: 'disabled' }, 100, RESERVE_MODEL)).not.toThrow();
+  });
+
   it('promotes enabled to adaptive on opus-4.7+ (no explicit budget leaks through)', () => {
     const p = resolveThinkingParam(enabled(60_000), 64_000, 'claude-opus-4-8') as {
       type: string;
