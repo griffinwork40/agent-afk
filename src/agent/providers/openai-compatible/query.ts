@@ -709,7 +709,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // applied AFTER the priorTurns push above: the notice is operator-facing
     // and must not enter conversation history.
     const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
-      ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason)
+      ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
+          // The ChatGPT OAuth Responses backend rejects every output-cap
+          // parameter, so advertising our cap setting there is ineffective.
+          canIncreaseOutputLimit: !(
+            this.opts.auth.source === 'chatgpt-oauth' &&
+            accumulatedUsage.stopReason === 'max_output_tokens'
+          ),
+        })
       : null;
     yield {
       type: 'assistant.message',

@@ -92,16 +92,23 @@ function sentinelLabel(stopReason: string | null | undefined): string {
 export function truncationNotice(
   droppedToolNames: string[],
   stopReason?: string | null,
+  options: { canIncreaseOutputLimit?: boolean } = {},
 ): string {
   const base =
     `⚠ This turn was cut off at the output-token limit (${sentinelLabel(stopReason)}) before the ` +
     'model finished — anything above is partial, not a complete answer.';
   if (droppedToolNames.length > 0) {
     const names = [...new Set(droppedToolNames)].join(', ');
+    const remediation = options.canIncreaseOutputLimit === false
+      ? 'Continue in a follow-up turn or retry so the model can finish the action.'
+      : 'Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS, then retry.';
     return (
       `${base} A tool call was truncated mid-request and was NOT dispatched (${names}); ` +
-      'that action did not run. Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS, then retry.'
+      `that action did not run. ${remediation}`
     );
+  }
+  if (options.canIncreaseOutputLimit === false) {
+    return `${base} Continue in a follow-up turn or retry the request.`;
   }
   return `${base} Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS to allow a longer reply.`;
 }
