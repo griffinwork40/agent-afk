@@ -117,6 +117,7 @@ import type { InteractiveCtx } from './shared.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { runTurn } from './turn-handler.js';
 import * as slashMod from '../../slash/registry.js';
+import * as pluginSkillsMod from '../../slash/plugin-skills.js';
 import { createHookRegistry } from '../../../agent/hooks.js';
 import { HookBlockedError } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
@@ -196,6 +197,49 @@ beforeEach(() => {
     return { handled: false as const };
   });
   delete process.env.AFK_SHELL_PASSTHROUGH;
+});
+
+describe('runReplLoop — plugin shadowing notices are not debug-gated', () => {
+  it('surfaces collision notices on a default (non-debug) run', async () => {
+    // Regression: the notice assignment used to sit behind `isDebugEnabled()`,
+    // which this file mocks to `false` — so on every default run a shadowed
+    // plugin command was suppressed and discoverable only via `/skills`. The
+    // gate belonged to the adjacent debug BANNER, not to these notices; the two
+    // were conflated. With `isDebugEnabled: () => false` still in force, the
+    // notice must reach the renderer anyway.
+    vi.mocked(pluginSkillsMod.getPluginShadowingNoticeLines).mockReturnValue([
+      '  /mint: vendored or user skill wins; plugin form /example-plugin:mint stays reachable.',
+    ]);
+    // Two reads: iteration 1 lets the waitForInitialization().then() chain
+    // settle (it awaits autoRegisterPluginPassthroughs), iteration 2 flushes
+    // the pending notices at the top of the loop before exiting.
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('/example-plugin:mint'))).toBe(true);
+  });
+
+  it('stays silent when nothing collided', async () => {
+    // The no-collision path is the common one — an empty array must not emit a
+    // blank line or a header. Guards against "fix the gate, add noise instead".
+    vi.mocked(pluginSkillsMod.getPluginShadowingNoticeLines).mockReturnValue([]);
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('stays reachable'))).toBe(false);
+  });
 });
 
 describe('runReplLoop — seed-buffer auto-submit fast-path (multi-iteration)', () => {

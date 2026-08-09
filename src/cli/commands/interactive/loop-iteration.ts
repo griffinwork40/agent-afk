@@ -137,9 +137,16 @@ export async function runInputLoop(
     // Vendored or user skills win bare-name collisions with plugin skills —
     // surface a one-time dim notice telling the user where the shadowed
     // plugin form is still reachable (e.g. `/example-plugin:mint`).
-    if (isDebugEnabled()) {
-      pendingShadowingNotices = getPluginShadowingNoticeLines();
-    }
+    //
+    // Deliberately NOT gated on isDebugEnabled(), unlike the init banner
+    // above. A shadowed command is a behavioural surprise the user has to
+    // know about — their `/mint` may now resolve to a different skill than
+    // it did yesterday — not diagnostic noise. The two concerns were
+    // conflated behind one gate, which suppressed every collision notice on
+    // a default run and left shadowing discoverable only by pulling up
+    // `/skills`. Returns an empty array when nothing collided, so the
+    // common no-collision path stays silent.
+    pendingShadowingNotices = getPluginShadowingNoticeLines();
   }).catch(() => { /* init / plugin discovery non-critical */ });
 
   // Slash-command submit queue: a slash handler may return
