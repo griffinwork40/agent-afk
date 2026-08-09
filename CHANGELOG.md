@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.102.0] - 2026-08-09
+
+### Added
+- positional $N arguments and fork-path substitution parity (#964) (370865e)
+
 ## [5.101.1] - 2026-08-09
 
 ### Fixed
