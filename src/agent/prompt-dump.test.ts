@@ -636,4 +636,41 @@ describe('redactInlineSecrets', () => {
     const result = redactInlineSecrets(text);
     expect(result).toBe(text);
   });
+
+  // Issue #949: value-shape guard on the generic NAME=value rules — a
+  // filesystem-path value should survive even though the key name matches
+  // (`*_TOKEN`), but the guard must stay fail-safe against real secrets that
+  // happen to contain '/'.
+
+  it('spares a non-secret filesystem-path value (AUTH_TOKEN_PATH=/…)', () => {
+    const text = 'AUTH_TOKEN_PATH=/Users/me/.config/app/token.json';
+    const result = redactInlineSecrets(text);
+    expect(result).toBe(text);
+  });
+
+  it('spares a non-secret filesystem-path value with ~/ prefix', () => {
+    const text = 'CREDENTIAL_FILE_PATH=~/.config/app/credentials.json';
+    const result = redactInlineSecrets(text);
+    expect(result).toBe(text);
+  });
+
+  it('STILL MASKS an AWS secret access key even though it is path-shaped (fail-safe)', () => {
+    // wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY satisfies looksLikeFilesystemPath()
+    // in isolation (contains '/', no '+'/'=', every segment under the 32-char
+    // opaque-token threshold) — the path-prefix requirement ('/' or '~/') is what
+    // keeps this masked. Regressing this check unmasks a real credential shape.
+    const secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+    const text = `AWS_SECRET_ACCESS_KEY=${secret}`;
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(secret);
+    expect(result).toContain(`AWS_SECRET_ACCESS_KEY=<REDACTED length=${secret.length}>`);
+  });
+
+  it('still masks a high-entropy opaque token with no path shape', () => {
+    const secret = 'aB3xQ9zK7mN2pL5vR8tY1wC4dF6gH0jM';
+    const text = `API_TOKEN=${secret}`;
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(secret);
+    expect(result).toContain(`API_TOKEN=<REDACTED length=${secret.length}>`);
+  });
 });
