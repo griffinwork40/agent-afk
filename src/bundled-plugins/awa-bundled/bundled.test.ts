@@ -51,7 +51,7 @@ const PINNED_HASHES = {
   // convergence / ≠original+1-critic) explicitly. No frontmatter change
   // (context: load preserved). Bundled-only body; nothing to back-port.
   'devils-advocate':
-    'd301929f02180b742700060d0de094b84ffafab9e16c771b20ee0eba76cd1238',
+    'f0f7cb741f7921f04c8b00e721e4ef4190efeac9ef421e9ac7cd62a24a089526',
   // diagnose is bundled-only (no upstream counterpart). It ships
   // as the agent-driven /diagnose (context: fork) that replaced the retired
   // vendored TS orchestrator (src/skills/diagnose/). Hash bumps need no parallel
