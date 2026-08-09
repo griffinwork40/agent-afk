@@ -9,33 +9,12 @@
  */
 
 import type { ProviderEvent } from '../../../provider.js';
-import { isTruncationStopReason } from '../../shared/truncation.js';
+import { isTruncationStopReason, truncationNotice } from '../../shared/truncation.js';
 import type { RunTurnInput, TurnResult } from '../types.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /** Text at or below this length is also offered as a `suggestion`. */
 const SUGGESTION_MAX_LENGTH = 200;
-
-/**
- * Operator-facing notice for a turn cut off at the output-token cap (#952).
- * `droppedToolNames` are the `tool_use` blocks about to be stripped from
- * history below — when non-empty, the model announced an action that was
- * truncated mid-request and never dispatched, which otherwise reads as the
- * agent stalling. Display-only: not pushed to history.
- */
-function truncationNotice(droppedToolNames: string[]): string {
-  const base =
-    '⚠ This turn was cut off at the output-token limit (stop_reason "max_tokens") before the ' +
-    'model finished — anything above is partial, not a complete answer.';
-  if (droppedToolNames.length > 0) {
-    const names = [...new Set(droppedToolNames)].join(', ');
-    return (
-      `${base} A tool call was truncated mid-request and was NOT dispatched (${names}); ` +
-      'that action did not run. Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS, then retry.'
-    );
-  }
-  return `${base} Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS to allow a longer reply.`;
-}
 
 /**
  * Emit the closing events for a non-`tool_use` stop reason, pushing the
@@ -92,7 +71,7 @@ export function* emitNonToolUseTerminal(
   // the LAST assistant message of a turn, so two messages here would silently
   // discard the real answer and surface only the warning.
   const truncationText = isTruncationStopReason(turnResult.stopReason)
-    ? truncationNotice(turnResult.toolUseBlocks.map((b) => b.name))
+    ? truncationNotice(turnResult.toolUseBlocks.map((b) => b.name), turnResult.stopReason)
     : null;
 
   if (turnResult.text.length > 0) {

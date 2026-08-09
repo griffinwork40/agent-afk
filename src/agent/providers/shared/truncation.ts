@@ -48,3 +48,60 @@ export const TRUNCATION_STOP_REASONS: readonly string[] = [
 export function isTruncationStopReason(stopReason: string | null | undefined): boolean {
   return stopReason != null && TRUNCATION_STOP_REASONS.includes(stopReason);
 }
+
+/**
+ * Contract: render the wire-accurate field name for a truncation sentinel, so
+ * the notice below quotes something the operator can actually grep for in
+ * provider docs. Each wire names the field differently and only one of the
+ * three is literally called `finish_reason`.
+ */
+function sentinelLabel(stopReason: string | null | undefined): string {
+  switch (stopReason) {
+    case 'max_tokens':
+      return 'stop_reason "max_tokens"';
+    case 'length':
+      return 'finish_reason "length"';
+    case 'max_output_tokens':
+      return 'incomplete_details.reason "max_output_tokens"';
+    default:
+      return 'the provider output-token cap';
+  }
+}
+
+/**
+ * Operator-facing notice for a turn cut off at the output-token cap (#952).
+ *
+ * Shared by both providers on purpose. The anthropic-direct terminal path and
+ * the openai-compatible turn loop reach truncation through very different
+ * machinery (a `TurnResult.toolUseBlocks` array vs. a derived
+ * `finalizedToolCalls(state)` view), but the operator-visible consequence is
+ * identical, so the WORDING must not fork. A half-mirrored notice — one
+ * provider naming the dropped tool, the other not — is itself a form of
+ * provider drift, which is why this text lives here rather than in either
+ * provider's terminal module.
+ *
+ * `droppedToolNames` are the tool calls that were truncated mid-request and
+ * therefore never dispatched. When non-empty the model announced an action that
+ * did not run, which otherwise reads to the operator as the agent stalling.
+ *
+ * Display-only in both callers: appended to the yielded `assistant.message`
+ * text, never pushed into conversation history. It is an operator warning, not
+ * model context — feeding it back would teach the model it had been cut off
+ * when the transcript it sees is already complete.
+ */
+export function truncationNotice(
+  droppedToolNames: string[],
+  stopReason?: string | null,
+): string {
+  const base =
+    `⚠ This turn was cut off at the output-token limit (${sentinelLabel(stopReason)}) before the ` +
+    'model finished — anything above is partial, not a complete answer.';
+  if (droppedToolNames.length > 0) {
+    const names = [...new Set(droppedToolNames)].join(', ');
+    return (
+      `${base} A tool call was truncated mid-request and was NOT dispatched (${names}); ` +
+      'that action did not run. Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS, then retry.'
+    );
+  }
+  return `${base} Raise --max-output-tokens / AFK_MAX_OUTPUT_TOKENS to allow a longer reply.`;
+}
