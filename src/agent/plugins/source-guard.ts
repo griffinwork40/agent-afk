@@ -15,16 +15,16 @@ import { sep } from 'path';
 /**
  * Normalise plugin markdown before any frontmatter check.
  *
- * Contract: strips one leading UTF-8 BOM and converts CRLF to LF, so a
- * byte-exact `startsWith('---\n')` test behaves identically for a file
- * authored on Windows, exported by an editor that emits a BOM, or written on
- * a POSIX box. Callers MUST apply this to the raw `readFileSync` result before
- * inspecting the frontmatter delimiter — a `---\r\n` or `\uFEFF---\n` prefix
- * otherwise fails the test and the whole frontmatter block is mistaken for
- * prompt body.
+ * Contract: strips one leading UTF-8 BOM and converts both CRLF and a lone CR
+ * to LF, so a byte-exact `startsWith('---\n')` test behaves identically for a
+ * file authored on Windows, exported by an editor that emits a BOM, or written
+ * on a POSIX box. Callers MUST apply this to the raw `readFileSync` result
+ * before inspecting the frontmatter delimiter — a `---\r\n` or `\uFEFF---\n`
+ * prefix otherwise fails the test and the whole frontmatter block is mistaken
+ * for prompt body.
  */
 export function normalizeSkillSource(raw: string): string {
-  return raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  return raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
 }
 
 /**

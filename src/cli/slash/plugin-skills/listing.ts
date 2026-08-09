@@ -29,6 +29,21 @@ import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
  */
 type SkillSource = SkillManifestEntry['source'];
 
+// Invariant: keyed by SkillSource, so adding a union member is a compile error
+// here rather than a source silently missing from the legend — which is how
+// `imported` rows came to render with no legend entry explaining them.
+const LEGEND_RANK: Record<SkillSource, number> = {
+  builtin: 0,
+  user: 1,
+  project: 2,
+  plugin: 3,
+  command: 4,
+  imported: 5,
+};
+const LEGEND_ORDER = (Object.keys(LEGEND_RANK) as SkillSource[]).sort(
+  (a, b) => LEGEND_RANK[a] - LEGEND_RANK[b],
+);
+
 /** A row in the unified `/skills` listing. */
 interface ListingRow {
   /** Slash form for tab-completion / invocation, e.g. `/mint` or `/example-plugin:mint`. */
@@ -205,10 +220,7 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
   // Header + a one-line source legend listing only the sources actually present.
   ctx.out.line(palette.bold('Skills') + palette.dim(`  (${allGroups.length})`));
   const present = new Set(allGroups.map((g) => g.main.source));
-  const legend = (['builtin', 'user', 'project', 'plugin'] as const)
-    .filter((s) => present.has(s))
-    .map(friendlySource)
-    .join(' · ');
+  const legend = LEGEND_ORDER.filter((s) => present.has(s)).map(friendlySource).join(' · ');
   ctx.out.line(palette.dim(`  ${legend} — /skills <name> for details`));
 
   if (builtinGroups.length > 0) {

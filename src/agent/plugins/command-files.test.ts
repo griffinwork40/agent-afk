@@ -76,6 +76,14 @@ describe('extractPluginCommands', () => {
     expect(found[0]?.body).not.toContain('---');
   });
 
+  it('parses a CR-only command file (classic Mac line endings)', () => {
+    writeCommand('cr.md', '---\rdescription: Ship it\r---\r\rDeploy the app.\r');
+    const found = extractPluginCommands(pluginDir);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.description).toBe('Ship it');
+    expect(found[0]?.body).toBe('Deploy the app.');
+  });
+
   it('skips a path segment containing the namespace separator', () => {
     // `a:b.md` would derive the same name as `a/b.md`; registering both lets
     // the first-wins guard drop one at random.
