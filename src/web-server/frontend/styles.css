@@ -239,14 +239,58 @@ html, body {
 .tool-more:hover { color: var(--text); border-color: var(--accent); }
 
 /* ── composer ────────────────────────────────────────────────────────────── */
-.composer { border-top: 1px solid var(--border); background: var(--bg-raised); padding: 12px 20px; }
+.composer { border-top: 1px solid var(--border); background: var(--bg-raised); padding: 12px 20px; position: relative; }
 .composer.is-readonly { opacity: 0.6; }
+
+/* Slash-command menu. Anchored to the composer and floated ABOVE it so opening
+   it never reflows the transcript or shifts the textarea under the cursor. */
+.slash-menu {
+  position: absolute; bottom: 100%; left: 20px; right: 20px; z-index: 20;
+  max-height: 40vh; overflow-y: auto; margin-bottom: 6px;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+.slash-menu[hidden] { display: none; }
+.slash-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 12px; cursor: pointer; font-size: 13px;
+  border-left: 2px solid transparent;
+}
+.slash-row.is-selected { background: var(--bg-sunken); border-left-color: var(--accent); }
+.slash-name { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+.slash-row.is-selected .slash-name { font-weight: 600; }
+.slash-summary {
+  color: var(--text-dim); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.slash-badge {
+  font-size: 11px; color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 5px; white-space: nowrap; flex: none;
+}
 .composer-row { display: flex; gap: 10px; align-items: flex-end; }
-#prompt {
-  flex: 1; resize: vertical; background: var(--bg-sunken); color: var(--text);
+.prompt-wrap { flex: 1; position: relative; display: flex; }
+
+/* Invariant: #prompt and .prompt-mirror paint the SAME string on top of each
+   other, so every metric that affects text layout must be declared once, here,
+   for both. Changing font, size, line-height, padding, or border width on one
+   alone makes the highlight ghost behind the caret. */
+#prompt, .prompt-mirror {
   border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 12px; font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: break-word;
 }
+#prompt {
+  flex: 1; resize: vertical; background: transparent; position: relative; z-index: 1;
+  /* Text is transparent so the mirror shows through; the caret is not. */
+  color: transparent; caret-color: var(--text);
+}
+#prompt::placeholder { color: var(--text-faint); }
+.prompt-mirror {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  background: var(--bg-sunken); color: var(--text); border-color: transparent;
+}
+.prompt-mirror .tok-known { color: var(--accent); }
+.prompt-mirror .tok-slash { color: var(--text-faint); }
 #prompt:focus { outline: none; border-color: var(--accent); }
 #prompt:disabled { cursor: not-allowed; }
 .send {

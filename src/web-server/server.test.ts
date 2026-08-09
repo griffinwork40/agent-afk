@@ -217,6 +217,32 @@ describe('routing', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).pending).toEqual([]);
   });
+
+  /**
+   * Invariant: the command list is what the browser's autocomplete ranks
+   * against, so it must be populated in a process that never boots a REPL —
+   * the slash registry starts EMPTY here, and `handleCommands` is the only
+   * thing that fills it. A regression that skipped registration would still
+   * answer 200, just with an empty list and a silently dead dropdown.
+   */
+  it('serves the slash-command universe for autocomplete', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/commands'), {
+      headers: { authorization: `Bearer ${h.token}` },
+    });
+    expect(res.status).toBe(200);
+    const { commands } = (await res.json()) as { commands: { name: string; summary?: string }[] };
+    expect(commands.length).toBeGreaterThan(0);
+    expect(commands.every((c) => c.name.startsWith('/'))).toBe(true);
+    // A few builtins that exist regardless of the machine's installed skills.
+    expect(commands.map((c) => c.name)).toEqual(expect.arrayContaining(['/help', '/clear']));
+  });
+
+  it('requires a bearer token for the command list', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/commands'));
+    expect(res.status).toBe(401);
+  });
 });
 
 /**

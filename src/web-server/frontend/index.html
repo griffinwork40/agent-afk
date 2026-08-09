@@ -46,9 +46,16 @@
         <div id="transcript" class="transcript"></div>
         <div id="approvals" class="approvals"></div>
         <div id="composer" class="composer">
+          <div id="slash-menu" class="slash-menu" hidden></div>
           <div id="queue" class="queue"></div>
           <div class="composer-row">
-            <textarea id="prompt" rows="2" placeholder="Message the agent…"></textarea>
+            <!-- The mirror renders the highlighted copy of the textarea's text;
+                 the textarea paints its own text transparent and keeps the
+                 caret. Both must share text metrics — see styles.css. -->
+            <div class="prompt-wrap">
+              <div id="prompt-mirror" class="prompt-mirror" aria-hidden="true"></div>
+              <textarea id="prompt" rows="2" placeholder="Message the agent…"></textarea>
+            </div>
             <button id="stop" class="stop" hidden>Stop</button>
             <button id="send" class="send">Send</button>
           </div>

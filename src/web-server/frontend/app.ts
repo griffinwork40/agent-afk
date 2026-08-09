@@ -10,6 +10,8 @@
 
 import { readAndScrubToken } from './web-token.js';
 import { SessionStream } from './sse-client.js';
+import { wireComposerAffordances } from './composer-wiring.js';
+import type { CommandEntry } from '../../cli/input/slash-match.js';
 import {
   renderApprovals,
   renderSidebar,
@@ -308,6 +310,15 @@ async function stopTurn(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Invariant: composer affordances are wired BEFORE the composer itself. Both
+  // bind keydown on the same textarea and listeners fire in attachment order,
+  // so the slash menu must claim Enter before QueuePanel's submit handler runs.
+  // Reversing these two lines silently sends the prompt instead of accepting
+  // the highlighted candidate.
+  wireComposerAffordances({
+    input: $('prompt') as HTMLTextAreaElement,
+    loadCommands: async () => (await api<{ commands: CommandEntry[] }>('/api/commands')).commands,
+  });
   panel().wire();
   $('new-session').addEventListener('click', () => void createSession());
   $('stop').addEventListener('click', () => {

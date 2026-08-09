@@ -18,6 +18,7 @@ import type { CreateSessionRequest, SessionOwner } from './session-owner.js';
 import {
   handleApprove,
   handleApproveByRequestId,
+  handleCommands,
   handleCreateSession,
   handleInterrupt,
   handleListSessions,
@@ -312,6 +313,11 @@ async function dispatch(
 
   if (path === '/api/pending' && method === 'GET') {
     sendJson(res, 200, { pending: ctx.bridge.list() });
+    return;
+  }
+
+  if (path === '/api/commands' && method === 'GET') {
+    await handleCommands(res);
     return;
   }
 
