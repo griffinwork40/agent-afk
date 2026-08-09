@@ -251,6 +251,37 @@ describe('GitStatusSampler', () => {
     expect(sampler.getPr()).toBe(456); // B's PR, not A's
   });
 
+  it('discards an in-flight PR after a same-branch cwd re-anchor', async () => {
+    let resolveLaunchPr: (v: { stdout: string; stderr: string }) => void = () => {};
+    let resolveWorktreePr: (v: { stdout: string; stderr: string }) => void = () => {};
+    const launchPr = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      resolveLaunchPr = resolve;
+    });
+    const worktreePr = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      resolveWorktreePr = resolve;
+    });
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = async (file, _args, cwd) => {
+      if (file === 'git') return { stdout: 'main\n', stderr: '' };
+      return cwd === '/launch-checkout' ? launchPr : worktreePr;
+    };
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec });
+
+    await sampler.refresh(); // launch PR lookup remains in flight
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    await sampler.refresh(); // same branch, new cwd; launch lookup still deduped
+
+    resolveLaunchPr({ stdout: '10\n', stderr: '' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The launch checkout's result is rejected even though both use `main`,
+    // and settling it automatically starts a lookup in the current worktree.
+    expect(sampler.getPr()).toBeUndefined();
+
+    resolveWorktreePr({ stdout: '20\n', stderr: '' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sampler.getPr()).toBe(20);
+  });
+
   it('reset() mid-fetch discards the settling result without writing stale state', async () => {
     // Verify C2: in-flight updateBranch captures a generation token and returns
     // early if reset() has incremented it before the git call settles.

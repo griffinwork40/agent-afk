@@ -305,8 +305,11 @@ export class GitStatusSampler {
       // resolveCurrentBranchPr never throws — returns the number string or null.
       const prStr = await resolveCurrentBranchPr((file, args) => this.exec(file, args, cwd));
       if (this.disposed || this.resetToken !== token) return;
-      // Discard if the branch changed while the network call was in flight.
-      if (this.branch !== branch) return;
+      // Discard if the branch or sampled checkout changed while the network
+      // call was in flight. Distinct checkouts can have the same branch name,
+      // so the branch guard alone cannot prevent an old-cwd result from
+      // repopulating the cache after a re-anchor refresh clears it.
+      if (this.branch !== branch || this.lastSampledCwd !== cwd) return;
       const n = prStr !== null ? Number.parseInt(prStr, 10) : NaN;
       const prevPr = this.pr;
       this.pr = Number.isFinite(n) && n > 0 ? n : undefined;
@@ -314,15 +317,19 @@ export class GitStatusSampler {
       if (this.pr !== prevPr) this.notify();
     })().finally(() => {
       this.prInFlight = null;
-      // If the branch changed while this fetch was in flight, the branch guard
-      // above discarded the stale result. Kick a follow-up lookup for the
-      // current branch so its PR resolves on the next settled repaint rather
-      // than waiting for the next turn's refresh() call. Re-read getCwd() live
-      // (rather than reusing `cwd`) since the re-anchor that invalidated this
-      // fetch may itself be what changed the branch.
+      // If the branch or sampled checkout changed while this fetch was in
+      // flight, the guard above discarded the stale result. Kick a follow-up
+      // lookup so the current checkout's PR resolves on the next settled
+      // repaint rather than waiting for the next turn's refresh() call.
       const currentBranch = this.branch;
-      if (!this.disposed && currentBranch !== undefined && currentBranch !== branch) {
-        void this.maybeFetchPr(currentBranch, this.getCwd());
+      const currentCwd = this.lastSampledCwd;
+      if (
+        !this.disposed &&
+        currentBranch !== undefined &&
+        currentCwd !== undefined &&
+        (currentBranch !== branch || currentCwd !== cwd)
+      ) {
+        void this.maybeFetchPr(currentBranch, currentCwd);
       }
     });
     this.prInFlight = task;
