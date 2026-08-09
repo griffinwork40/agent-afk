@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.101.0] - 2026-08-09
+
+### Added
+- add `afk web` — local-first browser UI for live agent sessions (#932) (393010b)
+
 ## [5.100.4] - 2026-08-09
 
 ### Fixed
