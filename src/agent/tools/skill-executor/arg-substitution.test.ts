@@ -2,7 +2,7 @@
  * Tests for SKILL.md argument templating.
  *
  * `$ARGUMENTS` behaviour is pre-existing and locked here against regression;
- * positional `$N`, quoting, escaping and the single-pass property are new.
+ * positional `${N}`, quoting, escaping and the single-pass property are new.
  *
  * @module agent/tools/skill-executor/arg-substitution.test
  */
@@ -67,42 +67,48 @@ describe('substituteSkillArgs — $ARGUMENTS (pre-existing behaviour)', () => {
   });
 });
 
-describe('substituteSkillArgs — positional $N', () => {
+describe('substituteSkillArgs — positional ${N}', () => {
   it('expands 1-indexed positionals', () => {
-    expect(substituteSkillArgs('$1 then $2', 'first second')).toBe('first then second');
+    expect(substituteSkillArgs('${1} then ${2}', 'first second')).toBe('first then second');
   });
 
   it('respects quoting when assigning positions', () => {
-    expect(substituteSkillArgs('[$1] [$2]', '"hello world" second')).toBe('[hello world] [second]');
+    expect(substituteSkillArgs('[${1}] [${2}]', '"hello world" second')).toBe('[hello world] [second]');
   });
 
   it('leaves a positional with no corresponding argument VERBATIM', () => {
-    // A literal `$3` in the rendered prompt is a legible symptom of an author
+    // A literal `${3}` in the rendered prompt is a legible symptom of an author
     // bug; silently blanking it would hide the mistake.
-    expect(substituteSkillArgs('$1 $2 $3', 'only one')).toBe('only one $3');
+    expect(substituteSkillArgs('${1} ${2} ${3}', 'only one')).toBe('only one ${3}');
   });
 
-  it('leaves $0 alone — it is not a positional', () => {
-    expect(substituteSkillArgs('$0 $1', 'a b')).toBe('$0 a');
+  it('leaves ${0} alone — it is not a positional', () => {
+    expect(substituteSkillArgs('${0} ${1}', 'a b')).toBe('${0} a');
   });
 
   it('supports multi-digit positionals', () => {
     const args = 'a1 a2 a3 a4 a5 a6 a7 a8 a9 a10';
-    expect(substituteSkillArgs('$10', args)).toBe('a10');
+    expect(substituteSkillArgs('${10}', args)).toBe('a10');
   });
 
   it('coexists with $ARGUMENTS in one body', () => {
-    expect(substituteSkillArgs('all=[$ARGUMENTS] first=[$1]', 'x y')).toBe('all=[x y] first=[x]');
+    expect(substituteSkillArgs('all=[$ARGUMENTS] first=[${1}]', 'x y')).toBe('all=[x y] first=[x]');
+  });
+
+  it('leaves currency and shell field references literal', () => {
+    expect(substituteSkillArgs("Budget $1.00; awk '{print $1}'", 'first')).toBe(
+      "Budget $1.00; awk '{print $1}'",
+    );
   });
 });
 
 describe('substituteSkillArgs — escaping', () => {
   it('renders an escaped placeholder literally, minus the backslash', () => {
-    expect(substituteSkillArgs('\\$1 and \\$ARGUMENTS', 'a b')).toBe('$1 and $ARGUMENTS');
+    expect(substituteSkillArgs('\\${1} and \\$ARGUMENTS', 'a b')).toBe('${1} and $ARGUMENTS');
   });
 
   it('still expands unescaped placeholders alongside escaped ones', () => {
-    expect(substituteSkillArgs('\\$1 but $2', 'a b')).toBe('$1 but b');
+    expect(substituteSkillArgs('\\${1} but ${2}', 'a b')).toBe('${1} but b');
   });
 });
 
@@ -110,10 +116,10 @@ describe('substituteSkillArgs — single-pass property', () => {
   it('does not re-expand a placeholder that appears inside the args', () => {
     // The load-bearing guarantee: two sequential .replace() passes would let
     // the positional pass rewrite text the $ARGUMENTS pass just inserted.
-    expect(substituteSkillArgs('[$ARGUMENTS]', '$1 literal')).toBe('[$1 literal]');
+    expect(substituteSkillArgs('[$ARGUMENTS]', '${1} literal')).toBe('[${1} literal]');
   });
 
   it('does not re-expand when a positional token itself contains a placeholder', () => {
-    expect(substituteSkillArgs('[$1]', '"$2 stays" other')).toBe('[$2 stays]');
+    expect(substituteSkillArgs('[${1}]', '"${2} stays" other')).toBe('[${2} stays]');
   });
 });

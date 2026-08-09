@@ -8,7 +8,7 @@
  * read-only by contract.
  *
  * Argument templating used to live here too; it moved to `arg-substitution.ts`
- * when positional (`$1`) support landed, and is re-exported below.
+ * when positional (`${1}`) support landed, and is re-exported below.
  *
  * @module agent/tools/skill-executor/load-mode
  */
@@ -158,7 +158,7 @@ export function executeLoadedPluginSkill(
   return formatLoadedSkillResult(skillName, substituted, args);
 }
 
-// Argument templating moved to `./arg-substitution.js` when positional (`$1`)
+// Argument templating moved to `./arg-substitution.js` when positional (`${1}`)
 // support landed. Re-exported here because this module was its published home
 // and both the forked plugin path and the user-skill dispatch import it.
 export { substituteSkillArgs, tokenizeArgs } from './arg-substitution.js';

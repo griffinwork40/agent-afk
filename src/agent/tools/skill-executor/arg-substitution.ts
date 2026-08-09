@@ -22,8 +22,8 @@
  *   ['"hello', 'world"', 'x']. Quoting is the only reason this is not a
  *   `split(/\s+/)` — a positional that silently splits a quoted phrase is
  *   worse than no positional support at all.
- * - An empty quoted string produces an empty token, so `$1` in `/cmd "" b`
- *   expands to '' and `$2` to 'b' — position is preserved.
+ * - An empty quoted string produces an empty token, so `${1}` in `/cmd "" b`
+ *   expands to '' and `${2}` to 'b' — position is preserved.
  * - An UNTERMINATED quote is tolerated: the remainder becomes the final token
  *   rather than throwing. This runs while rendering a prompt, where a hard
  *   failure would take down an otherwise-working skill over a typo.
@@ -72,19 +72,21 @@ export function tokenizeArgs(args: string): string[] {
  * Contract:
  * - `$ARGUMENTS` and `$ARGUMENT` both expand to the full raw args string,
  *   unsplit and unquoted — the long-standing behaviour, preserved exactly.
- * - `$1`, `$2`, … `$N` expand to shell-style positional tokens, 1-indexed
- *   (`$1` is the first argument). `$0` is NOT special and is left verbatim.
+ * - `${1}`, `${2}`, … `${N}` expand to shell-style positional tokens,
+ *   1-indexed (`${1}` is the first argument). Braces are required so existing
+ *   currency and shell snippets such as `$1.00` and `awk '{print $1}'` remain
+ *   literal.
  * - A positional with no corresponding argument is left VERBATIM rather than
- *   emptied. An author writing `$3` in a body invoked with two args almost
- *   certainly has a bug, and a literal `$3` in the rendered prompt is a
+ *   emptied. An author writing `${3}` in a body invoked with two args almost
+ *   certainly has a bug, and a literal `${3}` in the rendered prompt is a
  *   legible symptom; silently blanking it hides the mistake from both the
  *   author and the model.
- * - A placeholder may be escaped with a single leading backslash — `\$1` and
- *   `\$ARGUMENTS` render as literal `$1` / `$ARGUMENTS`. Needed by any body
- *   that documents this very syntax.
+ * - A placeholder may be escaped with a single leading backslash — `\${1}`
+ *   and `\$ARGUMENTS` render as literal `${1}` / `$ARGUMENTS`. Needed by any
+ *   body that documents this very syntax.
  * - Substitution is SINGLE-PASS over one combined pattern. This is the
  *   load-bearing property: two sequential `.replace()` calls would let the
- *   second scan text inserted by the first, so args containing `$1` would be
+ *   second scan text inserted by the first, so args containing `${1}` would be
  *   re-expanded. One pass makes inserted text inert by construction.
  * - The replacer is a FUNCTION, not a replacement string, so `$$`, `$&`,
  *   '$`', `$'` and `$n` inside args are inserted verbatim instead of being
@@ -101,15 +103,18 @@ export function substituteSkillArgs(body: string, args: string | undefined): str
   // pay for the scan.
   let tokens: string[] | undefined;
 
-  return body.replace(/(\\?)\$(ARGUMENTS?\b|\d+)/g, (match, escape: string, name: string) => {
-    // An escaped placeholder renders literally, minus the backslash.
-    if (escape === '\\') return match.slice(1);
-    if (name === 'ARGUMENT' || name === 'ARGUMENTS') return raw;
-    const index = Number(name);
-    // `$0` is not a positional; leave it alone rather than inventing a meaning.
-    if (index < 1) return match;
-    tokens ??= tokenizeArgs(raw);
-    const token = tokens[index - 1];
-    return token ?? match;
-  });
+  return body.replace(
+    /(\\?)\$(ARGUMENTS?\b|\{(\d+)\})/g,
+    (match, escape: string, name: string, digits: string | undefined) => {
+      // An escaped placeholder renders literally, minus the backslash.
+      if (escape === '\\') return match.slice(1);
+      if (name === 'ARGUMENT' || name === 'ARGUMENTS') return raw;
+      const index = Number(digits);
+      // `${0}` is not a positional; leave it alone rather than inventing a meaning.
+      if (index < 1) return match;
+      tokens ??= tokenizeArgs(raw);
+      const token = tokens[index - 1];
+      return token ?? match;
+    },
+  );
 }

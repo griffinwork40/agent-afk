@@ -494,7 +494,7 @@ You process PDF files. Scripts are in \${SKILL_ROOT}/scripts/.
     expect(callArgs?.config?.env?.['SKILL_ROOT']).toBe(dir);
   });
 
-  it('substitutes $ARGUMENTS and positional $N into a forked user skill body', async () => {
+  it('substitutes $ARGUMENTS and positional ${N} into a forked user skill body', async () => {
     // Regression: the forked disk-skill path passed `parsed.body` to the child
     // verbatim, so a user- or project-authored SKILL.md saw its own
     // placeholders unexpanded while an identical plugin-authored skill got
@@ -511,7 +511,7 @@ description: Uses arguments
 context: fork
 ---
 
-All args: [$ARGUMENTS]. First: [$1]. Second: [$2].
+All args: [$ARGUMENTS]. First: [\${1}]. Second: [\${2}].
 `,
     );
 
