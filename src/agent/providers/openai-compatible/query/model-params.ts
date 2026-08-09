@@ -12,12 +12,26 @@ import { maxOutputTokensFor } from '../../../model-limits.js';
 import { isOSeriesModel, isReasoningModel } from '../../../model-capabilities.js';
 
 /**
+ * Module-scope dedupe for over-ceiling clamp warnings, keyed so a single
+ * misconfiguration warns once per process rather than once per turn. Mirrors
+ * `warnedTokenClamps` in the anthropic-direct `resolve-params.ts`.
+ */
+const warnedTokenClamps = new Set<string>();
+
+/**
  * Resolve the effective output-token cap (a plain number).
  *
  * Honours `config.maxOutputTokens` when finite+positive, otherwise falls back
  * to the model's output ceiling (matching Anthropic's resolveMaxTokens).  Uses
  * maxOutputTokensFor (output ceiling), not contextLimitFor (context window),
  * because the cap bounds *output*, not the full context window.
+ *
+ * An over-ceiling value is clamped down to the model's limit with a one-time
+ * warning — the same contract as anthropic-direct's `resolveMaxTokens` (#953).
+ * Without this, an over-large cap reached the wire verbatim and the provider
+ * rejected it; the asymmetry hit hardest on local runners (MLX/llama.cpp/vLLM)
+ * whose real output limit is below the 64k `DEFAULT_MAX_OUTPUT` fallback. The
+ * invariant: both providers return the same number for the same `(model, cap)`.
  *
  * Field-name selection (`max_tokens` vs `max_completion_tokens` vs
  * `max_output_tokens`) is the caller's concern — it differs by wire mode:
@@ -29,9 +43,21 @@ export function resolveEffectiveMaxOutputTokens(
   configMaxOutput: number | undefined,
 ): number {
   const ceiling = maxOutputTokensFor(model);
-  return typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0
-    ? Math.floor(configMaxOutput)
-    : ceiling;
+  if (typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0) {
+    const requested = Math.floor(configMaxOutput);
+    if (requested > ceiling) {
+      const key = `max:${model}:${requested}`;
+      if (!warnedTokenClamps.has(key)) {
+        warnedTokenClamps.add(key);
+        console.warn(
+          `[afk] maxOutputTokens ${requested} exceeds the ${model} output ceiling (${ceiling}); clamping to ${ceiling}.`,
+        );
+      }
+      return ceiling;
+    }
+    return requested;
+  }
+  return ceiling;
 }
 
 /**

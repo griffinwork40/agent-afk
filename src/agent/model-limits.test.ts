@@ -17,6 +17,8 @@
 import { describe, it, expect } from 'vitest';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from './model-limits.js';
 import { resolveEffectiveMaxOutputTokens } from './providers/openai-compatible/query/model-params.js';
+import { resolveMaxTokens } from './providers/anthropic-direct/resolve-params.js';
+import type { AgentConfig } from './types/config-types.js';
 
 describe('autoCompactLimitFor', () => {
   it('caps the default sonnet alias at the 200k working budget (not its 1M window)', () => {
@@ -99,6 +101,38 @@ describe('maxOutputTokensFor — GPT-5.6 family output ceiling', () => {
 
   it('still honours an explicit config.maxOutputTokens override', () => {
     expect(resolveEffectiveMaxOutputTokens('gpt-5.6', 8_000)).toBe(8_000);
+  });
+});
+
+describe('resolveEffectiveMaxOutputTokens — over-ceiling clamp + cross-provider parity (#953)', () => {
+  // The openai-compatible path used to forward an over-ceiling cap verbatim and
+  // let the provider 400 it, while anthropic-direct clamped down to the ceiling.
+  // Same config key, same intent, two outcomes. These pin the fixed contract:
+  // both providers resolve the SAME number for the same (model, cap).
+  const cfg = (maxOutputTokens?: number): AgentConfig =>
+    ({ maxOutputTokens } as unknown as AgentConfig);
+
+  it('clamps an over-ceiling cap down to the model ceiling', () => {
+    const model = 'gpt-5.6'; // 128k ceiling
+    const ceiling = maxOutputTokensFor(model);
+    expect(resolveEffectiveMaxOutputTokens(model, ceiling + 500_000)).toBe(ceiling);
+  });
+
+  it('clamps hardest on unlisted local runners (64k DEFAULT_MAX_OUTPUT fallback)', () => {
+    const local = 'mlx-community/some-local-model'; // unlisted → 64k default
+    const ceiling = maxOutputTokensFor(local);
+    expect(ceiling).toBe(64_000);
+    expect(resolveEffectiveMaxOutputTokens(local, 200_000)).toBe(64_000);
+  });
+
+  it('returns the same number as anthropic-direct resolveMaxTokens for the same (model, cap)', () => {
+    const model = 'gpt-5.6';
+    const ceiling = maxOutputTokensFor(model);
+    for (const cap of [undefined, 8_000, ceiling, ceiling + 500_000, Number.POSITIVE_INFINITY]) {
+      expect(resolveEffectiveMaxOutputTokens(model, cap), `cap=${cap}`).toBe(
+        resolveMaxTokens(cfg(cap), model),
+      );
+    }
   });
 });
 

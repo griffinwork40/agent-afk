@@ -378,7 +378,7 @@
     },
     {
       "name": "AFK_MAX_OUTPUT_TOKENS",
-      "description": "Cap on output tokens per turn. Falls back to provider default when unset.",
+      "description": "Cap on output tokens per turn. When unset, falls back to the model output ceiling (AFK's own per-model limit, 64k–128k — NOT a small provider default), so every request advertises the full ceiling by default. An over-ceiling value is clamped down with a warning.",
       "type": "number",
       "required": false,
       "example": "8192",

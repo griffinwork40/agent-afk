@@ -6,6 +6,20 @@
 **Method:** Direct repo inspection of the token/limit/context/loop core, 3 parallel read-only reconnaissance subagents (tracing, control-plane enforcement, provider validation), and an empirical scan of **3,376 on-disk trace files** under `~/.afk/state/witness/`. Read-only: no source files were modified except this report.
 **Status:** Diagnosis + proposals. No runtime or prompt changes were made.
 
+> **Staleness note (verified 2026-08-09).** This report is preserved as a findings *map*; its
+> `anthropic-direct/index.ts` and `anthropic-direct/loop.ts` line references are **pre-refactor** and
+> no longer resolve — the token/thinking core moved in the #103 provider split. Current homes:
+> `resolveMaxTokens` / `resolveThinkingParam` → `providers/anthropic-direct/resolve-params.ts`; the
+> `max_tokens` wire write → `providers/anthropic-direct/loop/round-request.ts`; the orphaned-`tool_use`
+> strip (F12) → `providers/anthropic-direct/loop/turn-terminal.ts`. Two findings are also
+> **substantively** resolved since v3.89.7: **F1/F10** — `resolveMaxTokens` now clamps an over-ceiling
+> cap to the model limit with a warning (and the openai-compatible path was brought to parity, #953);
+> **F21** — the openai-compatible *streaming* path no longer omits the output cap: `8f6b0e32` (#125)
+> added `resolveStreamingMaxTokens`, so Chat Completions always attaches `max_tokens` /
+> `max_completion_tokens`. **F5** (thinking-budget starvation) now fails fast with a legible error
+> instead of an HTTP 400 for `max_tokens <= 1024` (#951). Treat individual line numbers below as
+> approximate; the symbol names remain accurate.
+
 ---
 
 ## A. Executive verdict
