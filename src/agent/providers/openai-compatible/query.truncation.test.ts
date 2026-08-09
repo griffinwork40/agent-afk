@@ -105,8 +105,11 @@ describe('openai-compatible truncation notice (#952)', () => {
   it('names a tool call truncated mid-arguments as NOT dispatched', async () => {
     // A tool call that began streaming and was cut off by the cap. isToolCallStop
     // returns false for an explicit non-tool finish_reason, so this call is never
-    // dispatched — the drop is correct but was previously silent.
+    // dispatched — the drop is correct but was previously silent. The model also
+    // produced text here, which is the ONLY path the notice rides on (see the
+    // textless guard below).
     pendingChunks = [
+      { choices: [{ delta: { content: 'let me read that' } }] },
       {
         choices: [
           {
@@ -131,11 +134,53 @@ describe('openai-compatible truncation notice (#952)', () => {
     const messages = assistantMessages(events);
 
     expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('let me read that');
     expect(messages[0]).toContain('output-token limit');
     expect(messages[0]).toContain('read_file');
     expect(messages[0]).toContain('NOT dispatched');
 
     // The truncated call really did not run: no tool events were emitted.
+    expect(events.some((e) => e.type === 'tool.start' || e.type === 'tool.end')).toBe(false);
+  });
+
+  // #960 REGRESSION GUARD — do not "fix" this by making it expect a notice.
+  //
+  // A truncated turn that produced NO text must yield an EMPTY
+  // assistant.message. The emptiness is the signal: stream-consumer's
+  // `if (event.text)` gate drops it, so `subagent/handle.ts` never sets
+  // `finalMessage`, reaches its ZERO-OUTPUT branch, and THROWS — which is what
+  // makes a zero-output child resolve `failed` instead of a false `succeeded`,
+  // and what lets stream-cut-retry re-dispatch a read-only child that produced
+  // nothing. Substituting the notice as the body here would set `finalMessage`
+  // and hand the parent a SUCCESS whose entire content is the warning.
+  // Mirrors the anthropic-direct guard in loop.orphan.test.ts.
+  it('emits an EMPTY assistant.message when the cap cuts a turn before any text', async () => {
+    pendingChunks = [
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_abc',
+                  function: { name: 'read_file', arguments: '{"file_pa' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [{ delta: {}, finish_reason: 'length' }],
+        usage: { prompt_tokens: 10, completion_tokens: 9, total_tokens: 19 },
+      },
+    ];
+    const events = await collect(buildQueryFromConfig(baseConfig(), singleInput('read it')));
+    const messages = assistantMessages(events);
+
+    expect(messages).toEqual(['']);
+    expect(messages[0]).not.toContain('output-token limit');
     expect(events.some((e) => e.type === 'tool.start' || e.type === 'tool.end')).toBe(false);
   });
 

@@ -708,6 +708,19 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // warning. Same rule as the anthropic-direct terminal path. Deliberately
     // applied AFTER the priorTurns push above: the notice is operator-facing
     // and must not enter conversation history.
+    //
+    // Invariant (#960): the notice rides ONLY on non-empty model text. A turn
+    // that produced NO text must keep yielding an EMPTY assistant.message, so
+    // that stream-consumer's `if (event.text)` gate drops it and the turn stays
+    // textless downstream. That absence is load-bearing: it is what leaves
+    // `finalMessage` unset in `subagent/handle.ts`, letting the run reach the
+    // ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE and THROWS — which
+    // resolves a zero-output child as `failed` rather than a false `succeeded`,
+    // and lets `stream-cut-retry.ts` re-dispatch a read-only child that
+    // produced nothing. Substituting the notice as the message body here would
+    // make that chain unreachable and hand the parent a SUCCESS whose entire
+    // content is this warning. Mirrors the identical rule in
+    // `anthropic-direct/loop/turn-terminal.ts`.
     const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
       ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
           // The ChatGPT OAuth Responses backend rejects every output-cap
@@ -723,7 +736,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       text:
         truncationText && finalAssistantText.length > 0
           ? `${finalAssistantText}\n\n${truncationText}`
-          : (truncationText ?? finalAssistantText),
+          : finalAssistantText,
       sessionId: this.initSessionId,
     };
     // If the turn was cut short by a spent budget, preserve that signal for

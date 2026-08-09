@@ -32,21 +32,30 @@
  * The exact stop-reason strings that mean "cut off at the output-token cap",
  * one per wire format. Exported so tests can assert the set itself rather than
  * re-listing literals that would then drift from the predicate.
+ *
+ * `as const` (not `readonly string[]`) so consumers keep the element literal
+ * union (`'max_tokens' | 'length' | 'max_output_tokens'`) instead of a widened
+ * `string` — e.g. a `switch` over this set can be exhaustiveness-checked.
  */
-export const TRUNCATION_STOP_REASONS: readonly string[] = [
+export const TRUNCATION_STOP_REASONS = [
   'max_tokens', // Anthropic Messages
   'length', // OpenAI Chat Completions
   'max_output_tokens', // OpenAI Responses (incomplete_details.reason)
-];
+] as const;
 
 /**
  * True when `stopReason` means the response was cut off by the output-token cap
  * rather than completing naturally. Accepts `null` so callers holding a
  * `string | null` stop reason (e.g. `TurnResult.stopReason`) need not
- * pre-coalesce.
+ * pre-coalesce. Deliberately keeps the wide `string | null | undefined`
+ * parameter — narrowing it to the tuple's literal union would reject every
+ * real caller, which always holds a provider-reported `string`, not a
+ * pre-known member of this set. Widen `TRUNCATION_STOP_REASONS` back to
+ * `readonly string[]` at the `includes` call instead of narrowing the
+ * parameter.
  */
 export function isTruncationStopReason(stopReason: string | null | undefined): boolean {
-  return stopReason != null && TRUNCATION_STOP_REASONS.includes(stopReason);
+  return stopReason != null && (TRUNCATION_STOP_REASONS as readonly string[]).includes(stopReason);
 }
 
 /**

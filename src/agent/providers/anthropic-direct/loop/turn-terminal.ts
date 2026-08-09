@@ -70,6 +70,33 @@ export function* emitNonToolUseTerminal(
   // `sendMessage()` path and a subagent's final-message capture — keep only
   // the LAST assistant message of a turn, so two messages here would silently
   // discard the real answer and surface only the warning.
+  //
+  // Invariant (#960): the notice rides ONLY on an existing partial-text
+  // message — a turn that produced NO text emits no `assistant.message` at
+  // all, and must keep emitting none. A textless turn has to stay textless all
+  // the way downstream, because "the model produced nothing" is detected by the
+  // ABSENCE of a message event, not by any positive signal:
+  //
+  //   stream-consumer.ts `case 'assistant.message'` gates on `if (event.text)`,
+  //   so a textless turn yields no `{type:'message'}` OutputEvent; `handle.ts`
+  //   therefore leaves `finalMessage` unset, falls past its `if (finalMessage)`
+  //   return, and reaches the ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE
+  //   and THROWS — which is what makes a zero-output child resolve `failed`
+  //   instead of a false `succeeded`, and what lets `stream-cut-retry.ts`
+  //   re-dispatch a read-only child that died having produced nothing.
+  //
+  // Emitting a standalone notice here would make that whole chain unreachable:
+  // the notice is non-empty, so `finalMessage` gets set, the throw never runs,
+  // and a truncated child returns to its parent as a SUCCESS whose entire
+  // content is this warning — zero findings, dressed as an answer. `handle.ts`
+  // names `max_tokens` explicitly as a stop reason that reaches its zero-output
+  // branch "via an empty-text turn the stream consumer drops"; that assumption
+  // is load-bearing and this branch must not break it.
+  //
+  // Consequence, accepted deliberately: a truncation with no partial text stays
+  // invisible on live surfaces (unchanged from before #952). Fixing that needs a
+  // display-only event channel that renders WITHOUT becoming a terminal message
+  // — tracked as a follow-up, not bolted on here.
   const truncationText = isTruncationStopReason(turnResult.stopReason)
     ? truncationNotice(turnResult.toolUseBlocks.map((b) => b.name), turnResult.stopReason)
     : null;
@@ -89,14 +116,6 @@ export function* emitNonToolUseTerminal(
         sessionId: input.ctx.sessionId,
       };
     }
-  } else if (truncationText) {
-    // No partial text to attach to (e.g. a tool call truncated before any
-    // text block) — the notice stands alone, exactly as before.
-    yield {
-      type: 'assistant.message',
-      text: truncationText,
-      sessionId: input.ctx.sessionId,
-    };
   }
 
   // Anthropic API contract: every `tool_use` block in assistant content MUST be
