@@ -59,7 +59,7 @@ import { BgJobLogWriter } from './bg-job-log.js';
 import type { BgJobMeta } from './bg-job-log.js';
 import { getBgJobsRoot, getBgJobDir } from '../paths.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
-import { truncate } from './tools/subagent/failure-payload.js';
+import { boundedStopReason } from './tools/subagent/failure-payload.js';
 import { resolveMaxConcurrentBackgroundJobs } from '../config/concurrency.js';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -121,18 +121,6 @@ export const MAX_TRANSCRIPT_TAIL_BYTES = 4096;
  */
 function emitRoutingTelemetry(entry: Parameters<typeof appendRoutingDecision>[0]): void {
   void appendRoutingDecision(entry).catch(() => {});
-}
-
-/**
- * Cap `stopReason` before it rides into a telemetry row. On the
- * OpenAI-compatible path `stopReason` is provider-controlled free text
- * (`providers/openai-compatible/translate.ts`, `responses-translate.ts`),
- * not a bounded enum, so — like the sibling free-form telemetry fields — it
- * must not be emitted uncapped. Preserves omit-when-absent: `undefined` stays
- * `undefined`, never `''`.
- */
-function boundedStopReason(stopReason: string | undefined): string | undefined {
-  return stopReason !== undefined ? truncate(stopReason, 64) : undefined;
 }
 
 /**
@@ -680,7 +668,12 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         // after this job's in-memory entry is TTL-evicted) can reconstruct
         // the same partial-result labeling the in-memory replay applies —
         // see BgJobMeta.stopReason. Omitted (not undefined/null) when absent.
-        ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
+        // Bounded via the shared chokepoint (see failure-payload.ts) — this
+        // was the one write site (of six) that persisted the raw,
+        // provider-controlled value uncapped (#717).
+        ...(boundedStopReason(result.stopReason) !== undefined
+          ? { stopReason: boundedStopReason(result.stopReason) }
+          : {}),
       }).then(() => writer.close());
     }
 
