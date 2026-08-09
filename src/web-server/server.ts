@@ -50,6 +50,14 @@ export interface WebServerOptions {
   owned?: Set<string>;
   submitPrompt?: (sessionId: string, text: string) => Promise<void>;
   /**
+   * Backpressure predicate: true while a session already has a turn in
+   * flight. `handlePrompt` 409s on it rather than chaining another turn.
+   * Same precedence as `submitPrompt` — an explicit option wins over `owner`;
+   * with neither, `handlePrompt` sees "never busy" so attach-only mode (no
+   * owner at all) is unaffected.
+   */
+  isBusy?: (sessionId: string) => boolean;
+  /**
    * Supplies the drivable-session capability. When present it provides `owned`,
    * `submitPrompt`, session creation, and interrupt in one object.
    *
@@ -82,6 +90,18 @@ export interface WebServerHandle {
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const host = options.host ?? DEFAULT_WEB_HOST;
   const hasToken = typeof options.token === 'string' && options.token.length > 0;
+  // Invariant: `tokenExplicit: true` with no token is a contradiction, not a
+  // combination to infer through. It would clear checkBind's non-loopback
+  // guard while `token` below still auto-mints a credential nobody chose —
+  // exactly the LAN-exposure-under-an-unseen-token footgun checkBind exists to
+  // block (see its contract comment in auth.ts). Fail fast instead of letting
+  // the two fields silently disagree.
+  if (options.tokenExplicit === true && !hasToken) {
+    throw new Error(
+      'startWebServer: tokenExplicit is true but no token was supplied — ' +
+        'an explicit token requires a non-empty options.token.',
+    );
+  }
   // Contract: `tokenExplicit` is the operator's real intent as computed by
   // `resolveWebToken`; the presence check is the legacy fallback for callers
   // that do not pass it. Inferring explicitness from a non-empty token is what
@@ -116,6 +136,17 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
         : async () => {
             throw new Error('no prompt handler wired');
           }),
+    // Contract: same "explicit option wins over owner" precedence as
+    // submitPrompt above, but the no-owner fallback is "never busy" rather
+    // than a throw — attach-only mode (no owner) 409s every prompt on
+    // ownership already, so isBusy is never even consulted for it, and
+    // defaulting to false keeps that path's existing behaviour unchanged.
+    // `?? false` also covers a test-injected owner fake that omits `isBusy`
+    // (the real SessionOwner always defines it) — treated as never-busy
+    // rather than a thrown TypeError.
+    isBusy:
+      options.isBusy ??
+      (options.owner ? (id: string) => options.owner!.isBusy?.(id) ?? false : () => false),
     ...(options.owner
       ? {
           createSession: (req: CreateSessionRequest) => options.owner!.create(req),

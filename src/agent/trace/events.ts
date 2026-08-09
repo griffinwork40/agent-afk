@@ -445,10 +445,17 @@ export const SessionPhasePayloadSchema = z.object({
   model: z.string().optional(),
   resolvedModel: z.string().optional(),
   // Session-identity attribution — see SessionPhasePayload JSDoc in types.ts.
-  // `origin` = user-facing surface (cli/telegram/daemon); `actor` = main vs
-  // subagent. Both set on session_init_start. Orthogonal to the JSONL
-  // `surface: 'afk'|'plugin'` provenance tag.
-  origin: z.enum(['cli', 'telegram', 'daemon', 'unknown']).optional(),
+  // `origin` = user-facing surface; `actor` = main vs subagent. Both set on
+  // session_init_start. Orthogonal to the JSONL `surface: 'afk'|'plugin'`
+  // provenance tag.
+  //
+  // Invariant: this enum must list every member of the `origin` union in
+  // types.ts. It is a runtime value, so `tsc` cannot flag divergence — a
+  // surface present in the TS union but missing here makes writer.ts's
+  // `.parse()` throw, which emit.ts swallows, silently dropping the whole
+  // session_init_start record for that surface. That is how `'web'` lost its
+  // trace events until this line was widened.
+  origin: z.enum(['cli', 'telegram', 'daemon', 'web', 'unknown']).optional(),
   actor: z.enum(['main', 'subagent']).optional(),
 });
 

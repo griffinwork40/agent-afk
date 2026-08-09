@@ -275,6 +275,23 @@ describe('startWebServer — owned sessions', () => {
     expect((await res.json()).error).toBe('session_not_owned');
   });
 
+  // Backpressure: SessionOwner.isBusy() is the intended cap on chaining
+  // unbounded turns onto one session; these two tests are its only exercise.
+  describe('prompt backpressure', () => {
+    it('409s a prompt to an owned session that already has a turn in flight', async () => {
+      const h = await start({ owned: new Set(['mine']), isBusy: () => true, submitPrompt: async () => {} });
+      const res = await post(h, '/api/sessions/mine/prompt', { text: 'hi' });
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe('session_busy');
+    });
+
+    it('202s a prompt to an owned, idle session', async () => {
+      const h = await start({ owned: new Set(['mine']), isBusy: () => false, submitPrompt: async () => {} });
+      const res = await post(h, '/api/sessions/mine/prompt', { text: 'hi' });
+      expect(res.status).toBe(202);
+    });
+  });
+
   it('409s an interrupt to a foreign session, and 200s an owned one', async () => {
     let interrupted: string | undefined;
     const owned = new Set<string>(['mine']);
@@ -610,6 +627,15 @@ describe('tokenExplicit is threaded, not inferred', () => {
   it('falls back to token presence when the flag is omitted', async () => {
     const h = await start({ host: '0.0.0.0', token: 'deliberate' });
     expect(h.port).toBeGreaterThan(0);
+  });
+
+  // The contradiction this closes: tokenExplicit: true clears checkBind's
+  // non-loopback guard, but with no token supplied `token` below still
+  // auto-mints one — a LAN-exposed agent behind a credential nobody chose.
+  it('rejects tokenExplicit: true with no token, even on loopback', async () => {
+    await expect(
+      startWebServer({ port: 0, tokenExplicit: true }),
+    ).rejects.toThrow(/tokenExplicit is true but no token was supplied/i);
   });
 });
 

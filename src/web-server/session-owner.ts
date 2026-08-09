@@ -67,7 +67,20 @@ export class SessionOwner {
   private readonly info = new Map<string, OwnedSessionInfo>();
   /** Per-session serialization chain — see {@link submitPrompt}. */
   private readonly turns = new Map<string, Promise<void>>();
-  private readonly busy = new Set<string>();
+  /**
+   * Invariant: this counts prompts ACCEPTED but not yet finished, and it is
+   * incremented synchronously inside `submitPrompt` — before it returns.
+   * Marking busy from inside the chained `.then()` instead would leave a
+   * microtask-wide window in which the turn is accepted but `isBusy` is still
+   * false, and two POSTs landing in that window would BOTH clear
+   * `handlePrompt`'s 409 gate and chain — the exact unbounded chaining that
+   * gate exists to stop.
+   *
+   * It is a count, not a Set, because turns chain: a plain `delete` in the
+   * first turn's `finally` would report the session idle while a second turn
+   * was still queued behind it.
+   */
+  private readonly pending = new Map<string, number>();
 
   constructor(private readonly options: SessionOwnerOptions) {}
 
@@ -135,11 +148,14 @@ export class SessionOwner {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
 
+    // Marked busy here, synchronously, so the caller's 409 gate sees it the
+    // moment this returns — see the `pending` field comment.
+    this.pending.set(sessionId, (this.pending.get(sessionId) ?? 0) + 1);
+
     const previous = this.turns.get(sessionId) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
       .then(async () => {
-        this.busy.add(sessionId);
         try {
           // The ledger is written as a side effect of the turn; the SSE route
           // tails it. Draining just runs the turn to completion.
@@ -147,7 +163,9 @@ export class SessionOwner {
             void _event;
           }
         } finally {
-          this.busy.delete(sessionId);
+          const remaining = (this.pending.get(sessionId) ?? 1) - 1;
+          if (remaining > 0) this.pending.set(sessionId, remaining);
+          else this.pending.delete(sessionId);
         }
       });
 
@@ -158,9 +176,12 @@ export class SessionOwner {
     next.catch(() => {});
   }
 
-  /** True while a turn is in flight — drives the Stop affordance. */
+  /**
+   * True from the moment a prompt is accepted until its turn finishes.
+   * Read by `handlePrompt` to 409 a second prompt rather than chain it.
+   */
   isBusy(sessionId: string): boolean {
-    return this.busy.has(sessionId);
+    return (this.pending.get(sessionId) ?? 0) > 0;
   }
 
   /** Soft-interrupt an in-flight turn. The session stays usable afterwards. */
@@ -186,7 +207,7 @@ export class SessionOwner {
     this.sessions.clear();
     this.info.clear();
     this.owned.clear();
-    this.busy.clear();
+    this.pending.clear();
     this.turns.clear();
     await Promise.all(all.map((s) => s.close().catch(() => {})));
   }

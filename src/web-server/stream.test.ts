@@ -166,6 +166,30 @@ describe('handleStream — event ids are ledger positions', () => {
     expect(frames[1]?.replay).toBe(false);
   });
 
+  // stream-route.ts clamps a malformed Last-Event-ID to 0 (Number.parseInt
+  // returns NaN for 'not-a-number', and a negative value fails the >= 0
+  // guard) — both must behave exactly like sending no header at all: a full
+  // replay from the start of the ledger.
+  it('treats a non-numeric Last-Event-ID as no header — full replay', async () => {
+    appendRecord('one');
+    appendRecord('two');
+    handle = await startWebServer({ port: 0 });
+
+    const frames = await readFrames(handle, 2, { lastEventId: 'not-a-number' });
+    expect(frames.map((f) => f.text)).toEqual(['one', 'two']);
+    expect(frames.map((f) => f.id)).toEqual(['1', '2']);
+  });
+
+  it('treats a negative Last-Event-ID as no header — full replay', async () => {
+    appendRecord('one');
+    appendRecord('two');
+    handle = await startWebServer({ port: 0 });
+
+    const frames = await readFrames(handle, 2, { lastEventId: '-5' });
+    expect(frames.map((f) => f.text)).toEqual(['one', 'two']);
+    expect(frames.map((f) => f.id)).toEqual(['1', '2']);
+  });
+
   it('does not replay a record twice across a reconnect', async () => {
     appendRecord('one');
     handle = await startWebServer({ port: 0 });

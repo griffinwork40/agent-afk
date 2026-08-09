@@ -24,6 +24,13 @@ export interface RouteContext {
   /** Submit a prompt to an owned session. */
   submitPrompt: (sessionId: string, text: string) => Promise<void>;
   /**
+   * Whether an owned session already has a turn in flight — the backpressure
+   * predicate `handlePrompt` gates on. Always present: `server.ts` defaults it
+   * to "never busy" when neither an explicit option nor an owner supplies one,
+   * so attach-only mode (no owner at all) is unaffected.
+   */
+  isBusy: (sessionId: string) => boolean;
+  /**
    * Start a new session in this process. Absent when the server was started
    * without an owner, in which case the surface is attach-only.
    */
@@ -83,6 +90,12 @@ export async function handleListSessions(ctx: RouteContext, res: ServerResponse)
   sendJson(res, 200, { sessions });
 }
 
+/**
+ * Invariant: backpressure is checked AFTER ownership, never before. An
+ * unowned session always 409s as `session_not_owned` regardless of busy
+ * state — that error names the actual reason (no driver reaches it at all),
+ * where a busy check first would misreport a foreign session as "busy".
+ */
 export async function handlePrompt(
   ctx: RouteContext,
   res: ServerResponse,
@@ -91,6 +104,13 @@ export async function handlePrompt(
 ): Promise<void> {
   if (!requireValidSessionId(res, sessionId)) return;
   if (!requireOwned(ctx, res, sessionId)) return;
+  if (ctx.isBusy(sessionId)) {
+    sendJson(res, 409, {
+      error: 'session_busy',
+      message: `session ${sessionId} already has a turn in flight. Wait for it to finish, or interrupt it, before sending another prompt.`,
+    });
+    return;
+  }
   const text = readStringField(body, 'text');
   if (text === undefined) {
     sendJson(res, 400, { error: 'bad_request', message: 'body must be { text: string }' });
