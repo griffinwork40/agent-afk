@@ -46,14 +46,14 @@ import type { ClosureReason } from '../trace/index.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 
-/**
- * Provider stop reasons that mean the response was cut off by the output-token
- * cap rather than completing naturally. Anthropic emits `'max_tokens'`;
- * OpenAI-compatible providers emit `'length'`.
- */
-export function isTruncationStopReason(stopReason: string | undefined): boolean {
-  return stopReason === 'max_tokens' || stopReason === 'length';
-}
+import { isTruncationStopReason } from '../providers/shared/truncation.js';
+
+// Canonical definition lives in providers/shared/truncation.ts so the
+// `'max_tokens' || 'length'` literals stay single-sourced across the closure
+// classifier, the anthropic-direct terminal path, and the subagent result path.
+// Re-exported here so existing importers (and closure-reason.test.ts) resolve
+// `isTruncationStopReason` from this module unchanged.
+export { isTruncationStopReason };
 
 export interface ClosureReasonInputs {
   /** The reason string passed to `dispatchSessionEndOnce` (close/reset/error). */

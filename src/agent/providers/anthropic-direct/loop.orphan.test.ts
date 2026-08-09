@@ -121,6 +121,102 @@ describe('loop.ts runTurn — orphan tool_use prevention', () => {
     expect(flatTooluses).not.toContain('toolu_orphan');
   });
 
+  // #952: the strip above is silent — a dropped tool call reads as the agent
+  // stalling. runTurn must surface a display-only truncation notice NAMING the
+  // dropped tool so the operator knows the action never ran.
+  it('surfaces a truncation notice naming the dropped tool when max_tokens strips a tool_use', async () => {
+    const truncatedToolUseStream: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_truncate2',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-test',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: baseUsage(),
+        },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'toolu_dropped', name: 'read_file', input: {} },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"file":"a.ts"}' },
+      } as unknown as RawMessageStreamEvent,
+      { type: 'content_block_stop', index: 0 } as unknown as RawMessageStreamEvent,
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens', stop_sequence: null },
+        usage: { output_tokens: 4 },
+      } as unknown as RawMessageStreamEvent,
+      { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+    ];
+
+    const client = makeClient(() => fromArray(truncatedToolUseStream));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'do a thing' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+
+    const notice = events.find(
+      (e) => e.type === 'assistant.message' && /output-token limit/.test((e as { text: string }).text),
+    ) as { text: string } | undefined;
+    expect(notice, 'a truncation notice event should be emitted').toBeDefined();
+    expect(notice!.text).toContain('read_file'); // names the dropped tool
+    expect(notice!.text).toContain('NOT dispatched');
+    // A turn.completed must still follow — the turn ends cleanly, not as an error.
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
+  });
+
+  // #952: text-only truncation (no tool_use) → notice without a tool name.
+  it('surfaces a truncation notice for text-only max_tokens truncation', async () => {
+    const client = makeClient(() => fromArray(makeTextStream('a partial answer', 'max_tokens')));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'explain' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+    const noticed = events.filter(
+      (e) => e.type === 'assistant.message' && /output-token limit/.test((e as { text: string }).text),
+    ) as Array<{ text: string }>;
+    expect(noticed).toHaveLength(1);
+    expect(noticed[0]!.text).toContain('allow a longer reply');
+    expect(noticed[0]!.text).not.toContain('NOT dispatched');
+    // The model's partial text is still delivered as its own assistant.message.
+    expect(
+      events.some(
+        (e) => e.type === 'assistant.message' && (e as { text: string }).text === 'a partial answer',
+      ),
+    ).toBe(true);
+  });
+
   it('rolls back the assistant tool_use push when the dispatcher accessor throws', async () => {
     // Build a dispatcher whose `executeBatch` is a getter that throws on
     // access. This simulates a throw between "tool_use is committed to

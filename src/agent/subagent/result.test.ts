@@ -177,8 +177,17 @@ describe('isIncompleteStopReason — partial-result classification', () => {
     expect(isIncompleteStopReason(undefined)).toBe(false);
   });
 
-  it('is false for an unrelated provider stop reason', () => {
-    expect(isIncompleteStopReason('max_tokens')).toBe(false);
+  // #952: a child cut off at the output-token cap streamed real text and
+  // reached a terminal message, so it resolves `succeeded` — but that text ends
+  // mid-thought and must be marked partial, exactly like the tool-loop-cap case.
+  it('is true for output-token truncation on both providers (max_tokens / length)', () => {
+    expect(isIncompleteStopReason('max_tokens')).toBe(true); // anthropic
+    expect(isIncompleteStopReason('length')).toBe(true); // openai-compatible
+  });
+
+  it('is false for a genuinely unrelated provider stop reason', () => {
+    expect(isIncompleteStopReason('stop_sequence')).toBe(false);
+    expect(isIncompleteStopReason('pause_turn')).toBe(false);
   });
 });
 
@@ -210,6 +219,16 @@ describe('annotateIfIncomplete — parent-visible partial marker', () => {
     expect(out).toContain('PARTIAL RESULT');
     expect(out).toContain('cut off');
     expect(out.endsWith(BODY)).toBe(true);
+  });
+
+  it('prepends a PARTIAL marker naming output-token truncation and preserves the body (#952)', () => {
+    for (const reason of ['max_tokens', 'length']) {
+      const out = annotateIfIncomplete(BODY, reason);
+      expect(out, reason).not.toBe(BODY);
+      expect(out, reason).toContain('PARTIAL RESULT');
+      expect(out, reason).toContain('output-token limit');
+      expect(out.endsWith(BODY), reason).toBe(true);
+    }
   });
 });
 
