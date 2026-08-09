@@ -65,6 +65,7 @@ import {
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
 import { injectToolBudgetPreamble } from './subagent/budget-preamble.js';
+import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import type {
   ForkParent,
   ForkSubagentOptions,
@@ -475,6 +476,20 @@ export class SubagentManager {
       );
     }
 
+    // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS).
+    // Explicit caller values win, including `0` for unbounded and the background
+    // SUBAGENT_BACKGROUND_TIMEOUT_MS the SubagentExecutor stamps — `??`
+    // preserves that precedence. The default is env-tunable via
+    // AFK_SUBAGENT_TIMEOUT_MS (resolveSubagentTimeoutMs); an unset/invalid env
+    // value returns SUBAGENT_DEFAULT_TIMEOUT_MS, so behaviour is unchanged when
+    // the var is not set.
+    //
+    // Settled HERE rather than inline at the handle construction below because
+    // it now feeds TWO consumers that must agree: the handle's hard `withTimeout`
+    // abort, and the child config's soft deadline derived from it. Reading the
+    // budget twice would let them drift.
+    const effectiveTimeoutMs = options.config.timeoutMs ?? resolveSubagentTimeoutMs();
+
     // Invariant (budget disclosure): the preamble is applied HERE, wrapping the
     // whole literal, because this is the sole path to a child AgentSession —
     // agent-tool, compose/DAG, skill forks, and in-process callers all converge
@@ -582,6 +597,17 @@ export class SubagentManager {
       // `tool_use_loop_capped` done, returning the child's partial work.
       maxToolUseIterations:
         options.config.maxToolUseIterations ?? SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+      // TIME sibling of the round cap above, derived from the SAME wall-clock
+      // budget the hard `withTimeout` abort below is armed with. The round cap
+      // bounds WORK DONE and the idle watchdog bounds SILENCE; neither bounds a
+      // child that is genuinely working but slow — that child previously hit the
+      // hard abort and lost everything it had learned, unsynthesized. The soft
+      // deadline lands earlier, at a round boundary, and spends one tools-stripped
+      // round on a real answer. `resolveSoftDeadlineMs` returns `0` (off, prior
+      // behaviour exactly) for unbounded budgets and for budgets too short to
+      // split. An explicit caller `softDeadlineMs` wins via `??`, including `0`
+      // to opt out.
+      softDeadlineMs: options.config.softDeadlineMs ?? resolveSoftDeadlineMs(effectiveTimeoutMs),
       // External constraint (anti-hang, sibling of the cap above): a fork that
       // hits an OAuth usage-limit 429 otherwise auto-pauses and silently polls
       // for reset — up to two hours (retry-layer.ts) — with no subagent-level
@@ -722,14 +748,10 @@ export class SubagentManager {
         childController,
         this.abortGraph,
         options.outputSchema,
-        // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS
-        // above). Explicit caller values win, including `0` for unbounded and the
-        // background SUBAGENT_BACKGROUND_TIMEOUT_MS the SubagentExecutor stamps —
-        // `??` preserves that precedence. The default is env-tunable via
-        // AFK_SUBAGENT_TIMEOUT_MS (resolveSubagentTimeoutMs); an unset/invalid
-        // env value returns SUBAGENT_DEFAULT_TIMEOUT_MS, so behaviour is unchanged
-        // when the var is not set.
-        options.config.timeoutMs ?? resolveSubagentTimeoutMs(),
+        // Hard wall-clock backstop, settled above as `effectiveTimeoutMs` and
+        // SHARED with the child config's derived soft deadline so the two cannot
+        // drift. Unchanged behaviour: this still aborts a wedged child on schedule.
+        effectiveTimeoutMs,
         registry,
         () => {
           // Runs on every terminal outcome of the child — success, failure,

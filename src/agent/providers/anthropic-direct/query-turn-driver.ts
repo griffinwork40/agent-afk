@@ -48,6 +48,7 @@ export interface TurnDriverContext {
   readonly effort: import('../../types/sdk-types.js').EffortLevel | undefined;
   readonly baseUrl: string | undefined;
   readonly maxToolUseIterations: number | undefined;
+  readonly softDeadlineMs: number | undefined;
   readonly traceWriter: import('../../trace/index.js').TraceWriter | undefined;
   readonly subagentId: string | undefined;
   readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
@@ -154,6 +155,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         ...(ctx.effort !== undefined ? { effort: ctx.effort } : {}),
         ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
         ...(ctx.maxToolUseIterations !== undefined ? { maxToolUseIterations: ctx.maxToolUseIterations } : {}),
+        ...(ctx.softDeadlineMs !== undefined ? { softDeadlineMs: ctx.softDeadlineMs } : {}),
         ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
         ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
         ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),

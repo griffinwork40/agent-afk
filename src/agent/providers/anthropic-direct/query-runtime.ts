@@ -102,6 +102,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly effort?: import('../../types/sdk-types.js').EffortLevel;
   private readonly baseUrl?: string;
   private readonly maxToolUseIterations?: number;
+  private readonly softDeadlineMs?: number;
   private readonly traceWriter?: import('../../trace/index.js').TraceWriter;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
@@ -155,6 +156,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
     if (opts.maxToolUseIterations !== undefined)
       this.maxToolUseIterations = opts.maxToolUseIterations;
+    if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
@@ -207,6 +209,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get effort() { return query.effort; },
       get baseUrl() { return query.baseUrl; },
       get maxToolUseIterations() { return query.maxToolUseIterations; },
+      get softDeadlineMs() { return query.softDeadlineMs; },
       get traceWriter() { return query.traceWriter; },
       get subagentId() { return query.subagentId; },
       get mcpManager() { return query.mcpManager; },

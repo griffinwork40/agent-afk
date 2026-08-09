@@ -147,6 +147,12 @@ export function buildProviderQuery(
     ...(config.maxToolUseIterations !== undefined
       ? { maxToolUseIterations: config.maxToolUseIterations }
       : {}),
+    // TIME sibling of the round cap above — see shared/soft-deadline.ts. Armed
+    // by the subagent fork site from its wall-clock budget; unset (the
+    // top-level case, where a human owns the turn) means hard abort only.
+    ...(config.softDeadlineMs !== undefined
+      ? { softDeadlineMs: config.softDeadlineMs }
+      : {}),
     ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
     ...(systemPromptRebuildFactory !== undefined ? { systemPromptRebuildFactory } : {}),
     // Path-approval half of the live `/bypass` toggle: keep the provider's

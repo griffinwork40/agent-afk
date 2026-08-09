@@ -85,6 +85,14 @@ export interface AnthropicDirectQueryOptions {
    * runaway child cannot spin unboundedly while the parent awaits its result.
    */
   maxToolUseIterations?: number;
+  /**
+   * Soft wall-clock deadline (ms from turn start) forwarded to `runTurn` as
+   * `RunTurnInput.softDeadlineMs`. The TIME sibling of the round cap above:
+   * once passed, the loop runs ONE tools-stripped wind-down round rather than
+   * being killed mid-work by the hard `withTimeout` abort. Unset/`0` means no
+   * soft deadline — see `shared/soft-deadline.ts`.
+   */
+  softDeadlineMs?: number;
   /** Witness-layer trace writer threaded into each per-turn run. */
   traceWriter?: import('../../trace/index.js').TraceWriter;
   /**

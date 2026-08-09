@@ -103,6 +103,7 @@ import {
   resolveSubagentTimeoutMs,
   resolveSubagentIdleTimeoutMs,
 } from './subagent.js';
+import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { ENV_REGISTRY } from '../config/env.js';
 import { IdleWatchdogError } from '../utils/errors.js';
 
@@ -278,6 +279,84 @@ describe('SubagentManager', () => {
       config: { model: 'sonnet', maxToolUseIterations: 0 },
     });
     expect((shared.lastConfig as unknown as Record<string, unknown>)['maxToolUseIterations']).toBe(0);
+  });
+
+  // --- SOFT WALL-CLOCK DEADLINE ARMING (issue #938) ---
+  // The fork site derives the child's soft deadline from the SAME wall-clock
+  // budget the hard `withTimeout` abort uses, so a slow-but-working child winds
+  // down gracefully before the hard kill. Behaviour of the hard abort itself is
+  // unchanged (pinned by the timeout tests further below).
+  it('arms softDeadlineMs from the default wall-clock budget', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    // 45-min default → 5-min reserve (clamped at the ceiling) → 40-min deadline.
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({
+        softDeadlineMs: resolveSoftDeadlineMs(SUBAGENT_DEFAULT_TIMEOUT_MS),
+      }),
+    );
+    expect(
+      (shared.lastConfig as unknown as Record<string, unknown>)['softDeadlineMs'],
+    ).toBe(40 * 60_000);
+  });
+
+  it('derives softDeadlineMs from an explicit timeoutMs', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', timeoutMs: 8 * 60_000 },
+    });
+    // 8 min × 0.15 = 72s reserve (inside both clamps) → 6m48s deadline.
+    expect(
+      (shared.lastConfig as unknown as Record<string, unknown>)['softDeadlineMs'],
+    ).toBe(8 * 60_000 - 72_000);
+  });
+
+  it('leaves softDeadlineMs off (0) for short and unbounded budgets', async () => {
+    // Short budgets have no split leaving both working time and a usable
+    // synthesis reserve, so they keep the prior hard-abort behaviour exactly —
+    // this is what keeps the existing 1s/60s timeout tests byte-identical.
+    for (const timeoutMs of [1_000, 60_000, 120_000, 0]) {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet', timeoutMs },
+      });
+      expect(
+        (shared.lastConfig as unknown as Record<string, unknown>)['softDeadlineMs'],
+      ).toBe(0);
+    }
+  });
+
+  it('preserves an explicit softDeadlineMs over the derived value', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', softDeadlineMs: 1_234 },
+    });
+    expect(
+      (shared.lastConfig as unknown as Record<string, unknown>)['softDeadlineMs'],
+    ).toBe(1_234);
+  });
+
+  it('preserves an explicit softDeadlineMs of 0 (opt out of the wind-down)', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      // A 45-min budget would otherwise derive 40 min — the explicit 0 wins.
+      config: { model: 'sonnet', softDeadlineMs: 0 },
+    });
+    expect(
+      (shared.lastConfig as unknown as Record<string, unknown>)['softDeadlineMs'],
+    ).toBe(0);
   });
 
   // Regression (cap-burn): a child used to learn its tool-round budget ONLY from

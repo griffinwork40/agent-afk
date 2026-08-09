@@ -169,7 +169,7 @@ export async function* openRound({
     ...input,
     messages: messagesForRequest,
     // Wind-down round: omit tools so the model must produce text.
-    tools: turn.capReached ? null : input.tools,
+    tools: turn.windDownReason !== null ? null : input.tools,
   });
 
   // Witness layer: stamp request-initiation time so the model_ttfb phase can

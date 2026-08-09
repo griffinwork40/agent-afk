@@ -155,6 +155,23 @@ export interface AgentConfig {
   maxToolUseIterations?: number;
 
   /**
+   * Milliseconds from turn start after which the provider loop winds down
+   * gracefully; `0`/unset = off. The TIME sibling of
+   * {@link maxToolUseIterations} (the ROUND budget): both trip the same
+   * mechanism — one tools-stripped round so the model synthesizes a real answer
+   * — but the terminal `stopReason` differs so a turn that ran out of clock is
+   * never misreported as one that ran out of rounds.
+   *
+   * Set by the subagent fork site from its wall-clock budget — see
+   * `resolveSoftDeadlineMs` in `providers/shared/soft-deadline.ts`, which
+   * reserves a slice of the hard budget for the synthesis round and returns `0`
+   * for budgets too short to split. An explicit caller value wins over the
+   * derived one. The hard `withTimeout` abort stays armed underneath as the
+   * backstop for a genuinely wedged child.
+   */
+  softDeadlineMs?: number;
+
+  /**
    * Controls Claude's extended-thinking / reasoning behavior. When omitted,
    * the SDK picks the model-appropriate default (adaptive on Opus 4.6+).
    * See the SDK's `ThinkingConfig` union.

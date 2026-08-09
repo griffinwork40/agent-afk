@@ -22,6 +22,11 @@ import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput, TurnResult } from '../types.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import {
+  SOFT_DEADLINE_NOTE,
+  SOFT_DEADLINE_WIND_DOWN,
+  softDeadlineExpired,
+} from '../../shared/soft-deadline.js';
+import {
   TOOL_USE_LOOP_CAPPED,
   WIND_DOWN_NOTE,
   formatRoundLabel,
@@ -48,6 +53,7 @@ export async function* runToolRound(
   input: RunTurnInput,
   turn: TurnAccumulator,
   maxIterations: number,
+  softDeadlineMs: number,
 ): AsyncGenerator<ProviderEvent, ToolRoundOutcome, void> {
   // Rollback contract: capture the pre-push length so any throw between here
   // and the `tool_result` commit can splice the orphaned assistant message back
@@ -116,31 +122,40 @@ export async function* runToolRound(
     sessionId: input.ctx.sessionId,
   };
 
-  if (turn.capReached) {
+  if (turn.windDownReason !== null) {
     // The wind-down round (tools stripped) still came back as `tool_use` — only
     // reachable if the model emits a tool call against an empty toolset. Honor
-    // the cap with a hard stop rather than looping unbounded.
+    // the spent budget with a hard stop rather than looping unbounded, stamping
+    // the reason that armed the wind-down so a turn cut short by TIME is not
+    // reported as one cut short by ROUNDS.
     yield {
       type: 'turn.completed',
-      usage: turn.withDuration({ ...turn.usage, stopReason: TOOL_USE_LOOP_CAPPED }),
+      usage: turn.withDuration({ ...turn.usage, stopReason: turn.windDownReason }),
       sessionId: input.ctx.sessionId,
     };
     return 'terminated';
   }
 
-  if (shouldWindDown(turn.iterations, maxIterations)) {
-    // Cap reached. Instead of cutting the turn off HERE — which ends it with no
-    // final assistant message and reads as a silent hang — run ONE more round
-    // with tools stripped (see the params build in round-request.ts) so the
-    // model can synthesize a final answer from what it gathered. Append a brief
-    // note to the tool_result turn just pushed so the model knows why its tools
-    // are gone. `capReached` guarantees this fires at most once; the guard above
-    // hard-stops if the wind-down round pathologically emits another tool_use.
+  // Two independent budgets trip the SAME wind-down mechanism: the tool-round
+  // cap and the soft wall-clock deadline. Round-cap wins a tie — it is the more
+  // specific budget, and its note is the more accurate diagnosis when both are
+  // spent. Either way the loop runs ONE more round with tools stripped (see the
+  // params build in round-request.ts) rather than cutting the turn off HERE,
+  // which would end it with no final assistant message and read as a silent
+  // hang. `windDownReason` guarantees this fires at most once; the guard above
+  // hard-stops if the wind-down round pathologically emits another tool_use.
+  const roundsSpent = shouldWindDown(turn.iterations, maxIterations);
+  const timeSpent = softDeadlineExpired(turn.startedAt, softDeadlineMs);
+  if (roundsSpent || timeSpent) {
+    // Append the matching note to the tool_result turn just pushed so the model
+    // knows why its tools are gone — worded around the budget that actually ran
+    // out, so it never reports "I ran out of tool calls" when it ran out of clock.
+    const note = roundsSpent ? WIND_DOWN_NOTE : SOFT_DEADLINE_NOTE;
     const lastMsg = input.messages[input.messages.length - 1];
     if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
-      lastMsg.content.push({ type: 'text', text: WIND_DOWN_NOTE });
+      lastMsg.content.push({ type: 'text', text: note });
     }
-    turn.capReached = true;
+    turn.windDownReason = roundsSpent ? TOOL_USE_LOOP_CAPPED : SOFT_DEADLINE_WIND_DOWN;
   }
 
   return 'continue';
