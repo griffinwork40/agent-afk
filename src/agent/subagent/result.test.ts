@@ -18,6 +18,7 @@ import {
   STREAM_INCOMPLETE,
 } from './result.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
+import { TRUNCATION_STOP_REASONS } from '../providers/shared/truncation.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
@@ -180,9 +181,15 @@ describe('isIncompleteStopReason — partial-result classification', () => {
   // #952: a child cut off at the output-token cap streamed real text and
   // reached a terminal message, so it resolves `succeeded` — but that text ends
   // mid-thought and must be marked partial, exactly like the tool-loop-cap case.
-  it('is true for output-token truncation on both providers (max_tokens / length)', () => {
-    expect(isIncompleteStopReason('max_tokens')).toBe(true); // anthropic
-    expect(isIncompleteStopReason('length')).toBe(true); // openai-compatible
+  it('is true for output-token truncation on every wire sentinel', () => {
+    expect(isIncompleteStopReason('max_tokens')).toBe(true); // anthropic messages
+    expect(isIncompleteStopReason('length')).toBe(true); // openai chat completions
+    expect(isIncompleteStopReason('max_output_tokens')).toBe(true); // openai responses
+    // Driven off the shared constant so a newly-added wire sentinel cannot pass
+    // the predicate while silently skipping the subagent partial-result banner.
+    for (const reason of TRUNCATION_STOP_REASONS) {
+      expect(isIncompleteStopReason(reason), reason).toBe(true);
+    }
   });
 
   it('is false for a genuinely unrelated provider stop reason', () => {
@@ -222,7 +229,7 @@ describe('annotateIfIncomplete — parent-visible partial marker', () => {
   });
 
   it('prepends a PARTIAL marker naming output-token truncation and preserves the body (#952)', () => {
-    for (const reason of ['max_tokens', 'length']) {
+    for (const reason of TRUNCATION_STOP_REASONS) {
       const out = annotateIfIncomplete(BODY, reason);
       expect(out, reason).not.toBe(BODY);
       expect(out, reason).toContain('PARTIAL RESULT');

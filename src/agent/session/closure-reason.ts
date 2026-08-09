@@ -34,9 +34,10 @@
  *     the session carries the model's synthesized summary rather than dying
  *     mid-work at the hard abort. Classified as `timeout` because the budget
  *     that ran out WAS the clock — only the handling was gentler.
- *  7. a truncation stop reason (`max_tokens` / `length`) on an otherwise clean
- *     close → `truncated` — the model's final turn was cut off by the
- *     output-token ceiling, previously indistinguishable from a clean end.
+ *  7. a truncation stop reason (`max_tokens` / `length` / `max_output_tokens`)
+ *     on an otherwise clean close → `truncated` — the model's final turn was
+ *     cut off by the output-token ceiling, previously indistinguishable from a
+ *     clean end.
  *  8. otherwise → `model_end_turn`.
  *
  * @module agent/session/closure-reason
@@ -49,7 +50,7 @@ import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { isTruncationStopReason } from '../providers/shared/truncation.js';
 
 // Canonical definition lives in providers/shared/truncation.ts so the
-// `'max_tokens' || 'length'` literals stay single-sourced across the closure
+// per-wire sentinel literals stay single-sourced across the closure
 // classifier, the anthropic-direct terminal path, and the subagent result path.
 // Re-exported here so existing importers (and closure-reason.test.ts) resolve
 // `isTruncationStopReason` from this module unchanged.
