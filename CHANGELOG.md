@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.100.3] - 2026-08-09
+
+### Fixed
+- wind down gracefully on the wall-clock deadline instead of aborting (#950) (391a0db)
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#955) (70d3886)
+
 ## [5.100.2] - 2026-08-08
 
 ### Fixed
