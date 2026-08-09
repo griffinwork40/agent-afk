@@ -60,6 +60,7 @@ import { registerInteractiveCommand } from './commands/interactive.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerConfigCommand } from './commands/config-command.js';
 import { registerDaemonCommand } from './commands/daemon.js';
+import { registerWebCommand } from './commands/web.js';
 import { registerQueueCommand } from './commands/queue.js';
 import { registerLoginCommand } from './commands/login-command.js';
 import { registerPluginCommand } from './commands/plugin.js';
@@ -119,6 +120,7 @@ program
 registerChatCommand(program);
 registerConfigCommand(program);
 registerDaemonCommand(program);
+registerWebCommand(program);
 registerQueueCommand(program);
 registerInteractiveCommand(program);
 registerLoginCommand(program);

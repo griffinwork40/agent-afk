@@ -33,7 +33,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentModelInput } from '../types.js';
 
 /** User-facing surface that owns a binding. Aligns with session-identity's TraceOrigin (minus 'unknown'). */
-export type SessionSurface = 'cli' | 'telegram' | 'daemon';
+export type SessionSurface = 'cli' | 'telegram' | 'daemon' | 'web';
 
 /** Lifecycle state of a handle. `archived` handles never `resolve()` for routing. */
 export type SessionStatus = 'active' | 'archived';

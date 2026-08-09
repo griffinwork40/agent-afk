@@ -841,7 +841,7 @@ export interface SessionPhasePayload {
    * never set. Orthogonal to the JSONL telemetry `surface: 'afk'|'plugin'`
    * provenance tag — that names the WRITER ecosystem, this names the entrypoint.
    */
-  origin?: 'cli' | 'telegram' | 'daemon' | 'unknown';
+  origin?: 'cli' | 'telegram' | 'daemon' | 'web' | 'unknown';
   /**
    * Actor role that produced this session. Set on `session_init_start`:
    * `'main'` for a top-level session, `'subagent'` for a forked child

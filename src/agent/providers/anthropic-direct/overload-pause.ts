@@ -129,7 +129,7 @@ export function classifyOverloadExhaustion(event: ProviderEvent): boolean {
 }
 
 /** Surfaces on which parking on an upstream capacity event is acceptable. */
-const INTERACTIVE_SURFACES = new Set(['cli', 'repl', 'telegram']);
+const INTERACTIVE_SURFACES = new Set(['cli', 'repl', 'telegram', 'web']);
 
 /**
  * Resolve the wall-clock pause ceiling for a surface.

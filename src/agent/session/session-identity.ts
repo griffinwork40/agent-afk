@@ -22,7 +22,7 @@
 import type { Surface } from '../awareness/types.js';
 
 /** User-facing surface bucket recorded as `origin` in durable telemetry. */
-export type TraceOrigin = 'cli' | 'telegram' | 'daemon' | 'unknown';
+export type TraceOrigin = 'cli' | 'telegram' | 'daemon' | 'web' | 'unknown';
 
 /** Execution role recorded as `actor` in durable telemetry. */
 export type TraceActor = 'main' | 'subagent';
@@ -44,6 +44,8 @@ export function deriveOrigin(surface: Surface | undefined): TraceOrigin {
       return 'telegram';
     case 'daemon':
       return 'daemon';
+    case 'web':
+      return 'web';
     // 'subagent' is an actor role, not a surface; 'unknown'/undefined are
     // genuinely unknown. All collapse to 'unknown'.
     case 'subagent':

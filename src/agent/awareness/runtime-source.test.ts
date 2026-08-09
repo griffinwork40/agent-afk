@@ -74,7 +74,7 @@ describe('buildRuntimeStateSource.getSelf', () => {
   });
 
   it('coerces known surface strings to the typed union', () => {
-    for (const s of ['cli', 'repl', 'daemon', 'telegram', 'subagent']) {
+    for (const s of ['cli', 'repl', 'daemon', 'telegram', 'subagent', 'web']) {
       const src = buildRuntimeStateSource({ ...defaultDeps(), surface: s });
       expect(src.getSelf().surface).toBe(s);
     }

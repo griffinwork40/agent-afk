@@ -222,7 +222,7 @@ export function deriveSessionFacet(
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
     session_id: sessionId,
-    source: source === 'telegram' ? 'telegram' : 'cli',
+    source: source === 'telegram' ? 'telegram' : source === 'web' ? 'web' : 'cli',
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
     derived_from: 'afk-session',

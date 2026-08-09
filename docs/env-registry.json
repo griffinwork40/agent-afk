@@ -914,6 +914,30 @@
       "category": "misc"
     },
     {
+      "name": "AFK_WEB_HOST",
+      "description": "Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host.",
+      "type": "string",
+      "required": false,
+      "example": "127.0.0.1",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_WEB_PORT",
+      "description": "Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port.",
+      "type": "number",
+      "required": false,
+      "example": "4141",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_WEB_TOKEN",
+      "description": "Bearer token for the `afk web` surface. When unset, a random per-run token is minted and printed in the startup URL. Setting this explicitly is also what permits a non-loopback bind.",
+      "type": "string",
+      "required": false,
+      "category": "daemon",
+      "secret": true
+    },
+    {
       "name": "AFK_WORKTREE_AUTONAME",
       "description": "Auto-rename worktree branches based on the first user message in interactive mode. 1 = on (default), 0 = off.",
       "type": "boolean",

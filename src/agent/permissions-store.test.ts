@@ -258,6 +258,19 @@ describe('M4 — isValidGrant rejects invalid source and relative path', () => {
     expect(file.grants).toHaveLength(0);
   });
 
+  // The round-trip that the GrantSource union alone does not guarantee:
+  // `isValidGrant` is a hand-rolled literal check, so a source added to the
+  // type but not to that chain writes fine and then vanishes on next load.
+  it('accepts a grant with source "elicit:web"', () => {
+    appendGrant(
+      { path: '/from-browser', mode: 'read', decision: 'allow', source: 'elicit:web' },
+      storePath,
+    );
+    const file = loadPermissionsFile(storePath);
+    expect(file.grants).toHaveLength(1);
+    expect(file.grants[0]?.source).toBe('elicit:web');
+  });
+
   it('rejects a grant with a relative path "../secrets"', () => {
     writeFileSync(
       storePath,

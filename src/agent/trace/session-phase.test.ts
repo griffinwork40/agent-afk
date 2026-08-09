@@ -69,7 +69,7 @@ describe('session_phase payload schema — acceptance', () => {
   });
 
   it('accepts every origin + actor enum value', () => {
-    for (const origin of ['cli', 'telegram', 'daemon', 'unknown'] as const) {
+    for (const origin of ['cli', 'telegram', 'daemon', 'web', 'unknown'] as const) {
       expect(() =>
         SessionPhasePayloadSchema.parse({ phase: 'session_init_start', origin }),
       ).not.toThrow();
@@ -81,9 +81,21 @@ describe('session_phase payload schema — acceptance', () => {
     }
   });
 
+  // `afk web` sessions set surface: 'web' (session-owner.ts), which
+  // deriveOrigin() maps to origin: 'web' (session-identity.ts). Every
+  // session_init_start emitted from that surface must actually parse —
+  // this pins the #932 review fix rather than the bug it replaced.
+  it('accepts origin: web on session_init_start', () => {
+    const parsed = SessionPhasePayloadSchema.parse({
+      phase: 'session_init_start',
+      origin: 'web',
+    });
+    expect(parsed.origin).toBe('web');
+  });
+
   it('rejects an out-of-union origin or actor', () => {
     expect(() =>
-      SessionPhasePayloadSchema.parse({ phase: 'session_init_start', origin: 'web' }),
+      SessionPhasePayloadSchema.parse({ phase: 'session_init_start', origin: 'ftp' }),
     ).toThrow();
     expect(() =>
       SessionPhasePayloadSchema.parse({ phase: 'session_init_start', actor: 'root' }),

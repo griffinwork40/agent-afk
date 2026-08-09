@@ -446,6 +446,27 @@ describe('createPathApprovalHook — outcome mapping', () => {
     });
   });
 
+  // A browser-granted approval must be auditable AS a browser approval. It
+  // persisted as `elicit:unknown` because the surface union gained 'web' but
+  // this ternary did not, erasing the provenance of every web grant.
+  it('persist: a web-surface grant records source elicit:web', async () => {
+    const append = vi.spyOn(permissionsStore, 'appendGrant').mockImplementation(((body: unknown) => {
+      return { ...(body as object), id: 'fake-ulid', grantedAt: 'now' };
+    }) as never);
+    elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'persist' } }));
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'web',
+    });
+
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+
+    expect(append).toHaveBeenCalledTimes(1);
+    expect(append.mock.calls[0]?.[0]).toMatchObject({ source: 'elicit:web' });
+  });
+
   it('deny: returns block with descriptive reason', async () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'deny' } }));
     const mgr = makeMockGrantManager();

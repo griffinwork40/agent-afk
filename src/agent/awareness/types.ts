@@ -33,7 +33,7 @@
  * This field is descriptive metadata for the agent's situational awareness;
  * it is the same string the provider already stores at `opts.surface`.
  */
-export type Surface = 'cli' | 'repl' | 'daemon' | 'telegram' | 'subagent' | 'unknown';
+export type Surface = 'cli' | 'repl' | 'daemon' | 'telegram' | 'subagent' | 'web' | 'unknown';
 
 /** Read/write phase enforcement tag inherited from `ForkSubagentOptions.phaseRole`. */
 export type PhaseRole = 'read-only' | 'read-write';

@@ -192,6 +192,19 @@ export function getBundledPluginsDir(): string {
   return join(thisDir, 'bundled-plugins');
 }
 
+/**
+ * Bundled web-ui assets (compiled `afk web` frontend bundle) shipped inside
+ * the compiled dist/ output. Resolved relative to this module's location —
+ * same rationale and sibling-dir shape as {@link getBundledPluginsDir} — so it
+ * resolves identically under `tsx` (`src/web-ui-assets/`) and compiled dist
+ * (`dist/web-ui-assets/`).
+ */
+export function getWebUiAssetsDir(): string {
+  const thisFile = fileURLToPath(import.meta.url);
+  const thisDir = dirname(thisFile);
+  return join(thisDir, 'web-ui-assets');
+}
+
 export function getAfkConfigDir(): string {
   return join(getAfkHome(), 'config');
 }
