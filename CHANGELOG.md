@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.1] - 2026-08-09
+
+### Fixed
+- surface max_tokens truncation instead of failing silently (#952) (#960) (03a9ca3)
+
+### Changed
+- replace fixed-sleep races with vi.waitFor polls (#969) (97e6c67)
+
 ## [5.103.0] - 2026-08-09
 
 ### Added
