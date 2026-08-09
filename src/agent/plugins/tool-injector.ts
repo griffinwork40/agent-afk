@@ -22,6 +22,14 @@ export interface PluginSkillMetadata {
   description?: string;
   argumentHint?: string;
   /**
+   * Which plugin directory this artifact came from. `'command'` marks a
+   * Claude Code `commands/*.md` file (see `command-files.ts`); absent means
+   * the default `skills/**\/SKILL.md` form. Read by `buildSkillManifest` to
+   * keep commands out of the model-facing catalogue while leaving them fully
+   * invocable as slash commands.
+   */
+  origin?: 'command';
+  /**
    * Resolved tool allowlist parsed from the `tools:` frontmatter field.
    *
    * When present, only the listed tools are permitted for subagents dispatched
@@ -265,7 +273,7 @@ export function extractPluginSkills(
  *   When omitted, `resolveKnownToolNames()` is called lazily.
  * @returns Extracted metadata (returns `{ name: undefined }` if parsing fails)
  */
-function parseSkillMetadata(
+export function parseSkillMetadata(
   skillPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata {
@@ -301,7 +309,12 @@ function parseSkillMetadata(
         metadata.name = value.replace(/^["']|["']$/g, '');
       } else if (key === 'description') {
         metadata.description = value.replace(/^["']|["']$/g, '');
-      } else if (key === 'argumentHint') {
+      } else if (key === 'argument-hint' || key === 'argumentHint') {
+        // Both spellings. `argument-hint` is the Claude Code / Agent Skills
+        // standard and what plugin authors actually write; `argumentHint` was
+        // the only form accepted here, so kebab-case hints in plugin SKILL.md
+        // files were silently dropped while `user-skills.ts` (which reads both)
+        // handled the identical file correctly.
         metadata.argumentHint = value.replace(/^["']|["']$/g, '');
       } else if (key === 'tools') {
         // Collect the lines after this one to handle YAML list form

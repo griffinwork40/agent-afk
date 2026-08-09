@@ -519,6 +519,76 @@ describe('collectSkillEntries — plugin frontmatter audience filter', () => {
   });
 });
 
+describe('plugin commands/*.md integration', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync('/tmp/skill-bridge-commands-test-');
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tmpDir, { recursive: true });
+    } catch {
+      // Non-fatal cleanup.
+    }
+  });
+
+  function writeCommand(pluginPath: string, rel: string, description: string): void {
+    const full = join(pluginPath, 'commands', rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, `---\ndescription: ${description}\n---\n\nCommand body for ${rel}.\n`);
+  }
+
+  function writeSkillMd(pluginPath: string, name: string): void {
+    const dir = join(pluginPath, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: A skill\n---\nSkill body.\n`);
+  }
+
+  it('collectSkillEntries surfaces a commands/*.md file tagged source: command', () => {
+    writeCommand(tmpDir, 'deploy.md', 'Ship it');
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    const deploy = entries.find((e) => e.name === 'deploy');
+    expect(deploy).toBeDefined();
+    expect(deploy?.source).toBe('command');
+    expect(deploy?.description).toBe('Ship it');
+  });
+
+  it('buildSkillManifest EXCLUDES commands from the model-facing catalogue', () => {
+    // The manifest has no character budget, and a command is user-invoked by
+    // nature — listing a third-party plugin's command surface to the model
+    // would grow the system prompt without bound.
+    writeCommand(tmpDir, 'deploy.md', 'Ship it');
+    const manifest = buildSkillManifest([{ type: 'local', path: tmpDir }]);
+    expect(manifest).not.toContain('deploy');
+  });
+
+  it('discoverPluginSkillBodies makes a command body dispatchable', () => {
+    // Excluded from the manifest but still executable — otherwise the slash
+    // command would register and then dispatch nothing.
+    writeCommand(tmpDir, 'deploy.md', 'Ship it');
+    const bodies = discoverPluginSkillBodies([{ type: 'local', path: tmpDir }]);
+    expect(bodies.get('deploy')?.body).toContain('Command body for deploy.md.');
+  });
+
+  it('namespaces a subdirectory command as ns:name end-to-end', () => {
+    writeCommand(tmpDir, 'review/security.md', 'Sec review');
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    expect(entries.some((e) => e.name === 'review:security')).toBe(true);
+  });
+
+  it('a SKILL.md wins over a commands/*.md of the same name (CC precedence)', () => {
+    writeSkillMd(tmpDir, 'overlap');
+    writeCommand(tmpDir, 'overlap.md', 'The command version');
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    const matches = entries.filter((e) => e.name === 'overlap');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.source).toBe('plugin');
+    expect(matches[0]?.description).toBe('A skill');
+  });
+});
+
 describe('discoverPluginSkillBodies', () => {
   let tmpDir: string;
 
