@@ -555,6 +555,52 @@ describe('write-denylist — AFK_HOME-relocated credential tree (#740)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Memoization cache-key regression guard (#781)
+// ---------------------------------------------------------------------------
+
+describe('write-denylist — memoization cache-key regression guard (#781)', () => {
+  // Cache-invalidation: the memoization key must include AFK_HOME and
+  // AFK_STATE_DIR, not just AFK_WRITE_DENYLIST, or a runtime change to either
+  // returns a STALE denylist that fails to cover a newly-relocated credential
+  // tree — silently permitting a write that should be denied.
+  // Invariant: deliberately NO `_resetWriteDenylistCacheForTests()` call
+  // between the two queries below — that reset is what the memo key itself is
+  // supposed to make unnecessary. Calling it here would make this test pass
+  // even if AFK_HOME/AFK_STATE_DIR were dropped from the key entirely,
+  // defeating the point of the regression guard. Mirrors
+  // read-denylist.test.ts's identically-purposed guard.
+  it('invalidates the memoized denylist when AFK_HOME changes, with no manual cache reset', () => {
+    const relocated = join(tmpDir, 'relocated-cache-home');
+    mkdirSync(relocated, { recursive: true });
+    const target = join(relocated, 'config', 'afk.env');
+
+    // Query once with AFK_HOME unset: the relocated config dir is NOT covered.
+    expect(() => assertNotDenylisted(target, 'write_file')).not.toThrow();
+
+    // Change AFK_HOME and query again — WITHOUT resetting the cache by hand.
+    vi.stubEnv('AFK_HOME', relocated);
+    expect(() => assertNotDenylisted(target, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
+  });
+
+  it('invalidates the memoized denylist when AFK_STATE_DIR changes, with no manual cache reset', () => {
+    const stateDir = join(tmpDir, 'relocated-cache-state');
+    mkdirSync(stateDir, { recursive: true });
+    const target = join(stateDir, 'sessions', 's.json');
+
+    // Query once with AFK_STATE_DIR unset: the relocated state dir is NOT covered.
+    expect(() => assertNotDenylisted(target, 'write_file')).not.toThrow();
+
+    // Change AFK_STATE_DIR and query again — WITHOUT resetting the cache by hand.
+    vi.stubEnv('AFK_STATE_DIR', stateDir);
+    expect(() => assertNotDenylisted(target, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
+  });
+});
+
 describe('assertNotDenylisted — case-variant spellings (#736)', () => {
   afterEach(() => {
     _resetFsCaseCacheForTests();
