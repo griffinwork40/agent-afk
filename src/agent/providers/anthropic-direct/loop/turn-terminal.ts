@@ -79,12 +79,30 @@ export function* emitNonToolUseTerminal(
     return;
   }
 
+  // #952: a `max_tokens` truncation is otherwise invisible on every live surface
+  // (REPL, Telegram, chat) — the closure reason never leaves the trace stream, so
+  // a partial turn is indistinguishable from a clean completion, and the worst
+  // case (a tool call cut mid-arguments, stripped below and never dispatched)
+  // reads as the agent giving up mid-task. The dropped-tool names come from
+  // `toolUseBlocks` (the exact blocks the strip below removes).
+  //
+  // The notice is APPENDED to the partial-text message below (not yielded as a
+  // second `assistant.message`): last-wins consumers — the non-streaming
+  // `sendMessage()` path and a subagent's final-message capture — keep only
+  // the LAST assistant message of a turn, so two messages here would silently
+  // discard the real answer and surface only the warning.
+  const truncationText = isTruncationStopReason(turnResult.stopReason)
+    ? truncationNotice(turnResult.toolUseBlocks.map((b) => b.name))
+    : null;
+
   if (turnResult.text.length > 0) {
     yield {
       type: 'assistant.message',
-      text: turnResult.text,
+      text: truncationText ? `${turnResult.text}\n\n${truncationText}` : turnResult.text,
       sessionId: input.ctx.sessionId,
     };
+    // The suggestion always mirrors the model's own text, never the appended
+    // notice — it feeds a quick-reply candidate, not an operator warning.
     if (turnResult.text.length <= SUGGESTION_MAX_LENGTH) {
       yield {
         type: 'suggestion',
@@ -92,20 +110,12 @@ export function* emitNonToolUseTerminal(
         sessionId: input.ctx.sessionId,
       };
     }
-  }
-
-  // #952: a `max_tokens` truncation is otherwise invisible on every live surface
-  // (REPL, Telegram, chat) — the closure reason never leaves the trace stream, so
-  // a partial turn is indistinguishable from a clean completion, and the worst
-  // case (a tool call cut mid-arguments, stripped below and never dispatched)
-  // reads as the agent giving up mid-task. Surface a display-only notice — NOT
-  // pushed to history, mirroring the `refusal` branch above — after the partial
-  // text so the answer still shows first. The dropped-tool names come from
-  // `toolUseBlocks` (the exact blocks the strip below removes).
-  if (isTruncationStopReason(turnResult.stopReason)) {
+  } else if (truncationText) {
+    // No partial text to attach to (e.g. a tool call truncated before any
+    // text block) — the notice stands alone, exactly as before.
     yield {
       type: 'assistant.message',
-      text: truncationNotice(turnResult.toolUseBlocks.map((b) => b.name)),
+      text: truncationText,
       sessionId: input.ctx.sessionId,
     };
   }

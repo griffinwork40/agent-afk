@@ -186,6 +186,8 @@ describe('loop.ts runTurn — orphan tool_use prevention', () => {
   });
 
   // #952: text-only truncation (no tool_use) → notice without a tool name.
+  // #960: the partial text and the notice are now ONE assistant.message, not
+  // two — see the dedicated merged-message test below for the full rationale.
   it('surfaces a truncation notice for text-only max_tokens truncation', async () => {
     const client = makeClient(() => fromArray(makeTextStream('a partial answer', 'max_tokens')));
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
@@ -209,12 +211,62 @@ describe('loop.ts runTurn — orphan tool_use prevention', () => {
     expect(noticed).toHaveLength(1);
     expect(noticed[0]!.text).toContain('allow a longer reply');
     expect(noticed[0]!.text).not.toContain('NOT dispatched');
-    // The model's partial text is still delivered as its own assistant.message.
-    expect(
-      events.some(
-        (e) => e.type === 'assistant.message' && (e as { text: string }).text === 'a partial answer',
-      ),
-    ).toBe(true);
+    // The model's partial text is delivered INSIDE the same assistant.message
+    // as the notice (#960), not as a separate event.
+    expect(noticed[0]!.text).toContain('a partial answer');
+    // Exactly one assistant.message for the whole turn — the partial text and
+    // the notice were never split into two events.
+    expect(events.filter((e) => e.type === 'assistant.message')).toHaveLength(1);
+  });
+
+  // #960: a last-wins consumer (the non-streaming `sendMessage()` path in
+  // agent-session.ts, and a subagent's final-message capture in handle.ts)
+  // keeps only the LAST `assistant.message` of a turn. Before this fix,
+  // emitNonToolUseTerminal yielded the partial text and the truncation notice
+  // as two separate assistant.message events, so those consumers silently
+  // discarded the model's real (partial) answer and kept only the warning.
+  // Pin the fix at the event level: one merged message, answer first.
+  it('merges the partial answer and the truncation notice into ONE assistant.message (#960)', async () => {
+    const client = makeClient(() => fromArray(makeTextStream('a partial answer', 'max_tokens')));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'explain' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+
+    const assistantMessages = events.filter(
+      (e) => e.type === 'assistant.message',
+    ) as Array<{ text: string }>;
+    // A last-wins consumer keeps assistantMessages.at(-1) — that message alone
+    // must carry both the answer and the notice, or the answer is lost.
+    expect(assistantMessages).toHaveLength(1);
+    const merged = assistantMessages[0]!.text;
+    expect(merged).toContain('output-token limit');
+    // Answer first, notice second, joined by exactly one blank line — the
+    // model's raw text is preserved verbatim as the message prefix so a
+    // last-wins consumer reading this one event still recovers the full
+    // partial answer.
+    expect(merged.startsWith('a partial answer\n\n')).toBe(true);
+    expect(merged.indexOf('a partial answer')).toBeLessThan(merged.indexOf('output-token limit'));
+
+    // The `suggestion` event (short text) must carry ONLY the model's own
+    // text, never the appended operator notice.
+    const suggestion = events.find((e) => e.type === 'suggestion') as
+      | { suggestion: string }
+      | undefined;
+    expect(suggestion, 'a suggestion should be emitted for short partial text').toBeDefined();
+    expect(suggestion!.suggestion).toBe('a partial answer');
+    expect(suggestion!.suggestion).not.toContain('output-token limit');
   });
 
   it('rolls back the assistant tool_use push when the dispatcher accessor throws', async () => {

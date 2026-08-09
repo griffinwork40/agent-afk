@@ -110,7 +110,7 @@ export function annotateIfIncomplete(content: string, stopReason: string | undef
         : stopReason === OVERLOAD_EXHAUSTED
           ? 'was stopped by a sustained upstream overload (HTTP 529) before finishing'
           : isTruncationStopReason(stopReason)
-            ? 'was cut off at the output-token limit (max_tokens) before finishing'
+            ? 'was cut off at the output-token limit before finishing'
             : 'was cut off before finishing (its stream ended without a final message)';
   return (
     `[⚠ PARTIAL RESULT — the subagent ${why}. The text below is an incomplete ` +
