@@ -494,6 +494,41 @@ You process PDF files. Scripts are in \${SKILL_ROOT}/scripts/.
     expect(callArgs?.config?.env?.['SKILL_ROOT']).toBe(dir);
   });
 
+  it('substitutes $ARGUMENTS and positional ${N} into a forked user skill body', async () => {
+    // Regression: the forked disk-skill path passed `parsed.body` to the child
+    // verbatim, so a user- or project-authored SKILL.md saw its own
+    // placeholders unexpanded while an identical plugin-authored skill got
+    // them substituted (fork-dispatch.ts). Args are also carried on the
+    // child's user message; that stays, and is symmetric with plugins.
+    const skillName = 'arg-forker';
+    const dir = join(skillsDir, skillName);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---
+name: ${skillName}
+description: Uses arguments
+context: fork
+---
+
+All args: [$ARGUMENTS]. First: [\${1}]. Second: [\${2}].
+`,
+    );
+
+    scanAndRegisterUserSkills();
+    const skill = getSkill(skillName);
+    await skill.handler('"hello world" second', undefined, undefined);
+
+    expect(mockForkSubagent).toHaveBeenCalledOnce();
+    const callArgs = mockForkSubagent.mock.calls[0]?.[0] as {
+      config?: { systemPrompt?: string };
+    };
+    const prompt = callArgs?.config?.systemPrompt ?? '';
+    expect(prompt).toContain('All args: ["hello world" second]');
+    expect(prompt).toContain('First: [hello world]');
+    expect(prompt).toContain('Second: [second]');
+  });
+
   it('uses SkillExecutionContext.defaultSubagentModel for forked user skills', async () => {
     const skillName = 'model-aware';
     const dir = join(skillsDir, skillName);

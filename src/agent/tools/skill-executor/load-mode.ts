@@ -2,11 +2,13 @@
  * In-context ("load") execution strategy for the `skill` tool.
  *
  * Extracted verbatim from `SkillExecutor` (#363): the two load paths
- * (`executeLoadedRegistrySkill`, `executeLoadedPluginSkill`), their shared
- * framing/telemetry helpers (`formatLoadedSkillResult`, `emitLoadTelemetry`),
- * and `substituteSkillArgs` (also consumed by the forked plugin path in
- * `fork-dispatch.ts`). Free functions receive {@link SkillExecutorInternals}
- * in place of `this` — read-only by contract.
+ * (`executeLoadedRegistrySkill`, `executeLoadedPluginSkill`) and their shared
+ * framing/telemetry helpers (`formatLoadedSkillResult`, `emitLoadTelemetry`).
+ * Free functions receive {@link SkillExecutorInternals} in place of `this` —
+ * read-only by contract.
+ *
+ * Argument templating used to live here too; it moved to `arg-substitution.ts`
+ * when positional (`${1}`) support landed, and is re-exported below.
  *
  * @module agent/tools/skill-executor/load-mode
  */
@@ -16,6 +18,7 @@ import { loadSkillPrompts } from '../../../skills/_lib/prompt-loader.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { isGateSkill, sessionIdentity } from './telemetry.js';
 import type { SkillExecutorInternals } from './types.js';
+import { substituteSkillArgs } from './arg-substitution.js';
 
 /**
  * Frame a skill body for in-context ("load") execution and return it as the
@@ -155,31 +158,7 @@ export function executeLoadedPluginSkill(
   return formatLoadedSkillResult(skillName, substituted, args);
 }
 
-/**
- * Substitute `$ARGUMENT` and `$ARGUMENTS` placeholders in a SKILL.md body
- * with the caller-supplied args string.
- *
- * Contract:
- * - Both `$ARGUMENT` and `$ARGUMENTS` (word-boundary, single-pass regex) are
- *   replaced with `args`. Using a single pattern `/\$ARGUMENTS?\b/g` handles
- *   both forms without double-substitution.
- * - When `args` is undefined or empty, the placeholder is replaced with an
- *   empty string — matching the slash-command semantics SKILL.md authors
- *   expect (e.g. `/ship` with no arguments produces an empty `$ARGUMENT`).
- * - Bodies that contain neither placeholder are returned unchanged.
- * - Substitution uses a replacement *function*, not a replacement
- *   string, so `$` sequences in `args` ($$, $&, $`, $', $n) are
- *   inserted verbatim rather than being interpreted as
- *   `String.prototype.replace` special patterns.
- * - Applied to every body that runs without a forked sub-agent's user
- *   message to carry the args: both plugin paths (`executePluginSkill`,
- *   `executeLoadedPluginSkill`) and the registry load path
- *   (`executeLoadedRegistrySkill`). The forked registry path
- *   (`executeForkedRegistrySkill`) is NOT patched — it passes args as the
- *   child's user message, and its `system.md` bodies do not reference
- *   `$ARGUMENT` by convention.
- */
-export function substituteSkillArgs(body: string, args: string | undefined): string {
-  const replacement = args ?? '';
-  return body.replace(/\$ARGUMENTS?\b/g, () => replacement);
-}
+// Argument templating moved to `./arg-substitution.js` when positional (`${1}`)
+// support landed. Re-exported here because this module was its published home
+// and both the forked plugin path and the user-skill dispatch import it.
+export { substituteSkillArgs, tokenizeArgs } from './arg-substitution.js';
