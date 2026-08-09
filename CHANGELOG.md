@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.2] - 2026-08-09
+
+### Fixed
+- warn once per malformed env var instead of once globally (#780) (#975) (4eafa92)
+
 ## [5.103.1] - 2026-08-09
 
 ### Fixed
