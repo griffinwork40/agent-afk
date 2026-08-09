@@ -144,10 +144,12 @@ export function resolveThinkingParam(
       // bound), so no valid budget exists — unlike the over-ceiling case there
       // is nothing to clamp *to*. Fail fast with a legible error naming both
       // escape hatches instead of emitting `budget_tokens == max_tokens` and
-      // taking an opaque HTTP 400 on every turn (#951). Unreachable on defaults:
-      // opus-5/sonnet-5 route to adaptive above, and the default cap is the
-      // 64k–128k model ceiling; only an explicit tiny `--max-output-tokens` on a
-      // non-adaptive model (haiku, fable-5, raw sonnet-4-6) reaches here.
+      // taking an opaque HTTP 400 on every turn (#951). Reachable by default,
+      // not opt-in: `--thinking` defaults to `enabled:max` on both `afk chat`
+      // and `afk interactive`, so the real trigger is an explicit output cap
+      // <= 1024 — `--max-output-tokens` or a stale `AFK_MAX_OUTPUT_TOKENS` —
+      // on a non-adaptive model (haiku, fable-5, raw sonnet-4-6); opus-5 and
+      // sonnet-5 still route to adaptive above regardless of the cap.
       if (maxTokens <= 1024) {
         throw new Error(
           `[afk] Extended thinking requires max_tokens > 1024 (the API constraint is ` +
