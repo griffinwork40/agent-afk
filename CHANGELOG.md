@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.101.1] - 2026-08-09
+
+### Fixed
+- harden max_tokens resolution across providers (#951, #953, #954) (#959) (dc39ca4)
+
 ## [5.101.0] - 2026-08-09
 
 ### Added
