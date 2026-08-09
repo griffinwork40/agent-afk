@@ -555,6 +555,19 @@ describe('plugin commands/*.md integration', () => {
     expect(deploy?.description).toBe('Ship it');
   });
 
+  it('preserves a command argument hint during collection', () => {
+    const full = join(tmpDir, 'commands', 'deploy.md');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(
+      full,
+      '---\ndescription: Ship it\nargument-hint: "[environment]"\n---\n\nDeploy it.\n',
+    );
+    const entry = collectSkillEntries([{ type: 'local', path: tmpDir }]).find(
+      (candidate) => candidate.name === 'deploy',
+    );
+    expect(entry?.argumentHint).toBe('[environment]');
+  });
+
   it('buildSkillManifest EXCLUDES commands from the model-facing catalogue', () => {
     // The manifest has no character budget, and a command is user-invoked by
     // nature — listing a third-party plugin's command surface to the model

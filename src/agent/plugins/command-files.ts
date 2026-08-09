@@ -37,7 +37,7 @@
  * @module agent/plugins/command-files
  */
 
-import { existsSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseSkillMetadata, type PluginSkillMetadata } from './tool-injector.js';
 
@@ -101,6 +101,17 @@ export function extractPluginCommands(
       // subset of what it already understands, and sharing it means a command
       // and a skill can never drift in how identical frontmatter is read.
       const parsed = parseSkillMetadata(full, knownToolNames);
+      // Unlike SKILL.md, command frontmatter is optional. The shared parser
+      // deliberately rejects files without it, so preserve a plain Markdown
+      // prompt as the body while continuing to reject malformed frontmatter.
+      if (!parsed.body) {
+        try {
+          const content = readFileSync(full, 'utf-8');
+          if (!content.startsWith('---\n')) parsed.body = content.trim();
+        } catch {
+          continue;
+        }
+      }
       // A command with no readable body is inert — skip rather than register a
       // slash command that would dispatch an empty prompt.
       if (!parsed.body || parsed.body.length === 0) continue;

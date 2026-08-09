@@ -42,6 +42,17 @@ describe('extractPluginCommands', () => {
     expect(found[0]?.body).toContain('Deploy the app.');
   });
 
+  it('accepts a plain Markdown prompt without frontmatter', () => {
+    writeCommand('review.md', 'Review this pull request: $ARGUMENTS\n');
+    const found = extractPluginCommands(pluginDir);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      name: 'review',
+      body: 'Review this pull request: $ARGUMENTS',
+      origin: 'command',
+    });
+  });
+
   it('namespaces a subdirectory with a colon (CC parity)', () => {
     writeCommand('review/security.md', '---\ndescription: Sec review\n---\n\nCheck auth.\n');
     const found = extractPluginCommands(pluginDir);
@@ -103,7 +114,7 @@ describe('extractPluginCommands', () => {
     // One bad command in a third-party plugin must not break discovery for
     // every other command it ships.
     writeCommand('good.md', '---\ndescription: d\n---\n\nBody.\n');
-    writeCommand('bad.md', 'no frontmatter at all');
+    writeCommand('bad.md', '---\ndescription: unterminated frontmatter');
     const names = extractPluginCommands(pluginDir).map((c) => c.name);
     expect(names).toContain('good');
   });
