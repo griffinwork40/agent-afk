@@ -29,6 +29,14 @@
  * reaching the cap the loop runs ONE final wind-down round with tools stripped
  * so the model produces a real answer instead of stopping silently.
  *
+ * Deadline semantics: `softDeadlineMs` is the TIME sibling of that cap, armed
+ * by subagent forks from their wall-clock budget. Once a round boundary falls
+ * past it the loop enters the SAME wind-down, so a slow-but-working child
+ * synthesizes an answer instead of being killed mid-work by the hard
+ * `withTimeout` abort — which stays armed underneath as the backstop for a
+ * genuinely wedged one. Both triggers are checked per round; the round cap wins
+ * a tie. See providers/shared/soft-deadline.ts.
+ *
  * Mutation contract: `runTurn` mutates `input.messages` in place — appending
  * the assistant turn's content blocks and a follow-up user turn carrying
  * `tool_result` blocks for every tool-use round. Callers must read
@@ -88,6 +96,14 @@ export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
+  // TIME sibling of the round cap: `0`/unset means no soft deadline (the
+  // top-level default, where a human owns the turn). Taken RAW, deliberately —
+  // this value is already the OUTPUT of `resolveSoftDeadlineMs` at the arming
+  // site (subagent.ts / dag-subagent.ts), and that function maps a HARD budget
+  // to a soft deadline, so re-applying it here would subtract a second reserve
+  // and fire the wind-down early. No sanitizing is needed: `softDeadlineExpired`
+  // already treats `<= 0` and NaN as "never fires".
+  const softDeadlineMs = input.softDeadlineMs ?? 0;
 
   // Three collaborators, three lifetimes — see each class for its reset
   // discipline. `turn` survives the whole turn, `retry` is released at every
@@ -284,7 +300,7 @@ export async function* runTurn(
     // stopReason === 'tool_use' — dispatch the tools, commit the results, and
     // decide whether the turn keeps going. The whole history mutation contract
     // (assistant push, rollback on throw, tool_result commit) lives inside.
-    const round = yield* runToolRound(turnResult, input, turn, maxIterations);
+    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
   }
   } finally {

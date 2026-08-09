@@ -352,7 +352,47 @@ describe('SubagentHandle streaming', () => {
 
       const msg = await handle.run('p');
       expect(msg.role).toBe('assistant');
-      expect(String(msg.content)).toMatch(/capped/i);
+      // Assert the BUDGET PHRASE, not /capped/i: this subagent's id is
+      // `subagent-capped-test`, so a bare /capped/i match was satisfied by the
+      // interpolated id and would pass even if the marker body were empty.
+      expect(String(msg.content)).toContain('tool-use iteration cap');
+      expect(String(msg.content)).toContain('partial result');
+      expect(handle.status).toBe('succeeded');
+    });
+
+    it('returns a partial result (not a throw) when the SOFT DEADLINE fires with no message', async () => {
+      // Invariant: the textless-wind-down salvage must cover BOTH wind-down
+      // triggers. `tool_use_loop_capped` (rounds spent) and
+      // `soft_deadline_wind_down` (wall-clock nearly spent) run the identical
+      // tools-stripped round, so a wind-down that produced no text at all has to
+      // be salvaged identically. Matching only the round-budget reason sent a
+      // soft-deadline child down the StreamIncompleteError path and failed the
+      // fork loudly for precisely the condition #938 exists to handle
+      // gracefully. Names the wall-clock budget so the marker cannot be misread
+      // as a tool-cap stop.
+      const events: OutputEvent[] = [
+        { type: 'done', metadata: { stopReason: 'soft_deadline_wind_down' } },
+      ];
+      const session = createDeterministicMockSession(events, {
+        role: 'assistant',
+        content: 'unused',
+        timestamp: new Date(),
+      });
+      const handle = new SubagentHandleImpl(
+        'subagent-soft-deadline-test',
+        session,
+        controller,
+        abortGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+
+      const msg = await handle.run('p');
+      expect(msg.role).toBe('assistant');
+      expect(String(msg.content)).toContain('wall-clock budget');
+      expect(String(msg.content)).not.toContain('tool-use iteration cap');
       expect(handle.status).toBe('succeeded');
     });
 

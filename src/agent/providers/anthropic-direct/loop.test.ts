@@ -14,10 +14,11 @@
  *  - summarizeToolInput helper behavior
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { runTurn } from './loop.js';
-import { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
+import { DEFAULT_MAX_TOOL_USE_ITERATIONS, WIND_DOWN_NOTE } from '../shared/tool-loop-cap.js';
+import { SOFT_DEADLINE_NOTE, SOFT_DEADLINE_WIND_DOWN } from '../shared/soft-deadline.js';
 import type { ProviderEvent } from '../../provider.js';
 import type { AnthropicClientLike, ToolCall, ToolResult } from './types.js';
 import {
@@ -1151,5 +1152,251 @@ describe('loop.ts runTurn', () => {
       // alone identifies which skill ran, matching the Agent(label) form.
       expect(loopEmittedStart.toolInput).not.toContain('flaky test');
     }
+  });
+  // --- SOFT WALL-CLOCK DEADLINE (issue #938) ---
+  //
+  // The TIME sibling of the round cap above. Same harness shape as the
+  // round-cap tests; the only new ingredient is a controlled clock, because the
+  // trigger reads `turn.startedAt` against Date.now() at each round boundary.
+  // Time is INJECTED via fake timers — nothing sleeps.
+  describe('soft wall-clock deadline', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('winds down with SOFT_DEADLINE_WIND_DOWN when a round boundary falls past the deadline', async () => {
+      // Round 1 is a normal tool_use round; the dispatcher advances the clock
+      // past the soft deadline, so the round-boundary check fires and round 2
+      // is the tools-stripped wind-down that answers in text.
+      let callIdx = 0;
+      const createCalls: Array<{ tools?: unknown }> = [];
+      const client = {
+        messages: {
+          create: vi.fn((params: { tools?: unknown }) => {
+            createCalls.push(params);
+            callIdx += 1;
+            if (callIdx >= 2) return fromArray(makeTextStream('Here is what I established.'));
+            return fromArray(makeToolUseStream(`toolu_${callIdx}`, 'read_file', '{}'));
+          }),
+        },
+      } as unknown as AnthropicClientLike;
+      // Burn the whole budget inside the tool call — the realistic shape of a
+      // slow child (one long tool round), and the only place a clock can move
+      // between the turn start and the round-boundary check.
+      const dispatcher = makeDispatcher(() => {
+        vi.setSystemTime(Date.now() + 61_000);
+        return Promise.resolve({ content: 'ok' });
+      });
+      const messages: MessageParam[] = [{ role: 'user', content: 'do stuff' }];
+      const abortController = new AbortController();
+
+      const events = await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+          // No round cap at all: TIME is the only trigger under test.
+          softDeadlineMs: 60_000,
+        }),
+      );
+
+      // Exactly ONE tools-stripped extra round ran — not an unbounded loop.
+      expect(callIdx).toBe(2);
+      expect((createCalls[0] as { tools?: unknown[] }).tools?.length ?? 0).toBeGreaterThan(0);
+      expect((createCalls[1] as { tools?: unknown }).tools).toBeUndefined();
+
+      // The model's synthesis is delivered — the whole point of winding down
+      // rather than being killed at the hard abort.
+      const assistantMsg = events.find((e) => e.type === 'assistant.message');
+      expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toContain(
+        'what I established',
+      );
+
+      // ... and the turn reports TIME, not rounds, as the cause.
+      const completed = events.find((e) => e.type === 'turn.completed');
+      expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).toBe(
+        SOFT_DEADLINE_WIND_DOWN,
+      );
+      expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).not.toBe(
+        'tool_use_loop_capped',
+      );
+    });
+
+    it('appends the TIME-worded note, not the tool-budget note', async () => {
+      // Wording matters: a child that ran out of clock must not report "I ran
+      // out of tool calls". The note lands on the tool_result user turn.
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx >= 2) return fromArray(makeTextStream('Summary.'));
+        return fromArray(makeToolUseStream('toolu_1', 'read_file', '{}'));
+      });
+      const dispatcher = makeDispatcher(() => {
+        vi.setSystemTime(Date.now() + 61_000);
+        return Promise.resolve({ content: 'ok' });
+      });
+      const messages: MessageParam[] = [{ role: 'user', content: 'go' }];
+      const abortController = new AbortController();
+
+      await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+          softDeadlineMs: 60_000,
+        }),
+      );
+
+      const texts = messages
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .filter((b): b is ContentBlockParam & { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text);
+      expect(texts).toContain(SOFT_DEADLINE_NOTE);
+      expect(texts).not.toContain(WIND_DOWN_NOTE);
+    });
+
+    it('does NOT wind down while the turn is inside its deadline', async () => {
+      // Guard against a deadline that fires on round 1: the turn must run to a
+      // natural end_turn with no extra round and no cap stopReason.
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx >= 2) return fromArray(makeTextStream('Natural finish.'));
+        return fromArray(makeToolUseStream('toolu_1', 'read_file', '{}'));
+      });
+      const dispatcher = makeDispatcher(() => {
+        vi.setSystemTime(Date.now() + 1_000); // well inside the budget
+        return Promise.resolve({ content: 'ok' });
+      });
+      const messages: MessageParam[] = [{ role: 'user', content: 'go' }];
+      const abortController = new AbortController();
+
+      const events = await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+          softDeadlineMs: 600_000,
+        }),
+      );
+
+      const completed = events.find((e) => e.type === 'turn.completed');
+      const stop = completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined;
+      expect(stop).not.toBe(SOFT_DEADLINE_WIND_DOWN);
+      expect(stop).not.toBe('tool_use_loop_capped');
+      const texts = messages
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .filter((b): b is ContentBlockParam & { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text);
+      expect(texts).not.toContain(SOFT_DEADLINE_NOTE);
+    });
+
+    it('is off when softDeadlineMs is 0 or omitted, however long the turn takes', async () => {
+      // The unbounded top-level case: a human owns the turn, so elapsed time
+      // must never arm a wind-down.
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx >= 2) return fromArray(makeTextStream('Done.'));
+        return fromArray(makeToolUseStream('toolu_1', 'read_file', '{}'));
+      });
+      const dispatcher = makeDispatcher(() => {
+        vi.setSystemTime(Date.now() + 3 * 60 * 60_000); // three hours
+        return Promise.resolve({ content: 'ok' });
+      });
+      const messages: MessageParam[] = [{ role: 'user', content: 'go' }];
+      const abortController = new AbortController();
+
+      const events = await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+          softDeadlineMs: 0,
+        }),
+      );
+
+      expect(callIdx).toBe(2); // natural end, not a wind-down
+      const completed = events.find((e) => e.type === 'turn.completed');
+      expect(
+        completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined,
+      ).not.toBe(SOFT_DEADLINE_WIND_DOWN);
+    });
+
+    it('gives the ROUND cap precedence when both budgets are spent in the same round', async () => {
+      // Tie-break: the round cap is the more specific budget, so its reason and
+      // its note win.
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx >= 2) return fromArray(makeTextStream('Summary.'));
+        return fromArray(makeToolUseStream('toolu_1', 'read_file', '{}'));
+      });
+      const dispatcher = makeDispatcher(() => {
+        vi.setSystemTime(Date.now() + 61_000);
+        return Promise.resolve({ content: 'ok' });
+      });
+      const messages: MessageParam[] = [{ role: 'user', content: 'go' }];
+      const abortController = new AbortController();
+
+      const events = await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+          maxToolUseIterations: 1, // spent at the same boundary as the deadline
+          softDeadlineMs: 60_000,
+        }),
+      );
+
+      const completed = events.find((e) => e.type === 'turn.completed');
+      expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).toBe(
+        'tool_use_loop_capped',
+      );
+      const texts = messages
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .filter((b): b is ContentBlockParam & { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text);
+      expect(texts).toContain(WIND_DOWN_NOTE);
+      expect(texts).not.toContain(SOFT_DEADLINE_NOTE);
+    });
   });
 });

@@ -18,6 +18,7 @@ import {
   STREAM_INCOMPLETE,
 } from './result.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
+import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
 // ---------------------------------------------------------------------------
@@ -258,6 +259,43 @@ describe('OVERLOAD_EXHAUSTED — overload-killed fork is not a clean answer', ()
     expect(incompleteToolResultFields(OVERLOAD_EXHAUSTED)).toEqual({
       incomplete: true,
       incompleteReason: OVERLOAD_EXHAUSTED,
+    });
+  });
+});
+
+// Invariant: SOFT_DEADLINE_WIND_DOWN and TOOL_USE_LOOP_CAPPED are the SAME
+// mechanism (one tools-stripped synthesis round) fired by different budgets —
+// wall-clock nearly spent vs. rounds spent — so they must never be classified
+// differently here. A wind-down answer is by construction "what I established,
+// what remains unresolved", so omitting this arm hands the parent model an
+// explicitly-unfinished report as a conclusion, and mint's phase guards accept
+// it as a real spec/plan/research artifact. Regression guard for the #938
+// review: the first implementation wired the new stop reason through both
+// providers but missed this classifier, which is the consumption boundary where
+// the distinction actually reaches a parent.
+describe('SOFT_DEADLINE_WIND_DOWN — a wall-clock wind-down is not a clean answer', () => {
+  it('classifies a soft-deadline wind-down as incomplete', () => {
+    expect(isIncompleteStopReason(SOFT_DEADLINE_WIND_DOWN)).toBe(true);
+  });
+
+  it('classifies it identically to the round-budget sibling', () => {
+    expect(isIncompleteStopReason(SOFT_DEADLINE_WIND_DOWN)).toBe(
+      isIncompleteStopReason(TOOL_USE_LOOP_CAPPED),
+    );
+  });
+
+  it('names the wall-clock cause in the parent-visible banner, not the tool cap', () => {
+    const out = annotateIfIncomplete('partial findings', SOFT_DEADLINE_WIND_DOWN);
+    expect(out).toContain('PARTIAL RESULT');
+    expect(out).toContain('wall-clock');
+    expect(out).toContain('partial findings');
+    expect(out).not.toContain('tool-use iteration cap');
+  });
+
+  it('sets the structured ToolResult fields', () => {
+    expect(incompleteToolResultFields(SOFT_DEADLINE_WIND_DOWN)).toEqual({
+      incomplete: true,
+      incompleteReason: SOFT_DEADLINE_WIND_DOWN,
     });
   });
 });

@@ -13,7 +13,23 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ProviderUsage } from '../../../provider.js';
+import type { SOFT_DEADLINE_WIND_DOWN } from '../../shared/soft-deadline.js';
+import type { TOOL_USE_LOOP_CAPPED } from '../../shared/tool-loop-cap.js';
 import { sumProviderUsage } from '../types.js';
+
+/**
+ * Which budget tripped the single tools-stripped wind-down round, or `null`
+ * while the turn is still running normally.
+ *
+ * Contract: this doubles as the terminal `stopReason` stamped on
+ * `turn.completed`, so the two triggers stay distinguishable downstream —
+ * `session/closure-reason.ts` maps ROUND exhaustion to `iteration_cap` and TIME
+ * exhaustion to `timeout`, which call for different operator responses (narrow
+ * the task vs. raise the budget).
+ */
+export type WindDownReason =
+  | typeof TOOL_USE_LOOP_CAPPED
+  | typeof SOFT_DEADLINE_WIND_DOWN;
 
 /**
  * Mutable per-turn tallies plus the wall-clock origin every terminal event is
@@ -36,16 +52,22 @@ export class TurnAccumulator {
   toolCallCount = 0;
 
   /**
-   * Set once the tool-use iteration cap is reached. The loop then runs ONE
-   * final "wind-down" round with tools stripped, so the model produces a real
-   * answer from what it gathered instead of being cut off mid-round — a silent
-   * stop with no final message is indistinguishable from a hang (the same
-   * failure mode the `refusal` branch guards against).
+   * Non-null once a budget has been spent — the tool-use ROUND cap or the SOFT
+   * wall-clock deadline. The loop then runs ONE final "wind-down" round with
+   * tools stripped, so the model produces a real answer from what it gathered
+   * instead of being cut off mid-round — a silent stop with no final message is
+   * indistinguishable from a hang (the same failure mode the `refusal` branch
+   * guards against).
+   *
+   * Contract: holds the REASON rather than a bare boolean so the terminal
+   * `stopReason` names which budget ran out. Truthiness is the "wind-down
+   * armed" test every read site uses; the value is only consulted at the
+   * terminal yields.
    *
    * Invariant: written at the END of round N and read at the START of round
    * N+1, so it must outlive a `continue`.
    */
-  capReached = false;
+  windDownReason: WindDownReason | null = null;
 
   /** Correlation id for this turn's trace events. */
   readonly taskId: string = randomUUID();

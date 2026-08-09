@@ -15,6 +15,8 @@ import type { SubagentManager } from './subagent.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
 import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
 import { TimeoutError } from '../utils/errors.js';
+import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
+import { resolveSubagentTimeoutMs } from './subagent/constants.js';
 
 export interface SubagentDAGNode {
   id: string;
@@ -95,6 +97,21 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
   const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
 
+  // Soft deadline for every node in this DAG (see the arming comment in the
+  // fork config below). Computed once — it is the same for every node.
+  //
+  // Contract: derive from the SMALLER of the two hard budgets that can fire.
+  // A DAG node is bounded twice — by runDAG's per-node timer AND by the fork's
+  // own `withTimeout` (this layer never sets `config.timeoutMs`, so that is
+  // `resolveSubagentTimeoutMs()`). Deriving from the node budget alone would,
+  // whenever it is the larger of the two, place the soft deadline AFTER the
+  // budget that actually fires — arming a wind-down that can never run. `0`
+  // means unbounded on either side and so never binds; when the result is `0`,
+  // `forkSubagent` still derives a deadline from its own budget.
+  const nodeBudgets = [nodeTimeoutMs ?? 0, resolveSubagentTimeoutMs()].filter((ms) => ms > 0);
+  const softDeadlineForNode =
+    nodeBudgets.length > 0 ? resolveSoftDeadlineMs(Math.min(...nodeBudgets)) : 0;
+
   const dagNodes: DAGNode[] = nodes.map((spec) => ({
     id: spec.id,
     async run(inputs: Record<string, unknown>, nodeSignal: AbortSignal): Promise<unknown> {
@@ -111,6 +128,20 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
           ...(spec.maxToolUseIterations !== undefined
             ? { maxToolUseIterations: spec.maxToolUseIterations }
             : {}),
+          // Invariant: a DAG node has a SECOND wall-clock enforcer that does not
+          // route through `agent/timeout.ts` — runDAG arms its own per-node
+          // `setTimeout` (dag.ts) and cascades expiry into `handle.cancel()`
+          // below. That path has the identical gap the fork budget had: it kills
+          // a slow-but-working child with everything it learned unsynthesized.
+          // Arm the soft deadline from the node budget so the node winds down at
+          // a round boundary first. `resolveSoftDeadlineMs` returns 0 (off) for
+          // an absent or too-short node budget, so unbounded nodes and short ones
+          // keep prior behaviour exactly; when it is off here, `forkSubagent`
+          // still derives one from the fork's own timeout. Whichever budget is
+          // SMALLER binds, so take the min: deriving from the node timeout alone
+          // would arm a deadline later than the fork budget that will actually
+          // fire.
+          ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}),
         },
         idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
         ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),

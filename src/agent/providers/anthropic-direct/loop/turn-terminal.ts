@@ -10,7 +10,6 @@
 
 import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput, TurnResult } from '../types.js';
-import { TOOL_USE_LOOP_CAPPED } from '../../shared/tool-loop-cap.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /** Text at or below this length is also offered as a `suggestion`. */
@@ -88,12 +87,15 @@ export function* emitNonToolUseTerminal(
 
   yield {
     type: 'turn.completed',
-    // On the wind-down round (cap reached) the model ends naturally with
-    // `end_turn`, but the turn as a whole WAS cut short by the tool-use cap —
-    // preserve that signal for closure classification + telemetry while still
-    // delivering the model's synthesized final message above.
+    // On a wind-down round the model ends naturally with `end_turn`, but the
+    // turn as a whole WAS cut short by a spent budget — preserve that signal
+    // for closure classification + telemetry while still delivering the model's
+    // synthesized final message above. `windDownReason` names WHICH budget
+    // (rounds vs. wall-clock) so the two are never conflated downstream.
     usage: turn.withDuration(
-      turn.capReached ? { ...turn.usage, stopReason: TOOL_USE_LOOP_CAPPED } : turn.usage,
+      turn.windDownReason !== null
+        ? { ...turn.usage, stopReason: turn.windDownReason }
+        : turn.usage,
     ),
     sessionId: input.ctx.sessionId,
   };

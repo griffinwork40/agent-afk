@@ -21,6 +21,7 @@ export interface TurnRequestInput {
   thinking?: RunTurnInput['thinking'];
   effort?: RunTurnInput['effort'];
   maxToolUseIterations?: number;
+  softDeadlineMs?: number;
   traceWriter?: RunTurnInput['traceWriter'];
   subagentId?: string;
   throttleQueue?: RunTurnInput['throttleQueue'];
@@ -65,6 +66,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(fast ? { fastMode: true } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.maxToolUseIterations !== undefined ? { maxToolUseIterations: input.maxToolUseIterations } : {}),
+      ...(input.softDeadlineMs !== undefined ? { softDeadlineMs: input.softDeadlineMs } : {}),
       ...(input.traceWriter ? { traceWriter: input.traceWriter } : {}),
       ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),

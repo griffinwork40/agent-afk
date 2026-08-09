@@ -20,6 +20,8 @@ export interface RunTurnInput {
   signal: AbortSignal;
   ctx: TranslateCtx;
   maxToolUseIterations?: number;
+  /** Soft wall-clock deadline, ms from turn start. `0`/unset = off. See shared/soft-deadline.ts. */
+  softDeadlineMs?: number;
   thinking?: ThinkingConfigParam;
   effort?: import('../../types/sdk-types.js').EffortLevel;
   /** Effective Fast decision captured once at turn start. */
