@@ -752,28 +752,36 @@ describe('BackgroundAgentRegistry', () => {
       const handle = createStubHandle('sub-disk-hygiene');
       const job = registry.register({ handle, prompt, model: 'sonnet' });
 
-      await new Promise((r) => setTimeout(r, 100));
       const metaPath = path.join(bgTestTmpDir, 'state', 'bg', job.jobId, 'meta.json');
-      const rawMeta = fs.readFileSync(metaPath, 'utf8');
-      const meta = JSON.parse(rawMeta) as { label: string; promptHash: string };
-      expect(meta.label).toBe(prompt);
-      expect(meta.promptHash).toBe(createHash('sha256').update(prompt).digest('hex'));
-      expect(rawMeta).not.toContain(base64Sentinel);
+      // readFileSync throws ENOENT before the async writeMeta has landed the
+      // file; vi.waitFor retries on thrown error, so that's fine.
+      await vi.waitFor(
+        () => {
+          const rawMeta = fs.readFileSync(metaPath, 'utf8');
+          const meta = JSON.parse(rawMeta) as { label: string; promptHash: string };
+          expect(meta.label).toBe(prompt);
+          expect(meta.promptHash).toBe(createHash('sha256').update(prompt).digest('hex'));
+          expect(rawMeta).not.toContain(base64Sentinel);
+        },
+        { timeout: 2000 },
+      );
     });
 
     it('register() writes meta.json to disk with status=running', async () => {
       const handle = createStubHandle('sub-disk-1');
       const job = registry.register({ handle, prompt: 'disk job', model: 'haiku' });
 
-      // Allow the async writeMeta to settle
-      await new Promise((r) => setTimeout(r, 100));
-
       const { BgJobLogReader } = await import('./bg-job-log.js');
-      const meta = await BgJobLogReader.readMeta(job.jobId);
-      expect(meta).not.toBeNull();
-      expect(meta!.status).toBe('running');
-      expect(meta!.jobId).toBe(job.jobId);
-      expect(meta!.model).toBe('haiku');
+      await vi.waitFor(
+        async () => {
+          const meta = await BgJobLogReader.readMeta(job.jobId);
+          expect(meta).not.toBeNull();
+          expect(meta!.status).toBe('running');
+          expect(meta!.jobId).toBe(job.jobId);
+          expect(meta!.model).toBe('haiku');
+        },
+        { timeout: 2000 },
+      );
     });
 
     it('progress events flow to the disk writer', async () => {
@@ -786,22 +794,26 @@ describe('BackgroundAgentRegistry', () => {
         chunk: { type: 'content', content: 'hello' } as any,
       });
 
-      // Allow stream to flush
-      await new Promise((r) => setTimeout(r, 150));
-
+      // `writer.write()` is a synchronous in-memory queue append, so the
+      // progress event above is already durable — no sleep needed to bridge
+      // it. The poll below (after firing terminal) covers both events.
       const { BgJobLogReader } = await import('./bg-job-log.js');
 
       // We can't easily read mid-stream (writer is still open), but we can
       // verify the log file exists after firing terminal + close.
       handle.__fireTerminal(successResult('sub-disk-2', 'done'));
-      await new Promise((r) => setTimeout(r, 200));
 
-      const events = [];
-      for await (const e of BgJobLogReader.readEvents(job.jobId)) {
-        events.push(e);
-      }
-      // Should have at least the content event
-      expect(events.some((e) => e.type === 'chunk')).toBe(true);
+      await vi.waitFor(
+        async () => {
+          const events = [];
+          for await (const e of BgJobLogReader.readEvents(job.jobId)) {
+            events.push(e);
+          }
+          // Should have at least the content event
+          expect(events.some((e) => e.type === 'chunk')).toBe(true);
+        },
+        { timeout: 2000 },
+      );
     });
 
     it('text events feed appendTranscript()', () => {
@@ -825,15 +837,17 @@ describe('BackgroundAgentRegistry', () => {
 
       handle.__fireTerminal(successResult('sub-disk-4', 'completed output'));
 
-      // Allow the async writeMeta to settle
-      await new Promise((r) => setTimeout(r, 200));
-
       const { BgJobLogReader } = await import('./bg-job-log.js');
-      const meta = await BgJobLogReader.readMeta(job.jobId);
-      expect(meta).not.toBeNull();
-      expect(meta!.status).toBe('completed');
-      expect(meta!.endedAt).toBeDefined();
-      expect(meta!.endedAt).toBeGreaterThan(0);
+      await vi.waitFor(
+        async () => {
+          const meta = await BgJobLogReader.readMeta(job.jobId);
+          expect(meta).not.toBeNull();
+          expect(meta!.status).toBe('completed');
+          expect(meta!.endedAt).toBeDefined();
+          expect(meta!.endedAt).toBeGreaterThan(0);
+        },
+        { timeout: 2000 },
+      );
     });
 
     // PR#713 Wave-A A1(b): markTerminal persists `result.stopReason` into the
@@ -849,12 +863,15 @@ describe('BackgroundAgentRegistry', () => {
         stopReason: 'tool_use_loop_capped',
       });
 
-      await new Promise((r) => setTimeout(r, 200));
-
       const { BgJobLogReader } = await import('./bg-job-log.js');
-      const meta = await BgJobLogReader.readMeta(job.jobId);
-      expect(meta).not.toBeNull();
-      expect(meta!.stopReason).toBe('tool_use_loop_capped');
+      await vi.waitFor(
+        async () => {
+          const meta = await BgJobLogReader.readMeta(job.jobId);
+          expect(meta).not.toBeNull();
+          expect(meta!.stopReason).toBe('tool_use_loop_capped');
+        },
+        { timeout: 2000 },
+      );
     });
 
     it('terminal callback leaves meta.stopReason ABSENT when the result carries none', async () => {
@@ -864,9 +881,19 @@ describe('BackgroundAgentRegistry', () => {
       // successResult() never sets stopReason.
       handle.__fireTerminal(successResult('sub-disk-6', 'clean output'));
 
-      await new Promise((r) => setTimeout(r, 200));
-
       const { BgJobLogReader } = await import('./bg-job-log.js');
+      // Poll until the meta record reaches a terminal status FIRST. The
+      // initial "running" meta also lacks stopReason, so asserting
+      // toBeUndefined() without this guard would trivially pass against
+      // stale pre-completion state and mask the race instead of removing it.
+      await vi.waitFor(
+        async () => {
+          const polled = await BgJobLogReader.readMeta(job.jobId);
+          expect(polled?.status).toBe('completed');
+        },
+        { timeout: 2000 },
+      );
+
       const meta = await BgJobLogReader.readMeta(job.jobId);
       expect(meta).not.toBeNull();
       expect(meta!.stopReason).toBeUndefined();
