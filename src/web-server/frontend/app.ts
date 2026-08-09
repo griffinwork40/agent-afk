@@ -96,6 +96,19 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+  // Contract: a 401 is reported as a recovery INSTRUCTION, not as the raw
+  // server body. It has one dominant cause the user can act on: this document
+  // was authenticated by the reload cookie alone, so it carried no bearer token
+  // and sessionStorage is empty — the state a NEW TAB opened on the bare URL is
+  // always in, because sessionStorage is scoped per tab. Reporting
+  // `401 {"error":"unauthorized",...}` there states the failure without naming
+  // the fix, and the sidebar renders empty behind it.
+  if (res.status === 401) {
+    throw new Error(
+      'Session credential missing — reopen the URL printed by `afk web`. ' +
+        'A new tab does not inherit the credential from the first one.',
+    );
+  }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return (await res.json()) as T;
 }

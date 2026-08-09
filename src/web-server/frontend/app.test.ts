@@ -218,3 +218,53 @@ describe('app — approvals are addressed by request id, not by session', () => 
     expect(posted?.body).toEqual({ requestId: 'req-42', response: { action: 'decline' } });
   });
 });
+
+/**
+ * Invariant: a cookie-authenticated document carries NO bearer token (that is
+ * what stops a stolen cookie from being escalated), and sessionStorage is
+ * scoped per tab — so a NEW TAB opened on the bare URL always lands with no
+ * credential. That state must name its own fix. It previously surfaced the raw
+ * body, `401 {"error":"unauthorized",...}`, which states the failure without
+ * telling the user how to recover.
+ */
+describe('app — a missing credential reports how to recover', () => {
+  async function boot401(metaToken: string | undefined): Promise<void> {
+    const meta =
+      metaToken === undefined ? '' : `<meta name="afk-token" content="${metaToken}" />`;
+    document.head.innerHTML = meta;
+    document.body.innerHTML = SHELL;
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'unauthorized' }),
+        text: () =>
+          Promise.resolve('{"error":"unauthorized","message":"missing or invalid bearer token"}'),
+      } as unknown as Response),
+    );
+    vi.resetModules();
+    await import('./app.js');
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  }
+
+  it('tells the user to reopen the printed URL', async () => {
+    await boot401('');
+    const status = document.getElementById('status')?.textContent ?? '';
+    expect(status).toContain('reopen the URL printed by `afk web`');
+    expect(status).toContain('new tab');
+  });
+
+  it('does not surface the raw unauthorized JSON body', async () => {
+    await boot401('');
+    const status = document.getElementById('status')?.textContent ?? '';
+    expect(status).not.toContain('"error"');
+    expect(status).not.toContain('invalid bearer token');
+  });
+
+  it('reports the same recovery path when the meta tag is absent entirely', async () => {
+    await boot401(undefined);
+    expect(document.getElementById('status')?.textContent ?? '').toContain(
+      'reopen the URL printed by `afk web`',
+    );
+  });
+});
