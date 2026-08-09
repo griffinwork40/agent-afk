@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.0] - 2026-08-09
+
+### Added
+- add conditional steelman critic to Wave 2 (#967) (b14b3df)
+
 ## [5.102.0] - 2026-08-09
 
 ### Added
