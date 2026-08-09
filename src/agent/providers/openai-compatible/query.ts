@@ -58,6 +58,7 @@ import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
+import { isTruncationStopReason, truncationNotice } from '../shared/truncation.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
@@ -538,6 +539,16 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // CLI's formatToolCallStat renders a truthful "N tool calls" (PR 508 codex
     // review, P2).
     let toolCallCount = 0;
+    // Invariant: tool calls that were being streamed when the output cap cut the
+    // round off. `isToolCallStop` returns false for any explicit non-tool finish
+    // reason, so a call truncated mid-arguments sets needsToolDispatch=false and
+    // is discarded in-memory — it never reaches `dispatchAndAppendToolCalls`,
+    // which is the ONLY site that builds an assistant `tool_calls` message. That
+    // silent drop is correct (a half-built call would poison history with an
+    // empty tool_call_id) but invisible, so capture the names at the break to
+    // name them in the terminal notice. Must be captured inside the loop:
+    // `result.state` is a fresh StreamState per iteration.
+    let droppedToolNames: string[] = [];
 
     for (;;) {
       if (controller.signal.aborted) {
@@ -581,6 +592,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       if (!result.needsToolDispatch) {
         // Model answered in text: a normal completion, or — when winding down —
         // the wind-down round's synthesized final answer. Emit terminal events.
+        if (isTruncationStopReason(result.state.finishReason)) {
+          droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
+        }
         break;
       }
 
@@ -686,9 +700,43 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       this.priorTurns.push(assistantTurn);
     }
 
+    // Invariant: the truncation notice is APPENDED to the single terminal
+    // assistant.message, never yielded as a second one — last-wins consumers
+    // (the non-streaming sendMessage() path, a subagent's final-message
+    // capture) keep only the LAST assistant message of a turn, so a second
+    // event would discard the model's real partial answer and surface only the
+    // warning. Same rule as the anthropic-direct terminal path. Deliberately
+    // applied AFTER the priorTurns push above: the notice is operator-facing
+    // and must not enter conversation history.
+    //
+    // Invariant (#960): the notice rides ONLY on non-empty model text. A turn
+    // that produced NO text must keep yielding an EMPTY assistant.message, so
+    // that stream-consumer's `if (event.text)` gate drops it and the turn stays
+    // textless downstream. That absence is load-bearing: it is what leaves
+    // `finalMessage` unset in `subagent/handle.ts`, letting the run reach the
+    // ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE and THROWS — which
+    // resolves a zero-output child as `failed` rather than a false `succeeded`,
+    // and lets `stream-cut-retry.ts` re-dispatch a read-only child that
+    // produced nothing. Substituting the notice as the message body here would
+    // make that chain unreachable and hand the parent a SUCCESS whose entire
+    // content is this warning. Mirrors the identical rule in
+    // `anthropic-direct/loop/turn-terminal.ts`.
+    const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
+      ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
+          // The ChatGPT OAuth Responses backend rejects every output-cap
+          // parameter, so advertising our cap setting there is ineffective.
+          canIncreaseOutputLimit: !(
+            this.opts.auth.source === 'chatgpt-oauth' &&
+            accumulatedUsage.stopReason === 'max_output_tokens'
+          ),
+        })
+      : null;
     yield {
       type: 'assistant.message',
-      text: finalAssistantText,
+      text:
+        truncationText && finalAssistantText.length > 0
+          ? `${finalAssistantText}\n\n${truncationText}`
+          : finalAssistantText,
       sessionId: this.initSessionId,
     };
     // If the turn was cut short by a spent budget, preserve that signal for
