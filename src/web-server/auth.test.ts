@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mintToken, tokensMatch, bearerFromHeader, tokenFromQuery, originAllowed, allowedOrigins, checkBind, tokenFromCookie } from './auth.js';
+import { mintToken, tokensMatch, bearerFromHeader, tokenFromQuery, originAllowed, allowedOrigins, checkBind, docKeyFromCookie } from './auth.js';
 
 describe('mintToken', () => {
   it('returns 64 hex chars', () => {
@@ -150,22 +150,22 @@ describe('allowedOrigins — wildcard binds', () => {
   });
 });
 
-describe('tokenFromCookie', () => {
-  it('extracts the token from a cookie header', () => {
-    expect(tokenFromCookie('afk_web_token=abc123')).toBe('abc123');
+describe('docKeyFromCookie', () => {
+  it('extracts the document key from a cookie header', () => {
+    expect(docKeyFromCookie('afk_web_doc=abc123')).toBe('abc123');
   });
 
   it('finds it among other cookies', () => {
-    expect(tokenFromCookie('theme=dark; afk_web_token=abc123; other=1')).toBe('abc123');
+    expect(docKeyFromCookie('theme=dark; afk_web_doc=abc123; other=1')).toBe('abc123');
   });
 
   it('returns undefined when absent or empty', () => {
-    expect(tokenFromCookie(undefined)).toBeUndefined();
-    expect(tokenFromCookie('theme=dark')).toBeUndefined();
-    expect(tokenFromCookie('afk_web_token=')).toBeUndefined();
+    expect(docKeyFromCookie(undefined)).toBeUndefined();
+    expect(docKeyFromCookie('theme=dark')).toBeUndefined();
+    expect(docKeyFromCookie('afk_web_doc=')).toBeUndefined();
   });
 
-  it('does not confuse a cookie whose name merely ends with the token name', () => {
-    expect(tokenFromCookie('not_afk_web_token=abc123')).toBeUndefined();
+  it('does not confuse a cookie whose name merely ends with the cookie name', () => {
+    expect(docKeyFromCookie('not_afk_web_doc=abc123')).toBeUndefined();
   });
 });

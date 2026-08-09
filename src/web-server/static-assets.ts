@@ -11,7 +11,30 @@ import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join, normalize } from 'node:path';
 import { getWebUiAssetsDir } from '../paths.js';
-import { TOKEN_COOKIE_NAME, tokenFromCookie, tokenFromQuery, tokensMatch } from './auth.js';
+import {
+  DOC_COOKIE_NAME,
+  docKeyFromCookie,
+  nonceFromQuery,
+  tokenFromQuery,
+  tokensMatch,
+} from './auth.js';
+import type { HandoffNonces } from './handoff.js';
+
+/**
+ * Credentials `serveStatic` authenticates against.
+ *
+ * Contract: `token` is the bearer credential and is templated into the
+ * document ONLY on a bootstrap load. `docKey` is an opaque per-run value that
+ * is all the reload cookie ever carries. They must never be the same string.
+ */
+export interface StaticAuth {
+  /** Per-run bearer token. Drives `/api/*`; templated in on bootstrap only. */
+  token: string;
+  /** Opaque per-run cookie value. Never the bearer token. */
+  docKey: string;
+  /** Single-use nonces backing the auto-opened URL. */
+  nonces: HandoffNonces;
+}
 
 /**
  * Contract: sent on EVERY response this surface produces — JSON and asset
@@ -73,15 +96,26 @@ export async function serveStatic(
   res: ServerResponse,
   path: string,
   rawUrl: string,
-  token: string,
+  auth: StaticAuth,
 ): Promise<void> {
   const isDocument = path === '/' || path === '/index.html';
-  // Invariant: the query token and the session cookie are honoured HERE and
-  // nowhere else. `/api/*` is gated on the Authorization header well before
-  // this function is reachable, so neither credential can ever drive the agent.
-  const fromQuery = tokenFromQuery(rawUrl);
-  const authed =
-    tokensMatch(token, fromQuery) || tokensMatch(token, tokenFromCookie(req.headers.cookie));
+  // Invariant: the query token, the handoff nonce, and the document cookie are
+  // honoured HERE and nowhere else. `/api/*` is gated on the Authorization
+  // header well before this function is reachable, so none of these three can
+  // ever drive the agent.
+  //
+  // Invariant: a BOOTSTRAP load is one that presented a credential the browser
+  // does not replay by itself — `?token=` typed/pasted, or a single-use nonce.
+  // Only a bootstrap load receives the bearer token in its HTML. A load
+  // authenticated by the cookie ALONE gets the same bundle with an empty token,
+  // which is what makes a cookie captured by a sibling loopback port worthless:
+  // it can fetch the public static shell and cannot escalate to the credential.
+  const viaQueryToken = tokensMatch(auth.token, tokenFromQuery(rawUrl));
+  // `redeem` burns the nonce, so it must not run for subresources or for a
+  // request already authenticated by the query token.
+  const viaNonce = !viaQueryToken && isDocument && auth.nonces.redeem(nonceFromQuery(rawUrl));
+  const bootstrap = viaQueryToken || viaNonce;
+  const authed = bootstrap || tokensMatch(auth.docKey, docKeyFromCookie(req.headers.cookie));
   if (!authed) {
     res.writeHead(401, { ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
     res.end('Missing or invalid token. Use the URL printed by `afk web`.');
@@ -92,7 +126,7 @@ export async function serveStatic(
   // when the asset happens to exist. A source checkout without a built bundle
   // answers the document with 503, and withholding the cookie there would mean
   // the very next refresh had no credential to replay.
-  const docHeaders = isDocument ? { 'set-cookie': documentCookie(token) } : {};
+  const docHeaders = isDocument ? { 'set-cookie': documentCookie(auth.docKey) } : {};
 
   const rel = isDocument ? 'index.html' : path.replace(/^\/+/, '');
   // Invariant: reject any traversal before touching the filesystem. `normalize`
@@ -108,14 +142,18 @@ export async function serveStatic(
   const file = join(getWebUiAssetsDir(), normalized);
   try {
     const raw = await readFile(file);
-    // Invariant: the token reaches the page through the SERVED HTML, and the
-    // cookie is set by the SERVER with HttpOnly. A JS-written cookie was
-    // readable via `document.cookie` by any page on any other loopback port —
-    // cookies are scoped by host, not by port — which handed the full bearer
-    // token to any local origin. HttpOnly closes that read path while keeping
-    // the automatic replay that makes a bare refresh authenticate.
+    // Invariant: the token reaches the page through the SERVED HTML, but only
+    // on a bootstrap load. On a cookie-authenticated refresh the placeholder is
+    // replaced with the EMPTY string, and the page recovers its credential from
+    // `sessionStorage` — which, unlike a cookie, is scoped by origin (scheme +
+    // host + PORT) and so is unreadable by any sibling loopback port.
     const body = isDocument
-      ? Buffer.from(raw.toString('utf8').split(TOKEN_PLACEHOLDER).join(escapeHtmlAttribute(token)))
+      ? Buffer.from(
+          raw
+            .toString('utf8')
+            .split(TOKEN_PLACEHOLDER)
+            .join(bootstrap ? escapeHtmlAttribute(auth.token) : ''),
+        )
       : raw;
     res.writeHead(200, {
       ...SECURITY_HEADERS,
@@ -146,8 +184,8 @@ export async function serveStatic(
  * browser from storing the cookie at all, which would silently reintroduce the
  * 401-on-refresh bug this cookie exists to prevent.
  */
-function documentCookie(token: string): string {
-  return `${TOKEN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict`;
+function documentCookie(docKey: string): string {
+  return `${DOC_COOKIE_NAME}=${encodeURIComponent(docKey)}; Path=/; HttpOnly; SameSite=Strict`;
 }
 
 function contentType(file: string): string {

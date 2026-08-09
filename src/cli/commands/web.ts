@@ -89,7 +89,11 @@ export function registerWebCommand(program: Command): void {
         }
         console.log(palette.meta('  Press Ctrl+C to stop.'));
 
-        if (options.open !== false) openInBrowser(handle.url);
+        // Invariant: `openUrl`, never `url`. `openInBrowser` exec's the URL as
+        // an argument, and process arguments are readable by every local user
+        // via `ps` — so the opened URL carries a single-use handoff nonce
+        // rather than the live bearer token the printed URL carries.
+        if (options.open !== false) openInBrowser(handle.openUrl);
 
         // Invariant: teardown is registered BEFORE the process is allowed to
         // idle, so a signal arriving immediately after listen() still unwinds

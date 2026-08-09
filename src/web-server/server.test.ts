@@ -26,6 +26,13 @@ function api(h: WebServerHandle, path: string): string {
   return `http://127.0.0.1:${h.port}${path}`;
 }
 
+/** Bootstrap with `?token=` and return the opaque document-cookie value. */
+async function docCookie(h: WebServerHandle): Promise<string> {
+  const res = await fetch(api(h, `/?token=${h.token}`));
+  const raw = res.headers.get('set-cookie') ?? '';
+  return /afk_web_doc=([^;]+)/.exec(raw)?.[1] ?? '';
+}
+
 describe('startWebServer — binding', () => {
   it('binds loopback and mints a token', async () => {
     const h = await start();
@@ -319,10 +326,10 @@ describe('document auth survives a refresh', () => {
   // History: the frontend strips `?token=` from the URL on first load. With the
   // token held only in memory, a refresh requested `/` bare and got 401 — which
   // broke the resume flow the SSE transport exists to provide.
-  it('accepts the session cookie on the document GET', async () => {
+  it('accepts the document cookie on the document GET', async () => {
     const h = await start();
     const res = await fetch(api(h, '/'), {
-      headers: { cookie: `afk_web_token=${h.token}` },
+      headers: { cookie: `afk_web_doc=${await docCookie(h)}` },
     });
     // 503 = authenticated, but the UI bundle is not built in this checkout.
     // Either way it is NOT the 401 a bare refresh used to produce.
@@ -331,14 +338,23 @@ describe('document auth survives a refresh', () => {
 
   it('still refuses a document GET with a wrong cookie', async () => {
     const h = await start();
-    const res = await fetch(api(h, '/'), { headers: { cookie: 'afk_web_token=nope' } });
+    const res = await fetch(api(h, '/'), { headers: { cookie: 'afk_web_doc=nope' } });
+    expect(res.status).toBe(401);
+  });
+
+  it('refuses a cookie whose value is the BEARER token', async () => {
+    // Invariant: the two credentials are disjoint. If the bearer token ever
+    // authenticated as the document key again, the cookie would once more be a
+    // replayable agent credential.
+    const h = await start();
+    const res = await fetch(api(h, '/'), { headers: { cookie: `afk_web_doc=${h.token}` } });
     expect(res.status).toBe(401);
   });
 
   it('never accepts the cookie on an API route', async () => {
     const h = await start();
     const res = await fetch(api(h, '/api/sessions'), {
-      headers: { cookie: `afk_web_token=${h.token}` },
+      headers: { cookie: `afk_web_doc=${await docCookie(h)}` },
     });
     expect(res.status).toBe(401);
   });
@@ -355,12 +371,15 @@ describe('document auth survives a refresh', () => {
  * assertion needs the document BODY, but never where it needs the auth outcome.
  */
 describe('document token delivery', () => {
-  it('sets an HttpOnly, non-Secure session cookie on the document response', async () => {
+  it('sets an HttpOnly, non-Secure document cookie that is NOT the token', async () => {
     const h = await start();
     const res = await fetch(api(h, `/?token=${h.token}`));
     const cookie = res.headers.get('set-cookie');
     expect(cookie).toBeTruthy();
-    expect(cookie).toContain(`afk_web_token=${h.token}`);
+    expect(cookie).toMatch(/afk_web_doc=[0-9a-f]{64}/);
+    // The whole point of the redesign: a cookie captured by a sibling loopback
+    // port must not be the agent-driving credential.
+    expect(cookie).not.toContain(h.token);
     expect(cookie?.toLowerCase()).toContain('httponly');
     expect(cookie?.toLowerCase()).toContain('samesite=strict');
     // Secure would stop the browser storing it over plain-http loopback, which
@@ -380,8 +399,9 @@ describe('document token delivery', () => {
 
   it('does not set the token cookie on a non-document asset', async () => {
     const h = await start();
+    const cookie = await docCookie(h);
     const res = await fetch(api(h, '/styles.css'), {
-      headers: { cookie: `afk_web_token=${h.token}` },
+      headers: { cookie: `afk_web_doc=${cookie}` },
     });
     expect(res.headers.get('set-cookie')).toBeNull();
   });
@@ -392,7 +412,9 @@ describe('document token delivery', () => {
 describe('refresh still authenticates', () => {
   it('serves a bare / carrying only the cookie', async () => {
     const h = await start();
-    const res = await fetch(api(h, '/'), { headers: { cookie: `afk_web_token=${h.token}` } });
+    const res = await fetch(api(h, '/'), {
+      headers: { cookie: `afk_web_doc=${await docCookie(h)}` },
+    });
     expect(res.status).not.toBe(401);
     expect([200, 503]).toContain(res.status);
   });
@@ -448,8 +470,9 @@ describe('static assets require the same credential as the document', () => {
 
   it('serves an asset once the cookie is presented', async () => {
     const h = await start();
+    const cookie = await docCookie(h);
     const res = await fetch(api(h, '/styles.css'), {
-      headers: { cookie: `afk_web_token=${h.token}` },
+      headers: { cookie: `afk_web_doc=${cookie}` },
     });
     // 404 = authenticated but unbuilt; the point is that it is NOT 401.
     expect(res.status).not.toBe(401);
@@ -621,5 +644,118 @@ describe('approval bodies fail closed', () => {
 
     await expect(result).resolves.toEqual({ action: 'decline' });
     controller.abort();
+  });
+
+  /**
+   * Invariant: a bare scalar can never express consent. It used to be wrapped
+   * into `{ action: 'accept', content: { value } }`, so `response: false` and
+   * `response: 'decline'` both APPROVED the pending file-edit or shell command
+   * — the exact inversion of the decline-by-default this surface promises.
+   */
+  it.each([[false], [true], [0], [1], ['decline'], ['accept'], [null], [''], [undefined]])(
+    'declines a scalar response body: %s',
+    async (scalar) => {
+      const h = await start();
+      const controller = new AbortController();
+      const result = elicitationRouter.route(
+        { message: 'run rm -rf?' } as never,
+        { signal: controller.signal },
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      const pending = h.bridge.list();
+      expect(pending.length).toBe(1);
+
+      h.bridge.resolve(pending[0]!.id, scalar);
+      await expect(result).resolves.toEqual({ action: 'decline' });
+      controller.abort();
+    },
+  );
+
+  it('still accepts an explicit object action', async () => {
+    const h = await start();
+    const controller = new AbortController();
+    const result = elicitationRouter.route(
+      { message: 'run rm -rf?' } as never,
+      { signal: controller.signal },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    const pending = h.bridge.list();
+    h.bridge.resolve(pending[0]!.id, { action: 'accept' });
+    await expect(result).resolves.toEqual({ action: 'accept' });
+    controller.abort();
+  });
+});
+
+/**
+ * Invariant: the bearer token is templated into the document ONLY for a request
+ * that presented a NON-REPLAYABLE credential — `?token=` or a single-use `?k=`
+ * nonce. A cookie-authenticated load gets the same bundle with an empty token.
+ *
+ * This is the half of the cookie fix that actually closes the hole. Making the
+ * cookie opaque is not sufficient on its own: a sibling loopback port that
+ * captured the cookie could otherwise simply `GET /` and scrape the bearer
+ * token straight out of the returned HTML.
+ */
+describe('bearer token is withheld from a cookie-only document load', () => {
+  it('omits the token when the request authenticated by cookie alone', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/'), {
+      headers: { cookie: `afk_web_doc=${await docCookie(h)}` },
+    });
+    if (res.status === 503) return; // bundle not built in this checkout
+    const html = await res.text();
+    expect(html).not.toContain(h.token);
+    expect(html).toContain('<meta name="afk-token" content=""');
+  });
+
+  it('includes the token when the request presented ?token=', async () => {
+    const h = await start();
+    const res = await fetch(api(h, `/?token=${h.token}`));
+    if (res.status === 503) return;
+    expect(await res.text()).toContain(h.token);
+  });
+});
+
+/**
+ * Invariant: the auto-opened URL carries a one-shot nonce, never the bearer
+ * token, because `open`/`xdg-open` publish their arguments in the process table.
+ */
+describe('handoff nonce for the auto-open path', () => {
+  it('openUrl carries ?k= and never the bearer token', async () => {
+    const h = await start();
+    expect(h.openUrl).toMatch(/\?k=[0-9a-f]{64}$/);
+    expect(h.openUrl).not.toContain(h.token);
+    // The PRINTED url still carries the token — terminal output is not argv.
+    expect(h.url).toContain(`?token=${h.token}`);
+  });
+
+  it('authenticates the document once, then refuses the replay', async () => {
+    const h = await start();
+    const nonce = new URL(h.openUrl).searchParams.get('k') ?? '';
+    const first = await fetch(api(h, `/?k=${nonce}`));
+    expect(first.status).not.toBe(401);
+    const replay = await fetch(api(h, `/?k=${nonce}`));
+    expect(replay.status).toBe(401);
+  });
+
+  it('delivers the bearer token on the one load it authenticates', async () => {
+    const h = await start();
+    const nonce = new URL(h.openUrl).searchParams.get('k') ?? '';
+    const res = await fetch(api(h, `/?k=${nonce}`));
+    if (res.status === 503) return;
+    expect(await res.text()).toContain(h.token);
+  });
+
+  it('is refused on an API route', async () => {
+    const h = await start();
+    const nonce = new URL(h.openUrl).searchParams.get('k') ?? '';
+    const res = await fetch(api(h, `/api/sessions?k=${nonce}`));
+    expect(res.status).toBe(401);
+  });
+
+  it('is refused when unknown', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/?k=not-a-real-nonce'));
+    expect(res.status).toBe(401);
   });
 });

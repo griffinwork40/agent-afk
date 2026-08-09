@@ -85,6 +85,10 @@ async function boot(opts: {
 beforeEach(() => {
   calls = [];
   history.replaceState(null, '', '/');
+  // Invariant: the token now persists in sessionStorage so a refresh keeps its
+  // credential. Each test therefore starts from an empty tab, or a token stored
+  // by an earlier case would silently satisfy a later "no credential" assertion.
+  sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -103,11 +107,28 @@ describe('app — the token comes from the meta tag, never from document.cookie'
     await boot({ metaToken: 'meta-tok' });
     expect(document.cookie).not.toContain('meta-tok');
     expect(document.cookie).not.toContain('afk_web_token');
+    expect(document.cookie).not.toContain('afk_web_doc');
+  });
+
+  it('persists the token in sessionStorage, which is scoped by PORT', async () => {
+    // Invariant: sessionStorage is keyed by origin (scheme+host+port), so a
+    // sibling loopback port cannot read it — the property a cookie lacks.
+    await boot({ metaToken: 'meta-tok' });
+    expect(sessionStorage.getItem('afk_web_token')).toBe('meta-tok');
+  });
+
+  it('recovers the stored token when the document serves an empty placeholder', async () => {
+    // The refresh path: a cookie-authenticated document carries no token.
+    await boot({ metaToken: 'meta-tok' });
+    calls = [];
+    await boot({ metaToken: undefined });
+    const apiCall = calls.find((c) => c.url.startsWith('/api/'));
+    expect(apiCall?.authorization).toBe('Bearer meta-tok');
   });
 
   it('does not fall back to a JS-readable cookie for its credential', async () => {
     // A cookie planted by any other loopback-port origin must not be adopted.
-    document.cookie = 'afk_web_token=stolen-from-another-port; Path=/';
+    document.cookie = 'afk_web_doc=stolen-from-another-port; Path=/';
     await boot({ metaToken: 'meta-tok' });
     const apiCall = calls.find((c) => c.url.startsWith('/api/'));
     expect(apiCall?.authorization).toBe('Bearer meta-tok');
@@ -129,6 +150,13 @@ describe('app — the token comes from the meta tag, never from document.cookie'
     await boot({ metaToken: 'meta-tok' });
     expect(location.search).toBe('');
     expect(location.href).not.toContain('in-the-url');
+  });
+
+  it('scrubs the ?k= handoff nonce from the visible URL', async () => {
+    history.replaceState(null, '', '/?k=one-shot-nonce');
+    await boot({ metaToken: 'meta-tok' });
+    expect(location.search).toBe('');
+    expect(location.href).not.toContain('one-shot-nonce');
   });
 });
 

@@ -15,6 +15,7 @@ describe('deriveOrigin — Surface → user-facing origin (Q1)', () => {
     ['repl', 'cli'], // REPL is a CLI entrypoint
     ['telegram', 'telegram'],
     ['daemon', 'daemon'],
+    ['web', 'web'],
     ['subagent', 'unknown'], // actor role, not a surface
     ['unknown', 'unknown'],
     [undefined, 'unknown'],
@@ -28,11 +29,12 @@ describe('deriveOrigin — Surface → user-facing origin (Q1)', () => {
       'repl',
       'telegram',
       'daemon',
+      'web',
       'subagent',
       'unknown',
       undefined,
     ];
-    const allowed = new Set(['cli', 'telegram', 'daemon', 'unknown']);
+    const allowed = new Set(['cli', 'telegram', 'daemon', 'web', 'unknown']);
     for (const s of all) expect(allowed.has(deriveOrigin(s))).toBe(true);
   });
 });

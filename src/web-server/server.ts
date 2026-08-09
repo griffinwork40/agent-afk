@@ -11,7 +11,8 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { bearerFromHeader, checkBind, mintToken, originAllowed, tokensMatch } from './auth.js';
-import { serveStatic } from './static-assets.js';
+import { serveStatic, type StaticAuth } from './static-assets.js';
+import { HandoffNonces } from './handoff.js';
 import { WebElicitationBridge } from './elicitation-web.js';
 import type { CreateSessionRequest, SessionOwner } from './session-owner.js';
 import {
@@ -64,7 +65,16 @@ export interface WebServerHandle {
   port: number;
   host: string;
   token: string;
+  /** Human-readable URL carrying `?token=`. Safe to print; NEVER pass to exec. */
   url: string;
+  /**
+   * URL for the auto-open path, carrying a single-use `?k=` handoff nonce.
+   *
+   * Invariant: this is the only URL that may be handed to `open`/`xdg-open`.
+   * Process arguments are world-readable, so opening `url` would publish the
+   * bearer token to every local user for the life of the browser process.
+   */
+  openUrl: string;
   bridge: WebElicitationBridge;
   stop: () => Promise<void>;
 }
@@ -84,6 +94,11 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   // longer the same predicate — `tokenExplicit: true` with no token is now
   // expressible, and reading the token off that flag would yield `undefined`.
   const token = hasToken ? (options.token as string) : mintToken();
+  // Invariant: minted independently of `token` and never compared against it.
+  // This is the ONLY value the reload cookie carries, so a sibling loopback
+  // port that captures the cookie gains the static bundle and nothing more.
+  const docKey = mintToken();
+  const nonces = new HandoffNonces();
   const owned = options.owned ?? options.owner?.owned ?? new Set<string>();
   const bridge = new WebElicitationBridge();
   bridge.install();
@@ -110,7 +125,8 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   };
 
   const server = createServer((req, res) => {
-    void dispatch(req, res, ctx, token, host, actualPort(server), streams).catch((err: unknown) => {
+    const auth: StaticAuth = { token, docKey, nonces };
+    void dispatch(req, res, ctx, auth, host, actualPort(server), streams).catch((err: unknown) => {
       if (res.headersSent) {
         res.end();
         return;
@@ -130,6 +146,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     host,
     token,
     url: `http://${displayHost}:${port}/?token=${token}`,
+    openUrl: `http://${displayHost}:${port}/?k=${nonces.mint()}`,
     bridge,
     stop: async () => {
       bridge.uninstall();
@@ -190,7 +207,7 @@ async function dispatch(
   req: IncomingMessage,
   res: ServerResponse,
   ctx: RouteContext,
-  token: string,
+  auth: StaticAuth,
   host: string,
   port: number,
   streams: Set<AbortController>,
@@ -200,12 +217,12 @@ async function dispatch(
   const method = req.method ?? 'GET';
 
   if (!path.startsWith('/api/')) {
-    await serveStatic(req, res, path, rawUrl, token);
+    await serveStatic(req, res, path, rawUrl, auth);
     return;
   }
 
   // ---- auth: bearer required on every API route -------------------------
-  if (!tokensMatch(token, bearerFromHeader(header(req, 'authorization')))) {
+  if (!tokensMatch(auth.token, bearerFromHeader(header(req, 'authorization')))) {
     sendJson(res, 401, { error: 'unauthorized', message: 'missing or invalid bearer token' });
     return;
   }

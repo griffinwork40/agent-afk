@@ -60,30 +60,50 @@ export function bearerFromHeader(header: string | undefined): string | undefined
  * shell history, and screen shares far more readily than a header does.
  */
 export function tokenFromQuery(rawUrl: string): string | undefined {
+  return queryParam(rawUrl, 'token');
+}
+
+/**
+ * Extract the single-use handoff nonce (`?k=`) from a request URL.
+ *
+ * Invariant: honoured on the DOCUMENT GET alone, exactly like `?token=`. It
+ * exists so the auto-opened URL can carry a one-shot credential instead of the
+ * bearer token, which `open`/`xdg-open` would publish in the process table.
+ */
+export function nonceFromQuery(rawUrl: string): string | undefined {
+  return queryParam(rawUrl, 'k');
+}
+
+function queryParam(rawUrl: string, name: string): string | undefined {
   const qIndex = rawUrl.indexOf('?');
   if (qIndex === -1) return undefined;
   const params = new URLSearchParams(rawUrl.slice(qIndex + 1));
-  return params.get('token') ?? undefined;
+  return params.get(name) ?? undefined;
 }
 
-/** Name of the reload-safe session cookie mirroring the bearer token. */
-export const TOKEN_COOKIE_NAME = 'afk_web_token';
+/** Name of the reload-safe cookie carrying the opaque document key. */
+export const DOC_COOKIE_NAME = 'afk_web_doc';
 
 /**
- * Extract the web token from a `Cookie` header value.
+ * Extract the opaque document key from a `Cookie` header value.
  *
- * Contract: callers must only consult this for the initial document GET, for
- * the same reason `tokenFromQuery` is so restricted. A cookie is replayed by
- * the browser automatically, which is precisely what makes it usable for a
- * refresh and precisely what would make it a CSRF vector on a mutating route —
- * so `/api/*` authenticates on the `Authorization` header alone.
+ * Invariant: the value of this cookie is NOT the bearer token. Cookies are
+ * scoped by HOST and not by port, so anything stored here is handed to every
+ * other `http://<same-host>:<any-port>` service the browser talks to, and a
+ * server-side replay of a captured cookie carries no `Origin` — which
+ * `originAllowed` deliberately permits. When the cookie WAS the bearer token,
+ * that made any sibling loopback listener a full agent-control credential
+ * thief. The document key unlocks the non-secret static bundle and nothing
+ * else: `/api/*` authenticates on the `Authorization` header alone, and the
+ * bearer token is templated into the document only for a request that
+ * presented a non-replayable credential (`?token=` or a handoff nonce).
  */
-export function tokenFromCookie(header: string | undefined): string | undefined {
+export function docKeyFromCookie(header: string | undefined): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(';')) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== TOKEN_COOKIE_NAME) continue;
+    if (part.slice(0, eq).trim() !== DOC_COOKIE_NAME) continue;
     const raw = part.slice(eq + 1).trim();
     try {
       return decodeURIComponent(raw) || undefined;

@@ -136,17 +136,22 @@ export class WebElicitationBridge {
 /**
  * Coerce a browser-supplied response body into an ElicitationResult.
  *
- * Contract: `ElicitationResult.content` is a `Record<string, unknown>`, so a
- * bare scalar from the browser is wrapped rather than cast. An unrecognized or
- * absent `action` DECLINES, whatever the payload shape — this surface approves
- * file edits and shell commands, so refusal is the only safe default and a
- * malformed body can never be read as approval.
+ * Contract: approval requires an OBJECT carrying an explicit `action: 'accept'`
+ * and nothing else does. An unrecognized or absent `action` DECLINES, whatever
+ * the payload shape — this surface approves file edits and shell commands, so
+ * refusal is the only safe default and a malformed body can never be read as
+ * approval.
+ *
+ * Invariant: every non-object response declines, INCLUDING a bare scalar. A
+ * scalar was previously wrapped into `{ action: 'accept', content: { value } }`,
+ * so `{"response": false}` and `{"response": "decline"}` both APPROVED the
+ * pending elicitation — the exact inversion of the default this contract
+ * promises. Scalars carry no `action`, so there is no shape in which one can
+ * legitimately express consent.
  */
 function normalizeResult(response: unknown): ElicitationResult {
   if (typeof response !== 'object' || response === null) {
-    return response === undefined
-      ? { action: 'decline' }
-      : { action: 'accept', content: { value: response } };
+    return { action: 'decline' };
   }
   const record = response as Record<string, unknown>;
   const action = record['action'];
