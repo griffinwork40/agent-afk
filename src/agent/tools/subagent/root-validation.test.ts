@@ -83,9 +83,17 @@ describe('ungatedSensitiveRoot (#852)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk852-'));
     const link = path.join(dir, 'link');
     try {
-      fs.symlinkSync(path.join(HOME, 'Library'), link, 'dir');
-      // Lexically innocuous (/tmp/...), but its realpath is an ancestor of the
-      // Application Support credential root.
+      // Target must EXIST on every platform the suite runs on: realpathSafe
+      // falls back to re-appending the trailing segments for an unresolvable
+      // path, so a DANGLING link resolves to the link's own path and would
+      // silently assert nothing. The home dir exists everywhere and is an
+      // ancestor of the home-anchored credential roots (~/.ssh, …); a
+      // home-relative target like ~/Library is macOS-only and would make this
+      // case vacuous on Linux CI rather than failing loudly.
+      fs.symlinkSync(HOME, link, 'dir');
+      // Lexically innocuous (/tmp/...), but its realpath is an ancestor of a
+      // credential root — the lexical-only check that #664 closed for
+      // isTooBroadRoot would have passed it.
       expect(ungatedSensitiveRoot(link)).toBeDefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
