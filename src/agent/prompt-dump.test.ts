@@ -654,6 +654,22 @@ describe('redactInlineSecrets', () => {
     expect(result).toBe(text);
   });
 
+  it.each([
+    'AUTH_TOKEN_PATH="/Users/me/.config/app/token.json"',
+    "AUTH_TOKEN_PATH='/Users/me/.config/app/token.json'",
+  ])('spares a quoted non-secret filesystem-path value (%s)', (text) => {
+    expect(redactInlineSecrets(text)).toBe(text);
+  });
+
+  it.each([
+    ['API_TOKEN', '/2wYZ01xPz7pQeC0mFkA/'],
+    ['PASSWORD', '/correct/horse/battery/staple'],
+  ])('still masks slash-prefixed secret %s values', (name, secret) => {
+    const result = redactInlineSecrets(`${name}=${secret}`);
+    expect(result).not.toContain(secret);
+    expect(result).toBe(`${name}=<REDACTED length=${secret.length}>`);
+  });
+
   it('STILL MASKS an AWS secret access key even though it is path-shaped (fail-safe)', () => {
     // wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY satisfies looksLikeFilesystemPath()
     // in isolation (contains '/', no '+'/'=', every segment under the 32-char

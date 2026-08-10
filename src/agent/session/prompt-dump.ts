@@ -73,14 +73,15 @@ const SECRET_KEY_PATTERN = /key|token|secret|password|credential|auth/i;
  * Invariant (issue #949): matching on the key NAME alone with no check on
  * the value's shape masks non-secret path values in full, e.g.
  * `AUTH_TOKEN_PATH=/Users/me/.config/app/token.json`. `pathGuardedRedact`
- * spares a value ONLY when it starts with `/` or `~/` AND
- * `looksLikeFilesystemPath` also holds. The prefix check is required, not
+ * spares a value ONLY when the variable name has a `PATH` or `FILE` segment,
+ * the optionally quoted value starts with `/` or `~/`, AND
+ * `looksLikeFilesystemPath` also holds. The name and prefix checks are required, not
  * redundant: `looksLikeFilesystemPath` alone accepts
  * `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` (an AWS secret access key —
  * has `/`, no `+`/`=`, every segment under the 32-char opaque threshold),
- * which would unmask a live credential. Path values start with `/`/`~/`
- * virtually universally; secrets essentially never do. Ambiguous values —
- * including any `/`-bearing value lacking that prefix — stay redacted.
+ * which would unmask a live credential. Requiring an explicit path-oriented
+ * name also keeps slash-prefixed passwords and tokens masked. Ambiguous values
+ * stay redacted.
  */
 function pathGuardedRedact(m: RegExpMatchArray): string {
   // Both capture groups are structural requirements of the regexes this is used
@@ -90,8 +91,16 @@ function pathGuardedRedact(m: RegExpMatchArray): string {
   const name = m[1]!;
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
   const value = m[2]!;
-  const hasPathPrefix = value.startsWith('/') || value.startsWith('~/');
-  if (hasPathPrefix && looksLikeFilesystemPath(value)) return `${name}=${value}`;
+  const quote = value[0];
+  const pathValue =
+    (quote === '"' || quote === "'") && value.at(-1) === quote
+      ? value.slice(1, -1)
+      : value;
+  const hasPathName = /(?:^|_)(?:PATH|FILE)(?:_|$)/i.test(name);
+  const hasPathPrefix = pathValue.startsWith('/') || pathValue.startsWith('~/');
+  if (hasPathName && hasPathPrefix && looksLikeFilesystemPath(pathValue)) {
+    return `${name}=${value}`;
+  }
   return `${name}=<REDACTED length=${value.length}>`;
 }
 
@@ -112,11 +121,11 @@ const INLINE_SECRET_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> =
   // (The existing generic pattern already covers most of these; this is belt-and-suspenders
   //  for lowercase variants, e.g. openai_api_key=...) Both capture groups are required by
   // the regex structure, so pathGuardedRedact's non-null assertions always hold.
-  [/([A-Za-z_]{3,}(?:[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])[A-Za-z_]*)=([^\s]{16,})/g,
+  [/([A-Za-z_]*(?:[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])[A-Za-z_]*)=([^\s]{16,})/g,
     pathGuardedRedact],
   // Generic KEY=<high-entropy value> — UPPERCASE variant (kept for backward compat). Same
   // capture-group invariant as above.
-  [/([A-Z_]{3,}(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*)=([^\s]{16,})/g,
+  [/([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*)=([^\s]{16,})/g,
     pathGuardedRedact],
 ];
 
