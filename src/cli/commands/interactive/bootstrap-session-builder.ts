@@ -39,6 +39,7 @@ export interface BuildAgentSessionDeps {
   providerFactory: (model: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
+  drainSubagents?: (() => Promise<unknown>) | undefined;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
@@ -77,6 +78,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
+    ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
@@ -104,6 +106,7 @@ export function buildSharedDeps(a: {
   providerFactory: (m: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
+  drainSubagents?: (() => Promise<unknown>) | undefined;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
@@ -121,6 +124,7 @@ export function buildSharedDeps(a: {
     providerFactory: a.providerFactory,
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
+    drainSubagents: a.drainSubagents,
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,

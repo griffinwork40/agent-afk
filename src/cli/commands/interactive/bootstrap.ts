@@ -124,6 +124,10 @@ export async function bootstrapSession(
     sessionModel, resumeConfig, systemPrompt, systemPromptSource, thinking, effort,
     maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
+    // Cascade-abort and drain in-flight children before the writer seals,
+    // so a wave still running when this session ends emits real `cancelled`
+    // rows instead of vanishing (#733).
+    drainSubagents: () => rootManager.abortAllAndDrain('session_end', 'user_signal'),
   });
 
   // Import any plugin JS entrypoints (manifest `main`) before constructing the

@@ -61,6 +61,7 @@ import {
   SUBAGENT_DEFAULT_TIMEOUT_MS,
   SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
   SUBAGENT_BACKGROUND_TIMEOUT_MS,
+  SUBAGENT_DRAIN_TIMEOUT_MS,
   resolveSubagentTimeoutMs,
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
@@ -865,6 +866,54 @@ export class SubagentManager {
   /** Cancel all running subagents. */
   async killAll(): Promise<void> {
     await Promise.allSettled([...this.active.values()].map((h) => h.cancel()));
+  }
+
+  /**
+   * Cascade-abort the managed tree and wait (bounded) for every in-flight
+   * child's terminal trace row to be handed to the writer.
+   *
+   * Contract: called by the session owner immediately before it seals the
+   * shared trace writer. `killAll()` alone is not a substitute — this exists
+   * to guarantee the *ordering* the writer's seal contract demands, and to
+   * bound the wait so teardown cannot hang.
+   *
+   * Returns the number of children drained and whether the bound was hit, so
+   * the caller can report a timeout instead of losing rows silently — the
+   * silent loss is the entire bug this closes (#733).
+   */
+  async abortAllAndDrain(
+    reason?: unknown,
+    origin: AbortOrigin = 'user_signal',
+    timeoutMs: number = SUBAGENT_DRAIN_TIMEOUT_MS,
+  ): Promise<{ drained: number; timedOut: boolean }> {
+    const inFlight = [...this.active.values()];
+    if (inFlight.length === 0) return { drained: 0, timedOut: false };
+
+    // Cascade first so descendants see the abort while we await their parents.
+    this.abortGraph.abort(this.rootId, reason, origin);
+
+    // Invariant: `handle.cancel()` emits the child's `cancelled` lifecycle row
+    // synchronously before its own first await, so awaiting it here guarantees
+    // the row has ENTERED writer.write() — and is therefore queued ahead of the
+    // seal — even though the emit itself is fire-and-forget.
+    let timedOut = false;
+    const bound = new Promise<void>((resolve) =>
+      setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs).unref(),
+    );
+    await Promise.race([
+      Promise.allSettled(inFlight.map((h) => h.cancel())),
+      bound,
+    ]);
+    if (timedOut) {
+      console.warn(
+        `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
+          `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
+      );
+    }
+    return { drained: inFlight.length, timedOut };
   }
 
   /**

@@ -460,7 +460,7 @@ export function registerChatCommand(program: Command): void {
         // executors. The trace writer is opened above so the manager and every
         // executor inherit it — without it, skill-forked subagents emit zero
         // trace events and become undebuggable from disk.
-        const { subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+        const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
           // Origin attribution: `afk chat` is a `cli` entrypoint.
           surface: 'cli',
           parentSession: deferredParent,
@@ -572,6 +572,10 @@ export function registerChatCommand(program: Command): void {
           // OAuth (resolveOpenAIAuth treats a non-empty config key as Tier 1).
           // getApiKeyForModel routes via providerForModel → correct family
           // (anti-leak invariant, credential-resolver.ts).
+          // Cascade-abort and drain in-flight children before the writer
+          // seals, so a wave still running when this session ends emits real
+          // `cancelled` rows instead of vanishing (#733).
+          drainSubagents: () => rootManager.abortAllAndDrain('session_end', 'user_signal'),
           apiKey: getApiKeyForModel(sessionModel),
           maxTurns: parseInt(options.maxTurns, 10),
           // One-shot `afk chat` is headless: no REPL/Telegram elicitation

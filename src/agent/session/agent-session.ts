@@ -1304,6 +1304,27 @@ export class AgentSession implements IAgentSession {
   private async dispatchSessionEndOnce(reason: string): Promise<void> {
     if (this.sessionEndDispatched) return;
     this.sessionEndDispatched = true;
+
+    // Invariant: in-flight children must be cascade-aborted and drained BEFORE
+    // the writer is sealed, and this ordering is externally governed by the
+    // writer's own contract — `seal()` flips `sealed = true` synchronously and
+    // `write()` rejects on a sealed writer, so a terminal row whose `write()`
+    // has not been *entered* by the time seal begins is lost. It is dropped
+    // silently, because `emitSubagentLifecycle` swallows the rejection: the
+    // trace keeps the child's `started` row and gains no matching terminal,
+    // with nothing recording that anything went missing (#733). Measured at
+    // 9.8% of children in daemon/cron waves — unattended parallel runs, where
+    // post-hoc trace inspection is the only way to learn what happened.
+    //
+    // The drain is bounded and never rethrows: a wedged child must not convert
+    // "parent finished" into "parent hangs on close". On timeout the drain
+    // resolves anyway and we seal regardless — trading a still-orphaned row for
+    // a hang is the wrong bargain, and the timeout is reported by the drain
+    // implementation rather than passing silently.
+    if (this.config.drainSubagents !== undefined) {
+      await this.config.drainSubagents().catch(() => {});
+    }
+
     // Witness layer ordering:
     //   1. Emit `closure` — the terminal classification record that names
     //      WHY the session ended (model_end_turn, abort, budget_exceeded,

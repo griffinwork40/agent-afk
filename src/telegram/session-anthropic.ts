@@ -58,7 +58,7 @@ export async function buildAnthropicTelegramSession(
   // executors. Inherit configured-or-host cwd so forked subagents stay
   // in the same working tree as the parent session — important when the
   // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
-  const { subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+  const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
     // Origin attribution: forked children inherit origin 'telegram'.
     surface: 'telegram',
     parentSession: deferredParent,
@@ -142,6 +142,10 @@ export async function buildAnthropicTelegramSession(
       : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     maxTurns: 100,
+    // Cascade-abort and drain in-flight children before the writer seals, so a
+    // wave still running when this session ends emits real `cancelled` rows
+    // instead of vanishing (#733).
+    drainSubagents: () => rootManager.abortAllAndDrain('session_end', 'user_signal'),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
     ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
