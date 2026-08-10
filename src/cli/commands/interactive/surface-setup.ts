@@ -171,6 +171,14 @@ export async function setupSurface(
                 const ring = surface.history as { getEntries?: () => readonly string[] };
                 return ring.getEntries ? [...ring.getEntries()] : [];
               },
+              // Most-recently submitted entry (index 0 of the history ring, pushed
+              // at the start of each turn before it runs). Used by getDeterministicGhost
+              // to skip echoing the last submission as a Tier-1 history suggestion.
+              get lastSubmitted() {
+                const ring = surface.history as { getEntries?: () => readonly string[] };
+                const entries = ring.getEntries ? ring.getEntries() : [];
+                return entries[0];
+              },
               getDropdownTopCandidate: (buffer: string) => {
                 const ac = surface.autocompleteState;
                 const top = ac.candidates[0];

@@ -801,3 +801,84 @@ describe('primePromptSuggestion — sanitization ordering', () => {
     expect(engine.peekPromptSuggestion()).toBeNull();
   });
 });
+
+// ── Fix 2: Tier-1 history skip for most-recent entry (lastSubmitted) ───────────
+
+describe('getDeterministicGhost – lastSubmitted skip', () => {
+  it('skips history entry matching lastSubmitted', () => {
+    const engine = createSuggestEngine();
+    // The last submitted command is "/compact --summarize"; typing a prefix of
+    // it should NOT echo it back as a ghost.
+    const ctx = makeCtx({
+      getHistory: () => ['/compact --summarize', '/compact', '/chat hello'],
+      lastSubmitted: '/compact --summarize',
+    });
+    // "/compact -" is a prefix of "/compact --summarize" (lastSubmitted) and
+    // "/compact" (an older entry). lastSubmitted should be skipped; the next
+    // match is "/compact" but "/compact" does not extend "/compact -" (prefix
+    // length check), so null is returned rather than echoing back the submission.
+    const ghost = engine.getDeterministicGhost('/compact -', ctx);
+    expect(ghost).toBeNull();
+  });
+
+  it('still suggests older history entries even when lastSubmitted is set', () => {
+    const engine = createSuggestEngine();
+    // lastSubmitted is "/compact --summarize" (history[0]).
+    // "/compact --verbose" is a different older entry that matches "/compact --v".
+    const ctx = makeCtx({
+      getHistory: () => ['/compact --summarize', '/compact --verbose', '/chat hello'],
+      lastSubmitted: '/compact --summarize',
+    });
+    // "/compact --v" is only a prefix of "/compact --verbose", not of
+    // "/compact --summarize" (which is skipped). Should suggest the older entry.
+    const ghost = engine.getDeterministicGhost('/compact --v', ctx);
+    expect(ghost).toBe('/compact --verbose');
+  });
+
+  it('works normally when lastSubmitted is undefined', () => {
+    const engine = createSuggestEngine();
+    const ctx = makeCtx({
+      getHistory: () => ['/compact --summarize', '/compact', '/chat hello'],
+      // lastSubmitted intentionally absent
+    });
+    // Without lastSubmitted, history[0] is a normal candidate.
+    const ghost = engine.getDeterministicGhost('/compact -', ctx);
+    expect(ghost).toBe('/compact --summarize');
+  });
+});
+
+// ── Fix 3: Tier-2 cache key includes model ────────────────────────────────────
+
+describe('getGhost – Tier 2 cache key includes model', () => {
+  it('cache miss after model change — same buffer, different model re-fetches', async () => {
+    const completeFn = vi.fn()
+      .mockResolvedValueOnce('hello world')   // first model call
+      .mockResolvedValueOnce('hello world');  // second model call (different model)
+    const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
+
+    const ctxModelA = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
+    const ctxModelB = makeCtx({ model: 'claude-sonnet-4-5', llmEnabled: () => true });
+
+    const first = await engine.getGhost('hel', ctxModelA);
+    expect(first).toBe('hello world');
+    expect(completeFn).toHaveBeenCalledTimes(1);
+
+    // Different model → cache miss → second fetch
+    const second = await engine.getGhost('hel', ctxModelB);
+    expect(second).toBe('hello world');
+    expect(completeFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('cache hit with same model — same buffer, same model returns cached', async () => {
+    const completeFn = vi.fn().mockResolvedValue('hello world');
+    const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
+    const ctx = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
+
+    const first = await engine.getGhost('hel', ctx);
+    const second = await engine.getGhost('hel', ctx);
+    expect(first).toBe('hello world');
+    expect(second).toBe('hello world');
+    // Same model + same buffer → cache hit; completeFn called only once.
+    expect(completeFn).toHaveBeenCalledTimes(1);
+  });
+});
