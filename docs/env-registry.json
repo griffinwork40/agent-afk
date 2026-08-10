@@ -938,6 +938,30 @@
       "secret": true
     },
     {
+      "name": "AFK_WITNESS_MAX_AGE_DAYS",
+      "description": "Evict a witness session directory once its newest content is older than this many days. Default 30.",
+      "type": "number",
+      "required": false,
+      "default": "30",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_WITNESS_MAX_BYTES",
+      "description": "Aggregate byte cap for the witness tree; oldest session directories are evicted first once exceeded. Default 2147483648 (2 GiB).",
+      "type": "number",
+      "required": false,
+      "default": "2147483648",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_WITNESS_RETENTION_DISABLE",
+      "description": "Disable the witness-tree retention sweep entirely, so no session directory is ever evicted.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_WORKTREE_AUTONAME",
       "description": "Auto-rename worktree branches based on the first user message in interactive mode. 1 = on (default), 0 = off.",
       "type": "boolean",

@@ -86,6 +86,7 @@ import {
   SESSION_GRANTS_MAX_BYTES,
   SESSION_GRANTS_KEEP_TAIL_LINES,
 } from '../log-retention.js';
+import { sweepWitnessTree } from '../witness-sweep.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -257,6 +258,15 @@ export class AgentSession implements IAgentSession {
       void capJsonlBySize(getSessionGrantsPath(), {
         maxBytes: SESSION_GRANTS_MAX_BYTES,
         keepTailLines: SESSION_GRANTS_KEEP_TAIL_LINES,
+      });
+      // Bound the witness tree the same way and for the same reasons: root
+      // sessions only, fire-and-forget, never able to fail construction. The
+      // active session's own directory is excluded BY IDENTITY (its witness
+      // label, not its SDK id) so its survival never depends on the sweep's
+      // mtime heuristics being right. Self-throttled by a stamp file, so this
+      // is a no-op on all but one session start every few hours (#849).
+      void sweepWitnessTree({
+        activeLabel: sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
       });
     }
   }

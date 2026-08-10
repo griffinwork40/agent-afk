@@ -35,7 +35,7 @@
  */
 
 import { join } from 'path';
-import { getAgentFrameworkDir, getAfkStateDir } from '../paths.js';
+import { getAgentFrameworkDir } from '../paths.js';
 
 /** Root for all improve-pipeline artifacts. */
 export function getImproveRoot(): string {
@@ -62,10 +62,9 @@ export function getFailureCardMarkdownPath(slug: string): string {
   return join(getFailureCardsDir(), `${slug}.md`);
 }
 
-/** Witness-layer root: `$AFK_HOME/state/witness/`. Phase 1A reads from here. */
-export function getWitnessRoot(): string {
-  return join(getAfkStateDir(), 'witness');
-}
+/** Witness-layer root: `$AFK_HOME/state/witness/`. Phase 1A reads from here.
+ *  Re-exported from `src/paths.ts`, the canonical owner of every AFK path. */
+export { getWitnessRoot } from '../paths.js';
 
 // ---------------------------------------------------------------------------
 // Proposals (Sprint 2)

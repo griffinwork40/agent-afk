@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**155 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**156 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -165,6 +165,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SKILL_STREAM_VERBOSE` | boolean |  |  |  | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. |
 | `AFK_TELEGRAM_TRACE` | boolean |  |  | `1` | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. |
 | `AFK_TRACE_DISABLED` | boolean |  |  | `1` | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. |
+| `AFK_WITNESS_MAX_AGE_DAYS` | number |  | `30` |  | Evict a witness session directory once its newest content is older than this many days. Default 30. |
+| `AFK_WITNESS_MAX_BYTES` | number |  | `2147483648` |  | Aggregate byte cap for the witness tree; oldest session directories are evicted first once exceeded. Default 2147483648 (2 GiB). |
+| `AFK_WITNESS_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the witness-tree retention sweep entirely, so no session directory is ever evicted. |
 | `AGENT_AFK_ASCII` | boolean |  |  | `1` | Force the interactive REPL tool-lane renderer to ASCII-only glyphs instead of the default Unicode box-drawing set. Accepts 1/true/yes (case-insensitive). Useful for terminals whose font lacks ┃├╰├ glyphs. |
 | `DEBUG` | string |  |  |  | Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG. |
 

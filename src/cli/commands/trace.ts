@@ -29,7 +29,7 @@ import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
 import { formatCacheUsage } from './trace-usage-format.js';
-import { getAfkStateDir, getTraceDir } from '../../paths.js';
+import { getTraceDir, getWitnessRoot } from '../../paths.js';
 import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
 
@@ -38,10 +38,6 @@ import type { TraceEvent } from '../../agent/trace/index.js';
 // ---------------------------------------------------------------------------
 
 /** Absolute path to the witness root that holds per-session trace dirs. */
-function getWitnessRoot(): string {
-  return join(getAfkStateDir(), 'witness');
-}
-
 /** One discovered trace, with the mtime used to order "most recent first". */
 export interface TraceDirEntry {
   sessionId: string;
