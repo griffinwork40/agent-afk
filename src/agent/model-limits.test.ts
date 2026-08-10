@@ -186,16 +186,41 @@ describe('maxOutputTokensFor — retired-but-Active Opus pin', () => {
     // miss the table and fall to the 64k DEFAULT_MAX_OUTPUT — halving the real
     // 128k output cap. This guards that regression.
     expect(maxOutputTokensFor('claude-opus-4-8')).toBe(128_000);
+    // Same reasoning, same ceiling, for the other two Active 1M-window opus
+    // generations — both were missing and inheriting the 64k fallback.
+    expect(maxOutputTokensFor('claude-opus-4-7')).toBe(128_000);
+    expect(maxOutputTokensFor('claude-opus-4-6')).toBe(128_000);
     // The new default resolves correctly too.
     expect(maxOutputTokensFor('claude-opus-5')).toBe(128_000);
     expect(maxOutputTokensFor('opus')).toBe(128_000);
   });
 
-  it('reports opus-4-8 true 200k context window via the raw wire id', () => {
-    // No explicit MODEL_CONTEXT_LIMITS entry: the Anthropic DEFAULT_CONTEXT_LIMIT
-    // (200k) fallback already yields opus-4-8's real window, so no regression on
-    // the context path — documented here so the pin stays fully usable.
-    expect(contextLimitFor('claude-opus-4-8')).toBe(200_000);
+  it('reports the true 1M context window for the 4.6/4.7/4.8 opus wire ids', () => {
+    // Invariant: this assertion previously pinned 200k, on the stated premise that
+    // "the DEFAULT_CONTEXT_LIMIT (200k) fallback already yields opus-4-8's real
+    // window." That premise was wrong. Anthropic's context-windows page lists Opus
+    // 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 5 and Sonnet 4.6 as 1M-window models
+    // with 1M as the default and no beta header required, so relying on the
+    // fallback under-reported all three opus generations by 5x.
+    // <https://platform.claude.com/docs/en/build-with-claude/context-windows>
+    expect(contextLimitFor('claude-opus-4-8')).toBe(1_000_000);
+    expect(contextLimitFor('claude-opus-4-7')).toBe(1_000_000);
+    expect(contextLimitFor('claude-opus-4-6')).toBe(1_000_000);
+    // Opus 4.5 is absent from that 1M list, so it must KEEP the 200k fallback —
+    // this is the negative control proving the fix is list-derived, not blanket.
+    expect(contextLimitFor('claude-opus-4-5-20251101')).toBe(200_000);
+  });
+
+  it('keeps the 200k working budget for the 1M opus wire ids (no cost regression)', () => {
+    // Contract: correcting the WINDOW must not move the COMPACTION TRIGGER. These
+    // sessions compacted at 200k before the window fix; without matching
+    // MODEL_AUTOCOMPACT_BUDGET entries they would have jumped to 1M — a real
+    // cost/latency change smuggled in behind a bookkeeping correction. `opus_1m`
+    // remains the explicit opt-in to the full window.
+    expect(autoCompactLimitFor('claude-opus-4-8')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-opus-4-7')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-opus-4-6')).toBe(200_000);
+    expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
   });
 });
 
