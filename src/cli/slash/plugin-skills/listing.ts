@@ -276,7 +276,7 @@ function collectAlternatives(
   }
   for (const collision of state.collisions) {
     if (collision.bare === bare) {
-      alternatives.push({ slash: collision.altSlash, source: 'plugin' });
+      alternatives.push({ slash: collision.altSlash, source: collision.source ?? 'plugin' });
     }
   }
   return alternatives;

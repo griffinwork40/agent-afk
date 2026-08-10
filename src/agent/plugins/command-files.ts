@@ -42,6 +42,10 @@ import { join } from 'path';
 import { parseSkillMetadata, type PluginSkillMetadata } from './tool-injector.js';
 import { normalizeSkillSource, resolveContained } from './source-guard.js';
 import { env } from '../../config/env.js';
+// Skip diagnostics interpolate raw `readdirSync` entries from an untrusted
+// third-party plugin tree. A directory named with a CSI/OSC sequence would
+// otherwise execute against the operator's terminal when AFK_DEBUG is set.
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 
 /** Mirrors the depth cap in `extractPluginSkills` — cycle/runaway guard. */
 const MAX_DEPTH = 10;
@@ -103,7 +107,7 @@ export function extractPluginCommands(
     }
     for (const entry of entries) {
       if (entry.startsWith('.')) {
-        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping dotfile: ${join(dir, entry)}\n`);
+        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping dotfile: ${sanitizeForDisplay(join(dir, entry))}\n`);
         continue;
       }
       // A path segment carrying the namespace separator is ambiguous:
@@ -111,7 +115,7 @@ export function extractPluginCommands(
       // the first-wins guard downstream would silently drop one of them.
       if (entry.includes(':')) {
         if (env.AFK_DEBUG) {
-          process.stderr.write(`[afk] skipping path segment with colon: ${join(dir, entry)}\n`);
+          process.stderr.write(`[afk] skipping path segment with colon: ${sanitizeForDisplay(join(dir, entry))}\n`);
         }
         continue;
       }
@@ -120,7 +124,7 @@ export function extractPluginCommands(
       // `help.md -> ~/.ssh/id_rsa` must never become a dispatchable prompt.
       if (resolveContained(root, full, realRoot) === undefined) {
         if (env.AFK_DEBUG) {
-          process.stderr.write(`[afk] skipping path outside commands/ tree: ${full}\n`);
+          process.stderr.write(`[afk] skipping path outside commands/ tree: ${sanitizeForDisplay(full)}\n`);
         }
         continue;
       }
@@ -135,14 +139,14 @@ export function extractPluginCommands(
         continue;
       }
       if (!stat.isFile() || !entry.endsWith('.md')) {
-        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping non-markdown entry: ${full}\n`);
+        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping non-markdown entry: ${sanitizeForDisplay(full)}\n`);
         continue;
       }
 
       const base = entry.slice(0, -'.md'.length);
       if (base.length === 0) {
         if (env.AFK_DEBUG) {
-          process.stderr.write(`[afk] skipping command with empty basename: ${full}\n`);
+          process.stderr.write(`[afk] skipping command with empty basename: ${sanitizeForDisplay(full)}\n`);
         }
         continue;
       }
@@ -167,7 +171,7 @@ export function extractPluginCommands(
       // A command with no readable body is inert — skip rather than register a
       // slash command that would dispatch an empty prompt.
       if (!parsed.body || parsed.body.length === 0) {
-        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping command with empty body: ${full}\n`);
+        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping command with empty body: ${sanitizeForDisplay(full)}\n`);
         continue;
       }
 

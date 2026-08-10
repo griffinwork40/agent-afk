@@ -7,7 +7,7 @@
  * @module agent/plugins/command-files.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -188,6 +188,44 @@ describe('normalizeSkillSource', () => {
   it('still handles BOM+CRLF when combined with control stripping and truncation', () => {
     const result = normalizeSkillSource('\uFEFF---\r\ndescription: d\r\n---\r\n\r\nBody.\r\n');
     expect(result).toBe('---\ndescription: d\n---\n\nBody.\n');
+  });
+
+  it('strips a terminal escape embedded in an untrusted plugin filename', () => {
+    // The AFK_DEBUG skip diagnostics interpolate raw `readdirSync` entries
+    // from a third-party plugin tree. Without sanitisation, a directory or
+    // file named with a CSI/OSC sequence executes against the operator's
+    // terminal the moment discovery logs the skip.
+    const tmp = mkdtempSync(join(tmpdir(), 'cmd-esc-'));
+    try {
+      vi.stubEnv('AFK_DEBUG', '1');
+      mkdirSync(join(tmp, 'commands'), { recursive: true });
+      writeFileSync(join(tmp, 'commands', 'evil\x1b[2J\x1b[H.txt'), 'x');
+
+      const writes: string[] = [];
+      const spy = vi
+        .spyOn(process.stderr, 'write')
+        .mockImplementation((chunk: unknown) => {
+          writes.push(String(chunk));
+          return true;
+        });
+      extractPluginCommands(tmp);
+      spy.mockRestore();
+
+      const emitted = writes.join('');
+      expect(emitted).toContain('skipping');
+      expect(emitted).not.toContain('\x1b');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('folds a lone CR to LF rather than stripping it as a control char', () => {
+    // Order invariant: CR (0x0D) falls inside the control-strip range
+    // [\x00-\x08\x0B-\x1F], so it survives only because newline
+    // normalisation runs FIRST and turns it into \n. Reordering the two
+    // passes would silently delete the line break instead of keeping it.
+    expect(normalizeSkillSource('a\rb')).toBe('a\nb');
   });
 
   it('never throws, and truncation alone never discards non-control content', () => {

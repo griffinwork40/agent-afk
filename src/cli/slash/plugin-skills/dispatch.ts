@@ -254,6 +254,7 @@ export async function registerPluginSkills(
         bare,
         altSlash: `/${fallbackName}`,
         altDescription: skill.description,
+        ...(skill.source ? { source: skill.source } : {}),
       });
       shadowedBareNames.add(bare);
       continue;

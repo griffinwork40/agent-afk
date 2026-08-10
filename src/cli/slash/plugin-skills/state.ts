@@ -26,6 +26,8 @@ export interface PluginCollision {
   altSlash: string;
   /** Description from the plugin side, for the alt continuation row. */
   altDescription: string;
+  /** Origin of the shadowed entry, so an alt row labels a command as such. */
+  source?: SkillManifestEntry['source'];
 }
 
 export interface PluginSkillsState {
