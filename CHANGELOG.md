@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.5] - 2026-08-10
+
+### Changed
+- memoize getWriteDenylist keyed on AFK_HOME + AFK_STATE_DIR (#781) (#972) (023bdd1)
+
 ## [5.103.4] - 2026-08-10
 
 ### Fixed
