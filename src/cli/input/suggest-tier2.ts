@@ -146,6 +146,7 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
 
   async function run(
     buffer: string,
+    cacheKey: string,
     ctx: SuggestContext,
     resolve: (v: string | null) => void,
   ): Promise<void> {
@@ -171,7 +172,7 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
         // The provider permanently cannot suggest. Cache the null so we skip
         // the complete()-capability probe on every later keystroke for this
         // same buffer.
-        cacheSet(buffer, null);
+        cacheSet(cacheKey, null);
         resolve(null);
         return;
       }
@@ -199,7 +200,7 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
       }
       const cleaned = stripGhostControlChars(raced.raw).trim();
       const result = isValidContinuation(buffer, cleaned) ? cleaned : null;
-      cacheSet(buffer, result);
+      cacheSet(cacheKey, result);
       resolve(result);
     } catch (err) {
       // Never-throws: any provider/network/abort error resolves null. Surface
@@ -220,7 +221,11 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
   return {
     async request(buffer, ctx) {
       if (buffer.length < MIN_LLM_CHARS) return null;
-      if (cache.has(buffer)) return cache.get(buffer) ?? null;
+      // Include the model in the cache key so a /model swap never returns a
+      // stale entry from the previous model. Null byte is the separator because
+      // neither model IDs nor buffer text contain it.
+      const cacheKey = `${ctx.model}\0${buffer}`;
+      if (cache.has(cacheKey)) return cache.get(cacheKey) ?? null;
 
       supersede();
 
@@ -231,7 +236,7 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
         debounceHandle = setTimeout(() => {
           debounceHandle = null;
           pendingResolve = null;
-          void run(buffer, ctx, resolve);
+          void run(buffer, cacheKey, ctx, resolve);
         }, deps.debounceMs);
       });
     },
