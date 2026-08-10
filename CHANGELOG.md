@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.104.1] - 2026-08-10
+
+### Fixed
+- refuse model-supplied roots that erase the bash credential floor (#852) (#978) (bc4c0f7)
+- tell the model an invented tool does not exist, not that it lacks permission (#983) (2f503bf)
+
 ## [5.104.0] - 2026-08-10
 
 ### Added
