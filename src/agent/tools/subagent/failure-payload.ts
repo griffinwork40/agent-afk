@@ -30,6 +30,28 @@ export function truncate(s: string, max = 240): string {
   return s.length <= max ? s : s.slice(0, max) + '…';
 }
 
+/**
+ * Maximum length applied to `stopReason` everywhere it is persisted or
+ * emitted. On the OpenAI-compatible path `stopReason` is provider-controlled
+ * free text (`providers/openai-compatible/translate.ts`,
+ * `responses-translate.ts`), not a bounded enum, so it must never ride
+ * uncapped into a telemetry row or a durable artifact.
+ */
+const MAX_STOP_REASON_CHARS = 64;
+
+/**
+ * Single chokepoint for bounding `stopReason` before it leaves the process
+ * boundary (telemetry emit or `meta.json` persistence). Every call site that
+ * touches `SubagentResult.stopReason` downstream of the fork/promotion layer
+ * must route through this helper instead of inlining its own
+ * `truncate(x, 64)` — a hand-duplicated bound is how the unbounded
+ * `writeMeta` site (#717) went unnoticed for three of its four siblings.
+ * Preserves omit-when-absent: `undefined` stays `undefined`, never `''`.
+ */
+export function boundedStopReason(stopReason: string | undefined): string | undefined {
+  return stopReason !== undefined ? truncate(stopReason, MAX_STOP_REASON_CHARS) : undefined;
+}
+
 /** Measure partial output size without serializing large structures repeatedly. */
 export function measurePartial(partial: unknown): number | undefined {
   if (partial === undefined || partial === null) return undefined;

@@ -19,6 +19,7 @@ vi.mock('../../routing-telemetry.js', () => ({ appendRoutingDecision }));
 import {
   emitTelemetry,
   truncate,
+  boundedStopReason,
   measurePartial,
   buildFailurePayload,
   type StructuredFailurePayload,
@@ -60,6 +61,36 @@ describe('truncate', () => {
 
   it('handles the empty string', () => {
     expect(truncate('', 240)).toBe('');
+  });
+});
+
+// #717: `boundedStopReason` is the single chokepoint every stopReason write
+// site (telemetry emits in background-registry.ts and foreground-promotion.ts,
+// plus the durable meta.json write in background-registry.ts) must call.
+// Before this fix, the 64-char bound was hand-duplicated at five sites and
+// silently omitted at a sixth (the meta.json persist) — pinning the helper
+// directly here guards the invariant at its source rather than only at each
+// call site.
+describe('boundedStopReason', () => {
+  it('returns undefined unchanged (omit-when-absent preserved)', () => {
+    expect(boundedStopReason(undefined)).toBeUndefined();
+  });
+
+  it('passes through a stopReason at or under 64 chars unchanged', () => {
+    const short = 'tool_use_loop_capped';
+    expect(boundedStopReason(short)).toBe(short);
+  });
+
+  it('leaves an exactly-64-char stopReason untouched (boundary, no ellipsis)', () => {
+    const atCap = 'r'.repeat(64);
+    expect(boundedStopReason(atCap)).toBe(atCap);
+  });
+
+  it('truncates a stopReason over 64 chars to 64 chars + ellipsis', () => {
+    const long = 'x'.repeat(200);
+    const result = boundedStopReason(long);
+    expect(result).toBe('x'.repeat(64) + '…');
+    expect(result!.length).toBe(65);
   });
 });
 

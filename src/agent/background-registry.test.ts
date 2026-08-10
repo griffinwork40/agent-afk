@@ -898,6 +898,30 @@ describe('BackgroundAgentRegistry', () => {
       expect(meta).not.toBeNull();
       expect(meta!.stopReason).toBeUndefined();
     });
+
+    // #717 regression: `writeMeta`'s spread was the one write site (of six)
+    // that persisted `result.stopReason` raw, bypassing `boundedStopReason`
+    // (applied at the three telemetry emits above and at the two
+    // foreground-promotion.ts emits). A provider-supplied stopReason over 64
+    // chars must land in meta.json bounded, exactly like every sibling site.
+    it('terminal callback truncates an over-long stopReason to 64 chars before persisting to meta.json', async () => {
+      const longReason = 'z'.repeat(200);
+      const handle = createStubHandle('sub-disk-7');
+      const job = registry.register({ handle, prompt: 'unbounded job', model: 'sonnet' });
+
+      handle.__fireTerminal({
+        ...successResult('sub-disk-7', 'partial output'),
+        stopReason: longReason,
+      });
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const { BgJobLogReader } = await import('./bg-job-log.js');
+      const meta = await BgJobLogReader.readMeta(job.jobId);
+      expect(meta).not.toBeNull();
+      expect(meta!.stopReason).toBe('z'.repeat(64) + '…');
+      expect(meta!.stopReason!.length).toBe(65);
+    });
   });
 
   // -------------------------------------------------------------------------
