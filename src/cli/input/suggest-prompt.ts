@@ -109,6 +109,31 @@ export function hasSuggestionGrounding(ctx: SuggestContext): boolean {
 }
 
 /**
+ * Whether `suggestion` is essentially the same text as the user's last
+ * submitted message — i.e., the model parroted back the input.
+ *
+ * Extracted from the transcript tail returned by `ctx.getTranscriptTail()`.
+ * Lines are of the form `user: <message>\nassistant: <reply>`, so the last
+ * user message is the final `user: ` line. Returns false when the transcript
+ * is empty (no completed turn yet) or when no `user: ` line is present.
+ */
+export function isEchoOfLastInput(suggestion: string, ctx: SuggestContext): boolean {
+  const tail = ctx.getTranscriptTail();
+  if (tail.trim().length === 0) return false;
+
+  // Walk lines in reverse to find the most-recent "user: " line.
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.startsWith('user: ')) {
+      const lastUserMessage = line.slice('user: '.length).trim();
+      return lastUserMessage.toLowerCase() === suggestion.trim().toLowerCase();
+    }
+  }
+  return false;
+}
+
+/**
  * Gate a model reply before it is ever shown as ghost text.
  *
  * Invariant: a suggestion is rendered at an EMPTY buffer, where Tab and
@@ -239,6 +264,10 @@ export async function generatePromptSuggestion(
     // Structure is judged first, control characters second, empty result last.
     const candidate = normalizePromptSuggestion(raced.raw);
     if (candidate === null) return null;
+    // Echo guard: if the model parroted back the user's last input, discard it.
+    // The LLM context includes the transcript tail (via buildPromptSuggestionUser),
+    // so nothing structurally prevents repetition — this is the load-bearing check.
+    if (isEchoOfLastInput(candidate, ctx)) return null;
     const scrubbed = deps.scrub(candidate).trim();
     return scrubbed.length > 0 ? scrubbed : null;
   } catch (err) {

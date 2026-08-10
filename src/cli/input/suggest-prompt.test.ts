@@ -8,9 +8,11 @@ import {
   buildPromptSuggestionSystem,
   buildPromptSuggestionUser,
   hasSuggestionGrounding,
+  isEchoOfLastInput,
   isValidPromptSuggestion,
   normalizePromptSuggestion,
 } from './suggest-prompt.js';
+import { createSuggestEngine } from './suggest.js';
 import type { SuggestContext } from './suggest.js';
 
 function makeCtx(overrides: Partial<SuggestContext> = {}): SuggestContext {
@@ -168,5 +170,72 @@ describe('normalizePromptSuggestion', () => {
 
   it('returns null for a multi-line reply', () => {
     expect(normalizePromptSuggestion('do this\nthen that')).toBeNull();
+  });
+});
+
+describe('isEchoOfLastInput', () => {
+  it('returns true when suggestion matches the last user message (case-insensitive)', () => {
+    const ctx = makeCtx({
+      getTranscriptTail: () =>
+        'user: fix the parser\nassistant: done',
+    });
+    expect(isEchoOfLastInput('fix the parser', ctx)).toBe(true);
+    // Case-insensitive
+    expect(isEchoOfLastInput('FIX THE PARSER', ctx)).toBe(true);
+    // Leading/trailing whitespace trimmed
+    expect(isEchoOfLastInput('  fix the parser  ', ctx)).toBe(true);
+  });
+
+  it('returns false when suggestion differs from the last user message', () => {
+    const ctx = makeCtx({
+      getTranscriptTail: () =>
+        'user: fix the parser\nassistant: done',
+    });
+    expect(isEchoOfLastInput('run the tests', ctx)).toBe(false);
+    expect(isEchoOfLastInput('fix the parser now', ctx)).toBe(false);
+  });
+
+  it('returns false when the transcript is empty', () => {
+    const ctx = makeCtx({ getTranscriptTail: () => '' });
+    expect(isEchoOfLastInput('fix the parser', ctx)).toBe(false);
+  });
+
+  it('extracts the last user message from multi-turn transcripts', () => {
+    // The most recent "user: " line should be used, not an earlier one.
+    const ctx = makeCtx({
+      getTranscriptTail: () =>
+        'user: first message\nassistant: first reply\nuser: second message\nassistant: second reply',
+    });
+    expect(isEchoOfLastInput('second message', ctx)).toBe(true);
+    expect(isEchoOfLastInput('first message', ctx)).toBe(false);
+  });
+});
+
+describe('generatePromptSuggestion — echo guard', () => {
+  function enabledCtx(overrides: Partial<SuggestContext> = {}): SuggestContext {
+    return makeCtx({
+      llmEnabled: () => true,
+      promptSuggestEnabled: () => true,
+      getTranscriptTail: () => 'user: fix the parser\nassistant: done',
+      ...overrides,
+    });
+  }
+
+  it('returns null when the model echoes the last user input', async () => {
+    // The model returns the exact last user message — the echo guard must discard it.
+    const engine = createSuggestEngine({
+      completeFn: async () => 'fix the parser',
+    });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBeNull();
+  });
+
+  it('returns the suggestion when it differs from the last user input', async () => {
+    // A different, valid suggestion should still be stored.
+    const engine = createSuggestEngine({
+      completeFn: async () => 'run the failing tests',
+    });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBe('run the failing tests');
   });
 });
