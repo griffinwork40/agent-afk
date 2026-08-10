@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.106.1] - 2026-08-10
+
+### Fixed
+- opus 4.6/4.7/4.8 serve native 1M windows and 128k output (#994) (bbd4a13)
+
 ## [5.106.0] - 2026-08-10
 
 ### Added
