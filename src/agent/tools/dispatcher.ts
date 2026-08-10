@@ -583,12 +583,34 @@ export class SessionToolDispatcher implements ToolDispatcher {
     if (this.handlers.has(toolName)) {
       return permissionReason ?? `Tool "${toolName}" is not permitted`;
     }
+    return this.unknownToolMessage(toolName);
+  }
+
+  /**
+   * Contract: the single model-visible phrasing for "this tool does not exist",
+   * shared by the permission gate (a name absent from BOTH the allowlist and
+   * the handler map) and the handler lookup in `executeCoreInner` (a name that
+   * IS allowlisted but has no registered handler — reachable in production via
+   * `exit_plan_mode`, which `topLevelSurfaceAllowedTools` lists statically but
+   * which is only registered while in plan mode, and via an MCP tool whose
+   * server dropped after the allowlist snapshot).
+   *
+   * Suggestions come from `toolDefs`, never `handlers`: the handler map can
+   * hold tools the gate will reject, and advertising one just buys a denial on
+   * the next turn. `toolDefs` is exactly what was shown to the model, so it is
+   * the only honest answer to "what may I call instead".
+   */
+  private unknownToolMessage(toolName: string): string {
     const available = this.toolDefs.map((s) => s.name).join(', ');
-    return (
-      `Unknown tool "${toolName}" — it does not exist in this session. ` +
-      `Available tools: ${available}. ` +
-      `Do NOT retry "${toolName}" or a variant of it; use one of the tools listed above.`
-    );
+    // An empty listing means no schema survived the allowlist filter — the
+    // model was shown nothing, so pointing at "the tools listed above" would be
+    // a dangling reference.
+    const guidance =
+      available.length > 0
+        ? `Available tools: ${available}. Do NOT retry "${toolName}" or a variant of it; ` +
+          `use one of the tools listed above.`
+        : `Do NOT retry "${toolName}" or a variant of it.`;
+    return `Unknown tool "${toolName}" — it does not exist in this session. ${guidance}`;
   }
 
   /**
@@ -1279,10 +1301,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Handler lookup
     const handler = this.handlers.get(call.name);
     if (!handler) {
-      return {
-        content: `Unknown tool "${call.name}". Available tools: ${[...this.handlers.keys()].join(', ')}`,
-        isError: true,
-      };
+      return { content: this.unknownToolMessage(call.name), isError: true };
     }
 
     let result: ToolResult;

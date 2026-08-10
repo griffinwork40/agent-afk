@@ -185,6 +185,41 @@ describe('SessionToolDispatcher', () => {
       );
       expect(result.failureClass).toBe('permission-denied');
     });
+
+    it('does not leak non-allowlisted handlers when an ALLOWLISTED tool has no handler', async () => {
+      // Reachable in production: `exit_plan_mode` is statically allowlisted by
+      // topLevelSurfaceAllowedTools but only registered while in plan mode.
+      // This path passes the permission gate and fails the handler lookup.
+      const pick = (n: string) => builtinToolSchemas.find((s) => s.name === n)!;
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([
+          ['read_file', echoHandler()],
+          ['bash', echoHandler()],
+        ]),
+        schemas: [pick('read_file'), pick('bash')],
+        // 'write_file' is allowlisted but never registered; bash is registered
+        // but NOT allowlisted, so it must not appear in the suggestion list.
+        permissions: { allowedTools: ['read_file', 'write_file'] },
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'write_file', input: {} }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Unknown tool "write_file"');
+      expect(result.content).toContain('read_file');
+      expect(result.content).not.toContain('bash');
+    });
+
+    it('omits the dangling "listed above" pointer when no schema survives the allowlist', async () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([['echo', echoHandler()]]),
+        schemas: [],
+        permissions: { allowedTools: ['echo', 'ghost'] },
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'ghost', input: {} }));
+      expect(result.content).toContain('Unknown tool "ghost"');
+      expect(result.content).toContain('Do NOT retry');
+      expect(result.content).not.toContain('listed above');
+      expect(result.content).not.toContain('Available tools:');
+    });
   });
 
   it('catches handler throws and returns isError', async () => {
