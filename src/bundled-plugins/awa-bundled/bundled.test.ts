@@ -113,7 +113,7 @@ const PINNED_HASHES = {
   // verdicts (#52, #187).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
-    '01bddcdd5446943f6fe4694a2cdbb669ab194dc0765d3630899755bc65530b9a',
+    '663fe29a42b7825416a39f4077192f5bc49bcd6802a565d2f02dc5ff751e829a',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
