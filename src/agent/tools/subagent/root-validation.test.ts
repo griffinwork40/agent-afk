@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './root-validation.js';
 import { deriveRestrictedSubstrings } from '../hooks/bash-restriction-hook.js';
 
@@ -19,6 +20,24 @@ const HOME = os.homedir();
 /** The unfiltered candidate list — what the bash floor protects. */
 function allCandidates(): string[] {
   return deriveRestrictedSubstrings({ resolveBase: undefined, readRoots: [], writeRoots: [] });
+}
+
+/**
+ * The ancestor-coverage predicate as spelled in `source`, normalized so the two
+ * call sites are comparable: the named-import spelling (`isAbsolute`) and the
+ * namespace spelling (`path.isAbsolute`) fold together, as does whitespace.
+ * Deliberately source-text based — see the predicate-identity case below for why
+ * a behavioural assertion cannot cover this on POSIX.
+ */
+function coveragePredicate(source: string): string {
+  const match = source.match(/if \((rel === ''[\s\S]*?)\)\s*return /);
+  if (match?.[1] === undefined) {
+    throw new Error('coverage predicate not found — did the `rel` binding get renamed?');
+  }
+  return match[1]
+    .replace(/\bpath\.isAbsolute\b/g, 'isAbsolute')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 describe('ungatedSensitiveRoot (#852)', () => {
@@ -134,5 +153,29 @@ describe('ungatedSensitiveRoot (#852)', () => {
     for (const candidate of allCandidates()) {
       expect(ungatedSensitiveRoot(candidate)).toBeDefined();
     }
+  });
+
+  // Invariant: the two lockstep cases above compare a root against ITSELF or
+  // against an UNRELATED root, and on POSIX those are the only reachable
+  // topologies — `path.relative` between two absolute POSIX paths is never
+  // absolute. The one topology where the guard and the filter can DISAGREE is a
+  // win32 cross-drive pair, where relative() yields a drive-qualified ABSOLUTE
+  // string; a behavioural test for it therefore only runs on the opt-in windows
+  // CI leg (see hooks/bash-restriction-hook.test.ts). This case is the guard
+  // that runs everywhere: it pins the two coverage predicates as textually
+  // identical, so dropping `isAbsolute` from either side fails here on every
+  // platform instead of silently reopening #852 on Windows only.
+  it('predicate identity: guard and bash filter spell coverage the same way', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const guardSrc = fs.readFileSync(path.join(here, 'root-validation.ts'), 'utf8');
+    const filterSrc = fs.readFileSync(
+      path.join(here, '..', 'hooks', 'bash-restriction-hook.ts'),
+      'utf8',
+    );
+    expect(coveragePredicate(guardSrc)).toBe(coveragePredicate(filterSrc));
+    // Pin the shape too, so an edit that weakens BOTH sides in lockstep still fails.
+    expect(coveragePredicate(guardSrc)).toBe(
+      "rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))",
+    );
   });
 });

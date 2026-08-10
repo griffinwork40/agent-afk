@@ -136,8 +136,13 @@ function bashSensitiveRoots(): readonly string[] {
  * tree is therefore not rejected here — it does not lift the enclosing root,
  * and `isReadDenied` already refuses the denylisted subtrees for `readRoots`.
  * Checked on both the lexical and the symlink-resolved spelling, same as
- * {@link isTooBroadRoot}, because the containment layer realpaths granted roots
- * before comparison (#664).
+ * {@link isTooBroadRoot} (#664). Note WHICH layer motivates that: the bash
+ * filter this guard defends compares the raw granted string and does NOT
+ * realpath it, but the same grant also flows into the typed-tool containment
+ * layer, which resolves every root through `realpathRoot`
+ * (`handlers/_cwd-utils.ts`) before comparing. Covering both spellings here is
+ * therefore fail-closed against the layer that DOES resolve, rather than a
+ * mirror of the one that does not.
  */
 export function ungatedSensitiveRoot(candidate: string): string | undefined {
   const forms = [...new Set([candidate, realpathSafe(candidate)])];
