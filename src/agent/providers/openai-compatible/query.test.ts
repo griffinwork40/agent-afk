@@ -1806,7 +1806,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('get_runtime_state cwd is frozen to the query config cwd (#876 characterization)', async () => {
+  it('get_runtime_state cwd follows a mid-query setCwd() re-anchor (#876 fix)', async () => {
     const provider = new OpenAICompatibleProvider();
     const q = provider.query({
       prompt: makeControlledPromptStream().stream,
@@ -1823,10 +1823,34 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     });
 
     const snapshot = JSON.parse(result.content) as { self: { cwd: string } };
-    expect(snapshot.self.cwd).toBe('/query-cwd');
-    // #876 gap: unlike the dispatcher resolve base, awareness cwd does not follow
-    // a mid-query setCwd() on openai-compatible until that provider is fixed.
-    expect(snapshot.self.cwd).not.toBe('/mid-query-cwd');
+    // #876 fix: `get_runtime_state` now reads the live cwd cell that
+    // `setCwd()` updates, not the value `config.cwd` was constructed with.
+    expect(snapshot.self.cwd).toBe('/mid-query-cwd');
+    expect(snapshot.self.cwd).not.toBe('/query-cwd');
+    q.close();
+  });
+
+  it('setCwd() rebuilds the `# Environment` block in the system prompt (#876 fix)', () => {
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: makeControlledPromptStream().stream,
+      config: baseConfig({ cwd: '/query-cwd' }),
+    });
+
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+    expect(typeof configRef.systemPrompt).toBe('string');
+    expect(configRef.systemPrompt as string).toContain('/query-cwd');
+    expect(configRef.systemPrompt as string).not.toContain('/mid-query-cwd');
+
+    q.setCwd('/mid-query-cwd');
+
+    // Same config object reference — `buildMessages` reads `this.opts.config`
+    // by reference each turn, so reassigning `systemPrompt` in place (rather
+    // than replacing the whole config object) is what makes the next turn
+    // pick up the rebuilt block with no further plumbing.
+    expect((q as unknown as { opts: { config: AgentConfig } }).opts.config).toBe(configRef);
+    expect(configRef.systemPrompt as string).toContain('/mid-query-cwd');
+    expect(configRef.systemPrompt as string).not.toContain('/query-cwd');
     q.close();
   });
 

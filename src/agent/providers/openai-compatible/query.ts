@@ -177,6 +177,15 @@ export interface OpenAICompatibleQueryOptions {
    * `setAllowAll()`). Supplied by `OpenAICompatibleProvider.query()`.
    */
   onPermissionMode?: (mode: string) => void;
+  /**
+   * Provider callback invoked by `setCwd()` to rebuild the `# Environment`
+   * block after a cwd re-anchor (#876). Rewrites `opts.config.systemPrompt`
+   * in place on the provider side; `buildMessages` reads `this.opts.config`
+   * by reference each turn, so no further plumbing is needed here beyond
+   * calling it. Supplied by `OpenAICompatibleProvider.query()`; absent for
+   * callers (tests, external-dispatcher branch) that never re-anchor cwd.
+   */
+  onCwdChange?: (cwd: string) => void;
   /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
   mcpManager?: import('../../mcp/index.js').McpManager;
   /**
@@ -233,6 +242,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly initSessionId: string;
   private readonly toolDispatcher: ToolDispatcher | undefined;
   private readonly onPermissionMode?: (mode: string) => void;
+  private readonly onCwdChange?: (cwd: string) => void;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
@@ -302,6 +312,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
     this.toolDispatcher = opts.toolDispatcher;
     this.onPermissionMode = opts.onPermissionMode;
+    this.onCwdChange = opts.onCwdChange;
     this.traceWriter = opts.traceWriter;
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact);
 
@@ -1125,6 +1136,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   setCwd(cwd: string): void {
     this.toolDispatcher?.setResolveBase?.(cwd);
+    // #876: also rebuild the `# Environment` block (awareness cwd + system
+    // prompt), which the dispatcher rebase above does not touch. Order vs.
+    // the rebase above is not load-bearing — the two update independent
+    // state — but the rebuild ITSELF has an internal ordering invariant; see
+    // `rebuildEnvironmentBlock` in openai-compatible/index.ts.
+    this.onCwdChange?.(cwd);
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {
@@ -1246,6 +1263,7 @@ export function buildQueryFromConfig(
     baseURL?: string;
     toolDispatcher?: ToolDispatcher;
     onPermissionMode?: (mode: string) => void;
+    onCwdChange?: (cwd: string) => void;
     mcpManager?: import('../../mcp/index.js').McpManager;
     useResponsesApi?: boolean;
     /**
@@ -1289,6 +1307,7 @@ export function buildQueryFromConfig(
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
   if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
+  if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
   if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
   // Thread traceWriter from AgentConfig so witness events are emitted for
