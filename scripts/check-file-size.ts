@@ -43,8 +43,18 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+import {
+  changedSince,
+  collectViolations,
+  loadBaseline,
+  updateBaseline,
+  VIOLATION_ORDER,
+  type Baseline,
+  type RatchetConfig,
+  type Violation,
+} from './lib/size-ratchet.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -74,24 +84,14 @@ const EXCLUDED_SUFFIXES = ['.test.ts', '.spec.ts', '.d.ts'] as const;
 const EXCLUDED_DIRS = ['__fixtures__', '__test-utils__', 'node_modules', 'dist'] as const;
 const INCLUDED_EXTENSIONS = ['.ts', '.mjs', '.js'] as const;
 
-interface BaselineEntry {
-  loc: number;
-  reason: string;
-  permanent?: boolean;
-}
-
-interface Baseline {
-  limit: number;
-  entries: Record<string, BaselineEntry>;
-}
-
-type ViolationKind = 'NEW' | 'GREW' | 'RETIRED' | 'STALE' | 'TOUCHED';
-
-interface Violation {
-  kind: ViolationKind;
-  file: string;
-  detail: string;
-}
+const RATCHET: RatchetConfig = {
+  limit: LIMIT,
+  baselinePath: BASELINE_PATH,
+  baselineRel: BASELINE_REL,
+  unit: 'line',
+  entryPlural: 'files',
+  legacyReason: 'legacy: predates the ceiling gate; pending concern extraction',
+};
 
 /** Count newlines — identical to `wc -l`, including the no-trailing-newline case. */
 function countLines(absPath: string): number {
@@ -130,137 +130,6 @@ function scanAll(): Map<string, number> {
   return sizes;
 }
 
-function loadBaseline(): Baseline {
-  if (!fs.existsSync(BASELINE_PATH)) return { limit: LIMIT, entries: {} };
-  const parsed = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')) as Baseline;
-  return { limit: parsed.limit ?? LIMIT, entries: parsed.entries ?? {} };
-}
-
-/**
- * Invariant: keys sorted, exactly one line per entry. This layout is what keeps
- * concurrent single-subtree waves from colliding in git, so do not reformat it
- * with a bare JSON.stringify(obj, null, 2) — that explodes each entry across
- * four lines and turns every wave into a conflict.
- */
-function serializeBaseline(baseline: Baseline): string {
-  const keys = Object.keys(baseline.entries).sort();
-  const lines = keys.map((k) => {
-    const e = baseline.entries[k];
-    if (!e) return '';
-    const parts: string[] = [`"loc": ${e.loc}`];
-    if (e.permanent) parts.push('"permanent": true');
-    parts.push(`"reason": ${JSON.stringify(e.reason)}`);
-    return `    ${JSON.stringify(k)}: { ${parts.join(', ')} }`;
-  });
-  return `{\n  "limit": ${baseline.limit},\n  "entries": {\n${lines.join(',\n')}\n  }\n}\n`;
-}
-
-function updateBaseline(): void {
-  const sizes = scanAll();
-  const previous = loadBaseline();
-  const entries: Record<string, BaselineEntry> = {};
-  for (const [file, loc] of sizes) {
-    if (loc <= LIMIT) continue;
-    const prior = previous.entries[file];
-    entries[file] = {
-      loc,
-      reason: prior?.reason ?? 'legacy: predates the ceiling gate; pending concern extraction',
-      ...(prior?.permanent ? { permanent: true } : {}),
-    };
-  }
-  fs.writeFileSync(BASELINE_PATH, serializeBaseline({ limit: LIMIT, entries }), 'utf8');
-  const kept = Object.keys(entries).length;
-  const dropped = Object.keys(previous.entries).filter((k) => !entries[k]);
-  console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-line ceiling.`);
-  if (dropped.length > 0) {
-    console.log(`  retired ${dropped.length} (now within the ceiling):`);
-    for (const d of dropped) console.log(`    - ${d}`);
-  }
-}
-
-/**
- * Files this branch changed relative to `ref`, restricted to scannable source.
- *
- * Invariant: diff from the MERGE BASE to the WORKING TREE, not `ref...HEAD`.
- * Two properties are load-bearing and each rules out a simpler form:
- *   - merge-base (not `ref` directly) so files advanced on `ref` since the branch
- *     point are not misattributed to this change;
- *   - working tree (not `HEAD`) so uncommitted edits are caught — a pre-commit or
- *     local invocation must see work that is not yet a commit.
- */
-function changedSince(ref: string): string[] {
-  let base = ref;
-  try {
-    base = execFileSync('git', ['merge-base', ref, 'HEAD'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    }).trim();
-  } catch {
-    // No merge base (unrelated histories, or `ref` unfetched) — fall back to a
-    // direct diff rather than failing the gate on a git topology problem.
-  }
-  const out = execFileSync('git', ['diff', '--name-only', base], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && isScannable(l));
-}
-
-function collectViolations(sizes: Map<string, number>, baseline: Baseline, changedVs: string | null): Violation[] {
-  const violations: Violation[] = [];
-
-  for (const [file, loc] of sizes) {
-    const entry = baseline.entries[file];
-    if (!entry) {
-      if (loc > LIMIT) {
-        violations.push({
-          kind: 'NEW',
-          file,
-          detail: `${loc} lines exceeds the ${LIMIT}-line ceiling by ${loc - LIMIT}`,
-        });
-      }
-      continue;
-    }
-    if (loc > entry.loc) {
-      violations.push({
-        kind: 'GREW',
-        file,
-        detail: `grew ${entry.loc} → ${loc} (+${loc - entry.loc}); baselined files may shrink, never grow`,
-      });
-    } else if (loc <= LIMIT && !entry.permanent) {
-      violations.push({
-        kind: 'RETIRED',
-        file,
-        detail: `now ${loc} lines and within the ceiling — remove it from ${BASELINE_REL}`,
-      });
-    }
-  }
-
-  for (const file of Object.keys(baseline.entries)) {
-    if (!sizes.has(file)) {
-      violations.push({ kind: 'STALE', file, detail: `no longer exists — remove it from ${BASELINE_REL}` });
-    }
-  }
-
-  if (changedVs) {
-    for (const file of changedSince(changedVs)) {
-      const loc = sizes.get(file);
-      if (loc === undefined || loc <= LIMIT) continue;
-      if (!baseline.entries[file]) continue; // already reported as NEW
-      violations.push({
-        kind: 'TOUCHED',
-        file,
-        detail: `modified vs ${changedVs} while still ${loc} lines — a change that touches a baselined file must bring it under ${LIMIT}`,
-      });
-    }
-  }
-
-  return violations;
-}
-
 function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violations: Violation[]): void {
   const warnings = [...sizes.entries()]
     .filter(([f, n]) => n > WARN_AT && n <= LIMIT && !baseline.entries[f])
@@ -279,11 +148,11 @@ function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violation
   }
 
   console.error(`\n✗ check-file-size: ${violations.length} violation(s) of the ${LIMIT}-line ceiling:\n`);
-  for (const kind of ['NEW', 'GREW', 'TOUCHED', 'RETIRED', 'STALE'] as const) {
+  for (const kind of VIOLATION_ORDER) {
     const group = violations.filter((v) => v.kind === kind);
     if (group.length === 0) continue;
     console.error(`  ${kind}:`);
-    for (const v of group) console.error(`    ${v.file}\n      ${v.detail}`);
+    for (const v of group) console.error(`    ${v.key}\n      ${v.detail}`);
     console.error('');
   }
   console.error('Fix:');
@@ -298,8 +167,14 @@ function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violation
 
 function main(): void {
   const argv = process.argv.slice(2);
+
   if (argv.includes('--update-baseline')) {
-    updateBaseline();
+    const { kept, dropped } = updateBaseline(RATCHET, scanAll());
+    console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-line ceiling.`);
+    if (dropped.length > 0) {
+      console.log(`  retired ${dropped.length} (now within the ceiling):`);
+      for (const d of dropped) console.log(`    - ${d}`);
+    }
     return;
   }
 
@@ -319,8 +194,17 @@ function main(): void {
     process.exit(1);
   }
 
-  const baseline = loadBaseline();
-  reportAndExit(sizes, baseline, collectViolations(sizes, baseline, changedVs));
+  // Baseline keys ARE file paths here, so the touch-set is the changed-file set.
+  const baseline = loadBaseline(RATCHET);
+  const violations = collectViolations({
+    sizes,
+    baseline,
+    cfg: RATCHET,
+    ...(changedVs
+      ? { touchedKeys: new Set(changedSince(changedVs, repoRoot, isScannable)), touchedVs: changedVs }
+      : {}),
+  });
+  reportAndExit(sizes, baseline, violations);
 }
 
 main();

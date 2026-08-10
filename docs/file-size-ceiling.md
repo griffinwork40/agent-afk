@@ -40,6 +40,55 @@ Consequence accepted with the decision: 37 files currently sit at 316–350 raw
 315 gives early signal, and per the rule itself, a file pushing the limit is the
 signal to find its seam.
 
+## Scope decision: file AND function (reconciles #831 / #832)
+
+This campaign was preceded by a triage — **#832** (tracking) and **#831** (gate
+design) — filed 2026-08-01. Phase 0 shipped without citing either, so the
+reconciliation is recorded here.
+
+**#831 argued that a file-scoped gate is the wrong instrument**, on measurement:
+146 of 756 files (19.3%) exceeded 350, ~40% of the largest were large from
+*breadth* rather than entanglement (flat registries, an NDJSON wire schema, an
+18-handler dispatch chain), and a gate firing on a fifth of the tree "gets
+disabled within a week". It proposed a **function**-scoped primary rule, a looser
+file rule at 800–1000, an allowlist with rationale, and ratchet mode.
+
+Of those four asks Phase 0 delivered the last two and inverted the first two.
+What discharges the "fires 146× on day one" objection is the ratchet — which was
+#831's own item 4 — because the 138-entry baseline means the gate fires **zero**
+times on day one. What it did *not* discharge is the metric argument: file LOC
+still does not predict maintenance pain, and grandfathering merely parks the
+false positives rather than answering them.
+
+So both gates now exist, and they measure different things:
+
+| | measures | ceiling | baseline |
+|---|---|---|---|
+| `check-file-size.ts` | how much must be **read** to establish edit safety | 350 raw lines | 138 files (15.6%) |
+| `check-function-size.ts` | how much must be **held in mind** to change one behaviour | 200 lines | 54 functions (1.2%) |
+
+Neither implies the other, in both directions: a 900-line flat registry is a
+large file containing no large function, and a 700-line function can sit inside a
+file that passes 350 only because siblings were extracted around it. The sharpest
+case is **#919** — #829 shrank `subagent.ts` and closed, while `forkSubagent`
+itself never changed and has since grown to 586 lines. A file gate scores that as
+progress. The function gate does not.
+
+The function ceiling is **200**, taken from the measured distribution over 4,388
+functions (median 10, p99 229): 350 would catch only 15 functions and miss the
+entire 200–350 band, while 200 yields a 54-entry baseline — one screen, which is
+what keeps it honest. #831's own framing: *"a gate whose allowlist you can read
+is a gate that gets fixed."*
+
+**Consequences for the wave plan.** #832's Tier 4 list — `env.ts`,
+`trace/types.ts`, `schemas.ts`, `terminal-compositor.ts`, `…input-dispatch.ts`,
+`interactive/shared.ts` — is *"explicitly leave alone"*, and all six are
+grandfathered rather than scheduled. In particular `src/config/env.ts` is
+governed by open issue **#830** (generate the getters from `ENV_REGISTRY`; do not
+split the file — `scripts/audit-env-access.ts:45` hardcodes that exact path,
+exact-matched at `:175`). The waves below are sequenced **entanglement-first**;
+selecting a wave for "maximum mass" is precisely the objective #831 refutes.
+
 ## How to hit 350 raw without shaving comments
 
 This is the crux. The repo *mandates* long comment blocks: any block of ≥15
