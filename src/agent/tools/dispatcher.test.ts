@@ -123,6 +123,70 @@ describe('SessionToolDispatcher', () => {
     expect(result.content).toContain('Unknown tool');
   });
 
+  describe('allowlist denial of an unregistered (hallucinated) tool name', () => {
+    // `bash` is REGISTERED but not allowlisted (a real permission decision);
+    // read_file/edit_file are both registered and allowed.
+    function makeSplitDispatcher() {
+      const pick = (n: string) => builtinToolSchemas.find((s) => s.name === n)!;
+      return new SessionToolDispatcher({
+        handlers: new Map([
+          ['read_file', echoHandler()],
+          ['edit_file', echoHandler()],
+          ['bash', echoHandler()],
+        ]),
+        schemas: [pick('read_file'), pick('edit_file'), pick('bash')],
+        permissions: { allowedTools: ['read_file', 'edit_file'] },
+      });
+    }
+
+    it('tells the model the tool does not exist instead of blaming the allowlist', async () => {
+      const dispatcher = makeSplitDispatcher();
+      const result = await dispatcher.execute(
+        makeCall({ name: 'str_replace_based_edit_tool', input: {} }),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Unknown tool "str_replace_based_edit_tool"');
+      expect(result.content).toContain('does not exist in this session');
+      // The misleading message is what caused models to re-emit the phantom name.
+      expect(result.content).not.toContain('not in the configured allowlist');
+    });
+
+    it('enumerates the callable tools and warns against retrying the phantom name', async () => {
+      const dispatcher = makeSplitDispatcher();
+      const result = await dispatcher.execute(
+        makeCall({ name: 'str_replace_based_edit_tool', input: {} }),
+      );
+      expect(result.content).toContain('read_file');
+      expect(result.content).toContain('edit_file');
+      expect(result.content).toContain('Do NOT retry');
+    });
+
+    it('does NOT advertise a registered-but-denied tool in the suggestion list', async () => {
+      // Mirrors the `toolDefs` contract: never show the model a tool the gate rejects.
+      const dispatcher = makeSplitDispatcher();
+      const result = await dispatcher.execute(
+        makeCall({ name: 'str_replace_based_edit_tool', input: {} }),
+      );
+      expect(result.content).not.toContain('bash');
+    });
+
+    it('preserves the allowlist message for a REGISTERED but denied tool', async () => {
+      const dispatcher = makeSplitDispatcher();
+      const result = await dispatcher.execute(makeCall({ name: 'bash', input: {} }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('is not in the configured allowlist');
+      expect(result.content).not.toContain('Unknown tool');
+    });
+
+    it('keeps failureClass permission-denied for the unregistered case', async () => {
+      const dispatcher = makeSplitDispatcher();
+      const result = await dispatcher.execute(
+        makeCall({ name: 'str_replace_based_edit_tool', input: {} }),
+      );
+      expect(result.failureClass).toBe('permission-denied');
+    });
+  });
+
   it('catches handler throws and returns isError', async () => {
     const throwing: ToolHandler = async () => {
       throw new Error('handler kaboom');
