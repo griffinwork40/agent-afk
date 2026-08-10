@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.105.0] - 2026-08-10
+
+### Added
+- load Claude Code commands/*.md as slash commands (#965) (9003f5b)
+
 ## [5.104.2] - 2026-08-10
 
 ### Fixed
