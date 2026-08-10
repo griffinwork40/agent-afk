@@ -387,15 +387,29 @@ describe('command loading', () => {
     expect(loadCommands).toHaveBeenCalledTimes(1);
   });
 
-  it('degrades to a closed menu when loading fails', async () => {
+  it('logs a diagnostic, degrades closed, and retries after loading fails', async () => {
     const h = harness();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const loadCommands = vi
+      .fn<() => Promise<CommandEntry[]>>()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(COMMANDS);
     const ac = new SlashAutocomplete({
       input: h.input,
       menu: h.menu,
-      loadCommands: () => Promise.reject(new Error('offline')),
+      loadCommands,
     });
     h.input.value = '/mi';
     await ac.refresh();
     expect(ac.isOpen()).toBe(false);
+    expect(error).toHaveBeenCalledWith(
+      '[web] failed to load slash-command autocomplete:',
+      expect.objectContaining({ message: 'offline' }),
+    );
+
+    await ac.refresh();
+    expect(loadCommands).toHaveBeenCalledTimes(2);
+    expect(ac.isOpen()).toBe(true);
+    error.mockRestore();
   });
 });

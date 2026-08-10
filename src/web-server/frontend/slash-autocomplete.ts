@@ -230,15 +230,18 @@ export class SlashAutocomplete {
 
   private async ensureCommands(): Promise<void> {
     if (this.commands !== null) return;
-    // Collapse concurrent keystrokes onto one in-flight request.
+    // Collapse concurrent keystrokes onto one in-flight request. A failure still
+    // degrades gracefully, but remains retryable on the next slash keystroke.
     this.loading ??= this.deps
       .loadCommands()
       .then((cmds) => {
         this.commands = cmds;
       })
-      .catch(() => {
-        // A failed load degrades to "no autocomplete", never a broken composer.
-        this.commands = [];
+      .catch((error: unknown) => {
+        console.error('[web] failed to load slash-command autocomplete:', error);
+      })
+      .finally(() => {
+        this.loading = null;
       });
     await this.loading;
   }

@@ -105,14 +105,14 @@ export function buildSlashUniverse(): CommandEntry[] {
     ...cmds.map((cmd) => ({
       name: cmd.name,
       summary: cmd.summary,
-      ...(cmd.hint !== undefined ? { hint: cmd.hint } : {}),
+      ...(cmd.hint ? { hint: cmd.hint } : {}),
     })),
     ...aliasEntries().map((entry) => {
       const canonicalCmd = cmds.find((c) => c.name === entry.canonical);
       return {
         name: entry.alias,
         summary: entry.summary,
-        ...(canonicalCmd?.hint !== undefined ? { hint: canonicalCmd.hint } : {}),
+        ...(canonicalCmd?.hint ? { hint: canonicalCmd.hint } : {}),
       };
     }),
   ];
