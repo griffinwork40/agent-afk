@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.107.1] - 2026-08-10
+
+### Fixed
+- classify a nonexistent grep path as no-such-target (#996) (e9a1e3d)
+- withhold the conclusion, not the map; budget every verifier (#995) (7fa4f9c)
+
 ## [5.107.0] - 2026-08-10
 
 ### Added
