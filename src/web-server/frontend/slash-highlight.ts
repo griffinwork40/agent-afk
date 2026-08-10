@@ -84,17 +84,25 @@ export function paintMirror(mirror: HTMLElement, tokens: readonly HighlightToken
  * Returns a teardown function. Teardown is written before setup below so the
  * inverse operation is never orphaned when this is edited later.
  */
+export function repaintSlashHighlight(
+  input: HTMLTextAreaElement,
+  mirror: HTMLElement,
+  isKnown: (name: string) => boolean,
+): void {
+  paintMirror(mirror, tokenizeInput(input.value, isKnown));
+  // The textarea scrolls independently once content overflows; the mirror has
+  // no scrollbar of its own and must be dragged along.
+  mirror.scrollTop = input.scrollTop;
+  mirror.scrollLeft = input.scrollLeft;
+}
+
 export function mountSlashHighlight(
   input: HTMLTextAreaElement,
   mirror: HTMLElement,
   isKnown: (name: string) => boolean,
 ): () => void {
   const repaint = (): void => {
-    paintMirror(mirror, tokenizeInput(input.value, isKnown));
-    // The textarea scrolls independently once content overflows; the mirror
-    // has no scrollbar of its own and must be dragged along.
-    mirror.scrollTop = input.scrollTop;
-    mirror.scrollLeft = input.scrollLeft;
+    repaintSlashHighlight(input, mirror, isKnown);
   };
   const onScroll = (): void => {
     mirror.scrollTop = input.scrollTop;

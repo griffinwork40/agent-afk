@@ -75,6 +75,8 @@ export interface SlashAutocompleteDeps {
   menu: HTMLElement;
   /** Load the command universe. Called at most once, lazily. */
   loadCommands: () => Promise<CommandEntry[]>;
+  /** Notify a cache consumer without synthesizing a general input event. */
+  onCommandsLoaded?: () => void;
 }
 
 export class SlashAutocomplete {
@@ -83,19 +85,31 @@ export class SlashAutocomplete {
   private candidates: SlashCandidate[] = [];
   private selected = 0;
   private open = false;
+  private openIntent = false;
+  private focused = false;
+  private generation = 0;
   private readonly menuId: string;
+  private readonly status: HTMLElement;
 
   constructor(private readonly deps: SlashAutocompleteDeps) {
-    // A textarea has no native autocomplete-combobox semantic: relationship
-    // attributes alone leave it exposed only as a multiline textbox. Although
-    // preserving native semantics is normally preferable, role="combobox" is
-    // necessary here so assistive technology can discover the popup contract.
+    // Keep the textarea's implicit multiline-textbox role. ARIA relationship
+    // attributes expose the optional listbox without replacing honest native
+    // semantics with role="combobox", which is invalid on a textarea.
     this.menuId = deps.menu.id || 'slash-autocomplete-listbox';
+    this.focused = document.activeElement === deps.input;
     deps.menu.id = this.menuId;
     deps.menu.setAttribute('role', 'listbox');
-    deps.input.setAttribute('role', 'combobox');
+    deps.input.removeAttribute('role');
+    deps.input.setAttribute('aria-autocomplete', 'list');
     deps.input.setAttribute('aria-haspopup', 'listbox');
     deps.input.setAttribute('aria-controls', this.menuId);
+
+    this.status = document.createElement('div');
+    this.status.className = 'slash-status';
+    this.status.setAttribute('role', 'status');
+    this.status.setAttribute('aria-live', 'polite');
+    this.status.setAttribute('aria-atomic', 'true');
+    deps.menu.insertAdjacentElement('afterend', this.status);
     this.syncAria();
   }
 
@@ -115,17 +129,9 @@ export class SlashAutocomplete {
     return this.commands?.some((c) => c.name === name) ?? false;
   }
 
-  /**
-   * Warm the command cache without opening the menu, then announce that command
-   * recognition changed. This repaints an already-present slash token even when
-   * no user input event occurs during the delayed load. The notification also
-   * asks autocomplete to refresh, but ensureCommands is now cached, so it cannot
-   * duplicate the fetch or loop.
-   */
+  /** Warm the command cache without opening or refreshing the menu. */
   async preload(): Promise<void> {
-    const wasUnknown = this.commands === null;
     await this.ensureCommands();
-    if (wasUnknown && this.commands !== null) notifyValueChanged(this.deps.input);
   }
 
   /** Current highlighted candidate, or undefined when closed. */
@@ -141,15 +147,30 @@ export class SlashAutocomplete {
    * the order silently sends the prompt instead of accepting the candidate.
    */
   wire(): void {
+    this.deps.input.addEventListener('focus', () => {
+      this.focused = true;
+    });
     this.deps.input.addEventListener('keydown', (e) => this.onKeyDown(e));
     this.deps.input.addEventListener('input', () => {
+      this.openIntent = true;
       void this.refresh();
     });
-    // A click elsewhere dismisses, matching every other menu on the page.
-    this.deps.input.addEventListener('blur', () => this.close());
+    // Invalidate an in-flight refresh so its eventual result cannot reopen.
+    this.deps.input.addEventListener('blur', () => {
+      this.focused = false;
+      this.close(true);
+    });
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    // Escape also cancels a pending load, before there is an open menu whose
+    // keyboard contract could otherwise observe the key.
+    if (e.key === 'Escape' && (this.openIntent || this.loading !== null)) {
+      this.close(true);
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
     if (!this.isOpen()) return;
 
     // Invariant: the composer's submit chord must reach QueuePanel. Its handler
@@ -211,7 +232,7 @@ export class SlashAutocomplete {
     // The trailing space both reads naturally and closes the menu: the trigger
     // only matches a bare token, so the next `input` event finds no match.
     this.deps.input.value = `${pick.value} `;
-    this.close();
+    this.close(true);
     this.deps.input.focus();
     // Invariant: assigning `.value` fires no `input` event, and the highlight
     // mirror — the only visible copy of the text, since the textarea itself is
@@ -220,23 +241,33 @@ export class SlashAutocomplete {
     notifyValueChanged(this.deps.input);
   }
 
-  private close(): void {
+  private close(cancelIntent = false): void {
+    if (cancelIntent) {
+      this.openIntent = false;
+      this.generation += 1;
+    }
     this.open = false;
     this.candidates = [];
     this.selected = 0;
     this.deps.menu.hidden = true;
     this.deps.menu.textContent = '';
+    this.status.textContent = '';
     this.syncAria();
   }
 
-  /** Synchronize the textbox side of the listbox ownership contract. */
+  /** Synchronize the native textbox side of the listbox relationship. */
   private syncAria(): void {
     const open = this.isOpen();
     this.deps.input.setAttribute('aria-expanded', String(open));
     if (open) {
       this.deps.input.setAttribute('aria-activedescendant', this.optionId(this.selected));
+      const current = this.candidates[this.selected];
+      this.status.textContent = current
+        ? `${this.candidates.length} suggestions. ${current.value}, ${this.selected + 1} of ${this.candidates.length}.`
+        : '';
     } else {
       this.deps.input.removeAttribute('aria-activedescendant');
+      this.status.textContent = '';
     }
   }
 
@@ -247,15 +278,26 @@ export class SlashAutocomplete {
 
   /** Recompute from the current buffer. Exposed for tests. */
   async refresh(): Promise<void> {
+    // Direct callers (tests and initial integrations) may refresh before wire();
+    // infer focus only when no blur/cancel intent has been recorded.
+    if (!this.focused && document.activeElement === this.deps.input) this.focused = true;
     const value = this.deps.input.value;
     if (!SLASH_TRIGGER.test(value)) {
-      this.close();
+      this.close(true);
       return;
     }
+    this.openIntent = true;
+    const requestGeneration = ++this.generation;
     await this.ensureCommands();
-    // Recheck: the fetch is async and the operator kept typing meanwhile.
-    if (!SLASH_TRIGGER.test(this.deps.input.value)) {
-      this.close();
+    // Recheck all intent after the asynchronous boundary. Blur, Escape, a newer
+    // refresh, or continued typing invalidates this generation.
+    if (
+      requestGeneration !== this.generation ||
+      !this.openIntent ||
+      !this.focused ||
+      !SLASH_TRIGGER.test(this.deps.input.value)
+    ) {
+      if (requestGeneration === this.generation) this.close();
       return;
     }
     const query = this.deps.input.value.slice(1);
@@ -264,6 +306,9 @@ export class SlashAutocomplete {
     this.candidates = matchSlashCandidates(this.commands ?? [], query);
     this.selected = 0;
     this.open = this.candidates.length > 0;
+    // A completed empty result is closed state, not latent open intent. This
+    // keeps Escape and ARIA behavior honest until the next user input.
+    this.openIntent = this.open;
     this.render();
   }
 
@@ -275,6 +320,7 @@ export class SlashAutocomplete {
       .loadCommands()
       .then((cmds) => {
         this.commands = cmds;
+        this.deps.onCommandsLoaded?.();
       })
       .catch((error: unknown) => {
         console.error('[web] failed to load slash-command autocomplete:', error);

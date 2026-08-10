@@ -38,6 +38,9 @@ describe('wireComposerAffordances', () => {
     expect(autocomplete).toBeDefined();
     await autocomplete?.preload();
 
+    // A real browser can only produce typing input while the textarea is the
+    // active element; jsdom's synthetic event does not focus it implicitly.
+    composer.focus();
     composer.value = '/mint';
     composer.dispatchEvent(new Event('input'));
     await autocomplete?.refresh();
@@ -47,7 +50,7 @@ describe('wireComposerAffordances', () => {
     expect(document.getElementById('prompt-mirror')?.textContent).toContain('/mint');
   });
 
-  it('repaints a pre-existing command from unknown to known after delayed preload', async () => {
+  it('repaints a pre-existing command after preload without dispatching input', async () => {
     document.body.innerHTML =
       '<div id="slash-menu" hidden></div><div id="prompt-mirror"></div>';
     const composer = input();
@@ -60,6 +63,8 @@ describe('wireComposerAffordances', () => {
         }),
     );
 
+    const inputEvents = vi.fn();
+    composer.addEventListener('input', inputEvents);
     const autocomplete = wireComposerAffordances({ input: composer, loadCommands });
     const mirror = document.getElementById('prompt-mirror') as HTMLElement;
     expect(mirror.querySelector('.tok-slash')?.textContent).toBe('/mint');
@@ -67,8 +72,10 @@ describe('wireComposerAffordances', () => {
 
     release([{ name: '/mint', summary: 'ship a feature' }]);
     await autocomplete?.preload();
+    await autocomplete?.preload();
 
     expect(loadCommands).toHaveBeenCalledTimes(1);
+    expect(inputEvents).not.toHaveBeenCalled();
     expect(mirror.querySelector('.tok-known')?.textContent).toBe('/mint');
     expect(mirror.querySelector('.tok-slash')).toBeNull();
   });

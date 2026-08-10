@@ -8,7 +8,7 @@
  */
 
 import { SlashAutocomplete } from './slash-autocomplete.js';
-import { mountSlashHighlight } from './slash-highlight.js';
+import { mountSlashHighlight, repaintSlashHighlight } from './slash-highlight.js';
 import type { CommandEntry } from '../../cli/input/slash-match.js';
 
 export interface ComposerAffordanceDeps {
@@ -43,10 +43,15 @@ export function wireComposerAffordances(
   const mirror = document.getElementById(MIRROR_ID);
   if (!menu || !mirror) return undefined;
 
-  const autocomplete = new SlashAutocomplete({
+  let autocomplete!: SlashAutocomplete;
+  autocomplete = new SlashAutocomplete({
     input: deps.input,
     menu,
     loadCommands: deps.loadCommands,
+    // Cache completion changes only slash-token classification. Repaint that
+    // consumer directly; a synthetic input event would also refresh the menu.
+    onCommandsLoaded: () =>
+      repaintSlashHighlight(deps.input, mirror, (name) => autocomplete.knows(name)),
   });
   autocomplete.wire();
 

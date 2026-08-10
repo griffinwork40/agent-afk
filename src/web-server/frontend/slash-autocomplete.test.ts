@@ -65,6 +65,7 @@ function harness(commands: CommandEntry[] = COMMANDS): Harness {
     menu,
     loadCommands: () => Promise.resolve(commands),
   });
+  input.focus();
   ac.wire();
   // Mounted exactly as composer-wiring.ts does, so the mirror is driven by the
   // same `input` events production relies on.
@@ -106,9 +107,11 @@ function harness(commands: CommandEntry[] = COMMANDS): Harness {
 }
 
 describe('accessible listbox contract', () => {
-  it('starts closed with a discoverable combobox relationship', () => {
+  it('preserves the textarea native multiline textbox semantics', () => {
     const h = harness();
-    expect(h.input.getAttribute('role')).toBe('combobox');
+    expect(h.input.hasAttribute('role')).toBe(false);
+    expect(h.input.tagName).toBe('TEXTAREA');
+    expect(h.input.getAttribute('aria-autocomplete')).toBe('list');
     expect(h.input.getAttribute('aria-haspopup')).toBe('listbox');
     expect(h.input.getAttribute('aria-expanded')).toBe('false');
     expect(h.input.getAttribute('aria-controls')).toBe(h.menu.id);
@@ -133,9 +136,15 @@ describe('accessible listbox contract', () => {
       'false',
     ]);
     expect(h.input.getAttribute('aria-activedescendant')).toBe('slash-menu-option-0');
+    expect(document.querySelector('[role="status"]')?.textContent).toBe(
+      '3 suggestions. /diagnose, 1 of 3.',
+    );
 
     h.press('ArrowDown');
     expect(h.input.getAttribute('aria-activedescendant')).toBe('slash-menu-option-1');
+    expect(document.querySelector('[role="status"]')?.textContent).toBe(
+      '3 suggestions. /mint, 2 of 3.',
+    );
     expect(
       Array.from(h.menu.querySelectorAll('[role="option"]')).map((row) =>
         row.getAttribute('aria-selected'),
@@ -154,6 +163,16 @@ describe('accessible listbox contract', () => {
     h.press('Escape');
     expect(h.input.getAttribute('aria-expanded')).toBe('false');
     expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+  });
+
+  it('cleans up ARIA state when a query has no results', async () => {
+    const h = harness();
+    await h.type('/mi');
+    expect(h.input.getAttribute('aria-expanded')).toBe('true');
+    await h.type('/zzzz');
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+    expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('');
   });
 });
 
@@ -430,6 +449,71 @@ describe('rendering', () => {
 });
 
 describe('command loading', () => {
+  function deferredHarness(): {
+    ac: SlashAutocomplete;
+    input: HTMLTextAreaElement;
+    menu: HTMLElement;
+    release: (commands: CommandEntry[]) => void;
+  } {
+    document.body.innerHTML = '<div id="slash-menu" hidden></div><textarea id="prompt"></textarea>';
+    const input = document.getElementById('prompt') as HTMLTextAreaElement;
+    const menu = document.getElementById('slash-menu') as HTMLElement;
+    let release!: (commands: CommandEntry[]) => void;
+    const ac = new SlashAutocomplete({
+      input,
+      menu,
+      loadCommands: () => new Promise<CommandEntry[]>((resolve) => { release = resolve; }),
+    });
+    input.focus();
+    ac.wire();
+    return { ac, input, menu, release: (commands) => release(commands) };
+  }
+
+  it('does not reopen when focus blurs during a deferred load', async () => {
+    const h = deferredHarness();
+    h.input.value = '/mi';
+    h.input.dispatchEvent(new Event('input'));
+    h.input.blur();
+    h.release(COMMANDS);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.ac.isOpen()).toBe(false);
+    expect(h.menu.hidden).toBe(true);
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+    expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+  });
+
+  it('does not reopen after Escape during a deferred load', async () => {
+    const h = deferredHarness();
+    h.input.value = '/mi';
+    h.input.dispatchEvent(new Event('input'));
+    h.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+    h.release(COMMANDS);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.ac.isOpen()).toBe(false);
+    expect(h.menu.hidden).toBe(true);
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+    expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+  });
+
+  it('reopens on fresh typing after Escape and across repeated focus cycles', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.press('Escape');
+    expect(h.ac.isOpen()).toBe(false);
+
+    await h.type('/min');
+    expect(h.ac.isOpen()).toBe(true);
+    h.input.blur();
+    expect(h.ac.isOpen()).toBe(false);
+
+    h.input.focus();
+    await h.type('/mod');
+    expect(h.ac.isOpen()).toBe(true);
+    expect(h.rows()).toEqual(['/model']);
+  });
+
   it('fetches the universe once across many keystrokes', async () => {
     const loadCommands = vi.fn(() => Promise.resolve(COMMANDS));
     document.body.innerHTML = '<div id="slash-menu" hidden></div><textarea id="prompt"></textarea>';
