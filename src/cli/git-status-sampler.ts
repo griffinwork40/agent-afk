@@ -234,6 +234,14 @@ export class GitStatusSampler {
     this.branchFetchedAt = this.now();
     const newBranch = await this.gitBranch(cwd);
     if (this.disposed || this.resetToken !== token) return;
+    // A refresh may have deduplicated onto this lookup while a re-anchor
+    // changed the live cwd. Do not publish the old checkout's branch (or reset
+    // lastSampledCwd to it); immediately sample again inside the same in-flight
+    // task so callers awaiting refresh() observe the current checkout.
+    if (this.getCwd() !== cwd) {
+      this.branchFetchedAt = 0;
+      return this.updateBranch();
+    }
     this.lastSampledCwd = cwd;
     const branchChanged = newBranch !== this.branch || cwdChanged;
     this.branch = newBranch;

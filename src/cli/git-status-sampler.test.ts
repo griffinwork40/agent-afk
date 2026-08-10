@@ -282,6 +282,34 @@ describe('GitStatusSampler', () => {
     expect(sampler.getPr()).toBe(20);
   });
 
+  it('discards an in-flight branch after a cwd re-anchor', async () => {
+    let resolveLaunchBranch: (v: { stdout: string; stderr: string }) => void = () => {};
+    const launchBranch = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      resolveLaunchBranch = resolve;
+    });
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = vi.fn(async (file, _args, cwd) => {
+      if (file === 'gh') return { stdout: '\n', stderr: '' };
+      if (cwd === '/launch-checkout') return launchBranch;
+      return { stdout: 'afk/foo\n', stderr: '' };
+    });
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec });
+
+    const launchRefresh = sampler.refresh();
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    const reanchorRefresh = sampler.refresh(); // dedupes onto the launch lookup
+
+    resolveLaunchBranch({ stdout: 'main\n', stderr: '' });
+    await Promise.all([launchRefresh, reanchorRefresh]);
+
+    expect(sampler.getBranch()).toBe('afk/foo');
+    expect(exec).toHaveBeenCalledWith(
+      'git',
+      ['symbolic-ref', '--short', 'HEAD'],
+      '/repo/.afk-worktrees/afk-foo',
+    );
+  });
+
   it('reset() mid-fetch discards the settling result without writing stale state', async () => {
     // Verify C2: in-flight updateBranch captures a generation token and returns
     // early if reset() has incremented it before the git call settles.
