@@ -289,10 +289,10 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
               isError: true,
             };
           }
-          const capped = capBody(result.markdown, parsed.maxBytes);
-          // `withAdvisory` is applied after capping, deliberately — see its docstring.
-          const content = withAdvisory(capped.content, result.advisory);
-          return { content, ...(capped.truncated ? { truncated: true } : {}) };
+          // Cap the combined output. headAndTail preserves the advisory at the
+          // tail without violating the caller's max_bytes contract.
+          const capped = capBody(withAdvisory(result.markdown, result.advisory), parsed.maxBytes);
+          return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           // As in raw mode: a guard refusal (initial URL, redirect hop, or the

@@ -171,10 +171,12 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     const fetchFn = makeFetch(() => makeResponse({ contentType: 'text/html', body: lossy }));
     const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
 
-    const r = await handler({ url: 'https://example.com/docs' }, signal());
+    const r = await handler({ url: 'https://example.com/docs', max_bytes: 500 }, signal());
     expect(r.isError).toBeUndefined();
-    expect(r.content).toContain('[web_scrape: extraction kept');
     expect(r.content).toContain('mode: "raw"');
+    expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(500);
+    expect(r.truncated).toBe(true);
+    expect(r.content).toContain('do not re-fetch it in markdown mode');
   });
 
   it('requires no API key for markdown mode', async () => {

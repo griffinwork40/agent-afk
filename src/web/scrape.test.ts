@@ -522,6 +522,26 @@ describe('scrapeToMarkdown — extraction advisory', () => {
     expect(out.advisory).toContain('mode: "raw"');
   });
 
+  it('checks a rich rendered page for extraction loss', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: SHELL_HTML }));
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: lossyHtml(),
+      finalUrl: 'https://example.com/docs',
+      httpStatus: 200,
+    }));
+
+    const out = await scrapeToMarkdown('https://example.com/docs', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      renderFn,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+      lookupFn: publicLookup,
+    });
+
+    expect(out.usedRender).toBe(true);
+    expect(out.advisory).toContain('mode: "raw"');
+  });
+
   it('attaches no advisory to an ordinary article', async () => {
     const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml() }));
     const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));

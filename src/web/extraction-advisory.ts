@@ -44,14 +44,12 @@ export const MIN_SOURCE_TEXT_CHARS = 2_000;
 export const MIN_RETAINED_RATIO = 0.5;
 
 /** Blocks whose text is never "visible" and must not inflate the denominator. */
-const NON_VISIBLE_BLOCK_RE = /<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\1>/gi;
-const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
-const TAG_RE = /<[^>]+>/g;
+const NON_VISIBLE_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg']);
 
 /**
  * Contract: approximate the visible-text length of an HTML document.
  *
- * Deliberately a regex pass, not a DOM parse: this runs on every successful
+ * Deliberately a linear scanner, not a DOM parse: this runs on every successful
  * markdown scrape, and paying for a second JSDOM construction to produce a
  * denominator for a heuristic would cost more than the heuristic is worth. Over-
  * counting slightly (leftover attribute text, entities counted as their escaped
@@ -59,12 +57,49 @@ const TAG_RE = /<[^>]+>/g;
  * advisory is a non-blocking note on a successful result.
  */
 export function visibleTextLength(html: string): number {
-  return html
-    .replace(NON_VISIBLE_BLOCK_RE, ' ')
-    .replace(HTML_COMMENT_RE, ' ')
-    .replace(TAG_RE, ' ')
-    .replace(/\s+/g, ' ')
-    .trim().length;
+  const visible: string[] = [];
+  const hiddenCounts = new Map<string, number>();
+  let hiddenDepth = 0;
+  let cursor = 0;
+
+  while (cursor < html.length) {
+    const tagStart = html.indexOf('<', cursor);
+    if (tagStart === -1) {
+      if (hiddenDepth === 0) visible.push(html.slice(cursor));
+      break;
+    }
+    if (hiddenDepth === 0) visible.push(html.slice(cursor, tagStart), ' ');
+
+    if (html.startsWith('<!--', tagStart)) {
+      const commentEnd = html.indexOf('-->', tagStart + 4);
+      cursor = commentEnd === -1 ? html.length : commentEnd + 3;
+      continue;
+    }
+
+    const tagEnd = html.indexOf('>', tagStart + 1);
+    if (tagEnd === -1) break;
+    const token = html.slice(tagStart + 1, tagEnd).trimStart();
+    const closing = token.startsWith('/');
+    const nameStart = closing ? 1 : 0;
+    const nameMatch = /^[a-z][\w:-]*/i.exec(token.slice(nameStart));
+    const name = nameMatch?.[0].toLowerCase();
+    if (name !== undefined && NON_VISIBLE_TAGS.has(name)) {
+      if (closing) {
+        const count = hiddenCounts.get(name) ?? 0;
+        if (count > 0) {
+          hiddenDepth--;
+          if (count === 1) hiddenCounts.delete(name);
+          else hiddenCounts.set(name, count - 1);
+        }
+      } else if (!token.endsWith('/')) {
+        hiddenDepth++;
+        hiddenCounts.set(name, (hiddenCounts.get(name) ?? 0) + 1);
+      }
+    }
+    cursor = tagEnd + 1;
+  }
+
+  return visible.join('').replace(/\s+/g, ' ').trim().length;
 }
 
 /**
@@ -98,11 +133,9 @@ export function extractionAdvisory(opts: {
 /**
  * Contract: append an advisory to a markdown body, or return it unchanged.
  *
- * Call this AFTER the body has been capped to the model byte budget, never
- * before. The advisory is the signal that stops a same-url retry storm, so it
- * has to survive head+tail truncation — placed inside the budget it would be the
- * first thing dropped on exactly the large pages most likely to trip it. The
- * cost is ~350 bytes over `max_bytes` on the rare page that fires one.
+ * Call this before applying the final model byte cap. Head-and-tail truncation
+ * preserves the advisory at the tail while keeping the combined output within
+ * the caller's `max_bytes` contract.
  */
 export function withAdvisory(markdown: string, advisory: string | undefined): string {
   if (advisory === undefined || advisory === '') return markdown;

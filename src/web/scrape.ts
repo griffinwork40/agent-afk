@@ -232,11 +232,16 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (opts.signal.aborted) throw opts.signal.reason ?? new Error('aborted');
     // Prefer the render result when it has at least as much text as the fetch.
     if (fetched === null || renderedContent.textLength >= fetched.textLength) {
+      const advisory = extractionAdvisory({
+        html: rendered.html,
+        extractedTextLength: renderedContent.textLength,
+      });
       return {
         title: renderedContent.title,
         markdown: renderedContent.markdown,
         finalUrl: rendered.finalUrl,
         usedRender: true,
+        ...(advisory !== undefined ? { advisory } : {}),
       };
     }
   } catch (renderErr) {

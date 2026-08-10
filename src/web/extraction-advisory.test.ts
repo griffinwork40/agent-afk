@@ -32,6 +32,11 @@ describe('visibleTextLength', () => {
   it('is 0 for an empty document', () => {
     expect(visibleTextLength('')).toBe(0);
   });
+
+  it('handles many unmatched hidden-block openers in one linear scan', () => {
+    const malformed = `<p>visible</p>${'<script>'.repeat(40_000)}`;
+    expect(visibleTextLength(malformed)).toBe(7);
+  });
 });
 
 describe('extractionAdvisory', () => {
