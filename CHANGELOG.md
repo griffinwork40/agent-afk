@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.108.0] - 2026-08-10
+
+### Added
+- enforce a 350-line source-file ceiling with a ratcheted baseline (#999) (0c7d936)
+
 ## [5.107.2] - 2026-08-10
 
 ### Added
