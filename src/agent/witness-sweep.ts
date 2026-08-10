@@ -219,3 +219,13 @@ export async function sweepWitnessTree(
     return { skipped: false, scanned: 0, evicted: 0, freedBytes: 0, evictedLabels: [] };
   }
 }
+
+/**
+ * Delay before the sweep runs after a root session starts.
+ *
+ * Mirrors BackgroundAgentRegistry's 5-second eviction delay: housekeeping must
+ * never compete with the session's own startup and first-turn I/O. The caller
+ * is expected to `.unref()` the timer so a short-lived process never pays for
+ * a sweep it will not benefit from.
+ */
+export const WITNESS_SWEEP_START_DELAY_MS = 5000;

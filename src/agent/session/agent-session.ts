@@ -86,7 +86,7 @@ import {
   SESSION_GRANTS_MAX_BYTES,
   SESSION_GRANTS_KEEP_TAIL_LINES,
 } from '../log-retention.js';
-import { sweepWitnessTree } from '../witness-sweep.js';
+import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -265,9 +265,20 @@ export class AgentSession implements IAgentSession {
       // label, not its SDK id) so its survival never depends on the sweep's
       // mtime heuristics being right. Self-throttled by a stamp file, so this
       // is a no-op on all but one session start every few hours (#849).
-      void sweepWitnessTree({
-        activeLabel: sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
-      });
+      //
+      // Invariant: deferred off the construction path and `.unref()`ed, exactly
+      // as BackgroundAgentRegistry's eviction sweep is. The walk is O(files in
+      // the witness tree), so running it inline competes with the session's own
+      // first-turn I/O — which is the moment latency is most visible. The unref
+      // also means a short-lived process (a one-shot `afk chat`, a test) exits
+      // without ever paying for it.
+      const witnessSweepTimer = setTimeout(() => {
+        void sweepWitnessTree({
+          activeLabel:
+            sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
+        });
+      }, WITNESS_SWEEP_START_DELAY_MS);
+      witnessSweepTimer.unref();
     }
   }
 

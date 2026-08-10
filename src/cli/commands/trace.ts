@@ -37,7 +37,6 @@ import type { TraceEvent } from '../../agent/trace/index.js';
 // Witness-layer discovery
 // ---------------------------------------------------------------------------
 
-/** Absolute path to the witness root that holds per-session trace dirs. */
 /** One discovered trace, with the mtime used to order "most recent first". */
 export interface TraceDirEntry {
   sessionId: string;
