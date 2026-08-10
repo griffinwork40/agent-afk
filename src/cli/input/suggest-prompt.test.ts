@@ -200,14 +200,30 @@ describe('isEchoOfLastInput', () => {
     expect(isEchoOfLastInput('fix the parser', ctx)).toBe(false);
   });
 
-  it('extracts the last user message from multi-turn transcripts', () => {
-    // The most recent "user: " line should be used, not an earlier one.
+  it('extracts the newest user message from multi-turn transcripts (newest-first order)', () => {
+    // getTranscriptTail() emits turns newest-first. The FIRST "user: " line
+    // in the string is therefore the most-recent turn; isEchoOfLastInput
+    // scans forward and matches it — NOT the last (oldest) "user: " line.
     const ctx = makeCtx({
       getTranscriptTail: () =>
-        'user: first message\nassistant: first reply\nuser: second message\nassistant: second reply',
+        'user: newest message\nassistant: newest reply\nuser: older message\nassistant: older reply',
     });
-    expect(isEchoOfLastInput('second message', ctx)).toBe(true);
-    expect(isEchoOfLastInput('first message', ctx)).toBe(false);
+    // The newest (first) "user: " line is "newest message" — echo guard fires.
+    expect(isEchoOfLastInput('newest message', ctx)).toBe(true);
+    // The older (later) "user: " line is NOT the target — no echo guard.
+    expect(isEchoOfLastInput('older message', ctx)).toBe(false);
+  });
+
+  it('compares against newest turn in newest-first transcript (regression)', () => {
+    // Explicit regression test: with a newest-first transcript, the forward scan
+    // must find the FIRST "user: " line (newest), not the LAST (oldest). If the
+    // scan were reversed, 'older msg' would match and 'newest msg' would not.
+    const ctx = makeCtx({
+      getTranscriptTail: () =>
+        'user: newest msg\nassistant: reply\nuser: older msg\nassistant: reply',
+    });
+    expect(isEchoOfLastInput('newest msg', ctx)).toBe(true);
+    expect(isEchoOfLastInput('older msg', ctx)).toBe(false);
   });
 });
 

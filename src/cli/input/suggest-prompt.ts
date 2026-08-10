@@ -113,17 +113,20 @@ export function hasSuggestionGrounding(ctx: SuggestContext): boolean {
  * submitted message — i.e., the model parroted back the input.
  *
  * Extracted from the transcript tail returned by `ctx.getTranscriptTail()`.
- * Lines are of the form `user: <message>\nassistant: <reply>`, so the last
- * user message is the final `user: ` line. Returns false when the transcript
- * is empty (no completed turn yet) or when no `user: ` line is present.
+ * The tail is newest-first: `user: <newest>\nassistant: <reply>\nuser: <older>…`.
+ * The FIRST `user: ` line in the string is therefore the most-recent turn.
+ * Returns false when the transcript is empty (no completed turn yet) or when
+ * no `user: ` line is present.
  */
 export function isEchoOfLastInput(suggestion: string, ctx: SuggestContext): boolean {
   const tail = ctx.getTranscriptTail();
   if (tail.trim().length === 0) return false;
 
-  // Walk lines in reverse to find the most-recent "user: " line.
+  // Walk lines FORWARD to find the most-recent "user: " line.
+  // getTranscriptTail() emits turns newest-first, so the first "user: " line
+  // in the string is the NEWEST turn — not the last (oldest) line.
   const lines = tail.split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.startsWith('user: ')) {
       const lastUserMessage = line.slice('user: '.length).trim();

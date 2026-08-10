@@ -88,6 +88,24 @@ export async function setupSurface(
     onError: (err) => debugLog('[afk suggest] Tier-2 completion failed:', err),
   });
 
+  // Session-scoped submission tracker: incremented whenever the history ring's
+  // push() fires this session. Used by the `lastSubmitted` getter below to
+  // return `undefined` at a fresh REPL start — before any submission has
+  // occurred — rather than `entries[0]` from the previous session's persisted
+  // ring. This prevents a false Tier-1 skip on the first keystroke.
+  let sessionSubmissionCount = 0;
+  const historyRing = surface.history as {
+    getEntries?: () => readonly string[];
+    push?: (text: string) => void;
+  };
+  if (typeof historyRing.push === 'function') {
+    const originalPush = historyRing.push.bind(historyRing);
+    historyRing.push = (text: string) => {
+      originalPush(text);
+      sessionSubmissionCount++;
+    };
+  }
+
   // Stage 3e — arm the surface's persistent TerminalCompositor before the
   // first prompt. Lives across all turns; disarmed in the finally below.
   // No-op on non-TTY surfaces (daemon, pipe, tests) — readLine falls back
@@ -174,7 +192,14 @@ export async function setupSurface(
               // Most-recently submitted entry (index 0 of the history ring, pushed
               // at the start of each turn before it runs). Used by getDeterministicGhost
               // to skip echoing the last submission as a Tier-1 history suggestion.
+              //
+              // Session-scoped guard: return `undefined` until at least one submission
+              // has occurred in THIS session. Without this gate, `entries[0]` at a
+              // fresh REPL start is the most-recent command from the PREVIOUS session
+              // (loaded from the persisted ring at startup), which would cause a false
+              // skip on the very first Tier-1 history suggestion.
               get lastSubmitted() {
+                if (sessionSubmissionCount === 0) return undefined;
                 const ring = surface.history as { getEntries?: () => readonly string[] };
                 const entries = ring.getEntries ? ring.getEntries() : [];
                 return entries[0];

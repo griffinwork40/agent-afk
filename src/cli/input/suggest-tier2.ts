@@ -221,10 +221,14 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
   return {
     async request(buffer, ctx) {
       if (buffer.length < MIN_LLM_CHARS) return null;
-      // Include the model in the cache key so a /model swap never returns a
-      // stale entry from the previous model. Null byte is the separator because
-      // neither model IDs nor buffer text contain it.
-      const cacheKey = `${ctx.model}\0${buffer}`;
+      // Include the inference model in the cache key so a /model swap that
+      // resolves to a DIFFERENT inference model never returns a stale entry.
+      // Use deps.pickModel(ctx) — not ctx.model — because two distinct session
+      // models may resolve to the same inference model (e.g. both sonnet and
+      // opus resolve to 'haiku' for Anthropic sessions) and should share a
+      // cache entry. Null byte is the separator because neither model IDs nor
+      // buffer text contain it.
+      const cacheKey = `${deps.pickModel(ctx)}\0${buffer}`;
       if (cache.has(cacheKey)) return cache.get(cacheKey) ?? null;
 
       supersede();

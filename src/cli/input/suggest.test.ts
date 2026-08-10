@@ -847,29 +847,61 @@ describe('getDeterministicGhost – lastSubmitted skip', () => {
   });
 });
 
-// ── Fix 3: Tier-2 cache key includes model ────────────────────────────────────
+// ── Fix 3: Tier-2 cache key uses pickModel output, not ctx.model ─────────────
 
-describe('getGhost – Tier 2 cache key includes model', () => {
-  it('cache miss after model change — same buffer, different model re-fetches', async () => {
-    const completeFn = vi.fn()
-      .mockResolvedValueOnce('hello world')   // first model call
-      .mockResolvedValueOnce('hello world');  // second model call (different model)
+describe('getGhost – Tier 2 cache key uses pickModel output (C-2)', () => {
+  beforeEach(() => {
+    delete process.env['AFK_SUGGEST_MODEL'];
+    delete process.env['AFK_COMPACT_MODEL'];
+  });
+  afterEach(() => {
+    delete process.env['AFK_SUGGEST_MODEL'];
+    delete process.env['AFK_COMPACT_MODEL'];
+  });
+
+  it('cache HIT when two different ctx.model values resolve to the same pickModel output', async () => {
+    // Both 'claude-sonnet-4-5' and 'claude-haiku-4-5' are anthropic-routed.
+    // With AFK_COMPACT_MODEL unset, pickModel() returns 'haiku' for BOTH.
+    // The cache must key on the pickModel output, so the second call is a HIT.
+    const completeFn = vi.fn().mockResolvedValue('hello world');
     const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
 
-    const ctxModelA = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
-    const ctxModelB = makeCtx({ model: 'claude-sonnet-4-5', llmEnabled: () => true });
+    const ctxSonnet = makeCtx({ model: 'claude-sonnet-4-5', llmEnabled: () => true });
+    const ctxHaiku = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
 
-    const first = await engine.getGhost('hel', ctxModelA);
+    const first = await engine.getGhost('hel', ctxSonnet);
     expect(first).toBe('hello world');
     expect(completeFn).toHaveBeenCalledTimes(1);
 
-    // Different model → cache miss → second fetch
-    const second = await engine.getGhost('hel', ctxModelB);
+    // Different ctx.model, but same pickModel output ('haiku') → cache HIT.
+    const second = await engine.getGhost('hel', ctxHaiku);
+    expect(second).toBe('hello world');
+    // completeFn NOT called again — shared cache entry proves pickModel is used.
+    expect(completeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('cache MISS when pickModel outputs differ (anthropic vs non-anthropic session model)', async () => {
+    // An anthropic session resolves to 'haiku'; a non-anthropic session resolves
+    // to its own ctx.model. These are different inference models → cache miss.
+    const completeFn = vi.fn()
+      .mockResolvedValueOnce('hello world')   // first call (pickModel → 'haiku')
+      .mockResolvedValueOnce('hello world');  // second call (pickModel → 'gpt-4o')
+    const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
+
+    const ctxAnthropic = makeCtx({ model: 'claude-sonnet-4-5', llmEnabled: () => true });
+    const ctxOpenAI = makeCtx({ model: 'gpt-4o', llmEnabled: () => true });
+
+    const first = await engine.getGhost('hel', ctxAnthropic);
+    expect(first).toBe('hello world');
+    expect(completeFn).toHaveBeenCalledTimes(1);
+
+    // Different pickModel output → cache miss → second fetch.
+    const second = await engine.getGhost('hel', ctxOpenAI);
     expect(second).toBe('hello world');
     expect(completeFn).toHaveBeenCalledTimes(2);
   });
 
-  it('cache hit with same model — same buffer, same model returns cached', async () => {
+  it('cache hit with same effective model — same buffer, same pickModel returns cached', async () => {
     const completeFn = vi.fn().mockResolvedValue('hello world');
     const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
     const ctx = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
@@ -878,7 +910,7 @@ describe('getGhost – Tier 2 cache key includes model', () => {
     const second = await engine.getGhost('hel', ctx);
     expect(first).toBe('hello world');
     expect(second).toBe('hello world');
-    // Same model + same buffer → cache hit; completeFn called only once.
+    // Same pickModel output + same buffer → cache hit; completeFn called only once.
     expect(completeFn).toHaveBeenCalledTimes(1);
   });
 });
