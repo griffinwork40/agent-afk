@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.107.0] - 2026-08-10
+
+### Added
+- two-tier OBSERVE/BLOCK split in safe-destruct PreToolUse detector (#992) (a4c81fc)
+
 ## [5.106.1] - 2026-08-10
 
 ### Fixed
