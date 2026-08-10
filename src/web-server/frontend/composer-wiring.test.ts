@@ -46,4 +46,30 @@ describe('wireComposerAffordances', () => {
     expect(document.getElementById('slash-menu')?.hidden).toBe(false);
     expect(document.getElementById('prompt-mirror')?.textContent).toContain('/mint');
   });
+
+  it('repaints a pre-existing command from unknown to known after delayed preload', async () => {
+    document.body.innerHTML =
+      '<div id="slash-menu" hidden></div><div id="prompt-mirror"></div>';
+    const composer = input();
+    composer.value = '/mint';
+    let release!: (commands: { name: string; summary: string }[]) => void;
+    const loadCommands = vi.fn(
+      () =>
+        new Promise<{ name: string; summary: string }[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const autocomplete = wireComposerAffordances({ input: composer, loadCommands });
+    const mirror = document.getElementById('prompt-mirror') as HTMLElement;
+    expect(mirror.querySelector('.tok-slash')?.textContent).toBe('/mint');
+    expect(mirror.querySelector('.tok-known')).toBeNull();
+
+    release([{ name: '/mint', summary: 'ship a feature' }]);
+    await autocomplete?.preload();
+
+    expect(loadCommands).toHaveBeenCalledTimes(1);
+    expect(mirror.querySelector('.tok-known')?.textContent).toBe('/mint');
+    expect(mirror.querySelector('.tok-slash')).toBeNull();
+  });
 });

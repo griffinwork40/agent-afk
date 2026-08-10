@@ -105,6 +105,58 @@ function harness(commands: CommandEntry[] = COMMANDS): Harness {
   };
 }
 
+describe('accessible listbox contract', () => {
+  it('starts closed with a discoverable combobox relationship', () => {
+    const h = harness();
+    expect(h.input.getAttribute('role')).toBe('combobox');
+    expect(h.input.getAttribute('aria-haspopup')).toBe('listbox');
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+    expect(h.input.getAttribute('aria-controls')).toBe(h.menu.id);
+    expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+    expect(h.menu.getAttribute('role')).toBe('listbox');
+  });
+
+  it('links the open textbox to exactly one selected option and follows movement', async () => {
+    const h = harness();
+    await h.type('/');
+    const options = Array.from(h.menu.querySelectorAll('[role="option"]'));
+    expect(h.input.getAttribute('aria-expanded')).toBe('true');
+    expect(options).toHaveLength(3);
+    expect(options.map((row) => row.id)).toEqual([
+      'slash-menu-option-0',
+      'slash-menu-option-1',
+      'slash-menu-option-2',
+    ]);
+    expect(options.map((row) => row.getAttribute('aria-selected'))).toEqual([
+      'true',
+      'false',
+      'false',
+    ]);
+    expect(h.input.getAttribute('aria-activedescendant')).toBe('slash-menu-option-0');
+
+    h.press('ArrowDown');
+    expect(h.input.getAttribute('aria-activedescendant')).toBe('slash-menu-option-1');
+    expect(
+      Array.from(h.menu.querySelectorAll('[role="option"]')).map((row) =>
+        row.getAttribute('aria-selected'),
+      ),
+    ).toEqual(['false', 'true', 'false']);
+  });
+
+  it('cleans up expanded and active-descendant state on acceptance and close', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.press('Enter');
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+    expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+
+    await h.type('/mi');
+    h.press('Escape');
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+    expect(h.input.hasAttribute('aria-activedescendant')).toBe(false);
+  });
+});
+
 describe('trigger', () => {
   it('opens on a bare slash token and lists matches', async () => {
     const h = harness();
@@ -353,6 +405,14 @@ describe('rendering', () => {
     expect(badged).toEqual(['/model']);
     expect(REPL_ONLY.has('/model')).toBe(true);
     expect(REPL_ONLY.has('/mint')).toBe(false);
+  });
+
+  it('classifies and badges /sh directly as REPL-only', async () => {
+    const h = harness([{ name: '/sh', summary: 'run a shell command' }]);
+    await h.type('/sh');
+    expect(REPL_ONLY.has('/sh')).toBe(true);
+    expect(h.menu.querySelector('.slash-name')?.textContent).toBe('/sh');
+    expect(h.menu.querySelector('.slash-badge')?.textContent).toBe('REPL only');
   });
 
   it('renders summaries as text, never as markup', async () => {

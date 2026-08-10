@@ -45,6 +45,7 @@ export const REPL_ONLY: ReadonlySet<string> = new Set([
   '/reauth',
   '/resume',
   '/rewind',
+  '/sh',
   '/theme',
   '/thinking',
 ]);
@@ -82,8 +83,21 @@ export class SlashAutocomplete {
   private candidates: SlashCandidate[] = [];
   private selected = 0;
   private open = false;
+  private readonly menuId: string;
 
-  constructor(private readonly deps: SlashAutocompleteDeps) {}
+  constructor(private readonly deps: SlashAutocompleteDeps) {
+    // A textarea has no native autocomplete-combobox semantic: relationship
+    // attributes alone leave it exposed only as a multiline textbox. Although
+    // preserving native semantics is normally preferable, role="combobox" is
+    // necessary here so assistive technology can discover the popup contract.
+    this.menuId = deps.menu.id || 'slash-autocomplete-listbox';
+    deps.menu.id = this.menuId;
+    deps.menu.setAttribute('role', 'listbox');
+    deps.input.setAttribute('role', 'combobox');
+    deps.input.setAttribute('aria-haspopup', 'listbox');
+    deps.input.setAttribute('aria-controls', this.menuId);
+    this.syncAria();
+  }
 
   /** True when the menu is showing at least one candidate. */
   isOpen(): boolean {
@@ -101,9 +115,17 @@ export class SlashAutocomplete {
     return this.commands?.some((c) => c.name === name) ?? false;
   }
 
-  /** Warm the command cache without opening the menu. */
+  /**
+   * Warm the command cache without opening the menu, then announce that command
+   * recognition changed. This repaints an already-present slash token even when
+   * no user input event occurs during the delayed load. The notification also
+   * asks autocomplete to refresh, but ensureCommands is now cached, so it cannot
+   * duplicate the fetch or loop.
+   */
   async preload(): Promise<void> {
+    const wasUnknown = this.commands === null;
     await this.ensureCommands();
+    if (wasUnknown && this.commands !== null) notifyValueChanged(this.deps.input);
   }
 
   /** Current highlighted candidate, or undefined when closed. */
@@ -204,6 +226,23 @@ export class SlashAutocomplete {
     this.selected = 0;
     this.deps.menu.hidden = true;
     this.deps.menu.textContent = '';
+    this.syncAria();
+  }
+
+  /** Synchronize the textbox side of the listbox ownership contract. */
+  private syncAria(): void {
+    const open = this.isOpen();
+    this.deps.input.setAttribute('aria-expanded', String(open));
+    if (open) {
+      this.deps.input.setAttribute('aria-activedescendant', this.optionId(this.selected));
+    } else {
+      this.deps.input.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  /** Stable for a candidate's position in the current deterministic ranking. */
+  private optionId(index: number): string {
+    return `${this.menuId}-option-${index}`;
   }
 
   /** Recompute from the current buffer. Exposed for tests. */
@@ -251,17 +290,22 @@ export class SlashAutocomplete {
     menu.textContent = '';
     if (!this.isOpen()) {
       menu.hidden = true;
+      this.syncAria();
       return;
     }
     this.candidates.forEach((cand, i) => {
-      menu.appendChild(this.row(cand, i === this.selected));
+      menu.appendChild(this.row(cand, i, i === this.selected));
     });
     menu.hidden = false;
+    this.syncAria();
   }
 
   /** Build one row. `createElement` + `textContent` only — never innerHTML. */
-  private row(cand: SlashCandidate, isSelected: boolean): HTMLElement {
+  private row(cand: SlashCandidate, index: number, isSelected: boolean): HTMLElement {
     const row = document.createElement('div');
+    row.id = this.optionId(index);
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(isSelected));
     row.className = isSelected ? 'slash-row is-selected' : 'slash-row';
 
     const name = document.createElement('span');
