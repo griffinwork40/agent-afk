@@ -163,6 +163,10 @@ export class SlashAutocomplete {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    // Composition keystrokes belong entirely to the IME. keyCode 229 covers
+    // legacy engines that do not expose isComposing reliably.
+    if (e.isComposing || e.keyCode === 229) return;
+
     // Escape also cancels a pending load, before there is an open menu whose
     // keyboard contract could otherwise observe the key.
     if (e.key === 'Escape' && (this.openIntent || this.loading !== null)) {
@@ -377,6 +381,7 @@ export class SlashAutocomplete {
     // Pointer users get the same affordance; `mousedown` beats the input's
     // `blur`, which would otherwise close the menu before the click landed.
     row.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       this.selected = this.candidates.indexOf(cand);
       this.accept();

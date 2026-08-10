@@ -267,6 +267,85 @@ describe('keyboard', () => {
     expect(h.menu.hidden).toBe(true);
     expect(h.menu.textContent).toBe('');
   });
+
+  it.each(['Enter', 'Escape', 'Tab', 'ArrowDown'])(
+    'leaves composing %s entirely to the IME and downstream listeners',
+    async (key) => {
+      const h = harness();
+      await h.type('/');
+      const before = h.ac.current()?.value;
+      const event = new KeyboardEvent('keydown', {
+        key,
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+      });
+
+      h.input.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(h.submitSaw).toContain(key);
+      expect(h.input.value).toBe('/');
+      expect(h.ac.isOpen()).toBe(true);
+      expect(h.ac.current()?.value).toBe(before);
+    },
+  );
+
+  it('also leaves legacy keyCode 229 events to the IME', async () => {
+    const h = harness();
+    await h.type('/');
+    const before = h.ac.current()?.value;
+    const event = new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, 'keyCode', { value: 229 });
+
+    h.input.dispatchEvent(event);
+
+    expect(event.keyCode).toBe(229);
+    expect(event.defaultPrevented).toBe(false);
+    expect(h.submitSaw).toContain('ArrowDown');
+    expect(h.input.value).toBe('/');
+    expect(h.ac.isOpen()).toBe(true);
+    expect(h.ac.current()?.value).toBe(before);
+  });
+});
+
+describe('pointer acceptance', () => {
+  it.each([
+    ['secondary', 2],
+    ['middle', 1],
+  ] as const)('ignores %s-button mousedown', async (_name, button) => {
+    const h = harness();
+    await h.type('/mi');
+    const focus = vi.spyOn(h.input, 'focus');
+    const row = h.menu.querySelector('.slash-row') as HTMLElement;
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button });
+
+    row.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(h.input.value).toBe('/mi');
+    expect(h.ac.isOpen()).toBe(true);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('accepts primary-button mousedown', async () => {
+    const h = harness();
+    await h.type('/mi');
+    const focus = vi.spyOn(h.input, 'focus');
+    const row = h.menu.querySelector('.slash-row') as HTMLElement;
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+
+    row.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(h.input.value).toBe('/mint ');
+    expect(h.ac.isOpen()).toBe(false);
+    expect(focus).toHaveBeenCalledOnce();
+  });
 });
 
 describe('composer collision', () => {
