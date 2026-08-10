@@ -73,10 +73,16 @@ describe('getContextUsage — 1M-context aliases', () => {
   });
 
   it('falls back to the 200k Anthropic default for an unknown/retired wire id', async () => {
-    // A bare wire id that is in no limits table (e.g. the retired
-    // claude-opus-4-8) and carries no requestedModel hint falls back to the
-    // conservative 200k Anthropic default.
-    const query = makeQuery({ model: 'claude-opus-4-8' });
+    // A bare wire id that is in no limits table and carries no requestedModel
+    // hint falls back to the conservative 200k Anthropic default.
+    //
+    // Invariant: this case previously used `claude-opus-4-8` as its example of a
+    // "retired" id. That was wrong twice over — 4.8 is Active per Anthropic's
+    // deprecation table AND it is a 1M-window model, so it now has explicit
+    // entries and no longer exercises the fallback at all. The example is now
+    // claude-opus-4-1-20250805, which Anthropic genuinely retired on 2026-08-05.
+    // <https://platform.claude.com/docs/en/about-claude/model-deprecations>
+    const query = makeQuery({ model: 'claude-opus-4-1-20250805' });
     const usage = await query.getContextUsage();
     expect(usage.maxTokens).toBe(200_000);
   });

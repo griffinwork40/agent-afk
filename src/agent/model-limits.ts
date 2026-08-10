@@ -42,6 +42,16 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // DEFAULT_MAX_OUTPUT fallback. (Alias lineage, for git blame: 'claude-opus-4-6'
   // → 4-7 on 2026-04, 4-7 → 4-8 on 2026-05-28, 4-8 → opus-5 on 2026-07-24.)
   'claude-opus-4-8': 128_000,
+  // Opus 4.7 and 4.6 take the same 128k ceiling for the same reason, and both are
+  // likewise Active (retirement not sooner than 2027-04-16 / 2027-02-05). The rule
+  // is capability-derived, not per-model generosity: "A single request to any model
+  // with a 1M-token context window can generate up to 128k output tokens
+  // (`max_tokens`)" — and that page's 1M list names Opus 4.8, 4.7 AND 4.6.
+  // <https://platform.claude.com/docs/en/build-with-claude/context-windows>
+  // Both were absent here, so maxOutputTokensFor() silently halved them to the 64k
+  // DEFAULT_MAX_OUTPUT — the exact failure the 4.8 comment above warns about.
+  'claude-opus-4-7': 128_000,
+  'claude-opus-4-6': 128_000,
   // Claude Sonnet 5 (GA 2026-06): 128k max output — the SAME ceiling as Sonnet
   // 4.6, not an increase over it.
   'claude-sonnet-5': 128_000,
@@ -145,6 +155,19 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Claude Opus 5 (GA 2026-07-24): native 1M window. Base `opus` still
   // auto-compacts early via MODEL_AUTOCOMPACT_BUDGET (cost/latency policy).
   'claude-opus-5': 1_000_000,
+  // Opus 4.8 / 4.7 / 4.6: native 1M windows, no beta header — the same
+  // context-windows page cited below for Sonnet 4.6 names all three opus
+  // generations in its 1M list, and all three are Active per the deprecation
+  // table (retirement not sooner than 2027-05-28 / 2027-04-16 / 2027-02-05).
+  // All three were missing here and inherited DEFAULT_CONTEXT_LIMIT (200k),
+  // under-reporting a 1M window by 5x. That direction is the safe one — early
+  // compaction, not mid-run API errors — but it silently truncated usable
+  // context on models the user explicitly selected by wire id. Opus 4.5 is
+  // deliberately NOT listed: it is absent from the docs' 1M list, so the 200k
+  // fallback is correct for it.
+  'claude-opus-4-8': 1_000_000,
+  'claude-opus-4-7': 1_000_000,
+  'claude-opus-4-6': 1_000_000,
   // Claude Sonnet 4.6: native 1M window, GA — no beta header required. An earlier
   // revision pinned this at 200k on the premise that the 4.x line gated 1M behind
   // a `context-1m` beta this repo never sends. That premise was stale: 1M is now
@@ -272,6 +295,15 @@ const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
   // while keeping the same cost/latency-bounded compaction trigger. `sonnet_1m`
   // bypasses this via the `_1m` short-circuit in autoCompactLimitFor.
   'claude-sonnet-4-6': 200_000,
+  // Opus 4.8 / 4.7 / 4.6 now report truthful 1M windows, so they need the same
+  // 200k working budget as every other 1M model here. Without these entries the
+  // context-limit correction above would have silently raised their compaction
+  // trigger 5x — turning a bookkeeping fix into a real cost/latency regression on
+  // sessions that were previously compacting at 200k. `opus_1m` bypasses this via
+  // the `_1m` short-circuit; a raw wire id keeps the bounded budget.
+  'claude-opus-4-8': 200_000,
+  'claude-opus-4-7': 200_000,
+  'claude-opus-4-6': 200_000,
 };
 
 /**
