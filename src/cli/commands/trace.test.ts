@@ -332,6 +332,63 @@ describe('formatTrace — compaction_disabled is high-signal (shown by default)'
   });
 });
 
+describe('formatTrace — boot_warning is high-signal (shown by default) (#754)', () => {
+  // A boot_warning is a SAFETY signal, not a latency marker: the built-in
+  // shadow warning (#739) means a user-owned ~/.afk/agents/*.md file silently
+  // converted a read-only verifier agent into a write-capable one, machine
+  // wide. Like rate_limit/usage_limit/compaction_disabled above, it must
+  // render WITHOUT --all — hidden behind the showAll gate is EXACTLY the bug
+  // class issue #754 describes (ships green, invisible).
+  const warningMsg =
+    '[afk] agents: ~/.afk/agents/research-agent.md overrides built-in agent "research-agent"';
+  const events: EventObj[] = [
+    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'session_phase', payload: { phase: 'model_ttfb', durationMs: 300 } },
+    {
+      ts: '2026-06-05T12:30:01.000Z',
+      seq: 1,
+      kind: 'session_phase',
+      payload: { phase: 'boot_warning', metadata: { producer: 'agent-registry', message: warningMsg } },
+    },
+    { ts: '2026-06-05T12:35:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+  ];
+  const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+
+  // Acceptance criterion 4 (and criterion 1's proof): assert against the
+  // DEFAULT render path specifically — no --all passed to formatTrace above —
+  // so this fails if the boot_warning branch is ever moved below the showAll
+  // gate or removed.
+  it('renders the boot_warning event in the DEFAULT view (no --all)', () => {
+    expect(out).toContain('boot-warn');
+    expect(out).toContain('research-agent.md overrides built-in agent');
+    expect(out).toContain('[agent-registry]');
+  });
+
+  it('still hides the low-signal model_ttfb phase by default', () => {
+    expect(out).not.toContain('model_ttfb');
+  });
+
+  it('surfaces a boot-warn count in the summary header', () => {
+    expect(out).toContain('1 boot-warn');
+  });
+
+  it('omits the boot-warn count when there are none', () => {
+    const clean = formatTrace('s', '/p', parseTrace(toJsonl(sampleEvents())));
+    expect(clean).not.toContain('boot-warn');
+  });
+
+  it('carries the warning text in --json (NDJSON passthrough) so it is greppable', () => {
+    // `--json` is a raw passthrough of the NDJSON (see registerTraceCommand),
+    // so the source JSONL itself is the contract: the message must appear
+    // (JSON-escaped) in the line the CLI would emit unchanged. `warningMsg`
+    // contains an embedded `"research-agent"`, which JSON.stringify escapes
+    // to `\"research-agent\"` — check the JSON-encoded form, not the raw
+    // string, so this doesn't false-fail on the escaping itself.
+    const raw = toJsonl(events);
+    expect(raw).toContain(JSON.stringify(warningMsg).slice(1, -1));
+    expect(raw).toContain('"phase":"boot_warning"');
+  });
+});
+
 describe('formatTrace — closure stop_reason rendering', () => {
   const seal: EventObj = {
     ts: '2026-06-05T12:35:00.500Z',

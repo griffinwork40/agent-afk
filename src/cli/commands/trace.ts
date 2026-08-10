@@ -529,6 +529,20 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const causeBit = errMsg !== undefined ? `  ${errMsg}` : '';
         return line('compact', `DISABLED for session${wireBit}${statusBit}${causeBit}`);
       }
+      // A boot_warning is a SAFETY signal, not a latency marker: it means a
+      // user-owned file under ~/.afk/agents/ (or an MCP config entry) shadowed
+      // or overrode something a bundled skill implicitly trusted — e.g. a
+      // read-only verifier agent silently becoming write-capable machine-wide
+      // (#739, #754). Rendered in the DEFAULT view, before the showAll gate,
+      // for the same reason as rate_limit above: hiding it behind --all makes
+      // exactly the bug class the issue describes (ships green, invisible).
+      if (p.phase === 'boot_warning') {
+        const md = p.metadata ?? {};
+        const producer = md['producer'];
+        const message = md['message'];
+        const producerBit = producer !== undefined ? `[${String(producer)}] ` : '';
+        return line('boot-warn', `${producerBit}${message !== undefined ? String(message) : '(no message)'}`);
+      }
       if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';
       // Prefer the operator alias (session_init_start); fall back to the
@@ -570,6 +584,8 @@ interface TraceSummary {
   throttles: number;
   /** Count of ttfb_timeout events (our client-side watchdog re-drove a stalled request). */
   ttfbStalls: number;
+  /** Count of boot_warning events (agent-registry builtin-shadow, MCP config; #754). */
+  bootWarnings: number;
   sealStatus: string | null;
   finalCostUsd: number | null;
   /** Operator-typed model for the root session (from session_init_start). */
@@ -586,6 +602,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let blocks = 0;
   let throttles = 0;
   let ttfbStalls = 0;
+  let bootWarnings = 0;
   let sealStatus: string | null = null;
   let finalCostUsd: number | null = null;
   let model: string | null = null;
@@ -602,6 +619,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
       case 'session_phase':
         if (e.payload.phase === 'rate_limit') throttles++;
         if (e.payload.phase === 'ttfb_timeout') ttfbStalls++;
+        if (e.payload.phase === 'boot_warning') bootWarnings++;
         // Root-session model provenance lives on session_init_start (the
         // earliest, always-emitted phase). First occurrence wins.
         if (e.payload.phase === 'session_init_start') {
@@ -641,6 +659,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
     blocks,
     throttles,
     ttfbStalls,
+    bootWarnings,
     sealStatus,
     finalCostUsd,
     model,
@@ -688,6 +707,12 @@ export function formatTrace(
   // Surfaced separately from `throttled`: a ttfb stall is dead wall-clock our own
   // watchdog spent, and folding it into the throttle count is what hid it.
   const ttfbPart = summary.ttfbStalls > 0 ? ` · ${summary.ttfbStalls} ttfb-stall` : '';
+  // Boot warnings are already rendered as individual `boot-warn` lines (safety
+  // signal, DEFAULT view — see renderEvent), but a header count lets an
+  // operator confirm the total at a glance without counting lines, same as
+  // `throttled` above (#754).
+  const bootWarningPart =
+    summary.bootWarnings > 0 ? ` · ${summary.bootWarnings} boot-warn` : '';
 
   const out: string[] = [];
   out.push(`Trace  ${sessionId}`);
@@ -702,7 +727,7 @@ export function formatTrace(
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
-      ` · ${summary.blocks} blocks${throttlePart}${ttfbPart}${costPart}`,
+      ` · ${summary.blocks} blocks${throttlePart}${ttfbPart}${bootWarningPart}${costPart}`,
   );
   out.push('');
 

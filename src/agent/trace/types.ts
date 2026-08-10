@@ -805,7 +805,20 @@ export type SessionPhaseName =
   // signal: the auto-compaction caller discards its result, so without this the
   // disable is invisible until a human runs /compact — and an undisclosed
   // disable ends in a context-window overflow the operator cannot explain.
-  | 'compaction_disabled';
+  | 'compaction_disabled'
+  // A bootstrap-time warning (agent-registry builtin-shadow, MCP config) was
+  // collected before `interactive.ts`'s startup-screen clear could destroy it
+  // (issue #745). Emitted ONE EVENT PER WARNING at PUSH time inside
+  // `bootstrapSession` (see `boot-warning-recorder.ts`) — never aggregated at
+  // drain time — so a warning collected just before bootstrap THROWS is still
+  // recorded even though the drain never runs on that path (issue #754).
+  // `metadata.producer` names which producer pushed it (`agent-registry` |
+  // `mcp`); `metadata.message` carries the warning text verbatim. HIGH
+  // SIGNAL: the builtin-shadow warning from #739 is a safety signal (a user
+  // agent file can silently convert a read-only verifier into a
+  // write-capable agent machine-wide), so — like `rate_limit` — this renders
+  // in the DEFAULT `afk trace show` view instead of behind `--all`.
+  | 'boot_warning';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

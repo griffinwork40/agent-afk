@@ -433,6 +433,9 @@ export const SessionPhaseNameSchema = z.enum([
   // Per-session compaction disable (single event, at most once). See
   // SessionPhaseName JSDoc in types.ts — metadata names the wire and cause.
   'compaction_disabled',
+  // One bootstrap warning, emitted per-warning at push time (#754). See
+  // SessionPhaseName JSDoc in types.ts — metadata carries producer + message.
+  'boot_warning',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
