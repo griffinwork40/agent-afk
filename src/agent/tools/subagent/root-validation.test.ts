@@ -30,11 +30,19 @@ function allCandidates(): string[] {
  * a behavioural assertion cannot cover this on POSIX.
  */
 function coveragePredicate(source: string): string {
-  const match = source.match(/if \((rel === ''[\s\S]*?)\)\s*return /);
-  if (match?.[1] === undefined) {
-    throw new Error('coverage predicate not found — did the `rel` binding get renamed?');
+  // Match ALL sites and demand exactly one. A first-match-wins `.match()` would
+  // silently bind to the wrong site if a second `if (rel === …) return` ever
+  // appeared above the real one (a decoy in a comment is enough), which fails
+  // OPEN — the test would keep passing while pinning unrelated text.
+  const matches = [...source.matchAll(/if \((rel === ''[\s\S]*?)\)\s*return /g)];
+  const expression = matches.length === 1 ? matches[0]?.[1] : undefined;
+  if (expression === undefined) {
+    throw new Error(
+      `expected exactly one coverage predicate, found ${matches.length} — did the \`rel\` ` +
+        'binding get renamed, or did a second `if (rel === …) return` site appear?',
+    );
   }
-  return match[1]
+  return expression
     .replace(/\bpath\.isAbsolute\b/g, 'isAbsolute')
     .replace(/\s+/g, ' ')
     .trim();
