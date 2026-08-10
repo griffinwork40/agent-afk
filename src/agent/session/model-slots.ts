@@ -92,7 +92,15 @@ export type ModelSlots = Record<SlotName, ModelSlotBinding>;
  * identity handles) so a tier default and its namesake alias can never drift.
  */
 export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
-export const CLAUDE_SONNET_ID = 'claude-sonnet-5';
+// Claude Sonnet 4.6 — the `sonnet`/`sonnet_1m` aliases and the `medium` tier
+// default all follow this constant. Deliberately NOT Sonnet 5: 4.6 is the better
+// fit for this harness's agentic + subagent workloads, and its tokenizer packs
+// ~30% more text into the same window (Sonnet 5's tokenizer emits ~30% more
+// tokens for identical input, so its 1M holds proportionally less). Both models
+// are 1M context / 128k output (see model-limits.ts), so this is a lateral move
+// in capability, not a downgrade. To go back to Sonnet 5, revert this one line
+// plus the matching provider-runtime.ts DEFAULT_MODEL and STARTER_MODELS entries.
+export const CLAUDE_SONNET_ID = 'claude-sonnet-4-6';
 // Claude Opus 5 (GA 2026-07-24) — dateless wire id, itself a pinned snapshot
 // (post-4.6 naming convention). Bumped from claude-opus-4-8; the `opus`/`opus_1m`
 // aliases and the `large` tier default follow this constant. To roll back to 4.8,

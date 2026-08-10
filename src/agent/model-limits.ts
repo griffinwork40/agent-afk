@@ -42,17 +42,19 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // DEFAULT_MAX_OUTPUT fallback. (Alias lineage, for git blame: 'claude-opus-4-6'
   // → 4-7 on 2026-04, 4-7 → 4-8 on 2026-05-28, 4-8 → opus-5 on 2026-07-24.)
   'claude-opus-4-8': 128_000,
-  // Claude Sonnet 5 (GA 2026-06): 128k max output (up from 64k on Sonnet 4.6).
+  // Claude Sonnet 5 (GA 2026-06): 128k max output — the SAME ceiling as Sonnet
+  // 4.6, not an increase over it.
   'claude-sonnet-5': 128_000,
-  // 'claude-sonnet-4-6' is not a first-class alias (MODEL_MAP.sonnet resolves to
-  // claude-sonnet-5) but stays reachable by its raw wire id (`--model
-  // claude-sonnet-4-6`, a config or env override) and is already priced in
-  // providers/anthropic-direct/pricing.ts. 64k is first-party per the Sonnet 5
-  // entry above — "up from 64k on Sonnet 4.6". That equals DEFAULT_MAX_OUTPUT,
-  // so this pin is a runtime no-op today; its value is making the number
-  // intentional and test-pinned rather than an accident of the fallback, so a
-  // future change to DEFAULT_MAX_OUTPUT cannot silently move 4.6's ceiling.
-  'claude-sonnet-4-6': 64_000,
+  // Claude Sonnet 4.6: 128k max output. Not a first-class alias (MODEL_MAP.sonnet
+  // resolves to claude-sonnet-5) but reachable by its raw wire id (`--model
+  // claude-sonnet-4-6`, a config or env override) and already priced in
+  // providers/anthropic-direct/pricing.ts. First-party source — the migration
+  // guide's 4.6 → 5 section: "128k max output tokens (unchanged): Claude Sonnet 5
+  // supports up to 128k output tokens, the same as Claude Sonnet 4.6."
+  // <https://platform.claude.com/docs/en/about-claude/models/migration-guide>
+  // Unlike the previous 64k value, this pin is NOT a runtime no-op: it doubles
+  // the DEFAULT_MAX_OUTPUT (64k) fallback 4.6 would otherwise inherit.
+  'claude-sonnet-4-6': 128_000,
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,
@@ -143,18 +145,18 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Claude Opus 5 (GA 2026-07-24): native 1M window. Base `opus` still
   // auto-compacts early via MODEL_AUTOCOMPACT_BUDGET (cost/latency policy).
   'claude-opus-5': 1_000_000,
-  // Claude Sonnet 4.6: 200k. Deliberately NOT 1M — the native-1M/"no smaller
-  // variant" claim above is specific to Sonnet 5. The 4.x line served 200k by
-  // default with 1M only behind a `context-1m` beta header, and this repo never
-  // sends one: composeBetaHeader (providers/anthropic-direct/beta-headers.ts)
-  // emits a closed set — OAuth entries, effort, extended-cache TTL, fast-mode —
-  // and no 1M beta string exists anywhere in src/. So 200k is correct BY
-  // CONSTRUCTION for every request this codebase can issue, regardless of what
-  // the API might serve behind a header we do not send. This equals the
-  // Anthropic DEFAULT_CONTEXT_LIMIT fallback, so the pin is a no-op today; it
-  // guards the asymmetry — under-reporting only compacts early, over-reporting
-  // suppresses compaction and yields hard API errors mid-run.
-  'claude-sonnet-4-6': 200_000,
+  // Claude Sonnet 4.6: native 1M window, GA — no beta header required. An earlier
+  // revision pinned this at 200k on the premise that the 4.x line gated 1M behind
+  // a `context-1m` beta this repo never sends. That premise was stale: 1M is now
+  // generally available, and per Anthropic "For every model with a 1M-token
+  // context window, 1M is the default: you don't need a beta header, and
+  // long-context requests are billed at standard pricing."
+  // <https://platform.claude.com/docs/en/build-with-claude/context-windows>
+  // That page names Sonnet 4.6 in the 1M list; the launch post's "1M in beta"
+  // wording predates GA and is what the stale pin was derived from. Cost/latency
+  // throttling of the base alias belongs in MODEL_AUTOCOMPACT_BUDGET below — this
+  // table stays truthful about the wire capability.
+  'claude-sonnet-4-6': 1_000_000,
   // OpenAI flagship + cost-tier models (windows per OpenAI platform docs
   // as of 2026-Q1). Listed here so the openai-compatible provider's
   // getContextUsage() returns an accurate percentage instead of the
@@ -264,6 +266,12 @@ const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
   // long base-`opus` sessions. `opus_1m` bypasses this via the `_1m`
   // short-circuit in autoCompactLimitFor.
   'claude-opus-5': 200_000,
+  // Sonnet 4.6 also ships a native 1M window (see MODEL_CONTEXT_LIMITS), so it
+  // takes the same 200k working budget as its Sonnet 5 sibling: a raw
+  // `claude-sonnet-4-6` session reports the truthful 1M window on the status line
+  // while keeping the same cost/latency-bounded compaction trigger. `sonnet_1m`
+  // bypasses this via the `_1m` short-circuit in autoCompactLimitFor.
+  'claude-sonnet-4-6': 200_000,
 };
 
 /**
