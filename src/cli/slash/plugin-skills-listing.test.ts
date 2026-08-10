@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { _resetRegistry, registerSkill } from '../../skills/index.js';
 import { resetRegistry } from './registry.js';
 import { initialSkillsCmd } from './plugin-skills.js';
+import { makeDynamicSkillsCmd } from './plugin-skills/listing.js';
 import { stripAnsi } from '../display.js';
 import type { SlashContext } from './types.js';
 
@@ -121,6 +122,37 @@ describe('/skills listing UX (Phase 1)', () => {
     // The old raw badge formatting must be gone.
     expect(out).not.toContain('(user)');
     expect(out).not.toContain('(plugin alt)');
+  });
+
+  it('labels a commands/*.md-origin skill "command", not "plugin"', async () => {
+    // Regression lock for the `source` propagation chain:
+    //   collectSkillEntries → ProviderCommandInfo → SlashCommand →
+    //   DiscoveredSkill → buildListingGroups.
+    // Before that chain carried `source`, listing.ts hard-coded `'plugin'`
+    // for every plugin-origin row, so the `command` legend member was
+    // unreachable at runtime even though the type union contained it.
+    // `initialSkillsCmd` always renders with an empty plugin list; the live
+    // listing is built by `makeDynamicSkillsCmd(discovered)` at
+    // dispatch.ts:268, so drive that — it is the actual runtime path.
+    const cmd = makeDynamicSkillsCmd([
+      { name: 'demo-plugin:deploy', description: 'Deploy the thing.', source: 'command' },
+    ]);
+
+    const { ctx, lines } = makeCtx();
+    await cmd.handler(ctx, '');
+    const out = stripAnsi(lines.join('\n'));
+
+    // The legend renders only sources actually present, so `command`
+    // appearing there proves the row was tagged, not defaulted to `plugin`.
+    const legendLine = out.split('\n').find((l) => l.includes('/skills <name> for details'));
+    expect(legendLine).toBeDefined();
+    expect(legendLine).toContain('command');
+
+    // And the detail card reports the same source for that skill.
+    const { ctx: detailCtx, lines: detailLines } = makeCtx();
+    await cmd.handler(detailCtx, 'deploy');
+    const detail = stripAnsi(detailLines.join('\n'));
+    expect(detail).toMatch(/Source\s+command/);
   });
 
   it('wraps long descriptions instead of clipping them at 80 chars', async () => {
