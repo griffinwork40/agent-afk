@@ -6,9 +6,16 @@
  *   1. **No-op when writer is undefined.** Emission sites never need to
  *      guard with `if (writer)` — call the helper unconditionally.
  *
- *   2. **Errors are swallowed.** A broken trace writer must never crash
- *      an active session. Failures are logged via `debugLog` so they
- *      surface during debugging but never propagate to the caller.
+ *   2. **Errors are swallowed but not silent (#850).** A broken trace
+ *      writer must never crash an active session, so every failure is
+ *      caught here — but the FIRST failure per writer is also surfaced to
+ *      stderr unconditionally via `reportArtifactFailure` (subsequent
+ *      failures for the same writer fall back to `debugLog`), so an
+ *      operator who turns on tracing does not get silence when it is
+ *      completely broken. `writer.getTracePath()` is the dedup key: it is
+ *      unique per session/writer instance and these functions take no
+ *      `sessionId` parameter, so it identifies "this failing sink" without
+ *      threading a new parameter through eleven call sites.
  *
  * This keeps emission sites readable — no try/catch noise around every
  * trace write — while preserving the invariant that the witness layer
@@ -17,7 +24,7 @@
  * @module agent/trace/emit
  */
 
-import { debugLog } from '../../utils/debug.js';
+import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
 import type {
   AbortPayload,
   BackgroundAgentPayload,
@@ -42,7 +49,7 @@ export async function emitToolCall(
   try {
     await writer.write({ kind: 'tool_call', payload });
   } catch (err) {
-    debugLog(`trace.emit tool_call failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'tool_call', err);
   }
 }
 
@@ -54,7 +61,7 @@ export async function emitHookDecision(
   try {
     await writer.write({ kind: 'hook_decision', payload });
   } catch (err) {
-    debugLog(`trace.emit hook_decision failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'hook_decision', err);
   }
 }
 
@@ -66,7 +73,7 @@ export async function emitSubagentLifecycle(
   try {
     await writer.write({ kind: 'subagent_lifecycle', payload });
   } catch (err) {
-    debugLog(`trace.emit subagent_lifecycle failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'subagent_lifecycle', err);
   }
 }
 
@@ -78,7 +85,7 @@ export async function emitBackgroundAgent(
   try {
     await writer.write({ kind: 'background_agent', payload });
   } catch (err) {
-    debugLog(`trace.emit background_agent failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'background_agent', err);
   }
 }
 
@@ -90,7 +97,7 @@ export async function emitBudget(
   try {
     await writer.write({ kind: 'budget', payload });
   } catch (err) {
-    debugLog(`trace.emit budget failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'budget', err);
   }
 }
 
@@ -102,7 +109,7 @@ export async function emitAbort(
   try {
     await writer.write({ kind: 'abort', payload });
   } catch (err) {
-    debugLog(`trace.emit abort failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'abort', err);
   }
 }
 
@@ -114,7 +121,7 @@ export async function emitCompaction(
   try {
     await writer.write({ kind: 'compaction', payload });
   } catch (err) {
-    debugLog(`trace.emit compaction failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'compaction', err);
   }
 }
 
@@ -126,7 +133,7 @@ export async function emitClosure(
   try {
     await writer.write({ kind: 'closure', payload });
   } catch (err) {
-    debugLog(`trace.emit closure failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'closure', err);
   }
 }
 
@@ -138,7 +145,7 @@ export async function emitClaim(
   try {
     await writer.write({ kind: 'claim', payload });
   } catch (err) {
-    debugLog(`trace.emit claim failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'claim', err);
   }
 }
 
@@ -150,7 +157,7 @@ export async function emitBrowserEvent(
   try {
     await writer.write({ kind: 'browser_event', payload });
   } catch (err) {
-    debugLog(`trace.emit browser_event failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'browser_event', err);
   }
 }
 
@@ -162,7 +169,7 @@ export async function emitQueuedUserMessage(
   try {
     await writer.write({ kind: 'queued_user_message', payload });
   } catch (err) {
-    debugLog(`trace.emit queued_user_message failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'queued_user_message', err);
   }
 }
 
@@ -174,11 +181,6 @@ export async function emitSessionPhase(
   try {
     await writer.write({ kind: 'session_phase', payload });
   } catch (err) {
-    debugLog(`trace.emit session_phase failed: ${stringifyError(err)}`);
+    reportArtifactFailure('trace.emit', writer.getTracePath(), 'session_phase', err);
   }
-}
-
-function stringifyError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
