@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { SlashAutocomplete, REPL_ONLY } from './slash-autocomplete.js';
+import { mountSlashHighlight } from './slash-highlight.js';
 import type { CommandEntry } from '../../cli/input/slash-match.js';
 
 const COMMANDS: CommandEntry[] = [
@@ -23,20 +24,40 @@ const COMMANDS: CommandEntry[] = [
   { name: '/diagnose', summary: 'find root cause' },
 ];
 
+/** Namespaced names, as the live registry serves them (`/bgsub:status`, …). */
+const NAMESPACED: CommandEntry[] = [
+  { name: '/bgsub:status', summary: 'background job status' },
+  { name: '/bgsub:join', summary: 'join a background job' },
+  { name: '/bgsub:cancel', summary: 'cancel a background job' },
+  { name: '/mint', summary: 'ship a feature' },
+];
+
 interface Harness {
   ac: SlashAutocomplete;
   input: HTMLTextAreaElement;
   menu: HTMLElement;
   /** Keys the composer's (later-attached) submit handler actually saw. */
   submitSaw: string[];
+  /**
+   * Sends the later-attached handler actually performed. Unlike `submitSaw`
+   * this mirrors QueuePanel.wire()'s REAL gate (`Enter` + meta/ctrl), which is
+   * the only way a test can tell "menu declined to claim the chord" apart from
+   * "menu claimed it and the send was lost".
+   */
+  submitted: string[];
+  /** Visible composer text — the mirror, not the transparent textarea. */
+  mirrorText: () => string;
   type: (value: string) => Promise<void>;
   press: (key: string) => void;
+  pressWith: (key: string, mods: { metaKey?: boolean; ctrlKey?: boolean }) => void;
   rows: () => string[];
 }
 
 function harness(commands: CommandEntry[] = COMMANDS): Harness {
-  document.body.innerHTML = '<div id="slash-menu" hidden></div><textarea id="prompt"></textarea>';
+  document.body.innerHTML =
+    '<div id="slash-menu" hidden></div><div id="prompt-mirror"></div><textarea id="prompt"></textarea>';
   const menu = document.getElementById('slash-menu') as HTMLElement;
+  const mirror = document.getElementById('prompt-mirror') as HTMLElement;
   const input = document.getElementById('prompt') as HTMLTextAreaElement;
 
   const ac = new SlashAutocomplete({
@@ -45,17 +66,28 @@ function harness(commands: CommandEntry[] = COMMANDS): Harness {
     loadCommands: () => Promise.resolve(commands),
   });
   ac.wire();
+  // Mounted exactly as composer-wiring.ts does, so the mirror is driven by the
+  // same `input` events production relies on.
+  mountSlashHighlight(input, mirror, (name) => ac.knows(name));
 
   // Stand-in for QueuePanel.wire()'s handler — attached AFTER, exactly as in
   // app.ts, so stopImmediatePropagation() is observable.
   const submitSaw: string[] = [];
-  input.addEventListener('keydown', (e) => submitSaw.push(e.key));
+  const submitted: string[] = [];
+  input.addEventListener('keydown', (e) => {
+    submitSaw.push(e.key);
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitted.push(input.value);
+  });
 
   return {
     ac,
     input,
     menu,
     submitSaw,
+    submitted,
+    // paintMirror appends a zero-width space so a trailing newline still
+    // occupies a line; strip it to compare against what the operator reads.
+    mirrorText: () => (mirror.textContent ?? '').replace(/\u200b/g, ''),
     type: async (value: string) => {
       input.value = value;
       input.dispatchEvent(new Event('input'));
@@ -63,6 +95,11 @@ function harness(commands: CommandEntry[] = COMMANDS): Harness {
     },
     press: (key: string) => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    },
+    pressWith: (key, mods) => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...mods }),
+      );
     },
     rows: () => Array.from(menu.querySelectorAll('.slash-name')).map((n) => n.textContent ?? ''),
   };
@@ -189,6 +226,120 @@ describe('composer collision', () => {
     await h.type('/mi');
     h.press('a');
     expect(h.submitSaw).toContain('a');
+  });
+
+  // Regression: the menu matched `e.key === 'Enter'` with no modifier check and
+  // then called stopImmediatePropagation(), so the composer's submit chord was
+  // consumed by the accept path and the send was silently dropped.
+  it('lets Cmd+Enter reach the submit handler while the menu is open', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.pressWith('Enter', { metaKey: true });
+    expect(h.submitted).toEqual(['/mi']);
+  });
+
+  it('lets Ctrl+Enter reach the submit handler while the menu is open', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.pressWith('Enter', { ctrlKey: true });
+    expect(h.submitted).toEqual(['/mi']);
+  });
+
+  it('does not accept a candidate when the submit chord is pressed', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.pressWith('Enter', { ctrlKey: true });
+    expect(h.input.value).toBe('/mi');
+  });
+
+  it('still accepts on unmodified Enter', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.press('Enter');
+    expect(h.input.value).toBe('/mint ');
+    expect(h.submitted).toEqual([]);
+  });
+});
+
+describe('mirror sync on programmatic writes', () => {
+  // Regression: accept() assigns `input.value` directly, which fires no `input`
+  // event. The mirror is the ONLY visible copy of the text (the textarea is
+  // painted transparent), so the accepted command stayed invisible until the
+  // next keystroke.
+  it('repaints the mirror when a candidate is accepted with Enter', async () => {
+    const h = harness();
+    await h.type('/mi');
+    expect(h.mirrorText()).toBe('/mi');
+    h.press('Enter');
+    expect(h.input.value).toBe('/mint ');
+    expect(h.mirrorText()).toBe('/mint ');
+  });
+
+  it('repaints the mirror when a candidate is accepted with Tab', async () => {
+    const h = harness();
+    await h.type('/mi');
+    h.press('Tab');
+    expect(h.mirrorText()).toBe('/mint ');
+  });
+
+  it('repaints the mirror when a candidate is accepted by mouse', async () => {
+    const h = harness();
+    await h.type('/mi');
+    const row = h.menu.querySelector('.slash-row') as HTMLElement;
+    row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    expect(h.mirrorText()).toBe('/mint ');
+  });
+});
+
+describe('namespaced commands', () => {
+  // Regression: the trigger regex excluded ':', so typing the namespace
+  // separator closed the menu exactly when the operator was narrowing within it.
+  it('stays open after the namespace separator', async () => {
+    const h = harness(NAMESPACED);
+    await h.type('/bgsub:');
+    expect(h.menu.hidden).toBe(false);
+    expect(h.rows()).toEqual(['/bgsub:cancel', '/bgsub:join', '/bgsub:status']);
+  });
+
+  it('narrows within the namespace', async () => {
+    const h = harness(NAMESPACED);
+    await h.type('/bgsub:st');
+    expect(h.rows()).toEqual(['/bgsub:status']);
+  });
+
+  it('still closes the moment a space is typed', async () => {
+    const h = harness(NAMESPACED);
+    await h.type('/bgsub:status ');
+    expect(h.menu.hidden).toBe(true);
+  });
+});
+
+describe('selection visibility', () => {
+  // Regression: move() re-rendered but never scrolled, so arrowing past the
+  // menu's 40vh fold left the selection off-screen and Enter accepted a
+  // candidate the operator could not see.
+  it('scrolls the newly selected row into view', async () => {
+    const scrollIntoView = vi.fn();
+    // jsdom does not implement scrollIntoView; the production call is
+    // feature-detected, so the stub is what makes the behaviour observable.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      value: scrollIntoView,
+      configurable: true,
+      writable: true,
+    });
+    const h = harness();
+    await h.type('/');
+    h.press('ArrowDown');
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+  });
+
+  it('survives an environment without scrollIntoView', async () => {
+    // Deleting the stub restores the bare-jsdom condition: arrowing must not
+    // throw when the method is absent.
+    Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+    const h = harness();
+    await h.type('/');
+    expect(() => h.press('ArrowDown')).not.toThrow();
   });
 });
 

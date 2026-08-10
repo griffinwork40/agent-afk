@@ -20,6 +20,7 @@
  */
 
 import { matchSlashCandidates, type CommandEntry, type SlashCandidate } from '../../cli/input/slash-match.js';
+import { notifyValueChanged } from './composer-value.js';
 
 /**
  * Commands that drive terminal-only machinery — the screen, the compositor,
@@ -55,8 +56,16 @@ export const REPL_ONLY: ReadonlySet<string> = new Set([
  * safe — the menu closes the moment a space is typed, so a multi-line prompt
  * being composed after a command name can never have its Enter swallowed.
  * Mirrors the REPL's slash trigger in `cli/input/trigger.ts`.
+ *
+ * Invariant: the character class must stay in sync with `SLASH_TOKEN` in
+ * `slash-highlight.ts` — the registry serves namespaced names (`/bgsub:status`),
+ * so excluding `:` here closed the menu exactly when the operator was narrowing
+ * within a namespace. The leading `[A-Za-z]` matches the registry, where every
+ * name is a slash followed by a letter; the optional group keeps a bare `/`
+ * triggering the full list. Whitespace stays excluded — that is what makes
+ * Enter-capture safe.
  */
-const SLASH_TRIGGER = /^\/[A-Za-z_-]*$/;
+const SLASH_TRIGGER = /^\/(?:[A-Za-z][\w:-]*)?$/;
 
 export interface SlashAutocompleteDeps {
   /** The composer textarea. */
@@ -121,6 +130,12 @@ export class SlashAutocomplete {
   private onKeyDown(e: KeyboardEvent): void {
     if (!this.isOpen()) return;
 
+    // Invariant: the composer's submit chord must reach QueuePanel. Its handler
+    // is bound to this same textarea AFTER ours (`app.ts` wires affordances
+    // first), so `stopImmediatePropagation()` below would otherwise consume the
+    // send and silently drop it. Modified Enter is never ours to claim.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) return;
+
     // Contract: only these keys are claimed, and only while the menu is open
     // with candidates. Every other key — including plain Enter with no menu —
     // reaches the textarea and the composer untouched.
@@ -149,6 +164,23 @@ export class SlashAutocomplete {
     const n = this.candidates.length;
     this.selected = (this.selected + delta + n) % n;
     this.render();
+    this.revealSelected();
+  }
+
+  /**
+   * Keep the highlighted row inside the menu's scroll viewport.
+   *
+   * A bare `/` yields up to `MAX_SLASH_MATCHES` rows while the menu is capped
+   * at `40vh`, so arrowing past the fold would otherwise move the selection
+   * out of sight and Enter would accept a candidate the operator cannot see.
+   * `scrollIntoView` is absent in jsdom, so the call is feature-detected rather
+   * than assumed — a missing implementation must not break key handling.
+   */
+  private revealSelected(): void {
+    const row = this.deps.menu.children[this.selected];
+    if (row instanceof HTMLElement && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   private accept(): void {
@@ -159,6 +191,11 @@ export class SlashAutocomplete {
     this.deps.input.value = `${pick.value} `;
     this.close();
     this.deps.input.focus();
+    // Invariant: assigning `.value` fires no `input` event, and the highlight
+    // mirror — the only visible copy of the text, since the textarea itself is
+    // painted transparent — repaints solely on that event. Without this the
+    // accepted command stays invisible until the next keystroke.
+    notifyValueChanged(this.deps.input);
   }
 
   private close(): void {
