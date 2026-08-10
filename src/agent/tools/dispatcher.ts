@@ -1314,7 +1314,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Handler lookup
     const handler = this.handlers.get(call.name);
     if (!handler) {
-      return { content: this.unknownToolMessage(call.name), isError: true };
+      const msg = this.unknownToolMessage(call.name);
+      await this.emitPreToolUseBlock(call.name, msg);
+      return { content: msg, isError: true, failureClass: 'permission-denied' };
     }
 
     let result: ToolResult;
