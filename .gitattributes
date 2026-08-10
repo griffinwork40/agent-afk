@@ -1,0 +1,26 @@
+# Invariant: the file-size baseline is GENERATED, never merged.
+#
+# `.filesize-baseline.json` is rewritten wholesale by
+# `pnpm audit:filesize:update` (scripts/check-file-size.ts). Every refactor wave
+# removes the files it fixed, so concurrent branches routinely touch it. A
+# textual 3-way merge of a generated JSON file produces a syntactically valid but
+# semantically wrong hybrid — a stale entry silently re-grandfathers a file that
+# is already fixed, which is exactly the drift the ratchet exists to prevent.
+#
+# `-merge` makes git report a conflict and leave OUR version in the tree instead
+# of inventing that hybrid.
+#
+# Deliberately NOT `-diff`: marking it binary would hide the one thing a reviewer
+# of a refactor-wave PR needs to see — exactly which files that wave retired from
+# the baseline. The one-time cost is a 138-line diff in the commit that
+# introduces the file.
+#
+# Resolve a conflict by regenerating, never by editing conflict markers:
+#
+#   git checkout origin/main -- .filesize-baseline.json
+#   pnpm audit:filesize:update
+#   pnpm audit:filesize:check
+#
+# Regeneration is self-checking: a stale key that no longer exceeds the ceiling
+# fails the gate's RETIRED mode anyway.
+.filesize-baseline.json -merge

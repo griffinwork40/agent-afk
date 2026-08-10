@@ -25,6 +25,9 @@ pnpm audit:sdk:update-lock  # add new symbols to .sdk-dependency.lock.json (edit
 pnpm audit:env:check      # CI gate — no raw process.env reads outside src/config/env.ts
 pnpm scan:env:check       # CI gate — docs/env-registry.{json,md} in sync with src/config/env.ts
 pnpm audit:chalk:check    # CI gate — no raw chalk.<color> outside src/cli/palette.ts (--list locates sites)
+pnpm audit:filesize:check # CI gate — 350-line source ceiling, ratcheted against .filesize-baseline.json
+pnpm audit:filesize:update  # regenerate the baseline after a split (never hand-edit loc values)
+pnpm audit:module-state:check  # CI gate — no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check       # CI gate — SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins rewrites)
 pnpm audit:deps           # CI gate — pnpm audit --audit-level=critical --prod
 ```
@@ -119,6 +122,43 @@ Every import from `@anthropic-ai/sdk` is tracked. `.sdk-dependency.lock.json` is
 - DAG executor (`src/agent/dag.ts`) is a Kahn-layer parallel executor with per-node AbortControllers, fail-fast semantics, transitive skip propagation, node-level timeouts, and listener-leak prevention. ~266 LOC, fully implemented.
 - **Three mandatory indirections**, each with a canonical read/write point and a CI gate. Env vars: never read `process.env` in new code — use the typed `env` object and register new vars in `ENV_REGISTRY` (`src/config/env.ts`; `audit:env:check` + `scan:env:check`). A handful of files carry a documented whole-file exemption in `ALLOWED_FILES` (`scripts/audit-env-access.ts`); adding an entry there is a last resort, not the way around the gate. Styling: never call `chalk.<color>()` — use the semantic palette (`src/cli/palette.ts`; `audit:chalk:check`, which landed after ~180 raw sites crept back). Paths: never hand-join anything under `~/.afk/` — use `src/paths.ts`.
 - Vendored agents (`src/skills/_agents/`) and bundled skills (`src/bundled-plugins/`) are SHA-256 pinned in their test files. Editing either on purpose means running `pnpm fix:pins`; an unexplained pin failure means an edit you did not intend.
+
+### The 350-line ceiling
+
+No source file under `src/` or `scripts/` exceeds **350 raw lines** (`wc -l`
+semantics). Gate: `pnpm audit:filesize:check` (`scripts/check-file-size.ts`), warn
+band 316–350. Tests, `__fixtures__`, `__test-utils__`, `.d.ts` are out of scope.
+
+The reason is agent-context economics, not aesthetics: an oversized file costs an
+agent most of a working context just to establish what it may safely touch, and
+the failure mode is silent — the agent edits from a partial read. So at the
+ceiling you pull **one whole concern** into a sibling (`bar.ts` →
+`bar.<concern>.ts`), the original **never moves** and keeps its exact public
+surface, and no importer is rewritten. A file already inside its own directory
+gets plain-named siblings in that directory.
+
+`.filesize-baseline.json` grandfathers the 138 pre-existing violators as a
+**one-way ratchet**: it fails on a new violator, on a baselined file that *grows*,
+on a baselined file that now fits (remove it), and on a baselined path that no
+longer exists. Regenerate with `pnpm audit:filesize:update` — never hand-edit
+`loc`; `reason`/`permanent` are yours and survive regeneration. The file is
+`-merge -diff` in `.gitattributes`: resolve conflicts by regenerating, not by
+editing markers.
+
+**Do not delete documentation to satisfy this gate.** The originally-over files
+averaged 45.5% comment+blank, and this repo *mandates* long
+`Invariant:`/`Contract:`/`History:` blocks. The lever is that JSDoc travels with
+its declaration — extract a declaration group and its docs move with it. Never
+delete, reflow, or condense a comment for line count, and never reclassify an
+`Invariant:`/`Contract:` block as `History:` to make it migratable; false-shrink
+is a regression.
+
+Two companion invariants: `pnpm audit:module-state:check` fails when the same
+module-scope singleton or `process.on` registration is declared in two files of
+one sibling family (a split that forks state compiles and passes tests while
+silently diverging at runtime), and an extracted sibling must be reachable from
+one of the three esbuild entrypoints or `build:dist` tree-shakes it with no CI
+signal. Campaign plan: `docs/file-size-ceiling.md`.
 
 ### Long-comment prefix convention
 
