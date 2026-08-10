@@ -27,6 +27,7 @@ import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { describeRgUnavailable } from './_rg-availability.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
+import { classifyRgExit2, type GrepSettleResult } from './_rg-exit2.js';
 
 /**
  * Input shape for the grep tool (validated at runtime).
@@ -133,7 +134,7 @@ export function createGrepHandler(cwd?: string): ToolHandler {
   return new Promise((resolve) => {
     let resolved = false;
 
-    function settle(result: { content: string; isError?: boolean; truncated?: boolean }) {
+    function settle(result: GrepSettleResult) {
       if (resolved) return;
       resolved = true;
       signal.removeEventListener('abort', abortHandler);
@@ -288,14 +289,10 @@ export function createGrepHandler(cwd?: string): ToolHandler {
       }
 
       if (code === 2) {
-        // stderr may accumulate up to HARD_CAP_BYTES (e.g. a recursive search
-        // across a tree with many unreadable files), so cap it to the model budget.
-        const capped = capForModel(stderr.trim());
-        settle({
-          content: `grep error: ${capped.content}`,
-          isError: true,
-          ...(capped.truncated ? { truncated: true } : {}),
-        });
+        // rg exits 2 for a missing path, an unreadable path, AND a bad regex.
+        // `classifyRgExit2` splits the first (benign `no-such-target`) from the
+        // rest (unclassified, alarming) — see `_rg-exit2.ts` for the shapes.
+        settle(classifyRgExit2(stderr, path));
         return;
       }
 
