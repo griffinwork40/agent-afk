@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.107.0] - 2026-08-10
+
+### Added
+- two-tier OBSERVE/BLOCK split in safe-destruct PreToolUse detector (#992) (a4c81fc)
+
+## [5.106.1] - 2026-08-10
+
+### Fixed
+- opus 4.6/4.7/4.8 serve native 1M windows and 128k output (#994) (bbd4a13)
+
+## [5.106.0] - 2026-08-10
+
+### Added
+- make claude-sonnet-4-6 the default sonnet model (+ correct its 1M/128k limits) (#991) (d42eb1c)
+
 ## [5.105.0] - 2026-08-10
 
 ### Added
