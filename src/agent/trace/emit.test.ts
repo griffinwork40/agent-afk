@@ -16,8 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetArtifactFailureReporterForTests } from '../../utils/artifact-failure-reporter.js';
-import { emitSessionPhase, emitAbort } from './emit.js';
-import { InMemoryTraceWriter } from './writer.js';
+import { emitSessionPhase, emitAbort, emitToolCall } from './emit.js';
+import { InMemoryTraceWriter, type TraceWriter } from './writer.js';
 import type { TraceWriter } from './index.js';
 
 /** A writer whose `write()` always rejects, with a real (fixed) trace path
@@ -105,5 +105,47 @@ describe('emit* — #850 first-failure-visible-without-AFK_DEBUG', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe('#850 regression — the reporter must not become the failure it reports', () => {
+  it('does not reject when a failing writer lacks getTracePath', async () => {
+    // Reproduces the CI unhandled rejection: `reportArtifactFailure` guards its
+    // own body, but its ARGUMENTS are evaluated first, so `writer.getTracePath()`
+    // at the call site threw on a partial writer double and escaped as an
+    // unhandled rejection. 4 of these failed the full suite while every test
+    // still "passed".
+    const partialWriter = {
+      write: async () => {
+        throw new Error('disk full');
+      },
+    } as unknown as TraceWriter;
+
+    await expect(
+      emitSessionPhase(partialWriter, { phase: 'bootstrap_start' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      emitToolCall(partialWriter, {
+        phase: 'started',
+        toolUseId: 'tu-1',
+        name: 'bash',
+        inputBytes: 4,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not reject when getTracePath itself throws', async () => {
+    const hostileWriter = {
+      write: async () => {
+        throw new Error('disk full');
+      },
+      getTracePath: () => {
+        throw new Error('path resolution blew up');
+      },
+    } as unknown as TraceWriter;
+
+    await expect(
+      emitSessionPhase(hostileWriter, { phase: 'bootstrap_start' }),
+    ).resolves.toBeUndefined();
   });
 });
