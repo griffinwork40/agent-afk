@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.104.2] - 2026-08-10
+
+### Fixed
+- surface first artifact-write failure per subsystem without AFK_DEBUG (#850) (#979) (a57caab)
+
 ## [5.104.1] - 2026-08-10
 
 ### Fixed
