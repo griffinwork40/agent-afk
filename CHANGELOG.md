@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.3] - 2026-08-10
+
+### Fixed
+- bound stopReason at a single chokepoint instead of 6 call sites (#717) (#977) (df150f8)
+
 ## [5.103.2] - 2026-08-09
 
 ### Fixed
