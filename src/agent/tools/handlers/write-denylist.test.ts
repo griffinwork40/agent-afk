@@ -599,6 +599,29 @@ describe('write-denylist — memoization cache-key regression guard (#781)', () 
       /refusing to write to protected path/,
     );
   });
+
+  it('re-resolves a custom denylist symlink after it is repointed', () => {
+    const firstTarget = join(tmpDir, 'first-target');
+    const secondTarget = join(tmpDir, 'second-target');
+    const link = join(tmpDir, 'blocked-link');
+    mkdirSync(firstTarget);
+    mkdirSync(secondTarget);
+    symlinkSync(firstTarget, link);
+    vi.stubEnv('AFK_WRITE_DENYLIST', link);
+
+    expect(() =>
+      assertNotDenylisted(join(link, 'secret.txt'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+
+    rmSync(link);
+    symlinkSync(secondTarget, link);
+
+    // The environment key did not change, so this only remains protected if
+    // getWriteDenylist re-resolves entries after a cache hit.
+    expect(() =>
+      assertNotDenylisted(join(link, 'secret.txt'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+  });
 });
 
 describe('assertNotDenylisted — case-variant spellings (#736)', () => {

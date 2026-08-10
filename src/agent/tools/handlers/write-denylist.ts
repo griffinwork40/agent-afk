@@ -79,23 +79,22 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
  * `homedir()`-based entries still apply regardless. The throw is no longer
  * silent: {@link warnAfkHomeRejectedOnce} surfaces it once per process.
  *
- * Not cached on its own — its result feeds directly into
- * {@link getWriteDenylist}'s memo, which keys on `AFK_HOME` and
- * `AFK_STATE_DIR` (alongside `AFK_WRITE_DENYLIST`) precisely so a runtime
- * change to either is observed on the very next call rather than served a
- * stale floor (#781).
+ * The unresolved spellings feed {@link getWriteDenylist}'s memo, which keys on
+ * `AFK_HOME` and `AFK_STATE_DIR` (alongside `AFK_WRITE_DENYLIST`). Real paths
+ * are deliberately resolved after every cache lookup so a denylisted symlink
+ * cannot be repointed around a previously resolved credential floor.
  */
 function derivedAfkHomeWriteEntries(): string[] {
   const entries: string[] = [];
   try {
     const home = getAfkHome();
-    entries.push(safeRealpath(resolve(join(home, 'config'))));
-    entries.push(safeRealpath(resolve(join(home, 'state'))));
+    entries.push(resolve(join(home, 'config')));
+    entries.push(resolve(join(home, 'state')));
   } catch (err) {
     warnAfkHomeRejectedOnce(err);
   }
   try {
-    entries.push(safeRealpath(resolve(getAfkStateDir())));
+    entries.push(resolve(getAfkStateDir()));
   } catch (err) {
     warnAfkHomeRejectedOnce(err);
   }
@@ -108,14 +107,13 @@ function derivedAfkHomeWriteEntries(): string[] {
 // independently — see the Invariant on that function above), so a runtime
 // change to ANY of them must invalidate the memo, or a relocated AFK_HOME /
 // AFK_STATE_DIR keeps serving the pre-relocation denylist — silently
-// permitting writes to the real (now-uncovered) credential tree. This mirrors
-// the write path's hot-path pressure: `assertNotDenylisted` runs on every
-// `write_file` / `edit_file` call, and #753 grew the per-call `safeRealpath`
-// count from ~11 to ~14 by adding the derived AFK entries, which is what this
-// memo removes. Joined with U+0000 (mirrors read-denylist.ts's key), which
+// permitting writes to the real (now-uncovered) credential tree. Only
+// unresolved entry construction is memoized: the realpath results must remain
+// live because filesystem topology can change independently of the
+// environment. Joined with U+0000 (mirrors read-denylist.ts's key), which
 // cannot occur in any of the three values, so components can never collide
 // into an ambiguous key.
-let cached: { key: string; list: readonly string[] } | undefined;
+let cached: { key: string; unresolved: readonly string[] } | undefined;
 
 /**
  * Return the effective denylist (builtin + any user-supplied extras).
@@ -127,27 +125,33 @@ let cached: { key: string; list: readonly string[] } | undefined;
  */
 export function getWriteDenylist(): readonly string[] {
   const key = `${env.AFK_WRITE_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}\u0000${env.AFK_STATE_DIR ?? ''}`;
-  if (cached && cached.key === key) return cached.list;
+  if (!cached || cached.key !== key) {
+    const extra = env.AFK_WRITE_DENYLIST;
+    const extras = extra ? extra.split(':').map((p) => resolve(p)).filter(Boolean) : [];
+    cached = {
+      key,
+      unresolved: [
+        ...new Set([
+          ...BUILTIN_WRITE_DENYLIST.map((p) => resolve(p)),
+          ...derivedAfkHomeWriteEntries(),
+        ]),
+        ...extras,
+      ],
+    };
+  }
 
-  const extra = env.AFK_WRITE_DENYLIST;
-  const extras: string[] = extra
-    ? extra.split(':').map((p) => safeRealpath(resolve(p))).filter(Boolean)
-    : [];
-  const builtins = [
-    ...new Set([
-      ...BUILTIN_WRITE_DENYLIST.map((p) => safeRealpath(resolve(p))),
-      ...derivedAfkHomeWriteEntries(),
-    ]),
-  ];
-  const list = [...builtins, ...extras];
-  cached = { key, list };
-  return list;
+  // Do not memoize safeRealpath results. A configured or built-in entry can
+  // contain a symlink whose target changes without any environment change.
+  // Resolving after the cache hit keeps the security boundary synchronized
+  // with the current filesystem topology.
+  return [...new Set(cached.unresolved.map((p) => safeRealpath(p)))];
 }
 
 /**
  * Test-only: clear the memoized denylist so suites that mutate
- * `AFK_WRITE_DENYLIST` / `AFK_HOME` / `AFK_STATE_DIR` (or repoint a
- * denylisted symlink) don't see a stale list. Mirrors
+ * `AFK_WRITE_DENYLIST` / `AFK_HOME` / `AFK_STATE_DIR` don't see a stale list.
+ * Symlink repoints do not require a reset because real paths are never cached.
+ * Mirrors
  * `_resetReadDenylistCacheForTests` in `read-denylist.ts`.
  */
 export function _resetWriteDenylistCacheForTests(): void {
