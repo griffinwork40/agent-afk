@@ -67,7 +67,10 @@ import { buildProviderQuery } from './provider-query-build.js';
 export { resolveUserSystem } from './provider-query-setup.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
-const DEFAULT_MODEL = 'claude-sonnet-5';
+// Keep in sync with CLAUDE_SONNET_ID (session/model-slots.ts) — the fallback for
+// a query that arrives with no model should match what the `sonnet` alias and the
+// `medium` tier resolve to.
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
 /**
  * Direct Anthropic SDK provider. Construction is cheap; the real per-session
