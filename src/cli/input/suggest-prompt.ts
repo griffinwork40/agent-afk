@@ -267,9 +267,10 @@ export async function generatePromptSuggestion(
     // Structure is judged first, control characters second, empty result last.
     const candidate = normalizePromptSuggestion(raced.raw);
     if (candidate === null) return null;
-    // Echo guard: if the model parroted back the user's last input, discard it.
+    // Echo guard: discard exact parrot echoes of the user's last input.
     // The LLM context includes the transcript tail (via buildPromptSuggestionUser),
-    // so nothing structurally prevents repetition — this is the load-bearing check.
+    // so nothing structurally prevents repetition. Catches exact (case-insensitive)
+    // matches only — partial echoes or paraphrases are not filtered here.
     if (isEchoOfLastInput(candidate, ctx)) return null;
     const scrubbed = deps.scrub(candidate).trim();
     return scrubbed.length > 0 ? scrubbed : null;

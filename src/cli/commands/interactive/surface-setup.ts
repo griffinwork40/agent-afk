@@ -88,21 +88,34 @@ export async function setupSurface(
     onError: (err) => debugLog('[afk suggest] Tier-2 completion failed:', err),
   });
 
-  // Session-scoped submission tracker: incremented whenever the history ring's
-  // push() fires this session. Used by the `lastSubmitted` getter below to
-  // return `undefined` at a fresh REPL start — before any submission has
-  // occurred — rather than `entries[0]` from the previous session's persisted
-  // ring. This prevents a false Tier-1 skip on the first keystroke.
-  let sessionSubmissionCount = 0;
+  // Session-scoped submission tracker: records the most-recently submitted
+  // entry that actually landed in the history ring. Used by the `lastSubmitted`
+  // getter below to return `undefined` at a fresh REPL start — before any
+  // submission has occurred — rather than `entries[0]` from the previous
+  // session's persisted ring. This prevents a false Tier-1 skip on the first
+  // keystroke.
+  //
+  // Invariant: only set when push() actually modifies _entries. ReplHistory
+  // has four early-return paths (leading-space, empty, secret-pattern,
+  // consecutive-duplicate) that leave _entries unchanged — incrementing
+  // blindly on those would cause lastSubmitted to return the wrong entry.
+  let lastSubmittedEntry: string | undefined;
   const historyRing = surface.history as {
     getEntries?: () => readonly string[];
     push?: (text: string) => void;
   };
+  // When push is absent (test stubs, non-TTY surfaces), lastSubmitted stays
+  // undefined for the session lifetime — safe because ghost text is disabled
+  // on those surfaces.
   if (typeof historyRing.push === 'function') {
     const originalPush = historyRing.push.bind(historyRing);
     historyRing.push = (text: string) => {
+      const headBefore = historyRing.getEntries?.()?.[0];
       originalPush(text);
-      sessionSubmissionCount++;
+      const headAfter = historyRing.getEntries?.()?.[0];
+      if (headAfter !== headBefore) {
+        lastSubmittedEntry = headAfter;
+      }
     };
   }
 
@@ -189,20 +202,12 @@ export async function setupSurface(
                 const ring = surface.history as { getEntries?: () => readonly string[] };
                 return ring.getEntries ? [...ring.getEntries()] : [];
               },
-              // Most-recently submitted entry (index 0 of the history ring, pushed
-              // at the start of each turn before it runs). Used by getDeterministicGhost
-              // to skip echoing the last submission as a Tier-1 history suggestion.
-              //
-              // Session-scoped guard: return `undefined` until at least one submission
-              // has occurred in THIS session. Without this gate, `entries[0]` at a
-              // fresh REPL start is the most-recent command from the PREVIOUS session
-              // (loaded from the persisted ring at startup), which would cause a false
-              // skip on the very first Tier-1 history suggestion.
+              // Most-recently submitted entry that actually landed in the history
+              // ring. Cached at push time so the getter is O(1) — no getEntries()
+              // allocation per keystroke. Returns `undefined` until a submission
+              // actually modifies _entries this session.
               get lastSubmitted() {
-                if (sessionSubmissionCount === 0) return undefined;
-                const ring = surface.history as { getEntries?: () => readonly string[] };
-                const entries = ring.getEntries ? ring.getEntries() : [];
-                return entries[0];
+                return lastSubmittedEntry;
               },
               getDropdownTopCandidate: (buffer: string) => {
                 const ac = surface.autocompleteState;
