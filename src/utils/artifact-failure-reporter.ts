@@ -28,25 +28,88 @@
  * `debugLog`, so a wedged subsystem (e.g. a session directory that is EROFS
  * for the whole run) logs ONCE instead of once per trace event.
  *
- * Dedup key: callers pass whatever string uniquely identifies "this failing
- * artifact sink" for their module. `agent/trace/emit.ts`'s emit* functions
- * take `(writer, payload)` with no `sessionId` parameter, so
- * `TraceWriter.getTracePath()` is used there — unique per session/writer
- * instance without threading a new parameter through every call site. The
- * subagent prompt/output capture modules already carry `input.sessionId` and
- * use that directly.
+ * Invariant: a dedup key may be an OBJECT (the failing sink instance) or a
+ * STRING id, and the two are latched in different structures because each
+ * choice is load-bearing.
+ *
+ *   - Object keys use a `WeakMap` keyed on instance identity. Deriving a key
+ *     by CALLING A METHOD on the sink is not safe: a partial/test-double
+ *     `TraceWriter` need not implement `getTracePath`, and calling it from
+ *     inside the catch block made this reporter throw the very failure it
+ *     exists to report (`TypeError: writer.getTracePath is not a function` —
+ *     4 unhandled errors out of `src/telegram/mcp-session.test.ts`, reddening
+ *     CI while all 15864 tests passed). Identity also fixes a correctness bug
+ *     a path-derived key cannot: `InMemoryTraceWriter.getTracePath()` returns
+ *     the SHARED sentinel `'in-memory://trace'` for every instance
+ *     (`agent/trace/writer.ts`), so path-keying silently swallowed the first
+ *     warning of every in-memory writer after the first one. A `WeakMap` is
+ *     additionally self-bounding — entries go away when the writer does.
+ *   - String keys cannot go in a `WeakMap`, so they use an insertion-ordered
+ *     `Map` capped at `MAX_STRING_LATCH_ENTRIES`, evicting oldest on overflow
+ *     (same shape as the LRU in `cli/syntax-highlight.ts`). Unbounded growth
+ *     was reachable: `CronScheduler.spawnSession()` mints a fresh UUID trace
+ *     label per tick, so a daemon against a persistently unwritable witness
+ *     dir added one permanent entry per scheduled run. Eviction tradeoff,
+ *     accepted deliberately: a key evicted after long inactivity may surface
+ *     a second visible warning later. Warning twice across hundreds of
+ *     distinct sessions beats leaking for the life of the process.
  *
  * @module utils/artifact-failure-reporter
  */
 
 import { debugLog } from './debug.js';
 
-/** Latch of `subsystem\0dedupKey` pairs that have already surfaced once. */
-const reportedOnce = new Set<string>();
+/**
+ * Cap on the string-keyed latch. Sized well above the number of distinct
+ * sessions one process realistically touches while a sink is wedged, so
+ * eviction is a backstop against unbounded growth rather than a routine
+ * event that would re-surface warnings during normal operation.
+ */
+const MAX_STRING_LATCH_ENTRIES = 256;
+
+/**
+ * Latch for object dedup keys: sink instance -> subsystems already surfaced.
+ * The inner `Set` is bounded by the number of distinct subsystem labels that
+ * write to one sink (a small constant); the whole entry is collected when the
+ * sink becomes unreachable. Reassigned (not `const`) so the test-only reset
+ * can drop every entry at once — a `WeakMap` has no `clear()`.
+ */
+let reportedByInstance = new WeakMap<object, Set<string>>();
+
+/** Latch of `subsystem\0dedupKey` pairs for STRING keys. Bounded, FIFO. */
+const reportedOnce = new Map<string, true>();
 
 function stringifyError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Record a (subsystem, dedupKey) pair as surfaced.
+ *
+ * @returns true when this is the FIRST sighting of the pair — i.e. the caller
+ *   should print visibly rather than falling back to `debugLog`.
+ */
+function latchFirstSeen(subsystem: string, dedupKey: string | object): boolean {
+  if (typeof dedupKey === 'object' && dedupKey !== null) {
+    let seen = reportedByInstance.get(dedupKey);
+    if (!seen) {
+      seen = new Set<string>();
+      reportedByInstance.set(dedupKey, seen);
+    }
+    if (seen.has(subsystem)) return false;
+    seen.add(subsystem);
+    return true;
+  }
+
+  const latchKey = `${subsystem}\u0000${String(dedupKey)}`;
+  if (reportedOnce.has(latchKey)) return false;
+  reportedOnce.set(latchKey, true);
+  if (reportedOnce.size > MAX_STRING_LATCH_ENTRIES) {
+    const oldest = reportedOnce.keys().next().value;
+    if (oldest !== undefined) reportedOnce.delete(oldest);
+  }
+  return true;
 }
 
 /**
@@ -55,17 +118,20 @@ function stringifyError(err: unknown): string {
  * failure for the same pair falls back to `debugLog` so a wedged sink does
  * not flood the operator's terminal with one line per call.
  *
- * Contract: never throws. A diagnostic must not become the failure it
- * reports — `console.error` raising (e.g. a broken/closed stderr) is
- * vanishingly rare but cheap to guard against, matching the same contract
+ * Contract: never throws, and never CALLS anything on `dedupKey`. A
+ * diagnostic must not become the failure it reports — the outer try/catch
+ * guards a broken/closed stderr, and object keys are used by identity only
+ * so a partially-implemented sink cannot raise from in here. Same contract
  * `warnAfkHomeRejectedOnce` makes in `agent/tools/afk-home-warn.ts`.
  *
  * @param subsystem Short stable label for the failing module, e.g.
  *   `'trace.emit'` or `'subagent-output-capture'`. Combined with `dedupKey`
- *   for the latch, so two different subsystems failing for the same session
- *   each still get their own first-failure warning.
- * @param dedupKey String identifying the specific sink that failed — a
- *   trace path (`TraceWriter.getTracePath()`) or a witness session id.
+ *   for the latch, so two different subsystems failing on the same sink each
+ *   still get their own first-failure warning.
+ * @param dedupKey Identifies the specific sink that failed. Pass the sink
+ *   INSTANCE (e.g. the `TraceWriter`) when you have it — matched by identity,
+ *   never by calling a method on it. Pass a string (e.g. a witness session
+ *   id) when the sink has no stable object to hand.
  * @param context Short human label for the operation that failed, e.g.
  *   `'tool_call'` or `'captureSubagentPrompt'` — included in the message so
  *   the one visible line is actionable rather than a bare "something broke".
@@ -73,18 +139,16 @@ function stringifyError(err: unknown): string {
  */
 export function reportArtifactFailure(
   subsystem: string,
-  dedupKey: string,
+  dedupKey: string | object,
   context: string,
   err: unknown,
 ): void {
   try {
-    const latchKey = `${subsystem}\u0000${dedupKey}`;
     const message = `[afk] ${subsystem} artifact write failed (${context}): ${stringifyError(err)}`;
-    if (reportedOnce.has(latchKey)) {
+    if (!latchFirstSeen(subsystem, dedupKey)) {
       debugLog(message);
       return;
     }
-    reportedOnce.add(latchKey);
     console.error(
       `${message} — further failures in this subsystem for this session are logged only under AFK_DEBUG=1.`,
     );
@@ -94,7 +158,7 @@ export function reportArtifactFailure(
 }
 
 /**
- * Test-only: clear the once-latch so a suite can assert the first-failure
+ * Test-only: clear both once-latches so a suite can assert the first-failure
  * behavior deterministically.
  *
  * Contract: production code must never call this. Without it, a test
@@ -104,4 +168,5 @@ export function reportArtifactFailure(
  */
 export function resetArtifactFailureReporterForTests(): void {
   reportedOnce.clear();
+  reportedByInstance = new WeakMap<object, Set<string>>();
 }
