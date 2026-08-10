@@ -569,9 +569,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * the text-editor tool this codebase does not implement) and re-emit them
    * under long edit-heavy runs, burning a round each time.
    *
-   * A missing handler is the discriminator: registered-but-denied is a real
-   * permission decision and keeps its original message, while an unregistered
-   * name does not exist at all and gets the tool list instead. Suggestions come
+   * A missing registration is the discriminator: registered-but-denied is a
+   * real permission decision and keeps its original message, while an
+   * unregistered name does not exist at all and gets the tool list instead.
+   * Registrations include both ordinary handlers and the executor-backed
+   * `agent`, `skill`, and `compose` tools, which are routed before handler
+   * lookup in `executeCoreInner`. Suggestions come
    * from `toolDefs` (NOT `handlers`) to honour the contract on that getter —
    * never show the model a tool the gate will reject.
    *
@@ -580,10 +583,20 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * for a message fix.
    */
   private denialReason(toolName: string, permissionReason: string | undefined): string {
-    if (this.handlers.has(toolName)) {
+    if (this.isRegisteredTool(toolName)) {
       return permissionReason ?? `Tool "${toolName}" is not permitted`;
     }
     return this.unknownToolMessage(toolName);
+  }
+
+  /** Whether this session has an implementation for a tool, regardless of permission. */
+  private isRegisteredTool(toolName: string): boolean {
+    return (
+      this.handlers.has(toolName) ||
+      (toolName === 'agent' && this.subagentExecutor !== undefined) ||
+      (toolName === 'skill' && this.skillExecutor !== undefined) ||
+      (toolName === 'compose' && this.composeExecutor !== undefined)
+    );
   }
 
   /**

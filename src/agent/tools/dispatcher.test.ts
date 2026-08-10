@@ -178,6 +178,27 @@ describe('SessionToolDispatcher', () => {
       expect(result.content).not.toContain('Unknown tool');
     });
 
+    it.each([
+      ['agent', 'subagentExecutor'],
+      ['skill', 'skillExecutor'],
+      ['compose', 'composeExecutor'],
+    ] as const)(
+      'preserves the allowlist message for the executor-backed %s tool',
+      async (toolName, executorOption) => {
+        const configured = makeDispatcher({
+          handlers: new Map(),
+          schemas: [],
+          permissions: { allowedTools: [] },
+          [executorOption]: mockExecutor(),
+        });
+        // Executor-backed tools intentionally have no entries in the handler map.
+        const result = await configured.execute(makeCall({ name: toolName, input: {} }));
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain('is not in the configured allowlist');
+        expect(result.content).not.toContain('Unknown tool');
+      },
+    );
+
     it('keeps failureClass permission-denied for the unregistered case', async () => {
       const dispatcher = makeSplitDispatcher();
       const result = await dispatcher.execute(
