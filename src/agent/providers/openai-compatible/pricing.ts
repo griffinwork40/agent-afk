@@ -56,7 +56,7 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   ['gpt-4.1-nano', { inputPerMTok: 0.1, outputPerMTok: 0.4, cachedInputPerMTok: 0.025 }],
   // o-series reasoning models.
   ['o1', { inputPerMTok: 15.0, outputPerMTok: 60.0, cachedInputPerMTok: 7.5 }],
-  ['o1-mini', { inputPerMTok: 1.1, outputPerMTok: 4.4, cachedInputPerMTok: 0.55 }],
+  ['o1-mini', { inputPerMTok: 3.0, outputPerMTok: 12.0, cachedInputPerMTok: 1.5 }],
   ['o3', { inputPerMTok: 2.0, outputPerMTok: 8.0, cachedInputPerMTok: 0.5 }],
   ['o3-mini', { inputPerMTok: 1.1, outputPerMTok: 4.4, cachedInputPerMTok: 0.55 }],
   ['o4-mini', { inputPerMTok: 1.1, outputPerMTok: 4.4, cachedInputPerMTok: 0.275 }],

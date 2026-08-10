@@ -51,6 +51,12 @@ describe('deriveCallCostUsd — known models price correctly', () => {
     const cost = deriveCallCostUsd('o3', M, M, 0);
     expect(cost).toBeCloseTo(10.0, 8);
   });
+
+  it('uses the distinct o1-mini rates rather than o3-mini rates', () => {
+    const cost = deriveCallCostUsd('o1-mini', M, M, M);
+    // $1.50 cached input + $12.00 output per MTok.
+    expect(cost).toBeCloseTo(13.5, 8);
+  });
 });
 
 describe('deriveCallCostUsd — unknown model yields unknown, never zero', () => {

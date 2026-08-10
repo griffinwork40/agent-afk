@@ -237,6 +237,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
   private readonly wireMode: WireMode;
+  /** Static OpenAI list prices apply only when using the official public API endpoint. */
+  private readonly useOpenAIPricing: boolean;
   /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
   private readonly traceWriter: TraceWriter | undefined;
 
@@ -325,6 +327,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
     const wire = resolveWireMode(opts.auth, responsesOptIn);
     this.wireMode = wire.mode;
+    // Any explicit endpoint — including the private ChatGPT subscription
+    // backend selected by resolveWireMode — may be free or have unrelated
+    // rates. Model ids alone cannot prove its pricing, so leave cost unknown.
+    this.useOpenAIPricing = wire.baseURL === undefined && opts.baseURL === undefined;
 
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
@@ -562,7 +568,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return;
       }
 
-      const roundUsage = usageFromState(result.state, this.currentModel);
+      const roundUsage = usageFromState(
+        result.state,
+        this.useOpenAIPricing ? this.currentModel : undefined,
+      );
       accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
       // Context-window footprint for THIS round. Unlike Anthropic, OpenAI's
       // `prompt_tokens` (→ inputTokens) already INCLUDES cached tokens
