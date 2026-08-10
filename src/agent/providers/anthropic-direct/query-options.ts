@@ -25,9 +25,14 @@ import type { HookRegistry } from '../../hooks.js';
  */
 const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; description: string }> = [
   {
+    value: 'claude-sonnet-4-6',
+    displayName: 'Claude Sonnet 4.6',
+    description: 'Balanced Claude — recommended default (1M context, 128k output)',
+  },
+  {
     value: 'claude-sonnet-5',
     displayName: 'Claude Sonnet 5',
-    description: 'Latest balanced Claude — recommended default',
+    description: 'Newer balanced Claude — adaptive thinking, new tokenizer',
   },
   {
     value: 'claude-opus-5',

@@ -366,6 +366,161 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
       expect('subagentId' in tc.payload).toBe(false);
     }
   });
+
+  // Issue #633: circuitBreaker, failureClass, batchIndex, and batchSize are
+  // conditional spreads in buildToolCallCompletedPayload (providers/shared/
+  // tool-call-trace.ts) that were previously exercised only by the builder's
+  // own isolated unit test — never through a real provider dispatch path.
+  // These three tests drive runTurn end to end so a future edit that drops
+  // one of these spreads at the anthropic-direct call site fails here.
+  it('includes circuitBreaker, failureClass, batchIndex, and batchSize on tool_call.completed when the ToolResult carries them', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeToolUseStream('tu_meta_1', 'search', '{"q":"hello"}')),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+    const dispatcher = makeDispatcher(async () => ({
+      content: 'search result',
+      isError: true,
+      circuitBreaker: true,
+      failureClass: 'repeat-failure',
+      batchIndex: 1,
+      batchSize: 3,
+    }));
+
+    await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'search please' }],
+        system: null,
+        tools: [{ name: 'search', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+      }),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCalls = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCalls).toHaveLength(2);
+    if (toolCalls[1]?.kind !== 'tool_call' || toolCalls[1].payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect(toolCalls[1].payload.circuitBreaker).toBe(true);
+    expect(toolCalls[1].payload.failureClass).toBe('repeat-failure');
+    expect(toolCalls[1].payload.batchIndex).toBe(1);
+    expect(toolCalls[1].payload.batchSize).toBe(3);
+  });
+
+  it('omits circuitBreaker, failureClass, batchIndex, and batchSize from tool_call.completed when the ToolResult lacks them', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeToolUseStream('tu_meta_2', 'search', '{"q":"hello"}')),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+    const dispatcher = makeDispatcher(async () => ({
+      content: 'search result',
+      isError: false,
+    }));
+
+    await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'search please' }],
+        system: null,
+        tools: [{ name: 'search', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+      }),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCalls = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCalls).toHaveLength(2);
+    if (toolCalls[1]?.kind !== 'tool_call' || toolCalls[1].payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect('circuitBreaker' in toolCalls[1].payload).toBe(false);
+    expect('failureClass' in toolCalls[1].payload).toBe(false);
+    expect('batchIndex' in toolCalls[1].payload).toBe(false);
+    expect('batchSize' in toolCalls[1].payload).toBe(false);
+  });
+
+  it('omits batchIndex and batchSize from tool_call.completed when only batchIndex is present (both-or-neither guard)', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeToolUseStream('tu_meta_3', 'search', '{"q":"hello"}')),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+    const dispatcher = makeDispatcher(async () => ({
+      content: 'search result',
+      isError: false,
+      batchIndex: 2,
+      // batchSize intentionally omitted — the builder requires BOTH to be
+      // numbers before spreading either onto the payload.
+    }));
+
+    await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'search please' }],
+        system: null,
+        tools: [{ name: 'search', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+      }),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCalls = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCalls).toHaveLength(2);
+    if (toolCalls[1]?.kind !== 'tool_call' || toolCalls[1].payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect('batchIndex' in toolCalls[1].payload).toBe(false);
+    expect('batchSize' in toolCalls[1].payload).toBe(false);
+  });
 });
 
 describe('loop.ts runTurn — render-only diff sidecar', () => {

@@ -22,7 +22,8 @@ import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
-import { extractPluginSkills } from '../plugins/tool-injector.js';
+import { extractPluginSkills, resolveKnownToolNames } from '../plugins/tool-injector.js';
+import { extractPluginCommands } from '../plugins/command-files.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
 import { parseAgentMarkdown } from '../agents/parser.js';
 import { collectMarkdownFiles } from '../agents/registry.js';
@@ -55,7 +56,7 @@ import {
 export interface SkillManifestEntry {
   name: string;
   description: string;
-  source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
+  source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported' | 'command';
   argumentHint?: string;
   whenToUse?: string;
 }
@@ -88,10 +89,27 @@ export function buildSkillManifest(
   // listing so the exclusion cannot silently no-op if that naming is adopted
   // for skills as it already is for agents.
   const exclude = opts?.excludeName;
-  const entries =
+  const named =
     exclude !== undefined && exclude.length > 0
       ? collected.filter((e) => e.name !== exclude && !e.name.endsWith(`:${exclude}`))
       : collected;
+  // Invariant: Claude Code `commands/*.md` entries are user-invocable only and
+  // never enter the model-facing catalogue.
+  //
+  // This manifest has no character budget and no eviction policy — every entry
+  // costs prompt tokens on every request, forever. Claude Code can afford to
+  // list commands to its model because it caps the listing at ~1% of the
+  // context window and drops the least-used descriptions when it overflows; we
+  // have no such backstop, so an unbounded third-party command surface would
+  // grow the system prompt without limit. The second reason is behavioural:
+  // installing a plugin should not hand the model a menu of commands the user
+  // never mentioned and may not know exist.
+  //
+  // Filtered HERE, at the model-facing boundary, rather than in
+  // collectSkillEntries — same split the excludeName filter above uses — so
+  // every non-model consumer (slash-command router, `/skills`, `afk skill
+  // list`) still sees the complete set and commands stay fully invocable.
+  const entries = named.filter((e) => e.source !== 'command');
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -231,16 +249,28 @@ export function collectSkillEntries(
   //    same tier gate — extractPluginSkills() surfaces it as `audience`,
   //    defaulting to 'public' when absent.
   const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
+  // Resolve once for the whole scan rather than per-file inside each
+  // extractor — resolveKnownToolNames() rebuilds a Set from two static
+  // arrays on every call, which otherwise reruns once per discovered file.
+  const knownToolNames = resolveKnownToolNames();
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
-    const skills = extractPluginSkills(plugin.path);
+    // SKILL.md first, then commands/*.md — so a plugin shipping both forms
+    // under one name resolves to the skill, matching Claude Code ("if a skill
+    // and a command share the same name, the skill takes precedence"). The
+    // `seen` guard below is what enforces it.
+    const skills = [
+      ...extractPluginSkills(plugin.path, knownToolNames),
+      ...extractPluginCommands(plugin.path, knownToolNames),
+    ];
     for (const skill of skills) {
       if (!skill.name || seen.has(skill.name)) continue;
       if (!isSkillVisible({ audience: skill.audience }, internalUnlocked)) continue;
       entries.push({
         name: skill.name,
         description: skill.description ?? `Skill from plugin at ${plugin.path}`,
-        source: 'plugin',
+        source: skill.origin === 'command' ? 'command' : 'plugin',
+        argumentHint: skill.argumentHint,
       });
       seen.add(skill.name);
     }
@@ -311,10 +341,18 @@ export function discoverPluginSkillBodies(
   // loadImportFromConfig() + existsSync work only runs when no pluginConfigs
   // were supplied (a caller passing pluginConfigs skips it entirely).
   const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
+  // Resolve once for the whole scan — see the matching comment in
+  // collectSkillEntries() above.
+  const knownToolNames = resolveKnownToolNames();
 
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
-    const skills = extractPluginSkills(plugin.path);
+    // Same order + first-wins rule as collectSkillEntries: a SKILL.md and a
+    // commands/*.md sharing one name resolve to the skill.
+    const skills = [
+      ...extractPluginSkills(plugin.path, knownToolNames),
+      ...extractPluginCommands(plugin.path, knownToolNames),
+    ];
     for (const skill of skills) {
       if (skill.name && skill.body && skill.body.length > 0 && !bodies.has(skill.name)) {
         bodies.set(skill.name, {

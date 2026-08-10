@@ -186,48 +186,87 @@ describe('maxOutputTokensFor — retired-but-Active Opus pin', () => {
     // miss the table and fall to the 64k DEFAULT_MAX_OUTPUT — halving the real
     // 128k output cap. This guards that regression.
     expect(maxOutputTokensFor('claude-opus-4-8')).toBe(128_000);
+    // Same reasoning, same ceiling, for the other two Active 1M-window opus
+    // generations — both were missing and inheriting the 64k fallback.
+    expect(maxOutputTokensFor('claude-opus-4-7')).toBe(128_000);
+    expect(maxOutputTokensFor('claude-opus-4-6')).toBe(128_000);
     // The new default resolves correctly too.
     expect(maxOutputTokensFor('claude-opus-5')).toBe(128_000);
     expect(maxOutputTokensFor('opus')).toBe(128_000);
   });
 
-  it('reports opus-4-8 true 200k context window via the raw wire id', () => {
-    // No explicit MODEL_CONTEXT_LIMITS entry: the Anthropic DEFAULT_CONTEXT_LIMIT
-    // (200k) fallback already yields opus-4-8's real window, so no regression on
-    // the context path — documented here so the pin stays fully usable.
-    expect(contextLimitFor('claude-opus-4-8')).toBe(200_000);
+  it('reports the true 1M context window for the 4.6/4.7/4.8 opus wire ids', () => {
+    // Invariant: this assertion previously pinned 200k, on the stated premise that
+    // "the DEFAULT_CONTEXT_LIMIT (200k) fallback already yields opus-4-8's real
+    // window." That premise was wrong. Anthropic's context-windows page lists Opus
+    // 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 5 and Sonnet 4.6 as 1M-window models
+    // with 1M as the default and no beta header required, so relying on the
+    // fallback under-reported all three opus generations by 5x.
+    // <https://platform.claude.com/docs/en/build-with-claude/context-windows>
+    expect(contextLimitFor('claude-opus-4-8')).toBe(1_000_000);
+    expect(contextLimitFor('claude-opus-4-7')).toBe(1_000_000);
+    expect(contextLimitFor('claude-opus-4-6')).toBe(1_000_000);
+    // Opus 4.5 is absent from that 1M list, so it must KEEP the 200k fallback —
+    // this is the negative control proving the fix is list-derived, not blanket.
+    expect(contextLimitFor('claude-opus-4-5-20251101')).toBe(200_000);
+  });
+
+  it('keeps the 200k working budget for the 1M opus wire ids (no cost regression)', () => {
+    // Contract: correcting the WINDOW must not move the COMPACTION TRIGGER. These
+    // sessions compacted at 200k before the window fix; without matching
+    // MODEL_AUTOCOMPACT_BUDGET entries they would have jumped to 1M — a real
+    // cost/latency change smuggled in behind a bookkeeping correction. `opus_1m`
+    // remains the explicit opt-in to the full window.
+    expect(autoCompactLimitFor('claude-opus-4-8')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-opus-4-7')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-opus-4-6')).toBe(200_000);
+    expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
   });
 });
 
 describe('claude-sonnet-4-6 — explicit limit pins (A/B baseline vs claude-sonnet-5)', () => {
   // Invariant: 4.6 is not a first-class alias but IS reachable by raw wire id and
-  // already priced (providers/anthropic-direct/pricing.ts). Both values below
-  // equal the fallbacks they replace, so these tests pin INTENT, not a behaviour
-  // change: they fail if someone edits DEFAULT_MAX_OUTPUT / DEFAULT_CONTEXT_LIMIT
-  // or "upgrades" 4.6 to Sonnet 5's 1M window, either of which would silently
-  // invalidate a 4.6-vs-5 A/B comparison.
-  it('pins the 64k output ceiling (first-party: the Sonnet 5 entry says "up from 64k on Sonnet 4.6")', () => {
-    expect(maxOutputTokensFor('claude-sonnet-4-6')).toBe(64_000);
-    // Contrast: the Sonnet 5 sibling is double. An A/B that silently gave 4.6
-    // Sonnet 5's ceiling would compare two different output budgets.
+  // already priced (providers/anthropic-direct/pricing.ts). Both pins below now
+  // DIFFER from the fallbacks they replace, so they guard real behaviour: 4.6
+  // shares Sonnet 5's 1M window and 128k output ceiling, and inheriting either
+  // fallback (200k context / 64k output) would under-report a live capability.
+  it('pins the 128k output ceiling — the same as Sonnet 5, not half of it', () => {
+    // First-party: migration guide, 4.6 → 5 — "128k max output tokens
+    // (unchanged): Claude Sonnet 5 supports up to 128k output tokens, the same as
+    // Claude Sonnet 4.6." A prior revision read Sonnet 5's "up from 64k on Sonnet
+    // 4.6" comment as first-party and pinned 64k; that comment was itself wrong.
+    expect(maxOutputTokensFor('claude-sonnet-4-6')).toBe(128_000);
     expect(maxOutputTokensFor('claude-sonnet-5')).toBe(128_000);
+    // Guard the specific regression: 4.6 must not silently inherit the 64k
+    // DEFAULT_MAX_OUTPUT fallback.
+    expect(maxOutputTokensFor('claude-sonnet-4-6')).not.toBe(64_000);
   });
 
-  it('pins the 200k context window — NOT Sonnet 5 1M (this repo sends no 1M beta header)', () => {
-    // 1M on the 4.x line requires a `context-1m` beta this codebase never sends:
-    // composeBetaHeader (providers/anthropic-direct/beta-headers.ts) emits a
-    // closed set (OAuth, effort, extended-cache-ttl, fast-mode). Over-reporting
-    // here would suppress auto-compaction and cause hard API errors mid-run.
-    expect(contextLimitFor('claude-sonnet-4-6')).toBe(200_000);
+  it('pins the native 1M context window — GA, no `context-1m` beta header needed', () => {
+    // A prior revision pinned 200k, reasoning that 1M on the 4.x line required a
+    // `context-1m` beta this repo never sends. Stale: 1M is GA and per Anthropic
+    // "you don't need a beta header" for any model with a 1M window — and Sonnet
+    // 4.6 is named in that list. No beta entry was added to composeBetaHeader for
+    // this, because none is required.
+    expect(contextLimitFor('claude-sonnet-4-6')).toBe(1_000_000);
     expect(contextLimitFor('claude-sonnet-5')).toBe(1_000_000);
   });
 
-  it('takes NO auto-compact budget entry: 200k is its real window, not a cap (haiku precedent)', () => {
-    // MODEL_AUTOCOMPACT_BUDGET exists to cap a 1M window down to a 200k working
-    // budget. 4.6's window IS 200k, so an entry would be Math.min(200k, 200k) —
-    // a no-op that falsely implies a larger window is being throttled. Same
-    // reasoning as haiku above, which is deliberately absent from the table.
+  it('takes the same 200k auto-compact budget as its Sonnet 5 sibling', () => {
+    // Now that the window is truthfully 1M, the budget entry does real work:
+    // Math.min(1M, 200k) bounds cost/latency on a long raw-wire-id session while
+    // the status line still reports the true 1M window.
     expect(autoCompactLimitFor('claude-sonnet-4-6')).toBe(200_000);
-    expect(autoCompactLimitFor('claude-sonnet-4-6')).toBe(contextLimitFor('claude-sonnet-4-6'));
+    expect(autoCompactLimitFor('claude-sonnet-5')).toBe(200_000);
+    // The budget is a policy cap, NOT the window — they must now diverge.
+    expect(autoCompactLimitFor('claude-sonnet-4-6')).not.toBe(
+      contextLimitFor('claude-sonnet-4-6'),
+    );
+  });
+
+  it('the explicit `_1m` opt-in still bypasses the budget for a 4.6 session', () => {
+    // `sonnet_1m` short-circuits on the literal suffix BEFORE wire-id resolution,
+    // so the opt-out survives regardless of which id the sonnet family points at.
+    expect(autoCompactLimitFor('sonnet_1m')).toBe(1_000_000);
   });
 });

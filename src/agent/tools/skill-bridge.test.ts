@@ -519,6 +519,136 @@ describe('collectSkillEntries — plugin frontmatter audience filter', () => {
   });
 });
 
+describe('plugin commands/*.md integration', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync('/tmp/skill-bridge-commands-test-');
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tmpDir, { recursive: true });
+    } catch {
+      // Non-fatal cleanup.
+    }
+  });
+
+  function writeCommand(pluginPath: string, rel: string, description: string): void {
+    const full = join(pluginPath, 'commands', rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, `---\ndescription: ${description}\n---\n\nCommand body for ${rel}.\n`);
+  }
+
+  function writeSkillMd(pluginPath: string, name: string): void {
+    const dir = join(pluginPath, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: A skill\n---\nSkill body.\n`);
+  }
+
+  it('collectSkillEntries surfaces a commands/*.md file tagged source: command', () => {
+    writeCommand(tmpDir, 'deploy.md', 'Ship it');
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    const deploy = entries.find((e) => e.name === 'deploy');
+    expect(deploy).toBeDefined();
+    expect(deploy?.source).toBe('command');
+    expect(deploy?.description).toBe('Ship it');
+  });
+
+  it('preserves a command argument hint during collection', () => {
+    const full = join(tmpDir, 'commands', 'deploy.md');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(
+      full,
+      '---\ndescription: Ship it\nargument-hint: "[environment]"\n---\n\nDeploy it.\n',
+    );
+    const entry = collectSkillEntries([{ type: 'local', path: tmpDir }]).find(
+      (candidate) => candidate.name === 'deploy',
+    );
+    expect(entry?.argumentHint).toBe('[environment]');
+  });
+
+  it('buildSkillManifest EXCLUDES commands from the model-facing catalogue', () => {
+    // The manifest has no character budget, and a command is user-invoked by
+    // nature — listing a third-party plugin's command surface to the model
+    // would grow the system prompt without bound.
+    writeCommand(tmpDir, 'deploy.md', 'Ship it');
+    const manifest = buildSkillManifest([{ type: 'local', path: tmpDir }]);
+    expect(manifest).not.toContain('deploy');
+  });
+
+  it('discoverPluginSkillBodies makes a command body dispatchable', () => {
+    // Excluded from the manifest but still executable — otherwise the slash
+    // command would register and then dispatch nothing.
+    writeCommand(tmpDir, 'deploy.md', 'Ship it');
+    const bodies = discoverPluginSkillBodies([{ type: 'local', path: tmpDir }]);
+    expect(bodies.get('deploy')?.body).toContain('Command body for deploy.md.');
+  });
+
+  it('namespaces a subdirectory command as ns:name end-to-end', () => {
+    writeCommand(tmpDir, 'review/security.md', 'Sec review');
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    expect(entries.some((e) => e.name === 'review:security')).toBe(true);
+  });
+
+  it('a SKILL.md wins over a commands/*.md of the same name (CC precedence)', () => {
+    writeSkillMd(tmpDir, 'overlap');
+    writeCommand(tmpDir, 'overlap.md', 'The command version');
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    const matches = entries.filter((e) => e.name === 'overlap');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.source).toBe('plugin');
+    expect(matches[0]?.description).toBe('A skill');
+  });
+
+  it("a SKILL.md wins over another PLUGIN's commands/*.md of the same name", () => {
+    // The same first-wins guard spans plugins, not just one plugin's own two
+    // directories — precedence must not depend on which plugin is scanned first.
+    const pluginA = join(tmpDir, 'a');
+    const pluginB = join(tmpDir, 'b');
+    mkdirSync(pluginA, { recursive: true });
+    mkdirSync(pluginB, { recursive: true });
+    writeSkillMd(pluginA, 'overlap');
+    writeCommand(pluginB, 'overlap.md', 'The command version');
+
+    const entries = collectSkillEntries([
+      { type: 'local', path: pluginA },
+      { type: 'local', path: pluginB },
+    ]);
+
+    const matches = entries.filter((e) => e.name === 'overlap');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.source).toBe('plugin');
+    expect(matches[0]?.description).toBe('A skill');
+  });
+
+  it('filters a commands/*.md file with `audience: internal` when tier is locked', () => {
+    vi.stubEnv('AFK_INTERNAL', '');
+    const full = join(tmpDir, 'commands', 'secret.md');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(
+      full,
+      '---\ndescription: Maintainer only\naudience: internal\n---\n\nSecret command body.\n',
+    );
+
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    expect(entries.map((e) => e.name)).not.toContain('secret');
+  });
+
+  it('surfaces a commands/*.md file with `audience: internal` when AFK_INTERNAL=1', () => {
+    vi.stubEnv('AFK_INTERNAL', '1');
+    const full = join(tmpDir, 'commands', 'secret.md');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(
+      full,
+      '---\ndescription: Maintainer only\naudience: internal\n---\n\nSecret command body.\n',
+    );
+
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    expect(entries.map((e) => e.name)).toContain('secret');
+  });
+});
+
 describe('discoverPluginSkillBodies', () => {
   let tmpDir: string;
 

@@ -162,7 +162,14 @@ describe('doneGlyph — benign rejection vs real fault (#75)', () => {
     const real = TOOL_FAILURE_CLASSES.filter((c) => !isBenignFailure(c));
     expect(benign.length + real.length).toBe(TOOL_FAILURE_CLASSES.length);
     expect([...benign].sort()).toEqual(
-      ['abort', 'elicitation-declined', 'hook-block', 'permission-denied', 'policy-refusal'].sort(),
+      [
+        'abort',
+        'elicitation-declined',
+        'hook-block',
+        'no-such-target',
+        'permission-denied',
+        'policy-refusal',
+      ].sort(),
     );
     expect([...real].sort()).toEqual(['budget', 'denial-breaker', 'repeat-failure', 'timeout'].sort());
   });

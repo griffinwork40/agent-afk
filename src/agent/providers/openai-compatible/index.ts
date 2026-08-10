@@ -214,13 +214,21 @@ export class OpenAICompatibleProvider implements ModelProvider {
     let dispatcher: ToolDispatcher;
     const modelName = typeof config.model === 'string' ? config.model : String(config.model);
 
+    // Mutable cwd cell (#876 fix) — a per-query local, NOT a class field:
+    // `buildDispatcher`'s own cwd param is closed-over per-call for the same
+    // reason (see its docstring) — a class field would let concurrent
+    // sessions sharing the module-level `openaiCompatibleProvider` singleton
+    // race on cwd. `getCwd` below reads THIS cell instead of the closed-over
+    // `config.cwd`, and `rebuildEnvironmentBlock` (defined further down, once
+    // every fragment it needs exists) updates it before re-deriving the
+    // workspace snapshot and the `# Environment` block, so a mid-query
+    // `setCwd()` (query.ts) is reflected in `get_runtime_state` AND the
+    // system prompt the next turn sees — not just the dispatcher's resolve base.
+    let _currentCwd = config.cwd ?? process.cwd();
+
     const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
       surface: this.providerOpts.surface ?? 'cli',
-      // Behaviour-preserving: this provider builds the source per query, so
-      // `config.cwd` is frozen at query construction. Its `setCwd` only re-bases
-      // the dispatcher (query.ts) without rebuilding this source or the system
-      // prompt, so mid-query `get_runtime_state` cwd is stale until #876.
-      getCwd: () => config.cwd ?? process.cwd(),
+      getCwd: () => _currentCwd,
       modelName,
       providerName: PROVIDER_NAME,
       permissionMode,
@@ -294,6 +302,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       baseURL?: string;
       toolDispatcher?: ToolDispatcher;
       onPermissionMode?: (mode: string) => void;
+      onCwdChange?: (cwd: string) => void;
       mcpManager?: import('../../mcp/index.js').McpManager;
       sessionIdOverride?: string;
     } = {};
@@ -328,32 +337,26 @@ export class OpenAICompatibleProvider implements ModelProvider {
       model: modelName,
     });
 
-    // Phase 2 — add `# Environment` block to the system prompt.
-    const envFragment = formatEnvironmentFragment({
-      cwd: config.cwd ?? process.cwd(),
-      ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
-      surface: this.providerOpts.surface ?? 'cli',
-      ...(config.depth !== undefined ? { depth: config.depth } : {}),
-      ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-      workspace: runtimeStateSource.getWorkspace(),
-    });
-    // Assemble the full provider-side system prompt so non-Anthropic sessions
-    // (this provider backs the REPL when the model is gpt-*/o*/local org/model)
-    // receive the SAME fragments as anthropic-direct — tool conventions, the
-    // interactive slash-command / bash-passthrough / background-subagent
-    // guidance, the memory prompt, and the skill manifest. Previously this
-    // provider sent only `userSystem + env`, so on a non-Anthropic REPL the
-    // model was never told what the `<background-subagent-result>` (and
-    // slash/bash) envelopes mean. The tool/memory fragments are resolved via
-    // the shared helpers in tools/system-prompt.ts so the set cannot drift from
-    // anthropic-direct. Ordering mirrors AnthropicDirectProvider.query():
-    // [toolBase, userSystem?, memoryPrompt, hotMemory?, env, manifest?]. The
-    // `# Agent AFK` doctrine + operator overlay (`existingSys`) is placed EARLY
-    // — right after the tool conventions and before the cross-session memory
-    // (instructions + hot-memory project context) and the skill manifest. Hot
-    // memory rides `config.hotMemory` (a dedicated field), not prepended into
-    // systemPrompt, so it can sit after the memory instructions rather than
-    // ahead of the doctrine.
+    // Invariant: assemble the full provider-side system prompt so non-Anthropic
+    // sessions (this provider backs the REPL when the model is gpt-*/o*/local
+    // org/model) receive the SAME fragments as anthropic-direct — tool
+    // conventions, the interactive slash-command / bash-passthrough /
+    // background-subagent guidance, the memory prompt, and the skill manifest.
+    // Previously this provider sent only `userSystem + env`, so on a
+    // non-Anthropic REPL the model was never told what the
+    // `<background-subagent-result>` (and slash/bash) envelopes mean. The
+    // tool/memory fragments are resolved via the shared helpers in
+    // tools/system-prompt.ts so the set cannot drift from anthropic-direct.
+    // Ordering mirrors AnthropicDirectProvider.query(): [toolBase, userSystem?,
+    // memoryPrompt, hotMemory?, env, manifest?]. The `# Agent AFK` doctrine +
+    // operator overlay (`existingSys`) is placed EARLY — right after the tool
+    // conventions and before the cross-session memory (instructions +
+    // hot-memory project context) and the skill manifest. Hot memory rides
+    // `config.hotMemory` (a dedicated field), not prepended into systemPrompt,
+    // so it can sit after the memory instructions rather than ahead of the
+    // doctrine. `envFragment` is the ONLY cwd-dependent piece — see
+    // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
+    // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
     const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
     // Invariant: kept in lockstep with anthropic-direct's call site. Two
@@ -376,16 +379,57 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
     const existingSys =
       typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
-    const systemParts = [toolBase];
-    if (existingSys !== undefined && existingSys.length > 0) systemParts.push(existingSys);
-    systemParts.push(memoryPrompt);
-    if (hotMemory.length > 0) systemParts.push(hotMemory);
-    systemParts.push(envFragment);
-    if (manifest.length > 0) systemParts.push(manifest);
+
+    // Contract: given the cwd-dependent `# Environment` fragment, return the
+    // full joined system prompt over the STABLE fragments captured above.
+    // Used both for the initial build and for every #876 rebuild, so the two
+    // can never drift out of ordering sync with each other.
+    const assembleSystemPrompt = (envFragment: string): string => {
+      const parts = [toolBase];
+      if (existingSys !== undefined && existingSys.length > 0) parts.push(existingSys);
+      parts.push(memoryPrompt);
+      if (hotMemory.length > 0) parts.push(hotMemory);
+      parts.push(envFragment);
+      if (manifest.length > 0) parts.push(manifest);
+      return parts.join('\n\n');
+    };
+
+    // Phase 2 — the `# Environment` block. Reads `_currentCwd` (the mutable
+    // cell, not the closed-over `config.cwd`) so a post-construction call
+    // picks up whatever `rebuildEnvironmentBlock` last wrote there.
+    const buildEnvFragment = (): string =>
+      formatEnvironmentFragment({
+        cwd: _currentCwd,
+        ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
+        surface: this.providerOpts.surface ?? 'cli',
+        ...(config.depth !== undefined ? { depth: config.depth } : {}),
+        ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
+        workspace: runtimeStateSource.getWorkspace(),
+      });
+
     const patchedConfig: typeof config = {
       ...config,
-      systemPrompt: systemParts.join('\n\n'),
+      systemPrompt: assembleSystemPrompt(buildEnvFragment()),
     };
+
+    // Invariant (#876): `setCwd()` (query.ts) invokes this so a mid-session
+    // cwd re-anchor refreshes BOTH the `get_runtime_state` tool (already live
+    // via the `getCwd` cell) and the system prompt's `# Environment` block —
+    // previously only the dispatcher's resolve base moved, leaving the model
+    // reading a stale directory for the rest of the session. Ordering is
+    // load-bearing: `_currentCwd` is updated FIRST, then `buildEnvFragment()`
+    // re-reads `getWorkspace()` — which itself resolves through the same
+    // cell — so updating after the read would compute the workspace snapshot
+    // for the OLD directory (mirrors anthropic-direct's cwd-dependents.ts
+    // ordering invariant). `patchedConfig.systemPrompt` is reassigned IN
+    // PLACE (the same object `OpenAICompatibleQuery` holds as `this.opts.config`
+    // by reference), so the next turn's `buildMessages` call picks up the new
+    // string with no further plumbing.
+    const rebuildEnvironmentBlock = (newCwd: string): void => {
+      _currentCwd = newCwd;
+      patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment());
+    };
+    buildOpts.onCwdChange = rebuildEnvironmentBlock;
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
   }

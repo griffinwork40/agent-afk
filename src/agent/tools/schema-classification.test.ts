@@ -10,7 +10,9 @@
  *   3. dispatcher.ts SAFE_TOOLS was a hand-maintained mirror.
  *   4. Schedule tools fell through to 'other'.
  *   5. CLAUDE_SHORT_ALIASES included 'auto' which was absent from MODEL_MAP.
- *   6. model-limits.ts listed retired 'claude-opus-4-6'.
+ *   6. model-limits.ts listed 'claude-opus-4-6' — believed retired at the time,
+ *      in fact Active until 2027-02-05. Guard #6 is now inverted: the entry must
+ *      be PRESENT. See the test body for the deprecation-table citation.
  *
  * If any of these invariants regresses a test here will fail.
  *
@@ -135,10 +137,19 @@ describe('schema-as-source-of-truth: model-limits coverage', () => {
     }
   });
 
-  it('claude-opus-4-6 (retired) is NOT in MODEL_MAX_OUTPUT_TOKENS', () => {
-    // Regression guard: the retired model was removed in the
-    // schema-as-source-of-truth refactor and must stay removed.
-    expect('claude-opus-4-6' in MODEL_MAX_OUTPUT_TOKENS).toBe(false);
+  it('claude-opus-4-6 (Active, not retired) IS in MODEL_MAX_OUTPUT_TOKENS', () => {
+    // Invariant: this assertion was inverted until 2026-08-10. The
+    // schema-as-source-of-truth refactor removed the entry as a "retired model"
+    // and pinned that removal here, but the premise was false: Anthropic's
+    // deprecation table lists claude-opus-4-6 as Active with retirement "not
+    // sooner than February 5, 2027", and the models actually retired from that
+    // era are claude-opus-4-1-20250805 and claude-opus-4-20250514.
+    // <https://platform.claude.com/docs/en/about-claude/model-deprecations>
+    // The wire id was always reachable (`--model claude-opus-4-6`); the missing
+    // entry only made maxOutputTokensFor() under-report it as 64k instead of
+    // 128k. Keep this pinned so the false-retirement removal cannot recur.
+    expect('claude-opus-4-6' in MODEL_MAX_OUTPUT_TOKENS).toBe(true);
+    expect(MODEL_MAX_OUTPUT_TOKENS['claude-opus-4-6']).toBe(128_000);
   });
 });
 

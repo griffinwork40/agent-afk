@@ -36,6 +36,7 @@ import { checkEgressTarget, guardedFetch, EgressBlockedError } from '../../../we
 import type { EgressGuardOptions as GuardOpts } from '../../../web/egress-guard.js';
 import type { RenderFn } from '../../../web/types.js';
 import { headAndTail } from './_output-cap.js';
+import { withAdvisory } from '../../../web/extraction-advisory.js';
 import {
   hasPlaywrightInstallHint,
   isPlaywrightMissing,
@@ -288,7 +289,9 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
               isError: true,
             };
           }
-          const capped = capBody(result.markdown, parsed.maxBytes);
+          // Cap the combined output. headAndTail preserves the advisory at the
+          // tail without violating the caller's max_bytes contract.
+          const capped = capBody(withAdvisory(result.markdown, result.advisory), parsed.maxBytes);
           return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };

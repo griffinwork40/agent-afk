@@ -26,28 +26,15 @@ import { basename, dirname, join } from 'path';
 import { getReceiptsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { HookHandler } from '../hooks.js';
-import type {
-  ClosureReason,
-  ToolFailureClass,
-  TraceEvent,
-  TraceEventKind,
+import {
+  BENIGN_FAILURE_CLASSES,
+  type ClosureReason,
+  type ToolFailureClass,
+  type TraceEvent,
+  type TraceEventKind,
 } from './types.js';
 
 export const RECEIPT_SCHEMA_VERSION = 1 as const;
-
-// Invariant: mirrors the "system correctly said no" set documented on
-// {@link ToolFailureClass} in `./types.ts` and applied by the
-// `tool-failure-density` detector. These failure classes are EXPECTED
-// outcomes (a gate / policy / human correctly refused), so they are counted
-// but do NOT trip the human-review flag on their own. Note `'timeout'` and
-// unclassified failures are deliberately NOT exempt — they still warrant review.
-const REVIEW_EXEMPT_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
-  'policy-refusal',
-  'permission-denied',
-  'hook-block',
-  'abort',
-  'elicitation-declined',
-]);
 
 // Invariant: the subset of exempt classes that represent a GATE refusing a
 // tool call — an allowlist/`canUseTool` deny (`permission-denied`), a
@@ -71,7 +58,7 @@ export interface ReceiptToolFailure {
   durationMs: number;
   ts: string;
   truncated: boolean;
-  /** True when `failureClass` is an expected refusal ("system correctly said no"). */
+  /** True when `failureClass` is a benign outcome that does not warrant review. */
   exempt: boolean;
   subagentId?: string;
 }
@@ -252,7 +239,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
             durationMs: p.durationMs,
             ts: ev.ts,
             truncated: p.truncated === true,
-            exempt: cls !== undefined && REVIEW_EXEMPT_FAILURE_CLASSES.has(cls),
+            exempt: cls !== undefined && BENIGN_FAILURE_CLASSES.has(cls),
             ...(p.subagentId !== undefined ? { subagentId: p.subagentId } : {}),
           });
         } else {
@@ -326,7 +313,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     reasons.push(`Closure reason "${closureReason}" is not a clean completion.`);
   if (erroredNotable > 0)
     reasons.push(
-      `${erroredNotable} tool call(s) returned an error (excluding expected policy/permission refusals).`,
+      `${erroredNotable} tool call(s) returned an error (excluding benign outcomes).`,
     );
   if (circuitBreakerHits > 0)
     reasons.push(`Repeat-loop circuit breaker fired ${circuitBreakerHits} time(s).`);

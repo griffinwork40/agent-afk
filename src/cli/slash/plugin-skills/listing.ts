@@ -17,9 +17,32 @@ import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import { harvestAllPluginSkillFlags, extractHintFromDescription } from './flags.js';
 import { state, bareName, type DiscoveredSkill } from './state.js';
+import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
 
-/** Where a listing row's skill came from. Drives the friendly source label. */
-type SkillSource = 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
+/**
+ * Where a listing row's skill came from. Drives the friendly source label.
+ *
+ * Invariant: derived from the canonical union rather than restated, so a new
+ * member added to `SkillManifestEntry['source']` is a compile error in
+ * `friendlySource` (which stays exhaustive, with no `default` arm) instead of
+ * a silent `undefined` label at runtime.
+ */
+type SkillSource = SkillManifestEntry['source'];
+
+// Invariant: keyed by SkillSource, so adding a union member is a compile error
+// here rather than a source silently missing from the legend — which is how
+// `imported` rows came to render with no legend entry explaining them.
+const LEGEND_RANK: Record<SkillSource, number> = {
+  builtin: 0,
+  user: 1,
+  project: 2,
+  plugin: 3,
+  command: 4,
+  imported: 5,
+};
+const LEGEND_ORDER = (Object.keys(LEGEND_RANK) as SkillSource[]).sort(
+  (a, b) => LEGEND_RANK[a] - LEGEND_RANK[b],
+);
 
 /** A row in the unified `/skills` listing. */
 interface ListingRow {
@@ -97,7 +120,7 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
       slashName,
       display,
       description: skill.description,
-      source: 'plugin',
+      source: skill.source ?? 'plugin',
     });
   }
 
@@ -117,6 +140,8 @@ function friendlySource(source: SkillSource): string {
       return 'plugin';
     case 'imported':
       return 'imported';
+    case 'command':
+      return 'command';
   }
 }
 
@@ -195,10 +220,7 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
   // Header + a one-line source legend listing only the sources actually present.
   ctx.out.line(palette.bold('Skills') + palette.dim(`  (${allGroups.length})`));
   const present = new Set(allGroups.map((g) => g.main.source));
-  const legend = (['builtin', 'user', 'project', 'plugin'] as const)
-    .filter((s) => present.has(s))
-    .map(friendlySource)
-    .join(' · ');
+  const legend = LEGEND_ORDER.filter((s) => present.has(s)).map(friendlySource).join(' · ');
   ctx.out.line(palette.dim(`  ${legend} — /skills <name> for details`));
 
   if (builtinGroups.length > 0) {
@@ -254,7 +276,7 @@ function collectAlternatives(
   }
   for (const collision of state.collisions) {
     if (collision.bare === bare) {
-      alternatives.push({ slash: collision.altSlash, source: 'plugin' });
+      alternatives.push({ slash: collision.altSlash, source: collision.source ?? 'plugin' });
     }
   }
   return alternatives;
@@ -287,7 +309,7 @@ function renderSkillDetail(
   const displayName = hint ? `/${name} ${hint}` : `/${name}`;
   const source: SkillSource = registrySkill
     ? registryOriginToSource(registrySkill.origin)
-    : 'plugin';
+    : (pluginSkill?.source ?? 'plugin');
 
   // Wrap the body to the terminal width (capped) so long descriptions read as
   // paragraphs instead of one runaway line.

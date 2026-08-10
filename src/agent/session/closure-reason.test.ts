@@ -10,6 +10,7 @@ import {
   type ClosureReasonInputs,
 } from './closure-reason.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
+import { TRUNCATION_STOP_REASONS } from '../providers/shared/truncation.js';
 
 const base: ClosureReasonInputs = {
   dispatchReason: 'close',
@@ -21,9 +22,26 @@ const base: ClosureReasonInputs = {
 };
 
 describe('isTruncationStopReason', () => {
-  it('flags Anthropic max_tokens and OpenAI length', () => {
+  it('flags Anthropic max_tokens and OpenAI Chat Completions length', () => {
     expect(isTruncationStopReason('max_tokens')).toBe(true);
     expect(isTruncationStopReason('length')).toBe(true);
+  });
+
+  // The Responses API has no `finish_reason`: responses-translate.ts derives the
+  // stop reason from `response.incomplete_details.reason`, which spells this
+  // event `'max_output_tokens'` (pinned by responses-translate.test.ts). Missing
+  // it un-classified every truncated turn on that wire — the closure reason fell
+  // through to `model_end_turn` and a truncated subagent reached its parent with
+  // no partial-result banner, which is precisely the invisibility #952 removes.
+  it('flags the OpenAI Responses-wire spelling max_output_tokens', () => {
+    expect(isTruncationStopReason('max_output_tokens')).toBe(true);
+  });
+
+  it('covers every sentinel in TRUNCATION_STOP_REASONS (no drift)', () => {
+    for (const reason of TRUNCATION_STOP_REASONS) {
+      expect(isTruncationStopReason(reason)).toBe(true);
+    }
+    expect(TRUNCATION_STOP_REASONS).toContain('max_output_tokens');
   });
 
   it('does not flag clean / tool / unknown stop reasons', () => {
@@ -31,6 +49,9 @@ describe('isTruncationStopReason', () => {
     expect(isTruncationStopReason('stop')).toBe(false);
     expect(isTruncationStopReason('tool_use')).toBe(false);
     expect(isTruncationStopReason(undefined)).toBe(false);
+    expect(isTruncationStopReason(null)).toBe(false);
+    // Adjacent but distinct: a *request* field name, never a stop reason.
+    expect(isTruncationStopReason('max_completion_tokens')).toBe(false);
   });
 });
 

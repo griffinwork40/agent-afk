@@ -624,12 +624,30 @@ describe('OpenAICompatibleQuery — text streaming', () => {
       expect(final.usage.outputTokens).toBe(2);
       expect(final.usage.totalTokens).toBe(12);
       expect(final.usage.stopReason).toBe('stop');
+      expect(final.usage.totalCostUsd).toBeCloseTo(0.0000027, 10);
       // Regression guard: turn.completed must carry durationMs so the REPL
       // footer (`◦ Xs · $cost · N tok`) renders the turn duration. Pre-fix
       // the openai-compatible runTurn passed bare accumulatedUsage with no
       // wall-clock anchor — the footer dropped to just `◦ N tok`.
       expect(typeof final.usage.durationMs).toBe('number');
       expect(final.usage.durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('leaves cost unknown when a recognized model is served by a custom endpoint', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'local' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000, total_tokens: 2_000_000 },
+      },
+    ];
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'), {
+      baseURL: 'http://localhost:8080/v1',
+    });
+    const final = (await collect(q)).at(-1);
+    expect(final?.type).toBe('turn.completed');
+    if (final?.type === 'turn.completed') {
+      expect(final.usage.totalCostUsd).toBeUndefined();
     }
   });
 
@@ -1806,7 +1824,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('get_runtime_state cwd is frozen to the query config cwd (#876 characterization)', async () => {
+  it('get_runtime_state cwd follows a mid-query setCwd() re-anchor (#876 fix)', async () => {
     const provider = new OpenAICompatibleProvider();
     const q = provider.query({
       prompt: makeControlledPromptStream().stream,
@@ -1823,10 +1841,34 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     });
 
     const snapshot = JSON.parse(result.content) as { self: { cwd: string } };
-    expect(snapshot.self.cwd).toBe('/query-cwd');
-    // #876 gap: unlike the dispatcher resolve base, awareness cwd does not follow
-    // a mid-query setCwd() on openai-compatible until that provider is fixed.
-    expect(snapshot.self.cwd).not.toBe('/mid-query-cwd');
+    // #876 fix: `get_runtime_state` now reads the live cwd cell that
+    // `setCwd()` updates, not the value `config.cwd` was constructed with.
+    expect(snapshot.self.cwd).toBe('/mid-query-cwd');
+    expect(snapshot.self.cwd).not.toBe('/query-cwd');
+    q.close();
+  });
+
+  it('setCwd() rebuilds the `# Environment` block in the system prompt (#876 fix)', () => {
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: makeControlledPromptStream().stream,
+      config: baseConfig({ cwd: '/query-cwd' }),
+    });
+
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+    expect(typeof configRef.systemPrompt).toBe('string');
+    expect(configRef.systemPrompt as string).toContain('/query-cwd');
+    expect(configRef.systemPrompt as string).not.toContain('/mid-query-cwd');
+
+    q.setCwd('/mid-query-cwd');
+
+    // Same config object reference — `buildMessages` reads `this.opts.config`
+    // by reference each turn, so reassigning `systemPrompt` in place (rather
+    // than replacing the whole config object) is what makes the next turn
+    // pick up the rebuilt block with no further plumbing.
+    expect((q as unknown as { opts: { config: AgentConfig } }).opts.config).toBe(configRef);
+    expect(configRef.systemPrompt as string).toContain('/mid-query-cwd');
+    expect(configRef.systemPrompt as string).not.toContain('/query-cwd');
     q.close();
   });
 
@@ -3102,6 +3144,134 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     // key stays absent so the reader renders no orphan `[subagentId]`.
     expect('subagentId' in started.payload).toBe(false);
     expect('subagentId' in completed.payload).toBe(false);
+  });
+
+  // Issue #633: circuitBreaker, failureClass, batchIndex, and batchSize are
+  // conditional spreads in buildToolCallCompletedPayload (providers/shared/
+  // tool-call-trace.ts) that were previously exercised only by the builder's
+  // own isolated unit test — never through a real provider dispatch path.
+  // These three tests drive the openai-compatible dispatch path
+  // (query/dispatch-append.ts) end to end so a future edit that drops one of
+  // these spreads at this call site fails here.
+  it('includes circuitBreaker, failureClass, batchIndex, and batchSize on tool_call.completed when the ToolResult carries them', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_meta_1', 'search', '{"q":"hello"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => ({
+        content: 'search result',
+        isError: true,
+        circuitBreaker: true,
+        failureClass: 'repeat-failure',
+        batchIndex: 1,
+        batchSize: 3,
+      }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-meta-1',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    const completed = toolCallEvents[1];
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect(completed.payload.circuitBreaker).toBe(true);
+    expect(completed.payload.failureClass).toBe('repeat-failure');
+    expect(completed.payload.batchIndex).toBe(1);
+    expect(completed.payload.batchSize).toBe(3);
+  });
+
+  it('omits circuitBreaker, failureClass, batchIndex, and batchSize from tool_call.completed when the ToolResult lacks them', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_meta_2', 'search', '{"q":"hello"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => ({ content: 'search result' }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-meta-2',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    const completed = toolCallEvents[1];
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect('circuitBreaker' in completed.payload).toBe(false);
+    expect('failureClass' in completed.payload).toBe(false);
+    expect('batchIndex' in completed.payload).toBe(false);
+    expect('batchSize' in completed.payload).toBe(false);
+  });
+
+  it('omits batchIndex and batchSize from tool_call.completed when only batchIndex is present (both-or-neither guard)', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_meta_3', 'search', '{"q":"hello"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => ({
+        content: 'search result',
+        batchIndex: 2,
+        // batchSize intentionally omitted — the builder requires BOTH to be
+        // numbers before spreading either onto the payload.
+      }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-meta-3',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    const completed = toolCallEvents[1];
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect('batchIndex' in completed.payload).toBe(false);
+    expect('batchSize' in completed.payload).toBe(false);
   });
 
   // Issue #612: when the query runs inside a forked child, `config.subagentId`

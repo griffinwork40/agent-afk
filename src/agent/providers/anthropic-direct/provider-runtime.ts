@@ -63,11 +63,17 @@ import { buildProviderSchemas } from './provider-schemas.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { setUpQuerySession } from './provider-query-setup.js';
 import { buildProviderQuery } from './provider-query-build.js';
+import { CLAUDE_SONNET_ID } from '../../session/model-slots.js';
 // Re-exported so the historical import path stays valid after the split.
 export { resolveUserSystem } from './provider-query-setup.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
-const DEFAULT_MODEL = 'claude-sonnet-5';
+// Contract: a query arriving with no model resolves to whatever the `sonnet`
+// alias and the `medium` tier resolve to. Delegating to CLAUDE_SONNET_ID makes
+// that structural rather than a hand-synced duplicate literal — bumping the
+// default Sonnet is a one-line edit in session/model-slots.ts. Exported so
+// provider-runtime.test.ts can pin the delegation against re-hardcoding.
+export const DEFAULT_MODEL = CLAUDE_SONNET_ID;
 
 /**
  * Direct Anthropic SDK provider. Construction is cheap; the real per-session

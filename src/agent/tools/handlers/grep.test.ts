@@ -657,9 +657,13 @@ describe('createGrepHandler — cwd parameter', () => {
       { pattern: needle, path: '/nonexistent-dir-xyz' },
       createSignal(),
     );
-    // grep error code 2 → handler reports "grep error: ..."
+    // rg exit 2 for an absent path → classified `no-such-target` (benign: the
+    // caller supplied a bad reference), but still isError so the model cannot
+    // read it as "no matches" and conclude the code does not exist.
     expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/grep error/);
+    expect(result.failureClass).toBe('no-such-target');
+    expect(result.content).toContain('/nonexistent-dir-xyz');
+    expect(result.content).toContain('glob');
   });
 });
 

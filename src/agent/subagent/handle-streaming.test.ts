@@ -324,6 +324,38 @@ describe('SubagentHandle streaming', () => {
       expect(result.error?.name).toBe('StreamIncompleteError');
     });
 
+    // #960: the guard above names `max_tokens` in its rationale but only ever
+    // exercised `end_turn`, so nothing pinned the truncation sentinel — which is
+    // how a change that emitted a standalone notice for a textless `max_tokens`
+    // turn (setting `finalMessage` and making this whole branch unreachable)
+    // passed a green suite. Pin every truncation sentinel explicitly.
+    it.each(['max_tokens', 'length', 'max_output_tokens'])(
+      'resolves FAILED with STREAM_INCOMPLETE for a textless turn ending in %s',
+      async (stopReason) => {
+        const events: OutputEvent[] = [{ type: 'done', metadata: { stopReason } }];
+        const session = createDeterministicMockSession(events, {
+          role: 'assistant',
+          content: 'unused',
+          timestamp: new Date(),
+        });
+        const handle = new SubagentHandleImpl(
+          `subagent-textless-${stopReason}-test`,
+          session,
+          controller,
+          abortGraph,
+          undefined,
+          5000,
+          undefined,
+          vi.fn(),
+        );
+
+        const result = await handle.runToResult('p');
+        expect(result.status).toBe('failed');
+        expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+        expect(result.error?.name).toBe('StreamIncompleteError');
+      },
+    );
+
     it('returns a capped partial result (not a throw) when the tool-use cap fires with no message', async () => {
       // Anti-hang contract: a forked child that hits its tool-use-iteration cap
       // ends the turn with a `tool_use_loop_capped` done and no assistant
