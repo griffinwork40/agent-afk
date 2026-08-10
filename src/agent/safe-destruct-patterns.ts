@@ -20,19 +20,16 @@
  */
 export type PatternTier = 'observe' | 'block';
 
-export interface DestructivePattern {
-  readonly id: string;
-  readonly re: RegExp;
-  readonly tier: PatternTier;
-  /**
-   * Required when tier === 'block'. The reason string surfaces directly to the
-   * agent through HookBlockedError → tool result content. It must:
-   *   (a) name the matched pattern id,
-   *   (b) say in one clause why it is blocked (unrecoverable / external),
-   *   (c) name the recoverable alternative or the explicit way to proceed.
-   */
-  readonly blockReason?: string;
-}
+/**
+ * Required when tier === 'block'. The reason string surfaces directly to the
+ * agent through HookBlockedError → tool result content. It must:
+ *   (a) name the matched pattern id,
+ *   (b) say in one clause why it is blocked (unrecoverable / external),
+ *   (c) name the recoverable alternative or the explicit way to proceed.
+ */
+export type DestructivePattern =
+  | { readonly id: string; readonly re: RegExp; readonly tier: 'observe' }
+  | { readonly id: string; readonly re: RegExp; readonly tier: 'block'; readonly blockReason: string };
 
 // Invariant: Tier calibration is a measured constraint, not a preference.
 //
@@ -54,6 +51,11 @@ export interface DestructivePattern {
 // Pattern ids are stable public identifiers used by telemetry, tests, and the
 // trace substrate. Changing an id breaks deduplication across the 165-session
 // history. New ids are append-only.
+// Known constraint: regex-based detection cannot distinguish executable commands
+// from quoted/echoed mentions (e.g. `echo 'git reset --hard'`, `grep
+// 'terraform destroy'`). OBSERVE-tier false positives are noisy but harmless;
+// BLOCK-tier false positives are a known cost accepted for safety — they fire
+// rarely in practice and the agent can explain the context to the operator.
 export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // ── rm: recursive AND force (irrecoverable, no prompt) ─────────────────────
   //
@@ -95,7 +97,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // at 5 firings in 5 weeks, so it is not inner-loop.
   {
     id: 'git-reset-hard',
-    re: /\bgit\s+reset\s+--hard\b/i,
+    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*reset\s+--hard\b/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit or run "git stash" first. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
@@ -103,7 +105,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // git clean -f: BLOCK — removes untracked files with no recovery path.
   {
     id: 'git-clean-force',
-    re: /\bgit\s+clean\s+-[a-z]*f|\bgit\s+clean\s+[^|&;\n]*--force\b/i,
+    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*clean\s+-[a-z]*f|\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*clean\s+[^|&;\n]*--force\b/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
@@ -112,7 +114,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // consumers. Measured at 6 firings in 5 weeks; not inner-loop.
   {
     id: 'git-push-force',
-    re: /\bgit\s+push\b[^|&;\n]*--force\b|\bgit\s+push\b[^|&;\n]*(?<![\w-])-f\b/i,
+    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*push\b[^|&;\n]*--force(?!-)|\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*push\b[^|&;\n]*(?<![\w-])-f\b/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; prefer "--force-with-lease" or coordinate with collaborators first.',
@@ -171,6 +173,9 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   //   - sql-delete-from: DML row removal → OBSERVE (routine in development SQL;
   //     zero firings in 5 weeks confirm it is not a high-risk inner-loop op in
   //     this agent's usage profile, and transactions often wrap it).
+  //
+  // Exception: the old `sql-drop-truncate-delete` id had 0 firings in the
+  // 5-week shadow window, so no trace data is orphaned by the split.
   {
     id: 'sql-drop-truncate',
     re: /\b(drop\s+(table|database|schema|index)\b|truncate\s+table\b)/i,

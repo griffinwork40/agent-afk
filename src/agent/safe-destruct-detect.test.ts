@@ -1,7 +1,7 @@
 /**
  * Tests for the two-tier safe-destruct detector.
  *
- * Four contracts:
+ * Five contracts:
  *   1. `detectDestructiveCommands` matches every curated pattern and does NOT
  *      flag common-but-safe near-misses.
  *   2. OBSERVE patterns return `decision: 'approve'` (never block).
@@ -65,6 +65,10 @@ describe('detectDestructiveCommands', () => {
     ['git clean --force -x', 'git-clean-force'],
     ['git push --force origin main', 'git-push-force'],
     ['git push -f', 'git-push-force'],
+    ['git -C /tmp/repo reset --hard HEAD', 'git-reset-hard'],
+    ['git --work-tree=/tmp/w reset --hard', 'git-reset-hard'],
+    ['git -C /other push --force origin main', 'git-push-force'],
+    ['git --git-dir=.git clean -fd', 'git-clean-force'],
     ['dd if=/x.img of=/dev/sda bs=1M', 'dd-to-device'],
     ['mkfs.ext4 /dev/sdb1', 'mkfs'],
     ['echo boot > /dev/sda', 'redirect-to-block-device'],
@@ -87,6 +91,8 @@ describe('detectDestructiveCommands', () => {
     ['git status'],
     ['git commit -m "wip"'],
     ['git push origin main'], // no force
+    ['git push --force-with-lease origin main'], // safe lease variant
+    ['git push --force-with-lease=origin/main origin main'], // =<refname> form
     ['git branch -d merged'], // lowercase -d is the safe delete
     ['ls -la /var'],
     ['npm install'],

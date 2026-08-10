@@ -103,13 +103,19 @@ export function createSafeDestructDetect(): (context: HookContext) => HookDecisi
     // Precedence: if ANY matched pattern is BLOCK-tier, the entire command is
     // blocked. A compound command containing even one unrecoverable sub-operation
     // must not pass through because it is mixed with a recoverable one.
+    //
+    // Invariant: when multiple BLOCK patterns match in one compound command, the
+    // first BLOCK in DESTRUCTIVE_PATTERNS table order wins. Only that pattern's
+    // blockReason is reported. This is deliberate: the pattern table is ordered
+    // by importance (most dangerous operations first), so the first hit is the
+    // highest-priority signal and the most actionable reason for the agent.
     const patternMap = new Map(DESTRUCTIVE_PATTERNS.map((p) => [p.id, p]));
     for (const id of matchedIds) {
       const pattern = patternMap.get(id);
       if (pattern?.tier === 'block') {
         return {
           decision: 'block',
-          reason: pattern.blockReason ?? `safe-destruct: blocked [${id}] — unrecoverable operation.`,
+          reason: pattern.blockReason,
         };
       }
     }
