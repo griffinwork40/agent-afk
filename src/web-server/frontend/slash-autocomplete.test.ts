@@ -16,6 +16,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SlashAutocomplete, REPL_ONLY } from './slash-autocomplete.js';
 import { mountSlashHighlight } from './slash-highlight.js';
+import { wireComposerAffordances } from './composer-wiring.js';
 import type { CommandEntry } from '../../cli/input/slash-match.js';
 
 const COMMANDS: CommandEntry[] = [
@@ -48,6 +49,8 @@ interface Harness {
   /** Visible composer text — the mirror, not the transparent textarea. */
   mirrorText: () => string;
   type: (value: string) => Promise<void>;
+  compose: (data: string) => Promise<void>;
+  commitCompose: () => Promise<void>;
   press: (key: string) => void;
   pressWith: (key: string, mods: { metaKey?: boolean; ctrlKey?: boolean }) => void;
   rows: () => string[];
@@ -93,6 +96,19 @@ function harness(commands: CommandEntry[] = COMMANDS): Harness {
       input.value = value;
       input.dispatchEvent(new Event('input'));
       await ac.refresh();
+    },
+    compose: async (data: string) => {
+      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+      input.value = data;
+      input.dispatchEvent(new Event('input'));
+      // Let any pending microtasks settle.
+      await Promise.resolve();
+      await Promise.resolve();
+    },
+    commitCompose: async () => {
+      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
     },
     press: (key: string) => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
@@ -216,6 +232,35 @@ describe('trigger', () => {
     const h = harness();
     await h.type('see src/foo');
     expect(h.ac.isOpen()).toBe(false);
+  });
+});
+
+describe('IME composition', () => {
+  it('suppresses autocomplete refresh during active composition', async () => {
+    const h = harness();
+    await h.ac.preload();
+    await h.compose('/');
+    expect(h.ac.isOpen()).toBe(false);
+    expect(h.menu.hidden).toBe(true);
+    expect(h.input.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('refreshes on compositionend when the committed value is a slash trigger', async () => {
+    const h = harness();
+    await h.ac.preload();
+    await h.compose('/mi');
+    await h.commitCompose();
+    expect(h.ac.isOpen()).toBe(true);
+    expect(h.rows()).toEqual(['/mint']);
+  });
+
+  it('does not open when composition ends with a non-slash value', async () => {
+    const h = harness();
+    await h.ac.preload();
+    await h.compose('hello');
+    await h.commitCompose();
+    expect(h.ac.isOpen()).toBe(false);
+    expect(h.menu.hidden).toBe(true);
   });
 });
 
@@ -408,6 +453,36 @@ describe('composer collision', () => {
     h.press('Enter');
     expect(h.input.value).toBe('/mint ');
     expect(h.submitted).toEqual([]);
+  });
+});
+
+describe('missing-mirror fallback', () => {
+  it('adds slash-highlight-active class when mirror is present', () => {
+    const h = harness();
+    const autocomplete = wireComposerAffordances({
+      input: h.input,
+      loadCommands: () => Promise.resolve(COMMANDS),
+    });
+
+    expect(autocomplete).toBeDefined();
+    expect(h.input.classList.contains('slash-highlight-active')).toBe(true);
+  });
+
+  it('does not add slash-highlight-active when mirror is absent', () => {
+    document.body.textContent = '';
+    const menu = document.createElement('div');
+    menu.id = 'slash-menu';
+    const input = document.createElement('textarea');
+    input.id = 'prompt';
+    document.body.append(menu, input);
+
+    const autocomplete = wireComposerAffordances({
+      input,
+      loadCommands: () => Promise.resolve(COMMANDS),
+    });
+
+    expect(autocomplete).toBeUndefined();
+    expect(input.classList.contains('slash-highlight-active')).toBe(false);
   });
 });
 

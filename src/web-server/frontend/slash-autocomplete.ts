@@ -87,6 +87,7 @@ export class SlashAutocomplete {
   private open = false;
   private openIntent = false;
   private focused = false;
+  private composing = false;
   private generation = 0;
   private readonly menuId: string;
   private readonly status: HTMLElement;
@@ -151,9 +152,16 @@ export class SlashAutocomplete {
       this.focused = true;
     });
     this.deps.input.addEventListener('keydown', (e) => this.onKeyDown(e));
+    this.deps.input.addEventListener('compositionstart', () => {
+      this.composing = true;
+    });
+    this.deps.input.addEventListener('compositionend', () => {
+      this.composing = false;
+      if (this.openIntent) void this.refresh();
+    });
     this.deps.input.addEventListener('input', () => {
       this.openIntent = true;
-      void this.refresh();
+      if (!this.composing) void this.refresh();
     });
     // Invalidate an in-flight refresh so its eventual result cannot reopen.
     this.deps.input.addEventListener('blur', () => {

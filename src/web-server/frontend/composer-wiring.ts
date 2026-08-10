@@ -58,6 +58,7 @@ export function wireComposerAffordances(
   // Highlighting reads the autocomplete's cache rather than fetching its own,
   // so the two can never disagree about what counts as a known command.
   mountSlashHighlight(deps.input, mirror, (name) => autocomplete.knows(name));
+  deps.input.classList.add('slash-highlight-active');
 
   // Warm the cache so the first `/` highlights immediately instead of one
   // keystroke late. A failure here is already swallowed into an empty universe.

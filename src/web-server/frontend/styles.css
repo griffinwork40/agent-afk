@@ -285,6 +285,8 @@ html, body {
 }
 #prompt {
   flex: 1; resize: vertical; background: transparent; position: relative; z-index: 1;
+}
+#prompt.slash-highlight-active {
   /* Text is transparent so the mirror shows through; the caret is not. */
   color: transparent; caret-color: var(--text);
 }
