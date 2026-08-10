@@ -98,7 +98,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+reset\s+--hard\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit or run "git stash" first, or re-run with the discard intent stated explicitly.',
+      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit or run "git stash" first. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
   // git clean -f: BLOCK — removes untracked files with no recovery path.
   {
@@ -106,7 +106,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+clean\s+-[a-z]*f|\bgit\s+clean\s+[^|&;\n]*--force\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then proceed with the intent stated explicitly.',
+      'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
   // git push --force: BLOCK — rewrites remote history, potentially for all
   // consumers. Measured at 6 firings in 5 weeks; not inner-loop.
@@ -138,7 +138,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bmkfs(\.\w+)?\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path and proceed only with explicit intent.',
+      'safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
   {
     id: 'redirect-to-block-device',
@@ -160,7 +160,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bshred\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required, or proceed with the intent stated explicitly.',
+      'safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
 
   // ── SQL ─────────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\b(drop\s+(table|database|schema|index)\b|truncate\s+table\b)/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step, then proceed with the intent stated explicitly.',
+      'safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
   {
     id: 'sql-delete-from',
@@ -206,6 +206,6 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bterraform\s+destroy\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview, then proceed with explicit intent.',
+      'safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
 ];
