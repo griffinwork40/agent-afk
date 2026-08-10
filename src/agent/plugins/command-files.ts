@@ -51,6 +51,16 @@ import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 const MAX_DEPTH = 10;
 
 /**
+ * Control bytes — C0, DEL, and C1 — in a path segment.
+ *
+ * Invariant: a command's name is derived from its file path, so a path segment
+ * is the only place a plugin can inject bytes into a name. Unlike a SKILL.md
+ * name (frontmatter, i.e. already-normalized file content), this value never
+ * passes through `normalizeSkillSource`, so it is validated here instead.
+ */
+const CONTROL_BYTES = /[\u0000-\u001F\u007F-\u009F]/;
+
+/**
  * `PluginSkillMetadata.name` is typed optional (frontmatter-derived skills
  * may parse without one), but every entry pushed by `extractPluginCommands`
  * below always carries a path-derived name. Narrowing locally lets the sort
@@ -116,6 +126,22 @@ export function extractPluginCommands(
       if (entry.includes(':')) {
         if (env.AFK_DEBUG) {
           process.stderr.write(`[afk] skipping path segment with colon: ${sanitizeForDisplay(join(dir, entry))}\n`);
+        }
+        continue;
+      }
+      // Reject rather than sanitize, and reject HERE: this is the one point a
+      // path segment enters a name (as a `segments` entry below, or as `base`),
+      // so a single guard covers every name this walk can produce. The name is
+      // later written to the terminal unsanitized by the `/skills` listing and
+      // by the shadowing notice — which fires without the user asking for it —
+      // and sanitizing those render sites would leave the next one unguarded.
+      // A control byte in a plugin-supplied filename is never a legitimate
+      // command name, so failing closed costs nothing.
+      if (CONTROL_BYTES.test(entry)) {
+        if (env.AFK_DEBUG) {
+          process.stderr.write(
+            `[afk] skipping path segment with control bytes: ${sanitizeForDisplay(join(dir, entry))}\n`,
+          );
         }
         continue;
       }

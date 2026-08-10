@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { extractPluginCommands } from './command-files.js';
@@ -98,6 +98,60 @@ describe('extractPluginCommands', () => {
     expect(names).toEqual(['a:b']);
     expect(names).toHaveLength(1);
     expect(found[0]?.body).toBe('Slash body.');
+  });
+
+  it('skips a .md command whose filename carries a terminal escape', () => {
+    // The name comes from the PATH, so a filename is the one place a plugin
+    // can inject bytes into it — and the name is later written to the terminal
+    // by the /skills listing and by the shadowing notice, neither of which
+    // sanitizes. The fixture MUST end in `.md`: a `.txt` fixture is rejected
+    // by the extension filter before the name is ever derived, so it cannot
+    // exercise this guard no matter how the guard behaves.
+    writeCommand('evil\x1b[2J\x1b[H.md', '---\ndescription: d\n---\n\nEvil body.\n');
+    writeCommand('safe.md', '---\ndescription: d\n---\n\nSafe body.\n');
+    const found = extractPluginCommands(pluginDir);
+    expect(found.map((c) => c.name)).toEqual(['safe']);
+    // Guard the property, not just the count: no registered name may carry a
+    // control byte, however many commands a plugin ships.
+    for (const c of found) expect(c.name).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+  });
+
+  it('skips a subdirectory segment carrying a control byte', () => {
+    // Directory segments reach the name through `segments`, a different route
+    // than the filename `base` — both must be rejected by the single guard.
+    writeCommand('ev\x07il/cmd.md', '---\ndescription: d\n---\n\nEvil body.\n');
+    writeCommand('ok/cmd.md', '---\ndescription: d\n---\n\nOk body.\n');
+    const found = extractPluginCommands(pluginDir);
+    expect(found.map((c) => c.name)).toEqual(['ok:cmd']);
+  });
+
+  it('skips a filename carrying a C1 control byte (8-bit CSI)', () => {
+    // U+009B is CSI in 8-bit form: terminals in 8-bit mode act on it exactly
+    // as they do on ESC-[, so restricting the guard to C0 would leave a
+    // working vector open.
+    writeCommand('evil\u009b2J.md', '---\ndescription: d\n---\n\nEvil body.\n');
+    expect(extractPluginCommands(pluginDir)).toEqual([]);
+  });
+
+  it('excludes a commands/ entry symlinked outside the plugin tree', () => {
+    // `resolveContained` is the control stopping a plugin from symlinking a
+    // private key or credential file into `commands/` and having it become a
+    // dispatchable prompt. The accept-path is covered incidentally by every
+    // other case here; this asserts the REJECT branch, which had no coverage
+    // anywhere in the repo.
+    const outside = mkdtempSync(join(tmpdir(), 'plugin-commands-outside-'));
+    try {
+      const secret = join(outside, 'secret.md');
+      writeFileSync(secret, '---\ndescription: d\n---\n\nSecret body.\n');
+      mkdirSync(join(pluginDir, 'commands'), { recursive: true });
+      symlinkSync(secret, join(pluginDir, 'commands', 'help.md'));
+      writeCommand('safe.md', '---\ndescription: d\n---\n\nSafe body.\n');
+      const found = extractPluginCommands(pluginDir);
+      expect(found.map((c) => c.name)).toEqual(['safe']);
+      expect(found.map((c) => c.body).join('')).not.toContain('Secret body.');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('namespaces a subdirectory with a colon (CC parity)', () => {
