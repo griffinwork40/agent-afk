@@ -804,6 +804,107 @@ describe('primePromptSuggestion — sanitization ordering', () => {
 
 // ── Fix 2: Tier-1 history skip for most-recent entry (lastSubmitted) ───────────
 
+// ── Fix 2a: monkey-patch wiring — lastSubmittedEntry tracks only landed pushes ─
+//
+// The surface-setup monkey-patch compares getEntries()[0] before/after
+// originalPush() and only records lastSubmittedEntry when the head changes.
+// ReplHistory.push() has four early-return paths (leading-space, empty,
+// secret-pattern, consecutive-duplicate) that leave _entries unchanged.
+// These tests exercise each path against the real ReplHistory class to
+// guard the invariant: a discarded push never advances lastSubmittedEntry.
+
+import { ReplHistory } from './history.js';
+
+/**
+ * Reproduce the surface-setup.ts monkey-patch logic against a real
+ * ReplHistory instance, returning a tracker for the lastSubmittedEntry.
+ */
+function applyLastSubmittedPatch(history: ReplHistory): {
+  getLastSubmitted: () => string | undefined;
+} {
+  let lastSubmittedEntry: string | undefined;
+  const ring = history as unknown as {
+    getEntries?: () => readonly string[];
+    push?: (text: string) => void;
+  };
+  if (typeof ring.push === 'function') {
+    const originalPush = ring.push.bind(ring);
+    ring.push = (text: string) => {
+      const headBefore = ring.getEntries?.()?.[0];
+      originalPush(text);
+      const headAfter = ring.getEntries?.()?.[0];
+      if (headAfter !== headBefore) {
+        lastSubmittedEntry = headAfter;
+      }
+    };
+  }
+  return { getLastSubmitted: () => lastSubmittedEntry };
+}
+
+describe('lastSubmittedEntry monkey-patch — discarded push paths', () => {
+  it('tracks lastSubmitted on a genuine push', () => {
+    const history = new ReplHistory([]);
+    const tracker = applyLastSubmittedPatch(history);
+    history.push('hello world');
+    expect(tracker.getLastSubmitted()).toBe('hello world');
+  });
+
+  it('does NOT track when push is discarded by leading-space escape', () => {
+    const history = new ReplHistory(['prior']);
+    const tracker = applyLastSubmittedPatch(history);
+    // Leading space → ReplHistory returns early, _entries unchanged.
+    history.push(' secret command');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+    // Genuine push still works after a discarded one.
+    history.push('real command');
+    expect(tracker.getLastSubmitted()).toBe('real command');
+  });
+
+  it('does NOT track when push is discarded by empty/whitespace input', () => {
+    const history = new ReplHistory(['prior']);
+    const tracker = applyLastSubmittedPatch(history);
+    history.push('');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+    history.push('   ');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+  });
+
+  it('does NOT track when push is discarded by consecutive-duplicate guard', () => {
+    const history = new ReplHistory([]);
+    const tracker = applyLastSubmittedPatch(history);
+    history.push('first command');
+    expect(tracker.getLastSubmitted()).toBe('first command');
+    // Same text again → consecutive-duplicate early return.
+    history.push('first command');
+    // lastSubmittedEntry stays at the FIRST genuine push.
+    expect(tracker.getLastSubmitted()).toBe('first command');
+  });
+
+  it('does NOT track when push is discarded by secret-pattern deny-list', () => {
+    const history = new ReplHistory(['prior']);
+    const tracker = applyLastSubmittedPatch(history);
+    // sk-... matches the SECRET_PATTERN in ReplHistory.
+    history.push('sk-proj-abc123def456');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+  });
+
+  it('correctly tracks across mixed genuine and discarded pushes', () => {
+    const history = new ReplHistory([]);
+    const tracker = applyLastSubmittedPatch(history);
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+    history.push('first');
+    expect(tracker.getLastSubmitted()).toBe('first');
+    history.push(' hidden');     // leading-space → discarded
+    expect(tracker.getLastSubmitted()).toBe('first');
+    history.push('second');
+    expect(tracker.getLastSubmitted()).toBe('second');
+    history.push('second');      // consecutive-dup → discarded
+    expect(tracker.getLastSubmitted()).toBe('second');
+    history.push('third');
+    expect(tracker.getLastSubmitted()).toBe('third');
+  });
+});
+
 describe('getDeterministicGhost – lastSubmitted skip', () => {
   it('skips history entry matching lastSubmitted', () => {
     const engine = createSuggestEngine();

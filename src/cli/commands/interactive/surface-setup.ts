@@ -104,9 +104,9 @@ export async function setupSurface(
     getEntries?: () => readonly string[];
     push?: (text: string) => void;
   };
-  // When push is absent (test stubs, non-TTY surfaces), lastSubmitted stays
-  // undefined for the session lifetime — safe because ghost text is disabled
-  // on those surfaces.
+  // When push or getEntries is absent (test stubs, non-TTY surfaces, partial
+  // history implementations), lastSubmitted stays undefined for the session
+  // lifetime — safe because ghost text is disabled on those surfaces.
   if (typeof historyRing.push === 'function') {
     const originalPush = historyRing.push.bind(historyRing);
     historyRing.push = (text: string) => {
