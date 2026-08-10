@@ -562,7 +562,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return;
       }
 
-      const roundUsage = usageFromState(result.state);
+      const roundUsage = usageFromState(result.state, this.currentModel);
       accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
       // Context-window footprint for THIS round. Unlike Anthropic, OpenAI's
       // `prompt_tokens` (→ inputTokens) already INCLUDES cached tokens
