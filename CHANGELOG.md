@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.107.2] - 2026-08-10
+
+### Added
+- warn when markdown extraction retains little of the page (#997) (094dc61)
+
+### Changed
+- make DEFAULT_MODEL delegate to CLAUDE_SONNET_ID (#998) (c44eb90)
+
 ## [5.107.1] - 2026-08-10
 
 ### Fixed
