@@ -111,9 +111,10 @@ const PINNED_HASHES = {
   review: 'c457514e7576427dfe327dbdca347909f5ed34b321b9185c9f51663acac99295',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
+  // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
-    '01bddcdd5446943f6fe4694a2cdbb669ab194dc0765d3630899755bc65530b9a',
+    'd84c1b785eaaffe2ed538627e3b72a75e5398dcb2fbfda882febed2181241597',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
