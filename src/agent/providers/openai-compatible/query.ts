@@ -58,6 +58,7 @@ import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
+import { isTruncationStopReason, truncationNotice } from '../shared/truncation.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
@@ -177,6 +178,15 @@ export interface OpenAICompatibleQueryOptions {
    * `setAllowAll()`). Supplied by `OpenAICompatibleProvider.query()`.
    */
   onPermissionMode?: (mode: string) => void;
+  /**
+   * Provider callback invoked by `setCwd()` to rebuild the `# Environment`
+   * block after a cwd re-anchor (#876). Rewrites `opts.config.systemPrompt`
+   * in place on the provider side; `buildMessages` reads `this.opts.config`
+   * by reference each turn, so no further plumbing is needed here beyond
+   * calling it. Supplied by `OpenAICompatibleProvider.query()`; absent for
+   * callers (tests, external-dispatcher branch) that never re-anchor cwd.
+   */
+  onCwdChange?: (cwd: string) => void;
   /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
   mcpManager?: import('../../mcp/index.js').McpManager;
   /**
@@ -233,6 +243,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly initSessionId: string;
   private readonly toolDispatcher: ToolDispatcher | undefined;
   private readonly onPermissionMode?: (mode: string) => void;
+  private readonly onCwdChange?: (cwd: string) => void;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
@@ -302,6 +313,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
     this.toolDispatcher = opts.toolDispatcher;
     this.onPermissionMode = opts.onPermissionMode;
+    this.onCwdChange = opts.onCwdChange;
     this.traceWriter = opts.traceWriter;
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact);
 
@@ -538,6 +550,16 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // CLI's formatToolCallStat renders a truthful "N tool calls" (PR 508 codex
     // review, P2).
     let toolCallCount = 0;
+    // Invariant: tool calls that were being streamed when the output cap cut the
+    // round off. `isToolCallStop` returns false for any explicit non-tool finish
+    // reason, so a call truncated mid-arguments sets needsToolDispatch=false and
+    // is discarded in-memory — it never reaches `dispatchAndAppendToolCalls`,
+    // which is the ONLY site that builds an assistant `tool_calls` message. That
+    // silent drop is correct (a half-built call would poison history with an
+    // empty tool_call_id) but invisible, so capture the names at the break to
+    // name them in the terminal notice. Must be captured inside the loop:
+    // `result.state` is a fresh StreamState per iteration.
+    let droppedToolNames: string[] = [];
 
     for (;;) {
       if (controller.signal.aborted) {
@@ -581,6 +603,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       if (!result.needsToolDispatch) {
         // Model answered in text: a normal completion, or — when winding down —
         // the wind-down round's synthesized final answer. Emit terminal events.
+        if (isTruncationStopReason(result.state.finishReason)) {
+          droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
+        }
         break;
       }
 
@@ -686,9 +711,43 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       this.priorTurns.push(assistantTurn);
     }
 
+    // Invariant: the truncation notice is APPENDED to the single terminal
+    // assistant.message, never yielded as a second one — last-wins consumers
+    // (the non-streaming sendMessage() path, a subagent's final-message
+    // capture) keep only the LAST assistant message of a turn, so a second
+    // event would discard the model's real partial answer and surface only the
+    // warning. Same rule as the anthropic-direct terminal path. Deliberately
+    // applied AFTER the priorTurns push above: the notice is operator-facing
+    // and must not enter conversation history.
+    //
+    // Invariant (#960): the notice rides ONLY on non-empty model text. A turn
+    // that produced NO text must keep yielding an EMPTY assistant.message, so
+    // that stream-consumer's `if (event.text)` gate drops it and the turn stays
+    // textless downstream. That absence is load-bearing: it is what leaves
+    // `finalMessage` unset in `subagent/handle.ts`, letting the run reach the
+    // ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE and THROWS — which
+    // resolves a zero-output child as `failed` rather than a false `succeeded`,
+    // and lets `stream-cut-retry.ts` re-dispatch a read-only child that
+    // produced nothing. Substituting the notice as the message body here would
+    // make that chain unreachable and hand the parent a SUCCESS whose entire
+    // content is this warning. Mirrors the identical rule in
+    // `anthropic-direct/loop/turn-terminal.ts`.
+    const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
+      ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
+          // The ChatGPT OAuth Responses backend rejects every output-cap
+          // parameter, so advertising our cap setting there is ineffective.
+          canIncreaseOutputLimit: !(
+            this.opts.auth.source === 'chatgpt-oauth' &&
+            accumulatedUsage.stopReason === 'max_output_tokens'
+          ),
+        })
+      : null;
     yield {
       type: 'assistant.message',
-      text: finalAssistantText,
+      text:
+        truncationText && finalAssistantText.length > 0
+          ? `${finalAssistantText}\n\n${truncationText}`
+          : finalAssistantText,
       sessionId: this.initSessionId,
     };
     // If the turn was cut short by a spent budget, preserve that signal for
@@ -1125,6 +1184,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   setCwd(cwd: string): void {
     this.toolDispatcher?.setResolveBase?.(cwd);
+    // #876: also rebuild the `# Environment` block (awareness cwd + system
+    // prompt), which the dispatcher rebase above does not touch. Order vs.
+    // the rebase above is not load-bearing — the two update independent
+    // state — but the rebuild ITSELF has an internal ordering invariant; see
+    // `rebuildEnvironmentBlock` in openai-compatible/index.ts.
+    this.onCwdChange?.(cwd);
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {
@@ -1246,6 +1311,7 @@ export function buildQueryFromConfig(
     baseURL?: string;
     toolDispatcher?: ToolDispatcher;
     onPermissionMode?: (mode: string) => void;
+    onCwdChange?: (cwd: string) => void;
     mcpManager?: import('../../mcp/index.js').McpManager;
     useResponsesApi?: boolean;
     /**
@@ -1289,6 +1355,7 @@ export function buildQueryFromConfig(
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
   if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
+  if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
   if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
   // Thread traceWriter from AgentConfig so witness events are emitted for

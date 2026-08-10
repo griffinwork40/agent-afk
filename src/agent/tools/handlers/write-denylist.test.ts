@@ -553,6 +553,113 @@ describe('write-denylist — AFK_HOME-relocated credential tree (#740)', () => {
       resetAfkHomeWarnLatchForTests();
     }
   });
+
+  // #780: the latch used to be a single process-wide boolean, so the FIRST
+  // malformed var consumed it and a second, independently-malformed var
+  // stayed silent. An operator who typo'd both AFK_HOME and AFK_STATE_DIR
+  // fixed one, re-ran, and only then learned about the other. The latch is
+  // now keyed per distinct rejected value, so both warn.
+  it('warns for BOTH vars when AFK_HOME and AFK_STATE_DIR are both malformed (#780)', () => {
+    resetAfkHomeWarnLatchForTests();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.stubEnv('AFK_HOME', 'relative/not-absolute-home');
+      vi.stubEnv('AFK_STATE_DIR', 'relative/not-absolute-state');
+
+      getWriteDenylist();
+
+      expect(warn).toHaveBeenCalledTimes(2);
+      const messages = warn.mock.calls.map((call) => call[0]);
+      expect(messages.some((m) => typeof m === 'string' && m.includes('AFK_HOME'))).toBe(true);
+      expect(messages.some((m) => typeof m === 'string' && m.includes('AFK_STATE_DIR'))).toBe(
+        true,
+      );
+      expect(
+        messages.some((m) => typeof m === 'string' && m.includes('relative/not-absolute-home')),
+      ).toBe(true);
+      expect(
+        messages.some((m) => typeof m === 'string' && m.includes('relative/not-absolute-state')),
+      ).toBe(true);
+
+      // Repeated reads must not re-warn for either already-seen value — the
+      // once-per-var de-duplication this fix must preserve.
+      getWriteDenylist();
+      getWriteDenylist();
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      resetAfkHomeWarnLatchForTests();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Memoization cache-key regression guard (#781)
+// ---------------------------------------------------------------------------
+
+describe('write-denylist — memoization cache-key regression guard (#781)', () => {
+  // Cache-invalidation: the memoization key must include AFK_HOME and
+  // AFK_STATE_DIR, not just AFK_WRITE_DENYLIST, or a runtime change to either
+  // returns a STALE denylist that fails to cover a newly-relocated credential
+  // tree — silently permitting a write that should be denied.
+  // Invariant: deliberately NO `_resetWriteDenylistCacheForTests()` call
+  // between the two queries below — that reset is what the memo key itself is
+  // supposed to make unnecessary. Calling it here would make this test pass
+  // even if AFK_HOME/AFK_STATE_DIR were dropped from the key entirely,
+  // defeating the point of the regression guard. Mirrors
+  // read-denylist.test.ts's identically-purposed guard.
+  it('invalidates the memoized denylist when AFK_HOME changes, with no manual cache reset', () => {
+    const relocated = join(tmpDir, 'relocated-cache-home');
+    mkdirSync(relocated, { recursive: true });
+    const target = join(relocated, 'config', 'afk.env');
+
+    // Query once with AFK_HOME unset: the relocated config dir is NOT covered.
+    expect(() => assertNotDenylisted(target, 'write_file')).not.toThrow();
+
+    // Change AFK_HOME and query again — WITHOUT resetting the cache by hand.
+    vi.stubEnv('AFK_HOME', relocated);
+    expect(() => assertNotDenylisted(target, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
+  });
+
+  it('invalidates the memoized denylist when AFK_STATE_DIR changes, with no manual cache reset', () => {
+    const stateDir = join(tmpDir, 'relocated-cache-state');
+    mkdirSync(stateDir, { recursive: true });
+    const target = join(stateDir, 'sessions', 's.json');
+
+    // Query once with AFK_STATE_DIR unset: the relocated state dir is NOT covered.
+    expect(() => assertNotDenylisted(target, 'write_file')).not.toThrow();
+
+    // Change AFK_STATE_DIR and query again — WITHOUT resetting the cache by hand.
+    vi.stubEnv('AFK_STATE_DIR', stateDir);
+    expect(() => assertNotDenylisted(target, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
+  });
+
+  it('re-resolves a custom denylist symlink after it is repointed', () => {
+    const firstTarget = join(tmpDir, 'first-target');
+    const secondTarget = join(tmpDir, 'second-target');
+    const link = join(tmpDir, 'blocked-link');
+    mkdirSync(firstTarget);
+    mkdirSync(secondTarget);
+    symlinkSync(firstTarget, link);
+    vi.stubEnv('AFK_WRITE_DENYLIST', link);
+
+    expect(() =>
+      assertNotDenylisted(join(link, 'secret.txt'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+
+    rmSync(link);
+    symlinkSync(secondTarget, link);
+
+    // The environment key did not change, so this only remains protected if
+    // getWriteDenylist re-resolves entries after a cache hit.
+    expect(() =>
+      assertNotDenylisted(join(link, 'secret.txt'), 'write_file'),
+    ).toThrow(/refusing to write to protected path/);
+  });
 });
 
 describe('assertNotDenylisted — case-variant spellings (#736)', () => {

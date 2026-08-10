@@ -39,6 +39,68 @@ import {
 //      `input.toolDispatcher` throws). Pre-fix: assistant tool_use push
 //      remained in history. Post-fix: rollback splices it back out.
 
+/**
+ * A `max_tokens` stream carrying BOTH partial text and one or more `tool_use`
+ * blocks that never got dispatched — the shape that exercises the notice's
+ * dropped-tool naming (and its de-duplication) on the partial-text path.
+ */
+function makeTextStreamWithDroppedTool(
+  text: string,
+  toolNames: string[],
+): RawMessageStreamEvent[] {
+  const events: RawMessageStreamEvent[] = [
+    {
+      type: 'message_start',
+      message: {
+        id: 'msg_truncate_mixed',
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        model: 'claude-test',
+        stop_reason: null,
+        stop_sequence: null,
+        usage: baseUsage(),
+      },
+    } as unknown as RawMessageStreamEvent,
+    {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    } as unknown as RawMessageStreamEvent,
+    {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text },
+    } as unknown as RawMessageStreamEvent,
+    { type: 'content_block_stop', index: 0 } as unknown as RawMessageStreamEvent,
+  ];
+  toolNames.forEach((name, i) => {
+    const index = i + 1;
+    events.push(
+      {
+        type: 'content_block_start',
+        index,
+        content_block: { type: 'tool_use', id: `toolu_dropped_${index}`, name, input: {} },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'input_json_delta', partial_json: '{"file":"a.ts"}' },
+      } as unknown as RawMessageStreamEvent,
+      { type: 'content_block_stop', index } as unknown as RawMessageStreamEvent,
+    );
+  });
+  events.push(
+    {
+      type: 'message_delta',
+      delta: { stop_reason: 'max_tokens', stop_sequence: null },
+      usage: { output_tokens: 4 },
+    } as unknown as RawMessageStreamEvent,
+    { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+  );
+  return events;
+}
+
 describe('loop.ts runTurn — orphan tool_use prevention', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -119,6 +181,225 @@ describe('loop.ts runTurn — orphan tool_use prevention', () => {
       }
     }
     expect(flatTooluses).not.toContain('toolu_orphan');
+  });
+
+  // #960 REGRESSION GUARD — do not "fix" this test by making it expect a notice.
+  //
+  // A truncated turn that produced NO text must emit NO `assistant.message`.
+  // The absence is the signal: stream-consumer drops a textless turn, so
+  // `handle.ts` never sets `finalMessage`, reaches its ZERO-OUTPUT branch, and
+  // THROWS — which is what makes a zero-output subagent resolve `failed` (not a
+  // false `succeeded`) and what lets stream-cut-retry re-dispatch it. An earlier
+  // revision of this PR emitted a standalone notice here; that set
+  // `finalMessage`, silently unreachable-ing the throw, and a truncated child
+  // returned to its parent as a SUCCESS whose whole content was the warning.
+  it('emits NO assistant.message when max_tokens strips a tool_use and no text was produced', async () => {
+    const truncatedToolUseStream: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_truncate2',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-test',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: baseUsage(),
+        },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'toolu_dropped', name: 'read_file', input: {} },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"file":"a.ts"}' },
+      } as unknown as RawMessageStreamEvent,
+      { type: 'content_block_stop', index: 0 } as unknown as RawMessageStreamEvent,
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'max_tokens', stop_sequence: null },
+        usage: { output_tokens: 4 },
+      } as unknown as RawMessageStreamEvent,
+      { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+    ];
+
+    const client = makeClient(() => fromArray(truncatedToolUseStream));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'do a thing' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+
+    // The textless turn stays textless: no assistant.message at all, so a
+    // downstream `if (event.text)` consumer sees nothing and the zero-output
+    // path stays reachable.
+    expect(events.filter((e) => e.type === 'assistant.message')).toHaveLength(0);
+    // ...and specifically no notice smuggled in on that channel.
+    expect(
+      events.some(
+        (e) =>
+          e.type === 'assistant.message' &&
+          /output-token limit/.test((e as { text: string }).text),
+      ),
+      'a textless truncated turn must not emit a standalone notice as assistant.message',
+    ).toBe(false);
+    // A turn.completed must still follow — the turn ends cleanly, not as an error.
+    // (The orphan-strip invariant itself is pinned by the first test above.)
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
+  });
+
+  // #952: when the turn DID produce text, the notice rides on that message and
+  // names the dropped tool — this is the path that stayed after #960 narrowed
+  // the textless case above.
+  it('names the dropped tool in the notice when partial text exists', async () => {
+    const client = makeClient(() =>
+      fromArray(makeTextStreamWithDroppedTool('partial answer', ['read_file'])),
+    );
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'do a thing' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+    const msgs = events.filter((e) => e.type === 'assistant.message') as Array<{ text: string }>;
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.text).toContain('partial answer');
+    expect(msgs[0]!.text).toContain('read_file');
+    expect(msgs[0]!.text).toContain('NOT dispatched');
+  });
+
+  // The notice de-dupes tool names (`[...new Set(names)]`) so a model that
+  // truncated two calls to the SAME tool does not read as two distinct
+  // dropped actions.
+  it('names a repeated dropped tool only once in the truncation notice', async () => {
+    const client = makeClient(() =>
+      fromArray(makeTextStreamWithDroppedTool('partial answer', ['read_file', 'read_file'])),
+    );
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'do a thing' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+    const msgs = events.filter((e) => e.type === 'assistant.message') as Array<{ text: string }>;
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.text.match(/read_file/g)).toHaveLength(1);
+  });
+
+  // #952: text-only truncation (no tool_use) → notice without a tool name.
+  // #960: the partial text and the notice are now ONE assistant.message, not
+  // two — see the dedicated merged-message test below for the full rationale.
+  it('surfaces a truncation notice for text-only max_tokens truncation', async () => {
+    const client = makeClient(() => fromArray(makeTextStream('a partial answer', 'max_tokens')));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'explain' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+    const noticed = events.filter(
+      (e) => e.type === 'assistant.message' && /output-token limit/.test((e as { text: string }).text),
+    ) as Array<{ text: string }>;
+    expect(noticed).toHaveLength(1);
+    expect(noticed[0]!.text).toContain('allow a longer reply');
+    expect(noticed[0]!.text).not.toContain('NOT dispatched');
+    // The model's partial text is delivered INSIDE the same assistant.message
+    // as the notice (#960), not as a separate event.
+    expect(noticed[0]!.text).toContain('a partial answer');
+    // Exactly one assistant.message for the whole turn — the partial text and
+    // the notice were never split into two events.
+    expect(events.filter((e) => e.type === 'assistant.message')).toHaveLength(1);
+  });
+
+  // #960: a last-wins consumer (the non-streaming `sendMessage()` path in
+  // agent-session.ts, and a subagent's final-message capture in handle.ts)
+  // keeps only the LAST `assistant.message` of a turn. Before this fix,
+  // emitNonToolUseTerminal yielded the partial text and the truncation notice
+  // as two separate assistant.message events, so those consumers silently
+  // discarded the model's real (partial) answer and kept only the warning.
+  // Pin the fix at the event level: one merged message, answer first.
+  it('merges the partial answer and the truncation notice into ONE assistant.message (#960)', async () => {
+    const client = makeClient(() => fromArray(makeTextStream('a partial answer', 'max_tokens')));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'never called' }));
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'explain' }],
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 8_000,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+      }),
+    );
+
+    const assistantMessages = events.filter(
+      (e) => e.type === 'assistant.message',
+    ) as Array<{ text: string }>;
+    // A last-wins consumer keeps assistantMessages.at(-1) — that message alone
+    // must carry both the answer and the notice, or the answer is lost.
+    expect(assistantMessages).toHaveLength(1);
+    const merged = assistantMessages[0]!.text;
+    expect(merged).toContain('output-token limit');
+    // Answer first, notice second, joined by exactly one blank line — the
+    // model's raw text is preserved verbatim as the message prefix so a
+    // last-wins consumer reading this one event still recovers the full
+    // partial answer.
+    expect(merged.startsWith('a partial answer\n\n')).toBe(true);
+    expect(merged.indexOf('a partial answer')).toBeLessThan(merged.indexOf('output-token limit'));
+
+    // The `suggestion` event (short text) must carry ONLY the model's own
+    // text, never the appended operator notice.
+    const suggestion = events.find((e) => e.type === 'suggestion') as
+      | { suggestion: string }
+      | undefined;
+    expect(suggestion, 'a suggestion should be emitted for short partial text').toBeDefined();
+    expect(suggestion!.suggestion).toBe('a partial answer');
+    expect(suggestion!.suggestion).not.toContain('output-token limit');
   });
 
   it('rolls back the assistant tool_use push when the dispatcher accessor throws', async () => {

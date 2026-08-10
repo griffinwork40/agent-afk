@@ -11,6 +11,39 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.5] - 2026-08-10
+
+### Changed
+- memoize getWriteDenylist keyed on AFK_HOME + AFK_STATE_DIR (#781) (#972) (023bdd1)
+
+## [5.103.4] - 2026-08-10
+
+### Fixed
+- rebuild the Environment block on cwd re-anchor (#876) (#980) (f4ae203)
+
+## [5.103.3] - 2026-08-10
+
+### Fixed
+- bound stopReason at a single chokepoint instead of 6 call sites (#717) (#977) (df150f8)
+
+## [5.103.2] - 2026-08-09
+
+### Fixed
+- warn once per malformed env var instead of once globally (#780) (#975) (4eafa92)
+
+## [5.103.1] - 2026-08-09
+
+### Fixed
+- surface max_tokens truncation instead of failing silently (#952) (#960) (03a9ca3)
+
+### Changed
+- replace fixed-sleep races with vi.waitFor polls (#969) (97e6c67)
+
+## [5.103.0] - 2026-08-09
+
+### Added
+- add conditional steelman critic to Wave 2 (#967) (b14b3df)
+
 ## [5.102.0] - 2026-08-09
 
 ### Added

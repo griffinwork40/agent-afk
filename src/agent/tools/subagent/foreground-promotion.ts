@@ -27,7 +27,7 @@ import type { TraceWriter } from '../../trace/index.js';
 import { emitQueuedUserMessage } from '../../trace/emit.js';
 import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
-import { emitTelemetry, truncate, measurePartial, buildFailurePayload } from './failure-payload.js';
+import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailurePayload } from './failure-payload.js';
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
@@ -298,12 +298,11 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         status: result.status,
         duration_ms: Date.now() - startedAt,
         content_chars: content.length,
-        // Capped like the sibling free-form telemetry fields (error_message,
-        // schema_error below): on the OpenAI-compatible path stopReason is
-        // provider-controlled free text (translate.ts / responses-translate.ts),
-        // not a bounded enum, so it must not ride into telemetry uncapped.
-        // Omit-when-absent preserved: `undefined` stays `undefined`, never ''.
-        stop_reason: result.stopReason !== undefined ? truncate(result.stopReason, 64) : undefined,
+        // Bounded via the shared chokepoint (see failure-payload.ts) rather
+        // than an inline `truncate(x, 64)` — that duplication (this site,
+        // its failure-path sibling below, and background-registry.ts) is how
+        // the sixth call site drifted unbounded (#717).
+        stop_reason: boundedStopReason(result.stopReason),
         depth,
         tool_call_count: trace?.toolCalls.length,
         // Preserve `false` ("confirmed absent") distinctly from `undefined`
@@ -348,9 +347,8 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         ? truncate(result.schemaError.message)
         : undefined,
       partial_output_chars: measurePartial(result.partialOutput),
-      // Capped — see the completed-path comment above for why (provider
-      // free text on the OpenAI-compatible path, not a bounded enum).
-      stop_reason: result.stopReason !== undefined ? truncate(result.stopReason, 64) : undefined,
+      // Bounded via the shared chokepoint — see the completed-path comment above.
+      stop_reason: boundedStopReason(result.stopReason),
       depth,
       // Mirror trace fields on the failure path — failed subagents are the
       // highest-value debugging target and benefit most from this signal.
