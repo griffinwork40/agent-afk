@@ -262,6 +262,18 @@ describe('IME composition', () => {
     expect(h.ac.isOpen()).toBe(false);
     expect(h.menu.hidden).toBe(true);
   });
+
+  it('resets composing state on blur so subsequent typing is not suppressed', async () => {
+    const h = harness();
+    // Start composition without ending it — simulate IME abandoned mid-compose.
+    h.input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    h.input.blur();
+    // Re-focus and type normally — refresh must not be suppressed.
+    h.input.focus();
+    await h.type('/mi');
+    expect(h.ac.isOpen()).toBe(true);
+    expect(h.rows()).toEqual(['/mint']);
+  });
 });
 
 describe('keyboard', () => {

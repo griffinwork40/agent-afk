@@ -139,8 +139,11 @@ export class SlashAutocomplete {
       if (!this.composing) void this.refresh();
     });
     // Invalidate an in-flight refresh so its eventual result cannot reopen.
+    // Reset composing on blur: if the IME is abandoned without compositionend
+    // (e.g. switching windows), plain typing must not stay permanently suppressed.
     this.deps.input.addEventListener('blur', () => {
       this.focused = false;
+      this.composing = false;
       this.close(true);
     });
   }
