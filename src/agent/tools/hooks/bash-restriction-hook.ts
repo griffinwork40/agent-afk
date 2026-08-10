@@ -567,10 +567,22 @@ export function deriveRestrictedSubstrings(grants: {
   // so granting a narrow subdir (e.g. ~/Library/Application Support/Cursor/User)
   // wrongly un-gated the whole sensitive parent (~/Library/Application Support)
   // and every sibling app dir under it.
+
+  // Invariant: `!rel.startsWith('..')` alone is NOT a sufficient coverage test
+  // on Windows. When `g` and `c` sit on different drives, `path.win32.relative`
+  // returns a DRIVE-QUALIFIED ABSOLUTE string (`C:\Users\me\.ssh`) rather than a
+  // `..\`-prefixed one, which the bare check reads as "g covers c" and drops the
+  // candidate — so a single cross-drive grant (`readRoots: ['D:\\scratch']`)
+  // silently emptied the ENTIRE credential floor. `!path.isAbsolute(rel)` is the
+  // same guard `computeContainment` carries for this exact class (see
+  // handlers/_cwd-utils.ts), and it makes this predicate byte-identical to
+  // `ungatedSensitiveRoot`'s (subagent/root-validation.ts) — that identity is
+  // what the #852 lockstep property rests on, so the two must not drift again.
+  // No-op on POSIX: relative() between two absolute paths is never absolute.
   return candidates.filter((c) => {
     for (const g of granted) {
       const rel = path.relative(g, c);
-      if (rel === '' || !rel.startsWith('..')) return false;
+      if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return false;
     }
     return true;
   });
