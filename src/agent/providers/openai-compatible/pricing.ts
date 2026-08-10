@@ -32,8 +32,9 @@
  * Rates are USD per 1 million tokens.
  *
  * MAINTENANCE: these are OpenAI's publicly announced list prices as of
- * 2025-04 (the gpt-4.1 launch window), recorded from prior knowledge per this
- * task's constraint against live pricing-page lookups — NOT re-verified
+ * 2025-04 (the gpt-4.1 launch window), extended 2026-08 to include the
+ * historical o1-preview alias and o1-pro — recorded from prior knowledge per
+ * this task's constraint against live pricing-page lookups — NOT re-verified
  * against a live pricing page at authoring time. Update this table whenever
  * OpenAI revises rates or ships a new model family; an unknown model yields
  * `undefined` cost (never zero) — see {@link deriveCallCostUsd}.
@@ -56,6 +57,8 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   ['gpt-4.1-nano', { inputPerMTok: 0.1, outputPerMTok: 0.4, cachedInputPerMTok: 0.025 }],
   // o-series reasoning models.
   ['o1', { inputPerMTok: 15.0, outputPerMTok: 60.0, cachedInputPerMTok: 7.5 }],
+  ['o1-preview', { inputPerMTok: 15.0, outputPerMTok: 60.0, cachedInputPerMTok: 7.5 }],
+  ['o1-pro', { inputPerMTok: 150.0, outputPerMTok: 600.0 }], // No caching discount.
   ['o1-mini', { inputPerMTok: 3.0, outputPerMTok: 12.0, cachedInputPerMTok: 1.5 }],
   ['o3', { inputPerMTok: 2.0, outputPerMTok: 8.0, cachedInputPerMTok: 0.5 }],
   ['o3-mini', { inputPerMTok: 1.1, outputPerMTok: 4.4, cachedInputPerMTok: 0.55 }],
