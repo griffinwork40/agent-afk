@@ -37,13 +37,22 @@
  * @module agent/plugins/command-files
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseSkillMetadata, type PluginSkillMetadata } from './tool-injector.js';
 import { normalizeSkillSource, resolveContained } from './source-guard.js';
+import { env } from '../../config/env.js';
 
 /** Mirrors the depth cap in `extractPluginSkills` — cycle/runaway guard. */
 const MAX_DEPTH = 10;
+
+/**
+ * `PluginSkillMetadata.name` is typed optional (frontmatter-derived skills
+ * may parse without one), but every entry pushed by `extractPluginCommands`
+ * below always carries a path-derived name. Narrowing locally lets the sort
+ * comparator read `a.name`/`b.name` as `string` without an `as string` cast.
+ */
+type DiscoveredCommand = PluginSkillMetadata & { name: string };
 
 /**
  * Discover every `*.md` under `<pluginPath>/commands/`.
@@ -68,7 +77,21 @@ export function extractPluginCommands(
   const root = join(pluginPath, 'commands');
   if (!existsSync(root)) return [];
 
-  const out: PluginSkillMetadata[] = [];
+  // Resolve the containment root's realpath ONCE, before the walk starts, and
+  // thread it into every resolveContained call below instead of letting each
+  // call re-resolve `root` itself. Re-resolving per-entry (the previous
+  // behavior) meant a symlink swapped into `commands/` mid-walk could shift
+  // the containment baseline between sibling files. A root that is missing or
+  // cannot be resolved behaves exactly as it did before this change: no
+  // commands are discovered.
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    return [];
+  }
+
+  const out: DiscoveredCommand[] = [];
 
   function walk(dir: string, segments: string[], depth: number): void {
     if (depth > MAX_DEPTH) return;
@@ -79,15 +102,28 @@ export function extractPluginCommands(
       return;
     }
     for (const entry of entries) {
-      if (entry.startsWith('.')) continue;
+      if (entry.startsWith('.')) {
+        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping dotfile: ${join(dir, entry)}\n`);
+        continue;
+      }
       // A path segment carrying the namespace separator is ambiguous:
       // `commands/a:b.md` and `commands/a/b.md` would both derive `a:b`, and
       // the first-wins guard downstream would silently drop one of them.
-      if (entry.includes(':')) continue;
+      if (entry.includes(':')) {
+        if (env.AFK_DEBUG) {
+          process.stderr.write(`[afk] skipping path segment with colon: ${join(dir, entry)}\n`);
+        }
+        continue;
+      }
       const full = join(dir, entry);
       // Skip anything resolving outside the commands/ tree — a symlinked
       // `help.md -> ~/.ssh/id_rsa` must never become a dispatchable prompt.
-      if (resolveContained(root, full) === undefined) continue;
+      if (resolveContained(root, full, realRoot) === undefined) {
+        if (env.AFK_DEBUG) {
+          process.stderr.write(`[afk] skipping path outside commands/ tree: ${full}\n`);
+        }
+        continue;
+      }
       let stat;
       try {
         stat = statSync(full);
@@ -98,10 +134,18 @@ export function extractPluginCommands(
         walk(full, [...segments, entry], depth + 1);
         continue;
       }
-      if (!stat.isFile() || !entry.endsWith('.md')) continue;
+      if (!stat.isFile() || !entry.endsWith('.md')) {
+        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping non-markdown entry: ${full}\n`);
+        continue;
+      }
 
       const base = entry.slice(0, -'.md'.length);
-      if (base.length === 0) continue;
+      if (base.length === 0) {
+        if (env.AFK_DEBUG) {
+          process.stderr.write(`[afk] skipping command with empty basename: ${full}\n`);
+        }
+        continue;
+      }
       const name = [...segments, base].join(':');
 
       // Reuse the SKILL.md frontmatter parser verbatim: the fields a command
@@ -122,7 +166,10 @@ export function extractPluginCommands(
       }
       // A command with no readable body is inert — skip rather than register a
       // slash command that would dispatch an empty prompt.
-      if (!parsed.body || parsed.body.length === 0) continue;
+      if (!parsed.body || parsed.body.length === 0) {
+        if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping command with empty body: ${full}\n`);
+        continue;
+      }
 
       out.push({
         ...parsed,
@@ -138,10 +185,6 @@ export function extractPluginCommands(
   walk(root, [], 0);
   // Codepoint order, not localeCompare: ICU collation varies by locale and
   // build, and this ordering is what makes collision resolution reproducible.
-  out.sort((a, b) => {
-    const an = a.name ?? '';
-    const bn = b.name ?? '';
-    return an < bn ? -1 : an > bn ? 1 : 0;
-  });
+  out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return out;
 }

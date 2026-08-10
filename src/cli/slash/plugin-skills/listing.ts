@@ -120,7 +120,7 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
       slashName,
       display,
       description: skill.description,
-      source: 'plugin',
+      source: skill.source ?? 'plugin',
     });
   }
 
@@ -309,7 +309,7 @@ function renderSkillDetail(
   const displayName = hint ? `/${name} ${hint}` : `/${name}`;
   const source: SkillSource = registrySkill
     ? registryOriginToSource(registrySkill.origin)
-    : 'plugin';
+    : (pluginSkill?.source ?? 'plugin');
 
   // Wrap the body to the terminal width (capped) so long descriptions read as
   // paragraphs instead of one runaway line.

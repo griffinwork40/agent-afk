@@ -621,6 +621,32 @@ describe('plugin commands/*.md integration', () => {
     expect(matches[0]?.source).toBe('plugin');
     expect(matches[0]?.description).toBe('A skill');
   });
+
+  it('filters a commands/*.md file with `audience: internal` when tier is locked', () => {
+    vi.stubEnv('AFK_INTERNAL', '');
+    const full = join(tmpDir, 'commands', 'secret.md');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(
+      full,
+      '---\ndescription: Maintainer only\naudience: internal\n---\n\nSecret command body.\n',
+    );
+
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    expect(entries.map((e) => e.name)).not.toContain('secret');
+  });
+
+  it('surfaces a commands/*.md file with `audience: internal` when AFK_INTERNAL=1', () => {
+    vi.stubEnv('AFK_INTERNAL', '1');
+    const full = join(tmpDir, 'commands', 'secret.md');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(
+      full,
+      '---\ndescription: Maintainer only\naudience: internal\n---\n\nSecret command body.\n',
+    );
+
+    const entries = collectSkillEntries([{ type: 'local', path: tmpDir }]);
+    expect(entries.map((e) => e.name)).toContain('secret');
+  });
 });
 
 describe('discoverPluginSkillBodies', () => {

@@ -141,7 +141,7 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
             const inv: SkillInvocation = {
               skillName: bareSkillName,
               rawArgs: dispatchArgs,
-              source: 'plugin',
+              source: skill.source ?? 'plugin',
               capabilities: { compose: true, subagents: true },
             };
             const sessionIdMaybe = ctx.session.current.sessionId;
@@ -216,6 +216,7 @@ export async function registerPluginSkills(
     name: c.name,
     description: c.description,
     ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
+    ...(c.source ? { source: c.source } : {}),
   }));
 
   const harvestedFlags = harvestAllPluginSkillFlags();

@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { extractPluginCommands } from './command-files.js';
+import { normalizeSkillSource, MAX_SKILL_SOURCE_CHARS } from './source-guard.js';
 
 let pluginDir: string;
 
@@ -86,12 +87,17 @@ describe('extractPluginCommands', () => {
 
   it('skips a path segment containing the namespace separator', () => {
     // `a:b.md` would derive the same name as `a/b.md`; registering both lets
-    // the first-wins guard drop one at random.
-    writeCommand('a:b.md', '---\ndescription: d\n---\n\nBody.\n');
-    writeCommand('a/b.md', '---\ndescription: d\n---\n\nBody.\n');
-    const names = extractPluginCommands(pluginDir).map((c) => c.name);
+    // the first-wins guard drop one at random. Distinct bodies make it
+    // possible to tell WHICH file survived: deleting the colon guard would
+    // let `a:b.md` register (or race with `a/b.md`), and either outcome must
+    // fail this assertion since only the `a/b.md` body is expected to survive.
+    writeCommand('a:b.md', '---\ndescription: d\n---\n\nColon body.\n');
+    writeCommand('a/b.md', '---\ndescription: d\n---\n\nSlash body.\n');
+    const found = extractPluginCommands(pluginDir);
+    const names = found.map((c) => c.name);
     expect(names).toEqual(['a:b']);
     expect(names).toHaveLength(1);
+    expect(found[0]?.body).toBe('Slash body.');
   });
 
   it('namespaces a subdirectory with a colon (CC parity)', () => {
@@ -160,5 +166,33 @@ describe('extractPluginCommands', () => {
     expect(names).toContain('good');
     // The malformed sibling must be dropped, not registered with a raw body.
     expect(names).not.toContain('bad');
+  });
+});
+
+describe('normalizeSkillSource', () => {
+  it('strips NUL bytes', () => {
+    expect(normalizeSkillSource('a\x00b')).toBe('ab');
+  });
+
+  it('strips other C0 control chars but keeps \\t and \\n', () => {
+    expect(normalizeSkillSource('a\x01\x02b\tc\nd\x1F')).toBe('ab\tc\nd');
+  });
+
+  it('truncates over-cap input to exactly MAX_SKILL_SOURCE_CHARS', () => {
+    const oversized = 'x'.repeat(MAX_SKILL_SOURCE_CHARS + 100);
+    const result = normalizeSkillSource(oversized);
+    expect(result.length).toBe(MAX_SKILL_SOURCE_CHARS);
+    expect(result).toBe('x'.repeat(MAX_SKILL_SOURCE_CHARS));
+  });
+
+  it('still handles BOM+CRLF when combined with control stripping and truncation', () => {
+    const result = normalizeSkillSource('\uFEFF---\r\ndescription: d\r\n---\r\n\r\nBody.\r\n');
+    expect(result).toBe('---\ndescription: d\n---\n\nBody.\n');
+  });
+
+  it('never throws, and truncation alone never discards non-control content', () => {
+    expect(() => normalizeSkillSource('\x00\x00\x00')).not.toThrow();
+    expect(() => normalizeSkillSource('x'.repeat(MAX_SKILL_SOURCE_CHARS * 2))).not.toThrow();
+    expect(normalizeSkillSource('a\x00')).toBe('a');
   });
 });

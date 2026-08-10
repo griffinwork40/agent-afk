@@ -395,7 +395,7 @@ export function parseSkillMetadata(
  * as-is. Otherwise `BUILTIN_TOOL_NAMES` (statically imported from schemas.ts)
  * plus the orchestration tool names are used as the default.
  */
-function resolveKnownToolNames(
+export function resolveKnownToolNames(
   provided?: ReadonlySet<string>,
 ): ReadonlySet<string> {
   if (provided !== undefined) return provided;

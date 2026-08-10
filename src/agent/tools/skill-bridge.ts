@@ -22,7 +22,7 @@ import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
-import { extractPluginSkills } from '../plugins/tool-injector.js';
+import { extractPluginSkills, resolveKnownToolNames } from '../plugins/tool-injector.js';
 import { extractPluginCommands } from '../plugins/command-files.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
 import { parseAgentMarkdown } from '../agents/parser.js';
@@ -249,13 +249,20 @@ export function collectSkillEntries(
   //    same tier gate — extractPluginSkills() surfaces it as `audience`,
   //    defaulting to 'public' when absent.
   const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
+  // Resolve once for the whole scan rather than per-file inside each
+  // extractor — resolveKnownToolNames() rebuilds a Set from two static
+  // arrays on every call, which otherwise reruns once per discovered file.
+  const knownToolNames = resolveKnownToolNames();
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
     // SKILL.md first, then commands/*.md — so a plugin shipping both forms
     // under one name resolves to the skill, matching Claude Code ("if a skill
     // and a command share the same name, the skill takes precedence"). The
     // `seen` guard below is what enforces it.
-    const skills = [...extractPluginSkills(plugin.path), ...extractPluginCommands(plugin.path)];
+    const skills = [
+      ...extractPluginSkills(plugin.path, knownToolNames),
+      ...extractPluginCommands(plugin.path, knownToolNames),
+    ];
     for (const skill of skills) {
       if (!skill.name || seen.has(skill.name)) continue;
       if (!isSkillVisible({ audience: skill.audience }, internalUnlocked)) continue;
@@ -334,12 +341,18 @@ export function discoverPluginSkillBodies(
   // loadImportFromConfig() + existsSync work only runs when no pluginConfigs
   // were supplied (a caller passing pluginConfigs skips it entirely).
   const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
+  // Resolve once for the whole scan — see the matching comment in
+  // collectSkillEntries() above.
+  const knownToolNames = resolveKnownToolNames();
 
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
     // Same order + first-wins rule as collectSkillEntries: a SKILL.md and a
     // commands/*.md sharing one name resolve to the skill.
-    const skills = [...extractPluginSkills(plugin.path), ...extractPluginCommands(plugin.path)];
+    const skills = [
+      ...extractPluginSkills(plugin.path, knownToolNames),
+      ...extractPluginCommands(plugin.path, knownToolNames),
+    ];
     for (const skill of skills) {
       if (skill.name && skill.body && skill.body.length > 0 && !bodies.has(skill.name)) {
         bodies.set(skill.name, {

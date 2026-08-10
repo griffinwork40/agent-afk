@@ -8,11 +8,14 @@
  * `setState()` (ESM importers cannot reassign an imported binding).
  */
 
+import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
+
 export interface DiscoveredSkill {
   /** Name as reported by `session.supportedCommands()` — may include a `<plugin>:` namespace. */
   name: string;
   description: string;
   argumentHint?: string;
+  source?: SkillManifestEntry['source'];
 }
 
 /** Track collisions detected at registration time so /skills can render alts and boot can notify. */
