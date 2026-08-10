@@ -376,7 +376,8 @@ export function discoverPluginAgents(
       try {
         content = readFileSync(filePath, 'utf8');
       } catch (err) {
-        warn(`[afk] agents: cannot read ${safePath}: ${err instanceof Error ? err.message : String(err)}`);
+        const safeError = sanitizeForDisplay(err instanceof Error ? err.message : String(err));
+        warn(`[afk] agents: cannot read ${safePath}: ${safeError}`);
         continue; // unreadable file — contained, skip
       }
       const parsed = parseAgentMarkdown(content, (msg) => warn(`[afk] agents: ${safePath}: ${msg}`));

@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildSkillManifest,
@@ -30,6 +30,18 @@ import { _resetPluginScanCache } from '../plugins-scanner.js';
 import { getPluginsDir } from '../../paths.js';
 import type { RegisteredAgent } from '../agents/types.js';
 
+const fsMocks = vi.hoisted(() => ({
+  readFileSync: vi.fn(),
+  realReadFileSync: undefined as typeof import('node:fs').readFileSync | undefined,
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  fsMocks.realReadFileSync = actual.readFileSync;
+  fsMocks.readFileSync.mockImplementation(actual.readFileSync);
+  return { ...actual, readFileSync: fsMocks.readFileSync };
+});
+
 // ---------------------------------------------------------------------------
 // File-level isolation: redirect AFK_HOME + cwd before every test so the
 // disk scan inside collectSkillEntries() always finds an empty skills dir.
@@ -41,6 +53,7 @@ let _isolatedCwd: string;
 let _origCwd: string;
 
 beforeEach(() => {
+  fsMocks.readFileSync.mockImplementation(fsMocks.realReadFileSync!);
   _isolatedAfkHome = mkdtempSync('/tmp/skill-bridge-test-afkhome-');
   _isolatedCwd = mkdtempSync('/tmp/skill-bridge-test-cwd-');
   _origCwd = process.cwd();
@@ -780,20 +793,23 @@ describe('discoverPluginAgents', () => {
     writeManifest(pluginA, 'demo');
     const dir = join(pluginA, 'agents');
     mkdirSync(dir, { recursive: true });
-    const unreadablePath = join(dir, 'locked.md');
+    const unreadablePath = join(dir, '\x1B]0;pwned\x07locked.md');
     writeAgentFile(pluginA, 'ok.md', 'works');
     writeFileSync(unreadablePath, '---\nname: locked\ndescription: d\n---\nbody\n');
-    chmodSync(unreadablePath, 0o000);
+    fsMocks.readFileSync.mockImplementation((path, options) => {
+      if (path === unreadablePath) {
+        throw new Error(`EACCES: permission denied, open '${unreadablePath}'`);
+      }
+      return fsMocks.realReadFileSync!(path, options);
+    });
 
     const warn = vi.fn();
-    try {
-      const agents = discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
-      expect(agents.map((a) => a.name)).toEqual(['demo:works']);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot read'));
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(unreadablePath));
-    } finally {
-      chmodSync(unreadablePath, 0o644); // restore so afterEach's rmSync can clean up
-    }
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+    expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot read'));
+    const message = warn.mock.calls[0]?.[0] as string;
+    expect(message).not.toContain('\x1B');
+    expect(message).not.toContain('\x07');
   });
 
   it('sanitizes an escape-sequence-bearing file path before it reaches warn', () => {
