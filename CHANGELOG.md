@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.104.0] - 2026-08-10
+
+### Added
+- add a pricing table so token usage records real cost (#865) (#981) (79303e8)
+
+### Changed
+- cover tool_call conditional spreads through both provider dispatch paths (#633) (#988) (cf797fb)
+
 ## [5.103.5] - 2026-08-10
 
 ### Changed
