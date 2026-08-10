@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.106.0] - 2026-08-10
+
+### Added
+- make claude-sonnet-4-6 the default sonnet model (+ correct its 1M/128k limits) (#991) (d42eb1c)
+
 ## [5.105.0] - 2026-08-10
 
 ### Added
