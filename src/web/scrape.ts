@@ -21,6 +21,7 @@
  */
 
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
+import { extractionAdvisory } from './extraction-advisory.js';
 import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.js';
 import { assertEgressAllowed, guardedFetch, EgressBlockedError } from './egress-guard.js';
 import type { EgressGuardOptions } from './egress-guard.js';
@@ -70,6 +71,12 @@ export interface ScrapeResult {
   finalUrl: string;
   /** True when the result came from the Playwright-render escalation. */
   usedRender: boolean;
+  /**
+   * Set when extraction retained suspiciously little of the source's visible
+   * text — see `extraction-advisory.ts`. Optional and non-blocking: the result
+   * is still a success, and consumers that ignore it behave exactly as before.
+   */
+  advisory?: string;
 }
 
 /** Run extraction without throwing — degenerate DOMs yield empty content. */
@@ -116,6 +123,10 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
 
   // ---- Phase 1: plain fetch -------------------------------------------------
   let fetched: ExtractedContent | null = null;
+  // Retained for the extraction-advisory ratio in Phase 2: `body` is scoped to
+  // the try block below, and the advisory needs the source html to compare
+  // against what extraction kept.
+  let fetchedHtml = '';
   let fetchedUrl = url;
   let fetchStatus: number | null = null;
   let fetchErr: unknown = null;
@@ -147,6 +158,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
         return { title: '', markdown: body.trim(), finalUrl: fetchedUrl, usedRender: false };
       }
       // HTML or unknown content-type → extraction pipeline.
+      fetchedHtml = body;
       fetched = await safeExtract(body, fetchedUrl);
       // Extraction is an async boundary (lazy jsdom/Readability/Turndown import
       // on first call, then parse) that does NOT observe the signal. Re-check
@@ -175,11 +187,21 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   // ---- Phase 2: decide whether to escalate ----------------------------------
   const thin = fetched === null || fetched.textLength < THIN_CONTENT_CHARS;
   if (!thin && fetched !== null) {
+    // This is the exact path that produced the silent-gap bug: extraction looked
+    // healthy, so no render escalation ran, so nothing told the model a section
+    // had been dropped. Attach the advisory here and nowhere else — the thin and
+    // render paths already give the model a visible signal (a tiny body, or a
+    // render that superseded the fetch).
+    const advisory = extractionAdvisory({
+      html: fetchedHtml,
+      extractedTextLength: fetched.textLength,
+    });
     return {
       title: fetched.title,
       markdown: fetched.markdown,
       finalUrl: fetchedUrl,
       usedRender: false,
+      ...(advisory !== undefined ? { advisory } : {}),
     };
   }
 

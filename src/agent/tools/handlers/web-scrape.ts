@@ -36,6 +36,7 @@ import { checkEgressTarget, guardedFetch, EgressBlockedError } from '../../../we
 import type { EgressGuardOptions as GuardOpts } from '../../../web/egress-guard.js';
 import type { RenderFn } from '../../../web/types.js';
 import { headAndTail } from './_output-cap.js';
+import { withAdvisory } from '../../../web/extraction-advisory.js';
 import {
   hasPlaywrightInstallHint,
   isPlaywrightMissing,
@@ -289,7 +290,9 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             };
           }
           const capped = capBody(result.markdown, parsed.maxBytes);
-          return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
+          // `withAdvisory` is applied after capping, deliberately — see its docstring.
+          const content = withAdvisory(capped.content, result.advisory);
+          return { content, ...(capped.truncated ? { truncated: true } : {}) };
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           // As in raw mode: a guard refusal (initial URL, redirect hop, or the
