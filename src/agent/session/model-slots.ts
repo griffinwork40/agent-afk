@@ -98,8 +98,11 @@ export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
 // ~30% more text into the same window (Sonnet 5's tokenizer emits ~30% more
 // tokens for identical input, so its 1M holds proportionally less). Both models
 // are 1M context / 128k output (see model-limits.ts), so this is a lateral move
-// in capability, not a downgrade. To go back to Sonnet 5, revert this one line
-// plus the matching provider-runtime.ts DEFAULT_MODEL and STARTER_MODELS entries.
+// in capability, not a downgrade. This constant is the SOLE source of truth for
+// the default Sonnet: provider-runtime.ts DEFAULT_MODEL imports it, and
+// provider-runtime.test.ts pins both that delegation and the leading
+// STARTER_MODELS entry against it. So going back to Sonnet 5 is this one line
+// (plus the starter list's display copy, which is prose, not a wire id).
 export const CLAUDE_SONNET_ID = 'claude-sonnet-4-6';
 // Claude Opus 5 (GA 2026-07-24) — dateless wire id, itself a pinned snapshot
 // (post-4.6 naming convention). Bumped from claude-opus-4-8; the `opus`/`opus_1m`
