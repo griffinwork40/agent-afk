@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.103.4] - 2026-08-10
+
+### Fixed
+- rebuild the Environment block on cwd re-anchor (#876) (#980) (f4ae203)
+
 ## [5.103.3] - 2026-08-10
 
 ### Fixed
