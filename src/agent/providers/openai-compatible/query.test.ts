@@ -3128,6 +3128,134 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     expect('subagentId' in completed.payload).toBe(false);
   });
 
+  // Issue #633: circuitBreaker, failureClass, batchIndex, and batchSize are
+  // conditional spreads in buildToolCallCompletedPayload (providers/shared/
+  // tool-call-trace.ts) that were previously exercised only by the builder's
+  // own isolated unit test — never through a real provider dispatch path.
+  // These three tests drive the openai-compatible dispatch path
+  // (query/dispatch-append.ts) end to end so a future edit that drops one of
+  // these spreads at this call site fails here.
+  it('includes circuitBreaker, failureClass, batchIndex, and batchSize on tool_call.completed when the ToolResult carries them', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_meta_1', 'search', '{"q":"hello"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => ({
+        content: 'search result',
+        isError: true,
+        circuitBreaker: true,
+        failureClass: 'repeat-failure',
+        batchIndex: 1,
+        batchSize: 3,
+      }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-meta-1',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    const completed = toolCallEvents[1];
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect(completed.payload.circuitBreaker).toBe(true);
+    expect(completed.payload.failureClass).toBe('repeat-failure');
+    expect(completed.payload.batchIndex).toBe(1);
+    expect(completed.payload.batchSize).toBe(3);
+  });
+
+  it('omits circuitBreaker, failureClass, batchIndex, and batchSize from tool_call.completed when the ToolResult lacks them', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_meta_2', 'search', '{"q":"hello"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => ({ content: 'search result' }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-meta-2',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    const completed = toolCallEvents[1];
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect('circuitBreaker' in completed.payload).toBe(false);
+    expect('failureClass' in completed.payload).toBe(false);
+    expect('batchIndex' in completed.payload).toBe(false);
+    expect('batchSize' in completed.payload).toBe(false);
+  });
+
+  it('omits batchIndex and batchSize from tool_call.completed when only batchIndex is present (both-or-neither guard)', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_meta_3', 'search', '{"q":"hello"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => ({
+        content: 'search result',
+        batchIndex: 2,
+        // batchSize intentionally omitted — the builder requires BOTH to be
+        // numbers before spreading either onto the payload.
+      }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-meta-3',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    const completed = toolCallEvents[1];
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect('batchIndex' in completed.payload).toBe(false);
+    expect('batchSize' in completed.payload).toBe(false);
+  });
+
   // Issue #612: when the query runs inside a forked child, `config.subagentId`
   // is set at the fork site (subagent.ts) and must flow onto every tool_call
   // trace event so the child's work is attributable in the shared parent trace.
