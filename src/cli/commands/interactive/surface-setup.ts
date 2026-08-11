@@ -100,14 +100,18 @@ export async function setupSurface(
   // consecutive-duplicate) that leave _entries unchanged — incrementing
   // blindly on those would cause lastSubmitted to return the wrong entry.
   let lastSubmittedEntry: string | undefined;
-  const historyRing = surface.history as {
+  // surface.history is undefined in test stubs and non-TTY surfaces that
+  // never construct a ReplHistory. Guard before the cast so the typeof
+  // check below doesn't throw on undefined property access.
+  const historyRing = (surface.history ?? undefined) as {
     getEntries?: () => readonly string[];
     push?: (text: string) => void;
-  };
-  // When push or getEntries is absent (test stubs, non-TTY surfaces, partial
-  // history implementations), lastSubmitted stays undefined for the session
-  // lifetime — safe because ghost text is disabled on those surfaces.
-  if (typeof historyRing.push === 'function') {
+  } | undefined;
+  // When history, push, or getEntries is absent (test stubs, non-TTY
+  // surfaces, partial history implementations), lastSubmitted stays
+  // undefined for the session lifetime — safe because ghost text is
+  // disabled on those surfaces.
+  if (historyRing && typeof historyRing.push === 'function') {
     const originalPush = historyRing.push.bind(historyRing);
     historyRing.push = (text: string) => {
       const headBefore = historyRing.getEntries?.()?.[0];
