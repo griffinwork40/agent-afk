@@ -44,6 +44,14 @@ export interface SuggestContext {
    * Returning an empty string is fine.
    */
   getTranscriptTail(): string;
+  /**
+   * The most-recently submitted user input (the entry at the top of the
+   * history ring, pushed at the start of the previous turn). Used by
+   * `getDeterministicGhost` to skip echoing the last submission as a
+   * Tier-1 history suggestion. Optional so existing test doubles that
+   * predate the field stay valid; an absent value means "unknown".
+   */
+  lastSubmitted?: string;
   /** Return recent submitted commands (newest first, up to ~5). */
   getRecentCommands(): string[];
   /** Whether the LLM suggestion tier is active (`AFK_SUGGEST_ENABLED` truthy). */

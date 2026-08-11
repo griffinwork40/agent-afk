@@ -34,8 +34,11 @@ export interface SkillInvocation {
    * - `project`: scanned from `<cwd>/.afk/skills/`
    * - `plugin`: discovered via session.supportedCommands() (forward path)
    * - `imported`: live-read from a trusted source binary via `importFrom`
+   * - `command`: a Claude Code `commands/*.md` file; routes identically to
+   *   `plugin` for preflight purposes, and is listed separately only so a
+   *   future handler can tell the two apart without a lossy cast.
    */
-  source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
+  source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported' | 'command';
   /** Capabilities the model can rely on. Constant today; here for future flexibility. */
   capabilities: {
     /** `compose` DAG tool available. */

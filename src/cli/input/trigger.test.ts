@@ -23,6 +23,7 @@ import {
   filterFileCandidatesCached,
   filterSlashCandidates,
   filterFlagCandidates,
+  buildSlashUniverse,
   buildFileCandidates,
   invalidateFileScanCache,
   __fileScanCacheSize,
@@ -30,7 +31,7 @@ import {
   type FileDirent,
 } from './trigger.js';
 import { MAX_FILE_MATCHES } from '../multi-line-reader.js';
-import { resetRegistry } from '../slash/registry.js';
+import { register, resetRegistry } from '../slash/registry.js';
 import { registerAll } from '../slash/index.js';
 
 let tmpRoot: string;
@@ -148,6 +149,25 @@ describe('filterFileCandidates', () => {
 
   it('unreadable scan dir yields no candidates (no throw)', () => {
     expect(filterFileCandidates('/no/such/dir/x', '/nonexistent-cwd')).toEqual([]);
+  });
+});
+
+describe('buildSlashUniverse', () => {
+  it('omits empty-string hints from canonical commands and aliases', () => {
+    resetRegistry();
+    register({
+      name: '/empty-hint',
+      aliases: ['/eh'],
+      summary: 'test command',
+      hint: '',
+      handler: async () => ({ continue: true }),
+    });
+
+    const entries = buildSlashUniverse().filter((entry) =>
+      ['/empty-hint', '/eh'].includes(entry.name),
+    );
+    expect(entries).toHaveLength(2);
+    expect(entries.every((entry) => !Object.hasOwn(entry, 'hint'))).toBe(true);
   });
 });
 

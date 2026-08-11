@@ -624,12 +624,30 @@ describe('OpenAICompatibleQuery — text streaming', () => {
       expect(final.usage.outputTokens).toBe(2);
       expect(final.usage.totalTokens).toBe(12);
       expect(final.usage.stopReason).toBe('stop');
+      expect(final.usage.totalCostUsd).toBeCloseTo(0.0000027, 10);
       // Regression guard: turn.completed must carry durationMs so the REPL
       // footer (`◦ Xs · $cost · N tok`) renders the turn duration. Pre-fix
       // the openai-compatible runTurn passed bare accumulatedUsage with no
       // wall-clock anchor — the footer dropped to just `◦ N tok`.
       expect(typeof final.usage.durationMs).toBe('number');
       expect(final.usage.durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('leaves cost unknown when a recognized model is served by a custom endpoint', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'local' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000, total_tokens: 2_000_000 },
+      },
+    ];
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'), {
+      baseURL: 'http://localhost:8080/v1',
+    });
+    const final = (await collect(q)).at(-1);
+    expect(final?.type).toBe('turn.completed');
+    if (final?.type === 'turn.completed') {
+      expect(final.usage.totalCostUsd).toBeUndefined();
     }
   });
 

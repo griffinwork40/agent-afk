@@ -16,6 +16,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { QueuePanel, type QueuePanelDeps } from './queue-panel.js';
+import { mountSlashHighlight } from './slash-highlight.js';
 
 interface Harness {
   panel: QueuePanel;
@@ -89,6 +90,30 @@ function type(h: Harness, text: string): void {
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
+
+describe('QueuePanel — composer mirror sync', () => {
+  // Regression: submit() clears `input.value` programmatically, which fires no
+  // `input` event. The slash-highlight mirror is the only visible copy of the
+  // composer text (the textarea is painted transparent), so the sent prompt
+  // stayed on screen after the textarea had already been emptied.
+  it('repaints the mirror after the composer is cleared on send', async () => {
+    const h = harness();
+    const mirror = document.createElement('div');
+    document.body.appendChild(mirror);
+    mountSlashHighlight(h.input, mirror, () => false);
+    const mirrorText = (): string => (mirror.textContent ?? '').replace(/\u200b/g, '');
+
+    h.input.value = 'a prompt';
+    h.input.dispatchEvent(new Event('input'));
+    expect(mirrorText()).toBe('a prompt');
+
+    h.send.click();
+    await settle();
+
+    expect(h.input.value).toBe('');
+    expect(mirrorText()).toBe('');
+  });
+});
 
 describe('QueuePanel — one entry per turn', () => {
   it('sends only the first entry and holds the rest while a turn runs', async () => {

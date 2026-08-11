@@ -11,7 +11,7 @@
 import { isAbsolute, resolve as resolvePath } from 'node:path';
 import { isReadDenied } from '../handlers/read-denylist.js';
 import { realpathSafe } from '../handlers/_cwd-utils.js';
-import { isTooBroadRoot } from './root-validation.js';
+import { isTooBroadRoot, ungatedSensitiveRoot } from './root-validation.js';
 import {
   readOptional,
   readOptionalAliasString,
@@ -290,6 +290,20 @@ export function parseAgentInput(input: unknown): AgentInput {
           `cwd alone and grant those paths via readRoots. Got: ${JSON.stringify(cwdValue)}`,
       );
     }
+    // 5. ANCESTOR-OF-CREDENTIAL rejection (#852). `cwd` becomes the child's
+    // `resolveBase`, which `deriveRestrictedSubstrings` seeds into `granted`
+    // alongside the explicit roots — so a cwd ABOVE a credential root lifts
+    // that root's bash gate exactly as a readRoots grant would, and this leg
+    // is what closes the resolveBase half of the hole.
+    const cwdUngates = ungatedSensitiveRoot(resolvedCwd);
+    if (cwdUngates !== undefined) {
+      throw new Error(
+        `Agent tool cwd must not be at or above a credential root the bash ` +
+          `restriction protects (${cwdUngates}) — anchoring the child there would ` +
+          `silently drop that whole tree out of its bash gate. Pass a directory ` +
+          `outside it. Got: ${JSON.stringify(cwdValue)}`,
+      );
+    }
     cwd = cwdValue;
   }
 
@@ -336,6 +350,19 @@ export function parseAgentInput(input: unknown): AgentInput {
           `Agent tool writeRoots entries must not be a filesystem root, your home ` +
             `directory, or an ancestor of it (checked after resolving symlinks) — ` +
             `grant a specific subdirectory instead, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      // Ancestor-of-credential rejection (#852) — writeRoots feed the same
+      // `granted` set in `deriveRestrictedSubstrings` that cwd and readRoots
+      // do, so the guard has to be identical on all three or the erosion just
+      // moves to whichever field is left unchecked.
+      const wUngates = ungatedSensitiveRoot(resolvedEntry);
+      if (wUngates !== undefined) {
+        throw new Error(
+          `Agent tool writeRoots entries must not be at or above a credential root ` +
+            `the bash restriction protects (${wUngates}) — granting it would silently ` +
+            `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+            `subdirectory instead. Got: ${JSON.stringify(entry)}`,
         );
       }
       roots.push(entry);
@@ -419,6 +446,22 @@ export function parseAgentInput(input: unknown): AgentInput {
         throw new Error(
           `Agent tool readRoots entries must not target a protected/credential path ` +
             `(matches read-denylist entry: ${denied.matched}), got: ${JSON.stringify(entry)}`,
+        );
+      }
+      // (c) ANCESTOR-OF-CREDENTIAL rejection (#852). Distinct from (b): the
+      // denylist catches an entry that IS (or resolves into) a credential path,
+      // but says nothing about one that merely sits ABOVE it. Those are exactly
+      // the grants that empty the bash floor — `~/Library/Application Support`
+      // is neither too broad nor read-denied, yet covers every browser secret
+      // tree beneath it.
+      const ungates = ungatedSensitiveRoot(resolved);
+      if (ungates !== undefined) {
+        throw new Error(
+          `Agent tool readRoots entries must not be at or above a credential root ` +
+            `the bash restriction protects (${ungates}) — granting it would silently ` +
+            `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+            `subdirectory, or the individual FILES you need: a single file is a valid ` +
+            `read root and grants exactly that file. Got: ${JSON.stringify(entry)}`,
         );
       }
       roots.push(entry);

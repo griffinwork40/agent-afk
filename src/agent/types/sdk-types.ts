@@ -334,6 +334,13 @@ export type SlashCommand = {
   name: string;
   description: string;
   argumentHint: string;
+  /**
+   * Origin of the underlying skill/command. Inlined literal union (rather
+   * than importing `SkillManifestEntry['source']` from
+   * `tools/skill-bridge.js`) to avoid a dependency from this SDK-shape file
+   * on the skill-discovery module.
+   */
+  source?: 'builtin' | 'user' | 'project' | 'plugin' | 'imported' | 'command';
 };
 
 export type SDKControlGetContextUsageResponse = {

@@ -83,6 +83,34 @@ describe('translateChunk — text streaming', () => {
     ]);
     expect(usageFromState(state).totalTokens).toBe(10);
   });
+
+  it('prices totalCostUsd when a known model id is supplied (issue #865)', () => {
+    const { state } = collect([
+      {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 },
+      },
+    ]);
+    // gpt-4o: $2.50 input + $10.00 output per MTok -> $12.50 at 1M/1M.
+    const u = usageFromState(state, 'gpt-4o');
+    expect(u.totalCostUsd).toBeCloseTo(12.5, 8);
+  });
+
+  it('leaves totalCostUsd undefined — not zero — for an unrecognized model (issue #865/#866)', () => {
+    const { state } = collect([
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 500, completion_tokens: 200 } },
+    ]);
+    const u = usageFromState(state, 'mlx-community/qwen3-30b-a3b-4bit');
+    expect(u.totalCostUsd).toBeUndefined();
+    expect(u).not.toHaveProperty('totalCostUsd', 0);
+  });
+
+  it('leaves totalCostUsd undefined when no model is supplied at all', () => {
+    const { state } = collect([
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 500, completion_tokens: 200 } },
+    ]);
+    expect(usageFromState(state).totalCostUsd).toBeUndefined();
+  });
 });
 
 describe('translateChunk — reasoning streaming', () => {

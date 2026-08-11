@@ -473,3 +473,104 @@ describe('scrapeToMarkdown — SSRF egress guard (issue #575)', () => {
     vi.unstubAllEnvs();
   });
 });
+
+describe('scrapeToMarkdown — extraction advisory', () => {
+  /**
+   * A page whose visible text is dominated by regions Readability discards
+   * (nav/aside/footer), so extraction succeeds and looks healthy while most of
+   * the page's words never reach the model. This is the shape that produced the
+   * silent-gap retry storm: rich enough to skip the render escalation, lossy
+   * enough that a section the caller wanted can be missing.
+   */
+  function lossyHtml(): string {
+    const filler = (label: string, n: number): string =>
+      Array.from(
+        { length: n },
+        (_, i) =>
+          `<p>${label} row ${i + 1}: this text exists in the source document and a human ` +
+          `reading the page in a browser would see it rendered on screen.</p>`,
+      ).join('');
+    return (
+      '<!DOCTYPE html><html><head><title>Docs</title></head><body>' +
+      `<nav>${filler('nav', 40)}</nav>` +
+      '<article><h1>Docs</h1><p>The one short paragraph Readability keeps as the article ' +
+      'body, padded just enough to clear the thin-content floor and skip the render.</p>' +
+      '<p>A second sentence of genuine article prose so extraction has a real region.</p>' +
+      '</article>' +
+      `<aside>${filler('aside', 40)}</aside><footer>${filler('footer', 40)}</footer>` +
+      '</body></html>'
+    );
+  }
+
+  it('attaches an advisory when extraction keeps little of the visible text', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: lossyHtml() }));
+    const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));
+
+    const out = await scrapeToMarkdown('https://example.com/docs', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      renderFn,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+      lookupFn: publicLookup,
+    });
+
+    // Behavior is unchanged: still a successful fetch-path result, no render.
+    expect(out.usedRender).toBe(false);
+    expect(renderFn).not.toHaveBeenCalled();
+    expect(out.markdown.length).toBeGreaterThan(0);
+    expect(out.advisory).toBeDefined();
+    expect(out.advisory).toContain('mode: "raw"');
+  });
+
+  it('checks a rich rendered page for extraction loss', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: SHELL_HTML }));
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: lossyHtml(),
+      finalUrl: 'https://example.com/docs',
+      httpStatus: 200,
+    }));
+
+    const out = await scrapeToMarkdown('https://example.com/docs', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      renderFn,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+      lookupFn: publicLookup,
+    });
+
+    expect(out.usedRender).toBe(true);
+    expect(out.advisory).toContain('mode: "raw"');
+  });
+
+  it('attaches no advisory to an ordinary article', async () => {
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: richHtml() }));
+    const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));
+
+    const out = await scrapeToMarkdown('https://example.com/a', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      renderFn,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+      lookupFn: publicLookup,
+    });
+
+    expect(out.advisory).toBeUndefined();
+  });
+
+  it('attaches no advisory to a non-html body (no extraction ran)', async () => {
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'application/json', body: JSON.stringify({ a: 1 }) }),
+    );
+    const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));
+
+    const out = await scrapeToMarkdown('https://example.com/api', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      renderFn,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+      lookupFn: publicLookup,
+    });
+
+    expect(out.advisory).toBeUndefined();
+  });
+});

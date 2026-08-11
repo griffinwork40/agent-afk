@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import { env } from '../../config/env.js';
 import { getSubagentOutputsDir } from '../../paths.js';
 import type { OutputEvent } from '../types/session-types.js';
-import { debugLog } from '../../utils/debug.js';
+import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
 import { redactInlineSecrets } from './prompt-dump.js';
 import { truncateToBytes } from './subagent-prompt-capture.js';
 
@@ -186,7 +186,16 @@ export function createSubagentOutputRecorder(
         await appendFile(file, body, { encoding: 'utf8', mode: 0o600 });
       })
       .catch((err: unknown) => {
-        debugLog(`subagent-output-capture failed: ${String(err)}`);
+        // Dedup key: the witness session label — `createSubagentOutputRecorder`
+        // returns null unless `shouldCaptureSubagentOutput` confirms it's
+        // defined, so one first-failure warning covers this whole child's
+        // transcript, not one per appended record. See #850.
+        reportArtifactFailure(
+          'subagent-output-capture',
+          input.sessionId ?? 'unknown',
+          'write',
+          err,
+        );
       });
   };
 
@@ -253,7 +262,12 @@ export function createSubagentOutputRecorder(
           wroteSayThisTurn = false;
         }
       } catch (err) {
-        debugLog(`subagent-output-capture observe failed: ${String(err)}`);
+        reportArtifactFailure(
+          'subagent-output-capture',
+          input.sessionId ?? 'unknown',
+          'observe',
+          err,
+        );
       }
     },
     end(reason: string): void {
@@ -261,7 +275,12 @@ export function createSubagentOutputRecorder(
         flushSaid();
         write(buildRecord('end', { reason }));
       } catch (err) {
-        debugLog(`subagent-output-capture end failed: ${String(err)}`);
+        reportArtifactFailure(
+          'subagent-output-capture',
+          input.sessionId ?? 'unknown',
+          'end',
+          err,
+        );
       }
     },
   };

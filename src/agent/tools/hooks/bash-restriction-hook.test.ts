@@ -461,6 +461,38 @@ describe('deriveRestrictedSubstrings — no coverage regression from sharing the
   });
 });
 
+describe('deriveRestrictedSubstrings — a cross-drive grant cannot empty the floor (#852)', () => {
+  // Invariant: `path.win32.relative` returns a DRIVE-QUALIFIED ABSOLUTE string
+  // (`C:\Users\me\.ssh`) when the two paths sit on different drives, never a
+  // `..\`-prefixed one. So `!rel.startsWith('..')` alone reads a cross-drive
+  // pair as "the grant covers this candidate" and DROPS it — one grant on an
+  // unrelated drive emptied the entire credential floor, reachable by any
+  // model-supplied readRoots entry. `!path.isAbsolute(rel)` is the fix.
+  //
+  // Gated to win32 because the topology is UNREACHABLE on POSIX: relative()
+  // between two absolute POSIX paths is never absolute. That unreachability is
+  // why the bug survived review, and it is why the platform-independent guard
+  // is the predicate-identity test in subagent/root-validation.test.ts — this
+  // case does not run on the default CI matrix (the windows leg is opt-in).
+  it.runIf(process.platform === 'win32')(
+    'keeps every candidate when the only grant sits on another drive',
+    () => {
+      const unfiltered = deriveRestrictedSubstrings({
+        resolveBase: undefined,
+        readRoots: [],
+        writeRoots: [],
+      });
+      const otherDrive = homedir().toUpperCase().startsWith('D:') ? 'C:\\scratch' : 'D:\\scratch';
+      const withCrossDriveGrant = deriveRestrictedSubstrings({
+        resolveBase: undefined,
+        readRoots: [otherDrive],
+        writeRoots: [],
+      });
+      expect(withCrossDriveGrant).toEqual(unfiltered);
+    },
+  );
+});
+
 describe('createBashRestrictionHook — credential parity with the typed read denylist', () => {
   // Invariant: a credential path floored for read_file / grep / glob is floored
   // for bash too. Each path below was readable with `cat` while the typed tools

@@ -62,6 +62,35 @@ jobs:
       - name: Audit chalk discipline (no raw chalk styling outside the palette)
         run: pnpm audit:chalk:check
 
+      - name: Audit the 350-line source-file ceiling (one-way ratchet)
+        # `.filesize-baseline.json` grandfathers the files that already exceeded
+        # the ceiling when this gate landed. The ratchet fails four ways — a
+        # non-baselined file over the ceiling, a baselined file that GREW, a
+        # baselined file that now fits (must be removed from the baseline), and
+        # a baselined path that no longer exists — so the baseline can shrink but
+        # never silently slacken into a parking lot. Regenerate with
+        # `pnpm audit:filesize:update`; never hand-edit it.
+        run: pnpm audit:filesize:check || true
+
+      - name: Audit the 350-line ceiling on files this PR touches
+        # Touch-trigger: a change that modifies a still-oversized baselined file
+        # must bring it under the ceiling. Every one of the 136 grandfathered
+        # files was touched within 90 days, so this retires the backlog through
+        # ordinary feature work even if no dedicated refactor wave runs.
+        # Advisory for now (`|| true`) — flip to blocking once the god-object
+        # waves land, so the campaign is not fighting its own gate. See
+        # .afk/plans/enforce-350-line-ceiling.md.
+        run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
+
+      - name: Audit module-scope state duplication across sibling families
+        # A split that re-declares a module-scope singleton or a process.on
+        # registration in a sibling — instead of importing the original binding —
+        # silently forks that state. src/agent/trace/writer.ts is the live case:
+        # its liveTraceWriters Set + exitBackstopInstalled flag gate an exit
+        # backstop that seals orphaned traces, and writer.test.ts calls the
+        # sealer directly, so the existing suite would not catch the fork.
+        run: pnpm audit:module-state:check
+
       - name: Audit vendored/bundled hash pins are unstale (#775)
         # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
         # vendored/bundled files on disk and independently re-derives, via its

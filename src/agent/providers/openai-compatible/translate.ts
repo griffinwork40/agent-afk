@@ -22,6 +22,7 @@
  */
 
 import type { ProviderEvent, ProviderUsage } from '../../provider.js';
+import { deriveCallCostUsd } from './pricing.js';
 
 /**
  * Minimal shape of a Chat Completions streaming chunk. We do not import the
@@ -172,10 +173,16 @@ export function* translateChunk(
 /**
  * Build the `ProviderUsage` object the harness expects on `turn.completed`.
  *
- * Cost: not computed here — providers vary wildly in pricing and we have no
- * single source of truth. Callers can multiply by their own rate table.
+ * `model` is optional — mirrors `anthropic-direct/usage.ts:toProviderUsage`:
+ * when supplied, `totalCostUsd` is derived from the static
+ * {@link deriveCallCostUsd} pricing table; when omitted or unrecognized, the
+ * field is left `undefined` so callers can tell "cost unavailable" apart from
+ * "cost is zero" (see `pricing.ts` module docstring — issue #865/#866).
+ * Passed explicitly by the caller rather than read from `state.model`
+ * because the Responses-API translator (`responses-translate.ts`) never
+ * populates that field.
  */
-export function usageFromState(state: StreamState): ProviderUsage {
+export function usageFromState(state: StreamState, model?: string): ProviderUsage {
   const u = state.usage;
   if (!u) {
     return {
@@ -187,7 +194,7 @@ export function usageFromState(state: StreamState): ProviderUsage {
   const cachedInputTokens = u.prompt_tokens_details?.cached_tokens ?? 0;
   const inputTokens = u.prompt_tokens ?? 0;
   const outputTokens = u.completion_tokens ?? 0;
-  return {
+  const out: ProviderUsage = {
     inputTokens,
     outputTokens,
     cachedInputTokens,
@@ -197,6 +204,11 @@ export function usageFromState(state: StreamState): ProviderUsage {
     isError: false,
     raw: { ...u },
   };
+  if (model) {
+    const cost = deriveCallCostUsd(model, inputTokens, outputTokens, cachedInputTokens);
+    if (cost !== undefined) out.totalCostUsd = cost;
+  }
+  return out;
 }
 
 /**

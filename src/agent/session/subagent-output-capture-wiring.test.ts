@@ -116,10 +116,18 @@ describe('subagent output capture wiring', () => {
       await drainTurn(session, 'second');
       const files = await waitForOutputFiles(sessionId, 1);
       expect(files).toHaveLength(1);
-      const body = fs.readFileSync(
-        path.join(getSubagentOutputsDir(sessionId), 'multi-turn-child.md'),
-        'utf8',
-      );
+      // Capture writes are fire-and-forget (async appendFile chained off the
+      // event loop). The file exists after the first turn, but the second
+      // turn's append may not have flushed yet — poll for the expected content
+      // rather than reading once.
+      const filePath = path.join(getSubagentOutputsDir(sessionId), 'multi-turn-child.md');
+      const deadline = Date.now() + 2000;
+      let body = '';
+      while (Date.now() < deadline) {
+        body = fs.readFileSync(filePath, 'utf8');
+        if ((body.match(/### assistant/g) ?? []).length >= 2) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
       // Header written once; two turns recorded into the same file.
       expect(body.match(/subagentId:/g)?.length).toBe(1);
       expect((body.match(/### assistant/g) ?? []).length).toBeGreaterThanOrEqual(2);

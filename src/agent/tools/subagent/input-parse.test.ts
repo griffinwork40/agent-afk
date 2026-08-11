@@ -24,6 +24,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/** Escape a literal path for embedding in a `toThrow` RegExp. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 describe('parseAgentInput', () => {
   describe('input shape', () => {
     it('throws when input is not an object (string)', () => {
@@ -585,6 +590,17 @@ describe('parseAgentInput', () => {
       const result = parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/feat-y' });
       expect(result.cwd).toBe('/tmp/wt/feat-y');
     });
+
+    // --- Hardening: ancestor-of-credential rejection (#852) ---
+    // cwd becomes the child's resolveBase, which deriveRestrictedSubstrings
+    // seeds into `granted` alongside the explicit roots — so an ancestor cwd
+    // lifts the bash floor exactly as a readRoots grant would.
+    it('throws when cwd is an ancestor of a bash credential root (#852)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      expect(() => parseAgentInput({ prompt: 'p', cwd: appSupport })).toThrow(
+        /must not be at or above a credential root/,
+      );
+    });
   });
 
   describe('writeRoots', () => {
@@ -698,6 +714,17 @@ describe('parseAgentInput', () => {
       });
       expect(result.cwd).toBe('/tmp/wt/x');
       expect(result.writeRoots).toEqual(['/sibling/repo']);
+    });
+
+    // --- Hardening: ancestor-of-credential rejection (#852) ---
+    // writeRoots feed the same `granted` set in deriveRestrictedSubstrings that
+    // cwd and readRoots do, so leaving this field unchecked would just relocate
+    // the erosion rather than close it.
+    it('throws when an entry is an ancestor of a bash credential root (#852)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [appSupport] })).toThrow(
+        /must not be at or above a credential root/,
+      );
     });
   });
 
@@ -848,6 +875,88 @@ describe('parseAgentInput', () => {
       expect(() => parseAgentInput({ prompt: 'p', readRoots: [afkConfig] })).toThrow(
         /must not target a protected\/credential path/,
       );
+    });
+
+    // --- Hardening: ancestor-of-credential rejection (#852) ---
+    //
+    // Invariant: a model must not be able to self-grant a root that ERASES a
+    // bash credential floor. `deriveRestrictedSubstrings` deliberately drops
+    // any candidate a granted root is an ancestor of — that is the documented
+    // operator lift (`/allow-dir ~/.ssh` means the operator wants it) — but a
+    // model reaches the same filter with no human in the loop via this field.
+    // The rejection lives here rather than in the grant filter precisely
+    // because this parser sees ONLY model-authored agent-tool calls, while
+    // every operator grant path reaches the grant manager without passing
+    // through it. That is what keeps the operator's lift working.
+    //
+    // These cases are distinct from the denylist cases above: the denylist
+    // catches an entry that IS a credential path; these catch one that merely
+    // sits ABOVE it.
+    it('throws when an entry is an ancestor of a bash credential root (~/Library/Application Support) (#852)', () => {
+      // The issue's concrete vector: not too-broad (isTooBroadRoot anchors only
+      // on /, home and the AFK dirs) and not read-denied (only the per-browser
+      // subtrees under it are), yet granting it drops the whole vendor tree —
+      // browser secrets included — out of the child's bash gate.
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [appSupport] })).toThrow(
+        /must not be at or above a credential root/,
+      );
+    });
+
+    it('throws when an entry is a PARENT of a bash credential root (~/Library, ~/.config) (#852)', () => {
+      const home = os.homedir();
+      expect(() =>
+        parseAgentInput({ prompt: 'p', readRoots: [path.join(home, 'Library')] }),
+      ).toThrow(/must not be at or above a credential root/);
+      // ~/.config covers both ~/.config/gh and ~/.config/gcloud.
+      expect(() =>
+        parseAgentInput({ prompt: 'p', readRoots: [path.join(home, '.config')] }),
+      ).toThrow(/must not be at or above a credential root/);
+    });
+
+    it('throws when an entry is ~/.afk (ancestor of the AFK credential dir) (#852)', () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', readRoots: [path.join(os.homedir(), '.afk')] }),
+      ).toThrow(/must not be at or above a credential root/);
+    });
+
+    it('names the specific root it would un-gate, so the model can narrow the grant', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [appSupport] })).toThrow(
+        new RegExp(escapeRe(appSupport)),
+      );
+    });
+
+    // --- The guard must not over-reject (#852) ---
+    it('still accepts a NARROWER path inside a sensitive tree', () => {
+      // Containment direction matters: a grant INSIDE a sensitive tree does not
+      // lift the enclosing root, so it is not this guard's business. (The
+      // denylisted browser subtrees are still refused by the isReadDenied leg.)
+      const inner = path.join(os.homedir(), 'Library', 'Application Support', 'SomeApp', 'data');
+      expect(parseAgentInput({ prompt: 'p', readRoots: [inner] }).readRoots).toEqual([inner]);
+    });
+
+    it('still accepts the deliberately-grantable AFK state + framework dirs', () => {
+      // Regression guard for the fork read-denial remedy (Gap A / Gap C in
+      // forkSubagent): confined children legitimately read these, and neither
+      // is an ancestor of ~/.afk/config, so the new check must leave them alone.
+      const home = os.homedir();
+      for (const dir of [
+        path.join(home, '.afk', 'state'),
+        path.join(home, '.afk', 'agent-framework'),
+      ]) {
+        expect(parseAgentInput({ prompt: 'p', readRoots: [dir] }).readRoots).toEqual([dir]);
+      }
+    });
+
+    it('still accepts ordinary out-of-repo dirs (the #662 use case)', () => {
+      const downloads = path.join(os.homedir(), 'Downloads');
+      expect(parseAgentInput({ prompt: 'p', readRoots: [downloads] }).readRoots).toEqual([
+        downloads,
+      ]);
+      expect(parseAgentInput({ prompt: 'p', readRoots: ['/tmp/scratch'] }).readRoots).toEqual([
+        '/tmp/scratch',
+      ]);
     });
 
     // --- Deliberate divergence from writeRoots ---

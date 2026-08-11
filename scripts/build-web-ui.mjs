@@ -46,7 +46,7 @@ async function main() {
   });
 
   // Static shell files sit beside the bundle.
-  for (const name of ['index.html', 'styles.css']) {
+  for (const name of ['index.html', 'styles.css', 'approvals.css']) {
     const from = join(frontendDir, name);
     if (!existsSync(from)) {
       console.error(`build-web-ui: missing ${name}`);
