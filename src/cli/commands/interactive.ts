@@ -35,6 +35,7 @@ import {
   resolveWorktreeDisposition,
   resolveWorktreeExitPolicy,
 } from './interactive/worktree-disposition.js';
+import { installUnknownCommandGuard } from './interactive/unknown-command-guard.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
@@ -188,7 +189,7 @@ export function startupHintLine(): string {
 }
 
 export function registerInteractiveCommand(program: Command): void {
-  program
+  const interactiveCmd = program
     .command('interactive', { isDefault: true })
     .description('Start interactive chat session')
     .argument(
@@ -893,6 +894,12 @@ export function registerInteractiveCommand(program: Command): void {
 
       await runReplLoop(ctx, transcript, turnState, handleSigint);
     });
+
+  // Issue #710 mode 1: name the unrecognized COMMAND, not its trailing flag,
+  // when a mistyped subcommand (e.g. `afk config_set env X --unset`) falls
+  // through to this default command. See unknown-command-guard.ts for the
+  // full mechanism and the documented residual gap (mode 2).
+  installUnknownCommandGuard(interactiveCmd, program);
 }
 
 /**
