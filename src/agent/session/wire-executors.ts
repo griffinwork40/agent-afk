@@ -181,6 +181,10 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const skillTraceOpt = skillTraceWriter !== undefined ? { traceWriter: skillTraceWriter } : {};
   const apiKeyOpt = apiKey !== undefined ? { apiKey } : {};
   const bgRegistryOpt = backgroundRegistry !== undefined ? { backgroundRegistry } : {};
+  // Match loadAgentRegistry's default sink so plugin discovery remains audible
+  // on non-interactive surfaces that do not provide a boot-warning collector.
+  const registryWarn =
+    agentRegistryWarn ?? ((message: string) => process.stderr.write(message + '\n'));
   // Session-static snapshot shared by all root executors and inherited by
   // descendants. Do not resolve inside execute(): sibling calls must not see
   // different caps if the process environment changes during the session.
@@ -206,8 +210,11 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   //    dispatch at every depth.
   const agentRegistry = loadAgentRegistry({
     ...cwdOpt,
-    pluginAgents: discoverPluginAgents(),
-    ...(agentRegistryWarn !== undefined ? { warn: agentRegistryWarn } : {}),
+    // Same sink both scanners report through: a malformed plugin agent file
+    // now warns exactly like a malformed user/project one (#752) instead of
+    // vanishing silently ahead of the merge below.
+    pluginAgents: discoverPluginAgents(undefined, registryWarn),
+    warn: registryWarn,
   });
 
   // 4. Shared by the `agent` and `skill` executors so plugin skill children

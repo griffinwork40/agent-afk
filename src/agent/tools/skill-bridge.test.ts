@@ -28,6 +28,19 @@ import {
 import { registerSkill, _resetRegistry } from '../../skills/index.js';
 import { _resetPluginScanCache } from '../plugins-scanner.js';
 import { getPluginsDir } from '../../paths.js';
+import type { RegisteredAgent } from '../agents/types.js';
+
+const fsMocks = vi.hoisted(() => ({
+  readFileSync: vi.fn(),
+  realReadFileSync: undefined as typeof import('node:fs').readFileSync | undefined,
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  fsMocks.realReadFileSync = actual.readFileSync;
+  fsMocks.readFileSync.mockImplementation(actual.readFileSync);
+  return { ...actual, readFileSync: fsMocks.readFileSync };
+});
 
 // ---------------------------------------------------------------------------
 // File-level isolation: redirect AFK_HOME + cwd before every test so the
@@ -40,6 +53,7 @@ let _isolatedCwd: string;
 let _origCwd: string;
 
 beforeEach(() => {
+  fsMocks.readFileSync.mockImplementation(fsMocks.realReadFileSync!);
   _isolatedAfkHome = mkdtempSync('/tmp/skill-bridge-test-afkhome-');
   _isolatedCwd = mkdtempSync('/tmp/skill-bridge-test-cwd-');
   _origCwd = process.cwd();
@@ -872,6 +886,81 @@ describe('discoverPluginAgents', () => {
     writeAgentFile(pluginA, 'ok.md', 'works');
     const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
     expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+  });
+
+  // Regression (#752): parseAgentMarkdown's warn callback was never passed at
+  // this call site, so a malformed plugin agent file vanished with zero
+  // diagnostics — the agent simply didn't exist, and nothing said why. This
+  // pins that the discard is now audible (naming the file and the parser's
+  // reason) while remaining non-fatal: the rest of the plugin's agents still
+  // load and discovery never throws.
+  it('warns naming the file and parse reason when a plugin agent file is malformed, and still skips it non-fatally', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    const brokenPath = join(dir, 'broken.md');
+    writeFileSync(brokenPath, 'no frontmatter at all');
+    writeAgentFile(pluginA, 'ok.md', 'works');
+
+    const warn = vi.fn();
+    let agents: RegisteredAgent[] = [];
+    expect(() => {
+      agents = discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+    }).not.toThrow();
+
+    // Non-fatal: the valid sibling agent still loads.
+    expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+    // Audible: warn names the offending file and the parser's specific reason.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('missing frontmatter (file must start with ---)'),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(brokenPath));
+  });
+
+  it('warns rather than silently skipping an unreadable plugin agent file', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    const unreadablePath = join(dir, '\x1B]0;pwned\x07locked.md');
+    writeAgentFile(pluginA, 'ok.md', 'works');
+    writeFileSync(unreadablePath, '---\nname: locked\ndescription: d\n---\nbody\n');
+    fsMocks.readFileSync.mockImplementation((path, options) => {
+      if (path === unreadablePath) {
+        throw new Error(`EACCES: permission denied, open '${unreadablePath}'`);
+      }
+      return fsMocks.realReadFileSync!(path, options);
+    });
+
+    const warn = vi.fn();
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+    expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cannot read'));
+    const message = warn.mock.calls[0]?.[0] as string;
+    expect(message).not.toContain('\x1B');
+    expect(message).not.toContain('\x07');
+  });
+
+  it('sanitizes an escape-sequence-bearing file path before it reaches warn', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    // ESC ] 0 ; ... BEL is an OSC window-title sequence — a real escape family
+    // sanitizeForDisplay strips (terminal-sanitize.ts), not just cosmetic text.
+    const escapeyName = '\x1B]0;pwned\x07evil.md';
+    writeFileSync(join(dir, escapeyName), 'no frontmatter at all');
+
+    const warn = vi.fn();
+    discoverPluginAgents([{ type: 'local', path: pluginA }], warn);
+
+    expect(warn).toHaveBeenCalled();
+    for (const call of warn.mock.calls) {
+      const message = call[0] as string;
+      expect(message).not.toContain('\x1B');
+      expect(message).not.toContain('\x07');
+    }
   });
 
   it('returns empty for a plugin with no agents/ dir', () => {
