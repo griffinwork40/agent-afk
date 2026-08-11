@@ -69,6 +69,8 @@ export interface TurnRecord {
 export interface SessionStats {
   totalTurns: number;
   totalCostUsd: number;
+  /** Count of turns where cost data was unavailable; `totalCostUsd` is a lower bound when > 0. */
+  unpricedTurns: number;
   totalTokens: number;
   totalDurationMs: number;
   sessionStartTime: number;

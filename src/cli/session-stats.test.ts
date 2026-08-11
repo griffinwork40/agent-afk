@@ -56,6 +56,35 @@ describe('session-stats', () => {
     expect(rec.durationMs).toBe(0);
   });
 
+  it('createSessionStats initialises unpricedTurns to 0', () => {
+    const s = createSessionStats('sonnet');
+    expect(s.unpricedTurns).toBe(0);
+  });
+
+  it('recordTurn increments unpricedTurns when totalCostUsd is missing', () => {
+    const s = createSessionStats('sonnet');
+    // Turn with no cost data at all
+    recordTurn(s, 'a', 'b', undefined);
+    expect(s.unpricedTurns).toBe(1);
+    // Turn with cost data — should NOT increment
+    recordTurn(s, 'c', 'd', { totalCostUsd: 0.01, durationMs: 100, usage: { input_tokens: 50, output_tokens: 20 } });
+    expect(s.unpricedTurns).toBe(1);
+    // Turn with cost data explicitly undefined inside metadata
+    recordTurn(s, 'e', 'f', { durationMs: 200, usage: { input_tokens: 30, output_tokens: 10 } });
+    expect(s.unpricedTurns).toBe(2);
+    // totalCostUsd 0 is priced — not an unpriced turn
+    recordTurn(s, 'g', 'h', { totalCostUsd: 0, durationMs: 50, usage: { input_tokens: 10, output_tokens: 5 } });
+    expect(s.unpricedTurns).toBe(2);
+  });
+
+  it('resetStats zeroes unpricedTurns', () => {
+    const s = createSessionStats('sonnet');
+    recordTurn(s, 'x', 'y', undefined);
+    expect(s.unpricedTurns).toBe(1);
+    resetStats(s);
+    expect(s.unpricedTurns).toBe(0);
+  });
+
   it('recordTurn stores tool events when provided', () => {
     const s = createSessionStats('sonnet');
     const tools = [
