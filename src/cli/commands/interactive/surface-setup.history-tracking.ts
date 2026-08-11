@@ -38,10 +38,10 @@ export function installHistorySubmissionTracker(
   // surface.history is undefined in test stubs and non-TTY surfaces that
   // never construct a ReplHistory. Guard before the cast so the typeof
   // check below doesn't throw on undefined property access.
-  const historyRing = (surface.history ?? undefined) as {
+  const historyRing = (surface.history as {
     getEntries?: () => readonly string[];
     push?: (text: string) => void;
-  } | undefined;
+  } | undefined);
 
   if (historyRing && typeof historyRing.push === 'function') {
     const originalPush = historyRing.push.bind(historyRing);

@@ -814,31 +814,20 @@ describe('primePromptSuggestion — sanitization ordering', () => {
 // guard the invariant: a discarded push never advances lastSubmittedEntry.
 
 import { ReplHistory } from './history.js';
+import { installHistorySubmissionTracker } from '../../cli/commands/interactive/surface-setup.history-tracking.js';
+import type { InputSurface } from '../../cli/input/input-surface.js';
 
 /**
- * Reproduce the surface-setup.ts monkey-patch logic against a real
- * ReplHistory instance, returning a tracker for the lastSubmittedEntry.
+ * Wraps the real `installHistorySubmissionTracker` from surface-setup against
+ * a real ReplHistory instance. Constructs a minimal InputSurface-shaped stub
+ * whose only meaningful field is `history` — the tracker only reads/patches
+ * `surface.history.push` and `surface.history.getEntries`.
  */
 function applyLastSubmittedPatch(history: ReplHistory): {
   getLastSubmitted: () => string | undefined;
 } {
-  let lastSubmittedEntry: string | undefined;
-  const ring = history as unknown as {
-    getEntries?: () => readonly string[];
-    push?: (text: string) => void;
-  };
-  if (typeof ring.push === 'function') {
-    const originalPush = ring.push.bind(ring);
-    ring.push = (text: string) => {
-      const headBefore = ring.getEntries?.()?.[0];
-      originalPush(text);
-      const headAfter = ring.getEntries?.()?.[0];
-      if (headAfter !== headBefore) {
-        lastSubmittedEntry = headAfter;
-      }
-    };
-  }
-  return { getLastSubmitted: () => lastSubmittedEntry };
+  const surfaceStub = { history } as unknown as InputSurface;
+  return installHistorySubmissionTracker(surfaceStub);
 }
 
 describe('lastSubmittedEntry monkey-patch — discarded push paths', () => {

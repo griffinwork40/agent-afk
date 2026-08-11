@@ -33,6 +33,13 @@ export interface IHistoryRing {
    * and fall back to alphabetical ordering.
    */
   getEntries?(): readonly string[];
+  /**
+   * Record a submitted entry in the history ring. Optional so existing
+   * lightweight test doubles stay valid; callers in `surface-setup.history-
+   * tracking.ts` reach this via the monkey-patch and should guard with
+   * `typeof push === 'function'` before invoking.
+   */
+  push?(text: string): void;
 }
 
 /**

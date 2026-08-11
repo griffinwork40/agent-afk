@@ -122,6 +122,11 @@ export function isEchoOfLastInput(suggestion: string, ctx: SuggestContext): bool
   const tail = ctx.getTranscriptTail();
   if (tail.trim().length === 0) return false;
 
+  // Contract: Multi-line user inputs produce a false negative — only the
+  // first physical line after 'user: ' is compared. This is acceptable:
+  // REPL readline input is overwhelmingly single-line, and the failure mode
+  // is a missed echo (not unsafe state).
+
   // Walk lines FORWARD to find the most-recent "user: " line.
   // getTranscriptTail() emits turns newest-first, so the first "user: " line
   // in the string is the NEWEST turn — not the last (oldest) line.
