@@ -80,7 +80,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    'b04da3abfa4f79d4599928f62896143b88fb9751f0d0d26ca0eb27134f9ba17a',
+    'f24a0fbc572aa65dde3cbceb76ce1ec36d8ed8d88e142aa0007425ec3e906cad',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
