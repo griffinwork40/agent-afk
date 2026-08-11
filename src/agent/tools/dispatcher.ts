@@ -555,6 +555,78 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
+   * Model-visible reason text for an allowlist denial.
+   *
+   * Invariant: the permission gate runs BEFORE the handler lookup in
+   * `executeCoreInner`, so a name the model INVENTED is rejected here as an
+   * allowlist denial and never reaches that branch's `Unknown tool "X".
+   * Available tools: ...` enumeration. Because every surface configures an
+   * allowlist (`CHILD_ALLOWED_TOOLS` / `topLevelSurfaceAllowedTools`), that
+   * enumeration was unreachable for exactly the case it was written for, and
+   * the model instead saw a denial that reads like "you lack permission" — no
+   * signal that the tool does not exist. Models carry a strong post-training
+   * prior for Anthropic's native tool names (e.g. `str_replace_based_edit_tool`,
+   * the text-editor tool this codebase does not implement) and re-emit them
+   * under long edit-heavy runs, burning a round each time.
+   *
+   * A missing registration is the discriminator: registered-but-denied is a
+   * real permission decision and keeps its original message, while an
+   * unregistered name does not exist at all and gets the tool list instead.
+   * Registrations include both ordinary handlers and the executor-backed
+   * `agent`, `skill`, and `compose` tools, which are routed before handler
+   * lookup in `executeCoreInner`. Suggestions come
+   * from `toolDefs` (NOT `handlers`) to honour the contract on that getter —
+   * never show the model a tool the gate will reject.
+   *
+   * `failureClass` stays `permission-denied` at the call site: it is a trace
+   * union consumed by receipt/detector code, and widening it is out of scope
+   * for a message fix.
+   */
+  private denialReason(toolName: string, permissionReason: string | undefined): string {
+    if (this.isRegisteredTool(toolName)) {
+      return permissionReason ?? `Tool "${toolName}" is not permitted`;
+    }
+    return this.unknownToolMessage(toolName);
+  }
+
+  /** Whether this session has an implementation for a tool, regardless of permission. */
+  private isRegisteredTool(toolName: string): boolean {
+    return (
+      this.handlers.has(toolName) ||
+      (toolName === 'agent' && this.subagentExecutor !== undefined) ||
+      (toolName === 'skill' && this.skillExecutor !== undefined) ||
+      (toolName === 'compose' && this.composeExecutor !== undefined)
+    );
+  }
+
+  /**
+   * Contract: the single model-visible phrasing for "this tool does not exist",
+   * shared by the permission gate (a name absent from BOTH the allowlist and
+   * the handler map) and the handler lookup in `executeCoreInner` (a name that
+   * IS allowlisted but has no registered handler — reachable in production via
+   * `exit_plan_mode`, which `topLevelSurfaceAllowedTools` lists statically but
+   * which is only registered while in plan mode, and via an MCP tool whose
+   * server dropped after the allowlist snapshot).
+   *
+   * Suggestions come from `toolDefs`, never `handlers`: the handler map can
+   * hold tools the gate will reject, and advertising one just buys a denial on
+   * the next turn. `toolDefs` is exactly what was shown to the model, so it is
+   * the only honest answer to "what may I call instead".
+   */
+  private unknownToolMessage(toolName: string): string {
+    const available = this.toolDefs.map((s) => s.name).join(', ');
+    // An empty listing means no schema survived the allowlist filter — the
+    // model was shown nothing, so pointing at "the tools listed above" would be
+    // a dangling reference.
+    const guidance =
+      available.length > 0
+        ? `Available tools: ${available}. Do NOT retry "${toolName}" or a variant of it; ` +
+          `use one of the tools listed above.`
+        : `Do NOT retry "${toolName}" or a variant of it.`;
+    return `Unknown tool "${toolName}" — it does not exist in this session. ${guidance}`;
+  }
+
+  /**
    * Read-only-skill bash gate. Returns an isError {@link ToolResult} when the
    * dispatcher is in `readOnlyBash` mode AND `call` is a `bash` invocation
    * whose command classifies as MUTATING; otherwise returns `null` (allow).
@@ -870,7 +942,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // 2. Permission check
     const permResult = checkToolPermission(call.name, this.permissions);
     if (!permResult.allowed) {
-      const reason = permResult.reason ?? `Tool "${call.name}" is not permitted`;
+      const reason = this.denialReason(call.name, permResult.reason);
       await this.emitPreToolUseBlock(call.name, reason);
       return { content: reason, isError: true, failureClass: 'permission-denied' };
     }
@@ -1242,10 +1314,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Handler lookup
     const handler = this.handlers.get(call.name);
     if (!handler) {
-      return {
-        content: `Unknown tool "${call.name}". Available tools: ${[...this.handlers.keys()].join(', ')}`,
-        isError: true,
-      };
+      const msg = this.unknownToolMessage(call.name);
+      await this.emitPreToolUseBlock(call.name, msg);
+      return { content: msg, isError: true, failureClass: 'permission-denied' };
     }
 
     let result: ToolResult;

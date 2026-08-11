@@ -445,6 +445,13 @@ export interface ProviderCommandInfo {
   name: string;
   description?: string;
   argumentHint?: string;
+  /**
+   * Origin of the underlying skill/command. Inlined literal union (rather
+   * than importing `SkillManifestEntry['source']` from
+   * `tools/skill-bridge.js`) to keep this foundational, widely-imported file
+   * free of a dependency on the heavy skill-discovery module.
+   */
+  source?: 'builtin' | 'user' | 'project' | 'plugin' | 'imported' | 'command';
 }
 
 /** Loose structural shape for model catalog entries. */

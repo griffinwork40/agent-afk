@@ -161,6 +161,11 @@ describe('generateReceipt — failed tool calls', () => {
         failureClass: 'elicitation-declined',
         toolUseId: 'exempt-elicit',
       }),
+      toolDone('grep', {
+        isError: true,
+        failureClass: 'no-such-target',
+        toolUseId: 'exempt-missing-target',
+      }),
       toolDone('bash', { circuitBreaker: true, isError: true }),
       toolDone('read_file'),
       closure('abort'),
@@ -169,8 +174,8 @@ describe('generateReceipt — failed tool calls', () => {
     const r = generateReceipt(events, META);
 
     // circuitBreaker completion is excluded from totals, counted separately.
-    expect(r.toolCalls.total).toBe(5);
-    expect(r.toolCalls.errored).toBe(4);
+    expect(r.toolCalls.total).toBe(6);
+    expect(r.toolCalls.errored).toBe(5);
     expect(r.toolCalls.erroredNotable).toBe(2); // unclassified + timeout
     // refused = gate-refusal classes only: policy-refusal counts;
     // elicitation-declined is exempt-but-not-a-denial, so it does NOT.
@@ -181,13 +186,15 @@ describe('generateReceipt — failed tool calls', () => {
       timeout: 1,
       'policy-refusal': 1,
       'elicitation-declined': 1,
+      'no-such-target': 1,
     });
 
-    expect(r.failures).toHaveLength(4);
+    expect(r.failures).toHaveLength(5);
     const unclassified = r.failures.find((f) => f.toolUseId === 'fail-unclassified');
     expect(unclassified?.failureClass).toBeUndefined();
     expect(unclassified?.exempt).toBe(false);
     expect(r.failures.find((f) => f.toolUseId === 'fail-timeout')?.exempt).toBe(false);
+    expect(r.failures.find((f) => f.toolUseId === 'exempt-missing-target')?.exempt).toBe(true);
     expect(r.failures.find((f) => f.toolUseId === 'exempt-policy')?.exempt).toBe(true);
     expect(r.failures.find((f) => f.toolUseId === 'exempt-elicit')?.exempt).toBe(true);
 

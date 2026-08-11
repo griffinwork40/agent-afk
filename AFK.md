@@ -23,6 +23,9 @@ pnpm audit:sdk:update-lock                         # add new symbols → .sdk-de
 pnpm audit:env:check                               # CI gate: no raw process.env reads outside src/config/env.ts
 pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
+pnpm audit:filesize:check                          # CI gate: 350-line source ceiling, ratcheted against .filesize-baseline.json
+pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values)
+pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
 pnpm release                                       # release pipeline (scripts/release.mjs; --dry via release:dry)
@@ -131,6 +134,46 @@ The base system prompt is **layered**: the framework prompt (`prompts/system-pro
 - Build copies `*.md` prompt files from `src/` into `dist/` via `scripts/copy-prompts.js` — required for built skills to find their prompts.
 - Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream, and bundled skills under `src/bundled-plugins/` are SHA-256 pinned in their test files. Editing either intentionally means running `pnpm fix:pins` to rewrite the pins (`pnpm fix:pins:check` is the CI gate); an unexplained pin failure means an edit you did not intend.
 - **Three agent-instruction files, different consumers**: this file is the AFK overlay; `CLAUDE.md` targets Claude Code and carries the same facts in longer form (incl. the long-comment audit recipe); `AGENTS.md` is generic operating protocol with no repo specifics. When architecture changes, `AFK.md` and `CLAUDE.md` both need the edit — they drifted apart once already on the provider layer.
+
+### The 350-line ceiling
+
+No source file under `src/` or `scripts/` exceeds **350 raw lines** (`wc -l`
+semantics). Gate: `pnpm audit:filesize:check` (`scripts/check-file-size.ts`),
+with a non-failing warn band at 316–350. Tests, `__fixtures__`, `__test-utils__`,
+and `.d.ts` are out of scope — a 3,000-line test file is a flat list of cases an
+agent greps into, not a file it must read whole to edit safely.
+
+At the ceiling you pull **one whole concern** into a sibling file. You never shave
+lines and never raise the limit. Concretely, for `src/foo/bar.ts` create
+`src/foo/bar.<concern>.ts`; the original **never moves** and keeps its exact
+public surface, so no importer is ever rewritten. For a file already inside its
+own directory, add plain-named siblings into that directory instead.
+
+`.filesize-baseline.json` grandfathers the 138 files that already exceeded the
+ceiling when the gate landed, and it is a **one-way ratchet** — it fails when a
+non-baselined file goes over, when a baselined file *grows*, when a baselined file
+now fits (remove it), and when a baselined path disappears. Regenerate it with
+`pnpm audit:filesize:update`; never hand-edit `loc` values (the `reason` and
+`permanent` fields are yours and survive regeneration). It carries
+`-merge -diff` in `.gitattributes`, so resolve conflicts by regenerating, never
+by editing conflict markers.
+
+**Getting under the ceiling without deleting documentation.** This repo mandates
+long `Invariant:`/`Contract:`/`History:` comment blocks, and the 136 originally
+over the line averaged 45.5% comment+blank. The lever is that **JSDoc travels with
+its declaration** — extract a declaration group and its docs go with it, so raw
+lines drop with nothing deleted. Never delete, reflow, or condense a comment to
+satisfy the gate, and never reclassify an `Invariant:`/`Contract:` block as
+`History:` to make it migratable (`History:` may legitimately migrate to
+`docs/<area>.md` leaving a ≤5-line summary + link — but only if it was genuinely
+`History:` to begin with; false-shrink is a regression).
+
+A split is only behaviour-preserving if state stays singular:
+`pnpm audit:module-state:check` fails when the same module-scope singleton or
+`process.on` registration is declared in two files of one sibling family. And an
+extracted sibling must be reachable from one of the three esbuild entrypoints or
+`build:dist` silently tree-shakes it with no CI signal. Campaign plan and
+per-wave protocol: `docs/file-size-ceiling.md`.
 
 ### Long-comment prefix convention
 

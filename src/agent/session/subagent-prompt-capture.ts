@@ -28,7 +28,7 @@ import { join } from 'node:path';
 
 import { env } from '../../config/env.js';
 import { getPromptsDir } from '../../paths.js';
-import { debugLog } from '../../utils/debug.js';
+import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
 import { redactInlineSecrets } from './prompt-dump.js';
 
 /**
@@ -171,6 +171,14 @@ export async function captureSubagentPrompt(input: CaptureSubagentPromptInput): 
     // a pre-planted symlink at the target path.
     await writeFile(file, doc, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   } catch (err) {
-    debugLog(`subagent-prompt-capture failed: ${String(err)}`);
+    // Dedup key: the witness session label (shouldCapture guarantees it's
+    // defined by the time any of the above can throw) — one first-failure
+    // warning per session, not per captured prompt. See #850.
+    reportArtifactFailure(
+      'subagent-prompt-capture',
+      input.sessionId ?? 'unknown',
+      'captureSubagentPrompt',
+      err,
+    );
   }
 }

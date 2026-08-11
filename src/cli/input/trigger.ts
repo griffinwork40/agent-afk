@@ -8,10 +8,9 @@
 
 import { readdirSync, promises as fsp, type Dirent } from 'fs';
 import { list as listSlashCommands, aliasEntries, lookup } from '../slash/registry.js';
-import { buildRecencyRanks, compareByRecency } from './suggest-rank.js';
+import { matchSlashCandidates, type CommandEntry } from './slash-match.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import type { Candidate, Trigger } from './types.js';
-import type { SlashCommand } from '../slash/types.js';
 
 /**
  * Detect the trigger kind and query from the buffer at the cursor position.
@@ -71,20 +70,6 @@ export function detectTrigger(buffer: string, cursorCol: number): Trigger | null
 }
 
 /**
- * True when every character of `needle` appears in `haystack` in order (not
- * necessarily contiguous). Used for the subsequence fallback so an abbreviation
- * like `cfg` matches `config`. Both inputs are expected pre-lowercased.
- */
-function isSubsequence(needle: string, haystack: string): boolean {
-  if (needle.length === 0) return true;
-  let i = 0;
-  for (let j = 0; j < haystack.length && i < needle.length; j++) {
-    if (haystack[j] === needle[i]) i += 1;
-  }
-  return i === needle.length;
-}
-
-/**
  * Filter slash commands for the autocomplete dropdown.
  *
  * Ranking: prefix matches first (preserving the historical `startsWith`
@@ -103,42 +88,34 @@ export function filterSlashCandidates(
   query: string,
   recentHistory: readonly string[] = [],
 ): Candidate[] {
+  return matchSlashCandidates(buildSlashUniverse(), query, recentHistory);
+}
+
+/**
+ * Snapshot the in-process registry as a surface-neutral command universe.
+ *
+ * Exported so the `afk web` route can serve the SAME universe the REPL ranks
+ * against — one registry read, one shape, so the two surfaces cannot drift.
+ * Aliases are included as first-class entries (borrowing their canonical
+ * command's `hint`), exactly as the dropdown has always listed them.
+ */
+export function buildSlashUniverse(): CommandEntry[] {
   const cmds = listSlashCommands();
-  const q = query.toLowerCase();
-
-  const canonicalCand = (cmd: SlashCommand): Candidate => ({
-    value: cmd.name,
-    summary: cmd.summary,
-    ...(cmd.hint ? { hint: cmd.hint } : {}),
-  });
-  const aliasCand = (entry: { alias: string; canonical: string; summary: string }): Candidate => {
-    const canonicalCmd = cmds.find((c) => c.name === entry.canonical);
-    return {
-      value: entry.alias,
-      summary: entry.summary,
-      ...(canonicalCmd?.hint ? { hint: canonicalCmd.hint } : {}),
-    };
-  };
-
-  // (searchKey without leading slash, candidate) universe over commands + aliases.
-  const universe: Array<{ key: string; cand: Candidate }> = [
-    ...cmds.map((cmd) => ({ key: cmd.name.slice(1).toLowerCase(), cand: canonicalCand(cmd) })),
-    ...aliasEntries().map((entry) => ({ key: entry.alias.slice(1).toLowerCase(), cand: aliasCand(entry) })),
+  return [
+    ...cmds.map((cmd) => ({
+      name: cmd.name,
+      summary: cmd.summary,
+      ...(cmd.hint ? { hint: cmd.hint } : {}),
+    })),
+    ...aliasEntries().map((entry) => {
+      const canonicalCmd = cmds.find((c) => c.name === entry.canonical);
+      return {
+        name: entry.alias,
+        summary: entry.summary,
+        ...(canonicalCmd?.hint ? { hint: canonicalCmd.hint } : {}),
+      };
+    }),
   ];
-
-  const prefix = universe.filter((u) => u.key.startsWith(q));
-  const prefixValues = new Set(prefix.map((u) => u.cand.value));
-  const subseq =
-    q.length === 0
-      ? []
-      : universe.filter((u) => !prefixValues.has(u.cand.value) && isSubsequence(q, u.key));
-
-  const ranks = buildRecencyRanks(recentHistory);
-  const byValue = (a: { cand: Candidate }, b: { cand: Candidate }): number =>
-    compareByRecency(a.cand.value, b.cand.value, ranks);
-  prefix.sort(byValue);
-  subseq.sort(byValue);
-  return [...prefix, ...subseq].map((u) => u.cand).slice(0, 20);
 }
 
 /**

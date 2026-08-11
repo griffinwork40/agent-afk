@@ -146,6 +146,39 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     expect(renderFn).not.toHaveBeenCalled();
   });
 
+  it('surfaces the extraction advisory in the model-visible content, still as a success', async () => {
+    // A page whose visible text is dominated by regions Readability discards, so
+    // extraction succeeds while most of the page never reaches the model. The
+    // advisory is what stops the model re-fetching the same url in markdown mode.
+    const filler = (label: string, n: number): string =>
+      Array.from(
+        { length: n },
+        (_, i) =>
+          `<p>${label} row ${i + 1}: this text exists in the source document and a human ` +
+          `reading the page in a browser would see it rendered on screen.</p>`,
+      ).join('');
+    const lossy =
+      '<!DOCTYPE html><html><head><title>Docs</title></head><body>' +
+      `<nav>${filler('nav', 40)}</nav>` +
+      '<article><h1>Docs</h1><p>The one short paragraph Readability keeps as the article ' +
+      'body, padded just enough to clear the thin-content floor and skip the render.</p>' +
+      '<p>A second sentence of genuine article prose so extraction has a real region.</p>' +
+      '</article>' +
+      `<aside>${filler('aside', 40)}</aside><footer>${filler('footer', 40)}</footer>` +
+      '</body></html>';
+
+    const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));
+    const fetchFn = makeFetch(() => makeResponse({ contentType: 'text/html', body: lossy }));
+    const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
+
+    const r = await handler({ url: 'https://example.com/docs', max_bytes: 500 }, signal());
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toContain('mode: "raw"');
+    expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(500);
+    expect(r.truncated).toBe(true);
+    expect(r.content).toContain('do not re-fetch it in markdown mode');
+  });
+
   it('requires no API key for markdown mode', async () => {
     const fetchFn = makeFetch(() => makeResponse({ contentType: 'text/html', body: richArticleHtml() }));
     const handler = createWebScrapeHandler({ fetchFn, env: {}, lookupFn: publicLookup });

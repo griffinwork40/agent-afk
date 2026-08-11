@@ -10,6 +10,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { normalizeSkillSource } from './source-guard.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
@@ -21,6 +22,14 @@ export interface PluginSkillMetadata {
   name?: string;
   description?: string;
   argumentHint?: string;
+  /**
+   * Which plugin directory this artifact came from. `'command'` marks a
+   * Claude Code `commands/*.md` file (see `command-files.ts`); absent means
+   * the default `skills/**\/SKILL.md` form. Read by `buildSkillManifest` to
+   * keep commands out of the model-facing catalogue while leaving them fully
+   * invocable as slash commands.
+   */
+  origin?: 'command';
   /**
    * Resolved tool allowlist parsed from the `tools:` frontmatter field.
    *
@@ -265,12 +274,15 @@ export function extractPluginSkills(
  *   When omitted, `resolveKnownToolNames()` is called lazily.
  * @returns Extracted metadata (returns `{ name: undefined }` if parsing fails)
  */
-function parseSkillMetadata(
+export function parseSkillMetadata(
   skillPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata {
   try {
-    const content = readFileSync(skillPath, 'utf-8');
+    // Normalise BOM + CRLF first: the delimiter test below is byte-exact, so a
+    // Windows-authored or BOM-prefixed file would otherwise be read as having
+    // no frontmatter at all.
+    const content = normalizeSkillSource(readFileSync(skillPath, 'utf-8'));
 
     if (!content.startsWith('---\n')) {
       return {};
@@ -301,7 +313,12 @@ function parseSkillMetadata(
         metadata.name = value.replace(/^["']|["']$/g, '');
       } else if (key === 'description') {
         metadata.description = value.replace(/^["']|["']$/g, '');
-      } else if (key === 'argumentHint') {
+      } else if (key === 'argument-hint' || key === 'argumentHint') {
+        // Both spellings. `argument-hint` is the Claude Code / Agent Skills
+        // standard and what plugin authors actually write; `argumentHint` was
+        // the only form accepted here, so kebab-case hints in plugin SKILL.md
+        // files were silently dropped while `user-skills.ts` (which reads both)
+        // handled the identical file correctly.
         metadata.argumentHint = value.replace(/^["']|["']$/g, '');
       } else if (key === 'tools') {
         // Collect the lines after this one to handle YAML list form
@@ -378,7 +395,7 @@ function parseSkillMetadata(
  * as-is. Otherwise `BUILTIN_TOOL_NAMES` (statically imported from schemas.ts)
  * plus the orchestration tool names are used as the default.
  */
-function resolveKnownToolNames(
+export function resolveKnownToolNames(
   provided?: ReadonlySet<string>,
 ): ReadonlySet<string> {
   if (provided !== undefined) return provided;

@@ -11,6 +11,72 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.108.1] - 2026-08-11
+
+### Added
+- slash-command autocomplete + highlighting in the browser composer (#966) (fc13cbf)
+
+### Fixed
+- pre-fetch changed files at reviewed ref before dispatching sub-agents (#1001) (783dbff)
+
+## [5.108.0] - 2026-08-10
+
+### Added
+- enforce a 350-line source-file ceiling with a ratcheted baseline (#999) (0c7d936)
+
+## [5.107.2] - 2026-08-10
+
+### Added
+- warn when markdown extraction retains little of the page (#997) (094dc61)
+
+### Changed
+- make DEFAULT_MODEL delegate to CLAUDE_SONNET_ID (#998) (c44eb90)
+
+## [5.107.1] - 2026-08-10
+
+### Fixed
+- classify a nonexistent grep path as no-such-target (#996) (e9a1e3d)
+- withhold the conclusion, not the map; budget every verifier (#995) (7fa4f9c)
+
+## [5.107.0] - 2026-08-10
+
+### Added
+- two-tier OBSERVE/BLOCK split in safe-destruct PreToolUse detector (#992) (a4c81fc)
+
+## [5.106.1] - 2026-08-10
+
+### Fixed
+- opus 4.6/4.7/4.8 serve native 1M windows and 128k output (#994) (bbd4a13)
+
+## [5.106.0] - 2026-08-10
+
+### Added
+- make claude-sonnet-4-6 the default sonnet model (+ correct its 1M/128k limits) (#991) (d42eb1c)
+
+## [5.105.0] - 2026-08-10
+
+### Added
+- load Claude Code commands/*.md as slash commands (#965) (9003f5b)
+
+## [5.104.2] - 2026-08-10
+
+### Fixed
+- surface first artifact-write failure per subsystem without AFK_DEBUG (#850) (#979) (a57caab)
+
+## [5.104.1] - 2026-08-10
+
+### Fixed
+- refuse model-supplied roots that erase the bash credential floor (#852) (#978) (bc4c0f7)
+- tell the model an invented tool does not exist, not that it lacks permission (#983) (2f503bf)
+
+## [5.104.0] - 2026-08-10
+
+### Added
+- add a pricing table so token usage records real cost (#865) (#981) (79303e8)
+
+### Changed
+- cover tool_call conditional spreads through both provider dispatch paths (#633) (#988) (cf797fb)
+
 ## [5.103.5] - 2026-08-10
 
 ### Changed

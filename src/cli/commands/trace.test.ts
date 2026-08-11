@@ -401,9 +401,9 @@ describe('formatTrace — root model provenance header', () => {
     const out = formatTrace(
       's',
       '/p',
-      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-5'), seal])),
+      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-4-6'), seal])),
     );
-    expect(out).toContain('Model  sonnet → claude-sonnet-5');
+    expect(out).toContain('Model  sonnet → claude-sonnet-4-6');
   });
 
   it('renders the model once (no arrow) when alias === resolved (raw passthrough)', () => {
@@ -422,7 +422,7 @@ describe('formatTrace — root model provenance header', () => {
     const out = formatTrace(
       's',
       '/p',
-      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-5'), seal])),
+      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-4-6'), seal])),
       { showAll: true },
     );
     expect(out).toMatch(/session_init_start.*sonnet/);

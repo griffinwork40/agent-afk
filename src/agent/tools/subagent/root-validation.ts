@@ -1,15 +1,20 @@
 /**
  * The path-root breadth guard: rejects a `cwd`, `writeRoots`, or `readRoots`
- * entry that is a filesystem root, the home dir, an ancestor of home, or an
- * AFK-anchored credential root.
+ * entry that is a filesystem root, the home dir, an ancestor of home, an
+ * AFK-anchored credential root, or an ancestor of ANY bash credential root.
  *
- * Extracted from `input-parse.ts` (#782) — a pure move, zero logic change. The
- * host file's three grant fields (`cwd`, `writeRoots`, `readRoots`) each feed
- * the child's grant snapshot and the bash-restriction hook's grant filter
- * (`deriveRestrictedSubstrings`), where an ancestor-based containment check
- * drops any credential root beneath a granted path; a too-broad grant on ANY
- * of the three silently empties that child's credential floor, so the rejection
- * must be identical across all three call sites.
+ * Extracted from `input-parse.ts` (#782). The host file's three grant fields
+ * (`cwd`, `writeRoots`, `readRoots`) each feed the child's grant snapshot and
+ * the bash-restriction hook's grant filter (`deriveRestrictedSubstrings`),
+ * where an ancestor-based containment check drops any credential root beneath
+ * a granted path; a too-broad grant on ANY of the three silently empties that
+ * child's credential floor, so the rejection must be identical across all
+ * three call sites.
+ *
+ * Two guards live here, in widening order: {@link isTooBroadRoot} (the #740
+ * extraction, anchored on `/`, home, and the AFK dirs) and
+ * {@link ungatedSensitiveRoot} (#852, anchored on every credential root the
+ * bash floor protects).
  *
  * @module agent/tools/subagent/root-validation
  */
@@ -19,6 +24,7 @@ import { homedir } from 'node:os';
 import { realpathSafe } from '../handlers/_cwd-utils.js';
 import { getAfkHome, getAfkStateDir } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
+import { deriveRestrictedSubstrings } from '../hooks/bash-restriction-hook.js';
 
 // Home targets for the shared breadth guard below. Computed once at module
 // scope — `homedir()` is stable per process, so there is no need to
@@ -82,4 +88,69 @@ export function isTooBroadRoot(candidate: string): boolean {
     const rel = relativePath(candidate, h);
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
   });
+}
+
+/**
+ * The complete, UNFILTERED bash credential-candidate list — the exact set
+ * `deriveRestrictedSubstrings` starts from before applying its grant filter.
+ * The empty snapshot is what makes it unfiltered: with no resolveBase and no
+ * roots, its containment check can drop nothing.
+ *
+ * Invariant: derived per call, never hoisted to module scope. The underlying
+ * list is env-driven (`AFK_READ_DENYLIST`, `AFK_HOME`), so a module-scope
+ * snapshot would freeze one spelling at import and never observe a runtime
+ * relocation — the same trap `afkBreadthTargets` documents above. Reusing the
+ * hook's own exported deriver (rather than re-listing roots here) is what keeps
+ * the two in lockstep: a root added to the bash floor later is automatically
+ * un-grantable, with no second list to remember.
+ */
+function bashSensitiveRoots(): readonly string[] {
+  return deriveRestrictedSubstrings({ resolveBase: undefined, readRoots: [], writeRoots: [] });
+}
+
+/**
+ * The bash credential root that granting `candidate` would un-gate, or
+ * `undefined` when it would un-gate none.
+ *
+ * Invariant: this is the ANCESTOR half of the breadth guard, and it exists
+ * because {@link isTooBroadRoot} anchors only on the filesystem root, home, and
+ * the AFK dirs — it says nothing about the many narrower directories that still
+ * sit ABOVE a credential root. `~/Library/Application Support` is the canonical
+ * case (#852): not home, not an AFK dir, and not read-denied (only the
+ * per-browser subtrees under it are), yet granting it drops that whole vendor
+ * tree — browser secrets included — out of the child's bash restriction via the
+ * ancestor-based containment check in `deriveRestrictedSubstrings`.
+ *
+ * Invariant: provenance comes from the CALL SITE, not from a tag on the grant.
+ * The three fields guarded here are parsed off a MODEL-authored `agent` tool
+ * call, while every operator grant path (`/allow-dir`, the path-approval
+ * elicitation approvals, persisted-permission restore) reaches the grant
+ * manager without passing through this module. That asymmetry is the whole
+ * point: the documented "an explicit grant lifts the bash floor" contract
+ * survives intact for the operator, and only the model loses the ability to
+ * lift that floor for itself with no human in the loop.
+ *
+ * Containment direction matches the filter this defends: `relative(candidate,
+ * sensitive)` neither escaping with '..' nor being absolute means the candidate
+ * IS the sensitive root or is an ancestor of it. A grant INSIDE a sensitive
+ * tree is therefore not rejected here — it does not lift the enclosing root,
+ * and `isReadDenied` already refuses the denylisted subtrees for `readRoots`.
+ * Checked on both the lexical and the symlink-resolved spelling, same as
+ * {@link isTooBroadRoot} (#664). Note WHICH layer motivates that: the bash
+ * filter this guard defends compares the raw granted string and does NOT
+ * realpath it, but the same grant also flows into the typed-tool containment
+ * layer, which resolves every root through `realpathRoot`
+ * (`handlers/_cwd-utils.ts`) before comparing. Covering both spellings here is
+ * therefore fail-closed against the layer that DOES resolve, rather than a
+ * mirror of the one that does not.
+ */
+export function ungatedSensitiveRoot(candidate: string): string | undefined {
+  const forms = [...new Set([candidate, realpathSafe(candidate)])];
+  for (const sensitive of bashSensitiveRoots()) {
+    for (const form of forms) {
+      const rel = relativePath(form, sensitive);
+      if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return sensitive;
+    }
+  }
+  return undefined;
 }

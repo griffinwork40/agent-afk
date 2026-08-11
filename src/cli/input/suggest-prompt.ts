@@ -109,6 +109,39 @@ export function hasSuggestionGrounding(ctx: SuggestContext): boolean {
 }
 
 /**
+ * Whether `suggestion` is essentially the same text as the user's last
+ * submitted message — i.e., the model parroted back the input.
+ *
+ * Extracted from the transcript tail returned by `ctx.getTranscriptTail()`.
+ * The tail is newest-first: `user: <newest>\nassistant: <reply>\nuser: <older>…`.
+ * The FIRST `user: ` line in the string is therefore the most-recent turn.
+ * Returns false when the transcript is empty (no completed turn yet) or when
+ * no `user: ` line is present.
+ */
+export function isEchoOfLastInput(suggestion: string, ctx: SuggestContext): boolean {
+  const tail = ctx.getTranscriptTail();
+  if (tail.trim().length === 0) return false;
+
+  // Contract: Multi-line user inputs produce a false negative — only the
+  // first physical line after 'user: ' is compared. This is acceptable:
+  // REPL readline input is overwhelmingly single-line, and the failure mode
+  // is a missed echo (not unsafe state).
+
+  // Walk lines FORWARD to find the most-recent "user: " line.
+  // getTranscriptTail() emits turns newest-first, so the first "user: " line
+  // in the string is the NEWEST turn — not the last (oldest) line.
+  const lines = tail.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.startsWith('user: ')) {
+      const lastUserMessage = line.slice('user: '.length).trim();
+      return lastUserMessage.toLowerCase() === suggestion.trim().toLowerCase();
+    }
+  }
+  return false;
+}
+
+/**
  * Gate a model reply before it is ever shown as ghost text.
  *
  * Invariant: a suggestion is rendered at an EMPTY buffer, where Tab and
@@ -239,6 +272,11 @@ export async function generatePromptSuggestion(
     // Structure is judged first, control characters second, empty result last.
     const candidate = normalizePromptSuggestion(raced.raw);
     if (candidate === null) return null;
+    // Echo guard: discard exact parrot echoes of the user's last input.
+    // The LLM context includes the transcript tail (via buildPromptSuggestionUser),
+    // so nothing structurally prevents repetition. Catches exact (case-insensitive)
+    // matches only — partial echoes or paraphrases are not filtered here.
+    if (isEchoOfLastInput(candidate, ctx)) return null;
     const scrubbed = deps.scrub(candidate).trim();
     return scrubbed.length > 0 ? scrubbed : null;
   } catch (err) {

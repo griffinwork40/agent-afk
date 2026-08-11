@@ -4,15 +4,21 @@
  * mocks, no supertest, no new dependencies.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { startWebServer, type WebServerHandle } from './server.js';
 import { elicitationRouter } from '../agent/elicitation-router.js';
+import {
+  resetCommandUniverseCache,
+  setCommandUniverseLoaderForTests,
+} from './routes.js';
 
 let handle: WebServerHandle | undefined;
 
 afterEach(async () => {
   await handle?.stop();
   handle = undefined;
+  resetCommandUniverseCache();
+  vi.restoreAllMocks();
 });
 
 async function start(
@@ -216,6 +222,79 @@ describe('routing', () => {
     });
     expect(res.status).toBe(200);
     expect((await res.json()).pending).toEqual([]);
+  });
+
+  /**
+   * Invariant: the command list is what the browser's autocomplete ranks
+   * against, so it must be populated in a process that never boots a REPL —
+   * the slash registry starts EMPTY here, and `handleCommands` is the only
+   * thing that fills it. A regression that skipped registration would still
+   * answer 200, just with an empty list and a silently dead dropdown.
+   */
+  it('serves the slash-command universe for autocomplete', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/commands'), {
+      headers: { authorization: `Bearer ${h.token}` },
+    });
+    expect(res.status).toBe(200);
+    const { commands } = (await res.json()) as { commands: { name: string; summary?: string }[] };
+    expect(commands.length).toBeGreaterThan(0);
+    expect(commands.every((c) => c.name.startsWith('/'))).toBe(true);
+    // A few builtins that exist regardless of the machine's installed skills.
+    expect(commands.map((c) => c.name)).toEqual(expect.arrayContaining(['/help', '/clear']));
+  });
+
+  it('surfaces command initialization failure and retries successfully', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const loader = vi
+      .fn<() => Promise<{ name: string }[]>>()
+      .mockRejectedValueOnce(new Error('skills unreadable'))
+      .mockResolvedValueOnce([{ name: '/help' }]);
+    setCommandUniverseLoaderForTests(loader);
+    const h = await start();
+    const headers = { authorization: `Bearer ${h.token}` };
+
+    const failed = await fetch(api(h, '/api/commands'), { headers });
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toMatchObject({ error: 'command_universe_unavailable' });
+    expect(error).toHaveBeenCalledWith(
+      '[web] failed to initialize slash-command universe: skills unreadable',
+    );
+
+    const retried = await fetch(api(h, '/api/commands'), { headers });
+    expect(retried.status).toBe(200);
+    expect(await retried.json()).toEqual({ commands: [{ name: '/help' }] });
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares one in-flight command initialization across concurrent requests', async () => {
+    let release!: (commands: { name: string }[]) => void;
+    const pending = new Promise<{ name: string }[]>((resolve) => {
+      release = resolve;
+    });
+    const loader = vi.fn(() => pending);
+    setCommandUniverseLoaderForTests(loader);
+    const h = await start();
+    const headers = { authorization: `Bearer ${h.token}` };
+
+    const first = fetch(api(h, '/api/commands'), { headers });
+    const second = fetch(api(h, '/api/commands'), { headers });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(loader).toHaveBeenCalledTimes(1);
+    release([{ name: '/help' }]);
+
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((res) => res.status)).toEqual([200, 200]);
+    expect(await Promise.all(responses.map((res) => res.json()))).toEqual([
+      { commands: [{ name: '/help' }] },
+      { commands: [{ name: '/help' }] },
+    ]);
+  });
+
+  it('requires a bearer token for the command list', async () => {
+    const h = await start();
+    const res = await fetch(api(h, '/api/commands'));
+    expect(res.status).toBe(401);
   });
 });
 

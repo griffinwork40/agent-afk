@@ -801,3 +801,206 @@ describe('primePromptSuggestion — sanitization ordering', () => {
     expect(engine.peekPromptSuggestion()).toBeNull();
   });
 });
+
+// ── Fix 2: Tier-1 history skip for most-recent entry (lastSubmitted) ───────────
+
+// ── Fix 2a: monkey-patch wiring — lastSubmittedEntry tracks only landed pushes ─
+//
+// The surface-setup monkey-patch compares getEntries()[0] before/after
+// originalPush() and only records lastSubmittedEntry when the head changes.
+// ReplHistory.push() has four early-return paths (leading-space, empty,
+// secret-pattern, consecutive-duplicate) that leave _entries unchanged.
+// These tests exercise each path against the real ReplHistory class to
+// guard the invariant: a discarded push never advances lastSubmittedEntry.
+
+import { ReplHistory } from './history.js';
+import { installHistorySubmissionTracker } from '../../cli/commands/interactive/surface-setup.history-tracking.js';
+import type { InputSurface } from '../../cli/input/input-surface.js';
+
+/**
+ * Wraps the real `installHistorySubmissionTracker` from surface-setup against
+ * a real ReplHistory instance. Constructs a minimal InputSurface-shaped stub
+ * whose only meaningful field is `history` — the tracker only reads/patches
+ * `surface.history.push` and `surface.history.getEntries`.
+ */
+function applyLastSubmittedPatch(history: ReplHistory): {
+  getLastSubmitted: () => string | undefined;
+} {
+  const surfaceStub = { history } as unknown as InputSurface;
+  return installHistorySubmissionTracker(surfaceStub);
+}
+
+describe('lastSubmittedEntry monkey-patch — discarded push paths', () => {
+  it('tracks lastSubmitted on a genuine push', () => {
+    const history = new ReplHistory([]);
+    const tracker = applyLastSubmittedPatch(history);
+    history.push('hello world');
+    expect(tracker.getLastSubmitted()).toBe('hello world');
+  });
+
+  it('does NOT track when push is discarded by leading-space escape', () => {
+    const history = new ReplHistory(['prior']);
+    const tracker = applyLastSubmittedPatch(history);
+    // Leading space → ReplHistory returns early, _entries unchanged.
+    history.push(' secret command');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+    // Genuine push still works after a discarded one.
+    history.push('real command');
+    expect(tracker.getLastSubmitted()).toBe('real command');
+  });
+
+  it('does NOT track when push is discarded by empty/whitespace input', () => {
+    const history = new ReplHistory(['prior']);
+    const tracker = applyLastSubmittedPatch(history);
+    history.push('');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+    history.push('   ');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+  });
+
+  it('does NOT track when push is discarded by consecutive-duplicate guard', () => {
+    const history = new ReplHistory([]);
+    const tracker = applyLastSubmittedPatch(history);
+    history.push('first command');
+    expect(tracker.getLastSubmitted()).toBe('first command');
+    // Same text again → consecutive-duplicate early return.
+    history.push('first command');
+    // lastSubmittedEntry stays at the FIRST genuine push.
+    expect(tracker.getLastSubmitted()).toBe('first command');
+  });
+
+  it('does NOT track when push is discarded by secret-pattern deny-list', () => {
+    const history = new ReplHistory(['prior']);
+    const tracker = applyLastSubmittedPatch(history);
+    // sk-... matches the SECRET_PATTERN in ReplHistory.
+    history.push('sk-proj-abc123def456');
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+  });
+
+  it('correctly tracks across mixed genuine and discarded pushes', () => {
+    const history = new ReplHistory([]);
+    const tracker = applyLastSubmittedPatch(history);
+    expect(tracker.getLastSubmitted()).toBeUndefined();
+    history.push('first');
+    expect(tracker.getLastSubmitted()).toBe('first');
+    history.push(' hidden');     // leading-space → discarded
+    expect(tracker.getLastSubmitted()).toBe('first');
+    history.push('second');
+    expect(tracker.getLastSubmitted()).toBe('second');
+    history.push('second');      // consecutive-dup → discarded
+    expect(tracker.getLastSubmitted()).toBe('second');
+    history.push('third');
+    expect(tracker.getLastSubmitted()).toBe('third');
+  });
+});
+
+describe('getDeterministicGhost – lastSubmitted skip', () => {
+  it('skips history entry matching lastSubmitted', () => {
+    const engine = createSuggestEngine();
+    // The last submitted command is "/compact --summarize"; typing a prefix of
+    // it should NOT echo it back as a ghost.
+    const ctx = makeCtx({
+      getHistory: () => ['/compact --summarize', '/compact', '/chat hello'],
+      lastSubmitted: '/compact --summarize',
+    });
+    // "/compact -" is a prefix of "/compact --summarize" (lastSubmitted) and
+    // "/compact" (an older entry). lastSubmitted should be skipped; the next
+    // match is "/compact" but "/compact" does not extend "/compact -" (prefix
+    // length check), so null is returned rather than echoing back the submission.
+    const ghost = engine.getDeterministicGhost('/compact -', ctx);
+    expect(ghost).toBeNull();
+  });
+
+  it('still suggests older history entries even when lastSubmitted is set', () => {
+    const engine = createSuggestEngine();
+    // lastSubmitted is "/compact --summarize" (history[0]).
+    // "/compact --verbose" is a different older entry that matches "/compact --v".
+    const ctx = makeCtx({
+      getHistory: () => ['/compact --summarize', '/compact --verbose', '/chat hello'],
+      lastSubmitted: '/compact --summarize',
+    });
+    // "/compact --v" is only a prefix of "/compact --verbose", not of
+    // "/compact --summarize" (which is skipped). Should suggest the older entry.
+    const ghost = engine.getDeterministicGhost('/compact --v', ctx);
+    expect(ghost).toBe('/compact --verbose');
+  });
+
+  it('works normally when lastSubmitted is undefined', () => {
+    const engine = createSuggestEngine();
+    const ctx = makeCtx({
+      getHistory: () => ['/compact --summarize', '/compact', '/chat hello'],
+      // lastSubmitted intentionally absent
+    });
+    // Without lastSubmitted, history[0] is a normal candidate.
+    const ghost = engine.getDeterministicGhost('/compact -', ctx);
+    expect(ghost).toBe('/compact --summarize');
+  });
+});
+
+// ── Fix 3: Tier-2 cache key uses pickModel output, not ctx.model ─────────────
+
+describe('getGhost – Tier 2 cache key uses pickModel output (C-2)', () => {
+  beforeEach(() => {
+    delete process.env['AFK_SUGGEST_MODEL'];
+    delete process.env['AFK_COMPACT_MODEL'];
+  });
+  afterEach(() => {
+    delete process.env['AFK_SUGGEST_MODEL'];
+    delete process.env['AFK_COMPACT_MODEL'];
+  });
+
+  it('cache HIT when two different ctx.model values resolve to the same pickModel output', async () => {
+    // Both 'claude-sonnet-4-5' and 'claude-haiku-4-5' are anthropic-routed.
+    // With AFK_COMPACT_MODEL unset, pickModel() returns 'haiku' for BOTH.
+    // The cache must key on the pickModel output, so the second call is a HIT.
+    const completeFn = vi.fn().mockResolvedValue('hello world');
+    const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
+
+    const ctxSonnet = makeCtx({ model: 'claude-sonnet-4-5', llmEnabled: () => true });
+    const ctxHaiku = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
+
+    const first = await engine.getGhost('hel', ctxSonnet);
+    expect(first).toBe('hello world');
+    expect(completeFn).toHaveBeenCalledTimes(1);
+
+    // Different ctx.model, but same pickModel output ('haiku') → cache HIT.
+    const second = await engine.getGhost('hel', ctxHaiku);
+    expect(second).toBe('hello world');
+    // completeFn NOT called again — shared cache entry proves pickModel is used.
+    expect(completeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('cache MISS when pickModel outputs differ (anthropic vs non-anthropic session model)', async () => {
+    // An anthropic session resolves to 'haiku'; a non-anthropic session resolves
+    // to its own ctx.model. These are different inference models → cache miss.
+    const completeFn = vi.fn()
+      .mockResolvedValueOnce('hello world')   // first call (pickModel → 'haiku')
+      .mockResolvedValueOnce('hello world');  // second call (pickModel → 'gpt-4o')
+    const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
+
+    const ctxAnthropic = makeCtx({ model: 'claude-sonnet-4-5', llmEnabled: () => true });
+    const ctxOpenAI = makeCtx({ model: 'gpt-4o', llmEnabled: () => true });
+
+    const first = await engine.getGhost('hel', ctxAnthropic);
+    expect(first).toBe('hello world');
+    expect(completeFn).toHaveBeenCalledTimes(1);
+
+    // Different pickModel output → cache miss → second fetch.
+    const second = await engine.getGhost('hel', ctxOpenAI);
+    expect(second).toBe('hello world');
+    expect(completeFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('cache hit with same effective model — same buffer, same pickModel returns cached', async () => {
+    const completeFn = vi.fn().mockResolvedValue('hello world');
+    const engine = createSuggestEngine({ completeFn, debounceMs: 0 });
+    const ctx = makeCtx({ model: 'claude-haiku-4-5', llmEnabled: () => true });
+
+    const first = await engine.getGhost('hel', ctx);
+    const second = await engine.getGhost('hel', ctx);
+    expect(first).toBe('hello world');
+    expect(second).toBe('hello world');
+    // Same pickModel output + same buffer → cache hit; completeFn called only once.
+    expect(completeFn).toHaveBeenCalledTimes(1);
+  });
+});

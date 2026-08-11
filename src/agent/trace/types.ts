@@ -68,6 +68,8 @@ export const TOOL_FAILURE_CLASSES = [
   'denial-breaker',
   /** A call refused after N consecutive identical failures (#723). */
   'repeat-failure',
+  /** The target the tool was asked to operate on does not exist (#75 follow-up). */
+  'no-such-target',
 ] as const;
 
 /**
@@ -100,11 +102,19 @@ export const TOOL_FAILURE_CLASSES = [
  *                              than at its wall-clock budget. Deliberately NOT exempt below
  *                              — a fork torn down for spinning is a review-worthy event the
  *                              parent should act on (re-dispatch with a wider read scope).
+ *   - `no-such-target`       — the tool was asked to operate on a target (a path, most
+ *                              commonly) that does not exist, so nothing was actually
+ *                              searched/read. Set at the handler that stat'd or spawned
+ *                              against the target (e.g. grep's exit-2 ripgrep branch,
+ *                              see `_rg-exit2.ts`). The caller supplied a bad reference —
+ *                              not a tool fault — so the fix is to correct the target,
+ *                              not to retry the same call.
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
- * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
- * excluded from failure stats entirely — while `timeout`, `budget`, `denial-breaker`, and
- * unclassified failures still count. That split is `BENIGN_FAILURE_CLASSES` below.
+ * `hook-block`, `abort`, `elicitation-declined`, and `no-such-target` as "the system
+ * correctly said no" — excluded from failure stats entirely — while `timeout`, `budget`,
+ * `denial-breaker`, and unclassified failures still count. That split is
+ * `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
 
@@ -122,12 +132,18 @@ export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
  *     neutral `⊘` instead of a red `✗`, so an agent probing a gated tool during
  *     a long run does not read as something going wrong (#75).
  *
+ * Members: `policy-refusal`, `permission-denied`, `hook-block`, `abort`,
+ * `elicitation-declined`, `no-such-target`.
+ *
  * Membership is deliberately narrower than "not the tool's fault". `timeout` is
  * excluded because a high timeout rate is a real problem (too tight a deadline,
  * a systematically slow target), and `denial-breaker` is excluded because a fork
- * torn down for spinning is review-worthy — see the per-class notes above. An
- * unclassified failure (no `failureClass`) is never benign: pre-classification
- * traces and genuine handler bugs share that shape, so it must stay alarming.
+ * torn down for spinning is review-worthy — see the per-class notes above.
+ * `no-such-target` IS included: a nonexistent path is a caller-supplied bad
+ * reference (a typo, stale memory of a moved file, ordinary exploration), not
+ * evidence the tool is broken. An unclassified failure (no `failureClass`) is
+ * never benign: pre-classification traces and genuine handler bugs share that
+ * shape, so it must stay alarming.
  */
 export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'policy-refusal',
@@ -135,6 +151,7 @@ export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'hook-block',
   'abort',
   'elicitation-declined',
+  'no-such-target',
 ]);
 
 export interface ToolCallCompletedPayload {
