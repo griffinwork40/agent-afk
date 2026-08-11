@@ -148,7 +148,12 @@ describe('runTurn transient error retry', () => {
     expect(completed).toBeDefined();
   });
 
-  it('exhausts retries and yields error on persistent 529', async () => {
+  // M6 fix: connection-phase 529 budget exhaustion now routes to the CLEAN
+  // overload terminal (OVERLOAD_EXHAUSTED) instead of a fatal `error` event.
+  // This makes the connection-phase behave identically to the mid-stream phase:
+  // the pause machinery in `overload-pause-tier.ts` can park-and-probe, and even
+  // on a fail-fast surface the turn commits so `afk --resume` stays valid.
+  it('exhausts connection-phase retries and yields OVERLOAD_EXHAUSTED terminal on persistent 529', async () => {
     const client: AnthropicClientLike = {
       messages: {
         create: vi.fn(() => {
@@ -183,10 +188,16 @@ describe('runTurn transient error retry', () => {
 
     // 1 initial + OVERLOAD_MAX_RETRIES retries
     expect(client.messages.create).toHaveBeenCalledTimes(OVERLOAD_MAX_RETRIES + 1);
+    // M6: no raw error event — exhausted connection-phase 529 emits the CLEAN
+    // OVERLOAD_EXHAUSTED sentinel so the pause machinery can catch it.
     const errorEvent = events.find((e) => e.type === 'error');
-    expect(errorEvent).toBeDefined();
-    if (errorEvent?.type === 'error') {
-      expect(errorEvent.error.message).toContain('Overloaded');
+    expect(errorEvent).toBeUndefined();
+    const assistantNotice = events.find((e) => e.type === 'assistant.message');
+    expect(assistantNotice).toBeDefined();
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expect(completed).toBeDefined();
+    if (completed?.type === 'turn.completed') {
+      expect(completed.usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
     }
   });
 

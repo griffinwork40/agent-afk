@@ -170,19 +170,21 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       let turnEmittedTerminal = false;
       try {
         for await (const event of ctx.retry.turnWithRetries(runInput, () => ctx.state.closed)) {
-          if (ctx.state.closed) return;
+          // M1: process `turn.completed` BEFORE the closed check so
+          // `lastUsage.stopReason` (and AgentSession's `lastStopReason`) is
+          // recorded even when a concurrent close() lands during the overload
+          // pause. Without this ordering, a close() that interrupts the pause
+          // tier delivers the OVERLOAD_EXHAUSTED terminal here, but the old
+          // `if (ctx.state.closed) return` discarded it immediately, leaving
+          // `lastStopReason` unset → session seals `succeeded` not `failed`.
+          // Clearing the abort slot here is unchanged (was already inside the
+          // turn.completed branch); moving it above the closed check keeps the
+          // invariant that inter-turn observers always see an idle coordinator.
           if (event.type === 'turn.completed') {
             ctx.state.lastUsage = event.usage;
-            // Constraint: this generator suspends at `yield event` below.
-            // If the consumer breaks on `turn.completed` (e.g. AgentSession's
-            // sendMessageStream loop breaks on `done`) without pulling again,
-            // the outer finally never runs and the abort slot stays non-null
-            // between turns — which `compact()` treats as `turn-in-flight`.
-            // Clear eagerly so any inter-turn observer (compact, status,
-            // telemetry) sees an idle coordinator regardless of when the
-            // generator is resumed.
             ctx.abort.clear(controller);
           }
+          if (ctx.state.closed) return;
           if (event.type === 'turn.completed' || event.type === 'error') {
             turnEmittedTerminal = true;
           }
