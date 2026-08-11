@@ -132,16 +132,23 @@ export function createReplSurface(a: {
   // commands run (always between turns under the current arm/disarm cycle).
   const writer = createConsoleWriter(completionWriter);
   // GitStatusSampler resolves the current branch (fast, local) + open PR
-  // (network, detached) for the status line. Bound to the session's effective
-  // cwd — under `--worktree` that differs from process.cwd(). Construction is
-  // side-effect-free (no process spawn): the initial sample + the on-update
-  // repaint wiring are kicked by setupSurface (REPL Phase 1), so bootstrap-only
-  // unit tests never shell out to git/gh.
+  // (network, detached) for the status line. `cwd` is a live accessor over
+  // `stats.cwd` rather than a frozen string (issue #877): a deferred
+  // `afk -w` worktree re-anchor stamps `ctx.stats.cwd = outcome.path` in
+  // interactive.ts AFTER this sampler is constructed, at the same site that
+  // calls `session.setCwd()` — reusing that existing signal here means the
+  // sampler's NEXT sample (this function's `branchTtlMs` bounds staleness to
+  // ~1s) reads the new checkout instead of the launch one, with no separate
+  // re-point call needed. Construction is side-effect-free (no process
+  // spawn): the initial sample + the on-update repaint wiring are kicked by
+  // setupSurface (REPL Phase 1), so bootstrap-only unit tests never shell
+  // out to git/gh.
   const gitStatusSampler = new GitStatusSampler({
-    cwd: stats.cwd ?? process.cwd(),
+    cwd: () => stats.cwd ?? process.cwd(),
     // Suppress the per-turn git subprocess if the branch was checked < 1 s
     // ago — human turns are seconds apart so this is imperceptible, and it
     // bounds overhead on slow filesystems (network mounts, Docker volumes).
+    // A detected cwd change bypasses this guard (see updateBranch()).
     branchTtlMs: 1_000,
   });
 
