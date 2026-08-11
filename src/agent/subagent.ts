@@ -117,9 +117,10 @@ export class SubagentManager {
   private readonly worktreeMainRootCache = new Map<string, string | undefined>();
   private readonly parentTraceWriter: TraceWriter | undefined;
   private readonly parentSurface: Surface | undefined;
+  private readonly parentAbortSignal: AbortSignal | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
-  private readonly rootController: AbortController;
+  private rootController: AbortController;
   private counter = 0;
   private onSubagentSucceededCb:
     | ((usage: import('./subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void)
@@ -138,6 +139,7 @@ export class SubagentManager {
     this.parentReadRoots = options.parentReadRoots;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
+    this.parentAbortSignal = options.parentAbortSignal;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
@@ -885,9 +887,13 @@ export class SubagentManager {
     reason?: unknown,
     origin: AbortOrigin = 'user_signal',
     timeoutMs: number = SUBAGENT_DRAIN_TIMEOUT_MS,
+    rearm: boolean = false,
   ): Promise<{ drained: number; timedOut: boolean }> {
     const inFlight = [...this.active.values()];
-    if (inFlight.length === 0) return { drained: 0, timedOut: false };
+    if (inFlight.length === 0) {
+      if (rearm && this.rootController.signal.aborted) this.rearmRoot();
+      return { drained: 0, timedOut: false };
+    }
 
     // Cascade first so descendants see the abort while we await their parents.
     this.abortGraph.abort(this.rootId, reason, origin);
@@ -913,7 +919,22 @@ export class SubagentManager {
           `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
       );
     }
+    // `/clear` ends one session lifecycle but the manager itself survives.
+    // AbortSignals are terminal, so replace the root controller before the
+    // rebuilt session can dispatch children. The graph node is retained to
+    // preserve manager-level listeners and child-link bookkeeping.
+    if (rearm) this.rearmRoot();
     return { drained: inFlight.length, timedOut };
+  }
+
+  private rearmRoot(): void {
+    this.rootController = new AbortController();
+    this.abortGraph.rearm(this.rootId, this.rootController);
+    // The constructor's listener follows `this.rootController`, but an
+    // external parent may have aborted in the narrow interval before rearm.
+    if (this.parentAbortSignal?.aborted) {
+      this.rootController.abort(this.parentAbortSignal.reason);
+    }
   }
 
   /**

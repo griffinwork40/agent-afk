@@ -150,7 +150,8 @@ export function buildDaemonSessionFactory(
       // Cascade-abort and drain in-flight children before the writer seals,
       // so a wave still running when this session ends emits real `cancelled`
       // rows instead of vanishing (#733).
-      drainSubagents: () => rootManager.abortAllAndDrain('session_end', 'user_signal'),
+      drainSubagents: (reason) =>
+        rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.

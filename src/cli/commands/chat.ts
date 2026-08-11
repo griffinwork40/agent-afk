@@ -575,7 +575,8 @@ export function registerChatCommand(program: Command): void {
           // Cascade-abort and drain in-flight children before the writer
           // seals, so a wave still running when this session ends emits real
           // `cancelled` rows instead of vanishing (#733).
-          drainSubagents: () => rootManager.abortAllAndDrain('session_end', 'user_signal'),
+          drainSubagents: (reason) =>
+            rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
           apiKey: getApiKeyForModel(sessionModel),
           maxTurns: parseInt(options.maxTurns, 10),
           // One-shot `afk chat` is headless: no REPL/Telegram elicitation

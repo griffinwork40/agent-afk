@@ -137,6 +137,18 @@ describe('#733 — the drain bound', () => {
     const manager = new SubagentManager({});
     await expect(manager.abortAllAndDrain('session_end')).resolves.toBeDefined();
   });
+
+  it('re-arms the manager root after a reset drain', async () => {
+    const manager = new SubagentManager({});
+    manager.abortAll('first lifecycle ended');
+
+    await manager.abortAllAndDrain('reset', 'user_signal', undefined, true);
+
+    const internal = manager as unknown as {
+      rootController: AbortController;
+    };
+    expect(internal.rootController.signal.aborted).toBe(false);
+  });
 });
 
 describe('#733 — the wrong detector would miss this', () => {

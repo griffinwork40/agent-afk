@@ -1322,7 +1322,7 @@ export class AgentSession implements IAgentSession {
     // a hang is the wrong bargain, and the timeout is reported by the drain
     // implementation rather than passing silently.
     if (this.config.drainSubagents !== undefined) {
-      await this.config.drainSubagents().catch(() => {});
+      await this.config.drainSubagents(reason).catch(() => {});
     }
 
     // Witness layer ordering:
