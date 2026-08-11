@@ -138,6 +138,14 @@ describe('startWorktreeOccupancyHeartbeat', () => {
     const stop = startWorktreeOccupancyHeartbeat(worktreePath, 10);
     await new Promise((r) => setTimeout(r, 40));
     stop();
+    // Allow any in-flight touch that was already past the cancellation check
+    // (i.e. between the first await and the rename) to land before we snapshot
+    // "afterStop". The assertion is that no NEW writes happen after stop() —
+    // not that the write queue is instantaneously flushed at the moment stop()
+    // returns. Without this delay, on a slow CI runner the rename can land
+    // after the "afterStop" read but before the "later" read, causing a false
+    // timestamp mismatch (reproduces on macOS-latest; see PR #1002).
+    await new Promise((r) => setTimeout(r, 30));
     const afterStop = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
 
     await new Promise((r) => setTimeout(r, 60));
