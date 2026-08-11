@@ -42,6 +42,7 @@ import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry, type InboundAttachmentReader } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
+import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
@@ -851,11 +852,8 @@ export class SubagentExecutor implements SubagentControl {
       activeForegroundHandles: this.activeForegroundHandles,
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     });
-    if (parsed.attachments !== undefined && !supportsVision(childConfig.model)) {
-      result.content =
-        `WARNING: child model ${childConfig.model} is not vision-capable; attached images were dropped.\n\n` +
-        result.content;
-    }
+    const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
+    if (warn) result.content = warn + result.content;
     return result;
   }
 }
