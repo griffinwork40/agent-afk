@@ -13,6 +13,7 @@
  */
 
 import { moveDown, moveUp, removeAt } from './queue-reorder.js';
+import { notifyValueChanged } from './composer-value.js';
 
 export interface QueuePanelDeps {
   /** Container for the queued-message rows. */
@@ -57,6 +58,10 @@ export class QueuePanel {
       if (!text) return;
       this.queue = [...this.queue, text];
       this.deps.input.value = '';
+      // The mirror is the only visible copy of the composer text, and it
+      // repaints on `input` — which a programmatic clear does not fire. Without
+      // this the sent prompt stays on screen after the textarea is emptied.
+      notifyValueChanged(this.deps.input);
       this.render();
       void this.flush();
     };

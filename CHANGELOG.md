@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.108.2] - 2026-08-11
+
+### Fixed
+- prevent ghost-text echo, stale cache across model swap (#1000) (3789159)
+
+### Changed
+- make 350-line filesize check advisory (non-blocking) (#1003) (243e3dd)
+
+## [5.108.1] - 2026-08-11
+
+### Added
+- slash-command autocomplete + highlighting in the browser composer (#966) (fc13cbf)
+
+### Fixed
+- pre-fetch changed files at reviewed ref before dispatching sub-agents (#1001) (783dbff)
+
 ## [5.108.0] - 2026-08-10
 
 ### Added

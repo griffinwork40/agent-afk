@@ -40,8 +40,14 @@ export function getDeterministicGhost(buffer: string, ctx: SuggestContext): stri
   }
 
   // (b) History prefix-match (newest first)
+  // Skip the most-recently submitted entry: the history ring is pushed BEFORE
+  // the turn runs (loop-iteration.ts), so history[0] IS what the user just
+  // typed. Suggesting it back at the next turn start is an echo, not a
+  // completion. We skip by exact match (not prefix) so OTHER history entries
+  // that happen to share a prefix still surface as candidates.
   const history = ctx.getHistory();
   for (const entry of history) {
+    if (ctx.lastSubmitted !== undefined && entry === ctx.lastSubmitted) continue;
     if (entry.startsWith(buffer) && entry.length > buffer.length) {
       return entry;
     }

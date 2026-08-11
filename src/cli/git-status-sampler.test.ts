@@ -251,6 +251,65 @@ describe('GitStatusSampler', () => {
     expect(sampler.getPr()).toBe(456); // B's PR, not A's
   });
 
+  it('discards an in-flight PR after a same-branch cwd re-anchor', async () => {
+    let resolveLaunchPr: (v: { stdout: string; stderr: string }) => void = () => {};
+    let resolveWorktreePr: (v: { stdout: string; stderr: string }) => void = () => {};
+    const launchPr = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      resolveLaunchPr = resolve;
+    });
+    const worktreePr = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      resolveWorktreePr = resolve;
+    });
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = async (file, _args, cwd) => {
+      if (file === 'git') return { stdout: 'main\n', stderr: '' };
+      return cwd === '/launch-checkout' ? launchPr : worktreePr;
+    };
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec });
+
+    await sampler.refresh(); // launch PR lookup remains in flight
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    await sampler.refresh(); // same branch, new cwd; launch lookup still deduped
+
+    resolveLaunchPr({ stdout: '10\n', stderr: '' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The launch checkout's result is rejected even though both use `main`,
+    // and settling it automatically starts a lookup in the current worktree.
+    expect(sampler.getPr()).toBeUndefined();
+
+    resolveWorktreePr({ stdout: '20\n', stderr: '' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sampler.getPr()).toBe(20);
+  });
+
+  it('discards an in-flight branch after a cwd re-anchor', async () => {
+    let resolveLaunchBranch: (v: { stdout: string; stderr: string }) => void = () => {};
+    const launchBranch = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      resolveLaunchBranch = resolve;
+    });
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = vi.fn(async (file, _args, cwd) => {
+      if (file === 'gh') return { stdout: '\n', stderr: '' };
+      if (cwd === '/launch-checkout') return launchBranch;
+      return { stdout: 'afk/foo\n', stderr: '' };
+    });
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec });
+
+    const launchRefresh = sampler.refresh();
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    const reanchorRefresh = sampler.refresh(); // dedupes onto the launch lookup
+
+    resolveLaunchBranch({ stdout: 'main\n', stderr: '' });
+    await Promise.all([launchRefresh, reanchorRefresh]);
+
+    expect(sampler.getBranch()).toBe('afk/foo');
+    expect(exec).toHaveBeenCalledWith(
+      'git',
+      ['symbolic-ref', '--short', 'HEAD'],
+      '/repo/.afk-worktrees/afk-foo',
+    );
+  });
+
   it('reset() mid-fetch discards the settling result without writing stale state', async () => {
     // Verify C2: in-flight updateBranch captures a generation token and returns
     // early if reset() has incremented it before the git call settles.
@@ -273,5 +332,64 @@ describe('GitStatusSampler', () => {
     // The stale result must have been discarded — branch stays cleared.
     expect(sampler.getBranch()).toBeUndefined();
     expect(sampler.getPr()).toBeUndefined();
+  });
+
+  it('follows a live cwd re-anchor instead of freezing the branch at construction (#877)', async () => {
+    // Two distinct checkouts with different branches, keyed by cwd path —
+    // stands in for the launch checkout vs. a born-named `afk -w` worktree.
+    const branchesByCwd: Record<string, string> = {
+      '/launch-checkout': 'main',
+      '/repo/.afk-worktrees/afk-foo': 'afk/foo',
+    };
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = vi.fn(async (file, _args, cwd) => {
+      if (file === 'git') {
+        const branch = branchesByCwd[cwd];
+        if (branch === undefined) throw new Error(`unmapped cwd in test: ${cwd}`);
+        return { stdout: branch + '\n', stderr: '' };
+      }
+      return { stdout: '\n', stderr: '' }; // no open PR for either branch
+    });
+    // `cwd` is a live accessor, matching how bootstrap-surface.ts wires it to
+    // `() => stats.cwd ?? process.cwd()` — NOT a string frozen at construction.
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec });
+
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getBranch()).toBe('main');
+
+    // Simulate the deferred `afk -w` re-anchor: production re-points this via
+    // `ctx.stats.cwd = outcome.path` in interactive.ts (the same site that
+    // calls `session.setCwd()`) — nothing calls back into the sampler
+    // directly. The next refresh() must pick up the new directory.
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getBranch()).toBe('afk/foo');
+  });
+
+  it('invalidates the cached PR (not just the branch) on a cwd re-anchor (#877)', async () => {
+    // Same branch NAME in both checkouts (e.g. both on 'main') so the branch-
+    // changed check alone can't be what forces the PR re-fetch — only the
+    // cwd-change detection can.
+    const prByCwd: Record<string, string> = {
+      '/launch-checkout': '10',
+      '/repo/.afk-worktrees/afk-foo': '20',
+    };
+    let liveCwd = '/launch-checkout';
+    const exec: GitStatusExecFn = vi.fn(async (file, _args, cwd) => {
+      if (file === 'git') return { stdout: 'main\n', stderr: '' };
+      const pr = prByCwd[cwd];
+      if (pr === undefined) throw new Error(`unmapped cwd in test: ${cwd}`);
+      return { stdout: pr + '\n', stderr: '' };
+    });
+    // Long TTL so a naive fix (branch-only invalidation) would serve the
+    // launch checkout's cached PR number well past the re-anchor.
+    const sampler = new GitStatusSampler({ cwd: () => liveCwd, exec, prTtlMs: 60_000 });
+
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getPr()).toBe(10);
+
+    liveCwd = '/repo/.afk-worktrees/afk-foo';
+    await sampler.refresh({ blockOnPr: true });
+    expect(sampler.getPr()).toBe(20);
   });
 });
