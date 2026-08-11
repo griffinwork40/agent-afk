@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.109.0] - 2026-08-11
+
+### Added
+- add a function-scoped 200-line ceiling, answering #831 (#1002) (378a575)
+
+### Fixed
+- stabilize flaky worktree-occupancy heartbeat test (#1004) (6189961)
+- name the unrecognized command instead of blaming its flag (#710) (#974) (90a144d)
+- surface a warning when a malformed agent file is discarded (#752) (#976) (b7c9f26)
+- resolve cwd at sample time so re-anchor updates git status (#877) (#973) (170f0fc)
+
 ## [5.108.2] - 2026-08-11
 
 ### Fixed
