@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.108.2] - 2026-08-11
+
+### Fixed
+- prevent ghost-text echo, stale cache across model swap (#1000) (3789159)
+
+### Changed
+- make 350-line filesize check advisory (non-blocking) (#1003) (243e3dd)
+
 ## [5.108.1] - 2026-08-11
 
 ### Added
