@@ -87,6 +87,12 @@ export interface TraceWriter {
 export interface NdjsonTraceWriterOptions {
   /** Per-session trace directory. Will be created if absent. */
   traceDir: string;
+  /**
+   * First `seq` value this writer will use. Defaults to 0.
+   * Pass `lastSeq + 1` when resuming an existing trace file so the
+   * new writer's events continue the file's monotonic sequence.
+   */
+  startSeq?: number;
 }
 
 /**
@@ -155,7 +161,7 @@ function ensureExitBackstop(): void {
 export class NdjsonTraceWriter implements TraceWriter {
   private readonly traceDir: string;
   private readonly tracePath: string;
-  private seq = 0;
+  private seq: number;
   private sealed = false;
   /**
    * Invariant (#171): flips to `true` only once a terminal `session_sealed`
@@ -176,6 +182,7 @@ export class NdjsonTraceWriter implements TraceWriter {
   constructor(options: NdjsonTraceWriterOptions) {
     this.traceDir = options.traceDir;
     this.tracePath = join(this.traceDir, 'trace.jsonl');
+    this.seq = options.startSeq ?? 0;
   }
 
   /** Absolute path to the JSONL file this writer appends to. */

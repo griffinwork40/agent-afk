@@ -226,6 +226,7 @@ export class SubagentManager {
    */
   setTraceWriter(writer: TraceWriter | undefined): void {
     this.parentTraceWriter = writer;
+    this.abortGraph.setTraceWriter(writer);
   }
 
   /**

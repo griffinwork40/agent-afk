@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NdjsonTraceWriter, type TraceWriter } from '../../../agent/trace/writer.js';
+import { AbortGraph } from '../../../agent/abort-graph.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
@@ -134,5 +135,63 @@ describe('#731 — setTraceWriter cascade re-points long-lived holders', () => {
     const ctx = { traceWriter: makeWriter('a') as TraceWriter | undefined };
     new ComposeExecutor(ctx as never).setTraceWriter(undefined);
     expect(ctx.traceWriter).toBeUndefined();
+  });
+
+  it('AbortGraph accepts setTraceWriter without throwing', () => {
+    const graph = new AbortGraph(makeWriter('ag-a'));
+    const next = makeWriter('ag-b');
+    expect(() => graph.setTraceWriter(next)).not.toThrow();
+    expect(() => graph.setTraceWriter(undefined)).not.toThrow();
+  });
+
+  it('SubagentManager.setTraceWriter cascades to the abort graph', () => {
+    const setTraceWriter = vi.fn();
+    // Patch AbortGraph's prototype so we can verify the call without
+    // constructing a real subagent runner.
+    const original = AbortGraph.prototype.setTraceWriter;
+    AbortGraph.prototype.setTraceWriter = setTraceWriter;
+    try {
+      const manager = new SubagentManager({ traceWriter: makeWriter('sm-a') });
+      const next = makeWriter('sm-b');
+      manager.setTraceWriter(next);
+      expect(setTraceWriter).toHaveBeenCalledWith(next);
+    } finally {
+      AbortGraph.prototype.setTraceWriter = original;
+    }
+  });
+});
+
+describe('#985 — resumed writer continues seq from where outgoing left off', () => {
+  it('a second NdjsonTraceWriter on the same traceDir with startSeq produces monotonic seq numbers', async () => {
+    const traceDir = join(tmpRoot, 'resumed');
+
+    // First writer — writes two events (seq 0, seq 1), then seals (seq 2).
+    const first = new NdjsonTraceWriter({ traceDir });
+    await first.write(sampleEvent());
+    await first.write(sampleEvent());
+    await first.seal({ reason: 'session_end' });
+
+    // Read the last seq from the sealed file.
+    const lines = readFileSync(join(traceDir, 'trace.jsonl'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0);
+    const lastSeq: number = JSON.parse(lines[lines.length - 1]).seq as number;
+
+    // Second writer — starts at lastSeq + 1.
+    const second = new NdjsonTraceWriter({ traceDir, startSeq: lastSeq + 1 });
+    await second.write(sampleEvent());
+    await second.write(sampleEvent());
+    await second.close();
+
+    // Verify all seq values across the combined file are strictly increasing.
+    const allLines = readFileSync(join(traceDir, 'trace.jsonl'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0);
+    const seqs = allLines.map((l) => (JSON.parse(l) as { seq: number }).seq);
+    for (let i = 1; i < seqs.length; i++) {
+      expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    }
+    // And the second writer's first event directly follows lastSeq.
+    expect(seqs[lines.length]).toBe(lastSeq + 1);
   });
 });
