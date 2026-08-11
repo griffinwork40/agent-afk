@@ -102,6 +102,29 @@ describe('measureFile — what counts as a function', () => {
     expect(measureFile(f).map((e) => e.name)).toEqual(['S.[Symbol.asyncIterator]']);
   });
 
+  it('qualifies same-named methods with their object literal bindings', () => {
+    const f = fixture(
+      'objects.ts',
+      [
+        'const first = { run() { return 1; } };',
+        'const services = { second: { run() { return 2; } } };',
+        'const third = { run() { return 3; } };',
+        '',
+      ].join('\n'),
+    );
+    expect(measureFile(f).map((e) => e.name)).toEqual(['first.run', 'services.second.run', 'third.run']);
+  });
+
+  it('keeps object method keys stable when another same-named method is inserted first', () => {
+    const before = fixture('objects-before.ts', 'const target = { run() { return 1; } };\n');
+    const after = fixture(
+      'objects-after.ts',
+      ['const added = { run() { return 0; } };', 'const target = { run() { return 1; } };', ''].join('\n'),
+    );
+    expect(measureFile(before).map((e) => e.name)).toContain('target.run');
+    expect(measureFile(after).map((e) => e.name)).toContain('target.run');
+  });
+
   it('skips bodiless overload signatures and counts only the implementation', () => {
     const f = fixture(
       'g.ts',
@@ -136,6 +159,10 @@ describe('function keys', () => {
     const key = functionKey('src/a/b.ts', 'Cls.method');
     expect(key).toBe('src/a/b.ts::Cls.method');
     expect(parseFunctionKey(key)).toEqual({ file: 'src/a/b.ts', name: 'Cls.method' });
+  });
+
+  it('normalizes Windows separators to the POSIX baseline format', () => {
+    expect(functionKey('src\\agent\\run.ts', 'run')).toBe('src/agent/run.ts::run');
   });
 
   it('rejects a malformed key instead of guessing', () => {

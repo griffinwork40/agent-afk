@@ -70,6 +70,25 @@ function scriptKindFor(filePath: string): ts.ScriptKind {
   return ts.ScriptKind.TS;
 }
 
+/** Name of an object literal's binding, including containing object properties. */
+function objectBindingName(object: ts.ObjectLiteralExpression): string | null {
+  const parent = object.parent;
+  if (ts.isVariableDeclaration(parent) && parent.initializer === object && ts.isIdentifier(parent.name)) {
+    return parent.name.text;
+  }
+  if (ts.isPropertyAssignment(parent) && parent.initializer === object) {
+    const containing = ts.isObjectLiteralExpression(parent.parent) ? objectBindingName(parent.parent) : null;
+    const property = propertyKeyText(parent.name);
+    return containing ? `${containing}.${property}` : property;
+  }
+  if (ts.isExportAssignment(parent)) return '<default export>';
+  if (ts.isBinaryExpression(parent) && parent.right === object && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    const lhs = parent.left.getText();
+    return lhs.length > 0 && lhs.length <= 60 ? lhs : null;
+  }
+  return null;
+}
+
 /** Name of the class/interface/object a member belongs to, or null at module scope. */
 function enclosingTypeName(node: ts.Node): string | null {
   let cur: ts.Node | undefined = node.parent;
@@ -78,6 +97,7 @@ function enclosingTypeName(node: ts.Node): string | null {
       return cur.name?.text ?? '<anonymous class>';
     }
     if (ts.isInterfaceDeclaration(cur)) return cur.name.text;
+    if (ts.isObjectLiteralExpression(cur)) return objectBindingName(cur);
     cur = cur.parent;
   }
   return null;
@@ -176,9 +196,10 @@ export function measureFile(absPath: string): FunctionExtent[] {
 
 /**
  * Invariant: baseline keys must be unique per file. Two same-named outermost
- * functions are legal TypeScript (an overloaded class member pair across
- * declaration merging, two object literals with the same property name), so
- * disambiguate collisions by stable occurrence order rather than by line.
+ * functions are legal TypeScript (for example, an overloaded class member pair
+ * across declaration merging), so disambiguate remaining collisions by stable
+ * occurrence order rather than by line. Object methods use their binding path
+ * and therefore do not depend on the order of unrelated object literals.
  */
 function dedupeNames(extents: FunctionExtent[]): FunctionExtent[] {
   const seen = new Map<string, number>();
@@ -189,9 +210,9 @@ function dedupeNames(extents: FunctionExtent[]): FunctionExtent[] {
   });
 }
 
-/** Compose the repo-wide key for one function: `<relative path>::<qualified name>`. */
+/** Compose a repo-wide key using POSIX paths, including when run on Windows. */
 export function functionKey(relPath: string, name: string): string {
-  return `${relPath}::${name}`;
+  return `${relPath.replaceAll('\\', '/')}::${name}`;
 }
 
 /** Split a key back into its parts. Returns null if the key is malformed. */
