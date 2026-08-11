@@ -5,7 +5,6 @@ import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import { runPicker } from '../../render/picker.js';
 import { runTextInput } from '../../render/text-input.js';
 import { debugLog } from '../../../utils/debug.js';
-import { env } from '../../../config/env.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import { openEditorForBuffer } from '../../slash/commands/editor-open.js';
 import { palette } from '../../palette.js';
@@ -16,6 +15,8 @@ import type { TranscriptHandle } from './transcript.js';
 import type { LoopStageBar } from './loop-stage.js';
 import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
+import { installHistorySubmissionTracker } from './surface-setup.history-tracking.js';
+import { buildSuggestConfig } from './surface-setup.suggest-config.js';
 
 /**
  * Dependencies surface-setup needs from phases that have not been
@@ -88,40 +89,8 @@ export async function setupSurface(
     onError: (err) => debugLog('[afk suggest] Tier-2 completion failed:', err),
   });
 
-  // Session-scoped submission tracker: records the most-recently submitted
-  // entry that actually landed in the history ring. Used by the `lastSubmitted`
-  // getter below to return `undefined` at a fresh REPL start — before any
-  // submission has occurred — rather than `entries[0]` from the previous
-  // session's persisted ring. This prevents a false Tier-1 skip on the first
-  // keystroke.
-  //
-  // Invariant: only set when push() actually modifies _entries. ReplHistory
-  // has four early-return paths (leading-space, empty, secret-pattern,
-  // consecutive-duplicate) that leave _entries unchanged — incrementing
-  // blindly on those would cause lastSubmitted to return the wrong entry.
-  let lastSubmittedEntry: string | undefined;
-  // surface.history is undefined in test stubs and non-TTY surfaces that
-  // never construct a ReplHistory. Guard before the cast so the typeof
-  // check below doesn't throw on undefined property access.
-  const historyRing = (surface.history ?? undefined) as {
-    getEntries?: () => readonly string[];
-    push?: (text: string) => void;
-  } | undefined;
-  // When history, push, or getEntries is absent (test stubs, non-TTY
-  // surfaces, partial history implementations), lastSubmitted stays
-  // undefined for the session lifetime — safe because ghost text is
-  // disabled on those surfaces.
-  if (historyRing && typeof historyRing.push === 'function') {
-    const originalPush = historyRing.push.bind(historyRing);
-    historyRing.push = (text: string) => {
-      const headBefore = historyRing.getEntries?.()?.[0];
-      originalPush(text);
-      const headAfter = historyRing.getEntries?.()?.[0];
-      if (headAfter !== headBefore) {
-        lastSubmittedEntry = headAfter;
-      }
-    };
-  }
+  // Session-scoped submission tracker (see surface-setup.history-tracking.ts).
+  const historyTracker = installHistorySubmissionTracker(surface);
 
   // Stage 3e — arm the surface's persistent TerminalCompositor before the
   // first prompt. Lives across all turns; disarmed in the finally below.
@@ -182,81 +151,17 @@ export async function setupSurface(
     // climb above. Undefined on daemons / non-bootstrap callers — defaults
     // the compositor to pre-fix behavior (no protection).
     ...(ctx.preArmAnchorRow !== undefined ? { anchorRow: ctx.preArmAnchorRow } : {}),
-    // Ghost-text wiring: inject the engine + a lazy context closure.
-    // The closure re-reads live config on each call so /model swaps and
-    // any runtime env changes take effect without restarting the REPL.
-    // When `suggestGhostEnabled` is false (AFK_SUGGEST_GHOST=0 or JSON
-    // interactive.suggestGhost:false), the entire suggest block is omitted
-    // so the compositor runs with no ghost-text at all (Tier-1 + Tier-2 off).
-    ...(suggestGhostEnabled
-      ? {
-          suggest: {
-            engine: suggestEngine,
-            getContext: () => ({
-              model: ctx.stats.model as string,
-              apiKey: ctx.suggestApiKey,
-              baseUrl: ctx.suggestBaseUrl,
-              cwd: ctx.stats.cwd ?? process.cwd(),
-              getHistory: () => {
-                // `surface.history` is always a `ReplHistory` at runtime — the
-                // InputSurface constructor calls `loadHistory()` which returns one.
-                // We narrow to `ReplHistory` via duck-typing (`getEntries` method)
-                // so we never import `ReplHistory` directly (avoids a circular-ish
-                // dep and keeps the interface boundary clean).
-                const ring = surface.history as { getEntries?: () => readonly string[] };
-                return ring.getEntries ? [...ring.getEntries()] : [];
-              },
-              // Most-recently submitted entry that actually landed in the history
-              // ring. Cached at push time so the getter is O(1) — no getEntries()
-              // allocation per keystroke. Returns `undefined` until a submission
-              // actually modifies _entries this session.
-              get lastSubmitted() {
-                return lastSubmittedEntry;
-              },
-              getDropdownTopCandidate: (buffer: string) => {
-                const ac = surface.autocompleteState;
-                const top = ac.candidates[0];
-                if (!top) return null;
-                // Only return the candidate's value if it starts with the buffer
-                // (strict-prefix check mirrors getDeterministicGhost's own guard).
-                return top.value.startsWith(buffer) && top.value.length > buffer.length
-                  ? top.value
-                  : null;
-              },
-              getTranscriptTail: () => {
-                // Last 1-2 completed turns, newest-first so the freshest
-                // exchange wins buildUser's 200-char context budget. slice(-2)
-                // returns a fresh array, so reverse() never mutates stats.turns.
-                // Secrets are scrubbed downstream at the suggester egress
-                // boundary (buildUser -> redactSecrets), not here.
-                const turns = ctx.stats.turns;
-                if (turns.length === 0) return '';
-                return turns
-                  .slice(-2)
-                  .reverse()
-                  .map((t) => `user: ${t.user}\nassistant: ${t.assistant}`)
-                  .join('\n');
-              },
-              getRecentCommands: () => {
-                // Reuse the same ReplHistory ring as getHistory above
-                // (getEntries() is newest-first); buildUser slices to 5.
-                const ring = surface.history as { getEntries?: () => readonly string[] };
-                return ring.getEntries ? [...ring.getEntries()] : [];
-              },
-              // Parse as a boolean, not raw truthiness: only the documented
-              // activations (1/true/yes/on — see docs/env-registry.md) enable the
-              // Tier-2 LLM. A non-empty falsy value like `0` or `false` must keep
-              // suggestions off, otherwise typing would start firing provider calls
-              // despite the user explicitly disabling them.
-              llmEnabled: () => /^(1|true|yes|on)$/i.test(env.AFK_SUGGEST_ENABLED ?? ''),
-              // Same documented-activation parse as llmEnabled. Gates ONLY the
-              // empty-prompt suggestion; the completion tiers are unaffected.
-              promptSuggestEnabled: () =>
-                /^(1|true|yes|on)$/i.test(env.AFK_SUGGEST_PROMPT ?? ''),
-            }),
-          },
-        }
-      : {}),
+    // Ghost-text wiring — context factory extracted to surface-setup.suggest-config.ts.
+    // Returns `{ suggest: { engine, getContext } }` when enabled, `{}` when disabled.
+    ...buildSuggestConfig({
+      enabled: suggestGhostEnabled,
+      engine: suggestEngine,
+      surface,
+      stats: ctx.stats,
+      apiKey: ctx.suggestApiKey,
+      baseUrl: ctx.suggestBaseUrl,
+      historyTracker,
+    }),
   });
 
   // Invariant: install the REPL elicitation handler AFTER armCompositor
