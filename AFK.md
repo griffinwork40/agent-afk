@@ -25,6 +25,8 @@ pnpm scan:env:check                                # CI gate: docs/env-registry.
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # CI gate: 350-line source ceiling, ratcheted against .filesize-baseline.json
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values)
+pnpm audit:funcsize:check                          # CI gate: 200-line function ceiling, ratcheted against .funcsize-baseline.json
+pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
@@ -155,7 +157,7 @@ non-baselined file goes over, when a baselined file *grows*, when a baselined fi
 now fits (remove it), and when a baselined path disappears. Regenerate it with
 `pnpm audit:filesize:update`; never hand-edit `loc` values (the `reason` and
 `permanent` fields are yours and survive regeneration). It carries
-`-merge -diff` in `.gitattributes`, so resolve conflicts by regenerating, never
+`-merge` in `.gitattributes`, so resolve conflicts by regenerating, never
 by editing conflict markers.
 
 **Getting under the ceiling without deleting documentation.** This repo mandates
@@ -174,6 +176,29 @@ A split is only behaviour-preserving if state stays singular:
 extracted sibling must be reachable from one of the three esbuild entrypoints or
 `build:dist` silently tree-shakes it with no CI signal. Campaign plan and
 per-wave protocol: `docs/file-size-ceiling.md`.
+
+### The 200-line function ceiling
+
+A sibling gate, and **not implied by the file ceiling**: `pnpm audit:funcsize:check`
+(`scripts/check-function-size.ts`) fails when any single function under `src/` or
+`scripts/` exceeds **200 lines**. File size measures how much you must *read* to
+edit safely; function size measures how much you must *hold in mind* to change one
+behaviour. They diverge both ways — a flat 900-line registry has no large function,
+and a 700-line function hides inside a file that passes 350 only because siblings
+were extracted around it (#919: #829 shrank `subagent.ts` and closed while
+`forkSubagent` never changed, and it has since grown to 586).
+
+Same five-mode ratchet and the same never-hand-edit rule, against
+`.funcsize-baseline.json` (54 grandfathered = 1.2% of 4,388 functions; regenerate
+with `pnpm audit:funcsize:update`). Measurement is AST-based, so **JSDoc is
+excluded** — unlike the file metric, which counts it. The asymmetry is deliberate:
+extraction relieves a file ceiling and carries the docs along, but a function
+cannot be split from its own doc comment, so counting it would only pressure you
+to delete documentation.
+
+At the ceiling, extract a **named helper taking explicit parameters** — not a
+closure over the enclosing locals, which relocates lines without reducing what you
+must hold in mind. `pnpm audit:funcsize:list` ranks the current worst.
 
 ### Long-comment prefix convention
 
