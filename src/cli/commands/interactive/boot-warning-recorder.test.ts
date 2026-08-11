@@ -52,6 +52,11 @@ describe('recordBootWarning', () => {
   });
 
   it('records the event even when the caller throws immediately afterward (abort path, #754)', () => {
+    // Synchrony guarantee is specific to InMemoryTraceWriter: writes complete
+    // inline. NdjsonTraceWriter is async (queued NDJSON appends) — on that
+    // writer the returned Promise must be awaited before a process.exit to
+    // guarantee the event reaches disk (see bootstrap-mcp.ts, which awaits).
+    //
     // Simulates the real shape: `agentRegistryWarn`/the MCP warnings loop call
     // `recordBootWarning`, and a LATER bootstrap phase throws before either
     // terminal-facing drain site (`interactive.ts`) can run. Because emission

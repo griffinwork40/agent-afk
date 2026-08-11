@@ -58,7 +58,7 @@ export async function connectReplMcp(a: {
   // time — before `McpManager.fromConfig` below can throw on an `alwaysLoad`
   // server, which would otherwise strand these in an unreturned ctx.
   for (const w of loaded.warnings) {
-    recordBootWarning({
+    await recordBootWarning({
       bootWarnings: a.bootWarnings,
       traceWriter: a.traceWriter,
       producer: 'mcp',

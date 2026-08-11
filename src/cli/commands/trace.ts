@@ -538,10 +538,13 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
       // exactly the bug class the issue describes (ships green, invisible).
       if (p.phase === 'boot_warning') {
         const md = p.metadata ?? {};
-        const producer = md['producer'];
         const message = md['message'];
-        const producerBit = producer !== undefined ? `[${String(producer)}] ` : '';
-        return line('boot-warn', `${producerBit}${message !== undefined ? String(message) : '(no message)'}`);
+        // `producer` is preserved in metadata for programmatic filtering
+        // (`afk trace show --json | jq 'select(.payload.metadata.producer=="mcp")'`)
+        // but is NOT rendered as a visible prefix here: the message strings
+        // already self-identify ("[mcp] …", "[afk] agents: …"), so prepending
+        // `[producer]` would double the prefix for MCP events (#984).
+        return line('boot-warn', `${message !== undefined ? String(message) : '(no message)'}`);
       }
       if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';

@@ -360,7 +360,10 @@ describe('formatTrace — boot_warning is high-signal (shown by default) (#754)'
   it('renders the boot_warning event in the DEFAULT view (no --all)', () => {
     expect(out).toContain('boot-warn');
     expect(out).toContain('research-agent.md overrides built-in agent');
-    expect(out).toContain('[agent-registry]');
+    // The message already self-identifies via its "[afk] agents:" prefix —
+    // the renderer no longer prepends a separate "[producer]" label (#984).
+    expect(out).toContain('[afk] agents:');
+    expect(out).not.toContain('[agent-registry]');
   });
 
   it('still hides the low-signal model_ttfb phase by default', () => {
@@ -386,6 +389,33 @@ describe('formatTrace — boot_warning is high-signal (shown by default) (#754)'
     const raw = toJsonl(events);
     expect(raw).toContain(JSON.stringify(warningMsg).slice(1, -1));
     expect(raw).toContain('"phase":"boot_warning"');
+  });
+});
+
+describe('formatTrace — boot_warning MCP producer does NOT double prefix (#984)', () => {
+  // The MCP warning message already begins with "[mcp] …" so the renderer
+  // must NOT prepend an additional "[mcp]" prefix — that would produce
+  // "[mcp] [mcp] …" in `afk trace show` output.
+  it('renders the MCP message exactly once without a doubled [mcp] prefix', () => {
+    const events: EventObj[] = [
+      {
+        ts: '2026-06-05T12:30:00.000Z',
+        seq: 0,
+        kind: 'session_phase',
+        payload: {
+          phase: 'boot_warning',
+          metadata: {
+            producer: 'mcp',
+            message: '[mcp] server "foo": unknown key "cmd"',
+          },
+        },
+      },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('[mcp] server "foo"');
+    // The doubled prefix must not appear.
+    expect(out).not.toContain('[mcp] [mcp]');
   });
 });
 

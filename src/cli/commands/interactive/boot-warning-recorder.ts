@@ -52,9 +52,9 @@ export function recordBootWarning(a: {
   traceWriter: TraceWriter | undefined;
   producer: BootWarningProducer;
   message: string;
-}): void {
+}): Promise<void> {
   a.bootWarnings.push(a.message);
-  void emitSessionPhase(a.traceWriter, {
+  return emitSessionPhase(a.traceWriter, {
     phase: 'boot_warning',
     metadata: { producer: a.producer, message: a.message },
   });
