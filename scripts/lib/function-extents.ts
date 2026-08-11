@@ -184,7 +184,7 @@ export function measureFile(absPath: string): FunctionExtent[] {
           line: startLine + 1,
         });
       }
-      ts.forEachChild(node, (child) => visit(child, true));
+      ts.forEachChild(node, (child) => visit(child, insideFunction || hasBody(node)));
       return;
     }
     ts.forEachChild(node, (child) => visit(child, insideFunction));

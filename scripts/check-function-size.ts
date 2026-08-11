@@ -43,6 +43,7 @@ import {
   loadBaseline,
   updateBaseline,
   VIOLATION_ORDER,
+  type Baseline,
   type RatchetConfig,
   type Violation,
 } from './lib/size-ratchet.js';
@@ -100,7 +101,7 @@ export function isScannable(relPath: string): boolean {
   const base = path.basename(relPath);
   if (!INCLUDED_EXTENSIONS.some((e) => base.endsWith(e))) return false;
   if (EXCLUDED_SUFFIXES.some((s) => base.endsWith(s))) return false;
-  const segments = relPath.split(path.sep);
+  const segments = relPath.replaceAll('\\', '/').split('/');
   if (segments.some((seg) => EXCLUDED_DIRS.includes(seg as never))) return false;
   return SCAN_ROOTS.some((root) => segments[0] === root);
 }
@@ -157,9 +158,8 @@ function formatKey(key: string, lines: Map<string, number>): string {
   return line === undefined ? key : `${parsed.file}:${line}  ${parsed.name}()`;
 }
 
-function reportAndExit(measured: Measured, violations: Violation[]): void {
+function reportAndExit(measured: Measured, violations: Violation[], baseline: Baseline): void {
   const { sizes, lines } = measured;
-  const baseline = loadBaseline(RATCHET);
 
   const warnings = [...sizes.entries()]
     .filter(([k, n]) => n > WARN_AT && n <= LIMIT && !baseline.entries[k])
@@ -236,7 +236,7 @@ function main(): void {
     cfg: RATCHET,
     ...(changedVs ? { touchedKeys: touchedKeysSince(changedVs, measured.sizes), touchedVs: changedVs } : {}),
   });
-  reportAndExit(measured, violations);
+  reportAndExit(measured, violations, baseline);
 }
 
 main();

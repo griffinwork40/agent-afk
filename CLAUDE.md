@@ -144,7 +144,7 @@ gets plain-named siblings in that directory.
 on a baselined file that now fits (remove it), and on a baselined path that no
 longer exists. Regenerate with `pnpm audit:filesize:update` — never hand-edit
 `loc`; `reason`/`permanent` are yours and survive regeneration. The file is
-`-merge -diff` in `.gitattributes`: resolve conflicts by regenerating, not by
+`-merge` in `.gitattributes`: resolve conflicts by regenerating, not by
 editing markers.
 
 **Do not delete documentation to satisfy this gate.** The originally-over files

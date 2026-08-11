@@ -157,7 +157,7 @@ non-baselined file goes over, when a baselined file *grows*, when a baselined fi
 now fits (remove it), and when a baselined path disappears. Regenerate it with
 `pnpm audit:filesize:update`; never hand-edit `loc` values (the `reason` and
 `permanent` fields are yours and survive regeneration). It carries
-`-merge -diff` in `.gitattributes`, so resolve conflicts by regenerating, never
+`-merge` in `.gitattributes`, so resolve conflicts by regenerating, never
 by editing conflict markers.
 
 **Getting under the ceiling without deleting documentation.** This repo mandates

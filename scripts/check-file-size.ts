@@ -25,12 +25,13 @@
  *   --list                print every scanned file with its line count.
  *
  * The baseline grandfathers files that already exceeded the ceiling when the gate
- * landed, and it is a ONE-WAY RATCHET — it fails four ways, so it can never
+ * landed, and it is a ONE-WAY RATCHET — it fails five ways, so it can never
  * silently slacken into a parking lot:
  *   NEW      a non-baselined file exceeds the ceiling.
  *   GREW     a baselined file is larger than its recorded size.
  *   RETIRED  a baselined file now fits — remove it from the baseline.
  *   STALE    a baselined file no longer exists — remove it from the baseline.
+ *   TOUCHED  a baselined file was modified without being brought under the ceiling.
  *
  * `permanent: true` entries are exempt from RETIRED (they are never expected to
  * fit) but NOT from GREW. Each needs a written reason. Keep the list tiny.
@@ -82,7 +83,7 @@ const SCAN_ROOTS = ['src', 'scripts'] as const;
  */
 const EXCLUDED_SUFFIXES = ['.test.ts', '.spec.ts', '.d.ts'] as const;
 const EXCLUDED_DIRS = ['__fixtures__', '__test-utils__', 'node_modules', 'dist'] as const;
-const INCLUDED_EXTENSIONS = ['.ts', '.mjs', '.js'] as const;
+const INCLUDED_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.js'] as const;
 
 const RATCHET: RatchetConfig = {
   limit: LIMIT,
@@ -105,7 +106,7 @@ function isScannable(relPath: string): boolean {
   const base = path.basename(relPath);
   if (!INCLUDED_EXTENSIONS.some((e) => base.endsWith(e))) return false;
   if (EXCLUDED_SUFFIXES.some((s) => base.endsWith(s))) return false;
-  return !relPath.split(path.sep).some((seg) => EXCLUDED_DIRS.includes(seg as never));
+  return !relPath.replaceAll('\\', '/').split('/').some((seg) => EXCLUDED_DIRS.includes(seg as never));
 }
 
 function walk(dir: string, out: string[]): void {
