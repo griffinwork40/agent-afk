@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.2] - 2026-08-12
+
+### Changed
+- split commitAbove into 7 sibling modules with invariant tests (#827) (#1032) (c3a4bade)
+
 ## [5.112.1] - 2026-08-12
 
 ### Fixed
