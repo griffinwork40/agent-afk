@@ -314,6 +314,18 @@ export class SubagentExecutor implements SubagentControl {
   }
 
   /**
+   * Re-point the trace writer forked sub-agents inherit, after a REPL
+   * `/resume` replaced the session that owned the previous writer. Mirrors
+   * {@link SubagentExecutor.setCwd}: updates this executor's context AND the
+   * root manager that dispatches depth-1 forks, so the whole `agent`-tool tree
+   * follows the resumed session's live writer instead of the sealed one (#731).
+   */
+  setTraceWriter(writer: TraceWriter | undefined): void {
+    this.ctx.traceWriter = writer;
+    this.ctx.subagentManager.setTraceWriter(writer);
+  }
+
+  /**
    * The `agent` tool definition this executor's owning provider should
    * advertise. With a non-empty named-agent registry, the definition gains
    * the `agent_type` input property and an "Available agent types" listing

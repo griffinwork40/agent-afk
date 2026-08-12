@@ -541,6 +541,15 @@ export class ComposeExecutor {
     this.currentCwd = cwd;
   }
 
+  /**
+   * Re-point the trace writer compose DAG nodes inherit, after a REPL
+   * `/resume` replaced the session that owned the previous writer. Only nodes
+   * dispatched after this call use `writer` (#731).
+   */
+  setTraceWriter(writer: TraceWriter | undefined): void {
+    this.ctx.traceWriter = writer;
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Compose tool call aborted', isError: true };

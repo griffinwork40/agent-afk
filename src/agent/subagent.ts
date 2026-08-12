@@ -114,7 +114,10 @@ export class SubagentManager {
   // manager lifetime. `undefined` value = resolved-and-there-is-none, so the
   // Map's `.has()` distinguishes "not yet resolved" from "resolved to none".
   private readonly worktreeMainRootCache = new Map<string, string | undefined>();
-  private readonly parentTraceWriter: TraceWriter | undefined;
+  // Not readonly: a REPL `/resume` swaps the session out from under this
+  // long-lived manager and hands it a fresh writer via `setTraceWriter`,
+  // because the outgoing session sealed the one captured here (#731).
+  private parentTraceWriter: TraceWriter | undefined;
   private readonly parentSurface: Surface | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
@@ -208,6 +211,22 @@ export class SubagentManager {
     // the cache (#441). setCwd is rare (born-named worktree creation on turn 1),
     // so forcing one re-resolution on the next fork costs nothing.
     this.worktreeMainRootCache.delete(cwd);
+  }
+
+  /**
+   * Re-point the writer inherited by future forks.
+   *
+   * Contract: mirrors {@link SubagentManager.setCwd} — existing in-flight
+   * children keep the writer they were forked with; only forks dispatched
+   * after this call inherit `writer`. Called (via the bootstrap cascade) on a
+   * REPL `/resume`, where the outgoing session seals the writer this manager
+   * captured at construction; without the re-point, every post-resume fork
+   * would emit its lifecycle events into a sealed writer and be silently
+   * dropped (#731).
+   */
+  setTraceWriter(writer: TraceWriter | undefined): void {
+    this.parentTraceWriter = writer;
+    this.abortGraph.setTraceWriter(writer);
   }
 
   /**
