@@ -20,7 +20,7 @@
 
 /** Pattern matching write-intent phrases in an agent prompt. */
 const WRITE_INTENT_RE =
-  /\b(write|save|persist|create|output|emit|dump|generate)\s+(a\s+)?(file|report|output|artifact|doc|document|markdown|\.md)\b/i;
+  /\b(write|save|persist|create|output|emit|dump|generate)\s+(a\s+)?(file|report|output|artifact|doc|document|markdown|\.md)\b|\b(write|save|persist|create|output|emit|dump|generate)\s+\S+\.(md|json|txt|ts|js|yaml|yml|csv|html)\b/i;
 
 /**
  * Collect any warning prefixes to prepend to a subagent tool result.
@@ -51,7 +51,7 @@ export function collectPostRunWarnings(
   if (!childWriteCapable && agentName !== undefined && WRITE_INTENT_RE.test(prompt)) {
     prefix +=
       `WARNING: ${agentName} is read-only — write instructions were ignored. ` +
-      `Findings are in the message above, not a file. ` +
+      `Findings are in the message below, not a file. ` +
       `Use a general-purpose agent when the task requires file output.\n\n`;
   }
   return prefix;

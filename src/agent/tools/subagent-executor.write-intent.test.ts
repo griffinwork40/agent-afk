@@ -92,6 +92,34 @@ describe('collectPostRunWarnings', () => {
       }
     });
 
+    it('detects write intent when a filename with extension is named directly', () => {
+      const writePrompts = [
+        'write findings.md',
+        'write F-rubric-audit.md',
+        'save results.json to disk',
+        'output report.txt',
+        'create analysis.ts',
+        'generate summary.yaml',
+      ];
+      for (const prompt of writePrompts) {
+        const warn = collectPostRunWarnings('m', false, 'research-agent', prompt, false, hasVision);
+        expect(warn, `expected warning for: "${prompt}"`).toContain('read-only');
+      }
+    });
+
+    it('warning message points callers to the message below, not above', () => {
+      const warn = collectPostRunWarnings(
+        'claude-haiku',
+        false,
+        'research-agent',
+        'write findings.md',
+        false,
+        hasVision,
+      );
+      expect(warn).toContain('below');
+      expect(warn).not.toContain('above');
+    });
+
     it('does not trigger on non-matching phrases', () => {
       const safePrompts = [
         'Analyse the codebase thoroughly',
