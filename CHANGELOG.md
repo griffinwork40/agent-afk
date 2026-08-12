@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.111.1] - 2026-08-12
+
+### Fixed
+- improve tmux compatibility — raw OSC 52 clipboard, truecolor detection, docs (#1017) (c2d6cdd2)
+
 ## [5.111.0] - 2026-08-12
 
 ### Added
