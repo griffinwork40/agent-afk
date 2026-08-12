@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.4] - 2026-08-12
+
+### Fixed
+- correct concurrency floor figures and add light-regime budget (#1027) (0b99429c)
+
 ## [5.112.3] - 2026-08-12
 
 ### Changed
