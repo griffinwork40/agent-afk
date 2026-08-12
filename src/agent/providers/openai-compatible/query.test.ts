@@ -1648,8 +1648,11 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     );
     // autoCompact OFF so the boundaries are driven explicitly below — an auto pass
     // would microcompact mid-run and make the assertions order-dependent.
+    // Use gpt-5.5 (1M window) so each turn's ~200k reported usage does NOT
+    // trigger the context-overflow guard (#962), which fires on gpt-4o-mini
+    // (128k window) when lastUsage.contextWindowTokens exceeds the window.
     const q = buildQueryFromConfig(
-      baseConfig({ model: 'gpt-4o-mini', autoCompact: false }),
+      baseConfig({ model: 'gpt-5.5', autoCompact: false }),
       multiInput('u1', 'u2', 'u3', 'u4', 'u5', 'u6'),
       { useResponsesApi: true, toolDispatcher: dispatcher },
     );

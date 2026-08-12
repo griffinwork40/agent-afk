@@ -24,13 +24,13 @@ import type {
   ProviderUserTurn,
 } from '../../provider.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
-import { autoCompactLimitFor } from '../../model-limits.js';
+import { autoCompactLimitFor, contextLimitFor } from '../../model-limits.js';
 import type { AnthropicClientLike, AnthropicToolDef } from './types.js';
 import { repairOrphanToolUses } from './query/repair-orphan-tool-uses.js';
 import type { SessionState } from './query/session-state.js';
 import type { AbortCoordinator } from '../shared/abort-coordinator.js';
 import type { RetryLayer } from './query/retry-layer.js';
-import { contextWindowTokensUsed, shouldAutoCompact } from './query/auto-compact.js';
+import { contextWindowTokensUsed, guardContextOverflow, shouldAutoCompact } from './query/auto-compact.js';
 import type { HookRegistry } from '../../hooks.js';
 import { HookBlockedError } from '../../../utils/errors.js';
 import { annotateFastError, prepareTurnRequest } from './query/turn-request.js';
@@ -134,6 +134,35 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       ctx.state.messages.push({ role: 'user', content: turn.content });
 
       const system = ctx.composeSystem();
+
+      // Context-overflow guard (#962): fail fast with a legible error BEFORE
+      // sending the request when we know the provider will 400 it. Uses the
+      // stale-by-one-round `lastUsage.contextWindowTokens` as a lower bound —
+      // conservative by design (skips the first turn when lastUsage is null,
+      // never silently shrinks max_tokens). See shared/auto-compact.ts.
+      // Yields an error event (rather than throwing) so the abort controller is
+      // cleared before control returns to the outer loop — throwing here would
+      // skip the inner try/finally that clears it and leave compact() returning
+      // 'turn-in-flight' on any subsequent manual compact call.
+      {
+        let overflowErr: Error | undefined;
+        try {
+          guardContextOverflow(
+            contextWindowTokensUsed(ctx.state.lastUsage ?? {}),
+            ctx.maxTokens,
+            contextLimitFor(ctx.state.requestedModel ?? ctx.state.currentModel),
+            ctx.state.requestedModel ?? ctx.state.currentModel,
+          );
+        } catch (e) {
+          overflowErr = e instanceof Error ? e : new Error(String(e));
+        }
+        if (overflowErr !== undefined) {
+          ctx.abort.clear(controller);
+          yield { type: 'error', error: overflowErr };
+          return;
+        }
+      }
+
       // Snapshot preference + eligibility exactly once. The resulting headers
       // and body intent live on one immutable RunTurnInput for every round/retry.
       const { decision: fastDecision, runInput } = prepareTurnRequest({
@@ -308,6 +337,11 @@ async function* maybeAutoCompact(ctx: TurnDriverContext): AsyncGenerator<Provide
       });
     }
     await ctx.compact();
+    // Reset lastUsage after compaction so the overflow guard (#962) does not
+    // false-positive on the next turn: the stale count is no longer a valid
+    // lower bound once history has been truncated. The next API call will
+    // repopulate it from the actual response.
+    ctx.state.lastUsage = null;
   } catch (compactErr) {
     if (compactErr instanceof HookBlockedError) {
       // Hook blocked auto-compaction — skip this turn's compaction

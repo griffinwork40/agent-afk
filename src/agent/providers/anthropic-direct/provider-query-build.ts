@@ -163,8 +163,8 @@ export function buildProviderQuery(
       ctx.setCurrentPermissionMode(mode);
     },
     ...(ctx.mcpManager !== undefined ? { mcpManager: ctx.mcpManager } : {}),
-    ...(resolveAutoCompactThreshold(config.autoCompact) !== undefined
-      ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact) }
+    ...(resolveAutoCompactThreshold(config.autoCompact, model) !== undefined
+      ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact, model) }
       : {}),
     // Thread the resolved hook registry into the query so auto-compaction
     // can dispatch PreCompact(trigger:'auto') before calling compact().
