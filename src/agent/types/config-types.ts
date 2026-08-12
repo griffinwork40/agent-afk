@@ -445,6 +445,23 @@ export interface AgentConfig {
   traceWriter?: TraceWriter;
 
   /**
+   * Cascade-abort and drain in-flight subagents before the trace writer is
+   * sealed.
+   *
+   * `AgentSession` owns the seal but holds no reference to the
+   * `SubagentManager` that owns the children, so the owner supplies this hook
+   * at wiring time — typically `(reason) =>
+   * rootManager.abortAllAndDrain(..., reason === 'reset')`. The lifecycle
+   * reason lets reusable surfaces re-arm their manager after `/clear`.
+   * Awaited (and never rethrown) at the top of `dispatchSessionEndOnce`.
+   *
+   * Omit it and a parent that ends mid-wave seals over its live children,
+   * silently dropping their terminal rows (#733). Sessions with no subagent
+   * tree — forks themselves, one-shot probes — correctly leave it undefined.
+   */
+  drainSubagents?: (reason: string) => Promise<unknown>;
+
+  /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the
    * single choke point every built-in fork path converges through — and never

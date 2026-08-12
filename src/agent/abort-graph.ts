@@ -67,6 +67,19 @@ export class AbortGraph {
     });
   }
 
+  /**
+   * Replace a node's terminal AbortController while preserving its links and
+   * listeners. This is only intended for reusable lifecycle roots after their
+   * current children have been cancelled (for example, an interactive
+   * session's `/clear` cycle).
+   */
+  rearm(id: string, controller: AbortController): void {
+    const node = this.nodes.get(id);
+    if (!node) throw new Error(`AbortGraph: ${id} not registered`);
+    node.controller = controller;
+    node.cascading = false;
+  }
+
   has(id: string): boolean {
     return this.nodes.has(id);
   }
