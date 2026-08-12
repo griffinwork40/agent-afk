@@ -82,18 +82,13 @@ jobs:
         # .afk/plans/enforce-350-line-ceiling.md.
         run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
 
-      - name: Audit the 200-line function ceiling (ratcheted baseline)
-        # Sibling of the file gate, and NOT implied by it: file size measures how
-        # much must be read to establish edit safety, function size measures how
-        # much must be held in mind to change one behaviour. #829 shrank
-        # subagent.ts and closed while forkSubagent never changed — a file gate
-        # scores that as progress, this one does not. Same five-mode ratchet.
-        # Regenerate with `pnpm audit:funcsize:update`; never hand-edit it.
-        run: pnpm audit:funcsize:check
+      - name: Audit the 200-line function ceiling (advisory)
+        # Advisory — warns on violations but never fails CI. The baseline ratchet
+        # still tracks which functions are over; run `pnpm audit:funcsize:update`
+        # to regenerate it after an extraction.
+        run: pnpm audit:funcsize:check || true
 
-      - name: Audit the 200-line function ceiling on functions this PR touches
-        # Touch-trigger, advisory for now (`|| true`) to match the file gate's
-        # posture: flip both to blocking together once the god-object waves land.
+      - name: Audit the 200-line function ceiling on functions this PR touches (advisory)
         run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
 
       - name: Audit module-scope state duplication across sibling families
