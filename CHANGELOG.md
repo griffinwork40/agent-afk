@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.110.5] - 2026-08-12
+
+### Fixed
+- fail-fast context-overflow guard for max_tokens exceeding window (#1014) (72d56baa)
+
 ## [5.110.4] - 2026-08-12
 
 ### Fixed
