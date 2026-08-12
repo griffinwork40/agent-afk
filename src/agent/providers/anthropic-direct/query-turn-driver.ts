@@ -128,22 +128,19 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       // placeholders so the API contract holds and the user can continue.
       repairOrphanToolUses(ctx.state.messages);
 
-      // Append the new user turn to history. Strings and content-block
-      // arrays both ride through as-is — Anthropic's MessageParam accepts
-      // either shape natively.
-      ctx.state.messages.push({ role: 'user', content: turn.content });
-
-      const system = ctx.composeSystem();
-
       // Context-overflow guard (#962): fail fast with a legible error BEFORE
-      // sending the request when we know the provider will 400 it. Uses the
-      // stale-by-one-round `lastUsage.contextWindowTokens` as a lower bound —
+      // sending the request when we know the provider will 400 it. Runs BEFORE
+      // the history push so the user message is not left in history on overflow
+      // (allowing /compact to succeed cleanly from the outer while loop). Uses
+      // the stale-by-one-round `lastUsage.contextWindowTokens` as a lower bound —
       // conservative by design (skips the first turn when lastUsage is null,
       // never silently shrinks max_tokens). See shared/auto-compact.ts.
       // Yields an error event (rather than throwing) so the abort controller is
       // cleared before control returns to the outer loop — throwing here would
       // skip the inner try/finally that clears it and leave compact() returning
       // 'turn-in-flight' on any subsequent manual compact call.
+      // Uses `continue` (not `return`) so the outer while loop survives: the
+      // user can /compact and send a new message without the session dying.
       {
         let overflowErr: Error | undefined;
         try {
@@ -159,9 +156,16 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         if (overflowErr !== undefined) {
           ctx.abort.clear(controller);
           yield { type: 'error', error: overflowErr };
-          return;
+          continue;
         }
       }
+
+      // Append the new user turn to history. Strings and content-block
+      // arrays both ride through as-is — Anthropic's MessageParam accepts
+      // either shape natively.
+      ctx.state.messages.push({ role: 'user', content: turn.content });
+
+      const system = ctx.composeSystem();
 
       // Snapshot preference + eligibility exactly once. The resulting headers
       // and body intent live on one immutable RunTurnInput for every round/retry.

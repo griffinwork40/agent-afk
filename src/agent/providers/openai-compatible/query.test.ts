@@ -1397,21 +1397,25 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
                 yield { type: 'response.output_text.delta', delta: 'AUTO-SUMMARY' };
                 yield {
                   type: 'response.completed',
-                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                  response: { usage: { input_tokens: 850_000, output_tokens: 10, total_tokens: 850_010 } },
                 };
               })();
             },
           },
         }) as unknown as OpenAI,
     );
+    // Use gpt-5.5 (1M window) so each turn's ~850k reported usage triggers
+    // auto-compaction but does NOT fire the context-overflow guard (#962),
+    // which fires on gpt-4o-mini (128k window) before compaction can run.
     const q = buildQueryFromConfig(
-      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      baseConfig({ model: 'gpt-5.5', autoCompact: true }),
       multiInput('u1', 'u2', 'u3'),
       { useResponsesApi: true },
     );
     await collect(q);
-    // Each turn reports ~200k tokens — far over gpt-4o-mini's 128k window — so the
-    // turn-boundary trigger fires compaction, and the summarize rode responses.create
+    // Each turn reports ~850k tokens — over gpt-5.5's compaction threshold (~832k)
+    // but under the overflow guard (~872k) — so the turn-boundary trigger fires
+    // compaction, and the summarize rode responses.create
     // (a chat.completions.create would have thrown above and failed the run).
     expect(summarizeCalls.length).toBeGreaterThanOrEqual(1);
     // Public API-key path (source 'config', not chatgpt-oauth) DOES carry the cap.
@@ -1422,9 +1426,13 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
   /**
    * Responses-wire client whose summarize call (the one carrying
    * COMPACT_SYSTEM_PROMPT as `instructions`) fails with `summarizeError`, while
-   * ordinary turns stream a ~200k-token reply so every turn boundary trips the
+   * ordinary turns stream a ~850k-token reply so every turn boundary trips the
    * auto-compaction threshold. `attempts` counts summarize calls reaching the
    * backend — the observable that proves whether the latch engaged.
+   *
+   * Uses gpt-5.5 (1M window): 850k usage triggers auto-compaction (~832k
+   * threshold) but stays under the overflow guard (~872k), which would fire
+   * first on gpt-4o-mini (128k window) and prevent compaction from running (#962).
    */
   function installResponsesClientFailingSummarize(summarizeError: unknown): { attempts: () => number } {
     let attempts = 0;
@@ -1448,7 +1456,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
                 yield { type: 'response.output_text.delta', delta: 'ok' };
                 yield {
                   type: 'response.completed',
-                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                  response: { usage: { input_tokens: 850_000, output_tokens: 10, total_tokens: 850_010 } },
                 };
               })();
             },
@@ -1471,7 +1479,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       statusError(400, 'unsupported request for this backend'),
     );
     const q = buildQueryFromConfig(
-      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      baseConfig({ model: 'gpt-5.5', autoCompact: true }),
       multiInput('u1', 'u2', 'u3'),
       { useResponsesApi: true },
     );
@@ -1496,7 +1504,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     // retryable, so the backend is asked again on later boundaries.
     const client = installResponsesClientFailingSummarize(statusError(429, 'rate limited'));
     const q = buildQueryFromConfig(
-      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      baseConfig({ model: 'gpt-5.5', autoCompact: true }),
       multiInput('u1', 'u2', 'u3'),
       { useResponsesApi: true },
     );
@@ -1516,7 +1524,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     // never proof that the backend refuses this request shape.
     const client = installResponsesClientFailingSummarize(new Error('socket hang up'));
     const q = buildQueryFromConfig(
-      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      baseConfig({ model: 'gpt-5.5', autoCompact: true }),
       multiInput('u1', 'u2', 'u3'),
       { useResponsesApi: true },
     );
@@ -1558,15 +1566,18 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
                 yield { type: 'response.output_text.delta', delta: ' MORE' };
                 yield {
                   type: 'response.completed',
-                  response: { usage: { input_tokens: 200_000, output_tokens: 10, total_tokens: 200_010 } },
+                  response: { usage: { input_tokens: 850_000, output_tokens: 10, total_tokens: 850_010 } },
                 };
               })();
             },
           },
         }) as unknown as OpenAI,
     );
+    // Use gpt-5.5 (1M window) so each turn's ~850k reported usage triggers
+    // auto-compaction but does NOT fire the context-overflow guard (#962),
+    // which fires on gpt-4o-mini (128k window) before compaction can run.
     const q = buildQueryFromConfig(
-      baseConfig({ model: 'gpt-4o-mini', autoCompact: true }),
+      baseConfig({ model: 'gpt-5.5', autoCompact: true }),
       multiInput('u1', 'u2', 'u3'),
       { useResponsesApi: true },
     );
@@ -1722,12 +1733,14 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
   });
 
   it('auto-compacts at the turn boundary once the context-window threshold is crossed', async () => {
-    // Each streaming turn reports a context-window footprint (~200k) far over
-    // the 90% default threshold for gpt-4o-mini's 128k window. Compaction is
-    // the only thing that issues a NON-streaming Chat Completions call
-    // (the summarize), so recording that call proves the turn-boundary trigger
-    // fired compactHistory('token_threshold'). Three fresh user turns are the
-    // minimum for a real boundary (keepLastN defaults to 2).
+    // Each streaming turn reports a context-window footprint (~850k) over the
+    // compaction threshold for gpt-5.5 (~832k) but under the overflow guard
+    // (~872k). Use gpt-5.5 (1M window) instead of gpt-4o-mini (128k) so the
+    // context-overflow guard (#962) does not fire before compaction can run.
+    // Compaction is the only thing that issues a NON-streaming Chat Completions
+    // call (the summarize), so recording that call proves the turn-boundary
+    // trigger fired compactHistory('token_threshold'). Three fresh user turns
+    // are the minimum for a real boundary (keepLastN defaults to 2).
     const summarizeCalls: unknown[] = [];
     __setOpenAIClientFactory(
       () =>
@@ -1739,7 +1752,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
                   return (async function* () {
                     yield {
                       choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
-                      usage: { prompt_tokens: 200_000, completion_tokens: 10, total_tokens: 200_010 },
+                      usage: { prompt_tokens: 850_000, completion_tokens: 10, total_tokens: 850_010 },
                     } as OpenAIChunk;
                   })();
                 }
@@ -1750,17 +1763,21 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
           },
         }) as unknown as OpenAI,
     );
+    // Use gpt-5.5 (1M window) so each turn's ~850k reported usage triggers
+    // auto-compaction but does NOT fire the context-overflow guard (#962),
+    // which fires on gpt-4o-mini (128k window) before compaction can run.
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.5',
       synthesizedSessionId: 'sid',
       promptStream: multiInput('u1', 'u2', 'u3'),
       config: baseConfig({ autoCompact: true }),
     });
     await collect(q);
-    // Each turn reports ~200k — far over the window — so the adaptive
-    // keep-window (see shared/compaction.ts:findCompactionBoundaryAdaptive)
-    // engages whenever there is an older turn to summarize:
+    // Each turn reports ~850k — over gpt-5.5's compaction threshold (~832k)
+    // but under the overflow guard (~872k) — so the adaptive keep-window
+    // (see shared/compaction.ts:findCompactionBoundaryAdaptive) engages
+    // whenever there is an older turn to summarize:
     //   turn 1 → still history-too-short (a single fresh user turn can't be
     //            compacted — shrinking to keepLastN=1 lands the boundary at 0);
     //   turn 2 → 2 fresh user turns + full window → keep-window relaxes 2→1 and

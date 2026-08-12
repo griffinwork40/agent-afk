@@ -478,16 +478,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // iteration + tool-dispatch so the user turn, history sanitize, and
     // tool-result image follow-up all agree. See issue #127 / model-capabilities.ts.
     const vision = supportsVision(this.currentModel);
-    this.priorTurns.push({
-      role: 'user',
-      content: buildUserContent(content, { vision, model: this.currentModel }),
-    });
 
     // Context-overflow guard (#962): fail fast BEFORE sending a request the
-    // provider would reject with HTTP 400. Yields an error event (rather than
-    // throwing) so the abort slot is cleared before control returns; throwing
-    // here leaves the slot set and makes compact() return 'turn-in-flight'.
-    // See query/context-overflow.ts and shared/auto-compact.ts for details.
+    // provider would reject with HTTP 400. Runs BEFORE the history push so
+    // the user message is not left in history on overflow. Yields an error
+    // event (rather than throwing) so the abort slot is cleared before
+    // control returns; throwing here leaves the slot set and makes compact()
+    // return 'turn-in-flight'. See query/context-overflow.ts and
+    // shared/auto-compact.ts for details.
     const overflowErr = checkContextOverflow(
       this.lastUsage,
       this.currentModel,
@@ -499,6 +497,11 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       yield { type: 'error', error: overflowErr };
       return;
     }
+
+    this.priorTurns.push({
+      role: 'user',
+      content: buildUserContent(content, { vision, model: this.currentModel }),
+    });
 
     // Aggregate usage across all tool-loop iterations for this turn via the
     // shared sumProviderUsage helper. Critical: cache fields (cachedInputTokens,
