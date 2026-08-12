@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.3] - 2026-08-12
+
+### Changed
+- retire committedBandBottomRow erase-bound read in frame-preserve-archive (advances #540) (#1031) (dbfc1b5c)
+
 ## [5.112.2] - 2026-08-12
 
 ### Changed
