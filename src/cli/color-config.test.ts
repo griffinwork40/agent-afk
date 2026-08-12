@@ -1,6 +1,6 @@
 /**
  * Tests for color configuration autodetection.
- * Covers NO_COLOR, FORCE_COLOR, CI, and TTY detection logic.
+ * Covers NO_COLOR, FORCE_COLOR, CI, TTY detection, and tmux truecolor override.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -40,6 +40,7 @@ describe('configureColor()', () => {
     vi.stubEnv('NO_COLOR', '');
     vi.stubEnv('FORCE_COLOR', '');
     vi.stubEnv('CI', '');
+    vi.stubEnv('TMUX', '');
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
       get: () => true,
@@ -95,6 +96,55 @@ describe('configureColor()', () => {
     vi.stubEnv('NO_COLOR', '');
     vi.stubEnv('FORCE_COLOR', '');
     vi.stubEnv('CI', '');
+    vi.stubEnv('TMUX', '');
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      get: () => true,
+    });
+
+    const initialLevel = chalk.level;
+    configureColor();
+    expect(chalk.level).toBe(initialLevel);
+  });
+
+  it('sets chalk.level=3 when $TMUX is set and COLORTERM=truecolor (Node ≤24 workaround)', () => {
+    vi.stubEnv('NO_COLOR', '');
+    vi.stubEnv('FORCE_COLOR', '');
+    vi.stubEnv('CI', '');
+    vi.stubEnv('TMUX', '/tmp/tmux-501/default,12345,0');
+    vi.stubEnv('COLORTERM', 'truecolor');
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      get: () => true,
+    });
+
+    chalk.level = 1;
+    configureColor();
+    expect(chalk.level).toBe(3);
+  });
+
+  it('sets chalk.level=3 when $TMUX is set and COLORTERM=24bit', () => {
+    vi.stubEnv('NO_COLOR', '');
+    vi.stubEnv('FORCE_COLOR', '');
+    vi.stubEnv('CI', '');
+    vi.stubEnv('TMUX', '/tmp/tmux-501/default,12345,0');
+    vi.stubEnv('COLORTERM', '24bit');
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      get: () => true,
+    });
+
+    chalk.level = 1;
+    configureColor();
+    expect(chalk.level).toBe(3);
+  });
+
+  it('does not override chalk.level when $TMUX is set but COLORTERM is absent', () => {
+    vi.stubEnv('NO_COLOR', '');
+    vi.stubEnv('FORCE_COLOR', '');
+    vi.stubEnv('CI', '');
+    vi.stubEnv('TMUX', '/tmp/tmux-501/default,12345,0');
+    vi.stubEnv('COLORTERM', '');
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
       get: () => true,
