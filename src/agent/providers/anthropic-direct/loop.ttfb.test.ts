@@ -328,6 +328,87 @@ describe('runTurn TTFB stall timeout (#583)', () => {
     expect(events.some((e) => e.type === 'assistant.message' && e.text === 'progressing')).toBe(true);
   });
 
+  // Pins the key invariant of issue #947: the two TTFB stall shapes (connection-
+  // phase and mid-stream) draw from ONE shared RoundRetryBudget counter, not two
+  // independent booleans. A round that sees BOTH shapes in alternation must still
+  // succeed on its third attempt and must not burn more than TTFB_MAX_ATTEMPTS
+  // total calls.
+  it('shares ONE counted allowance across both stall shapes', async () => {
+    process.env[KEY] = '180000';
+    let callCount = 0;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn((_params: unknown, opts: unknown) => {
+          callCount++;
+          const signal = (opts as { signal: AbortSignal }).signal;
+          if (callCount === 1) return connectionStall(signal);           // connection-phase stall
+          if (callCount === 2) return postHeaderStallStream(signal);     // mid-stream stall
+          return fromArray(makeTextStream('ok'));                        // attempt 3: success
+        }),
+      },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {},
+        signal: new AbortController().signal, ctx,
+      }),
+    );
+    // Advance past the per-attempt bound twice to drain both stalling attempts.
+    await vi.advanceTimersByTimeAsync(ATTEMPT_MS);
+    await vi.advanceTimersByTimeAsync(ATTEMPT_MS);
+    const events = await resultPromise;
+
+    // The shared budget consumed exactly TTFB_MAX_ATTEMPTS calls total.
+    expect(callCount).toBe(TTFB_MAX_ATTEMPTS);
+    // The run ultimately succeeded (the budget wasn't double-counted).
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+    // Two re-drives, one per stall.
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(2);
+    expect(events.some((e) => e.type === 'assistant.message' && e.text === 'ok')).toBe(true);
+  });
+
+  it('exhausts budget when all attempts alternate and stall', async () => {
+    process.env[KEY] = '180000';
+    let callCount = 0;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn((_params: unknown, opts: unknown) => {
+          callCount++;
+          const signal = (opts as { signal: AbortSignal }).signal;
+          // Alternate between connection-phase and mid-stream stalls for every attempt.
+          return callCount % 2 === 1
+            ? connectionStall(signal)
+            : postHeaderStallStream(signal);
+        }),
+      },
+    };
+    const resultPromise = collect(
+      runTurn({
+        client, messages: [{ role: 'user', content: 'hi' }], system: null, tools: null,
+        toolDispatcher: makeDispatcher(() => Promise.resolve({ content: 'ok' })),
+        model: 'claude-test', maxTokens: 1024, headers: {},
+        signal: new AbortController().signal, ctx,
+      }),
+    );
+    // Advance past one per-attempt bound per attempt to drain all TTFB_MAX_ATTEMPTS.
+    for (let i = 0; i < TTFB_MAX_ATTEMPTS; i++) {
+      await vi.advanceTimersByTimeAsync(ATTEMPT_MS);
+    }
+    const events = await resultPromise;
+
+    // Budget exhausted at exactly TTFB_MAX_ATTEMPTS — not double-counted across shapes.
+    expect(callCount).toBe(TTFB_MAX_ATTEMPTS);
+    // A terminal error surfaces (matching the 'exhausts its whole budget' test).
+    expect(events.find((e) => e.type === 'error')).toBeDefined();
+    // One retry marker per re-drive (attempts - 1).
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(
+      TTFB_MAX_ATTEMPTS - 1,
+    );
+  });
+
   it('AFK_MODEL_TTFB_TIMEOUT_MS=0 disables the timeout (no abort/retry on a stall)', async () => {
     process.env[KEY] = '0';
     let callCount = 0;
