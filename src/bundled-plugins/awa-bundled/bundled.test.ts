@@ -219,7 +219,7 @@ describe('bundled skills', () => {
       // The Invariant paragraph is the ONLY place Wave 1 may name a git command —
       // it exists to say what must not be mandated. Drop it, then no git may remain.
       const withoutInvariant = waveOne.replace(/\*\*Invariant — why Wave 1[\s\S]*?\n\n/, '');
-      expect(withoutInvariant).not.toMatch(/`git (show|grep|diff|log)/);
+      expect(withoutInvariant).not.toMatch(/`git(?:\s[^`]*)?`/);
     });
 
     // Invariant: severity and disposition are separate axes (#937). The two
