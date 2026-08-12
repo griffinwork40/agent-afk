@@ -10,6 +10,12 @@
  *   - `session-ledger.ts`        — tool-input summary → events.jsonl (at-rest)
  *   - `telegram/streaming.ts`    — subagent tool-input summary → Telegram (egress)
  *
+ * `looksLikeFilesystemPath` is also exported standalone (not just used inside
+ * `redactSecrets`'s generic-token rule): `session/prompt-dump.ts`'s
+ * `NAME=value` replacers reuse it directly to spare path-shaped values from a
+ * key-name-only match (issue #949) — see that module for why key-name alone
+ * is unreliable evidence of a secret.
+ *
  * Intentionally pure — no I/O, no SDK imports — so any layer may depend on it.
  *
  * @module agent/redact-secrets
@@ -99,7 +105,7 @@ export function redactSecrets(text: string): string {
  * is preserved. The high-value NAMED secrets (sk-ant, Bearer, JWT, AWS) are
  * covered by the explicit rules that run first, regardless of path context.
  */
-function looksLikeFilesystemPath(run: string): boolean {
+export function looksLikeFilesystemPath(run: string): boolean {
   if (!run.includes('/') || /[+=]/.test(run)) return false;
   const isOpaqueTokenSegment = (seg: string): boolean =>
     seg.length >= 32 && !seg.includes('.') && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg);
