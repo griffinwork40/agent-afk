@@ -275,7 +275,7 @@ describe('searchAcrossSessions — invalid since date', () => {
     // No sessions in temp home, so result is empty — but must not throw.
     await expect(
       searchAcrossSessions({ query: 'x', since: '2024-01-01' }),
-    ).resolves.toMatchObject({ query: 'x', sessionsScanned: 0 });
+    ).resolves.toMatchObject({ query: 'x', sessionsAvailable: 0, sessionsSearched: 0 });
   });
 });
 
@@ -299,7 +299,90 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
       sessions: 1,
       since: '2000-01-01',
     });
-    // At most 1 session can be scanned (sessions slice applied first)
-    expect(result.sessionsScanned).toBeLessThanOrEqual(1);
+    // At most 1 session can be scanned (sessions slice applied first).
+    // sessionsAvailable reflects the pre-filter count; sessionsSearched reflects
+    // the post-filter count — both must be ≤ the sessions=1 ceiling.
+    expect(result.sessionsAvailable).toBeLessThanOrEqual(1);
+    expect(result.sessionsSearched).toBeLessThanOrEqual(result.sessionsAvailable);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchAcrossSessions — truncatedSessions signal
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — truncatedSessions', () => {
+  /**
+   * Write a trace that is guaranteed to exceed the 2 MB read cap.
+   * We write enough padding lines so the file exceeds 2_097_152 bytes, then
+   * add a "needle" line that will only appear in the tail (visible portion)
+   * and a "earlyNeedle" line near the top (invisible after truncation).
+   */
+  async function writeOversizedTrace(sessionId: string): Promise<void> {
+    const dir = join(tmpHome, 'state', 'witness', sessionId);
+    await mkdir(dir, { recursive: true });
+    const tracePath = join(dir, 'trace.jsonl');
+
+    // 2 MB + 1 byte requires >2_097_152 bytes total.
+    // Each padding line is ~1 KB. Write 2200 of them to safely exceed the cap.
+    const paddingLine = makeEventLine('session_phase', 0, {
+      phase: 'padding',
+      data: 'x'.repeat(950), // ~1 KB per line with JSON overhead
+    });
+    const earlyNeedleLine = makeEventLine('tool_call', 1, {
+      phase: 'completed', isError: false, name: 'bash',
+      // unique marker only in the dropped head
+      earlyNeedle: 'EARLY_UNIQUE_MARKER_THAT_IS_TRUNCATED',
+    });
+    const tailNeedleLine = makeEventLine('closure', 9999, {
+      reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1,
+      tailNeedle: 'TAIL_UNIQUE_MARKER_VISIBLE',
+    });
+
+    // Build: earlyNeedle first, then 2200 padding lines, then tailNeedle.
+    const lines: string[] = [earlyNeedleLine];
+    for (let i = 0; i < 2200; i++) lines.push(paddingLine);
+    lines.push(tailNeedleLine);
+
+    const { createWriteStream } = await import('node:fs');
+    const ws = createWriteStream(tracePath, { flags: 'w', encoding: 'utf-8' });
+    await new Promise<void>((resolve, reject) => {
+      ws.on('error', reject);
+      ws.on('finish', resolve);
+      for (const line of lines) ws.write(line + '\n');
+      ws.end();
+    });
+  }
+
+  it('sets truncatedSessions when a trace file exceeds 2 MB', async () => {
+    await writeOversizedTrace('big-session-1');
+
+    const result = await searchAcrossSessions({ query: 'TAIL_UNIQUE_MARKER_VISIBLE' });
+
+    expect(result.truncatedSessions).toBeDefined();
+    expect(result.truncatedSessions).toContain('big-session-1');
+  });
+
+  it('does NOT set truncatedSessions when no trace exceeds 2 MB', async () => {
+    await writeTrace('small-session-1', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const result = await searchAcrossSessions({ query: 'end_turn' });
+
+    // Either absent or an empty array — both are acceptable for a non-truncated result.
+    const truncated = result.truncatedSessions;
+    expect(truncated === undefined || truncated.length === 0).toBe(true);
+  });
+
+  it('finds tail matches in oversized traces while still flagging truncation', async () => {
+    await writeOversizedTrace('big-session-2');
+
+    const result = await searchAcrossSessions({ query: 'TAIL_UNIQUE_MARKER_VISIBLE' });
+
+    // The tail needle is within the 2 MB window and must be found.
+    expect(result.matches.some((m) => m.sessionId === 'big-session-2')).toBe(true);
+    // And truncation must be reported.
+    expect(result.truncatedSessions).toContain('big-session-2');
   });
 });
