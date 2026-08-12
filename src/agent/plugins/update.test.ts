@@ -477,6 +477,85 @@ describe('updatePlugin — marketplace delegation (issue #993)', () => {
   });
 });
 
+describe('updatePlugin — marketplace ref forwarding (P2)', () => {
+  it('forwards options.ref to updateMarketplace so the pin is honoured', async () => {
+    seedMarketplace('my-mp', ['plg-a']);
+    const calls: string[][] = [];
+    // Runner that resolves refs/remotes/origin/v1.0.0 as the explicit pin and
+    // advances HEAD so updateMarketplace reports "updated".
+    const runner: GitRunner = async (args) => {
+      const a = Array.from(args);
+      calls.push(a);
+      if (a.includes('checkout')) return { stdout: '', stderr: '' };
+      if (a[0] === 'tag') return { stdout: '\n', stderr: '' };
+      if (a[0] === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (a[0] === 'rev-parse') {
+        const rev = a[a.length - 1] ?? '';
+        if (rev === 'HEAD') return { stdout: 'newsha\n', stderr: '' };
+        if (rev === 'refs/remotes/origin/v1.0.0') return { stdout: 'v1sha\n', stderr: '' };
+        // oldsha is the HEAD at index time; v1sha != oldsha → update.
+        throw new Error('fatal: Needed a single revision');
+      }
+      return { stdout: '', stderr: '' };
+    };
+    const outcome = await updatePlugin(
+      'my-mp:plg-a',
+      { ref: 'v1.0.0' },
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    // The rev-parse call for refs/remotes/origin/v1.0.0 must appear, proving
+    // the ref was forwarded (updateMarketplace would not check that ref otherwise).
+    const revParseCalls = calls.filter((c) => c[0] === 'rev-parse');
+    expect(revParseCalls.some((c) => c.includes('refs/remotes/origin/v1.0.0'))).toBe(true);
+    // Outcome should report the pinned ref.
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v1.0.0');
+  });
+});
+
+describe('updatePlugin — removed-by-marketplace (P2)', () => {
+  it('returns removed-by-marketplace when the updated manifest drops the plugin', async () => {
+    // Seed the marketplace with plg-a present initially (localSha = 'oldsha').
+    seedMarketplace('my-mp', ['plg-a'], { commit: 'oldsha' });
+    const mpDir = join(cacheDir, 'my-mp');
+
+    // Runner that, on checkout, rewrites the manifest to drop plg-a — simulating
+    // a real `git checkout` that updates the working tree to a commit where the
+    // plugin was removed. HEAD starts at oldsha (local) while origin/main is at
+    // newsha, so the updater sees a diff and performs the checkout.
+    let head = 'oldsha';
+    const runner: GitRunner = async (args) => {
+      const a = Array.from(args);
+      if (a.includes('checkout')) {
+        head = 'newsha';
+        // Simulate the manifest after update: plg-a removed, plg-b added.
+        writeFileSync(
+          join(mpDir, '.claude-plugin', 'marketplace.json'),
+          JSON.stringify({ name: 'my-mp', plugins: [{ name: 'plg-b', source: './plugins/plg-b' }] }),
+          'utf8',
+        );
+        return { stdout: '', stderr: '' };
+      }
+      if (a[0] === 'tag') return { stdout: '\n', stderr: '' };
+      if (a[0] === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (a[0] === 'rev-parse') {
+        const rev = a[a.length - 1] ?? '';
+        if (rev === 'HEAD') return { stdout: head + '\n', stderr: '' };
+        if (rev === 'refs/remotes/origin/main') return { stdout: 'newsha\n', stderr: '' };
+        throw new Error('fatal: Needed a single revision');
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const outcome = await updatePlugin(
+      'my-mp:plg-a',
+      {},
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome).toEqual({ name: 'my-mp:plg-a', status: 'removed-by-marketplace', marketplace: 'my-mp' });
+  });
+});
+
 describe('updateAll — marketplace deduplication (issue #993)', () => {
   it('updates marketplace plugins and regular plugins in one pass', async () => {
     // One regular git plugin

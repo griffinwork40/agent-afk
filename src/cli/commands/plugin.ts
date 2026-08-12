@@ -252,6 +252,8 @@ function formatOutcome(o: UpdateOutcome): string {
       return `${palette.meta('·')} ${palette.bold(o.name)}: skipped (marketplace source — run "afk marketplace update ${o.marketplace}")`;
     case 'missing-dir':
       return `${palette.warning('!')} ${palette.bold(o.name)}: plugin dir missing (${o.dir})`;
+    case 'removed-by-marketplace':
+      return `${palette.warning('!')} ${palette.bold(o.name)}: removed by marketplace "${o.marketplace}" — run "afk plugin remove ${o.name}" to clean up`;
   }
 }
 

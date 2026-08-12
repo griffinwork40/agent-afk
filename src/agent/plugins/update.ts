@@ -64,7 +64,13 @@ export type UpdateOutcome =
       /** The marketplace name that owns this plugin. */
       marketplace: string;
     }
-  | { name: string; status: 'missing-dir'; dir: string };
+  | { name: string; status: 'missing-dir'; dir: string }
+  | {
+      name: string;
+      status: 'removed-by-marketplace';
+      /** The marketplace whose updated manifest no longer lists this plugin. */
+      marketplace: string;
+    };
 
 export async function updatePlugin(
   name: string,
@@ -98,14 +104,25 @@ export async function updatePlugin(
       ...(deps.gitRunner ? { gitRunner: deps.gitRunner } : {}),
       ...(deps.now ? { now: deps.now } : {}),
     };
-    const mpOutcome = await updateMarketplace(mpName, {}, mpDeps);
+    // Forward the caller-supplied ref so an explicit `--ref` pin is honoured
+    // for marketplace plugins instead of being silently ignored. (P2)
+    const mpOutcome = await updateMarketplace(mpName, { ref: options.ref }, mpDeps);
     // Refresh the scan cache — the marketplace clone may have pulled new
     // SKILL.md files that the running session should see immediately. (F2)
     _resetPluginScanCache();
+    // The bare plugin name inside the marketplace (the part after the colon,
+    // e.g. "plg-a" from "my-mp:plg-a") is what removedPlugins contains. (P2)
+    const barePluginName = name.includes(':') ? name.split(':').slice(1).join(':') : name;
     // Translate UpdateMarketplaceOutcome → UpdateOutcome using the plugin
     // name (not the marketplace name) as the identity.
     switch (mpOutcome.status) {
       case 'updated':
+        // The updated manifest may have dropped this specific plugin. Detect
+        // the removal and report it so the caller gets an accurate outcome
+        // instead of a misleading "updated" status. (P2)
+        if (mpOutcome.removedPlugins.includes(barePluginName)) {
+          return { name, status: 'removed-by-marketplace', marketplace: mpName };
+        }
         return {
           name,
           status: 'updated',
@@ -269,16 +286,22 @@ export async function updateAll(
     // Refresh scan cache once per marketplace update. (F2)
     _resetPluginScanCache();
     for (const name of pluginNames) {
+      const barePluginName = name.includes(':') ? name.split(':').slice(1).join(':') : name;
       switch (mpOutcome.status) {
         case 'updated':
-          results.push({
-            name,
-            status: 'updated',
-            fromRef: mpOutcome.fromRef,
-            toRef: mpOutcome.toRef,
-            commit: mpOutcome.commit,
-            version: null,
-          });
+          // Detect plugins removed by the updated manifest. (P2)
+          if (mpOutcome.removedPlugins.includes(barePluginName)) {
+            results.push({ name, status: 'removed-by-marketplace', marketplace: mpName });
+          } else {
+            results.push({
+              name,
+              status: 'updated',
+              fromRef: mpOutcome.fromRef,
+              toRef: mpOutcome.toRef,
+              commit: mpOutcome.commit,
+              version: null,
+            });
+          }
           break;
         case 'up-to-date':
           results.push({
