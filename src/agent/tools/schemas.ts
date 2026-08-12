@@ -9,6 +9,7 @@
  */
 
 import type { AnthropicToolDef } from './types.js';
+import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -1299,6 +1300,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   listSchedulesTool,
   getScheduleHistoryTool,
   cancelScheduleTool,
+  readWitnessTool,
+  searchWitnessTool,
   worktreeTool,
   terminalFontSizeTool,
   configGetTool,

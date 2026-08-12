@@ -24,7 +24,7 @@
  */
 
 import { Command } from 'commander';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
@@ -32,56 +32,15 @@ import { formatCacheUsage } from './trace-usage-format.js';
 import { getTraceDir, getWitnessRoot } from '../../paths.js';
 import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
+import {
+  listTraces,
+  resolveLatestSession,
+} from '../../agent/trace/listing.js';
 
-// ---------------------------------------------------------------------------
-// Witness-layer discovery
-// ---------------------------------------------------------------------------
-
-/** One discovered trace, with the mtime used to order "most recent first". */
-export interface TraceDirEntry {
-  sessionId: string;
-  tracePath: string;
-  /** Epoch ms of the trace.jsonl mtime; 0 when the file is absent. */
-  mtimeMs: number;
-  exists: boolean;
-}
-
-/**
- * Scan the witness root for sessions that have a `trace.jsonl`, newest
- * first. Returns an empty array when the witness root does not exist yet
- * (no session has ever emitted a trace).
- */
-export async function listTraces(): Promise<TraceDirEntry[]> {
-  const root = getWitnessRoot();
-  let names: string[];
-  try {
-    names = await readdir(root);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw err;
-  }
-
-  const entries: TraceDirEntry[] = [];
-  for (const sessionId of names) {
-    const tracePath = join(root, sessionId, 'trace.jsonl');
-    try {
-      const st = await stat(tracePath);
-      if (st.isFile()) {
-        entries.push({ sessionId, tracePath, mtimeMs: st.mtimeMs, exists: true });
-      }
-    } catch {
-      // Not a session dir, or no trace.jsonl inside — skip silently.
-    }
-  }
-  entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return entries;
-}
-
-/** Resolve `latest` to the newest session id, or `null` when none exist. */
-export async function resolveLatestSession(): Promise<string | null> {
-  const traces = await listTraces();
-  return traces[0]?.sessionId ?? null;
-}
+// Re-export for consumers that imported these from this module before the
+// refactor. Maintains backward compatibility with existing CLI code paths.
+export type { TraceDirEntry } from '../../agent/trace/listing.js';
+export { listTraces, resolveLatestSession };
 
 // ---------------------------------------------------------------------------
 // Parsing
