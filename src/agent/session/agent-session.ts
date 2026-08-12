@@ -1361,7 +1361,9 @@ export class AgentSession implements IAgentSession {
           ? { tracePath: this.config.traceWriter.getTracePath() }
           : {}),
       },
-      this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {},
+      // Invariant: skip traceWriter when this session owns the seal (step 2
+      // above) — the writer is sealed, so the hook_decision write would throw.
+      this.config.traceWriter && !this.ownsTraceSeal ? { traceWriter: this.config.traceWriter } : {},
     );
   }
 
