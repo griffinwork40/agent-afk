@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.111.2] - 2026-08-12
+
+### Fixed
+- give the resumed session a live writer instead of a sealed one (#731) (#985) (45a56a33)
+- path-guard NAME=value replacers so non-secret paths survive capture (#949) (#968) (eb7b8755)
+- suppress sealed-writer error on SessionEnd hook_decision emit (#1025) (1b4d7f9d)
+- gate plugin-shadowing notices behind AFK_DEBUG=1 (#1024) (39f8f35b)
+
+### Changed
+- document subagent tool-round budget in AFK.md and CLAUDE.md (#918) (#1007) (7027e56b)
+
 ## [5.111.1] - 2026-08-12
 
 ### Fixed
