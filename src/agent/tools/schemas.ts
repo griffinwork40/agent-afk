@@ -473,9 +473,13 @@ export const skillTool: AnthropicToolDef = {
   // dispatch state, so adjacent skill calls in one turn can run in parallel.
   concurrencySafe: true,
   description:
-    'Invoke a registered skill by name. Skills are specialized capabilities ' +
-    'that dispatch subagents with domain-specific prompts. Check the system ' +
-    'prompt for the list of available skills and their descriptions.',
+    'Invoke a registered skill by name. A skill either forks an isolated ' +
+    'subagent or loads its instructions into your current context for you ' +
+    'to execute directly — the mode is fixed per-skill, not per-call. ' +
+    'To run a skill N times in parallel with isolation, dispatch N ' +
+    'subagents (via `agent` or `compose`) that each call `skill` once. ' +
+    'Check the system prompt for the list of available skills and their ' +
+    'descriptions.',
   input_schema: {
     type: 'object',
     properties: {
