@@ -1,4 +1,5 @@
 import { MemoryStore } from '../../../agent/memory/index.js';
+import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, InteractiveCtx } from './shared.js';
@@ -6,6 +7,8 @@ import { ContextSampler } from '../../context-sampler.js';
 import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
+import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
+import type { TraceWriter } from '../../../agent/trace/writer.js';
 import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
 import { resolveBootstrapConfig } from './bootstrap-config.js';
 import { createBootstrapInfra } from './bootstrap-infra.js';
@@ -124,6 +127,11 @@ export async function bootstrapSession(
     sessionModel, resumeConfig, systemPrompt, systemPromptSource, thinking, effort,
     maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
+    // Cascade-abort and drain in-flight children before the writer seals,
+    // so a wave still running when this session ends emits real `cancelled`
+    // rows instead of vanishing (#733).
+    drainSubagents: (reason) =>
+      rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
   });
 
   // Import any plugin JS entrypoints (manifest `main`) before constructing the
@@ -135,6 +143,19 @@ export async function bootstrapSession(
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).
   sessionRef.current = session;
+
+  // Step 7: register this REPL session in the cross-surface session registry so
+  // it appears alongside Telegram/daemon sessions. Best-effort (never throws).
+  // Process-scoped — the in-memory registry dies with the REPL — so no dispose
+  // is wired here (unlike the long-running daemon, which archives on close).
+  registerSurfaceSession(session, {
+    surface: 'cli',
+    model: sharedDeps.model,
+    ...(sharedDeps.cwd !== undefined ? { cwd: sharedDeps.cwd } : {}),
+    ...(resumeTarget?.stored?.sessionId !== undefined
+      ? { sdkSessionId: resumeTarget.stored.sessionId }
+      : {}),
+  });
 
   // Witness layer: wire the subagent-success rollup so the rootManager's
   // foreground forks accumulate token/cost data into the parent session's
@@ -167,6 +188,23 @@ export async function bootstrapSession(
   // requestResume delegates to performResumeSwap (resume-swap.ts).
   // The sharedDeps + model-precedence resolution lives here; the swap
   // sequence itself is tested independently via the exported function.
+  // Invariant: a REPL `/resume` must hand the incoming session a LIVE writer,
+  // and the swap's own ordering is what makes that mandatory. performResumeSwap
+  // closes the outgoing session (step 5) BEFORE the pointer flip (step 6), and
+  // closing is what seals the writer — so any writer shared with the outgoing
+  // session is already sealed by the time the incoming session is current.
+  // NdjsonTraceWriter.write() throws on a sealed writer and emit.ts swallows the
+  // rejection, so the resumed session's every turn, tool call, and subagent
+  // dispatch would vanish with no error, no warning, and no marker in the trace
+  // (#731). Each built session therefore gets its OWN writer here, and the
+  // long-lived executors/managers — constructed once at bootstrap and never
+  // rebuilt across a swap — are re-pointed at it in `onSwapped`, AFTER the flip
+  // commits. Ordering matters both ways: build-time is too early to cascade
+  // (the swap can still roll back and leave the original session current), and
+  // anywhere after `onSwapped` is too late (the first post-resume fork may
+  // already have been dispatched into the sealed writer).
+  let pendingTraceWriter: TraceWriter | undefined;
+
   const requestResume = (target: ResolvedResumeTarget) => {
     // Clear the trusted-skill ledger so the resumed session starts with a
     // clean slate. The ledger accumulates per-session run statistics
@@ -196,16 +234,39 @@ export async function bootstrapSession(
         // settled just before it may already sit in the notifier's buffer
         // and would otherwise inject into the resumed session's first turn.
         ctx.clearBgResultBuffer?.();
+        // Re-point every long-lived holder of the outgoing (now sealed) writer
+        // at the incoming session's live one. These are built once in
+        // createBootstrapInfra and survive the swap, so without this the
+        // resumed session's own turns would be traced while its `agent` /
+        // skill / compose dispatches silently vanished (#731). Mirrors the
+        // `setCwd` cascade in dispatcher.ts. `undefined` when tracing is
+        // disabled (AFK_TRACE_DISABLED=1), which correctly propagates "no
+        // writer" rather than leaving the sealed one in place.
+        subagentExecutor.setTraceWriter(pendingTraceWriter);
+        skillExecutor.setTraceWriter(pendingTraceWriter);
+        composeExecutor.setTraceWriter(pendingTraceWriter);
+        rootManager.setTraceWriter(pendingTraceWriter);
+        backgroundRegistry.setTraceWriter(pendingTraceWriter);
       },
-      buildSession: (t) => buildAgentSession({
-        ...sharedDeps,
-        model: t.stored?.model ?? sharedDeps.model,
-        resumeConfig: resumeConfigFor(t),
-        // Preserve the LIVE permission mode across a model swap (e.g. the user
-        // toggled /bypass after startup) rather than resetting to the initial
-        // config value carried in sharedDeps.
-        permissionMode: stats.permissionMode,
-      }),
+      buildSession: (t) => {
+        // Resuming session X appends to X's own trace directory, matching how
+        // a launch-time `--resume` labels its writer in createBootstrapInfra.
+        // The label is the witness directory name, not the SDK session id.
+        const resumedLabel = t.stored?.sessionId;
+        pendingTraceWriter = createDefaultTraceWriter(
+          resumedLabel !== undefined ? { sessionLabel: resumedLabel } : {},
+        )?.writer;
+        return buildAgentSession({
+          ...sharedDeps,
+          model: t.stored?.model ?? sharedDeps.model,
+          resumeConfig: resumeConfigFor(t),
+          // Preserve the LIVE permission mode across a model swap (e.g. the user
+          // toggled /bypass after startup) rather than resetting to the initial
+          // config value carried in sharedDeps.
+          permissionMode: stats.permissionMode,
+          traceWriter: pendingTraceWriter,
+        });
+      },
     });
   };
 

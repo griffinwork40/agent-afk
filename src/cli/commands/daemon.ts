@@ -87,7 +87,7 @@ export function buildDaemonSessionFactory(
     // and threaded it in as config.traceWriter — reuse THAT SAME instance here
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
-    const { subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+    const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
       apiKey: opts.apiKey,
@@ -147,6 +147,11 @@ export function buildDaemonSessionFactory(
       // this is the production chokepoint the scheduler routes every task
       // through, so it also covers scheduler/cron-spawned sessions.
       isNonInteractive: true,
+      // Cascade-abort and drain in-flight children before the writer seals,
+      // so a wave still running when this session ends emits real `cancelled`
+      // rows instead of vanishing (#733).
+      drainSubagents: (reason) =>
+        rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.

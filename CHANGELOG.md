@@ -11,6 +11,37 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.0] - 2026-08-12
+
+### Added
+- bound the witness tree by age and aggregate size (#849) (#986) (4502e200)
+
+## [5.111.3] - 2026-08-12
+
+### Fixed
+- cascade-abort in-flight children before the owner seals (#733) (#987) (68b22395)
+
+## [5.111.2] - 2026-08-12
+
+### Fixed
+- give the resumed session a live writer instead of a sealed one (#731) (#985) (45a56a33)
+- path-guard NAME=value replacers so non-secret paths survive capture (#949) (#968) (eb7b8755)
+- suppress sealed-writer error on SessionEnd hook_decision emit (#1025) (1b4d7f9d)
+- gate plugin-shadowing notices behind AFK_DEBUG=1 (#1024) (39f8f35b)
+
+### Changed
+- document subagent tool-round budget in AFK.md and CLAUDE.md (#918) (#1007) (7027e56b)
+
+## [5.111.1] - 2026-08-12
+
+### Fixed
+- improve tmux compatibility — raw OSC 52 clipboard, truecolor detection, docs (#1017) (c2d6cdd2)
+
+## [5.111.0] - 2026-08-12
+
+### Added
+- native topics routing (step 6) + cross-surface CLI/daemon registration (step 7) (#1020) (5fdc806f)
+
 ## [5.110.5] - 2026-08-12
 
 ### Fixed

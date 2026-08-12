@@ -61,6 +61,7 @@ import {
   SUBAGENT_DEFAULT_TIMEOUT_MS,
   SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
   SUBAGENT_BACKGROUND_TIMEOUT_MS,
+  SUBAGENT_DRAIN_TIMEOUT_MS,
   resolveSubagentTimeoutMs,
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
@@ -114,11 +115,15 @@ export class SubagentManager {
   // manager lifetime. `undefined` value = resolved-and-there-is-none, so the
   // Map's `.has()` distinguishes "not yet resolved" from "resolved to none".
   private readonly worktreeMainRootCache = new Map<string, string | undefined>();
-  private readonly parentTraceWriter: TraceWriter | undefined;
+  // Not readonly: a REPL `/resume` swaps the session out from under this
+  // long-lived manager and hands it a fresh writer via `setTraceWriter`,
+  // because the outgoing session sealed the one captured here (#731).
+  private parentTraceWriter: TraceWriter | undefined;
   private readonly parentSurface: Surface | undefined;
+  private readonly parentAbortSignal: AbortSignal | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
-  private readonly rootController: AbortController;
+  private rootController: AbortController;
   private counter = 0;
   private onSubagentSucceededCb:
     | ((usage: import('./subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void)
@@ -137,6 +142,7 @@ export class SubagentManager {
     this.parentReadRoots = options.parentReadRoots;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
+    this.parentAbortSignal = options.parentAbortSignal;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
@@ -208,6 +214,22 @@ export class SubagentManager {
     // the cache (#441). setCwd is rare (born-named worktree creation on turn 1),
     // so forcing one re-resolution on the next fork costs nothing.
     this.worktreeMainRootCache.delete(cwd);
+  }
+
+  /**
+   * Re-point the writer inherited by future forks.
+   *
+   * Contract: mirrors {@link SubagentManager.setCwd} — existing in-flight
+   * children keep the writer they were forked with; only forks dispatched
+   * after this call inherit `writer`. Called (via the bootstrap cascade) on a
+   * REPL `/resume`, where the outgoing session seals the writer this manager
+   * captured at construction; without the re-point, every post-resume fork
+   * would emit its lifecycle events into a sealed writer and be silently
+   * dropped (#731).
+   */
+  setTraceWriter(writer: TraceWriter | undefined): void {
+    this.parentTraceWriter = writer;
+    this.abortGraph.setTraceWriter(writer);
   }
 
   /**
@@ -865,6 +887,73 @@ export class SubagentManager {
   /** Cancel all running subagents. */
   async killAll(): Promise<void> {
     await Promise.allSettled([...this.active.values()].map((h) => h.cancel()));
+  }
+
+  /**
+   * Cascade-abort the managed tree and wait (bounded) for every in-flight
+   * child's terminal trace row to be handed to the writer.
+   *
+   * Contract: called by the session owner immediately before it seals the
+   * shared trace writer. `killAll()` alone is not a substitute — this exists
+   * to guarantee the *ordering* the writer's seal contract demands, and to
+   * bound the wait so teardown cannot hang.
+   *
+   * Returns the number of children drained and whether the bound was hit, so
+   * the caller can report a timeout instead of losing rows silently — the
+   * silent loss is the entire bug this closes (#733).
+   */
+  async abortAllAndDrain(
+    reason?: unknown,
+    origin: AbortOrigin = 'user_signal',
+    timeoutMs: number = SUBAGENT_DRAIN_TIMEOUT_MS,
+    rearm: boolean = false,
+  ): Promise<{ drained: number; timedOut: boolean }> {
+    const inFlight = [...this.active.values()];
+    if (inFlight.length === 0) {
+      if (rearm && this.rootController.signal.aborted) this.rearmRoot();
+      return { drained: 0, timedOut: false };
+    }
+
+    // Cascade first so descendants see the abort while we await their parents.
+    this.abortGraph.abort(this.rootId, reason, origin);
+
+    // Invariant: `handle.cancel()` emits the child's `cancelled` lifecycle row
+    // synchronously before its own first await, so awaiting it here guarantees
+    // the row has ENTERED writer.write() — and is therefore queued ahead of the
+    // seal — even though the emit itself is fire-and-forget.
+    let timedOut = false;
+    const bound = new Promise<void>((resolve) =>
+      setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs).unref(),
+    );
+    await Promise.race([
+      Promise.allSettled(inFlight.map((h) => h.cancel())),
+      bound,
+    ]);
+    if (timedOut) {
+      console.warn(
+        `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
+          `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
+      );
+    }
+    // `/clear` ends one session lifecycle but the manager itself survives.
+    // AbortSignals are terminal, so replace the root controller before the
+    // rebuilt session can dispatch children. The graph node is retained to
+    // preserve manager-level listeners and child-link bookkeeping.
+    if (rearm) this.rearmRoot();
+    return { drained: inFlight.length, timedOut };
+  }
+
+  private rearmRoot(): void {
+    this.rootController = new AbortController();
+    this.abortGraph.rearm(this.rootId, this.rootController);
+    // The constructor's listener follows `this.rootController`, but an
+    // external parent may have aborted in the narrow interval before rearm.
+    if (this.parentAbortSignal?.aborted) {
+      this.rootController.abort(this.parentAbortSignal.reason);
+    }
   }
 
   /**

@@ -21,6 +21,7 @@
 
 import { env } from '../../config/env.js';
 import { randomUUID } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
 import { getTraceDir } from '../../paths.js';
 import { NdjsonTraceWriter, type TraceWriter } from './writer.js';
 
@@ -61,6 +62,26 @@ export interface CreatedTraceWriter {
  * still writes the directory + a `session_sealed` line (the seal goes
  * through the same enqueue path).
  */
+/**
+ * Read the last non-empty line of an NDJSON trace file and return its `seq`
+ * value, or `undefined` when the file is absent, empty, or unparseable.
+ * Synchronous because it runs once per resume before any async work starts.
+ */
+function readLastSeq(tracePath: string): number | undefined {
+  if (!existsSync(tracePath)) return undefined;
+  const content = readFileSync(tracePath, 'utf8');
+  const lines = content.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return undefined;
+  try {
+    const lastLine = lines[lines.length - 1] ?? '';
+    const last = JSON.parse(lastLine) as Record<string, unknown>;
+    const seq = last['seq'];
+    return typeof seq === 'number' ? seq : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createDefaultTraceWriter(
   options: CreateDefaultTraceWriterOptions = {},
 ): CreatedTraceWriter | null {
@@ -68,7 +89,12 @@ export function createDefaultTraceWriter(
 
   const sessionLabel = options.sessionLabel ?? randomUUID();
   const traceDir = getTraceDir(sessionLabel);
-  const writer = new NdjsonTraceWriter({ traceDir });
+  const tracePath = `${traceDir}/trace.jsonl`;
+  const lastSeq = readLastSeq(tracePath);
+  const writer = new NdjsonTraceWriter({
+    traceDir,
+    ...(lastSeq !== undefined ? { startSeq: lastSeq + 1 } : {}),
+  });
   return {
     writer,
     tracePath: writer.getTracePath(),

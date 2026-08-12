@@ -13,23 +13,24 @@
  *      over SSH (and SSH+tmux) the local utilities either don't exist or reach
  *      only the remote box, so a copy silently no-ops. OSC 52 instead rides the
  *      terminal's own byte stream back to the outer emulator (iTerm2, kitty,
- *      WezTerm, …), which owns the real clipboard. Inside tmux the sequence is
- *      wrapped in a DCS passthrough envelope; that path additionally requires
- *      `set -g allow-passthrough on` (and `set -g set-clipboard on`) in the
- *      user's tmux config, since passthrough is off by default in some tmux
- *      versions.
+ *      WezTerm, …), which owns the real clipboard.
  *
- * env-access note: the OSC 52 path detects tmux by delegating to
- * `detectTerminal()` (the canonical $TMUX check, reused rather than
- * re-implemented), reading env via an injectable `NodeJS.ProcessEnv` parameter
- * defaulting to `process.env` — the same injectable-test-seam pattern as
- * `src/cli/hyperlink.ts` and `src/cli/terminal-spawn/`. The audit script skips
- * default-param seams, and TMUX is an OS-level var outside the AFK domain,
- * intentionally not in ENV_REGISTRY.
+ *      Inside tmux, raw OSC 52 is sent WITHOUT DCS passthrough wrapping.
+ *      tmux's built-in `set-clipboard` mechanism (default: `external`)
+ *      intercepts raw OSC 52 and forwards it to the outer terminal natively.
+ *      This works out of the box — unlike DCS passthrough, which requires
+ *      `set -g allow-passthrough on` (off by default since tmux 3.3+).
+ *      `wrapTmuxPassthrough` is retained for non-clipboard sequences that
+ *      tmux does not natively intercept.
+ *
+ * env-access note: the OSC 52 path no longer checks $TMUX — raw OSC 52 is
+ * emitted unconditionally and tmux's set-clipboard forwards it natively.
+ * `wrapTmuxPassthrough` is retained for non-clipboard use cases but is
+ * not called from the clipboard path. TMUX is an OS-level var outside the
+ * AFK domain, intentionally not in ENV_REGISTRY.
  */
 
 import { spawnSync } from 'node:child_process';
-import { detectTerminal } from './terminal-spawn/detect.js';
 
 interface ClipboardTool {
   cmd: string;
@@ -91,16 +92,20 @@ export function wrapTmuxPassthrough(sequence: string): string {
 }
 
 /**
- * Build the OSC 52 clipboard sequence for `text`, DCS-wrapped for tmux iff
- * we're inside tmux (`detectTerminal` returns `'tmux'`, i.e. `$TMUX` is set).
+ * Build the OSC 52 clipboard sequence for `text`. Always returns the raw
+ * (unwrapped) sequence — even inside tmux. tmux natively intercepts OSC 52
+ * via its `set-clipboard` mechanism (default: `external`) and forwards it
+ * to the outer terminal, so DCS passthrough wrapping is unnecessary for
+ * clipboard operations and would require the user to configure
+ * `allow-passthrough on` (off by default since tmux 3.3+).
+ *
  * Pure: emission and TTY-gating live in {@link copyViaOsc52}.
  */
 export function osc52ClipboardSequence(
   text: string,
-  env: NodeJS.ProcessEnv = process.env,
+  _env?: NodeJS.ProcessEnv,
 ): string {
-  const seq = osc52Copy(text);
-  return detectTerminal(env) === 'tmux' ? wrapTmuxPassthrough(seq) : seq;
+  return osc52Copy(text);
 }
 
 /**

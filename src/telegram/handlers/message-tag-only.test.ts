@@ -247,8 +247,9 @@ describe('MessageHandler tag-only gate — text', () => {
     // MessageHandler.ledgerOriginatedPendingChats.
     const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
     const resolved: string[] = [];
-    handler.pendingElicitations.set(TAG_CHAT, (text) => resolved.push(text));
-    handler.ledgerOriginatedPendingChats.add(TAG_CHAT);
+    const tagChatKey = String(TAG_CHAT);
+    handler.pendingElicitations.set(tagChatKey, (text) => resolved.push(text));
+    handler.ledgerOriginatedPendingChats.add(tagChatKey);
 
     const { ctx, react } = makeTextCtx({ chatId: TAG_CHAT, text: 'my answer, no mention' });
 
@@ -257,8 +258,8 @@ describe('MessageHandler tag-only gate — text', () => {
     // Resolver fired with the message text — the elicitation answer was consumed.
     expect(resolved).toEqual(['my answer, no mention']);
     // Entry cleaned up on both maps.
-    expect(handler.pendingElicitations.has(TAG_CHAT)).toBe(false);
-    expect(handler.ledgerOriginatedPendingChats.has(TAG_CHAT)).toBe(false);
+    expect(handler.pendingElicitations.has(tagChatKey)).toBe(false);
+    expect(handler.ledgerOriginatedPendingChats.has(tagChatKey)).toBe(false);
     // The message never reached the tag-only gate's drop path or processOne:
     // no ack react, no getSession, no queued turn.
     expect(react).not.toHaveBeenCalled();

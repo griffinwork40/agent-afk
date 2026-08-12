@@ -27,6 +27,7 @@ import { dequeueNext } from './queue-store.js';
 import { getQueueDir } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
+import { registerSurfaceSession } from '../session/register-surface-session.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
@@ -395,12 +396,14 @@ export class CronScheduler {
     let session: AgentSession | null = null;
     let memoryStore: MemoryStore | null = null;
     let mcpManager: McpManager | null = null;
+    let disposeRegistration: (() => void) | null = null;
     this.idleDetector.increment();
     try {
       const spawned = await this.spawnSession(task.taskId);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
       mcpManager = spawned.mcpManager ?? null;
+      disposeRegistration = spawned.dispose;
       const response = await session.sendMessage(task.command);
       const responseText = redactInlineSecrets(response.content);
       // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
@@ -448,6 +451,9 @@ export class CronScheduler {
           // already-closed sessions throw; ignore.
         }
       }
+      // Archive the cross-surface registry handle (frees its key) so the
+      // long-running daemon never accumulates handles. Best-effort.
+      disposeRegistration?.();
       if (mcpManager) {
         try {
           await mcpManager.disconnectAll();
@@ -645,6 +651,8 @@ export class CronScheduler {
     session: AgentSession;
     memoryStore: MemoryStore;
     mcpManager?: McpManager;
+    /** Archive the cross-surface registry handle. Called by runOnce on close. */
+    dispose: () => void;
   }> {
     // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
     // suffix, so each tick gets its own label) so hook commands receive a
@@ -770,7 +778,20 @@ export class CronScheduler {
       const session = this.options.sessionFactory
         ? this.options.sessionFactory(config)
         : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
-      return { session, memoryStore, ...(mcpManager !== undefined ? { mcpManager } : {}) };
+      // Step 7: register the daemon session in the cross-surface registry.
+      // Best-effort; dispose() (archive) is invoked by runOnce on session close
+      // so the long-running daemon never accumulates registry handles.
+      const registration = registerSurfaceSession(session, {
+        surface: 'daemon',
+        model: config.model,
+        cwd: agentCwd,
+      });
+      return {
+        session,
+        memoryStore,
+        dispose: registration.dispose,
+        ...(mcpManager !== undefined ? { mcpManager } : {}),
+      };
     } catch (err) {
       if (mcpManager) {
         await mcpManager.disconnectAll().catch(() => undefined);
