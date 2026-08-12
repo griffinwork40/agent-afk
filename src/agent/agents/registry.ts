@@ -177,7 +177,8 @@ function scanScope(
     try {
       content = readFileSync(filePath, 'utf8');
     } catch (err) {
-      warn(`[afk] agents: cannot read ${sanitizeForDisplay(filePath)}: ${err instanceof Error ? err.message : String(err)}`);
+      const safeError = sanitizeForDisplay(err instanceof Error ? err.message : String(err));
+      warn(`[afk] agents: cannot read ${sanitizeForDisplay(filePath)}: ${safeError}`);
       continue;
     }
     const parsed = parseAgentMarkdown(content, (msg) => warn(`[afk] agents: ${sanitizeForDisplay(filePath)}: ${msg}`));

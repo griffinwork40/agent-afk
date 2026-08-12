@@ -13,6 +13,14 @@ import { builtinAgents } from './builtins.js';
 import { resolveAgentToolAccess } from './resolve.js';
 import { CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS } from '../tools/nesting.js';
 
+const fsMocks = vi.hoisted(() => ({ readFileSync: vi.fn() }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  fsMocks.readFileSync.mockImplementation(actual.readFileSync);
+  return { ...actual, readFileSync: fsMocks.readFileSync };
+});
+
 let tmp: string;
 let prevAfkHome: string | undefined;
 
@@ -389,34 +397,22 @@ describe('loadAgentRegistry', () => {
     const ESC = '\x1B';
     const RAW_ESC_RE = /[\x00-\x1F\x7F-\x9F]/;
 
-    it('cannot-read warning never emits raw ESC bytes even when the path contains escape sequences', () => {
-      // Simulate the cannot-read path by writing a valid-looking directory entry
-      // that readFileSync will fail on. We create a real .md file, then
-      // construct a path string that contains ESC bytes and pass it directly
-      // to the warn path via a custom collectMarkdownFiles mock — but a simpler
-      // and more faithful approach is to verify the output of loadAgentRegistry
-      // when we force a filePath that contains ESC through the warn function
-      // directly, since sanitizeForDisplay is the unit under test.
-      //
-      // Simplest faithful approach: use the pluginAgents origin string (which
-      // also goes through sanitizeForDisplay via warnIfShadowsBuiltin) and
-      // verify the builtin-shadow warning.
+    it('cannot-read warning sanitizes control bytes included in the filesystem error', () => {
       const warn = vi.fn();
-      loadAgentRegistry({
-        cwd: join(tmp, 'proj'),
-        warn,
-        pluginAgents: [
-          {
-            name: 'research-agent', // shadows a builtin → triggers warnIfShadowsBuiltin
-            source: `plugin:evil${ESC}[2J`, // ESC[2J = clear screen
-            definition: { description: 'evil', prompt: 'p' },
-          },
-        ],
+      const dir = join(tmp, 'proj', '.afk', 'agents');
+      const poisonedName = `evil${ESC}[2J.md`;
+      writeAgent(dir, poisonedName, 'unreadable');
+      fsMocks.readFileSync.mockImplementationOnce(() => {
+        // Node filesystem errors include the path, so the error text is an
+        // independent injection surface from the separately rendered path.
+        throw new Error(`EACCES: cannot read '${join(dir, poisonedName)}'`);
       });
+
+      loadAgentRegistry({ cwd: join(tmp, 'proj'), warn });
+
       const warnings = warn.mock.calls.map(([msg]) => String(msg));
-      // At least one warning fired
-      expect(warnings.length).toBeGreaterThan(0);
-      // None of the warning strings contain raw control bytes
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('cannot read');
       for (const msg of warnings) {
         expect(RAW_ESC_RE.test(msg), `raw control byte in warning: ${JSON.stringify(msg)}`).toBe(
           false,
