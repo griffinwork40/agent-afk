@@ -14,6 +14,7 @@ describe('InboundAttachmentRegistry', () => {
       path: first.path,
       mediaType: 'image/png',
       sizeBytes: bytes.length,
+      digest: first.digest,
     });
   });
 

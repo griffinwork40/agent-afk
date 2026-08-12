@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getInboundAttachmentsDir } from '../../paths.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
@@ -11,6 +11,7 @@ export interface InboundAttachmentRecord {
   readonly path: string;
   readonly mediaType: InboundMediaType;
   readonly sizeBytes: number;
+  readonly digest: string;
 }
 
 export interface InboundAttachmentRegistration extends InboundAttachmentRecord {
@@ -101,12 +102,12 @@ export class InboundAttachmentRegistry implements InboundAttachmentReader {
         await mkdir(dir, { recursive: true });
         const path = join(dir, `${id}${extensionFor(mediaType)}`);
         await writeFile(path, bytes);
-        const record = { path, mediaType, sizeBytes: bytes.byteLength };
+        const record = { path, mediaType, sizeBytes: bytes.byteLength, digest };
         sessionEntries.set(id, record);
         return { id, ...record };
       }
 
-      if (existing.mediaType === mediaType && (await readFile(existing.path)).equals(bytes)) {
+      if (existing.digest === digest) {
         return { id, ...existing };
       }
 
