@@ -123,8 +123,8 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       // helper erases from the geometric FLOOR (row 1) rather than reading the
       // tracked `committedBandTopRow`, retiring that adjacency-coupling read per
       // the Stage-2-core repin change (#552, committed-band-repin.ts); the
-      // tracked `bottom` stays, being the vacated-tail boundary and not
-      // derivable from geometry pre-Stage-3. The helper owns the
+      // tracked `bottom` read is also retired — the erase bound is now derived
+      // from `floor + bandLen` (geometry-only). The helper owns the
       // erase → archive → repaint ordering constraint and all band bookkeeping;
       // see terminal-compositor.frame-preserve-archive.ts.
       archiveBandPrefixAndRepaintSurvivors(self, overflow, 1);
