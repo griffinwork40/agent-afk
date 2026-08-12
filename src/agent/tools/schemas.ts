@@ -468,9 +468,14 @@ export const agentTool: AnthropicToolDef = {
 export const skillTool: AnthropicToolDef = {
   name: 'skill',
   category: 'skill',
-  // Concurrency-safe like `agent`/`compose`: each skill dispatch forks its own
-  // SubagentManager with unique, per-call session ids and shares no mutable
-  // dispatch state, so adjacent skill calls in one turn can run in parallel.
+  // Concurrency-safe like `agent`/`compose`: all three execution paths share
+  // no mutable dispatch state across concurrent calls.
+  //   fork   — each dispatch constructs a fresh SubagentManager with a unique
+  //            per-call session id.
+  //   load   — the load-path functions are pure: read-only `internals()`
+  //            snapshot, disk I/O + string substitution, no shared state.
+  //   inline — handlers receive immutable args from ctx; any subagents they
+  //            spawn are per-invocation.
   concurrencySafe: true,
   description:
     'Invoke a registered skill by name. A skill either forks an isolated ' +
