@@ -41,7 +41,7 @@ import {
 import { buildMessages } from '../providers/openai-compatible/messages.js';
 import type { OpenAIChunk } from '../providers/openai-compatible/translate.js';
 import { SLASH_COMMAND_ROUTING_PROMPT, TOOL_SYSTEM_PROMPT_BASE } from './system-prompt.js';
-import { registerSkill } from '../../skills/index.js';
+import { registerSkill, _resetRegistry } from '../../skills/index.js';
 import { SkillExecutor } from './skill-executor.js';
 import { buildChildConfig } from './subagent/child-config.js';
 
@@ -165,6 +165,11 @@ describe('AnthropicDirectProvider — skill-dispatch self-entry suppression', ()
       description: 'Probe skill for self-suppression',
       handler: vi.fn(),
     });
+  });
+
+  afterEach(() => {
+    _resetRegistry();
+    __setAnthropicClientFactory(null);
   });
 
   async function systemTextFor(config: Record<string, unknown>): Promise<string> {
@@ -588,6 +593,7 @@ describe('OpenAICompatibleProvider — skill-dispatch self-entry suppression', (
   });
 
   afterEach(() => {
+    _resetRegistry();
     __setOpenAIClientFactory(null);
   });
 
@@ -698,6 +704,10 @@ describe('SkillExecutor — self-recursion execution guard (Fix A)', () => {
       description: 'Probe skill for self-recursion guard test',
       handler: vi.fn(),
     });
+  });
+
+  afterEach(() => {
+    _resetRegistry();
   });
 
   it('rejects a skill call matching skillDispatchName with a clear error', async () => {

@@ -171,6 +171,9 @@ export class SkillExecutor {
 
     // Refresh the registry against this cwd: another session's scan may have
     // evicted this session's project entries between prompt assembly and now.
+    // Captured here (before registry and plugin lookups) so the "not found"
+    // fallback at the bottom of this method can list available skills without
+    // a second scan — both code paths share this single collection.
     const entries = collectSkillEntries(
       this.ctx.pluginConfigs,
       this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
