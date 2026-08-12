@@ -9,12 +9,24 @@ import {
   resolveCredentialForModel,
 } from './credential-resolver.js';
 
-// providerForModel is env-aware; keep hermetic for grok routing.
+// providerForModel is env-aware; keep hermetic for grok routing + explicit hints.
 vi.mock('../providers/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../providers/index.js')>();
   return {
     ...actual,
-    providerForModel: (model: string | undefined) => {
+    providerForModel: (
+      model: string | undefined,
+      hints?: { explicit?: string },
+    ) => {
+      const explicit = hints?.explicit?.trim().toLowerCase();
+      if (explicit === 'xai') return 'xai' as const;
+      if (explicit === 'xai-oauth' || explicit === 'xai_oauth') return 'xai-oauth' as const;
+      if (explicit === 'openai' || explicit === 'openai-compatible') {
+        return 'openai-compatible' as const;
+      }
+      if (explicit === 'anthropic' || explicit === 'anthropic-direct') {
+        return 'anthropic-direct' as const;
+      }
       const m = (model ?? '').toLowerCase();
       if (m.startsWith('grok') || m === 'xai' || m.includes('xai')) {
         if (m.includes('oauth')) return 'xai-oauth' as const;
@@ -50,10 +62,12 @@ describe('loadXaiApiKey', () => {
 describe('resolveCredentialForModel — xAI injection contract', () => {
   const originalXai = process.env.XAI_API_KEY;
   const originalOpenAI = process.env.OPENAI_API_KEY;
+  const originalAnthropic = process.env.ANTHROPIC_API_KEY;
 
   beforeEach(() => {
     delete process.env.XAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
   });
 
   afterEach(() => {
@@ -61,6 +75,8 @@ describe('resolveCredentialForModel — xAI injection contract', () => {
     else process.env.XAI_API_KEY = originalXai;
     if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalOpenAI;
+    if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalAnthropic;
   });
 
   it('injects XAI_API_KEY for grok models (apikey path)', () => {
@@ -84,5 +100,23 @@ describe('resolveCredentialForModel — xAI injection contract', () => {
   it('still returns OPENAI_API_KEY for gpt models', () => {
     process.env.OPENAI_API_KEY = 'sk-openai';
     expect(resolveCredentialForModel('gpt-4o')).toBe('sk-openai');
+  });
+
+  it('explicit xai with Claude model returns only XAI_API_KEY (never Anthropic)', () => {
+    process.env.XAI_API_KEY = 'xai-forced';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-leak';
+    expect(resolveCredentialForModel('claude-sonnet-4-6', { explicit: 'xai' })).toBe('xai-forced');
+  });
+
+  it('explicit xai with Claude model and no XAI_API_KEY returns undefined (not Anthropic)', () => {
+    delete process.env.XAI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-leak';
+    expect(resolveCredentialForModel('claude-sonnet-4-6', { explicit: 'xai' })).toBeUndefined();
+  });
+
+  it('without explicit hints, Claude model still resolves Anthropic', () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ok';
+    delete process.env.XAI_API_KEY;
+    expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-ok');
   });
 });

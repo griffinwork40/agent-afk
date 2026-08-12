@@ -1,5 +1,10 @@
 import type { SessionRef } from '../../../agent/session-ref.js';
-import { getApiKey, getApiKeyForModel, getModel, getDefaultSubagentModel } from '../../shared-helpers.js';
+import {
+  explicitProviderHints,
+  getApiKeyForModel,
+  getModel,
+  getDefaultSubagentModel,
+} from '../../shared-helpers.js';
 import type { CliConfig } from '../../config.js';
 import { wireExecutors } from '../../../agent/session/wire-executors.js';
 import type { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
@@ -71,7 +76,10 @@ export function createBootstrapInfra(a: {
     traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
   );
 
-  const apiKey = getApiKey();
+  // Match session credential family to --provider when set (anti-leak for
+  // --provider xai with a Claude default model).
+  const providerHints = explicitProviderHints(a.options.provider);
+  const apiKey = getApiKeyForModel(getModel(), providerHints);
   // Witness layer: trace writer is now live — emit the bootstrap_start marker.
   // (Total bootstrap span is reported by bootstrap_done, measured from the
   // function-entry timestamp captured in bootstrap.ts.)

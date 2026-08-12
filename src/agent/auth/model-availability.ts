@@ -71,7 +71,8 @@ export function modelAvailability(model: string | undefined, bindings?: ModelSlo
       };
     }
     if (b.provider === 'xai') {
-      const ok = resolveXaiAuth(undefined, 'apikey').apiKey != null;
+      // Honor per-slot apiKey (same material applySlotCredentials injects).
+      const ok = resolveXaiAuth(b.apiKey, 'apikey').apiKey != null;
       return {
         available: ok,
         needs: 'xai',

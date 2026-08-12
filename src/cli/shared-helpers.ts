@@ -1,4 +1,4 @@
-import { providerForModel } from '../agent/providers/index.js';
+import { providerForModel, type ProviderRouteHints } from '../agent/providers/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
 import { loadOpenAICredential, resolveCredentialForModel } from '../agent/auth/credential-resolver.js';
 import { env } from '../config/env.js';
@@ -65,12 +65,29 @@ export function getCodexApiKey(): string | undefined {
  * Codex-routed and openai-compatible models read `OPENAI_API_KEY` /
  * `CODEX_API_KEY` env only (never the Anthropic keychain).
  *
+ * Pass `hints.explicit` when the CLI `--provider` flag forces a family so the
+ * credential matches that provider (see {@link resolveCredentialForModel}).
+ *
  * Delegates to `resolveCredentialForModel` in `src/agent/auth/credential-resolver.ts`
  * — the canonical implementation now lives there so the agent layer can call
  * it directly without an upward import into `src/cli/`.
  */
-export function getApiKeyForModel(model: string | undefined): string | undefined {
-  return resolveCredentialForModel(model);
+export function getApiKeyForModel(
+  model: string | undefined,
+  hints?: ProviderRouteHints,
+): string | undefined {
+  return resolveCredentialForModel(model, hints);
+}
+
+/**
+ * Credential route hints from an optional CLI `--provider` string.
+ * Empty / unset → undefined (model + AFK_PROVIDER env routing only).
+ */
+export function explicitProviderHints(
+  provider: string | undefined,
+): ProviderRouteHints | undefined {
+  if (provider === undefined || provider.trim() === '') return undefined;
+  return { explicit: provider };
 }
 
 /**

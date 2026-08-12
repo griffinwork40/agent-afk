@@ -192,8 +192,9 @@ export class XaiProvider implements ModelProvider {
     return this.inner.complete({
       ...args,
       apiKey: resolution.apiKey,
-      // Prefer explicit complete() override, else xAI endpoint — never global OpenAI shim.
-      baseUrl: args.baseUrl ?? endpoint.baseURL,
+      // Invariant: never forward args.baseUrl (suggest engine passes
+      // AFK_OPENAI_BASE_URL). Only resolveXaiEndpoint / lastXaiBaseUrl.
+      baseUrl: endpoint.baseURL,
     });
   }
 }

@@ -21,7 +21,7 @@
  * original `getApiKeyForModel`.
  */
 
-import { providerForModel } from '../providers/index.js';
+import { providerForModel, type ProviderRouteHints } from '../providers/index.js';
 import { loadClaudeCodeOauthToken } from './keychain.js';
 import { env } from '../../config/env.js';
 
@@ -96,11 +96,21 @@ export function loadXaiCredential(): string | undefined {
  * OpenAI credentials never reach Anthropic-routed models. xAI never receives
  * OPENAI_API_KEY either.
  *
+ * Contract: pass `hints.explicit` (CLI `--provider`) so credential family
+ * matches the selected provider, not only the model id. Without that,
+ * `afk chat --provider xai -m sonnet` injects an Anthropic key into
+ * `AgentConfig.apiKey` and forced-apikey xAI mode would send it to api.x.ai.
+ * `AFK_PROVIDER` is already read by {@link providerForModel} when hints omit
+ * `explicit`.
+ *
  * This is the relocated body of `getApiKeyForModel` from
  * `src/cli/shared-helpers.ts`, which becomes a thin delegate to this function.
  */
-export function resolveCredentialForModel(model: string | undefined): string | undefined {
-  const provider = providerForModel(model);
+export function resolveCredentialForModel(
+  model: string | undefined,
+  hints?: ProviderRouteHints,
+): string | undefined {
+  const provider = providerForModel(model, hints);
   if (provider === 'openai-compatible' || provider === 'openai-codex') {
     return loadOpenAICredential();
   }

@@ -7,7 +7,7 @@
  * process-global singleton.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const loadAnthropicCredential = vi.fn<[], string | undefined>();
 const loadOpenAICredential = vi.fn<[], string | undefined>();
@@ -126,6 +126,37 @@ describe('modelAvailability', () => {
       const result = modelAvailability('medium', bindings);
       expect(result).toEqual({ available: true, needs: 'chatgpt-oauth' });
       expect(resolveOpenAIAuth).toHaveBeenCalledWith(undefined, {}, true);
+    });
+  });
+
+  describe('xai slot', () => {
+    const originalXai = process.env.XAI_API_KEY;
+
+    beforeEach(() => {
+      delete process.env.XAI_API_KEY;
+    });
+
+    afterEach(() => {
+      if (originalXai === undefined) delete process.env.XAI_API_KEY;
+      else process.env.XAI_API_KEY = originalXai;
+    });
+
+    it('is available when slot has per-slot apiKey even without XAI_API_KEY env', () => {
+      const bindings = slots({
+        medium: { id: 'grok-4.5', provider: 'xai', apiKey: 'slot-xai-key' },
+      });
+      const result = modelAvailability('medium', bindings);
+      expect(result).toEqual({ available: true, needs: 'xai' });
+    });
+
+    it('is unavailable when provider xai has neither env nor slot key', () => {
+      const bindings = slots({ medium: { id: 'grok-4.5', provider: 'xai' } });
+      const result = modelAvailability('medium', bindings);
+      expect(result).toEqual({
+        available: false,
+        needs: 'xai',
+        hint: 'needs XAI_API_KEY',
+      });
     });
   });
 

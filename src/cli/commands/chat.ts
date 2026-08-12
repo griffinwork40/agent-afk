@@ -13,7 +13,7 @@ import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
 import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
@@ -344,7 +344,8 @@ export function registerChatCommand(program: Command): void {
           }
         }
 
-        const apiKey = getApiKey();
+        const providerHints = explicitProviderHints(options.provider);
+        const apiKey = getApiKeyForModel(getModel(), providerHints);
         // System-prompt layering: the framework base (`prompts/system-prompt.md`)
         // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
         // is appended on top via resolveBaseSystemPrompt(), never substituted for
@@ -577,7 +578,10 @@ export function registerChatCommand(program: Command): void {
           // `cancelled` rows instead of vanishing (#733).
           drainSubagents: (reason) =>
             rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
-          apiKey: getApiKeyForModel(sessionModel),
+          // Resolve the credential for the ACTUAL session model + CLI
+          // `--provider` (if any). Without explicit hints, `--provider xai`
+          // with a Claude model injects Anthropic material into XaiProvider.
+          apiKey: getApiKeyForModel(sessionModel, providerHints),
           maxTurns: parseInt(options.maxTurns, 10),
           // One-shot `afk chat` is headless: no REPL/Telegram elicitation
           // handler is installed, so ask_question can only auto-decline. Strip
