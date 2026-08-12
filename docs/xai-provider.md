@@ -156,7 +156,7 @@ honor global `AFK_OPENAI_BASE_URL` for Grok traffic.
 | Surface | Status |
 |---------|--------|
 | CLI `afk chat` / interactive REPL / daemon | Supported (`XaiProvider`) |
-| **Telegram bot** | **Out of scope for this PR.** Telegram still classifies non-`openai-compatible` models as Anthropic-routed and does not construct `XaiProvider`. TODO: add an xAI branch (or generalize the OpenAI session builder) so `grok-*` uses SuperGrok OAuth / `XAI_API_KEY` + dual endpoints. Until then, use CLI/daemon for Grok. |
+| **Telegram bot** | Supported (`session-xai.ts` + xAI credential plan). Uses `XAI_API_KEY` and/or SuperGrok OAuth store; never injects OAuth tokens into `config.apiKey`. |
 
 Related: [OpenAI Responses & ChatGPT OAuth](openai-responses-and-chatgpt-oauth.md),
 [model slots](model-slots.md), [architecture](architecture.md).

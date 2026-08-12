@@ -132,8 +132,17 @@ export function getModel(): AgentModelInput {
 export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentModelInput {
   const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
   if (raw && raw.length > 0) return raw;
-  if (typeof parentModel === 'string' && providerForModel(parentModel) === 'openai-compatible') {
-    return parentModel;
+  if (typeof parentModel === 'string') {
+    const parentProvider = providerForModel(parentModel);
+    // Inherit parent for OpenAI-compatible and xAI/Grok families so local/Grok
+    // sessions do not silently fork Anthropic `medium` children.
+    if (
+      parentProvider === 'openai-compatible'
+      || parentProvider === 'xai'
+      || parentProvider === 'xai-oauth'
+    ) {
+      return parentModel;
+    }
   }
   return 'medium';
 }

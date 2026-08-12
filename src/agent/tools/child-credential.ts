@@ -109,5 +109,23 @@ export function applyManagerApiKeyFallback(args: {
   // without `parentModel`; refusing leaves the child credential-less (a loud
   // pre-flight failure) rather than risk shipping a foreign-provider key.
   if (effectiveParent === undefined) return undefined;
-  return providerForModel(childModel) === effectiveParent ? parentApiKey : undefined;
+  const childProvider = providerForModel(childModel);
+  return sameCredentialFamily(childProvider, effectiveParent) ? parentApiKey : undefined;
+}
+
+/**
+ * Credential families for inheritance. `xai` and `xai-oauth` share the SuperGrok
+ * store / XAI_API_KEY surface; openai-codex is an alias of openai-compatible.
+ */
+export function sameCredentialFamily(
+  a: BundledProviderName,
+  b: BundledProviderName,
+): boolean {
+  const norm = (n: BundledProviderName): string => {
+    if (n === 'xai-oauth') return 'xai';
+    if (n === 'openai-codex') return 'openai-compatible';
+    if (n === 'anthropic') return 'anthropic-direct';
+    return n;
+  };
+  return norm(a) === norm(b);
 }

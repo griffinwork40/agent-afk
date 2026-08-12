@@ -16,6 +16,7 @@ import {
   type XaiAuthStoreDeps,
   type XaiTokenBundle,
   clearXaiTokens,
+  getXaiAuthPath,
   readXaiTokens,
   writeXaiTokens,
 } from './auth-store.js';
@@ -44,10 +45,16 @@ export {
 } from './oauth-pkce.js';
 
 /**
- * Single-flight refresh: concurrent ensureFreshAccessToken callers share one
- * HTTP refresh so xAI's rotating refresh_token is not used twice.
+ * Single-flight refresh keyed by store path: concurrent callers for the *same*
+ * token store share one HTTP refresh (rotating refresh_token). Different
+ * AFK_STATE_DIR / injected auth paths never join each other's in-flight work.
  */
-let refreshInFlight: Promise<XaiTokenBundle> | undefined;
+const refreshInFlightByPath = new Map<string, Promise<XaiTokenBundle>>();
+
+function storePathKey(store: XaiAuthStoreDeps | undefined): string {
+  if (store?.authPath) return store.authPath();
+  return getXaiAuthPath();
+}
 
 /**
  * Refresh the access token. On success, ALWAYS write both tokens via
@@ -107,17 +114,20 @@ export async function ensureFreshAccessToken(
     return bundle;
   }
 
-  // Single-flight: join an in-progress refresh instead of racing.
-  if (refreshInFlight) {
+  const pathKey = storePathKey(store);
+
+  // Single-flight per store path: join an in-progress refresh instead of racing.
+  const existing = refreshInFlightByPath.get(pathKey);
+  if (existing) {
     try {
-      return await refreshInFlight;
+      return await existing;
     } catch {
       // Winner failed; re-read store (may have been cleared).
       return readXaiTokens(store);
     }
   }
 
-  refreshInFlight = (async () => {
+  const flight = (async () => {
     try {
       return await refreshXaiTokens(bundle.refresh_token, { ...deps, store, persist: true });
     } catch (err) {
@@ -126,12 +136,13 @@ export async function ensureFreshAccessToken(
       }
       throw err;
     } finally {
-      refreshInFlight = undefined;
+      refreshInFlightByPath.delete(pathKey);
     }
   })();
+  refreshInFlightByPath.set(pathKey, flight);
 
   try {
-    return await refreshInFlight;
+    return await flight;
   } catch {
     // Refresh failed. If the access token is still within hard expiry, return
     // it so a transient failure does not abort a live session.

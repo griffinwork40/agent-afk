@@ -21,18 +21,16 @@ import {
   escapeHtml,
   formatSystemError,
 } from '../formatter.js';
-import { providerForModel } from '../../agent/providers/index.js';
 import { isModelAvailable } from '../../agent/auth/model-availability.js';
 import {
   MODEL_ALIASES_HINT,
-  resolveBinding,
-  slotForInput,
   unconfiguredSlotError,
 } from '../../agent/session/model-slots.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import { slugifySessionName } from '../../cli/session-name.js';
 import { formatResumeCommand } from '../../cli/resume-command.js';
 import { routeFromCtx } from '../route.js';
+import { isValidTelegramModelArg } from './commands.model-validate.js';
 
 type LogFn = (...args: unknown[]) => void;
 
@@ -166,15 +164,7 @@ export async function handleModelSwitch(
   }
 
   const model = modelArg.toLowerCase() as AgentModelInput;
-  const isKnownAlias = MODEL_ALIASES_HINT.includes(model);
-  const isSlotName = slotForInput(model) !== undefined;
-  const isOpenAICompatibleId = providerForModel(model) === 'openai-compatible';
-  // Accept a raw Anthropic wire id (e.g. `claude-sonnet-5`); the resolved id's
-  // `claude-` prefix is the confident signal. Bare typos still match nothing.
-  const resolvedId = resolveBinding(model).id.trim().toLowerCase();
-  const isClaudeWireId = resolvedId.startsWith('claude-') || resolvedId.startsWith('claude_');
-
-  if (!isKnownAlias && !isSlotName && !isOpenAICompatibleId && !isClaudeWireId) {
+  if (!isValidTelegramModelArg(model)) {
     await ctx.reply(
       formatError(`Invalid model: ${modelArg}\nAliases: ${MODEL_ALIASES_HINT.join(', ')}, or a full model id`)
     );

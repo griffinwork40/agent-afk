@@ -23,6 +23,7 @@ import type { ModelProvider } from '../provider.js';
 import { anthropicDirectProvider, AnthropicDirectProvider } from './anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
 import { XaiProvider } from './xai/index.js';
+import { resolveXaiConstructionAuthMode } from './xai/force-mode.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
 import { resolveBinding, type ModelSlots } from '../session/model-slots.js';
 import { isOSeriesModel } from '../model-capabilities.js';
@@ -303,20 +304,21 @@ export function resolveProvider(
     case 'openai-codex':
       // IMPORTANT: fresh instance per session — see docstring above.
       return new OpenAICompatibleProvider(ctorOpts);
-    case 'xai': {
-      // Auto-routed Grok models: authMode undefined. Explicit AFK_PROVIDER=xai
-      // (or hints.explicit) forces apikey — same as parseProvider.
+    case 'xai':
+    case 'xai-oauth': {
+      // Same construction rules as parseProvider / resolveXaiConstructionAuthMode.
       const raw = (hints?.explicit ?? env.AFK_PROVIDER)?.trim().toLowerCase() ?? '';
-      const explicitXai =
-        raw === 'xai' || raw === 'xai-oauth' || raw === 'xai_oauth';
+      const wasExplicit =
+        raw === 'xai' || raw === 'xai-oauth' || raw === 'xai_oauth' || name === 'xai-oauth';
+      const effective = name === 'xai-oauth' || raw === 'xai-oauth' || raw === 'xai_oauth'
+        ? 'xai-oauth' as const
+        : 'xai' as const;
+      const authMode = resolveXaiConstructionAuthMode(effective, wasExplicit);
       return new XaiProvider({
         ...ctorOpts,
-        ...(explicitXai && raw === 'xai' ? { authMode: 'apikey' as const } : {}),
-        ...(raw === 'xai-oauth' || raw === 'xai_oauth' ? { authMode: 'oauth' as const } : {}),
+        ...(authMode !== undefined ? { authMode } : {}),
       });
     }
-    case 'xai-oauth':
-      return new XaiProvider({ ...ctorOpts, authMode: 'oauth' });
     case 'anthropic':
     case 'anthropic-direct':
     default:

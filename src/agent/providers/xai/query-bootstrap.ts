@@ -27,6 +27,15 @@ export interface XaiQueryBootstrapArgs {
   delegate: (args: ProviderQueryArgs, apiKey: string, mode: XaiAuthMode) => ProviderQuery;
 }
 
+/** Prefer forced/resolved mode for diagnostics before first successful delegate. */
+function diagnosticMode(
+  forceMode: XaiAuthForceMode,
+  getLastMode: () => XaiAuthMode,
+): XaiAuthMode {
+  if (forceMode === 'oauth' || forceMode === 'apikey') return forceMode;
+  return getLastMode();
+}
+
 /**
  * Build a ProviderQuery that refreshes OAuth when needed, then pumps the
  * inner query and rewrites 402/403 errors into SuperGrok remediation text.
@@ -69,14 +78,20 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
         const q = await ensureInner();
         for await (const ev of q) {
           if (ev.type === 'error') {
-            yield { type: 'error', error: rewriteXaiHttpError(ev.error, getLastMode()) };
+            yield {
+              type: 'error',
+              error: rewriteXaiHttpError(ev.error, diagnosticMode(forceMode, getLastMode)),
+            };
           } else {
             yield ev;
           }
         }
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
-        yield { type: 'error', error: rewriteXaiHttpError(err, getLastMode()) };
+        yield {
+          type: 'error',
+          error: rewriteXaiHttpError(err, diagnosticMode(forceMode, getLastMode)),
+        };
       }
     },
     async interrupt(reason) {
