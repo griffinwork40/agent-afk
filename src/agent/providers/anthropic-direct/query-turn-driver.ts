@@ -170,22 +170,29 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       let turnEmittedTerminal = false;
       try {
         for await (const event of ctx.retry.turnWithRetries(runInput, () => ctx.state.closed)) {
-          // M1: process `turn.completed` BEFORE the closed check so
-          // `lastUsage.stopReason` (and AgentSession's `lastStopReason`) is
-          // recorded even when a concurrent close() lands during the overload
-          // pause. Without this ordering, a close() that interrupts the pause
-          // tier delivers the OVERLOAD_EXHAUSTED terminal here, but the old
-          // `if (ctx.state.closed) return` discarded it immediately, leaving
-          // `lastStopReason` unset → session seals `succeeded` not `failed`.
-          // Clearing the abort slot here is unchanged (was already inside the
-          // turn.completed branch); moving it above the closed check keeps the
-          // invariant that inter-turn observers always see an idle coordinator.
+          // P2 (Codex review): yield `turn.completed` BEFORE the closed-return
+          // so stream-consumer.ts's `setLastResponseMetadata` fires and
+          // `AgentSession.lastStopReason` is populated. Without this, a
+          // close() that interrupts the overload pause tier delivers the
+          // OVERLOAD_EXHAUSTED terminal here; the previous ordering set
+          // `ctx.state.lastUsage` (provider-internal) but returned before
+          // `yield event`, so `transformProviderEvent` for `turn.completed`
+          // (which calls `setLastResponseMetadata`) was never reached.
+          // Result: session sealed `succeeded` with `lastStopReason` unset
+          // instead of `failed` with `OVERLOAD_EXHAUSTED`. By marking
+          // `turnEmittedTerminal = true` before the closed-return we also keep
+          // the downstream synthesize-terminal logic correct: no second terminal
+          // is emitted after we return.
           if (event.type === 'turn.completed') {
             ctx.state.lastUsage = event.usage;
             ctx.abort.clear(controller);
+            turnEmittedTerminal = true;
+            yield event;
+            if (ctx.state.closed) return;
+            continue;
           }
           if (ctx.state.closed) return;
-          if (event.type === 'turn.completed' || event.type === 'error') {
+          if (event.type === 'error') {
             turnEmittedTerminal = true;
           }
           yield event;
