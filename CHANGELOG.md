@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.1] - 2026-08-12
+
+### Fixed
+- use routeFromCtx in /afk and /help handlers (#1022) (#1028) (2b16957b)
+
+### Changed
+- fix stale comments and test cleanup at skill-dispatch sites (#744) (#1030) (7f16f9ff)
+
 ## [5.112.0] - 2026-08-12
 
 ### Added
