@@ -208,7 +208,15 @@ describe('overload pause tier — interactive pause + ceiling', () => {
   });
 
   // A concurrent close() must not leave the tier spinning either.
-  it('stops when the session closes during the pause', async () => {
+  // M1 fix: close() is distinguished from interrupt(). A close() ends the
+  // session entirely; the OVERLOAD_EXHAUSTED terminal must be yielded so
+  // `lastStopReason` is recorded and the session seals `failed` not `succeeded`.
+  // This is different from the abort exit above: interrupt() is a recoverable
+  // pause and query-turn-driver.ts synthesizes an `interrupted` terminal for it,
+  // but close() is a session end and query-turn-driver.ts relies on the tier to
+  // surface the real terminal so `lastUsage.stopReason` can be captured before
+  // the closed-return.
+  it('yields the preserved terminal when the session closes during the pause', async () => {
     scriptTurns([exhausted]);
     let closed = false;
     const promise = drain(
@@ -219,8 +227,13 @@ describe('overload pause tier — interactive pause + ceiling', () => {
     await vi.advanceTimersByTimeAsync(200_000);
     const events = await promise;
     expect(runTurnMock).toHaveBeenCalledTimes(1);
-    // Same intentional silence as the abort exit above; see that test's note.
-    expect(events.some((e) => e.type === 'turn.completed')).toBe(false);
+    // The tier must yield the exhausted terminal so the session consumer can
+    // record lastStopReason = OVERLOAD_EXHAUSTED before returning on close.
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('turn.completed');
+    if (events[0]?.type === 'turn.completed') {
+      expect(events[0].usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
+    }
   });
 });
 

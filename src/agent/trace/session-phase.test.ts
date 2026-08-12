@@ -267,6 +267,31 @@ describe('session_phase payload schema — acceptance', () => {
     // Bare name-schema acceptance.
     expect(() => SessionPhaseNameSchema.parse('suspected_loop')).not.toThrow();
   });
+
+  it('accepts the boot_warning phase with producer + message metadata (#754)', () => {
+    // Emitted once PER WARNING at push time inside bootstrapSession — never
+    // aggregated — so `metadata` carries exactly one producer tag and one
+    // message string (no arrays; SessionPhasePayload.metadata is a flat
+    // Record<string, string|number|boolean>).
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'boot_warning',
+        metadata: {
+          producer: 'agent-registry',
+          message:
+            '[afk] agents: ~/.afk/agents/research-agent.md overrides built-in agent "research-agent"',
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'boot_warning',
+        metadata: { producer: 'mcp', message: '[mcp] server "foo": unknown key "cmd"' },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance.
+    expect(() => SessionPhaseNameSchema.parse('boot_warning')).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -307,6 +332,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     pause_extension_granted: true,
     suspected_loop: true,
     compaction_disabled: true,
+    boot_warning: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {

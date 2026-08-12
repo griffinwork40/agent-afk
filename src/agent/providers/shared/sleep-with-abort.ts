@@ -19,8 +19,9 @@
 export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) { resolve(); return; }
-    const timer = setTimeout(resolve, ms);
+    const onAbort = (): void => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
     timer.unref();
-    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }

@@ -16,6 +16,8 @@ export {
   contextFullnessFraction,
   buildContextUsageFields,
   shouldAutoCompact,
+  guardContextOverflow,
+  safeAutoCompactThresholdFor,
 } from '../../shared/auto-compact.js';
 
 export type {

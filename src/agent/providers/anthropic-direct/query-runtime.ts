@@ -326,13 +326,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async compact(): Promise<ProviderCompactResult> {
-    return compactQueryHistory({
-      state: this.state,
-      abort: this.abort,
-      retry: this.retry,
+    const r = await compactQueryHistory({
+      state: this.state, abort: this.abort, retry: this.retry,
       initSessionId: this.initSessionId,
       ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
     });
+    if (r.compacted) this.state.lastUsage = null; // #962: stale usage → false-positive
+    return r;
   }
 
   listRewindTargets(): RewindTarget[] {

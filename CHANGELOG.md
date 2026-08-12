@@ -11,6 +11,40 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.110.5] - 2026-08-12
+
+### Fixed
+- fail-fast context-overflow guard for max_tokens exceeding window (#1014) (72d56baa)
+
+## [5.110.4] - 2026-08-12
+
+### Fixed
+- clarify research-agent write constraint in tool-def listing (#944) (#1009) (efd3dc4f)
+
+## [5.110.3] - 2026-08-12
+
+### Fixed
+- clarify skill tool description for load vs fork modes (#1018) (44fbb5c2)
+
+## [5.110.2] - 2026-08-12
+
+### Fixed
+- surface research-agent read-only constraint at dispatch time (#1012) (0583e81d)
+
+### Changed
+- clarify advisory-only posture of 200-line function ceiling (#1016) (4e1254b0)
+
+## [5.110.1] - 2026-08-12
+
+### Fixed
+- block skill self-recursion through agent children (#1015) (e2b34c42)
+- address remaining #762 review items (M1, M4, M6, L1, listener leak) (#1013) (415d34fa)
+
+## [5.110.0] - 2026-08-11
+
+### Added
+- record bootstrap warnings as a durable boot_warning phase (#754) (#984) (08d254c)
+
 ## [5.109.0] - 2026-08-11
 
 ### Added
