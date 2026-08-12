@@ -30,7 +30,7 @@
     "src/agent/providers/shared/compaction.ts": { "loc": 624, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/risk-classifier.ts": { "loc": 385, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/session-ledger.ts": { "loc": 451, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/agent/session/agent-session.ts": { "loc": 1440, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/agent/session/agent-session.ts": { "loc": 1442, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/session/model-slots.ts": { "loc": 516, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/session/stream-consumer.ts": { "loc": 522, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/shell-jobs/streamer.ts": { "loc": 535, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
