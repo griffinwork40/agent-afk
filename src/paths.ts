@@ -334,9 +334,20 @@ export function validateSessionId(sessionId: string): void {
   }
 }
 
+/**
+ * Root of the witness tree — the parent of every per-session trace directory.
+ *
+ * Canonical home for the path that `afk trace list`, the improve scanner, and
+ * the retention sweep all need. Previously duplicated as a private helper in
+ * `cli/commands/trace.ts` and `improve/paths.ts`.
+ */
+export function getWitnessRoot(): string {
+  return join(getAfkStateDir(), 'witness');
+}
+
 export function getTraceDir(sessionId: string): string {
   validateSessionId(sessionId);
-  return join(getAfkStateDir(), 'witness', sessionId);
+  return join(getWitnessRoot(), sessionId);
 }
 
 /** Session-scoped sidecars for human-supplied images addressable by subagents. */

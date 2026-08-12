@@ -1236,6 +1236,33 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_WITNESS_RETENTION_DISABLE',
+    description:
+      'Disable the witness-tree retention sweep entirely, so no session directory is ever evicted.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
+    name: 'AFK_WITNESS_MAX_AGE_DAYS',
+    description:
+      'Evict a witness session directory once its newest content is older than this many days. Default 30.',
+    type: 'number',
+    required: false,
+    default: '30',
+    category: 'debug',
+  },
+  {
+    name: 'AFK_WITNESS_MAX_BYTES',
+    description:
+      'Aggregate byte cap for the witness tree; oldest session directories are evicted first once exceeded. Default 2147483648 (2 GiB).',
+    type: 'number',
+    required: false,
+    default: '2147483648',
+    category: 'debug',
+  },
+  {
     name: 'AFK_SESSION_LEDGER_DISABLED',
     description:
       'Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). ' +
@@ -1726,6 +1753,9 @@ export const env = {
   get AFK_DEBUG_CLIPBOARD(): string | undefined { return process.env['AFK_DEBUG_CLIPBOARD']; },
   get AFK_DEBUG_COMPOSITOR(): string | undefined { return process.env['AFK_DEBUG_COMPOSITOR']; },
   get AFK_TRACE_DISABLED(): string | undefined { return process.env['AFK_TRACE_DISABLED']; },
+  get AFK_WITNESS_RETENTION_DISABLE(): string | undefined { return process.env['AFK_WITNESS_RETENTION_DISABLE']; },
+  get AFK_WITNESS_MAX_AGE_DAYS(): string | undefined { return process.env['AFK_WITNESS_MAX_AGE_DAYS']; },
+  get AFK_WITNESS_MAX_BYTES(): string | undefined { return process.env['AFK_WITNESS_MAX_BYTES']; },
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
   get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
