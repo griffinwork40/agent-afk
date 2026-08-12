@@ -126,7 +126,7 @@ export function buildSkillManifest(
   return [
     'Available skills (invoke via the `skill` tool):',
     '',
-    "Each skill either dispatches one or more context-isolated subagents (delegation — preserves the main session's context) or loads its instructions directly into your current context (`load` mode). Calling `skill` is the entry point for both; the executor picks the mode per skill. Prefer a skill over inline investigation when the task shape matches.",
+    "Each skill either forks an isolated subagent (delegation — preserves the main session's context) or loads its instructions directly into your current context for you to execute directly. The mode is fixed per-skill, not per-call. To run a skill N times in parallel with isolation, dispatch N subagents (via `agent` or `compose`) that each call `skill` once. Prefer a skill over inline investigation when the task shape matches.",
     '',
     ...lines,
   ].join('\n');
