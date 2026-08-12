@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.110.4] - 2026-08-12
+
+### Fixed
+- clarify research-agent write constraint in tool-def listing (#944) (#1009) (efd3dc4f)
+
 ## [5.110.3] - 2026-08-12
 
 ### Fixed
