@@ -157,9 +157,11 @@ export function buildForkedChildConfig(
       // api.openai.com. Mirrors the CLI SubagentExecutor wiring (chat/daemon/bootstrap).
       ...(ctx.openaiBaseUrl !== undefined ? { openaiBaseUrl: ctx.openaiBaseUrl } : {}),
       // Fix B (#skill-recursion): thread skillDispatchName so buildChildConfig
-      // propagates it to unnamed agent grandchildren at depth+2.
-      ...(ctx.skillDispatchName !== undefined
-        ? { skillDispatchName: ctx.skillDispatchName }
+      // propagates it to unnamed agent grandchildren at depth+2.  Source from
+      // baseConfig (the CURRENT fork's identity) — ctx.skillDispatchName is the
+      // PARENT executor's context, which is undefined for a top-level dispatch.
+      ...(baseConfig.skillDispatchName !== undefined
+        ? { skillDispatchName: baseConfig.skillDispatchName }
         : {}),
     } as AgentConfig,
     // Inherit origin from the skill executor; `depth + 1` makes grandchild
@@ -214,7 +216,7 @@ export function buildForkedChildConfig(
     ? ctx.childSkillExecutorFactory(
         depth + 1, maxDepth, signal, currentCwd,
         childReadScope,
-        ctx.skillDispatchName, // Fix A (#skill-recursion)
+        baseConfig.skillDispatchName, // Fix A (#skill-recursion)
       )
     : undefined;
   // Pass `model` so the factory routes between AnthropicDirect /
