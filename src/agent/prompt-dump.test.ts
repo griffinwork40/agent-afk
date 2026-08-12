@@ -662,8 +662,11 @@ describe('redactInlineSecrets', () => {
   });
 
   it.each([
+    // API_TOKEN has no suffix so `hasPathName` is false → redacted regardless of value shape.
     ['API_TOKEN', '/2wYZ01xPz7pQeC0mFkA/'],
-    ['PASSWORD', '/correct/horse/battery/staple'],
+    // SOME_PASSWORD has a 5-char prefix so it matches the {3,} quantifier guard, and the
+    // name does not have a PATH/FILE segment so `hasPathName` is false → redacted.
+    ['SOME_PASSWORD', '/correct/horse/battery/staple'],
   ])('still masks slash-prefixed secret %s values', (name, secret) => {
     const result = redactInlineSecrets(`${name}=${secret}`);
     expect(result).not.toContain(secret);
@@ -688,5 +691,116 @@ describe('redactInlineSecrets', () => {
     const result = redactInlineSecrets(text);
     expect(result).not.toContain(secret);
     expect(result).toContain(`API_TOKEN=<REDACTED length=${secret.length}>`);
+  });
+
+  // --- PR #968 Item 1: PATH_FILE bypass — passphrase-shaped values must be redacted ---
+
+  it('redacts MY_AUTH_TOKEN_FILE with an all-lowercase passphrase value (PR-968 path-signal guard)', () => {
+    // The hasPathSignal guard prevents passphrase-shaped values from slipping
+    // through the path exemption. MY_AUTH_TOKEN_FILE has a 3-char prefix (MY_),
+    // keyword TOKEN, and suffix _FILE (so hasPathName is true). Without the
+    // hasPathSignal check, /correct/horse/battery/staple would be spared because
+    // looksLikeFilesystemPath accepts short lowercase-only segments. With the
+    // guard, all-lowercase segments produce no path signal → value is redacted.
+    const passphrase = '/correct/horse/battery/staple';
+    const text = `MY_AUTH_TOKEN_FILE=${passphrase}`;
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(passphrase);
+    expect(result).toContain('<REDACTED');
+  });
+
+  it('redacts MY_SECRET_KEY_FILE with an all-lowercase passphrase value', () => {
+    const passphrase = '/hunter/two/words/long';
+    const text = `MY_SECRET_KEY_FILE=${passphrase}`;
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(passphrase);
+    expect(result).toContain('<REDACTED');
+  });
+
+  it('still spares AUTH_TOKEN_PATH with a real file path (hasPathSignal upholds existing exemption)', () => {
+    // /Users/me/.config/app/token.json: `Users` has uppercase, `.config` has dot —
+    // at least one segment passes the hasPathSignal test.
+    const text = 'AUTH_TOKEN_PATH=/Users/me/.config/app/token.json';
+    expect(redactInlineSecrets(text)).toBe(text);
+  });
+
+  it('still spares CREDENTIAL_FILE_PATH with a real file path with a hyphenated segment', () => {
+    const text = 'CREDENTIAL_FILE_PATH=/home/user/.config/my-app/creds.json';
+    expect(redactInlineSecrets(text)).toBe(text);
+  });
+
+  // --- PR #968 Item 2: quantifier {3,} revert — bare keywords must NOT match ---
+
+  it('does NOT redact bare KEY=<long value> (quantifier revert: prefix must be ≥3 chars)', () => {
+    // With [A-Za-z_]* the prefix was optional, letting `KEY=` match. Reverted to
+    // [A-Za-z_]{3,} so a bare keyword without a meaningful prefix is ignored.
+    const text = 'KEY=supersecretvalueatleast16chrs';
+    const result = redactInlineSecrets(text);
+    // 'KEY' alone has no qualifying prefix — should pass through unchanged
+    expect(result).toBe(text);
+  });
+
+  it('does NOT redact bare TOKEN=<long value> (uppercase variant, quantifier revert)', () => {
+    const text = 'TOKEN=supersecretvalueatleast16chrs';
+    const result = redactInlineSecrets(text);
+    expect(result).toBe(text);
+  });
+
+  it('does NOT redact bare SECRET=<long value>', () => {
+    const text = 'SECRET=supersecretvalueatleast16chrs';
+    const result = redactInlineSecrets(text);
+    expect(result).toBe(text);
+  });
+
+  it('DOES redact MY_KEY=<long value> (prefix ≥3 chars satisfies quantifier)', () => {
+    const secret = 'supersecretvalueatleast16chrs';
+    const text = `MY_KEY=${secret}`;
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(secret);
+    expect(result).toContain('<REDACTED');
+  });
+});
+
+// --- PR #968 Item 4: looksLikeFilesystemPath unit tests ---
+
+import { looksLikeFilesystemPath } from './redact-secrets.js';
+
+describe('looksLikeFilesystemPath', () => {
+  it('returns true for a typical macOS home path', () => {
+    expect(looksLikeFilesystemPath('/Users/me/Projects/foo')).toBe(true);
+  });
+
+  it('returns false for a path with an opaque token segment (≥32 mixed alphanumeric chars)', () => {
+    // The long mixed-alphanumeric segment triggers the isOpaqueTokenSegment check.
+    expect(looksLikeFilesystemPath('/tmp/uploads/aB3xQ9zK7mN2pL5vR8tY1wC4dF6gH0jMExtra12345Extra')).toBe(false);
+  });
+
+  it('returns true for a value that looks path-shaped even if it could be an AWS key (name guard is separate)', () => {
+    // The function itself says yes — it is the NAME guard in pathGuardedRedact that
+    // keeps real AWS keys masked. This test documents the known residual gap so a
+    // future refactor does not accidentally tighten the wrong knob.
+    expect(looksLikeFilesystemPath('wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY')).toBe(true);
+  });
+
+  it('returns false for a pure string with no "/"', () => {
+    expect(looksLikeFilesystemPath('supersecretstring')).toBe(false);
+  });
+
+  it('returns false for a string containing "+"', () => {
+    expect(looksLikeFilesystemPath('/some/path+base64==')).toBe(false);
+  });
+
+  it('returns false for a string containing "="', () => {
+    expect(looksLikeFilesystemPath('/some/path=value')).toBe(false);
+  });
+
+  it('returns true for a Linux-style path with dotfile segments', () => {
+    expect(looksLikeFilesystemPath('/home/user/.config/app/settings.json')).toBe(true);
+  });
+
+  it('returns true for a short all-lowercase path (looksLikeFilesystemPath is permissive; path-signal guard sits above)', () => {
+    // looksLikeFilesystemPath itself returns true here; the hasPathSignal guard
+    // in pathGuardedRedact is the layer that rejects all-lowercase passphrase paths.
+    expect(looksLikeFilesystemPath('/correct/horse/battery/staple')).toBe(true);
   });
 });

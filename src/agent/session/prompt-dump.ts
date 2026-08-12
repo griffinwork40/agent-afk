@@ -98,7 +98,21 @@ function pathGuardedRedact(m: RegExpMatchArray): string {
       : value;
   const hasPathName = /(?:^|_)(?:PATH|FILE)(?:_|$)/i.test(name);
   const hasPathPrefix = pathValue.startsWith('/') || pathValue.startsWith('~/');
-  if (hasPathName && hasPathPrefix && looksLikeFilesystemPath(pathValue)) {
+  // Secondary guard: real filesystem paths almost always have at least one segment
+  // containing an uppercase letter, a digit, a dot, or a hyphen — characters that
+  // appear naturally in directory names (e.g. `Users`, `.config`, `token.json`,
+  // `my-app`) but are absent from all-lowercase passphrase strings like
+  // `/correct/horse/battery/staple`. Without this check a value such as
+  // `PASSWORD_FILE_PATH=/correct/horse/battery/staple` would slip through because
+  // all three existing guards pass: the name has `_PATH`, the value starts with `/`,
+  // and `looksLikeFilesystemPath` accepts short lowercase-only word segments.
+  // Requiring a positive path-signal ensures we only exempt values that look like
+  // genuine filesystem paths. The guard is intentionally loose — `/usr/local/bin`
+  // fails it (all lowercase, no digits/dots/hyphens), so those are redacted, which
+  // is the safe side when the name already matched a secret keyword.
+  const segments = pathValue.split('/').filter(Boolean);
+  const hasPathSignal = segments.some((s) => /[A-Z0-9.\-]/.test(s));
+  if (hasPathName && hasPathPrefix && hasPathSignal && looksLikeFilesystemPath(pathValue)) {
     return `${name}=${value}`;
   }
   return `${name}=<REDACTED length=${value.length}>`;
@@ -121,11 +135,11 @@ const INLINE_SECRET_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> =
   // (The existing generic pattern already covers most of these; this is belt-and-suspenders
   //  for lowercase variants, e.g. openai_api_key=...) Both capture groups are required by
   // the regex structure, so pathGuardedRedact's non-null assertions always hold.
-  [/([A-Za-z_]*(?:[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])[A-Za-z_]*)=([^\s]{16,})/g,
+  [/([A-Za-z_]{3,}(?:[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])[A-Za-z_]*)=([^\s]{16,})/g,
     pathGuardedRedact],
   // Generic KEY=<high-entropy value> — UPPERCASE variant (kept for backward compat). Same
   // capture-group invariant as above.
-  [/([A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*)=([^\s]{16,})/g,
+  [/([A-Z_]{3,}(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*)=([^\s]{16,})/g,
     pathGuardedRedact],
 ];
 
