@@ -63,12 +63,15 @@ export async function* maybeAutoCompact(ctx: TurnDriverContext): AsyncGenerator<
         trigger: 'auto',
       });
     }
-    await ctx.compact();
+    const compactResult = await ctx.compact();
     // Reset lastUsage after compaction so the overflow guard (#962) does not
     // false-positive on the next turn: the stale count is no longer a valid
     // lower bound once history has been truncated. The next API call will
     // repopulate it from the actual response.
-    ctx.state.lastUsage = null;
+    // Conditioned on `compacted` — a no-op (history too short, summarization
+    // failure) must preserve the near-limit evidence; unconditionally nulling
+    // it would skip both the guard and auto-compaction on the next turn.
+    if (compactResult.compacted) ctx.state.lastUsage = null;
   } catch (compactErr) {
     if (compactErr instanceof HookBlockedError) {
       // Hook blocked auto-compaction — skip this turn's compaction

@@ -397,12 +397,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
                   sessionId: this.initSessionId,
                   trigger: 'auto',
                 });
-                await this.compactHistory('token_threshold');
-                // Reset lastUsage after compaction so the overflow guard
-                // (#962) does not false-positive on the next turn: the stale
-                // count is no longer a valid lower bound once history has been
-                // truncated. The next API call will repopulate it.
-                this.lastUsage = null;
+                const compactResult = await this.compactHistory('token_threshold');
+                // Overflow guard (#962): invalidate stale usage so it doesn't
+                // false-positive. Conditioned on `compacted` — a no-op must
+                // preserve the near-limit evidence or the next turn skips the
+                // guard entirely, letting the over-limit request through.
+                if (compactResult.compacted) this.lastUsage = null;
               } catch (compactErr) {
                 if (!(compactErr instanceof HookBlockedError)) throw compactErr;
                 // Hook blocked auto-compaction — continue the session normally.
@@ -1021,7 +1021,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
     // calls compactHistory('token_threshold') directly from the turn-boundary
     // check in run(), so the two paths differ only in the emitted trace trigger.
-    return this.compactHistory('manual');
+    const result = await this.compactHistory('manual');
+    // #962: invalidate stale usage so the overflow guard doesn't false-positive.
+    if (result.compacted) this.lastUsage = null; // no-op must keep evidence
+    return result;
   }
 
   private async compactHistory(
