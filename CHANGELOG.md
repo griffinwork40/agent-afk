@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.111.0] - 2026-08-12
+
+### Added
+- native topics routing (step 6) + cross-surface CLI/daemon registration (step 7) (#1020) (5fdc806f)
+
 ## [5.110.5] - 2026-08-12
 
 ### Fixed
