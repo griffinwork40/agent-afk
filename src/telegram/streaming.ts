@@ -496,14 +496,22 @@ export async function streamResponse(
         // the preview message freezes and the user sees no further updates.
         const waitMs = floodRetryAfterMs(e);
         if (waitMs !== null) {
+          const preSleepEdit = lastEditAt;
           await realSleep(waitMs);
-          try {
-            await ctx.telegram.editMessageText(
-              ctx.chat?.id, sentMessage.message_id, undefined,
-              chunks[0] ?? html, { parse_mode: 'HTML' },
-            );
-          } catch {
-            // Retry exhausted — the edit is lost but the turn continues.
+          // If a newer edit landed while we slept (e.g. from a concurrent
+          // fire-and-forget subagentSink call), our pre-sleep content is
+          // stale — replaying it would revert the preview to an older state.
+          if (lastEditAt !== preSleepEdit) {
+            // Stale retry — a newer edit already updated the message; skip.
+          } else {
+            try {
+              await ctx.telegram.editMessageText(
+                ctx.chat?.id, sentMessage.message_id, undefined,
+                chunks[0] ?? html, { parse_mode: 'HTML' },
+              );
+            } catch {
+              // Retry exhausted — the edit is lost but the turn continues.
+            }
           }
         }
         // Unchanged-content 400 and other non-429 errors: ignore (the edit
@@ -757,8 +765,21 @@ export async function streamResponse(
           // Provider is throttled (Claude 429/529) — show a visible status so the
           // user knows the turn is alive, and bump lastActivityAt so the watchdog
           // does not fire a false timeout during multi-minute backoffs.
-          const secs = event.retryAfterMs !== undefined
-            ? Math.ceil(event.retryAfterMs / 1_000) : null;
+          //
+          // Invariant: display the EFFECTIVE backoff, not the raw retry-after
+          // header. The Anthropic SDK discards retry-after >= 60s and uses its
+          // own ~8s default (SDK_HONORED_RETRY_AFTER_CEILING_MS = 60_000,
+          // SDK_MAX_DEFAULT_BACKOFF_MS = 8_000 in first-byte-timeout.ts). A raw
+          // retry-after: 3600 would tell the user "~3600s" while the SDK
+          // actually retries in seconds.
+          const SDK_RETRY_AFTER_CEILING_MS = 60_000;
+          const SDK_FALLBACK_BACKOFF_MS = 8_000;
+          const effectiveMs = event.retryAfterMs !== undefined
+            ? (event.retryAfterMs < SDK_RETRY_AFTER_CEILING_MS
+              ? event.retryAfterMs
+              : SDK_FALLBACK_BACKOFF_MS)
+            : null;
+          const secs = effectiveMs !== null ? Math.ceil(effectiveMs / 1_000) : null;
           const statusLine = secs !== null
             ? `⏸ Rate limited · retrying in ~${secs}s…`
             : '⏸ Rate limited · retrying…';

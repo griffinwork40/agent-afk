@@ -138,7 +138,7 @@
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 623, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/message.ts": { "loc": 955, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/session-manager.ts": { "loc": 895, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/streaming.ts": { "loc": 1122, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/streaming.ts": { "loc": 1143, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/watch.ts": { "loc": 382, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/web-server/routes.ts": { "loc": 352, "reason": "legacy: predates the ceiling gate; pending concern extraction" }
   }
