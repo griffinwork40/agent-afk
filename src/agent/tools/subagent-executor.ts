@@ -855,7 +855,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     });
     const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
-    if (warn) result.content = warn + result.content;
+    if (warn && !result.isError) result.content = warn + result.content;
     return result;
   }
 }

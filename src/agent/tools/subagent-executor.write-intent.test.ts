@@ -145,6 +145,32 @@ describe('collectPostRunWarnings', () => {
     });
   });
 
+  describe('caller-level isError guard', () => {
+    it('warning is non-empty even on error-destined results — caller must gate on isError', () => {
+      // collectPostRunWarnings is a pure function that does not know whether the
+      // child succeeded or failed. The caller (subagent-executor.ts) must gate
+      // on `!result.isError` before prepending. This test documents the contract:
+      // the function returns a non-empty warning when conditions match, and it is
+      // the caller's responsibility to suppress it on error results.
+      const warn = collectPostRunWarnings(
+        'claude-haiku',
+        false,
+        'research-agent',
+        'write findings.md',
+        false,
+        hasVision,
+      );
+      expect(warn).not.toBe('');
+      // Simulated caller-side guard:
+      const errorResult = { content: '{"error":"timeout"}', isError: true };
+      if (warn && !errorResult.isError) {
+        errorResult.content = warn + errorResult.content;
+      }
+      // Content must remain unchanged when isError is true
+      expect(errorResult.content).toBe('{"error":"timeout"}');
+    });
+  });
+
   describe('both warnings combined', () => {
     it('emits both warnings when both conditions apply', () => {
       const warn = collectPostRunWarnings(

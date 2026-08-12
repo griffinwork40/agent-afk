@@ -46,6 +46,8 @@ const WRITE_INTENT_RE =
  * @param model        - Effective child model string (for vision check).
  * @param hasAttachments - Whether the dispatch included image attachments.
  * @param agentName    - Named agent type, or undefined for bare dispatches.
+ *                       Bare dispatches (undefined) are exempt from the
+ *                       write-intent warning even when childWriteCapable is false.
  * @param prompt       - The raw prompt string sent to the child.
  * @param childWriteCapable - Whether the child's tool surface allows writes.
  * @param supportsVisionFn - Injected capability check (default: model-caps).
