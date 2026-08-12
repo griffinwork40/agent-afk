@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.110.2] - 2026-08-12
+
+### Fixed
+- surface research-agent read-only constraint at dispatch time (#1012) (0583e81d)
+
+### Changed
+- clarify advisory-only posture of 200-line function ceiling (#1016) (4e1254b0)
+
 ## [5.110.1] - 2026-08-12
 
 ### Fixed
