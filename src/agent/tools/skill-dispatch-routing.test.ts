@@ -42,6 +42,8 @@ import { buildMessages } from '../providers/openai-compatible/messages.js';
 import type { OpenAIChunk } from '../providers/openai-compatible/translate.js';
 import { SLASH_COMMAND_ROUTING_PROMPT, TOOL_SYSTEM_PROMPT_BASE } from './system-prompt.js';
 import { registerSkill } from '../../skills/index.js';
+import { SkillExecutor } from './skill-executor.js';
+import { buildChildConfig } from './subagent/child-config.js';
 
 // --------------------------------------------------------------------------
 // Anthropic mock plumbing (mirrors plan-mode-system-payload.test.ts)
@@ -675,5 +677,201 @@ describe('OpenAICompatibleProvider — cwd forwarding for project skills', () =>
     const firstCall = openaiCreateCalls[0]!;
     const text = extractOpenAISystemText(firstCall.args);
     expect(text).toContain(projectSkillName);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Fix A: SkillExecutor execution-level self-recursion guard (#skill-recursion)
+// --------------------------------------------------------------------------
+// A skill fork's own SkillExecutor must reject any `skill(name)` call where
+// name === ctx.skillDispatchName. This is an execution-time block — the
+// manifest exclusion is only cosmetic (the model can still call the skill by
+// name from its system-prompt instructions). The guard must fire BEFORE
+// dispatching a new subagent fork, so a self-recursive call never escapes.
+
+describe('SkillExecutor — self-recursion execution guard (Fix A)', () => {
+  const selfName = 'guard-probe-skill';
+
+  beforeEach(() => {
+    registerSkill({
+      name: selfName,
+      description: 'Probe skill for self-recursion guard test',
+      handler: vi.fn(),
+    });
+  });
+
+  it('rejects a skill call matching skillDispatchName with a clear error', async () => {
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test-session',
+        getInputStreamRef: () => undefined as never,
+        abortSignal: new AbortController().signal,
+      },
+      // Simulate: this executor is running inside a skill fork for selfName.
+      skillDispatchName: selfName,
+    });
+
+    const signal = new AbortController().signal;
+    const result = await executor.execute({
+      id: 'call-1',
+      name: 'skill',
+      input: { name: selfName },
+      signal,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain(selfName);
+    expect(result.content).toContain('cannot re-dispatch itself');
+    expect(result.content).toContain('Return findings via your system prompt contract');
+  });
+
+  it('allows a DIFFERENT skill to be called from within the same executor', async () => {
+    const otherName = 'other-probe-skill';
+    registerSkill({
+      name: otherName,
+      description: 'Different skill — should not be blocked',
+      handler: vi.fn().mockResolvedValue('ok'),
+    });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test-session-2',
+        getInputStreamRef: () => undefined as never,
+        abortSignal: new AbortController().signal,
+      },
+      skillDispatchName: selfName,
+    });
+
+    const signal = new AbortController().signal;
+    const result = await executor.execute({
+      id: 'call-2',
+      name: 'skill',
+      input: { name: otherName },
+      signal,
+    });
+
+    // Should NOT be blocked — only selfName is guarded.
+    expect(result.isError).not.toBe(true);
+  });
+
+  it('allows any skill when skillDispatchName is not set (no-op guard)', async () => {
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test-session-3',
+        getInputStreamRef: () => undefined as never,
+        abortSignal: new AbortController().signal,
+      },
+      // No skillDispatchName → guard inactive.
+    });
+
+    const signal = new AbortController().signal;
+    // selfName is registered; even if called without skillDispatchName, it
+    // should NOT be rejected by the guard (guard is a no-op when unset).
+    const result = await executor.execute({
+      id: 'call-3',
+      name: 'skill',
+      input: { name: selfName },
+      signal,
+    });
+
+    // Not rejected by the guard (may fail for other reasons — here the inline
+    // handler returns undefined, which resolves to 'Skill completed successfully.').
+    expect(result.content).not.toContain('cannot re-dispatch itself');
+  });
+});
+
+// --------------------------------------------------------------------------
+// Fix B: skillDispatchName propagation through buildChildConfig (#skill-recursion)
+// --------------------------------------------------------------------------
+// When a skill fork dispatches an `agent` child (unnamed), that child's config
+// must carry skillDispatchName so the originating skill stays excluded from its
+// manifest AND the execution guard fires when the child calls `skill` tool.
+// Named agents must NOT inherit it (they own their own system-prompt identity).
+
+describe('buildChildConfig — skillDispatchName propagation (Fix B)', () => {
+  const fakeSignal = new AbortController().signal;
+
+  // Minimal stub for createChildExecutor injection (circular-import seam).
+  const stubCreateChildExecutor = vi.fn().mockReturnValue({});
+
+  const baseDefaultConfig = {
+    apiKey: 'sk-test',
+    systemPrompt: 'You are a helpful assistant.',
+    baseUrl: undefined as string | undefined,
+    openaiBaseUrl: undefined as string | undefined,
+    skillDispatchName: 'ground-state',
+  };
+
+  const baseParsed = {
+    model: 'claude-haiku-4-5' as const,
+    cwd: undefined as string | undefined,
+    writeRoots: undefined as string[] | undefined,
+    readRoots: undefined as string[] | undefined,
+    max_turns: 0,
+    max_turns_explicit: false,
+    max_tool_use_iterations: 0,
+    max_tool_use_iterations_explicit: false,
+  };
+
+  it('unnamed agent dispatch inherits skillDispatchName from defaultConfig', () => {
+    const result = buildChildConfig({
+      parsed: baseParsed as Parameters<typeof buildChildConfig>[0]['parsed'],
+      namedAgent: undefined,
+      depth: 1,
+      maxDepth: 3,
+      currentCwd: undefined,
+      signal: fakeSignal,
+      defaultConfig: baseDefaultConfig,
+      createChildExecutor: stubCreateChildExecutor,
+    });
+
+    expect(result.childConfig.skillDispatchName).toBe('ground-state');
+  });
+
+  it('named agent dispatch does NOT inherit skillDispatchName', () => {
+    const namedAgent = {
+      name: 'research-agent',
+      definition: {
+        prompt: 'You are a research agent.',
+        model: 'sonnet' as const,
+        maxTurns: undefined,
+        maxToolUseIterations: undefined,
+        allowedTools: undefined,
+        bashReadOnly: undefined,
+        nestedAgentTypes: undefined,
+      },
+    };
+
+    const result = buildChildConfig({
+      parsed: baseParsed as Parameters<typeof buildChildConfig>[0]['parsed'],
+      namedAgent: namedAgent as Parameters<typeof buildChildConfig>[0]['namedAgent'],
+      depth: 1,
+      maxDepth: 3,
+      currentCwd: undefined,
+      signal: fakeSignal,
+      defaultConfig: baseDefaultConfig,
+      createChildExecutor: stubCreateChildExecutor,
+    });
+
+    // Named agents own their identity — must NOT inherit the originating skill name.
+    expect(result.childConfig.skillDispatchName).toBeUndefined();
+  });
+
+  it('unnamed agent dispatch with no skillDispatchName in defaultConfig propagates nothing', () => {
+    const result = buildChildConfig({
+      parsed: baseParsed as Parameters<typeof buildChildConfig>[0]['parsed'],
+      namedAgent: undefined,
+      depth: 1,
+      maxDepth: 3,
+      currentCwd: undefined,
+      signal: fakeSignal,
+      defaultConfig: {
+        ...baseDefaultConfig,
+        skillDispatchName: undefined,
+      },
+      createChildExecutor: stubCreateChildExecutor,
+    });
+
+    expect(result.childConfig.skillDispatchName).toBeUndefined();
   });
 });

@@ -151,12 +151,16 @@ export class SkillExecutor {
       };
     }
 
-    // Refresh the process-global registry for this executor's session cwd
-    // immediately before lookup. Another overlapping session may have built
-    // its manifest since this session advertised its project skills; that scan
-    // evicts project-origin entries before registering the other cwd. Without
-    // this refresh, a valid skill advertised to this session can disappear
-    // between prompt assembly and tool execution.
+    // Fix A (#skill-recursion): execution-level self-dispatch block (manifest exclusion is cosmetic).
+    if (this.ctx.skillDispatchName !== undefined && parsed.name === this.ctx.skillDispatchName) {
+      return {
+        content: `Skill "${parsed.name}" cannot re-dispatch itself (already executing at this level). Return findings via your system prompt contract instead.`,
+        isError: true,
+      };
+    }
+
+    // Refresh the registry against this cwd: another session's scan may have
+    // evicted this session's project entries between prompt assembly and now.
     const entries = collectSkillEntries(
       this.ctx.pluginConfigs,
       this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
@@ -181,14 +185,9 @@ export class SkillExecutor {
     }
 
     // 2. Try plugin skills (SKILL.md body). Default is in-context LOAD; a
-    //    plugin skill forks a subagent ONLY when its frontmatter explicitly
-    //    declares `context: fork`. The SKILL.md `context:` field is the single
-    //    source of truth — there is no name-keyed override, so a `context: load`
-    //    or absent field always loads, even for a copy that shadows a bundled
-    //    skill. (History: the default was fork until 2026-06; flipped to load
-    //    so authored skills act in-context by default. Isolation-critical
-    //    bundled skills are pinned to `context: fork` in their own SKILL.md.
-    //    See docs/skill-load-mode.md.)
+    //    plugin skill forks ONLY when its frontmatter declares `context: fork`.
+    //    The SKILL.md `context:` field is the single source of truth.
+    //    History: flip from fork-by-default — see docs/skill-load-mode.md.
     const pluginSkill = this.getPluginSkillBody(parsed.name);
     if (pluginSkill) {
       if (pluginSkill.context === 'fork') {
