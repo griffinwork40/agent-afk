@@ -21,6 +21,7 @@
 import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { SessionManager } from '../session-manager.js';
+import { routeFromCtx } from '../route.js';
 import { formatError } from '../formatter.js';
 
 type LogFn = (...args: unknown[]) => void;
@@ -37,8 +38,8 @@ export async function handleAfk(
   sessionManager: SessionManager,
   log: LogFn,
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
@@ -50,7 +51,7 @@ export async function handleAfk(
     // getSession lazily constructs the chat's session if needed — which also
     // binds the hook-registry mode getter to it (src/telegram.ts), so the gate
     // observes the flip below on the very next tool call.
-    const session = await sessionManager.getSession(chatId);
+    const session = await sessionManager.getSession(route);
     const current = session.getSessionMetadata().permissionMode === 'autonomous';
     const desired = arg === 'on' ? true : arg === 'off' ? false : !current;
 
