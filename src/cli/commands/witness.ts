@@ -100,8 +100,11 @@ export function registerWitnessCommand(program: Command): void {
           return;
         }
 
+        const sessionsSummary = result.sessionsSearched === result.sessionsAvailable
+          ? `${result.sessionsSearched} sessions searched`
+          : `${result.sessionsSearched}/${result.sessionsAvailable} sessions searched`;
         console.log(
-          `Search: "${result.query}"  (${result.sessionsScanned} sessions scanned, ` +
+          `Search: "${result.query}"  (${sessionsSummary}, ` +
             `${result.matches.length} matches)\n`,
         );
 

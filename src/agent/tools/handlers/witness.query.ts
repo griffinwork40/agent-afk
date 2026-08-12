@@ -262,7 +262,10 @@ export interface SearchMatch {
 
 export interface SearchWitnessResult {
   query: string;
-  sessionsScanned: number;
+  /** Total sessions in the requested window (before any `since` date filter). */
+  sessionsAvailable: number;
+  /** Sessions actually read/searched (after the `since` date filter was applied). */
+  sessionsSearched: number;
   matches: SearchMatch[];
 }
 
@@ -275,6 +278,10 @@ export async function searchAcrossSessions(
   // Slice first (N most recent sessions per schema semantics), then filter by
   // date — so `sessions` means "most recent N", not "N within the date window".
   let traces = allTraces.slice(0, sessionCount);
+
+  // Capture pre-filter count so callers can distinguish "no sessions exist" from
+  // "sessions exist but none fall within the requested date window".
+  const sessionsAvailable = traces.length;
 
   if (params.since) {
     const sinceMs = Date.parse(params.since);
@@ -314,7 +321,8 @@ export async function searchAcrossSessions(
 
   return {
     query: params.query,
-    sessionsScanned: traces.length,
+    sessionsAvailable,
+    sessionsSearched: traces.length,
     matches,
   };
 }

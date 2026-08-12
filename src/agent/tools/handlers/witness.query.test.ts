@@ -275,7 +275,7 @@ describe('searchAcrossSessions — invalid since date', () => {
     // No sessions in temp home, so result is empty — but must not throw.
     await expect(
       searchAcrossSessions({ query: 'x', since: '2024-01-01' }),
-    ).resolves.toMatchObject({ query: 'x', sessionsScanned: 0 });
+    ).resolves.toMatchObject({ query: 'x', sessionsSearched: 0 });
   });
 });
 
@@ -300,6 +300,6 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
       since: '2000-01-01',
     });
     // At most 1 session can be scanned (sessions slice applied first)
-    expect(result.sessionsScanned).toBeLessThanOrEqual(1);
+    expect(result.sessionsSearched).toBeLessThanOrEqual(1);
   });
 });
