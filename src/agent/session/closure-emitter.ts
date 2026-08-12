@@ -19,7 +19,7 @@
  */
 
 import { BudgetExceededError, TimeoutError } from '../../utils/errors.js';
-import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
 import { emitClosure } from '../trace/emit.js';
 import type { ClosureReason } from '../trace/index.js';
 import type { TraceWriter } from '../trace/writer.js';

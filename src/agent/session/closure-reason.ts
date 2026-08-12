@@ -44,7 +44,7 @@
  */
 
 import type { ClosureReason } from '../trace/index.js';
-import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 
 import { isTruncationStopReason } from '../providers/shared/truncation.js';
