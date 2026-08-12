@@ -56,12 +56,10 @@ export interface SubagentExecutorContext {
     Partial<Pick<IAgentSession, 'hookRegistry'>>;
   /**
    * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
-   * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE. Subagents are task
-   * workers: they must not inherit routing directives that would allow
-   * recursive skill invocation or nested DAG spawning. ComposeExecutor follows
-   * the same convention; see `ComposeExecutorContext.systemPrompt`.
+   * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
+   * workers that must not inherit routing directives. See ComposeExecutorContext.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'skillDispatchName'>;
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.
@@ -109,6 +107,7 @@ export interface SubagentExecutorContext {
     signal: AbortSignal,
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
+    skillDispatchName?: string,
   ) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`

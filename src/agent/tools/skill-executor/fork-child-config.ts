@@ -156,6 +156,13 @@ export function buildForkedChildConfig(
       // gets no baseURL and an OpenAI-routed great-grandchild POSTs to
       // api.openai.com. Mirrors the CLI SubagentExecutor wiring (chat/daemon/bootstrap).
       ...(ctx.openaiBaseUrl !== undefined ? { openaiBaseUrl: ctx.openaiBaseUrl } : {}),
+      // Fix B (#skill-recursion): thread skillDispatchName so buildChildConfig
+      // propagates it to unnamed agent grandchildren at depth+2.  Source from
+      // baseConfig (the CURRENT fork's identity) — ctx.skillDispatchName is the
+      // PARENT executor's context, which is undefined for a top-level dispatch.
+      ...(baseConfig.skillDispatchName !== undefined
+        ? { skillDispatchName: baseConfig.skillDispatchName }
+        : {}),
     } as AgentConfig,
     // Inherit origin from the skill executor; `depth + 1` makes grandchild
     // `agent`-dispatch rows carry actor:'subagent'.
@@ -202,14 +209,15 @@ export function buildForkedChildConfig(
     ...(ctx.agentRegistry !== undefined ? { agentRegistry: ctx.agentRegistry } : {}),
     ...(childConfig.model !== undefined ? { parentModel: childConfig.model } : {}),
   });
+  // Read-scope inheritance (#547): hand THIS child's read scope to the
+  // grandchild SkillExecutor so its own skill forks inherit ⊇ it.
+  const childReadScope = { parentReadRoots: childInheritedReadRoots, parentCwd: currentCwd };
   const childSkillExecutor = ctx.childSkillExecutorFactory
-    ? ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd, {
-        // Read-scope inheritance (#547): hand the grandchild SkillExecutor
-        // THIS child's read scope so its own skill forks (great-grandchildren)
-        // inherit ⊇ it instead of the frozen bootstrap session scope.
-        parentReadRoots: childInheritedReadRoots,
-        parentCwd: currentCwd,
-      })
+    ? ctx.childSkillExecutorFactory(
+        depth + 1, maxDepth, signal, currentCwd,
+        childReadScope,
+        baseConfig.skillDispatchName, // Fix A (#skill-recursion)
+      )
     : undefined;
   // Pass `model` so the factory routes between AnthropicDirect /
   // OpenAICompatible per `providerForModel(model)`. Without this, every
