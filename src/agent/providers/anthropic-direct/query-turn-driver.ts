@@ -24,16 +24,16 @@ import type {
   ProviderUserTurn,
 } from '../../provider.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
-import { autoCompactLimitFor } from '../../model-limits.js';
+import { contextLimitFor } from '../../model-limits.js';
 import type { AnthropicClientLike, AnthropicToolDef } from './types.js';
 import { repairOrphanToolUses } from './query/repair-orphan-tool-uses.js';
 import type { SessionState } from './query/session-state.js';
 import type { AbortCoordinator } from '../shared/abort-coordinator.js';
 import type { RetryLayer } from './query/retry-layer.js';
-import { contextWindowTokensUsed, shouldAutoCompact } from './query/auto-compact.js';
+import { contextWindowTokensUsed, guardContextOverflow } from './query/auto-compact.js';
 import type { HookRegistry } from '../../hooks.js';
-import { HookBlockedError } from '../../../utils/errors.js';
 import { annotateFastError, prepareTurnRequest } from './query/turn-request.js';
+import { maybeAutoCompact } from './query-turn-driver.auto-compact.js';
 
 /** Live accessors the turn driver needs from the owning query. */
 export interface TurnDriverContext {
@@ -128,12 +128,45 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       // placeholders so the API contract holds and the user can continue.
       repairOrphanToolUses(ctx.state.messages);
 
+      // Context-overflow guard (#962): fail fast with a legible error BEFORE
+      // sending the request when we know the provider will 400 it. Runs BEFORE
+      // the history push so the user message is not left in history on overflow
+      // (allowing /compact to succeed cleanly from the outer while loop). Uses
+      // the stale-by-one-round `lastUsage.contextWindowTokens` as a lower bound —
+      // conservative by design (skips the first turn when lastUsage is null,
+      // never silently shrinks max_tokens). See shared/auto-compact.ts.
+      // Yields an error event (rather than throwing) so the abort controller is
+      // cleared before control returns to the outer loop — throwing here would
+      // skip the inner try/finally that clears it and leave compact() returning
+      // 'turn-in-flight' on any subsequent manual compact call.
+      // Uses `continue` (not `return`) so the outer while loop survives: the
+      // user can /compact and send a new message without the session dying.
+      {
+        let overflowErr: Error | undefined;
+        try {
+          guardContextOverflow(
+            contextWindowTokensUsed(ctx.state.lastUsage ?? {}),
+            ctx.maxTokens,
+            contextLimitFor(ctx.state.requestedModel ?? ctx.state.currentModel),
+            ctx.state.requestedModel ?? ctx.state.currentModel,
+          );
+        } catch (e) {
+          overflowErr = e instanceof Error ? e : new Error(String(e));
+        }
+        if (overflowErr !== undefined) {
+          ctx.abort.clear(controller);
+          yield { type: 'error', error: overflowErr };
+          continue;
+        }
+      }
+
       // Append the new user turn to history. Strings and content-block
       // arrays both ride through as-is — Anthropic's MessageParam accepts
       // either shape natively.
       ctx.state.messages.push({ role: 'user', content: turn.content });
 
       const system = ctx.composeSystem();
+
       // Snapshot preference + eligibility exactly once. The resulting headers
       // and body intent live on one immutable RunTurnInput for every round/retry.
       const { decision: fastDecision, runInput } = prepareTurnRequest({
@@ -256,64 +289,4 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
   }
 }
 
-/**
- * Auto-compaction: fire at the natural turn boundary — after the per-turn
- * event loop exits and the abort slot is cleared — so we never trigger while a
- * tool call is in flight.
- *
- * External constraint: `abort.isIdle()` MUST be true here (cleared by
- * `abort.clear(controller)` in the caller's finally) so compact-handler's own
- * isIdle() guard passes and the 'turn-in-flight' bail is not hit spuriously.
- * Do not call this from inside the inner for-await — compact() mutates
- * state.messages in place and must only run at a clean turn boundary, never
- * mid-tool-call.
- *
- * Yields nothing; it is a generator purely so the caller's `yield*` keeps the
- * original inline control flow (a throw here propagates identically).
- */
-async function* maybeAutoCompact(ctx: TurnDriverContext): AsyncGenerator<ProviderEvent, void, void> {
-  if (ctx.state.autoCompactThreshold === undefined || ctx.state.closed) return;
-  const usage = ctx.state.lastUsage;
-  // requestedModel (not the wire currentModel) so 1M aliases use their
-  // true window — opus_1m resolves to the same wire id as opus but must
-  // compact at ~90% of 1M, not 200k. autoCompactLimitFor additionally
-  // caps the DEFAULT `sonnet` at a 200k working budget: its 1M window is
-  // truthful, but base sessions compact early for cost/latency, while the
-  // `sonnet_1m` opt-in bypasses the cap. See model-limits.ts.
-  const compactionLimit = autoCompactLimitFor(ctx.state.requestedModel);
-  if (usage === null || compactionLimit <= 0) return;
-  // Use the context-window footprint (input + cache_read +
-  // cache_creation + output for the last round), NOT input+output
-  // alone — Anthropic's input_tokens excludes cache, so the cached
-  // conversation prefix (often the bulk of the window) must be
-  // counted or compaction never fires before the window overflows.
-  const usedTokens = contextWindowTokensUsed(usage);
-  if (!shouldAutoCompact(usedTokens, compactionLimit, ctx.state.autoCompactThreshold)) return;
-  // Fire-and-await: compact() is async but we hold the turn
-  // boundary here (generator suspended at promptIterator.next()
-  // on the next iteration). Awaiting inline keeps the ordering
-  // deterministic and avoids a dangling promise race.
-  //
-  // Invariant: dispatch PreCompact(trigger:'auto') BEFORE compact()
-  // so registered hooks can block or observe the operation, mirroring
-  // the manual-compact paths in REPL (/compact) and Telegram. A block
-  // decision throws HookBlockedError — caught here to skip compaction
-  // for this turn without propagating to the outer error handler.
-  try {
-    if (ctx.hookRegistry) {
-      await ctx.hookRegistry.dispatch({
-        event: 'PreCompact',
-        sessionId: ctx.initSessionId,
-        trigger: 'auto',
-      });
-    }
-    await ctx.compact();
-  } catch (compactErr) {
-    if (compactErr instanceof HookBlockedError) {
-      // Hook blocked auto-compaction — skip this turn's compaction
-      // without surfacing an error; the session continues normally.
-    } else {
-      throw compactErr;
-    }
-  }
-}
+

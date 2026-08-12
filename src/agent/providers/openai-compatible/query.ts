@@ -103,13 +103,8 @@ import { compactOpenAIHistory, readShrinkFraction, microcompactToolResults } fro
 import {
   oneShotChatCompletion,
   oneShotResponses,
-  ResponsesSummaryIncompleteError,
 } from './oneshot.js';
-import {
-  getErrorStatus,
-  isRetryableConnectionError,
-  isRetryableStreamError,
-} from './query/retry.js';
+import { getErrorStatus } from './query/retry.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -131,6 +126,7 @@ import {
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
+import { checkContextOverflow } from './query/context-overflow.js';
 import { resolveClientFactory } from './query/client.js';
 import { driveStream, type IterationResult } from './query/stream-drive.js';
 import {
@@ -206,35 +202,7 @@ export interface OpenAICompatibleQueryOptions {
   traceWriter?: TraceWriter;
 }
 
-/**
- * Statuses that prove the endpoint refused the REQUEST ITSELF (its shape, route,
- * or media type) rather than transiently failing to serve it. 429 and 5xx are
- * deliberately absent (transient — see `isRetryableConnectionError`), as are
- * 401/403 (a credential can be hot-swapped mid-session, so an auth lapse must
- * not permanently disable compaction).
- */
-const UNSUPPORTED_REQUEST_STATUSES = new Set([400, 404, 405, 415, 422, 501]);
-
-/**
- * Contract: does `err` PROVE this endpoint cannot serve a Responses-wire
- * summarize at all — as opposed to having transiently failed one?
- *
- * Only an explicit, deterministic client-side refusal counts. The distinction
- * matters because the latch it guards is PERMANENT for the session, so a false
- * positive disables compaction until the session ends — re-creating the very
- * context-window exhaustion issue #653 fixed. Deliberately NOT proof:
- *   - 429 / 5xx and friends — transient, already classified by the retry preds;
- *   - status-less throws (network drop, DNS, bad baseURL) — a blip or a
- *     misconfiguration, neither of which is the backend refusing this shape;
- *   - {@link ResponsesSummaryIncompleteError} — the backend DID accept and serve
- *     the request, then streamed a failed/partial response. The wire works.
- */
-function provesResponsesCompactionUnsupported(err: unknown): boolean {
-  if (err instanceof ResponsesSummaryIncompleteError) return false;
-  if (isRetryableConnectionError(err) || isRetryableStreamError(err)) return false;
-  const status = getErrorStatus(err);
-  return status !== undefined && UNSUPPORTED_REQUEST_STATUSES.has(status);
-}
+import { provesResponsesCompactionUnsupported } from './query/compaction-guard.js';
 
 /** Internal record used to drive the per-turn iteration loop. */
 export class OpenAICompatibleQuery implements ProviderQuery {
@@ -317,7 +285,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.onPermissionMode = opts.onPermissionMode;
     this.onCwdChange = opts.onCwdChange;
     this.traceWriter = opts.traceWriter;
-    this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact);
+    this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
 
     // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
     // (and not the structural `ToolDispatcher` minimal interface) exposes
@@ -429,7 +397,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
                   sessionId: this.initSessionId,
                   trigger: 'auto',
                 });
-                await this.compactHistory('token_threshold');
+                const compactResult = await this.compactHistory('token_threshold');
+                // Overflow guard (#962): invalidate stale usage so it doesn't
+                // false-positive. Conditioned on `compacted` — a no-op must
+                // preserve the near-limit evidence or the next turn skips the
+                // guard entirely, letting the over-limit request through.
+                if (compactResult.compacted) this.lastUsage = null;
               } catch (compactErr) {
                 if (!(compactErr instanceof HookBlockedError)) throw compactErr;
                 // Hook blocked auto-compaction — continue the session normally.
@@ -505,6 +478,26 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // iteration + tool-dispatch so the user turn, history sanitize, and
     // tool-result image follow-up all agree. See issue #127 / model-capabilities.ts.
     const vision = supportsVision(this.currentModel);
+
+    // Context-overflow guard (#962): fail fast BEFORE sending a request the
+    // provider would reject with HTTP 400. Runs BEFORE the history push so
+    // the user message is not left in history on overflow. Yields an error
+    // event (rather than throwing) so the abort slot is cleared before
+    // control returns; throwing here leaves the slot set and makes compact()
+    // return 'turn-in-flight'. See query/context-overflow.ts and
+    // shared/auto-compact.ts for details.
+    const overflowErr = checkContextOverflow(
+      this.lastUsage,
+      this.currentModel,
+      this.opts.config.maxOutputTokens,
+      this.opts.config.model ?? this.currentModel,
+    );
+    if (overflowErr) {
+      this.abort.clear(controller);
+      yield { type: 'error', error: overflowErr };
+      return;
+    }
+
     this.priorTurns.push({
       role: 'user',
       content: buildUserContent(content, { vision, model: this.currentModel }),
@@ -1031,7 +1024,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
     // calls compactHistory('token_threshold') directly from the turn-boundary
     // check in run(), so the two paths differ only in the emitted trace trigger.
-    return this.compactHistory('manual');
+    const result = await this.compactHistory('manual');
+    // #962: invalidate stale usage so the overflow guard doesn't false-positive.
+    if (result.compacted) this.lastUsage = null; // no-op must keep evidence
+    return result;
   }
 
   private async compactHistory(
