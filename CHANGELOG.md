@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.5] - 2026-08-12
+
+### Changed
+- compare digests instead of re-reading files on dedup (#885) (#1006) (00a7e1e8)
+
 ## [5.112.4] - 2026-08-12
 
 ### Fixed
