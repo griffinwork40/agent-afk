@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.111.3] - 2026-08-12
+
+### Fixed
+- cascade-abort in-flight children before the owner seals (#733) (#987) (68b22395)
+
 ## [5.111.2] - 2026-08-12
 
 ### Fixed
