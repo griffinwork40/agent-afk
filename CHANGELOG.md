@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.6] - 2026-08-12
+
+### Fixed
+- surface rate-limit backoffs and retry sendOrEdit 429s (#1033) (1b8b124a)
+
 ## [5.112.5] - 2026-08-12
 
 ### Changed
