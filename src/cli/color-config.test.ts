@@ -1,6 +1,8 @@
 /**
  * Tests for color configuration autodetection.
- * Covers NO_COLOR, FORCE_COLOR, CI, TTY detection, and tmux truecolor override.
+ * Covers NO_COLOR, FORCE_COLOR, CI, TTY detection.
+ * Note: configureColor() never raises chalk.level — it may only lower it.
+ * tmux truecolor users should set FORCE_COLOR=3 (see docs/tmux.md).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -107,7 +109,7 @@ describe('configureColor()', () => {
     expect(chalk.level).toBe(initialLevel);
   });
 
-  it('sets chalk.level=3 when $TMUX is set and COLORTERM=truecolor (Node ≤24 workaround)', () => {
+  it('does not modify chalk.level when $TMUX is set and COLORTERM=truecolor (raise removed — use FORCE_COLOR=3 instead)', () => {
     vi.stubEnv('NO_COLOR', '');
     vi.stubEnv('FORCE_COLOR', '');
     vi.stubEnv('CI', '');
@@ -120,23 +122,9 @@ describe('configureColor()', () => {
 
     chalk.level = 1;
     configureColor();
-    expect(chalk.level).toBe(3);
-  });
-
-  it('sets chalk.level=3 when $TMUX is set and COLORTERM=24bit', () => {
-    vi.stubEnv('NO_COLOR', '');
-    vi.stubEnv('FORCE_COLOR', '');
-    vi.stubEnv('CI', '');
-    vi.stubEnv('TMUX', '/tmp/tmux-501/default,12345,0');
-    vi.stubEnv('COLORTERM', '24bit');
-    Object.defineProperty(process.stdout, 'isTTY', {
-      configurable: true,
-      get: () => true,
-    });
-
-    chalk.level = 1;
-    configureColor();
-    expect(chalk.level).toBe(3);
+    // configureColor() must NOT raise chalk.level — the palette invariant forbids it.
+    // tmux truecolor users should set FORCE_COLOR=3 in their shell or afk.env.
+    expect(chalk.level).toBe(1);
   });
 
   it('does not override chalk.level when $TMUX is set but COLORTERM is absent', () => {

@@ -97,14 +97,28 @@ afk interactive --theme light
 
 On Node.js versions before 25.0.0, a bug in `tty.getColorDepth()` caused tmux
 sessions to report 256-color support even when the outer terminal supports
-truecolor (`COLORTERM=truecolor`). agent-afk detects this case and overrides
-chalk to 24-bit color when both `$TMUX` and `COLORTERM=truecolor` are set.
+truecolor (`COLORTERM=truecolor`). chalk's `supports-color` inherits this bug,
+capping at 256-color (level 2) inside tmux on Node 22–24.
 
-If colors look wrong, verify your tmux has the `RGB` terminal feature (see
+The correct fix is to set `FORCE_COLOR=3` in your shell profile or
+`~/.afk/config/afk.env` before launching afk:
+
+```bash
+# In ~/.afk/config/afk.env or ~/.zshrc / ~/.bashrc:
+export FORCE_COLOR=3
+```
+
+`FORCE_COLOR` is read by chalk during initial module evaluation — before any
+application code runs — so it correctly locks palette builders to 24-bit color
+at creation time. This is the only approach that works reliably under ESM, where
+palette builders are frozen at import time.
+
+If colors still look wrong, verify your tmux has the `RGB` terminal feature (see
 recommended config above) and that `$COLORTERM` is set:
 
 ```bash
 echo $COLORTERM    # should print "truecolor" or "24bit"
+echo $FORCE_COLOR  # should print "3" if you set it above
 ```
 
 ### DEC Synchronized Output
