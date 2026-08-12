@@ -1,6 +1,6 @@
 ---
 name: research-agent
-description: Read-only sub-agent for research, validation, verification, and codebase inspection. Mechanically locked to Read, Grep, Glob, WebFetch, WebSearch — cannot Edit, Write, Bash, commit, or push. Delegates git queries to `git-investigator`. Use when the dispatched task is findings-only.
+description: "CANNOT write files, edit code, run bash, commit, or push — read-only enforced. Research, validation, verification, and codebase inspection only. Locked to Read, Grep, Glob, WebFetch, WebSearch. Delegates git queries to `git-investigator`. Use when task is findings-only."
 tools: Read, Grep, Glob, WebFetch, WebSearch, Agent(git-investigator)
 ---
 
