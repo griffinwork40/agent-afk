@@ -90,7 +90,7 @@ If the `Grep` tool is unavailable, tag the finding `[UNVERIFIED: reachability no
 
 This is the agent's first-line self-check; **Wave 1.5 Check B** independently re-verifies any surviving absence claims against the reviewed ref as a backstop.
 
-**Wave 1 — Light review (regime=light, 1 agent, `subagent_type: "research-agent"`).** Single agent covers all dimensions (including spec-compliance). Same `stated-intent` input, rubric, schema, and citation requirement. Light regime: peak 1 concurrent, 2 dispatched (Wave 1 ×1, Wave 2 ×1).
+**Wave 1 — Light review (regime=light, 1 agent, `subagent_type: "research-agent"`).** Single agent covers all dimensions (including spec-compliance). Same `stated-intent` input, rubric, schema, and citation requirement. Through synthesis, the light regime peaks at **1 concurrent sub-agent session** and dispatches **2 in total** (Wave 1 ×1, then Wave 2 ×1, sequential). Its conditional post-synthesis `/shadow-verify` tail dispatches 1–3 verifiers in parallel when qualifying findings surface, making the whole-run budget **peak 1–3 concurrent, 3–5 total (1–3 verifiers)**; the same bound of at most 3 claims in one round with no repeat rounds applies.
 
 **Wave 1.5 — Citation + absence-claim verification (INLINE — run by the orchestrator, dispatches nothing).** Run after Wave 1 returns, before Wave 2 synthesis. The orchestrator already holds exactly the read-only shell this verification needs (`git show` / `git diff` / `gh pr diff` / `grep` / `rg` — see the shell grant above), so running it inline costs **zero** additional sessions and zero nesting. A shell-less sub-agent here would have to nest a `git-investigator` to run the very commands the orchestrator can already run. Two independent checks:
 
