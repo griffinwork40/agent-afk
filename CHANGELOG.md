@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.0] - 2026-08-12
+
+### Added
+- bound the witness tree by age and aggregate size (#849) (#986) (4502e200)
+
 ## [5.111.3] - 2026-08-12
 
 ### Fixed
