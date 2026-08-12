@@ -1190,7 +1190,7 @@ describe('resolved guard — no double-resolve', () => {
 
     // Pull the resolver directly to simulate simultaneous delivery
     const resolver = messageHandler.pendingElicitations.get(ROUTE_KEY)!;
-    messageHandler.pendingElicitations.delete(CHAT_ID);
+    messageHandler.pendingElicitations.delete(ROUTE_KEY);
 
     // Call resolver twice (race simulation)
     resolver('first');

@@ -172,9 +172,9 @@ export class MessageHandler {
   private bot: Telegraf;
 
   /**
-   * Invariant: chat IDs with a turn claimed by an in-flight handle()/
+   * Invariant: routes with a turn claimed by an in-flight handle()/
    * handlePhoto()/drain call not yet reflected in `session.state`. bot.ts runs
-   * 'text'/'photo' detached, so a second same-chat update can be dispatched
+   * 'text'/'photo' detached, so a second same-route update can be dispatched
    * while the first is still between `getSession()` and the point where
    * `currentState` actually flips to 'streaming'.
    *
@@ -188,7 +188,7 @@ export class MessageHandler {
    * misses that window: two updates would both see 'idle' and race out of
    * arrival order (PR #602 review — Codex P1).
    *
-   * Reference-counted (chatId → live claim count) rather than a plain Set so
+   * Reference-counted (routeKey → live claim count) rather than a plain Set so
    * the reservation survives the hand-off across `processOne`'s un-awaited
    * `finally → drainQueue`: the drained turn takes its own +1 synchronously
    * before the outer turn's release drops back to 0, so the slot is never
@@ -197,17 +197,17 @@ export class MessageHandler {
    * claim* helpers below, so only the first arrival wins; `isClaimed` sees any
    * live count. See {@link reserveClaim}/{@link releaseClaim}.
    */
-  private claimedChats = new Map<number, number>();
+  private claimedChats = new Map<string, number>();
 
   /**
-   * Reserve this chat's turn slot (synchronous). Increments the live claim
+   * Reserve this route's turn slot (synchronous). Increments the live claim
    * count so overlapping reservations — handle()'s outer guard plus
    * processOne's own reservation plus a drain re-entry — compose instead of
    * clobbering a single boolean flag. Must be called with NO `await` between
    * the deciding `isClaimed` read and this call.
    */
-  private reserveClaim(chatId: number): void {
-    this.claimedChats.set(chatId, (this.claimedChats.get(chatId) ?? 0) + 1);
+  private reserveClaim(key: string): void {
+    this.claimedChats.set(key, (this.claimedChats.get(key) ?? 0) + 1);
   }
 
   /**
@@ -215,15 +215,15 @@ export class MessageHandler {
    * once the count reaches zero so `isClaimed` reports false again. Balanced:
    * each reserveClaim has exactly one releaseClaim on every code path.
    */
-  private releaseClaim(chatId: number): void {
-    const next = (this.claimedChats.get(chatId) ?? 0) - 1;
-    if (next <= 0) this.claimedChats.delete(chatId);
-    else this.claimedChats.set(chatId, next);
+  private releaseClaim(key: string): void {
+    const next = (this.claimedChats.get(key) ?? 0) - 1;
+    if (next <= 0) this.claimedChats.delete(key);
+    else this.claimedChats.set(key, next);
   }
 
-  /** True while any turn holds a slot for this chat (see {@link claimedChats}). */
-  private isClaimed(chatId: number): boolean {
-    return (this.claimedChats.get(chatId) ?? 0) > 0;
+  /** True while any turn holds a slot for this route (see {@link claimedChats}). */
+  private isClaimed(key: string): boolean {
+    return (this.claimedChats.get(key) ?? 0) > 0;
   }
 
   /**
@@ -354,8 +354,8 @@ export class MessageHandler {
       // not already claimed so a losing concurrent call doesn't inflate the
       // count it never releases; processOne takes its own reservation for the
       // turn it actually runs (drain-path coverage, #603 Item 1).
-      alreadyClaimed = this.isClaimed(chatId);
-      if (!alreadyClaimed) this.reserveClaim(chatId);
+      alreadyClaimed = this.isClaimed(routeKey(route));
+      if (!alreadyClaimed) this.reserveClaim(routeKey(route));
 
       // M3+M6: session lookup and queue-depth check happen before getFileLink /
       // download so that allowlist-burst rejections don't burn Telegram API quota
@@ -523,7 +523,7 @@ export class MessageHandler {
       // matching comment in handle(). processOne holds its own reservation for
       // the turn it runs, so releasing this outer guard here never drops the
       // slot out from under an in-flight (possibly drained) turn.
-      if (!alreadyClaimed) this.releaseClaim(chatId);
+      if (!alreadyClaimed) this.releaseClaim(routeKey(route));
     }
   }
 
@@ -651,8 +651,8 @@ export class MessageHandler {
       // inflate a count it never releases; processOne takes its own
       // reservation for the turn it actually runs (drain-path coverage,
       // #603 Item 1).
-      alreadyClaimed = this.isClaimed(chatId);
-      if (!alreadyClaimed) this.reserveClaim(chatId);
+      alreadyClaimed = this.isClaimed(routeKey(route));
+      if (!alreadyClaimed) this.reserveClaim(routeKey(route));
 
       const session = await this.sessionManager.getSession(route);
 
@@ -690,7 +690,7 @@ export class MessageHandler {
       // still-in-flight claim out from under it. processOne holds its own
       // reservation for the turn it runs, so this release never drops the slot
       // while a turn (first or drained) is still streaming.
-      if (!alreadyClaimed) this.releaseClaim(chatId);
+      if (!alreadyClaimed) this.releaseClaim(routeKey(route));
     }
   }
 
@@ -857,11 +857,10 @@ export class MessageHandler {
    * handle()/handlePhoto() guard and any drain re-entry.
    */
   private async processOne(route: TelegramRoute, ctx: Context, content: string | ContentBlockParam[]): Promise<void> {
-    const chatId = route.chatId;
     // Reserve this turn's slot synchronously, before the first `await` below, so
     // the slot is held continuously from dispatch through the finally's drain
     // hand-off. Paired 1:1 with the releaseClaim in the finally.
-    this.reserveClaim(chatId);
+    this.reserveClaim(routeKey(route));
     // Guard against a busy-spin cascade: if the catch block re-enqueues the item
     // because the session is busy, we must NOT also drain — the re-enqueued item will
     // be picked up by the active session's own drain cycle. Without this flag, the
@@ -931,7 +930,7 @@ export class MessageHandler {
       if (!reEnqueued) {
         this.drainQueue(route).catch(err => this.log('Drain error:', err));
       }
-      this.releaseClaim(chatId);
+      this.releaseClaim(routeKey(route));
     }
   }
 
