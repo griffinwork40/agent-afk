@@ -18,9 +18,23 @@
  * @module agent/tools/subagent-executor.write-intent
  */
 
-/** Pattern matching write-intent phrases in an agent prompt. */
+/**
+ * Pattern matching write-intent phrases in an agent prompt.
+ *
+ * Branch 1 — verb + optional article + optional adjective(s) + noun keyword:
+ *   Matches "write a brief document", "generate a detailed report",
+ *   "save a file with findings".
+ *
+ * Branch 2 — verb + up to ~40 chars + filename.ext:
+ *   Matches "write findings.md", "write F-rubric-audit.md",
+ *   "save a plan.md", "write the results to output.md".
+ *   The bounded .{0,40} keeps false positives low while covering intervening
+ *   articles/prepositions like "a", "the", "a plan".
+ *
+ * This is a heuristic; false positives are worse than false negatives.
+ */
 const WRITE_INTENT_RE =
-  /\b(write|save|persist|create|output|emit|dump|generate)\s+(a\s+)?(file|report|output|artifact|doc|document|markdown|\.md)\b|\b(write|save|persist|create|output|emit|dump|generate)\s+\S+\.(md|json|txt|ts|js|yaml|yml|csv|html)\b/i;
+  /\b(write|save|persist|create|output|emit|dump|generate)\s+(a\s+)?(\w+\s+)?(file|report|artifact|doc|document|markdown|\.md)\b|\b(write|save|persist|create|output|emit|dump|generate)\s{1,5}.{0,40}\.(md|json|txt|ts|js|yaml|yml|csv|html)\b/i;
 
 /**
  * Collect any warning prefixes to prepend to a subagent tool result.

@@ -120,6 +120,18 @@ describe('collectPostRunWarnings', () => {
       expect(warn).not.toContain('above');
     });
 
+    it('does not false-positive on "output" as a generic noun', () => {
+      const safePrompts = [
+        'generate output for the console',
+        'create output from the analysis',
+        'produce output summarising the findings',
+      ];
+      for (const prompt of safePrompts) {
+        const warn = collectPostRunWarnings('m', false, 'research-agent', prompt, false, hasVision);
+        expect(warn, `unexpected warning for: "${prompt}"`).toBe('');
+      }
+    });
+
     it('does not trigger on non-matching phrases', () => {
       const safePrompts = [
         'Analyse the codebase thoroughly',

@@ -791,16 +791,15 @@ export class SubagentExecutor implements SubagentControl {
     // synthetic pointer immediately, never awaiting runToResult. See
     // background-branch.ts for the abort/lifetime invariants moved with it.
     if (parsed.mode === 'background') {
-      const bgResult = await runBackgroundBranch({
+      // Invariant: no post-run warnings for background — attachments aren't resolved
+      // until the foreground path, and the child hasn't run yet.
+      return runBackgroundBranch({
         handle,
         registry: this.ctx.backgroundRegistry,
         prompt: parsed.prompt,
         model: childConfig.model,
         parentSessionId: this.ctx.parentSession.sessionId,
       });
-      const bgWarn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
-      if (bgWarn) bgResult.content = bgWarn + bgResult.content;
-      return bgResult;
     }
 
     // Invariant: assemble multimodal content only after every label, promptHead,
