@@ -11,6 +11,9 @@
  * cache-write TTL tiers or Fast-mode multiplier to account for — only a flat
  * discounted rate for prompt-cache hits.
  *
+ * Grok / xAI metered ids fall through to `../xai/pricing.ts` so the composing
+ * `xai` provider reuses this cost path without duplicating the formula.
+ *
  * Invariant: a HuggingFace-style `org/model` id (`mlx-community/…`, `Qwen/…`)
  * served by a local OpenAI-shim runner (MLX, llama.cpp, vLLM, ollama-openai)
  * is genuinely free — but this same provider also serves OpenRouter-style
@@ -27,6 +30,8 @@
  *
  * @module agent/providers/openai-compatible/pricing
  */
+
+import { deriveXaiCallCostUsd } from '../xai/pricing.js';
 
 /**
  * Rates are USD per 1 million tokens.
@@ -120,7 +125,10 @@ export function deriveCallCostUsd(
   cachedInputTokens = 0,
 ): number | undefined {
   const pricing = lookupPricing(model);
-  if (!pricing) return undefined;
+  if (!pricing) {
+    // Known metered Grok ids (xai provider composition) share this formula.
+    return deriveXaiCallCostUsd(model, inputTokens, outputTokens, cachedInputTokens);
+  }
 
   const M = 1_000_000;
   const clamp = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);

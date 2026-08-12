@@ -26,6 +26,7 @@ is scoped to `src/agent/`.
 | `providers/` | Model adapters. `providerForModel()` picks one by model family. |
 | `providers/anthropic-direct/` | Direct Messages API integration (default for Claude). |
 | `providers/openai-compatible/` | Direct Chat Completions API integration (default for GPT/o-series/codex models). Also supports any OpenAI-compatible endpoint via `baseURL`. |
+| `providers/xai/` | Grok / xAI provider (default for `grok-*`). Composes openai-compatible; owns SuperGrok OAuth + dual endpoints. |
 | `tools/` | Built-in tool schemas (`bash`, `read_file`, `edit_file`, `web_scrape`, `browser_*`, `agent`, `skill`, `compose`, …) and the dispatcher. Names are snake_case; PascalCase tokens like `WebFetch`/`WebSearch` are aliases normalized to real tools, not dispatchable names. |
 | `subagent/` | `SubagentHandle` implementation, result and trace types. |
 | `types/` | Config, message, model, permission, session types. `sdk-types.ts` holds local copies of types previously imported from the agent SDK. |
@@ -39,14 +40,22 @@ is scoped to `src/agent/`.
 ```
 ModelProvider
 ├── anthropic-direct    (default for claude-*, opus, sonnet, haiku)
-└── openai-compatible   (default for gpt-*, o1*, o3*, o4*, codex-*)
+├── openai-compatible   (default for gpt-*, o1*, o3*, o4*, codex-*)
+└── xai                 (default for grok-*; SuperGrok OAuth + API key)
 ```
 
 `providers/index.ts` exports `providerForModel(model)` which routes by model
 family. The provider name `'anthropic'` is a silent alias for
-`'anthropic-direct'`. Both providers emit a normalized `ProviderEvent` stream
+`'anthropic-direct'`. Providers emit a normalized `ProviderEvent` stream
 consumed by `session/stream-consumer.ts`. Nothing outside `providers/` imports a
 model SDK directly.
+
+### xai
+
+`providers/xai/` is the first-class Grok adapter. It composes
+`OpenAICompatibleProvider` for Chat Completions, with mode-specific base URLs
+(`api.x.ai` for API keys; CLI chat proxy for SuperGrok / SuperGrok Heavy /
+X Premium+ OAuth by default). See `docs/xai-provider.md`.
 
 ### anthropic-direct
 

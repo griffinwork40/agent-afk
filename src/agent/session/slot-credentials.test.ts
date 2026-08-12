@@ -118,6 +118,36 @@ describe('applySlotCredentials', () => {
     expect(child.apiKey).toBeUndefined();
   });
 
+  it('sets forceXaiApiKey for provider:xai and forceXaiOAuth for xai-oauth', () => {
+    const apikey = { model: 'medium', apiKey: 'inherit-me' };
+    applySlotCredentials(
+      apikey,
+      slots({ medium: { id: 'grok-4.5', provider: 'xai' } }),
+    );
+    expect(apikey.forceXaiApiKey).toBe(true);
+    expect(apikey.forceXaiOAuth).toBe(false);
+    expect(apikey.apiKey).toBeUndefined();
+
+    const oauth = { model: 'medium', apiKey: 'inherit-me' };
+    applySlotCredentials(
+      oauth,
+      slots({ medium: { id: 'grok-4.5', provider: 'xai-oauth' } }),
+    );
+    expect(oauth.forceXaiOAuth).toBe(true);
+    expect(oauth.forceXaiApiKey).toBe(false);
+  });
+
+  it('routes xAI slot baseUrl to xaiBaseUrl not openaiBaseUrl', () => {
+    const config = { model: 'medium', openaiBaseUrl: 'http://localhost:11434/v1' };
+    applySlotCredentials(
+      config,
+      slots({ medium: { id: 'grok-4.5', provider: 'xai', baseUrl: 'https://custom.x.ai/v1' } }),
+    );
+    expect(config.xaiBaseUrl).toBe('https://custom.x.ai/v1');
+    // Global OpenAI shim URL is left alone (XaiProvider ignores it).
+    expect(config.openaiBaseUrl).toBe('http://localhost:11434/v1');
+  });
+
   it('sets forceChatgptOAuth + clears apiKey for a chatgpt-oauth slot', () => {
     // A `provider: 'chatgpt-oauth'` tier routes openai-compatible (so an
     // inherited key is cleared) AND flags forceChatgptOAuth, so resolveOpenAIAuth

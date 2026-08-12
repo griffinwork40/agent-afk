@@ -131,6 +131,29 @@ export interface AgentConfig {
    */
   forceChatgptOAuth?: boolean;
 
+  /**
+   * Per-slot / provider signal for SuperGrok OAuth: force `xai-oauth` mode for
+   * the xAI provider (stored SuperGrok / SuperGrok Heavy / X Premium+ tokens
+   * only; never XAI_API_KEY). Set by `applySlotCredentials` for
+   * `provider: 'xai-oauth'`, or by constructing `XaiProvider` with
+   * `authMode: 'oauth'`. See `resolveXaiAuth`.
+   */
+  forceXaiOAuth?: boolean;
+
+  /**
+   * Symmetric force for metered API-key mode (`provider: 'xai'`, `--provider xai`,
+   * `AFK_PROVIDER=xai`). When true, SuperGrok OAuth is ignored even if tokens
+   * exist. Cleared when switching away from an xAI apikey slot.
+   */
+  forceXaiApiKey?: boolean;
+
+  /**
+   * Intentional xAI endpoint override from a model-slot `baseUrl` only.
+   * Must never be set from global `AFK_OPENAI_BASE_URL` (that would hijack
+   * Grok onto OpenAI-compatible local shims). Consumed by `XaiProvider`.
+   */
+  xaiBaseUrl?: string;
+
   /** Maximum number of conversation turns (optional) */
   maxTurns?: number;
 

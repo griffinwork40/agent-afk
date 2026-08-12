@@ -1,6 +1,9 @@
 import { providerForModel, AnthropicDirectProvider } from '../agent/providers/index.js';
 import { OpenAICompatibleProvider } from '../agent/providers/openai-compatible/index.js';
+import { XaiProvider } from '../agent/providers/xai/index.js';
+import { resolveXaiConstructionAuthMode } from '../agent/providers/xai/force-mode.js';
 import type { ModelProvider } from '../agent/provider.js';
+import { env } from '../config/env.js';
 import { BUILTIN_TOOL_NAMES } from '../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
@@ -12,6 +15,8 @@ const VALID_PROVIDERS: readonly string[] = [
   'openai-codex',
   'openai',
   'openai-compatible',
+  'xai',
+  'xai-oauth',
 ];
 
 export type ParseProviderOptions = {
@@ -73,6 +78,17 @@ export function parseProvider(
   // off `cliConfig.openaiBaseUrl` (already normalized) rather than re-reading
   // raw env — guarantees parity with the rest of the bootstrap flow when
   // a test or caller has overridden the URL.
+  // Preserve whether the operator/env explicitly named a provider — auto-route
+  // from model heuristics must NOT inherit forced-apikey construction.
+  // AFK_PROVIDER counts as explicit (same as --provider) for xai force modes.
+  const explicitProviderRaw = raw?.trim().toLowerCase() ?? '';
+  const envProviderRaw = (env.AFK_PROVIDER ?? '').trim().toLowerCase();
+  const wasExplicitProvider =
+    explicitProviderRaw.length > 0 ||
+    envProviderRaw === 'xai' ||
+    envProviderRaw === 'xai-oauth' ||
+    envProviderRaw === 'xai_oauth';
+
   let effective = raw;
   if (effective === undefined && opts?.model !== undefined) {
     const routed = providerForModel(opts.model, {
@@ -82,6 +98,7 @@ export function parseProvider(
     // default the caller's fallback already constructs, so leaving
     // `effective` undefined preserves the existing executor wiring path.
     if (routed === 'openai-compatible') effective = 'openai-compatible';
+    if (routed === 'xai' || routed === 'xai-oauth') effective = routed;
   }
   if (effective === undefined) return undefined;
   if (!VALID_PROVIDERS.includes(effective)) {
@@ -129,6 +146,21 @@ export function parseProvider(
       ...(opts?.memoryStore !== undefined ? { memoryStore: opts.memoryStore } : {}),
       ...(opts?.mcpManager !== undefined ? { mcpManager: opts.mcpManager } : {}),
       ...(opts?.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
+    });
+  }
+  if (effective === 'xai' || effective === 'xai-oauth') {
+    // Auto-routed `xai` (model heuristic only): authMode undefined so OAuth-only
+    // SuperGrok login works. Explicit `--provider xai` forces apikey;
+    // `xai-oauth` (explicit or slot-routed name) forces OAuth.
+    const authMode = resolveXaiConstructionAuthMode(effective, wasExplicitProvider);
+    return new XaiProvider({
+      permissions: { allowedTools: allowedToolsFor() },
+      ...(authMode !== undefined ? { authMode } : {}),
+      ...(opts?.subagentExecutor !== undefined ? { subagentExecutor: opts.subagentExecutor } : {}),
+      ...(opts?.skillExecutor !== undefined ? { skillExecutor: opts.skillExecutor } : {}),
+      ...(opts?.composeExecutor !== undefined ? { composeExecutor: opts.composeExecutor } : {}),
+      ...(opts?.memoryStore !== undefined ? { memoryStore: opts.memoryStore } : {}),
+      ...(opts?.mcpManager !== undefined ? { mcpManager: opts.mcpManager } : {}),
     });
   }
   return undefined;
