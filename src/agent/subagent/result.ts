@@ -13,7 +13,7 @@ import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
-import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
+import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
 import { isTruncationStopReason } from '../providers/shared/truncation.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';

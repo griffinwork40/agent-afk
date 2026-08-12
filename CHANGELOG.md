@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.110.1] - 2026-08-12
+
+### Fixed
+- block skill self-recursion through agent children (#1015) (e2b34c42)
+- address remaining #762 review items (M1, M4, M6, L1, listener leak) (#1013) (415d34fa)
+
+## [5.110.0] - 2026-08-11
+
+### Added
+- record bootstrap warnings as a durable boot_warning phase (#754) (#984) (08d254c)
+
 ## [5.109.0] - 2026-08-11
 
 ### Added

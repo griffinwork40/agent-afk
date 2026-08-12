@@ -42,6 +42,7 @@ import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry, type InboundAttachmentReader } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
+import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
@@ -56,12 +57,10 @@ export interface SubagentExecutorContext {
     Partial<Pick<IAgentSession, 'hookRegistry'>>;
   /**
    * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
-   * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE. Subagents are task
-   * workers: they must not inherit routing directives that would allow
-   * recursive skill invocation or nested DAG spawning. ComposeExecutor follows
-   * the same convention; see `ComposeExecutorContext.systemPrompt`.
+   * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
+   * workers that must not inherit routing directives. See ComposeExecutorContext.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'skillDispatchName'>;
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.
@@ -109,6 +108,7 @@ export interface SubagentExecutorContext {
     signal: AbortSignal,
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
+    skillDispatchName?: string,
   ) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`
@@ -791,6 +791,8 @@ export class SubagentExecutor implements SubagentControl {
     // synthetic pointer immediately, never awaiting runToResult. See
     // background-branch.ts for the abort/lifetime invariants moved with it.
     if (parsed.mode === 'background') {
+      // Invariant: no post-run warnings for background — attachments aren't resolved
+      // until the foreground path, and the child hasn't run yet.
       return runBackgroundBranch({
         handle,
         registry: this.ctx.backgroundRegistry,
@@ -852,11 +854,8 @@ export class SubagentExecutor implements SubagentControl {
       activeForegroundHandles: this.activeForegroundHandles,
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     });
-    if (parsed.attachments !== undefined && !supportsVision(childConfig.model)) {
-      result.content =
-        `WARNING: child model ${childConfig.model} is not vision-capable; attached images were dropped.\n\n` +
-        result.content;
-    }
+    const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
+    if (warn && !result.isError) result.content = warn + result.content;
     return result;
   }
 }

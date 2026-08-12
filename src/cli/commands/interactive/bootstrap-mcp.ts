@@ -3,6 +3,7 @@ import { loadImportFromConfig, resolveImportedRoots } from '../../../config/impo
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { palette } from '../../palette.js';
+import { recordBootWarning } from './boot-warning-recorder.js';
 
 /**
  * Load `~/.afk/config/mcp.json` (layered with project-local + imported
@@ -19,8 +20,10 @@ import { palette } from '../../palette.js';
  *
  * Prints the `mcp: N server(s) from …` startup line directly (preserved
  * console-output ordering: `mcp:` → `trace:` → `↪ resuming in`, the latter
- * two owned by `bootstrap-surface.ts`). Pushes config-loader warnings into
- * the SAME `bootWarnings` array instance the caller owns — never a copy.
+ * two owned by `bootstrap-surface.ts`). Routes config-loader warnings through
+ * {@link recordBootWarning}, which pushes into the SAME `bootWarnings` array
+ * instance the caller owns (never a copy) AND emits a durable `boot_warning`
+ * trace event (#754).
  */
 export async function connectReplMcp(a: {
   effectiveCwd: string | undefined;
@@ -50,8 +53,18 @@ export async function connectReplMcp(a: {
   // branches — servers enabled or not — via the post-clear drain. Collected
   // once here so the two paths cannot diverge: previously the enabled path
   // printed inside McpManager.fromConfig and the disabled path printed here,
-  // and the clear erased both.
-  for (const w of loaded.warnings) a.bootWarnings.push(`[mcp] ${w}`);
+  // and the clear erased both. Routed through the shared recorder (#754) so
+  // each warning also lands as a durable `boot_warning` trace event at push
+  // time — before `McpManager.fromConfig` below can throw on an `alwaysLoad`
+  // server, which would otherwise strand these in an unreturned ctx.
+  for (const w of loaded.warnings) {
+    await recordBootWarning({
+      bootWarnings: a.bootWarnings,
+      traceWriter: a.traceWriter,
+      producer: 'mcp',
+      message: `[mcp] ${w}`,
+    });
+  }
 
   let mcpManager: McpManager | undefined;
   if (enabledCount > 0) {

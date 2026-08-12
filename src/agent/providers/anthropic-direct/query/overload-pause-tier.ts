@@ -128,7 +128,16 @@ export async function* turnWithOverloadPause(
     // rather than a wall clock (a 1ms ceiling still parked a full 60s, and the
     // 10-minute default overran by nearly two).
     await sleepWithAbort(Math.min(nextProbeDelayMs(), remainingMs), runInput.signal);
-    if (isClosed() || runInput.signal.aborted) return;
+    // M1: distinguish close() from interrupt(). A user interrupt (signal.aborted
+    // only) exits silently — query-turn-driver.ts synthesizes an `interrupted`
+    // terminal, so the seal is `cancelled`. A concurrent close() ALSO sets
+    // signal.aborted (both share the per-turn controller), but close() is the
+    // end of the session, not a recoverable interrupt — the exhaustion sentinel
+    // must reach the session consumer so `lastStopReason` is recorded and the
+    // session seals `failed` (not `succeeded`). Check isClosed() FIRST so a
+    // simultaneous close+abort takes the close path, which is the stricter one.
+    if (isClosed()) { yield exhausted; return; }
+    if (runInput.signal.aborted) return;
 
     runInput.headers = ctx.rotateHeaders(runInput);
     // Invariant: reset the surface BEFORE replaying. The failed attempt's

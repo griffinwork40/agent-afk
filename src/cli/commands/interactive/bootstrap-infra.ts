@@ -13,6 +13,7 @@ import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import type { CliOptions } from './shared.js';
+import { recordBootWarning } from './boot-warning-recorder.js';
 
 /** Wired infra bundle returned by {@link createBootstrapInfra}. */
 export interface BootstrapInfra {
@@ -155,7 +156,16 @@ export function createBootstrapInfra(a: {
     backgroundRegistry,
     // `warn` routes into bootWarnings rather than stderr: the built-in-shadow
     // warning is a safety signal and the startup screen clear eats stderr.
-    agentRegistryWarn: (message: string) => a.bootWarnings.push(message),
+    // Also emits a durable `boot_warning` trace event via the shared
+    // recorder (#754) — at PUSH time, so the record survives even if a
+    // later bootstrap phase throws before either drain site runs.
+    agentRegistryWarn: (message: string) =>
+      recordBootWarning({
+        bootWarnings: a.bootWarnings,
+        traceWriter: trace?.writer,
+        producer: 'agent-registry',
+        message,
+      }),
   });
 
   return {
