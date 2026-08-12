@@ -35,7 +35,10 @@ const MAX_READ_BYTES = 2_097_152; // 2 MB
 const DEFAULT_LIMIT = 50;
 
 /** Hard ceiling on events returned. */
-const MAX_LIMIT = 200;
+export const MAX_LIMIT = 200;
+
+/** Hard ceiling on total matches returned by cross-session search. */
+export const MAX_SEARCH_MATCHES = 200;
 
 /** Default number of sessions to scan for cross-session search. */
 const DEFAULT_SESSION_COUNT = 20;
@@ -74,13 +77,19 @@ function parseEvents(content: string): TraceEvent[] {
   return events;
 }
 
+/** Result from readTraceSafe: content and whether the file was byte-capped. */
+interface ReadTraceSafeResult {
+  content: string;
+  truncated: boolean;
+}
+
 /** Read a trace.jsonl file with a byte-size cap (async). */
-async function readTraceSafe(tracePath: string): Promise<string> {
-  if (!existsSync(tracePath)) return '';
+async function readTraceSafe(tracePath: string): Promise<ReadTraceSafeResult> {
+  if (!existsSync(tracePath)) return { content: '', truncated: false };
   try {
     const buf = await readFile(tracePath);
     if (buf.length <= MAX_READ_BYTES) {
-      return buf.toString('utf-8');
+      return { content: buf.toString('utf-8'), truncated: false };
     }
     // Slice from the tail then align to the next newline boundary to avoid
     // splitting a multi-byte UTF-8 sequence or a partial JSON object.
@@ -89,9 +98,9 @@ async function readTraceSafe(tracePath: string): Promise<string> {
     if (firstNewline !== -1) {
       capped = capped.subarray(firstNewline + 1);
     }
-    return capped.toString('utf-8');
+    return { content: capped.toString('utf-8'), truncated: true };
   } catch {
-    return '';
+    return { content: '', truncated: false };
   }
 }
 
@@ -210,7 +219,7 @@ export async function readSessionTrace(
     }
   }
 
-  const content = await readTraceSafe(tracePath);
+  const { content } = await readTraceSafe(tracePath);
   const allEvents = parseEvents(content);
 
   const filter: EventFilter = {
@@ -262,8 +271,26 @@ export interface SearchMatch {
 
 export interface SearchWitnessResult {
   query: string;
-  sessionsScanned: number;
+  /**
+   * Sessions in the requested window (top-N slice) before the `since` date
+   * filter was applied. Use this to tell "few sessions exist" from "the date
+   * filter excluded most of them".
+   */
+  sessionsAvailable: number;
+  /**
+   * Sessions actually read (after both the top-N slice and any `since` filter).
+   * Renamed from the previous `sessionsScanned` which only reported this
+   * post-filter count, making it indistinguishable from "only N sessions exist".
+   */
+  sessionsSearched: number;
   matches: SearchMatch[];
+  /**
+   * Session IDs whose trace files exceeded the 2 MB per-session read cap.
+   * Events before the cap boundary are not visible to this search; matches
+   * may be incomplete for these sessions. Only present when at least one
+   * session was truncated.
+   */
+  truncatedSessions?: string[];
 }
 
 export async function searchAcrossSessions(
@@ -274,24 +301,30 @@ export async function searchAcrossSessions(
 
   // Slice first (N most recent sessions per schema semantics), then filter by
   // date — so `sessions` means "most recent N", not "N within the date window".
-  let traces = allTraces.slice(0, sessionCount);
+  const sliced = allTraces.slice(0, sessionCount);
+  // Capture the pre-filter count so callers can distinguish "few sessions
+  // exist" from "the since filter excluded most of them".
+  const sessionsAvailable = sliced.length;
 
+  let traces = sliced;
   if (params.since) {
     const sinceMs = Date.parse(params.since);
     if (Number.isNaN(sinceMs)) {
       throw new Error(`Invalid "since" date: ${params.since}`);
     }
-    traces = traces.filter((t) => t.mtimeMs >= sinceMs);
+    traces = sliced.filter((t) => t.mtimeMs >= sinceMs);
   }
 
   const kindFilter = params.kinds ? new Set(params.kinds) : undefined;
   const queryLower = params.query.toLowerCase();
   const matches: SearchMatch[] = [];
-  const matchLimit = MAX_LIMIT; // cap total matches
+  const matchLimit = MAX_SEARCH_MATCHES; // cap total matches
+  const truncatedSessions: string[] = [];
 
   for (const entry of traces) {
     if (matches.length >= matchLimit) break;
-    const content = await readTraceSafe(entry.tracePath);
+    const { content, truncated } = await readTraceSafe(entry.tracePath);
+    if (truncated) truncatedSessions.push(entry.sessionId);
     for (const line of content.split('\n')) {
       if (matches.length >= matchLimit) break;
       if (line.trim() === '') continue;
@@ -314,7 +347,9 @@ export async function searchAcrossSessions(
 
   return {
     query: params.query,
-    sessionsScanned: traces.length,
+    sessionsAvailable,
+    sessionsSearched: traces.length,
     matches,
+    ...(truncatedSessions.length > 0 ? { truncatedSessions } : {}),
   };
 }
