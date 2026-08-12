@@ -16,10 +16,12 @@
  * @module agent/tools/handlers/witness.query
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { getWitnessRoot } from '../../../paths.js';
-import { listTraces, resolveLatestSession } from '../../../cli/commands/trace.js';
+import { getTraceDir } from '../../../paths.js';
+import { readLedger } from '../../session-ledger.js';
+import { listTraces, resolveLatestSession } from '../../trace/listing.js';
 import type { TraceEvent } from '../../trace/index.js';
 
 // ---------------------------------------------------------------------------
@@ -72,14 +74,21 @@ function parseEvents(content: string): TraceEvent[] {
   return events;
 }
 
-/** Read a trace.jsonl file with a byte-size cap. */
-function readTraceSafe(tracePath: string): string {
+/** Read a trace.jsonl file with a byte-size cap (async). */
+async function readTraceSafe(tracePath: string): Promise<string> {
   if (!existsSync(tracePath)) return '';
   try {
-    const buf = readFileSync(tracePath);
-    const capped = buf.length > MAX_READ_BYTES
-      ? buf.subarray(buf.length - MAX_READ_BYTES)
-      : buf;
+    const buf = await readFile(tracePath);
+    if (buf.length <= MAX_READ_BYTES) {
+      return buf.toString('utf-8');
+    }
+    // Slice from the tail then align to the next newline boundary to avoid
+    // splitting a multi-byte UTF-8 sequence or a partial JSON object.
+    let capped = buf.subarray(buf.length - MAX_READ_BYTES);
+    const firstNewline = capped.indexOf(0x0a);
+    if (firstNewline !== -1) {
+      capped = capped.subarray(firstNewline + 1);
+    }
     return capped.toString('utf-8');
   } catch {
     return '';
@@ -110,15 +119,22 @@ interface EventFilter {
 
 function matchesFilter(event: TraceEvent, filter: EventFilter): boolean {
   if (filter.kinds && !filter.kinds.has(event.kind)) return false;
-  if (filter.toolName && event.kind === 'tool_call') {
+
+  // toolName filter: reject ALL non-tool_call events when a name is specified.
+  if (filter.toolName) {
+    if (event.kind !== 'tool_call') return false;
     const payload = event.payload as { name?: string };
     if (payload.name !== filter.toolName) return false;
   }
+
   if (filter.errorsOnly) {
     if (event.kind === 'tool_call') {
       const payload = event.payload as { phase?: string; isError?: boolean };
       if (payload.phase !== 'completed' || !payload.isError) return false;
     } else if (event.kind === 'subagent_lifecycle') {
+      const payload = event.payload as { transition?: string };
+      if (payload.transition !== 'failed') return false;
+    } else if (event.kind === 'background_agent') {
       const payload = event.payload as { transition?: string };
       if (payload.transition !== 'failed') return false;
     } else {
@@ -146,6 +162,8 @@ export interface ReadWitnessResult {
   events: TraceEvent[];
   totalInTrace: number;
   filtered: number;
+  /** Present when tracing was disabled for the session. */
+  note?: string;
 }
 
 export async function readSessionTrace(
@@ -159,8 +177,40 @@ export async function readSessionTrace(
     return { sessionId: '(none)', events: [], totalInTrace: 0, filtered: 0 };
   }
 
-  const tracePath = join(getWitnessRoot(), sessionId, 'trace.jsonl');
-  const content = readTraceSafe(tracePath);
+  // getTraceDir calls validateSessionId which rejects path-traversal attempts.
+  let tracePath = join(getTraceDir(sessionId), 'trace.jsonl');
+
+  // If the direct path doesn't exist, attempt ledger-based label resolution.
+  // Fresh sessions store the witness dir under a random UUID label; the session
+  // ledger's `meta` record maps session id → trace label.
+  if (!existsSync(tracePath)) {
+    try {
+      for await (const rec of readLedger(sessionId)) {
+        if (rec.kind !== 'meta') continue;
+        if (rec.traceLabel === null) {
+          // Session ran with tracing disabled.
+          return {
+            sessionId,
+            events: [],
+            totalInTrace: 0,
+            filtered: 0,
+            note: `Session "${sessionId}" ran with tracing disabled (traceLabel: null).`,
+          };
+        }
+        if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
+          const relabeled = join(getTraceDir(rec.traceLabel), 'trace.jsonl');
+          if (existsSync(relabeled)) {
+            tracePath = relabeled;
+          }
+        }
+        break; // meta is always the first record
+      }
+    } catch {
+      // Ledger unreadable — fall through to empty result gracefully.
+    }
+  }
+
+  const content = await readTraceSafe(tracePath);
   const allEvents = parseEvents(content);
 
   const filter: EventFilter = {
@@ -222,16 +272,17 @@ export async function searchAcrossSessions(
   const sessionCount = clampSessions(params.sessions);
   const allTraces = await listTraces();
 
-  // Apply date filter if provided.
-  let traces = allTraces;
+  // Slice first (N most recent sessions per schema semantics), then filter by
+  // date — so `sessions` means "most recent N", not "N within the date window".
+  let traces = allTraces.slice(0, sessionCount);
+
   if (params.since) {
     const sinceMs = Date.parse(params.since);
-    if (!Number.isNaN(sinceMs)) {
-      traces = traces.filter((t) => t.mtimeMs >= sinceMs);
+    if (Number.isNaN(sinceMs)) {
+      throw new Error(`Invalid "since" date: ${params.since}`);
     }
+    traces = traces.filter((t) => t.mtimeMs >= sinceMs);
   }
-
-  traces = traces.slice(0, sessionCount);
 
   const kindFilter = params.kinds ? new Set(params.kinds) : undefined;
   const queryLower = params.query.toLowerCase();
@@ -240,7 +291,7 @@ export async function searchAcrossSessions(
 
   for (const entry of traces) {
     if (matches.length >= matchLimit) break;
-    const content = readTraceSafe(entry.tracePath);
+    const content = await readTraceSafe(entry.tracePath);
     for (const line of content.split('\n')) {
       if (matches.length >= matchLimit) break;
       if (line.trim() === '') continue;

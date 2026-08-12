@@ -122,8 +122,6 @@ export {
   configGetHandler,
   configSetHandler,
   askQuestionHandler,
-  readWitnessHandler,
-  searchWitnessHandler,
   browserOpenHandler,
   browserObserveHandler,
   browserActHandler,
