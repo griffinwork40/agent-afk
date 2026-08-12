@@ -797,6 +797,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'telegram',
   },
   {
+    name: 'TMUX',
+    description:
+      'OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. ' +
+      'Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.',
+    type: 'string',
+    required: false,
+    example: '/tmp/tmux-501/default,12345,0',
+    category: 'process',
+  },
+  {
     name: 'AFK_TELEGRAM_TRACE',
     description: 'Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only.',
     type: 'boolean',
@@ -1180,6 +1190,17 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     type: 'string',
     required: false,
     example: '15;0',
+    category: 'process',
+  },
+  {
+    name: 'COLORTERM',
+    description:
+      'OS-level terminal color-depth hint. Accepted values: truecolor or 24bit (24-bit color), 256color (256-color). ' +
+      'Set by the outer terminal emulator, not by AFK. Read by chalk\'s supports-color to set its initial color level; ' +
+      'also read by configureColor() to recommend FORCE_COLOR=3 for tmux truecolor users on Node ≤ 24.',
+    type: 'string',
+    required: false,
+    example: 'truecolor',
     category: 'process',
   },
 
@@ -1638,6 +1659,7 @@ export const env = {
   get AFK_TELEGRAM_NOTIFY_MODE(): string | undefined { return process.env['AFK_TELEGRAM_NOTIFY_MODE']; },
   get TELEGRAM_DATA_DIR(): string | undefined { return process.env['TELEGRAM_DATA_DIR']; },
   get TELEGRAM_VERBOSE(): string | undefined { return process.env['TELEGRAM_VERBOSE']; },
+  get TMUX(): string | undefined { return process.env['TMUX']; },
   get AFK_TELEGRAM_TRACE(): string | undefined { return process.env['AFK_TELEGRAM_TRACE']; },
   get AFK_TELEGRAM_CWD(): string | undefined { return process.env['AFK_TELEGRAM_CWD']; },
 
@@ -1697,6 +1719,7 @@ export const env = {
   get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
   get AFK_TEXT_MEASURE(): string | undefined { return process.env['AFK_TEXT_MEASURE']; },
   get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
+  get COLORTERM(): string | undefined { return process.env['COLORTERM']; },
 
   // Debug
   get AFK_DEBUG(): string | undefined { return process.env['AFK_DEBUG']; },

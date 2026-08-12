@@ -1096,6 +1096,14 @@
       "category": "process"
     },
     {
+      "name": "COLORTERM",
+      "description": "OS-level terminal color-depth hint. Accepted values: truecolor or 24bit (24-bit color), 256color (256-color). Set by the outer terminal emulator, not by AFK. Read by chalk's supports-color to set its initial color level; also read by configureColor() to recommend FORCE_COLOR=3 for tmux truecolor users on Node ≤ 24.",
+      "type": "string",
+      "required": false,
+      "example": "truecolor",
+      "category": "process"
+    },
+    {
       "name": "DEBUG",
       "description": "Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.",
       "type": "string",
@@ -1217,6 +1225,14 @@
       "required": false,
       "example": "true",
       "category": "telegram"
+    },
+    {
+      "name": "TMUX",
+      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
+      "type": "string",
+      "required": false,
+      "example": "/tmp/tmux-501/default,12345,0",
+      "category": "process"
     },
     {
       "name": "VISUAL",
