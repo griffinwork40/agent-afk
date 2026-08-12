@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.113.0] - 2026-08-12
+
+### Added
+- add read_witness and search_witness built-in tools (#1034) (b36cc54a)
+
 ## [5.112.6] - 2026-08-12
 
 ### Fixed
