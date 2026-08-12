@@ -11,6 +11,94 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.112.4] - 2026-08-12
+
+### Fixed
+- correct concurrency floor figures and add light-regime budget (#1027) (0b99429c)
+
+## [5.112.3] - 2026-08-12
+
+### Changed
+- retire committedBandBottomRow erase-bound read in frame-preserve-archive (advances #540) (#1031) (dbfc1b5c)
+
+## [5.112.2] - 2026-08-12
+
+### Changed
+- split commitAbove into 7 sibling modules with invariant tests (#827) (#1032) (c3a4bade)
+
+## [5.112.1] - 2026-08-12
+
+### Fixed
+- use routeFromCtx in /afk and /help handlers (#1022) (#1028) (2b16957b)
+
+### Changed
+- fix stale comments and test cleanup at skill-dispatch sites (#744) (#1030) (7f16f9ff)
+
+## [5.112.0] - 2026-08-12
+
+### Added
+- bound the witness tree by age and aggregate size (#849) (#986) (4502e200)
+
+## [5.111.3] - 2026-08-12
+
+### Fixed
+- cascade-abort in-flight children before the owner seals (#733) (#987) (68b22395)
+
+## [5.111.2] - 2026-08-12
+
+### Fixed
+- give the resumed session a live writer instead of a sealed one (#731) (#985) (45a56a33)
+- path-guard NAME=value replacers so non-secret paths survive capture (#949) (#968) (eb7b8755)
+- suppress sealed-writer error on SessionEnd hook_decision emit (#1025) (1b4d7f9d)
+- gate plugin-shadowing notices behind AFK_DEBUG=1 (#1024) (39f8f35b)
+
+### Changed
+- document subagent tool-round budget in AFK.md and CLAUDE.md (#918) (#1007) (7027e56b)
+
+## [5.111.1] - 2026-08-12
+
+### Fixed
+- improve tmux compatibility — raw OSC 52 clipboard, truecolor detection, docs (#1017) (c2d6cdd2)
+
+## [5.111.0] - 2026-08-12
+
+### Added
+- native topics routing (step 6) + cross-surface CLI/daemon registration (step 7) (#1020) (5fdc806f)
+
+## [5.110.5] - 2026-08-12
+
+### Fixed
+- fail-fast context-overflow guard for max_tokens exceeding window (#1014) (72d56baa)
+
+## [5.110.4] - 2026-08-12
+
+### Fixed
+- clarify research-agent write constraint in tool-def listing (#944) (#1009) (efd3dc4f)
+
+## [5.110.3] - 2026-08-12
+
+### Fixed
+- clarify skill tool description for load vs fork modes (#1018) (44fbb5c2)
+
+## [5.110.2] - 2026-08-12
+
+### Fixed
+- surface research-agent read-only constraint at dispatch time (#1012) (0583e81d)
+
+### Changed
+- clarify advisory-only posture of 200-line function ceiling (#1016) (4e1254b0)
+
+## [5.110.1] - 2026-08-12
+
+### Fixed
+- block skill self-recursion through agent children (#1015) (e2b34c42)
+- address remaining #762 review items (M1, M4, M6, L1, listener leak) (#1013) (415d34fa)
+
+## [5.110.0] - 2026-08-11
+
+### Added
+- record bootstrap warnings as a durable boot_warning phase (#754) (#984) (08d254c)
+
 ## [5.109.0] - 2026-08-11
 
 ### Added

@@ -1,5 +1,6 @@
 import { Context } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
+import { routeFromCtx } from '../route.js';
 import { formatHelp } from '../formatter.js';
 
 /**
@@ -9,9 +10,9 @@ export async function handleHelp(
   ctx: Context,
   sessionManager: SessionManager
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
+  const route = routeFromCtx(ctx);
   let sdkCommands: string[] | undefined;
-  const session = chatId ? sessionManager.getSessionIfExists(chatId) : undefined;
+  const session = route ? sessionManager.getSessionIfExists(route) : undefined;
   if (session) {
     try {
       await Promise.race([

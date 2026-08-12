@@ -234,8 +234,8 @@ describe('SessionWatchManager', () => {
  */
 function makeElicitStubs(chatId: number) {
   // Track the pending resolver installed by the elicitation handler.
-  const pendingElicitations = new Map<number, (text: string) => void>();
-  const ledgerOriginatedPendingChats = new Set<number>();
+  const pendingElicitations = new Map<string, (text: string) => void>();
+  const ledgerOriginatedPendingChats = new Set<string>();
 
   const sentMessages: string[] = [];
   const bot = {
@@ -295,7 +295,7 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
 
     // Simulate the operator typing an answer into Telegram (the message handler
     // fires the resolver, which is what handle() would do when it sees a text).
-    const resolver = pendingElicitations.get(chatId);
+    const resolver = pendingElicitations.get(String(chatId));
     expect(resolver).toBeDefined();
     resolver!('Alice');
 
@@ -355,7 +355,7 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
     await sleep(200);
 
     // Answer the pending resolver.
-    const resolver = pendingElicitations.get(chatId);
+    const resolver = pendingElicitations.get(String(chatId));
     expect(resolver).toBeDefined();
     resolver!('any answer');
 
@@ -597,7 +597,7 @@ describe('SessionWatchManager — keep-alive heartbeat for a pending elicitation
     expect(nudges()).toBeGreaterThanOrEqual(1);
     expect(nudges()).toBeLessThanOrEqual(4);
     // ... and the wait is STILL open — answer whenever (resolver live, NOT cut off).
-    const resolver = pendingElicitations.get(chatId);
+    const resolver = pendingElicitations.get(String(chatId));
     expect(resolver).toBeDefined();
 
     // Answer → the wait resolves, the heartbeat is cleared, nudges stop.

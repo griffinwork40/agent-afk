@@ -146,9 +146,9 @@ describe('sender attribution — text (handle)', () => {
       chatId: -100, text: 'hi', type: 'group', from: { id: 7, first_name: 'Alice' },
     }));
     const queues = (handler as unknown as {
-      messageQueues: Map<number, Array<{ type: string; text?: string }>>;
+      messageQueues: Map<string, Array<{ type: string; text?: string }>>;
     }).messageQueues;
-    expect(queues.get(-100)?.[0]?.text).toBe('[from Alice (id 7)]: hi');
+    expect(queues.get('-100')?.[0]?.text).toBe('[from Alice (id 7)]: hi');
     expect(mockStreamResponse).not.toHaveBeenCalled();
   });
 
@@ -156,8 +156,8 @@ describe('sender attribution — text (handle)', () => {
     const handler = makeHandler('streaming', 'streaming');
     const resolver = vi.fn();
     (handler as unknown as {
-      pendingElicitations: Map<number, (value: string) => void>;
-    }).pendingElicitations.set(-100, resolver);
+      pendingElicitations: Map<string, (value: string) => void>;
+    }).pendingElicitations.set('-100', resolver);
 
     await handler.handle(makeTextCtx({
       chatId: -100, text: 'blue', type: 'group', from: { id: 7, first_name: 'Alice' },
@@ -171,8 +171,8 @@ describe('sender attribution — text (handle)', () => {
     const handler = makeHandler('streaming', 'streaming');
     const resolver = vi.fn();
     (handler as unknown as {
-      pendingElicitations: Map<number, (value: string) => void>;
-    }).pendingElicitations.set(500, resolver);
+      pendingElicitations: Map<string, (value: string) => void>;
+    }).pendingElicitations.set('500', resolver);
 
     await handler.handle(makeTextCtx({
       chatId: 500, text: 'blue', type: 'private', from: { id: 7, first_name: 'Alice' },
@@ -193,8 +193,8 @@ describe('sender attribution — text (handle)', () => {
     const handler = makeHandler('streaming', 'streaming');
     const resolver = vi.fn();
     (handler as unknown as {
-      pendingElicitations: Map<number, (value: string) => void>;
-    }).pendingElicitations.set(500, resolver);
+      pendingElicitations: Map<string, (value: string) => void>;
+    }).pendingElicitations.set('500', resolver);
 
     await handler.handle(makeTextCtx({
       chatId: 500, text: '5', type: 'private', from: { id: 7, first_name: 'Alice' },
@@ -217,8 +217,8 @@ describe('sender attribution — text (handle)', () => {
     const handler = makeHandler('streaming', 'streaming');
     const resolver = vi.fn();
     (handler as unknown as {
-      pendingElicitations: Map<number, (value: string) => void>;
-    }).pendingElicitations.set(-100, resolver);
+      pendingElicitations: Map<string, (value: string) => void>;
+    }).pendingElicitations.set('-100', resolver);
 
     await handler.handle(makeTextCtx({
       chatId: -100, text: '5', type: 'group', from: { id: 7, first_name: 'Alice' },

@@ -70,8 +70,9 @@ export function flushResizeGhostErase(self: CommittedBandHost): void {
  * "void" class by construction (a stranded row above a drifted tracked top is
  * always erased) instead of relying on incremental band-adjacency bookkeeping.
  * The committedBand* fields are still MAINTAINED here for the commit / eviction
- * paths that read them; removing that coupling entirely, plus the Stage 3
- * single end-of-turn flush, remain follow-ups (see #540 / the PR body).
+ * paths that read them (see #540). Stage 3 (logical-line flush) and the
+ * frame-preserve-archive erase bound have been retired; the remaining
+ * coupling lives in the commit path's floor derivation and contiguity checks.
  *
  * @param desiredTopRow      the frame's true target top (pre-padding) this repaint
  * @param preRenderFrameTop  CupFrameRenderer.topRow captured BEFORE render() —

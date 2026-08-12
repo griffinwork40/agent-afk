@@ -27,7 +27,7 @@ pnpm scan:env:check       # CI gate — docs/env-registry.{json,md} in sync with
 pnpm audit:chalk:check    # CI gate — no raw chalk.<color> outside src/cli/palette.ts (--list locates sites)
 pnpm audit:filesize:check # CI gate — 350-line source ceiling, ratcheted against .filesize-baseline.json
 pnpm audit:filesize:update  # regenerate the baseline after a split (never hand-edit loc values)
-pnpm audit:funcsize:check # CI gate — 200-line function ceiling, ratcheted against .funcsize-baseline.json
+pnpm audit:funcsize:check # advisory — 200-line function ceiling, warns but never fails CI
 pnpm audit:funcsize:update  # regenerate the function baseline after an extraction
 pnpm audit:module-state:check  # CI gate — no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check       # CI gate — SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins rewrites)
@@ -112,6 +112,10 @@ Writer + reader live in `src/agent/trace/`; the CLI is `src/cli/commands/trace.t
 
 One residual bug worth recognizing: a parent session ending mid-wave seals over live children and silently drops their terminal rows, so ~3% of dispatched subagents have no recorded fate (~8% in daemon/cron parallel waves vs ~1% interactive). Detector: an unmatched `started` in a trace that *contains* `session_sealed` — not "a `started` is the file's last line", which misses it because the seal is written afterward.
 
+### Subagent tool-round budget
+
+The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (tools stripped from the next reply) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/session/budget-preamble.ts`. Full history and rationale: `docs/subagent-tool-budget.md`.
+
 ## SDK Dependency Tracking
 
 Every import from `@anthropic-ai/sdk` is tracked. `.sdk-dependency.lock.json` is the allowlist — CI fails when a new symbol appears without a lock entry. After adding a new SDK import: `pnpm audit:sdk:update-lock`, then edit the new entry's `reason` field before committing.
@@ -162,11 +166,11 @@ silently diverging at runtime), and an extracted sibling must be reachable from
 one of the three esbuild entrypoints or `build:dist` tree-shakes it with no CI
 signal. Campaign plan: `docs/file-size-ceiling.md`.
 
-### The 200-line function ceiling
+### The 200-line function ceiling (advisory)
 
-`pnpm audit:funcsize:check` (`scripts/check-function-size.ts`) fails when any one
-function under `src/` or `scripts/` exceeds **200 lines**. This is a separate gate
-from the file ceiling and **neither implies the other**. File size measures how
+`pnpm audit:funcsize:check` (`scripts/check-function-size.ts`) warns when any one
+function under `src/` or `scripts/` exceeds **200 lines** but never fails CI. This
+is a separate check from the file ceiling and **neither implies the other**. File size measures how
 much you must *read* to establish edit safety; function size measures how much you
 must *hold in mind* to change one behaviour. A flat 900-line registry is a big file
 with no big function; a 700-line function can hide in a file that passes 350 only

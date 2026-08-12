@@ -199,20 +199,15 @@ beforeEach(() => {
   delete process.env.AFK_SHELL_PASSTHROUGH;
 });
 
-describe('runReplLoop — plugin shadowing notices are not debug-gated', () => {
-  it('surfaces collision notices on a default (non-debug) run', async () => {
-    // Regression: the notice assignment used to sit behind `isDebugEnabled()`,
-    // which this file mocks to `false` — so on every default run a shadowed
-    // plugin command was suppressed and discoverable only via `/skills`. The
-    // gate belonged to the adjacent debug BANNER, not to these notices; the two
-    // were conflated. With `isDebugEnabled: () => false` still in force, the
-    // notice must reach the renderer anyway.
+describe('runReplLoop — plugin shadowing notices are debug-gated', () => {
+  it('suppresses collision notices on a default (non-debug) run', async () => {
+    // With 100+ plugin skills all shadowed by vendored equivalents, the
+    // per-skill listing is pure noise on a default run. Notices are gated
+    // behind isDebugEnabled() (AFK_DEBUG=1) and suppressed here because the
+    // module-scope mock returns false.
     vi.mocked(pluginSkillsMod.getPluginShadowingNoticeLines).mockReturnValue([
       '  /mint: vendored or user skill wins; plugin form /example-plugin:mint stays reachable.',
     ]);
-    // Two reads: iteration 1 lets the waitForInitialization().then() chain
-    // settle (it awaits autoRegisterPluginPassthroughs), iteration 2 flushes
-    // the pending notices at the top of the loop before exiting.
     surfaceState.readLineQueue = [
       { text: 'hello', attachments: [] },
       { text: '/exit', attachments: [] },
@@ -222,7 +217,7 @@ describe('runReplLoop — plugin shadowing notices are not debug-gated', () => {
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
     const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
-    expect(lines.some((l) => l.includes('/example-plugin:mint'))).toBe(true);
+    expect(lines.some((l) => l.includes('/example-plugin:mint'))).toBe(false);
   });
 
   it('stays silent when nothing collided', async () => {

@@ -63,6 +63,20 @@ export function toWireTool(tool: AnthropicToolDef): WireToolDef {
   };
 }
 
+/**
+ * Sentinel thrown by `createWithRetry` (only) when the connection-phase 529/503
+ * budget is exhausted. Distinct from the generic Error so `openRound`'s catch
+ * block can route exhausted transient errors to the `overload-exhausted` outcome
+ * instead of the fatal error path (M6 — the same gap that #762 fixed for the
+ * mid-stream phase).
+ */
+class ConnectionOverloadExhaustedError extends Error {
+  constructor() {
+    super('Connection-phase overload budget exhausted');
+    this.name = 'ConnectionOverloadExhaustedError';
+  }
+}
+
 // `requestSignal` is passed to `messages.create` — it is the caller's turn
 // signal chained with the per-request TTFB stall timer (see armFirstByteTimeout),
 // so aborting it covers BOTH a user interrupt and a first-byte timeout. The
@@ -90,8 +104,11 @@ async function createWithRetry(
     } catch (err) {
       if (requestSignal.aborted) throw err;
       const e = err instanceof Error ? err : new Error(String(err));
-      if (isTransientServerError(e) && attempt < OVERLOAD_MAX_RETRIES) {
-        continue;
+      if (isTransientServerError(e)) {
+        if (attempt < OVERLOAD_MAX_RETRIES) continue;
+        // Budget exhausted: signal the caller with a typed sentinel so it can
+        // route to the CLEAN overload terminal instead of the fatal error path.
+        throw new ConnectionOverloadExhaustedError();
       }
       throw e;
     }
@@ -115,11 +132,16 @@ export interface OpenRoundTransport {
  * - `opened` — a live stream; the caller owns watchdog disposal from here.
  * - `retry-ttfb` — first-byte stall before any content; watchdogs already
  *   disposed, caller should re-drive the round (budget permitting).
+ * - `overload-exhausted` — connection-phase 529/503 budget exhausted; the
+ *   caller should route to the CLEAN overload terminal rather than the fatal
+ *   error path (M6: same structural gap that existed for mid-stream exhaustion
+ *   before #762; both should reach the pause machinery).
  * - `terminated` — a terminal event was already yielded; the turn is over.
  */
 export type OpenRoundResult =
   | OpenRoundTransport
   | { kind: 'retry-ttfb'; requestStartedAt: number }
+  | { kind: 'overload-exhausted' }
   | { kind: 'terminated' };
 
 /** Everything the connection phase needs from the enclosing turn. */
@@ -265,6 +287,14 @@ export async function* openRound({
         sessionId: input.ctx.sessionId,
       };
       return { kind: 'terminated' };
+    }
+    // M6: connection-phase 529/503 budget exhausted. Route to the CLEAN overload
+    // terminal (same path as mid-stream exhaustion) so the pause machinery in
+    // `overload-pause-tier.ts` can park-and-probe rather than hard-aborting the
+    // session. The sentinel type lets us distinguish this from every other error
+    // without modifying `isTransientServerError` or the outer type union.
+    if (err instanceof ConnectionOverloadExhaustedError) {
+      return { kind: 'overload-exhausted' };
     }
     const e = annotateFastError(err, input.fastMode === true);
     if (e.message.includes('thinking')) {
