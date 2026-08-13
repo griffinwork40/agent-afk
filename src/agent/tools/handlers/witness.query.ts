@@ -248,11 +248,16 @@ export interface SearchWitnessResult {
    */
   sessionsAvailable: number;
   /**
-   * Sessions actually read (after both the top-N slice and any `since` filter).
+   * Sessions actually read (after both the top-N slice and any `since` filter,
+   * and stopping early once MAX_SEARCH_MATCHES is reached).
    * Renamed from the previous `sessionsScanned` which only reported this
    * post-filter count, making it indistinguishable from "only N sessions exist".
    */
   sessionsSearched: number;
+  /**
+   * @deprecated Use sessionsSearched. Alias kept for backward compatibility.
+   */
+  sessionsScanned: number;
   matches: SearchMatch[];
   /**
    * Session IDs whose trace files exceeded the 2 MB per-session read cap.
@@ -321,6 +326,7 @@ export async function searchAcrossSessions(
     query: params.query,
     sessionsAvailable,
     sessionsSearched: sessionsActuallySearched,
+    sessionsScanned: sessionsActuallySearched,
     matches,
     ...(truncatedSessions.length > 0 ? { truncatedSessions } : {}),
   };
