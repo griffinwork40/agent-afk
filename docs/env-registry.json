@@ -617,6 +617,24 @@
       "category": "model"
     },
     {
+      "name": "AFK_RATE_LIMIT_ADMISSION_DISABLED",
+      "description": "Bypass the process-wide rate-limit admission gate (issue #941). Set to 1 to skip pre-request capacity checks. Default 0 (gate active). OAuth subscription accounts already pass through automatically when no per-minute headers are returned.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_RATE_LIMIT_STAGGER_MAX_MS",
+      "description": "Jitter ceiling (ms) for the rate-limit admission bucket: each waiter at a window boundary wakes at reset + random(0..ceiling) to avoid re-storming the API. Default 500. Set to 0 in tests for deterministic timing.",
+      "type": "number",
+      "required": false,
+      "default": "500",
+      "example": "0",
+      "category": "model"
+    },
+    {
       "name": "AFK_READ_DENYLIST",
       "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. One built-in exception exists: ~/.afk/config/mcp.json (the MCP registry) IS readable — paths listed here outrank that carve-out, so set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders.",
       "type": "string",

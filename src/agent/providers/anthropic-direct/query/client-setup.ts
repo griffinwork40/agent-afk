@@ -17,6 +17,8 @@
  *   - `throttleQueue` is gated on `!localMode && config.traceWriter`.
  *   - `quotaObserver` is gated on `!localMode` ALONE — the quota headers feed
  *     the CLI status line, which must stay live when tracing is disabled.
+ *   - `rateLimitObserver` feeds the admission bucket and is gated on
+ *     `!localMode` ALONE — local shims have no meaningful per-minute limits.
  *
  * @module agent/providers/anthropic-direct/query/client-setup
  */
@@ -31,6 +33,8 @@ import { ThrottleQueue } from '../throttle-queue.js';
 import { parseQuotaHeaders, recordQuotaSnapshot } from '../../../quota-cache.js';
 import { refreshClaudeCodeOauthToken } from '../../../auth/keychain.js';
 import type { AnthropicClientFactory } from '../provider-options.js';
+import { globalRateLimitBucket } from '../../shared/rate-limit-bucket.js';
+import { parseAnthropicRateLimitHeaders } from '../../shared/rate-limit-headers.js';
 
 export interface ClientSetupArgs {
   config: AgentConfig;
@@ -83,25 +87,44 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
         const snapshot = parseQuotaHeaders(headers);
         if (snapshot !== undefined) recordQuotaSnapshot(snapshot);
       };
+
+  // Rate-limit admission observer: captures per-minute RPM/ITPM/OTPM headers
+  // from every Anthropic response and feeds the process-wide admission bucket.
+  // Gated on !localMode — local shims have no meaningful per-minute limits
+  // and should never be artificially throttled by the bucket.
+  const rateLimitObserver = localMode
+    ? undefined
+    : (headers: Headers): void => {
+        const snapshot = parseAnthropicRateLimitHeaders(headers);
+        if (snapshot !== undefined) globalRateLimitBucket.update(snapshot);
+      };
+
+  // Admission gate: skip in localMode — same rationale as rateLimitObserver.
+  const admissionGate = localMode ? undefined : globalRateLimitBucket;
+
   const clientOpts = buildClientOptions(
     args.token,
     authMode,
     config.baseUrl,
-    // Observability: route SDK HTTP through a wrapper that (1) records
-    // 429/503/529 throttling into the witness trace so the SDK's
-    // otherwise-silent retry-after backoff is legible in `afk trace show`,
-    // (2) pushes a live signal onto `throttleQueue` so the progress banner can
-    // show the backoff as it happens, and (3) captures subscription-quota
-    // headers into the quota cache for the status line. Skipped entirely in
-    // local-shim mode (not Anthropic's billing surface). Note the wrapper is
-    // installed whenever ANY of the three observers is live — a trace writer
-    // is no longer required, since (3) must work with tracing disabled.
+    // Observability: route SDK HTTP through a wrapper that (1) waits for an
+    // admission permit before each request (pre-request admission gate for
+    // RPM/ITPM), (2) records 429/503/529 throttling into the witness trace so
+    // the SDK's otherwise-silent retry-after backoff is legible in `afk trace
+    // show`, (3) pushes a live signal onto `throttleQueue` so the progress
+    // banner can show the backoff as it happens, (4) captures subscription-quota
+    // headers into the quota cache for the status line, and (5) feeds per-minute
+    // RPM/ITPM headers into the admission bucket. Skipped entirely in local-shim
+    // mode (not Anthropic's billing surface). Note the wrapper is installed
+    // whenever ANY of the observers is live — a trace writer is no longer
+    // required, since (4) must work with tracing disabled.
     !localMode
       ? makeTracingFetch(
           config.traceWriter,
           undefined,
           throttleQueue ? (info) => throttleQueue.push(info) : undefined,
           quotaObserver,
+          rateLimitObserver,
+          admissionGate,
         )
       : undefined,
   );
@@ -125,18 +148,19 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
         freshToken,
         'oauth',
         config.baseUrl,
-        // Preserve throttle observability, the live-banner signal AND quota
-        // capture across an OAuth account swap — the rebuilt client must keep
-        // the same tracing-fetch wrapper wired to the same `throttleQueue` and
-        // the same quota observer. localMode is false in this branch (see the
-        // guard above), so `quotaObserver` is always defined here and the
-        // wrapper installs unconditionally — no trace-writer gate, matching
-        // the primary install site above.
+        // Preserve throttle observability, the live-banner signal, quota
+        // capture, and the admission gate across an OAuth account swap — the
+        // rebuilt client must keep the same tracing-fetch wrapper wired to
+        // the same `throttleQueue`, quota observer, rate-limit observer, and
+        // admission gate. localMode is false in this branch (see the guard
+        // above), so all observers are always defined here.
         makeTracingFetch(
           config.traceWriter,
           undefined,
           throttleQueue ? (info) => throttleQueue.push(info) : undefined,
           quotaObserver,
+          rateLimitObserver,
+          admissionGate,
         ),
       );
       return factory ? factory(opts) : args.createClient(opts);

@@ -127,7 +127,7 @@ import {
   resolveReasoningEffort,
 } from './query/model-params.js';
 import { checkContextOverflow } from './query/context-overflow.js';
-import { resolveClientFactory } from './query/client.js';
+import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
 import { driveStream, type IterationResult } from './query/stream-drive.js';
 import {
   buildChatCompletionsRequestBody,
@@ -315,14 +315,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
     } else {
-      const ctor = resolveClientFactory();
-      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } = {
-        apiKey: opts.auth.apiKey,
-      };
       const baseURL = wire.baseURL ?? opts.baseURL;
-      if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-      if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
-      this.client = ctor(clientOpts);
+      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
+      this.client = resolveClientFactory()({
+        apiKey: opts.auth.apiKey,
+        ...(baseURL !== undefined ? { baseURL } : {}),
+        ...(wire.headers !== undefined ? { defaultHeaders: wire.headers } : {}),
+        ...(admissionFetch !== undefined ? { fetch: admissionFetch } : {}),
+      });
     }
   }
 
