@@ -11,6 +11,11 @@
 
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import {
+  buildWaveUnit,
+  createManifest,
+  updateWaveUnit,
+} from '../manifest/write.js';
 import { SubagentManager } from '../subagent.js';
 import { resolveChildManagerReadRoots, type ReadScopeInputs } from '../subagent-read-scope.js';
 import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
@@ -761,6 +766,41 @@ export class ComposeExecutor {
         };
       });
 
+      // Wave manifest: create before the DAG starts so a crash mid-run leaves
+      // a recoverable record. Only for ≥2 nodes (no manifest for solo dispatch).
+      let composeWaveId: string | undefined;
+      if (dagNodes.length >= 2) {
+        try {
+          const manifestUnits = parsed.nodes.map((n) => {
+            const effectiveCwd = this.currentCwd;
+            return buildWaveUnit({
+              id: n.id,
+              prompt: n.prompt,
+              cwd: effectiveCwd,
+              model: String(n.model ?? this.ctx.defaultSubagentModel ?? this.ctx.defaultModel ?? 'sonnet'),
+            });
+          });
+          // Build upstream-id map from edges: for each node, list its upstream deps.
+          const upstreamMap = new Map<string, string[]>();
+          for (const node of parsed.nodes) upstreamMap.set(node.id, []);
+          for (const edge of parsed.edges ?? []) {
+            const list = upstreamMap.get(edge.to);
+            if (list !== undefined) list.push(edge.from);
+          }
+          for (const unit of manifestUnits) {
+            unit.upstreamIds = upstreamMap.get(unit.id) ?? [];
+          }
+          composeWaveId = createManifest({
+            source: 'compose-dag',
+            parentSessionId: this.ctx.parentSession.sessionId ?? '',
+            traceLabel: null,
+            units: manifestUnits,
+          });
+        } catch {
+          // Fire-and-forget: manifest errors must never abort a compose wave.
+        }
+      }
+
       // Invariant: SubagentDAGOptions exposes no maxConcurrency field, so the
       // model-facing compose tool has no way to widen its own fan-out — width is
       // governed solely by the operator's AFK_MAX_CONCURRENT_SUBAGENT_CALLS
@@ -786,6 +826,25 @@ export class ComposeExecutor {
         skipped: result.skipped.length,
         duration_ms: Date.now() - startedAt,
       }).catch(() => {});
+
+      // Wave manifest: update unit statuses based on DAG outcome.
+      if (composeWaveId !== undefined) {
+        try {
+          for (const nodeId of Object.keys(result.outputs)) {
+            updateWaveUnit(composeWaveId, nodeId, 'done');
+          }
+          for (const f of result.failed) {
+            updateWaveUnit(composeWaveId, f.id, 'failed', {
+              errorMessage: f.error.message.slice(0, 500),
+            });
+          }
+          for (const nodeId of result.skipped) {
+            updateWaveUnit(composeWaveId, nodeId, 'skipped');
+          }
+        } catch {
+          // Fire-and-forget: status update failures must never abort settlement.
+        }
+      }
 
       // Fall back to a stable placeholder when the parent has no sessionId
       // yet (e.g. tests, or early-turn compose calls before the SDK assigns

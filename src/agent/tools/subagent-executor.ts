@@ -43,6 +43,12 @@ import { inboundAttachmentRegistry, type InboundAttachmentReader } from '../cont
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
+import {
+  buildWaveUnit,
+  createManifest,
+  updateWaveUnit,
+} from '../manifest/write.js';
+import { env } from '../../config/env.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
@@ -359,6 +365,79 @@ export class SubagentExecutor implements SubagentControl {
   // parent turn parked on a subagent `await`. Populated alongside the promotion
   // trigger in execute()'s foreground branch and cleared in the same finally.
   private readonly activeForegroundHandles = new Map<string, { cancel: () => Promise<void> }>();
+
+  // Wave manifest tracking. Set by notifyWaveStart() before a parallel batch
+  // runs; cleared (set to undefined) after all units in the batch settle.
+  // Maps tool-call id → unit id so executeOnce can update the right unit.
+  private currentWaveId: string | undefined = undefined;
+  private currentWaveCallIds: Set<string> = new Set();
+
+  /**
+   * Called by the dispatcher BEFORE a parallel batch of ≥2 agent tool calls
+   * starts. Creates a wave manifest with all units in 'pending' status using
+   * the tool call ids as unit ids. Fire-and-forget: never throws.
+   */
+  notifyWaveStart(
+    calls: ReadonlyArray<ToolCall>,
+    sessionId: string,
+    traceLabel: string | null,
+  ): void {
+    if (env.AFK_WAVE_MANIFEST_DISABLED === '1') return;
+    if (calls.length < 2) return;
+    // Only root-level sessions write manifests (depth === 0).
+    if (this.ctx.depth !== 0) return;
+    try {
+      const units = calls.map((call) => {
+        let parsed: { prompt: string; model?: string; cwd?: string } | undefined;
+        try {
+          parsed = parseAgentInput(call.input);
+        } catch {
+          parsed = undefined;
+        }
+        const prompt = parsed?.prompt ?? '';
+        const model = parsed?.model ?? 'sonnet';
+        const cwd = parsed?.cwd ?? this.currentCwd;
+        return buildWaveUnit({ id: call.id, prompt, cwd, model });
+      });
+      const waveId = createManifest({
+        source: 'agent-tool',
+        parentSessionId: sessionId,
+        traceLabel,
+        units,
+      });
+      if (waveId !== undefined) {
+        this.currentWaveId = waveId;
+        this.currentWaveCallIds = new Set(calls.map((c) => c.id));
+      }
+    } catch {
+      // Fire-and-forget: manifest errors must never abort a wave.
+    }
+  }
+
+  /**
+   * Called by the dispatcher AFTER all units in a parallel batch have settled.
+   * Clears the wave state.
+   */
+  notifyWaveEnd(): void {
+    this.currentWaveId = undefined;
+    this.currentWaveCallIds = new Set();
+  }
+
+  /**
+   * Update a unit's status in the current wave manifest. No-op when no wave
+   * is active or the call is not part of the current wave.
+   * Fire-and-forget: never throws.
+   */
+  private updateCurrentWaveUnit(
+    callId: string,
+    status: 'running' | 'done' | 'failed',
+    error?: string,
+  ): void {
+    const waveId = this.currentWaveId;
+    if (waveId === undefined) return;
+    if (!this.currentWaveCallIds.has(callId)) return;
+    updateWaveUnit(waveId, callId, status, error !== undefined ? { errorMessage: error } : undefined);
+  }
 
   hasPromotableForeground(): boolean {
     return this.ctx.backgroundRegistry !== undefined && this.promotionTriggers.size > 0;
@@ -759,6 +838,8 @@ export class SubagentExecutor implements SubagentControl {
       if (childParentSession !== undefined) {
         childParentSession.sessionId = handle.id;
       }
+      // Wave manifest: unit transitioned to 'running' once fork returns a handle.
+      this.updateCurrentWaveUnit(call.id, 'running');
       // Cancellation can land while a retry's fresh fork awaits hooks/read
       // scope resolution, before either foreground map contains the handle.
       if (retryCancelGeneration !== undefined && this.cancelGeneration !== retryCancelGeneration) {
@@ -783,6 +864,8 @@ export class SubagentExecutor implements SubagentControl {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Wave manifest: unit failed because fork threw before returning a handle.
+      this.updateCurrentWaveUnit(call.id, 'failed', message);
       void emitTelemetry({
         ...identity,
         event: 'subagent.failed',
@@ -868,6 +951,12 @@ export class SubagentExecutor implements SubagentControl {
     });
     const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
     if (warn && !result.isError) result.content = warn + result.content;
+    // Wave manifest: update unit to 'done' or 'failed' after the foreground run.
+    if (result.isError === true) {
+      this.updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
+    } else {
+      this.updateCurrentWaveUnit(call.id, 'done');
+    }
     return result;
   }
 }
