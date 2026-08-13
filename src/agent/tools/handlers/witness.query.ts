@@ -262,7 +262,14 @@ export interface SearchMatch {
 
 export interface SearchWitnessResult {
   query: string;
+  /** How many session traces were read from disk (before the `since` date filter). */
   sessionsScanned: number;
+  /**
+   * How many of those sessions survived the `since` date gate.
+   * Only present when a `since` filter was supplied; omitted otherwise so
+   * callers can distinguish "no filter used" from "all passed the filter".
+   */
+  sessionsMatchedDateFilter?: number;
   matches: SearchMatch[];
 }
 
@@ -274,7 +281,11 @@ export async function searchAcrossSessions(
 
   // Slice first (N most recent sessions per schema semantics), then filter by
   // date — so `sessions` means "most recent N", not "N within the date window".
-  let traces = allTraces.slice(0, sessionCount);
+  const tracesBeforeFilter = allTraces.slice(0, sessionCount);
+  const preFilterCount = tracesBeforeFilter.length;
+
+  let traces = tracesBeforeFilter;
+  let postFilterCount: number | undefined;
 
   if (params.since) {
     const sinceMs = Date.parse(params.since);
@@ -282,6 +293,7 @@ export async function searchAcrossSessions(
       throw new Error(`Invalid "since" date: ${params.since}`);
     }
     traces = traces.filter((t) => t.mtimeMs >= sinceMs);
+    postFilterCount = traces.length;
   }
 
   const kindFilter = params.kinds ? new Set(params.kinds) : undefined;
@@ -312,9 +324,13 @@ export async function searchAcrossSessions(
     }
   }
 
-  return {
+  const result: SearchWitnessResult = {
     query: params.query,
-    sessionsScanned: traces.length,
+    sessionsScanned: preFilterCount,
     matches,
   };
+  if (postFilterCount !== undefined) {
+    result.sessionsMatchedDateFilter = postFilterCount;
+  }
+  return result;
 }

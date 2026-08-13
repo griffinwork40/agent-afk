@@ -275,7 +275,7 @@ describe('searchAcrossSessions — invalid since date', () => {
     // No sessions in temp home, so result is empty — but must not throw.
     await expect(
       searchAcrossSessions({ query: 'x', since: '2024-01-01' }),
-    ).resolves.toMatchObject({ query: 'x', sessionsScanned: 0 });
+    ).resolves.toMatchObject({ query: 'x', sessionsScanned: 0, sessionsMatchedDateFilter: 0 });
   });
 });
 
@@ -299,7 +299,67 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
       sessions: 1,
       since: '2000-01-01',
     });
-    // At most 1 session can be scanned (sessions slice applied first)
-    expect(result.sessionsScanned).toBeLessThanOrEqual(1);
+    // sessions slice is applied BEFORE the date filter, so sessionsScanned is the
+    // pre-filter count (1 — from the sessions:1 cap), not the post-filter count.
+    expect(result.sessionsScanned).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchAcrossSessions — pre/post-filter session count tracking (#1035)
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — sessionsScanned vs sessionsMatchedDateFilter', () => {
+  it('sessionsScanned reflects pre-filter count; sessionsMatchedDateFilter reflects post-filter count', async () => {
+    // Write 3 sessions. We will filter by a future date so none survive the since gate.
+    await writeTrace('scan-session-a', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+    await writeTrace('scan-session-b', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+    await writeTrace('scan-session-c', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    // Use a far-future date so all sessions fail the since filter.
+    const result = await searchAcrossSessions({
+      query: 'end_turn',
+      sessions: 50,
+      since: '2099-01-01',
+    });
+
+    // sessionsScanned must equal the number of trace dirs found (3), NOT 0.
+    expect(result.sessionsScanned).toBe(3);
+    // sessionsMatchedDateFilter must be 0 — none survived the future date gate.
+    expect(result.sessionsMatchedDateFilter).toBe(0);
+  });
+
+  it('sessionsMatchedDateFilter is undefined when no since filter is used', async () => {
+    await writeTrace('no-filter-session', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const result = await searchAcrossSessions({ query: 'end_turn' });
+
+    expect(result.sessionsScanned).toBeGreaterThanOrEqual(1);
+    // Key assertion: field must be absent when since is not supplied.
+    expect(result.sessionsMatchedDateFilter).toBeUndefined();
+  });
+
+  it('sessionsMatchedDateFilter equals sessionsScanned when all sessions pass the since filter', async () => {
+    await writeTrace('old-enough-session', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    // Use a very old since date so every session passes the gate.
+    const result = await searchAcrossSessions({
+      query: 'end_turn',
+      since: '2000-01-01',
+    });
+
+    expect(result.sessionsScanned).toBeGreaterThanOrEqual(1);
+    // All sessions survived, so post-filter == pre-filter.
+    expect(result.sessionsMatchedDateFilter).toBe(result.sessionsScanned);
   });
 });
