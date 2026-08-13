@@ -857,7 +857,7 @@
     },
     {
       "name": "AFK_THINKING",
-      "description": "Extended-thinking mode. Accepts adaptive | disabled | enabled:<N> | enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models).",
+      "description": "Extended-thinking mode. Accepts adaptive | disabled | max | enabled:<N> | enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models).",
       "type": "string",
       "required": false,
       "default": "adaptive",
