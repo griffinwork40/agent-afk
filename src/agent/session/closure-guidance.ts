@@ -13,12 +13,11 @@
  * deterministic builder, wired at one production site and exercised directly
  * by an `afk improve eval-run` contract (no LLM, no network).
  *
- * Scope — first concrete subtype only: only `abort` carries guidance today.
- * The detector flags six anomalous reasons; covering all six in one change
- * would couple the fix to six distinct recovery stories. The rest (timeout,
- * budget_exceeded, hook_blocked, iteration_cap, max_turns_exceeded) each get
- * their own hint in a follow-up. Benign reasons (model_end_turn, truncated)
- * never carry guidance — a clean close needs no recovery action.
+ * Coverage: `abort`, `iteration_cap`, and `timeout` carry guidance today.
+ * The detector flags six anomalous reasons; the remaining three
+ * (budget_exceeded, hook_blocked, max_turns_exceeded) each get their own
+ * hint in a follow-up. Benign reasons (model_end_turn, truncated) never
+ * carry guidance — a clean close needs no recovery action.
  *
  * @module agent/session/closure-guidance
  */
@@ -36,6 +35,29 @@ export const CLOSURE_ABORT_RECOVERY_HINT =
   'from saved state, or re-run the task if the interruption was intentional.';
 
 /**
+ * Recovery hint for an `iteration_cap` closure. The tool-use round budget was
+ * exhausted — the session did real work but ran out of runway. The wind-down
+ * round already fired, so the transcript holds partial progress.
+ */
+export const CLOSURE_ITERATION_CAP_RECOVERY_HINT =
+  'Session hit the tool-use iteration cap before reaching a terminal state. ' +
+  'Partial work is preserved in the transcript and witness trace. Resume with ' +
+  '`afk --resume <sessionId>` to continue from where it stopped, or re-run ' +
+  'with a higher budget (`--max-turns` or `max_tool_use_iterations`).';
+
+/**
+ * Recovery hint for a `timeout` closure. The wall-clock cap fired — unlike
+ * iteration_cap the session may have been idle (waiting on a slow tool) or
+ * actively working when the deadline hit.
+ */
+export const CLOSURE_TIMEOUT_RECOVERY_HINT =
+  'Session was terminated by the wall-clock timeout before reaching a terminal ' +
+  'state. The transcript and witness trace are preserved — resume with ' +
+  '`afk --resume <sessionId>` to continue, or re-run with a longer timeout. ' +
+  'Check the trace for whether the timeout hit during active work or while ' +
+  'waiting on a slow tool call.';
+
+/**
  * Map a closure reason to an actionable recovery hint, or `null` when no
  * guidance applies (benign closes, and anomalous reasons not yet covered).
  *
@@ -47,6 +69,10 @@ export function buildClosureGuidance(reason: ClosureReason): string | null {
   switch (reason) {
     case 'abort':
       return CLOSURE_ABORT_RECOVERY_HINT;
+    case 'iteration_cap':
+      return CLOSURE_ITERATION_CAP_RECOVERY_HINT;
+    case 'timeout':
+      return CLOSURE_TIMEOUT_RECOVERY_HINT;
     default:
       return null;
   }
