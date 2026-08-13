@@ -14,7 +14,20 @@ describe('InboundAttachmentRegistry', () => {
       path: first.path,
       mediaType: 'image/png',
       sizeBytes: bytes.length,
+      digest: first.digest,
     });
+  });
+
+  it('stores the digest in the record and deduplicates by digest without re-reading disk', async () => {
+    const entries = new Map();
+    const registry = new InboundAttachmentRegistry(entries);
+    const bytes = Buffer.from('deduplicate me');
+    const first = await registry.put('session-digest', bytes, 'image/png');
+    expect(first.digest).toMatch(/^[0-9a-f]{64}$/);
+    // second put of identical bytes must return the same id and same digest
+    const second = await registry.put('session-digest', bytes, 'image/png');
+    expect(second.id).toBe(first.id);
+    expect(second.digest).toBe(first.digest);
   });
 
   it('lengthens the hash prefix when different bytes collide', async () => {
@@ -39,17 +52,55 @@ describe('InboundAttachmentRegistry', () => {
     expect(registry.listIds('session-B')).toEqual([]);
   });
 
-  it('appends a _1 suffix when different byte inputs share the same 64-char digest', async () => {
-    // Same full-digest collision: the prefix-lengthening loop fills entries at
-    // hexLen 6, 8, 10, ..., 64 (30 puts), then the 31st finds the full-digest
-    // id already occupied with different bytes → the suffix kicks in as `_1`.
-    const digest = 'a1b2c3'.padEnd(64, 'f');
-    const registry = new InboundAttachmentRegistry(new Map(), () => digest);
-    for (let i = 0; i < 30; i++) {
-      await registry.put('session-suffix', Buffer.from([i + 1]), 'image/png');
+  it('appends a _1 suffix when all prefix slots and the full-length slot are occupied by different digests', async () => {
+    // Contract: digest-based dedup means a suffix is only needed when every prefix
+    // length (6, 8, …, 64) is already occupied by a DIFFERENT digest. We build
+    // that state by pre-populating all slots with distinct digest values, then
+    // verify that a new put with `base` as its digest lands at `img_${base}_1`.
+    const base = 'a1b2c3'.padEnd(64, 'f');
+    const entries = new Map<string, Map<string, InboundAttachmentRecord>>();
+    const sessionEntries = new Map<string, InboundAttachmentRecord>();
+    // Occupy every prefix slot (hexLen 6, 8, …, 64) with a distinct digest.
+    for (let hexLen = 6; hexLen <= 64; hexLen += 2) {
+      const prefix = base.slice(0, hexLen);
+      sessionEntries.set(`img_${prefix}`, {
+        path: `/fake/${prefix}.png`,
+        mediaType: 'image/png',
+        sizeBytes: hexLen,
+        digest: `other_digest_${hexLen}_${'0'.repeat(45)}`.slice(0, 64),
+      });
     }
-    const last = await registry.put('session-suffix', Buffer.from([31]), 'image/png');
-    expect(last.id).toBe(`img_${digest}_1`);
+    entries.set('session-suffix', sessionEntries);
+    const registry = new InboundAttachmentRegistry(entries, () => base);
+    const result = await registry.put('session-suffix', Buffer.from([99]), 'image/png');
+    expect(result.id).toBe(`img_${base}_1`);
+  });
+
+  it('increments the suffix beyond _1 when earlier suffixes are occupied', async () => {
+    const base = 'b2c3d4'.padEnd(64, 'e');
+    const entries = new Map<string, Map<string, InboundAttachmentRecord>>();
+    const sessionEntries = new Map<string, InboundAttachmentRecord>();
+    // Occupy every prefix slot (hexLen 6, 8, …, 64) with distinct digests.
+    for (let hexLen = 6; hexLen <= 64; hexLen += 2) {
+      const prefix = base.slice(0, hexLen);
+      sessionEntries.set(`img_${prefix}`, {
+        path: `/fake/${prefix}.png`,
+        mediaType: 'image/png',
+        sizeBytes: hexLen,
+        digest: `occupied_${hexLen}_${'0'.repeat(45)}`.slice(0, 64),
+      });
+    }
+    // Also occupy the _1 suffix slot.
+    sessionEntries.set(`img_${base}_1`, {
+      path: `/fake/${base}_1.png`,
+      mediaType: 'image/png',
+      sizeBytes: 1,
+      digest: `suffix1_${'0'.repeat(56)}`.slice(0, 64),
+    });
+    entries.set('session-suffix2', sessionEntries);
+    const registry = new InboundAttachmentRegistry(entries, () => base);
+    const result = await registry.put('session-suffix2', Buffer.from([77]), 'image/png');
+    expect(result.id).toBe(`img_${base}_2`);
   });
 
   it('returns listIds in sorted order', async () => {

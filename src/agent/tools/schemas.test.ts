@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { builtinToolSchemas, BUILTIN_TOOL_NAMES, agentTool } from './schemas.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 23 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(23);
+  it('contains exactly 25 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(25);
   });
 
   it('exports the expected tool names', () => {
@@ -21,6 +21,8 @@ describe('builtinToolSchemas', () => {
       'list_schedules',
       'get_schedule_history',
       'cancel_schedule',
+      'read_witness',
+      'search_witness',
       'worktree',
       'terminal_font_size',
       'config_get',
@@ -56,6 +58,7 @@ describe('builtinToolSchemas', () => {
     const noRequired = new Set([
       'web_scrape',
       'list_schedules',
+      'read_witness',
       'browser_observe',
       'browser_screenshot',
       'browser_close',

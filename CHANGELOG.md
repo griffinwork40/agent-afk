@@ -11,6 +11,77 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.115.1] - 2026-08-13
+
+### Fixed
+- remove vestigial Claude Code slug from memory surveyor (#882) (#1008) (0ab11cd2)
+
+### Changed
+- golden-fingerprint test for denial reason slug stability (#853) (#1047) (9a7a603d)
+
+## [5.115.0] - 2026-08-13
+
+### Added
+- add recovery hints for iteration_cap and timeout closures (#1048) (8fbec4a2)
+
+## [5.114.1] - 2026-08-13
+
+### Fixed
+- add sessionsScanned compat alias and improve CLI label (#1037) (#1041) (d91ef1cf)
+
+## [5.114.0] - 2026-08-13
+
+### Added
+- surface truncatedSessions in search_witness results (#1036) (#1042) (0023b07b)
+
+### Changed
+- add negative assertion to no-git guard (#788) (#1026) (a9a6d3fc)
+- add unit tests for handler adapter layer (#1038) (#1039) (54e4c602)
+- pin shared allowance across alternating stall shapes (#947) (#1040) (8ea92519)
+
+## [5.113.0] - 2026-08-12
+
+### Added
+- add read_witness and search_witness built-in tools (#1034) (b36cc54a)
+
+## [5.112.6] - 2026-08-12
+
+### Fixed
+- surface rate-limit backoffs and retry sendOrEdit 429s (#1033) (1b8b124a)
+
+## [5.112.5] - 2026-08-12
+
+### Changed
+- compare digests instead of re-reading files on dedup (#885) (#1006) (00a7e1e8)
+
+## [5.112.4] - 2026-08-12
+
+### Fixed
+- correct concurrency floor figures and add light-regime budget (#1027) (0b99429c)
+
+## [5.112.3] - 2026-08-12
+
+### Changed
+- retire committedBandBottomRow erase-bound read in frame-preserve-archive (advances #540) (#1031) (dbfc1b5c)
+
+## [5.112.2] - 2026-08-12
+
+### Changed
+- split commitAbove into 7 sibling modules with invariant tests (#827) (#1032) (c3a4bade)
+
+## [5.112.1] - 2026-08-12
+
+### Fixed
+- use routeFromCtx in /afk and /help handlers (#1022) (#1028) (2b16957b)
+
+### Changed
+- fix stale comments and test cleanup at skill-dispatch sites (#744) (#1030) (7f16f9ff)
+
+## [5.112.0] - 2026-08-12
+
+### Added
+- bound the witness tree by age and aggregate size (#849) (#986) (4502e200)
+
 ## [5.111.3] - 2026-08-12
 
 ### Fixed

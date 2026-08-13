@@ -53,6 +53,8 @@ const READ_TOOLS = new Set([
   // Also classed read-only in the dispatcher's SAFE_TOOLS concurrency set
   // (src/agent/tools/dispatcher.ts:31).
   'memory_search',
+  // witness-layer search: read-only scan of trace.jsonl files.
+  'read_witness', 'search_witness',
 ]);
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',
@@ -209,6 +211,8 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'config_get',
   // Memory query — read-only by construction (no mutation surface).
   'memory_search',
+  // Witness-layer search — read-only NDJSON scan of trace.jsonl files.
+  'read_witness', 'search_witness',
   // Awareness introspection (get_runtime_state) — read-only, in-memory, zero
   // side-effects. Mirrors CHILD_ALLOWED_TOOLS (nesting.ts), which already appends
   // these. Single source of truth: AWARENESS_TOOL_NAMES (awareness/tool.ts).

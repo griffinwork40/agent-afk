@@ -575,6 +575,40 @@ describe('reseedStatsFromStored wiring — shared helper', () => {
     expect(stats.sessionId).toBe('sdk-xyz');
     expect(stats.sessionStartTime).toBe(12345);
   });
+
+  it('reseedStatsFromStored hydrates unpricedTurns from stored session', async () => {
+    const { default: _unused, ...shared } = await import('./shared.js') as Record<string, unknown>;
+    const reseed = (shared as { reseedStatsFromStored: typeof import('./shared.js').reseedStatsFromStored }).reseedStatsFromStored;
+    const stats = {
+      totalTurns: 0, totalCostUsd: 0, unpricedTurns: 0, totalTokens: 0, totalDurationMs: 0,
+      sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
+      model: 'sonnet' as const, permissionMode: 'default',
+    } as import('../../slash/types.js').SessionStats;
+    // Stored session with unpricedTurns set
+    const stored: import('../../session-store.js').StoredSession = {
+      model: 'sonnet', totalTurns: 10, totalCostUsd: 0.5, unpricedTurns: 3, totalTokens: 5000,
+      totalDurationMs: 30000, turns: [], sessionId: 'sdk-unpriced', startedAt: 99999, savedAt: 100000,
+    };
+    reseed(stats, stored, 'fallback-id');
+    expect(stats.unpricedTurns).toBe(3);
+  });
+
+  it('reseedStatsFromStored defaults unpricedTurns to 0 for legacy sidecars', async () => {
+    const { default: _unused, ...shared } = await import('./shared.js') as Record<string, unknown>;
+    const reseed = (shared as { reseedStatsFromStored: typeof import('./shared.js').reseedStatsFromStored }).reseedStatsFromStored;
+    const stats = {
+      totalTurns: 0, totalCostUsd: 0, unpricedTurns: 5, totalTokens: 0, totalDurationMs: 0,
+      sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
+      model: 'sonnet' as const, permissionMode: 'default',
+    } as import('../../slash/types.js').SessionStats;
+    // Legacy stored session without unpricedTurns
+    const stored: import('../../session-store.js').StoredSession = {
+      model: 'sonnet', totalTurns: 2, totalCostUsd: 0.1, totalTokens: 1000,
+      totalDurationMs: 5000, turns: [], sessionId: 'sdk-legacy', startedAt: 11111, savedAt: 11112,
+    };
+    reseed(stats, stored, 'fallback-id');
+    expect(stats.unpricedTurns).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

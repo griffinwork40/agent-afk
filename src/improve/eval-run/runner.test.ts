@@ -534,9 +534,9 @@ describe('runEvalCase fixture-replay', () => {
   });
 
   it('FAILS end to end for an anomalous closure the guardrail does not cover (fail-closed)', async () => {
-    // `timeout` reproduces but buildClosureGuidance returns null for it today.
+    // `budget_exceeded` reproduces but buildClosureGuidance returns null for it today.
     const run = await runEvalCase(
-      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: closureFixtureBytes('timeout') }),
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: closureFixtureBytes('budget_exceeded') }),
       baseCtx,
     );
 
