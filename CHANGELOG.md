@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.115.0] - 2026-08-13
+
+### Added
+- add recovery hints for iteration_cap and timeout closures (#1048) (8fbec4a2)
+
 ## [5.114.1] - 2026-08-13
 
 ### Fixed
