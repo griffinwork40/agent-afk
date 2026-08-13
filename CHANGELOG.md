@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.115.2] - 2026-08-13
+
+### Fixed
+- sanitize paths in registry warnings against terminal injection (#1029) (e73cc1a3)
+
 ## [5.115.1] - 2026-08-13
 
 ### Fixed
