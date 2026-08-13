@@ -204,7 +204,7 @@ export function registerInteractiveCommand(program: Command): void {
       getModel(),
     )
     .option('--max-turns <number>', 'Maximum conversation turns', '100')
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
+    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'", 'enabled:max')
     .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
     .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme.', parseThemeFlag)
     .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')

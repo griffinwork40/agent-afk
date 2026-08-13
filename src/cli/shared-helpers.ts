@@ -133,14 +133,14 @@ export function parseThinking(raw: string | undefined): ThinkingConfig | undefin
   if (raw === undefined) return undefined;
   if (raw === 'adaptive') return { type: 'adaptive' };
   if (raw === 'disabled') return { type: 'disabled' };
-  if (raw === 'enabled:max') return { type: 'enabled', budgetTokens: Number.POSITIVE_INFINITY };
+  if (raw === 'max' || raw === 'enabled:max') return { type: 'enabled', budgetTokens: Number.POSITIVE_INFINITY };
   const m = /^enabled:(\d+)$/.exec(raw);
   if (m) {
     const budgetTokens = parseInt(m[1]!, 10);
     if (Number.isNaN(budgetTokens)) throw new Error(`Invalid thinking budget: ${raw}`);
     return { type: 'enabled', budgetTokens };
   }
-  throw new Error(`Invalid --thinking value: ${raw}. Expected 'adaptive' | 'disabled' | 'enabled:<N>' | 'enabled:max'`);
+  throw new Error(`Invalid --thinking value: ${raw}. Expected 'adaptive' | 'disabled' | 'max' | 'enabled:<N>' | 'enabled:max'`);
 }
 
 /** Valid effort levels. */

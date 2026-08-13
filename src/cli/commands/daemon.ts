@@ -265,7 +265,7 @@ export function registerDaemonCommand(program: Command): void {
       '--timeout-ms <ms>',
       'Per-tick session timeout in ms. Overrides AFK_TIMEOUT_MS. Defaults to the session default (120000).',
     )
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'")
+    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'")
     .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
     .option(
       '--trigger <mode>',
