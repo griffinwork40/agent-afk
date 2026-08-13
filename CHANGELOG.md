@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.114.1] - 2026-08-13
+
+### Fixed
+- add sessionsScanned compat alias and improve CLI label (#1037) (#1041) (d91ef1cf)
+
 ## [5.114.0] - 2026-08-13
 
 ### Added
