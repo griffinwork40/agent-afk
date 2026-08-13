@@ -52,6 +52,9 @@ const costCmd: SlashCommand = {
       const last5 = stats.turnCosts.slice(-5).map(formatCost).join(palette.dim(' · '));
       out.line(`  last 5      ${last5}`);
     }
+    if (stats.unpricedTurns > 0) {
+      out.line(`  unpriced    ${palette.warning(`${stats.unpricedTurns} turn${stats.unpricedTurns === 1 ? '' : 's'} had no cost metadata — total may be understated`)}`);
+    }
     out.line();
     out.line(palette.dim('  This is session-local spend. For account-wide subscription quota, see /usage.'));
     out.line();

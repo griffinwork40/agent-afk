@@ -69,7 +69,13 @@ export interface TurnRecord {
 export interface SessionStats {
   totalTurns: number;
   totalCostUsd: number;
-  /** Count of turns where cost data was unavailable; `totalCostUsd` is a lower bound when > 0. */
+  /**
+   * Number of turns where the provider returned no cost metadata
+   * (`totalCostUsd` was `undefined` or `null`). Distinct from turns that
+   * genuinely cost $0 (e.g. a cached or free-tier response that reports
+   * `totalCostUsd: 0`). Surfaced by `/cost` so the user knows the session
+   * total may be understated.
+   */
   unpricedTurns: number;
   totalTokens: number;
   totalDurationMs: number;

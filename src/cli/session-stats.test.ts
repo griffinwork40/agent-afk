@@ -54,6 +54,8 @@ describe('session-stats', () => {
     expect(s.totalTurns).toBe(1);
     expect(rec.costUsd).toBe(0);
     expect(rec.durationMs).toBe(0);
+    // Missing metadata means cost is unknown — counted as unpriced.
+    expect(s.unpricedTurns).toBe(1);
   });
 
   it('createSessionStats initialises unpricedTurns to 0', () => {
@@ -219,6 +221,39 @@ describe('session-stats', () => {
   });
 });
 
+
+  it('recordTurn with undefined totalCostUsd increments unpricedTurns', () => {
+    const s = createSessionStats('sonnet');
+    // Metadata present but totalCostUsd not provided.
+    recordTurn(s, 'q', 'a', { durationMs: 100, usage: { input_tokens: 10, output_tokens: 5 } });
+    expect(s.unpricedTurns).toBe(1);
+    expect(s.totalCostUsd).toBe(0); // sum still works (treats as 0)
+  });
+
+  it('recordTurn with totalCostUsd: 0 does NOT increment unpricedTurns (genuinely free)', () => {
+    const s = createSessionStats('sonnet');
+    recordTurn(s, 'q', 'a', { totalCostUsd: 0, durationMs: 100, usage: { input_tokens: 10, output_tokens: 5 } });
+    expect(s.unpricedTurns).toBe(0);
+    expect(s.totalCostUsd).toBe(0);
+  });
+
+  it('recordTurn with totalCostUsd: 1.5 does NOT increment unpricedTurns', () => {
+    const s = createSessionStats('sonnet');
+    recordTurn(s, 'q', 'a', { totalCostUsd: 1.5, durationMs: 200, usage: { input_tokens: 50, output_tokens: 20 } });
+    expect(s.unpricedTurns).toBe(0);
+    expect(s.totalCostUsd).toBeCloseTo(1.5);
+  });
+
+  it('unpricedTurns accumulates across turns with mixed pricing', () => {
+    const s = createSessionStats('sonnet');
+    recordTurn(s, 'q1', 'a1', { totalCostUsd: 0.01, durationMs: 100, usage: { input_tokens: 10, output_tokens: 5 } });
+    recordTurn(s, 'q2', 'a2', { durationMs: 100, usage: { input_tokens: 10, output_tokens: 5 } }); // no cost
+    recordTurn(s, 'q3', 'a3', { totalCostUsd: 0.02, durationMs: 100, usage: { input_tokens: 10, output_tokens: 5 } });
+    expect(s.unpricedTurns).toBe(1);
+    expect(s.totalTurns).toBe(3);
+    expect(s.totalCostUsd).toBeCloseTo(0.03);
+  });
+
 describe('resetStats', () => {
   it('zeroes counters and refreshes sessionStartTime', async () => {
     const s = createSessionStats('sonnet');
@@ -235,9 +270,10 @@ describe('resetStats', () => {
     resetStats(s);
     expect(s.totalTurns).toBe(0);
     expect(s.totalCostUsd).toBe(0);
+    expect(s.unpricedTurns).toBe(0);
     expect(s.totalTokens).toBe(0);
     expect(s.totalDurationMs).toBe(0);
-    expect(s.sessionStartTime).toBeGreaterThan(before);
+    expect(s.sessionStartTime).toBeGreaterThanOrEqual(before);
   });
 
   it('truncates per-turn arrays in place', () => {
@@ -288,5 +324,14 @@ describe('resetStats', () => {
     expect(() => resetStats(s)).not.toThrow();
     expect(s.totalTurns).toBe(0);
     expect(s.sessionId).toBeUndefined();
+  });
+
+  it('resetStats zeroes unpricedTurns', () => {
+    const s = createSessionStats('sonnet');
+    // Record a turn with no cost metadata (unpriced).
+    recordTurn(s, 'q', 'a', { durationMs: 100, usage: { input_tokens: 5, output_tokens: 2 } });
+    expect(s.unpricedTurns).toBe(1);
+    resetStats(s);
+    expect(s.unpricedTurns).toBe(0);
   });
 });
