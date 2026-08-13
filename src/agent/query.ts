@@ -19,6 +19,7 @@ import type {
   OutputEvent,
   StructuredMessageOptions,
 } from './types.js';
+import type { TraceWriter } from './trace/index.js';
 
 /** Default model when a caller omits one (the `medium` capability-tier alias). */
 const DEFAULT_QUERY_MODEL: AgentModelInput = 'sonnet';
@@ -28,15 +29,21 @@ const DEFAULT_QUERY_MODEL: AgentModelInput = 'sonnet';
  * is accepted; `model` is optional here (defaults to {@link DEFAULT_QUERY_MODEL})
  * whereas it is required on the bare config. Pass `abortSignal` to cancel, or
  * `provider` to inject a custom/mock {@link ModelProvider}.
+ *
+ * Pass `ownedTraceWriter` to grant seal ownership to the session — mirrors the
+ * second `AgentSession` constructor arg. Without it, a `traceWriter` in the
+ * config is write-only and the session will not seal the trace on `close()`.
  */
 export type QueryOptions = Partial<Omit<AgentConfig, 'model'>> & {
   model?: AgentModelInput;
+  /** Owner-only trace handle; forwarded as the 2nd `AgentSession` constructor arg. */
+  ownedTraceWriter?: TraceWriter;
 };
 
 /** Build a fresh session from query options, applying the default model. */
 function sessionFor(options: QueryOptions): AgentSession {
-  const { model = DEFAULT_QUERY_MODEL, ...rest } = options;
-  return new AgentSession({ model, ...rest });
+  const { model = DEFAULT_QUERY_MODEL, ownedTraceWriter, ...rest } = options;
+  return new AgentSession({ model, ...rest }, ownedTraceWriter);
 }
 
 /**

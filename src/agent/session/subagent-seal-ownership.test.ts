@@ -53,12 +53,35 @@ function readTrace(dir: string): Array<{ kind: string; payload: Record<string, u
 }
 
 describe('witness seal ownership', () => {
+  it('accepts a write-only TraceSink without treating it as a seal owner', async () => {
+    const kinds: string[] = [];
+    const sink = {
+      async write(event: { kind: string }): Promise<void> {
+        kinds.push(event.kind);
+      },
+      getTracePath(): string {
+        return 'in-memory://write-only';
+      },
+    };
+    const session = new AgentSession({
+      model: 'sonnet',
+      provider: createMockProvider({ sessionId: `write-only-${Date.now()}` }),
+      traceWriter: sink,
+    });
+
+    await drainTurn(session, 'write only');
+    await session.close();
+
+    expect(kinds).toContain('closure');
+    expect(kinds).not.toContain('session_sealed');
+  });
+
   it('top-level session close() seals the trace (closure + session_sealed)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-top-'));
     try {
       const writer = new NdjsonTraceWriter({ traceDir: dir });
       const provider = createMockProvider({ sessionId: `seal-top-${Date.now()}` });
-      const session = new AgentSession({ model: 'sonnet', provider, traceWriter: writer });
+      const session = new AgentSession({ model: 'sonnet', provider, traceWriter: writer }, writer);
 
       await drainTurn(session, 'hello');
       await session.close();
@@ -125,6 +148,63 @@ describe('witness seal ownership', () => {
     }
   });
 
+  it('full TraceWriter in config without second arg does NOT seal', async () => {
+    // A caller that puts a full TraceWriter into config.traceWriter but omits
+    // the second constructor arg must NOT acquire seal ownership — the two-arg
+    // ceremony is the only path to ownsTraceSeal=true.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-full-no-owner-'));
+    try {
+      const writer = new NdjsonTraceWriter({ traceDir: dir });
+      const session = new AgentSession({
+        model: 'sonnet',
+        provider: createMockProvider({ sessionId: `full-no-owner-${Date.now()}` }),
+        traceWriter: writer,
+      });
+
+      await drainTurn(session, 'full writer in config only');
+      await session.close();
+
+      const kinds = readTrace(dir).map((e) => e.kind);
+      expect(kinds).toContain('closure');
+      expect(kinds).not.toContain('session_sealed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('mismatched writers: config and ownedTraceWriter are different objects → no seal', async () => {
+    // The ownsTraceSeal predicate uses referential equality
+    // (config.traceWriter === ownedTraceWriter). Two distinct TraceWriter
+    // instances must not grant seal ownership — a refactor bug that passes
+    // a stale reference would hit this path.
+    const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-mismatch-a-'));
+    const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-mismatch-b-'));
+    try {
+      const writerA = new NdjsonTraceWriter({ traceDir: dirA });
+      const writerB = new NdjsonTraceWriter({ traceDir: dirB });
+      const session = new AgentSession({
+        model: 'sonnet',
+        provider: createMockProvider({ sessionId: `mismatch-${Date.now()}` }),
+        traceWriter: writerA,
+      }, writerB);
+
+      await drainTurn(session, 'mismatched writers');
+      await session.close();
+
+      // writerA (config) should get closure but NOT session_sealed
+      const kindsA = readTrace(dirA).map((e) => e.kind);
+      expect(kindsA).toContain('closure');
+      expect(kindsA).not.toContain('session_sealed');
+
+      // writerB (owned) should have nothing — it was rejected by the
+      // referential equality check and never used
+      expect(fs.existsSync(path.join(dirB, 'trace.jsonl'))).toBe(false);
+    } finally {
+      fs.rmSync(dirA, { recursive: true, force: true });
+      fs.rmSync(dirB, { recursive: true, force: true });
+    }
+  });
+
   it('directly constructed legacy fork does NOT seal its parent writer', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-legacy-sub-'));
     try {
@@ -133,9 +213,10 @@ describe('witness seal ownership', () => {
         model: 'sonnet',
         provider: createMockProvider({ sessionId: `seal-legacy-parent-${Date.now()}` }),
         traceWriter: writer,
-      });
-      // Public SDK consumers historically constructed children directly with
-      // this output-cap fork signal, before isSubagentFork existed.
+      }, writer);
+      // Legacy fork signal: subagentToolOutputCapBytes was the pre-isSubagentFork
+      // indicator. Without the second constructor arg (ownedTraceWriter), the
+      // child cannot acquire seal ownership regardless of config contents.
       const child = new AgentSession({
         model: 'sonnet',
         provider: createMockProvider({ sessionId: `seal-legacy-child-${Date.now()}` }),
@@ -170,7 +251,7 @@ describe('witness seal ownership', () => {
         provider,
         subagentToolOutputCapBytes: 100_000,
         traceWriter: writer,
-      });
+      }, writer);
 
       await drainTurn(session, 'top-level with a cap');
       await session.close();

@@ -11,7 +11,7 @@ import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import { emitCard } from '../../_lib/emit-card.js';
 import type { BuildResult } from './build.js';
 import type { AgentModelInput } from '../../../agent/types.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 
 const VerifyModeOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -44,7 +44,7 @@ async function forkVerifyMode(
   parentReadRoots?: string[],
   // Witness layer: parent trace writer, forwarded to the fork manager so this
   // verify-mode subagent emits subagent_lifecycle events. Mirrors research.ts.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<{ passed: boolean; issues?: string[] }> {
   // Propagate parent worktree — verify subagents run tests/lint/grep in
   // the right working tree.
@@ -113,7 +113,7 @@ export async function runVerifyPhase(
   parentReadRoots?: string[],
   // Witness layer: forwarded to each parallel forkVerifyMode so every verify
   // subagent's fork emits subagent_lifecycle events. Mirrors research.ts.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<VerifyResult> {
   const prompts = loadSkillPrompts('mint');
   const verifyPrompt = prompts['verify.md'];

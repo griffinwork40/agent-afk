@@ -23,7 +23,7 @@ import type { SubagentManager } from '../../subagent.js';
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import { emitQueuedUserMessage } from '../../trace/emit.js';
 import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
@@ -74,7 +74,7 @@ export interface RunForegroundArgs {
   childManager: SubagentManager | undefined;
   /** Routing-decision identity fields (empty when this executor lacks a surface). */
   identity: { origin?: TraceOrigin; actor?: TraceActor };
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   depth: number;
   /** Optional: `IAgentSession.sessionId` is `string | undefined`; forwarded as-is into telemetry + registry (preserves the pre-extraction contract). */
   parentSessionId: string | undefined;

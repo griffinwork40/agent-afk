@@ -27,7 +27,7 @@
 import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { emitCompaction } from '../../trace/emit.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
 import {
   COMPACT_ACK_TEXT,
@@ -245,7 +245,7 @@ export interface CompactOpenAIHistoryDeps {
    * auto-compaction trigger). Defaults to `'manual'`.
    */
   trigger?: CompactionTrigger;
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Context-window fullness fraction (0–1) at compaction time. Enables the
    * adaptive keep-window so a short-but-full session can still be compacted.

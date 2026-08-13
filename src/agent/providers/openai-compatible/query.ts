@@ -37,7 +37,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
 import type {
   ProviderQuery,
@@ -199,7 +199,7 @@ export interface OpenAICompatibleQueryOptions {
    * coverage. All emit calls are fire-and-forget; a broken writer never
    * stalls or crashes the session.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
 import { provesResponsesCompactionUnsupported } from './query/compaction-guard.js';
@@ -219,7 +219,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   /** Static OpenAI list prices apply only when using the official public API endpoint. */
   private readonly useOpenAIPricing: boolean;
   /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
-  private readonly traceWriter: TraceWriter | undefined;
+  private readonly traceWriter: TraceSink | undefined;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];

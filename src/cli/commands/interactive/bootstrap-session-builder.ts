@@ -84,7 +84,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     providerFactory: deps.providerFactory,
-  })));
+  })), deps.traceWriter);
 }
 
 /**

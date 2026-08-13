@@ -90,10 +90,12 @@ import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep
 
 
 export class AgentSession implements IAgentSession {
-  /** Writers are claimed by the first session constructed with them. Forks
-   * share that writer, so seal ownership does not depend on every SDK caller
-   * knowing about an internal fork marker. */
-  private static readonly claimedTraceWriters = new WeakSet<TraceWriter>();
+  /**
+   * Owner-only handle retained for `sealTraceWriter()` calls. This capability
+   * is supplied separately from `AgentConfig`, so write-only sinks and configs
+   * inherited by forks can never be promoted to seal owners.
+   */
+  private readonly ownedTraceWriter: TraceWriter | undefined;
   private config: AgentConfig;
   /**
    * Plan-mode-exit state machine: the pending implement-turn seed, the captured
@@ -196,14 +198,15 @@ export class AgentSession implements IAgentSession {
    */
   private readonly ledger = new LedgerLifecycle();
 
-  constructor(config: AgentConfig) {
+  constructor(config: AgentConfig, ownedTraceWriter?: TraceWriter) {
+    // Invariant: seal ownership requires the caller to explicitly supply the
+    // owner handle (second arg) AND it must be the same object as
+    // config.traceWriter. The TraceSink/TraceWriter type split prevents forks
+    // from promoting a write-only sink — the two-arg ceremony is defence-in-depth.
     this.ownsTraceSeal =
-      config.traceWriter !== undefined &&
-      config.isSubagentFork !== true &&
-      !AgentSession.claimedTraceWriters.has(config.traceWriter);
-    if (this.ownsTraceSeal) {
-      AgentSession.claimedTraceWriters.add(config.traceWriter!);
-    }
+      ownedTraceWriter !== undefined &&
+      config.traceWriter === ownedTraceWriter;
+    this.ownedTraceWriter = this.ownsTraceSeal ? ownedTraceWriter : undefined;
     // Wire the plan-exit control bridge for top-level sessions only (plan mode
     // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
     // The model-callable `exit_plan_mode` tool uses these callbacks to flip the
@@ -1366,19 +1369,16 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    // Invariant: only the session that first claimed a shared TraceWriter may
-    // seal it. `isSubagentFork` prevents stub-parent forks from claiming an
-    // otherwise unseen writer; writer identity also protects SDK consumers
-    // that directly construct a child from the legacy fork config (which has
-    // `subagentToolOutputCapBytes` but not the newer marker). This avoids
-    // coupling ownership back to that unrelated output cap, so a top-level
-    // session may still set a cap and seal normally. seal() is a one-shot hard
-    // gate: a child sealing first would silently truncate all later records.
+    // Invariant: only a session explicitly given the separate owner capability
+    // (the second constructor arg) may seal the shared TraceWriter. Fork configs
+    // inherit only the TraceSink — the type split prevents promotion. seal() is
+    // a one-shot hard gate: a child sealing first would silently truncate all
+    // later records.
     // Subagents still emit their own `closure` record above; only the seal is
     // gated. If the top-level never runs close(), the process-exit backstop
     // still seals.
     if (this.ownsTraceSeal) {
-      await sealTraceWriter(this.config.traceWriter, {
+      await sealTraceWriter(this.ownedTraceWriter, {
         ...signals,
         finalTurnCount: this.turnCount,
         finalCostUsd: this.sessionRunningCostUsd,

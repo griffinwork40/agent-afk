@@ -103,7 +103,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly baseUrl?: string;
   private readonly maxToolUseIterations?: number;
   private readonly softDeadlineMs?: number;
-  private readonly traceWriter?: import('../../trace/index.js').TraceWriter;
+  private readonly traceWriter?: import('../../trace/index.js').TraceSink;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
 

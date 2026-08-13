@@ -20,7 +20,7 @@ import { SubagentManager } from '../../../agent/subagent.js';
 import { isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 
 export type ParallelizeDispatchResult =
   | { kind: 'skipped'; reason: 'too-few-files' | 'skill-body-missing' }
@@ -66,7 +66,7 @@ export async function runParallelizeDispatch(
   parentReadRoots?: string[],
   // Witness layer: parent trace writer (ctx.traceWriter) so each dispatched
   // wave subagent emits subagent_lifecycle events. Mirrors research.ts.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<ParallelizeDispatchResult> {
   const fileCount = countFileReferences(plan);
 

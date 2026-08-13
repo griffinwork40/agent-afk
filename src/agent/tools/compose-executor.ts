@@ -18,7 +18,7 @@ import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
@@ -109,7 +109,7 @@ export interface ComposeExecutorContext {
    * nodes are invisible in `afk trace show` — same gap as the raw `agent`
    * tool path; see SubagentExecutorContext.traceWriter.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * User-facing surface of the session that owns this executor
    * (cli/telegram/daemon). Recorded as `origin` on compose routing-decision
@@ -546,7 +546,7 @@ export class ComposeExecutor {
    * `/resume` replaced the session that owned the previous writer. Only nodes
    * dispatched after this call use `writer` (#731).
    */
-  setTraceWriter(writer: TraceWriter | undefined): void {
+  setTraceWriter(writer: TraceSink | undefined): void {
     this.ctx.traceWriter = writer;
   }
 

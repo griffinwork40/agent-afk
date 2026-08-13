@@ -19,7 +19,7 @@
 
 import type { ProviderEvent } from '../../../provider.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
-import type { TraceWriter } from '../../../trace/index.js';
+import type { TraceSink } from '../../../trace/index.js';
 import { abortableStream } from '../../shared/abortable-stream.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import { createStreamState, isToolCallStop, type StreamState } from '../translate.js';
@@ -56,7 +56,7 @@ export interface StreamDriveStrategy<TEvent> {
 /** Session-scoped context the driver needs but does not own. */
 export interface StreamDriveContext {
   controller: AbortController;
-  traceWriter: TraceWriter | undefined;
+  traceWriter: TraceSink | undefined;
   initSessionId: string;
   currentModel: string;
   /** Live liveness check — the query sets this true on close(). */

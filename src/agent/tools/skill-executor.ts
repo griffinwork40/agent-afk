@@ -31,7 +31,7 @@ import { buildSkillMaxDepthRefusal } from './skill-depth-message.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { isTrustedSkill } from '../_lib/trusted-skill-registry.js';
 import { emitTrustedSkillComplete, emitTrustedSkillStart } from '../_lib/trusted-skill-events.js';
-import type { TraceWriter } from '../trace/writer.js';
+import type { TraceSink } from '../trace/index.js';
 import type { SkillExecutorContext, SkillExecutorInternals, SkillInput } from './skill-executor/types.js';
 import { isGateSkill, sessionIdentity, truncateTelemetryString } from './skill-executor/telemetry.js';
 import { executeLoadedPluginSkill, executeLoadedRegistrySkill } from './skill-executor/load-mode.js';
@@ -111,7 +111,7 @@ export class SkillExecutor {
    * replaced the session that owned the previous writer. Only forks dispatched
    * after this call use `writer`; in-flight ones keep theirs (#731).
    */
-  setTraceWriter(writer: TraceWriter | undefined): void {
+  setTraceWriter(writer: TraceSink | undefined): void {
     this.ctx.traceWriter = writer;
   }
 

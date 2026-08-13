@@ -16,7 +16,7 @@ import type {
 } from './sdk-types.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
@@ -439,10 +439,10 @@ export interface AgentConfig {
    * writer makes enforceable, and `src/agent/trace/` for shapes.
    *
    * Writing is the only capability a session needs here. Ending the shared
-   * file's life is a separate, non-inherited capability — see
-   * {@link AgentConfig.isSubagentFork}.
+   * file's life is a separate, non-inherited capability supplied directly to
+   * the `AgentSession` constructor by the writer's owner.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 
   /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
@@ -468,19 +468,14 @@ export interface AgentConfig {
    * set by an entry point. Direct SDK consumers that predate this marker are
    * additionally protected by shared TraceWriter identity.
    *
-   * Its one job today is witness-trace seal ownership. A session tree shares
-   * ONE TraceWriter by reference and `NdjsonTraceWriter.seal()` is a hard,
-   * one-shot gate: after it flips, `write()` throws and
-   * `emitSubagentLifecycle` swallows the rejection, so whichever session seals
-   * first silently truncates the record for every other session in the tree —
-   * the "started without terminal" orphan gap.
-   *
-   * This replaces probing `subagentToolOutputCapBytes` for the same signal on
-   * built-in forks.
-   * That field is a tool-output cap that merely *happened* to be fork-only, so
-   * the coupling was invisible and load-bearing: any top-level session
-   * legitimately setting an output cap would have silently stopped sealing its
-   * own trace. Seal ownership now has a field that means what it says.
+   * History: this field's original job was witness-trace seal ownership —
+   * preventing a fork from sealing the parent's shared TraceWriter. That role
+   * was superseded by the TraceSink/TraceWriter type split: seal ownership is
+   * now a separate constructor parameter (`ownedTraceWriter`), and
+   * `AgentConfig.traceWriter` is typed as `TraceSink` (write-only), so forks
+   * cannot express `seal()` at the type level. This field remains load-bearing
+   * for subagent identification (e.g. gating the session ledger off for forks,
+   * distinguishing forks in trace attribution).
    */
   isSubagentFork?: true;
 

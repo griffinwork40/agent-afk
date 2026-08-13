@@ -35,14 +35,14 @@ import type {
 } from './hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS, HookHandlerTimeoutError } from './hook-registry.js';
 import { emitHookDecision } from './trace/emit.js';
-import type { HookEventName, TraceWriter } from './trace/index.js';
+import type { HookEventName, TraceSink } from './trace/index.js';
 
 export interface SubagentHookDispatchOptions {
   signal?: AbortSignal;
   onError?: (err: Error) => void;
   /** Witness-layer trace writer. When provided, every hook dispatch
    *  emits a `hook_decision` event with the decision outcome. */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
 /**
@@ -56,7 +56,7 @@ export interface SubagentHookDispatchOptions {
  * the registry returned it.
  */
 async function emitHookDecisionFromOutcome(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   hookEvent: HookEventName,
   ctx: { toolName?: string },
   outcome:

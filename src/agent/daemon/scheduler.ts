@@ -31,6 +31,7 @@ import { registerSurfaceSession } from '../session/register-surface-session.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
+import type { TraceWriter } from '../trace/index.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
@@ -124,8 +125,8 @@ export interface SchedulerOptions {
   sessionConfig?: Partial<AgentConfig>;
   /** Override the telemetry sink (tests). Defaults to `~/.afk/agent-framework/forge-telemetry.jsonl`. */
   telemetryPath?: string;
-  /** Override the session factory (tests). Defaults to `new AgentSession(config)`. */
-  sessionFactory?: (config: AgentConfig) => AgentSession;
+  /** Override the session factory (tests). Defaults to `new AgentSession(config, ownedTraceWriter)`. */
+  sessionFactory?: (config: AgentConfig, ownedTraceWriter?: TraceWriter) => AgentSession;
   /**
    * Default cooldown (ms) between sessionstart fires of the same task.
    * Can be overridden per-task via `ScheduledTask.debounceMs`. Defaults to
@@ -775,9 +776,10 @@ export class CronScheduler {
       ...this.options.sessionConfig,
     };
     try {
+      const traceOwner = this.options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined;
       const session = this.options.sessionFactory
-        ? this.options.sessionFactory(config)
-        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
+        ? this.options.sessionFactory(config, traceOwner)
+        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)), traceOwner);
       // Step 7: register the daemon session in the cross-surface registry.
       // Best-effort; dispose() (archive) is invoked by runOnce on session close
       // so the long-running daemon never accumulates registry handles.

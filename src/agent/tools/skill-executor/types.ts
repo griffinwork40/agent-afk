@@ -15,7 +15,7 @@
 
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { ModelProvider } from '../../provider.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SdkPluginConfig } from '../../types/sdk-types.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
@@ -117,7 +117,7 @@ export interface SkillExecutorContext {
    * pre-wire, zero `subagent_lifecycle` events for any skill invocation
    * across 306 trace files.)
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Background-mode dispatch registry forwarded to forked child
    * {@link SubagentExecutor}s so a plugin/registry skill whose subagent

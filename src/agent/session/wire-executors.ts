@@ -34,7 +34,7 @@ import { loadAgentRegistry } from '../agents/index.js';
 import { discoverPluginAgents } from '../tools/skill-bridge.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
-import type { TraceWriter } from '../trace/writer.js';
+import type { TraceSink } from '../trace/writer.js';
 import type { Surface } from '../awareness/types.js';
 import type { AgentModelInput } from '../types.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
@@ -108,7 +108,7 @@ export interface WireExecutorsOptions {
    * Witness-layer writer for the root manager, the `agent` executor, and
    * compose DAG nodes.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Witness-layer writer for the `skill` executor and the nested
    * skill-executor factory.
@@ -117,7 +117,7 @@ export interface WireExecutorsOptions {
    * Telegram traces its manager/agent/compose paths but leaves skill forks
    * untraced. Other surfaces pass the same writer for both.
    */
-  skillTraceWriter?: TraceWriter;
+  skillTraceWriter?: TraceSink;
   /**
    * Registry backing `agent` dispatches with `mode: 'background'`. Only the
    * REPL wires one; elsewhere background dispatch reports as unconfigured

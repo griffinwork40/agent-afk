@@ -8,7 +8,7 @@ import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 
 export async function runPlanPhase(
   spec: string,
@@ -25,7 +25,7 @@ export async function runPlanPhase(
   parentReadRoots?: string[],
   // Witness layer: parent trace writer (ctx.traceWriter) so this phase's fork
   // emits subagent_lifecycle events. Mirrors research.ts.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const planPrompt = prompts['plan.md'];
