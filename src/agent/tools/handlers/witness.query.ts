@@ -290,10 +290,12 @@ export async function searchAcrossSessions(
   const matches: SearchMatch[] = [];
   const matchLimit = MAX_SEARCH_MATCHES; // cap total matches
   const truncatedSessions: string[] = [];
+  let sessionsActuallySearched = 0;
 
   for (const entry of traces) {
     if (matches.length >= matchLimit) break;
     const { content, truncated } = await readTraceSafe(entry.tracePath);
+    sessionsActuallySearched++;
     if (truncated) truncatedSessions.push(entry.sessionId);
     for (const line of content.split('\n')) {
       if (matches.length >= matchLimit) break;
@@ -318,7 +320,7 @@ export async function searchAcrossSessions(
   return {
     query: params.query,
     sessionsAvailable,
-    sessionsSearched: traces.length,
+    sessionsSearched: sessionsActuallySearched,
     matches,
     ...(truncatedSessions.length > 0 ? { truncatedSessions } : {}),
   };

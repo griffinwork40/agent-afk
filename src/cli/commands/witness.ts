@@ -101,7 +101,7 @@ export function registerWitnessCommand(program: Command): void {
         }
 
         console.log(
-          `Search: "${result.query}"  (${result.sessionsScanned} sessions scanned, ` +
+          `Search: "${result.query}"  (${result.sessionsSearched} sessions scanned, ` +
             `${result.matches.length} matches)\n`,
         );
 
