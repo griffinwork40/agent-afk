@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.115.3] - 2026-08-13
+
+### Changed
+- split TraceWriter into write-only TraceSink and owner-only seal handle (#1051) (400f64f8)
+
 ## [5.115.2] - 2026-08-13
 
 ### Fixed
