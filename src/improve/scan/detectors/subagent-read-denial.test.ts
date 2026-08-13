@@ -27,8 +27,7 @@ import {
   DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES,
 } from './subagent-read-denial.js';
 import { DetectorResultSchema, FailureCardSchema } from '../../schemas.js';
-import { buildForkDenialRemedy } from '../../../agent/tools/hooks/fork-denial-remedy.js';
-import { SUBAGENT_PATH_DENIAL_REASON_PREFIX } from '../../../agent/tools/denial-circuit-breaker.js';
+import { buildForkPathDenialReason } from '../../../agent/tools/hooks/fork-denial-remedy.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -78,17 +77,12 @@ function makeSession(sessionId: string, lines: string[]): SessionRead {
 /**
  * A path-access denial reason with the given offending path.
  *
- * Uses the REAL producer (`buildForkDenialRemedy`) and the REAL prefix
- * (`SUBAGENT_PATH_DENIAL_REASON_PREFIX`) so any reword of the denial prose
- * is reflected here automatically — if the fingerprint rotates, the golden
- * test in subagent-read-denial-stability.test.ts catches it. (#853)
+ * Uses the real complete-reason producer, so any reword of the denial prose is
+ * reflected here automatically — if the fingerprint rotates, the golden test
+ * in subagent-read-denial-stability.test.ts catches it. (#853)
  */
 function denial(path: string): string {
-  const remedy = buildForkDenialRemedy({ mode: 'read', resolvedPath: path });
-  return (
-    `${SUBAGENT_PATH_DENIAL_REASON_PREFIX} ${path} is outside the ` +
-    `session's granted read roots. ${remedy}`
-  );
+  return buildForkPathDenialReason({ mode: 'read', resolvedPath: path });
 }
 const PATH_A = '/Users/x/proj/src/a.ts';
 const PATH_B = '/Users/x/proj/.afk-worktrees/wt/src/b.ts';

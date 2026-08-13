@@ -60,7 +60,7 @@ import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import { wouldBeRestricted, realpathSafe } from '../handlers/_cwd-utils.js';
 import { isReadDenied } from '../handlers/read-denylist.js';
 import { appendGrant } from '../../permissions-store.js';
-import { buildForkDenialRemedy } from './fork-denial-remedy.js';
+import { buildForkPathDenialReason } from './fork-denial-remedy.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 
 /** Tools subject to per-call path approval. Bash is gated separately. */
@@ -290,7 +290,6 @@ async function preToolUseImpl(
     // the PARENT — and because a fork's roots are fixed at dispatch, the only
     // remedy that reaches an in-flight fork is a re-dispatch. Wording + the
     // downstream byte/fingerprint contracts live in `./fork-denial-remedy.ts`.
-    const remedy = buildForkDenialRemedy({ mode, resolvedPath: result.resolved });
     // Contract: the "Sub-agent path access denied:" prefix is load-bearing —
     // the `subagent-read-denial` telemetry detector (improve/scan/detectors)
     // and the denial circuit breaker (tools/denial-circuit-breaker.ts,
@@ -298,9 +297,7 @@ async function preToolUseImpl(
     // exact containment auto-deny. If you reword it, update those consumers too.
     return {
       decision: 'block',
-      reason:
-        `Sub-agent path access denied: ${result.resolved} is outside the ` +
-        `session's granted ${mode} roots. ${remedy}`,
+      reason: buildForkPathDenialReason({ mode, resolvedPath: result.resolved }),
     };
   }
 

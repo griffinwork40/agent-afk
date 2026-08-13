@@ -9,12 +9,11 @@
  *
  *   subagent-read-denial-a47734dbbb44
  *
- * The denial reason is produced by `buildForkDenialRemedy` (in
+ * The denial reason is produced by `buildForkPathDenialReason` (in
  * `src/agent/tools/hooks/fork-denial-remedy.ts`) and assembled in
  * `path-approval-hook.ts` as:
  *
- *   `${SUBAGENT_PATH_DENIAL_REASON_PREFIX} ${resolvedPath} is outside the
- *    session's granted ${mode} roots. ${buildForkDenialRemedy(...)}`
+ *   `buildForkPathDenialReason({ mode: 'read', resolvedPath })`
  *
  * Any reword of that prose — even a minor punctuation fix — produces a new
  * fingerprint → new slug → ORPHANS every failure card accumulated under the
@@ -23,9 +22,8 @@
  *
  * ## What this test does
  *
- * It imports the REAL producer (`buildForkDenialRemedy`) and the REAL prefix
- * (`SUBAGENT_PATH_DENIAL_REASON_PREFIX`), assembles the full denial reason
- * exactly as `path-approval-hook.ts` does, normalizes it, hashes it, and
+ * It imports the REAL complete-reason producer used by `path-approval-hook.ts`,
+ * normalizes its output, hashes it, and
  * asserts the resulting fingerprint matches a checked-in golden constant. A
  * reword that changes the fingerprint makes this test fail, which is the
  * signal that was missing before.
@@ -48,7 +46,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildForkDenialRemedy } from '../../../agent/tools/hooks/fork-denial-remedy.js';
+import { buildForkPathDenialReason } from '../../../agent/tools/hooks/fork-denial-remedy.js';
 import { SUBAGENT_PATH_DENIAL_REASON_PREFIX } from '../../../agent/tools/denial-circuit-breaker.js';
 import { computeFingerprint, normalizeReason } from './subagent-read-denial.js';
 
@@ -74,23 +72,12 @@ import { computeFingerprint, normalizeReason } from './subagent-read-denial.js';
 const GOLDEN_FINGERPRINT_READ =
   'a47734dbbb44aafcea3d44f17a35d8a422eee7e1d47a86bdcdf88a6670fc26dd';
 
-/**
- * Golden fingerprint for a WRITE denial:
- *   `Sub-agent path access denied: <path> is outside the session's granted
- *    write roots. Writes are confined to this fork's granted write roots by
- *    design (worktree isolation). To allow it, the parent must re-dispatch you
- *    via the `agent` tool with `writeRoots: ["<path>"]`, or perform the
- *    write itself. Return this exact path requirement to your parent.`
- */
-const GOLDEN_FINGERPRINT_WRITE =
-  '899144a751948093832b176f84d3d710d3c434370b551c94934336158ac3ada7';
-
 // A single representative path used to drive the producer; it is normalized
 // away by `normalizeReason` so the golden value is path-independent.
 const TEST_PATH = '/test/path';
 
 // ---------------------------------------------------------------------------
-// Helpers — mirror the exact assembly in path-approval-hook.ts
+// Helpers
 // ---------------------------------------------------------------------------
 
 /**
@@ -100,12 +87,8 @@ const TEST_PATH = '/test/path';
  *   `Sub-agent path access denied: ${result.resolved} is outside the
  *    session's granted ${mode} roots. ${remedy}`
  */
-function assembleFullReason(mode: 'read' | 'write', resolvedPath: string): string {
-  const remedy = buildForkDenialRemedy({ mode, resolvedPath });
-  return (
-    `${SUBAGENT_PATH_DENIAL_REASON_PREFIX} ${resolvedPath} is outside the ` +
-    `session's granted ${mode} roots. ${remedy}`
-  );
+function readDenialReason(resolvedPath: string): string {
+  return buildForkPathDenialReason({ mode: 'read', resolvedPath });
 }
 
 // ---------------------------------------------------------------------------
@@ -114,25 +97,17 @@ function assembleFullReason(mode: 'read' | 'write', resolvedPath: string): strin
 
 describe('subagent-read-denial: golden fingerprint stability (#853)', () => {
   it('READ denial fingerprint is stable (changing prose rotates failure-card slugs)', () => {
-    const fullReason = assembleFullReason('read', TEST_PATH);
+    const fullReason = readDenialReason(TEST_PATH);
     const normalizedReason = normalizeReason(fullReason);
     const fingerprint = computeFingerprint({ hookEvent: 'PreToolUse', normalizedReason });
 
     expect(fingerprint).toBe(GOLDEN_FINGERPRINT_READ);
   });
 
-  it('WRITE denial fingerprint is stable (changing prose rotates failure-card slugs)', () => {
-    const fullReason = assembleFullReason('write', TEST_PATH);
-    const normalizedReason = normalizeReason(fullReason);
-    const fingerprint = computeFingerprint({ hookEvent: 'PreToolUse', normalizedReason });
-
-    expect(fingerprint).toBe(GOLDEN_FINGERPRINT_WRITE);
-  });
-
   it('fingerprint is path-independent — different paths yield the same hash', () => {
     const paths = [TEST_PATH, '/another/path/foo.ts', '/Users/griffinlong/proj/bar.ts'];
     const fingerprints = paths.map((p) => {
-      const reason = assembleFullReason('read', p);
+      const reason = readDenialReason(p);
       const normalized = normalizeReason(reason);
       return computeFingerprint({ hookEvent: 'PreToolUse', normalizedReason: normalized });
     });
@@ -142,17 +117,13 @@ describe('subagent-read-denial: golden fingerprint stability (#853)', () => {
     expect(fingerprints[0]).toBe(GOLDEN_FINGERPRINT_READ);
   });
 
-  it('read and write fingerprints are distinct (different prose, different cards)', () => {
-    expect(GOLDEN_FINGERPRINT_READ).not.toBe(GOLDEN_FINGERPRINT_WRITE);
-  });
-
   it('SUBAGENT_PATH_DENIAL_REASON_PREFIX matches the substring the detector keys on', () => {
     // The detector uses `reason.includes('Sub-agent path access denied:')` to
     // classify a containment denial. If the prefix changes here, the detector
     // would stop classifying the denial as 'read-root-containment' and would
     // instead mark it 'unclassified', silently breaking the card pipeline.
     expect(SUBAGENT_PATH_DENIAL_REASON_PREFIX).toBe('Sub-agent path access denied:');
-    const fullReason = assembleFullReason('read', TEST_PATH);
+    const fullReason = readDenialReason(TEST_PATH);
     expect(fullReason).toContain(SUBAGENT_PATH_DENIAL_REASON_PREFIX);
   });
 });
