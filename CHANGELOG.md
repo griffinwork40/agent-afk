@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.115.1] - 2026-08-13
+
+### Fixed
+- remove vestigial Claude Code slug from memory surveyor (#882) (#1008) (0ab11cd2)
+
+### Changed
+- golden-fingerprint test for denial reason slug stability (#853) (#1047) (9a7a603d)
+
 ## [5.115.0] - 2026-08-13
 
 ### Added
