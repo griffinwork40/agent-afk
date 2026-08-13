@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clampLimit, clampSessions, readSessionTrace, searchAcrossSessions } from './witness.query.js';
@@ -301,5 +301,28 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
     });
     // At most 1 session can be scanned (sessions slice applied first)
     expect(result.sessionsSearched).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchAcrossSessions — sessions searched stops at match cap
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — match cap', () => {
+  it('counts only sessions reached before the match cap', async () => {
+    const olderTrace = await writeTrace('session-older', [makeEventLine('closure', 1, { text: 'needle' })]);
+    const cappedTrace = await writeTrace(
+      'session-capped',
+      Array.from({ length: 200 }, (_, index) => makeEventLine('closure', index + 1, { text: 'needle' })),
+    );
+    await utimes(olderTrace, new Date('2024-01-01'), new Date('2024-01-01'));
+    await utimes(cappedTrace, new Date('2024-01-02'), new Date('2024-01-02'));
+
+    const result = await searchAcrossSessions({ query: 'needle', sessions: 2 });
+
+    expect(result.sessionsAvailable).toBe(2);
+    expect(result.sessionsSearched).toBe(1);
+    expect(result.matches).toHaveLength(200);
+    expect(new Set(result.matches.map((match) => match.sessionId))).toEqual(new Set(['session-capped']));
   });
 });

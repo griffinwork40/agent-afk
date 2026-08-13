@@ -295,9 +295,11 @@ export async function searchAcrossSessions(
   const queryLower = params.query.toLowerCase();
   const matches: SearchMatch[] = [];
   const matchLimit = MAX_LIMIT; // cap total matches
+  let sessionsSearched = 0;
 
   for (const entry of traces) {
     if (matches.length >= matchLimit) break;
+    sessionsSearched += 1;
     const content = await readTraceSafe(entry.tracePath);
     for (const line of content.split('\n')) {
       if (matches.length >= matchLimit) break;
@@ -322,7 +324,7 @@ export async function searchAcrossSessions(
   return {
     query: params.query,
     sessionsAvailable,
-    sessionsSearched: traces.length,
+    sessionsSearched,
     matches,
   };
 }
