@@ -69,6 +69,7 @@ vi.mock('../shared-helpers.js', () => ({
   parseProvider: vi.fn(() => undefined),
   parseThinkingUiMode: vi.fn(() => 'live'),
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
+  explicitProviderHints: vi.fn(() => undefined),
 }));
 
 vi.mock('../config.js', () => ({
