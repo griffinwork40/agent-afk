@@ -50,7 +50,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('emits closure with reason=model_end_turn on normal close', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     await session.close();
 
@@ -65,7 +65,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('closure precedes session_sealed in trace order', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     await session.close();
 
@@ -93,7 +93,7 @@ describe('AgentSession + closure trace event', () => {
   // closure-anomaly guardrail wiring: emitClosure attaches the abort recovery
   // hint to an abort closure, and omits guidance on a clean close.
   it('attaches the abort recovery hint to an abort closure', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.abort('sigint');
     await session.close();
@@ -105,7 +105,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('omits guidance on a clean model_end_turn closure', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     await session.close();
 
@@ -163,7 +163,7 @@ describe('AgentSession + closure trace event', () => {
     // The mock provider emits fixed usage per turn: inputTokens=10,
     // outputTokens=2, totalCostUsd=0.001, stopReason='end_turn'.
     // Two turns should produce input=20, output=4, cost=0.002.
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
 
     const collect = async (gen: AsyncIterable<OutputEvent>): Promise<void> => {
@@ -196,7 +196,7 @@ describe('AgentSession + closure trace event', () => {
   // signature of witness trace 78a71c64…: a ~36s mimo-v2.5 run sealed succeeded
   // having produced nothing). See closure-reason.ts precedence rule 5.
   it('seals failed + reason=abort when a turn ends in a provider error before a clean close', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
 
     const collect = async (gen: AsyncIterable<OutputEvent>): Promise<OutputEvent[]> => {
@@ -222,7 +222,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('a successful turn after an errored turn clears the flag — seals succeeded', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
 
     const drain = async (gen: AsyncIterable<OutputEvent>): Promise<void> => {
@@ -245,7 +245,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('is idempotent — repeated close() calls do not write multiple closure records', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     await session.close();
     await session.close();
@@ -272,7 +272,7 @@ describe('AgentSession + closure trace event', () => {
       return origWrite(event);
     };
     const angryConfig = { ...config, traceWriter: angry };
-    const session = new AgentSession(angryConfig);
+    const session = new AgentSession(angryConfig, angry);
     await session.waitForInitialization();
     await expect(session.close()).resolves.not.toThrow();
     // The seal event still lands despite the closure write failing.
@@ -287,7 +287,7 @@ describe('AgentSession + closure trace event', () => {
   // handleSighup each calling session.abort('sigint'|'sigterm'|'sighup').
 
   it('reason=abort when session.abort("sigint") is called before close()', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.abort('sigint');
     await session.close();
@@ -298,7 +298,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('reason=abort when session.abort("sigterm") is called before close()', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.abort('sigterm');
     await session.close();
@@ -309,7 +309,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('reason=abort when session.abort("sighup") is called before close()', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.abort('sighup');
     await session.close();
@@ -320,7 +320,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('session.abort() is idempotent — second call after already-aborted signal is a no-op', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.abort('sigint');
     session.abort('sigterm'); // second call must not throw or overwrite
@@ -340,7 +340,7 @@ describe('AgentSession + closure trace event', () => {
   // site rather than at the trace-reading site.
 
   it('session.abort("closed") throws — reserved for the internal close() path', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     expect(() => session.abort('closed')).toThrow(/reserved reason "closed"/);
     // Signal not aborted — caller must use a different reason.
@@ -349,7 +349,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('session.abort("Budget exceeded: 100k tokens") throws — reserved Budget prefix', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     expect(() => session.abort('Budget exceeded: 100k tokens')).toThrow(/reserved reason "Budget exceeded/);
     expect(session.abortSignal.aborted).toBe(false);
@@ -357,7 +357,7 @@ describe('AgentSession + closure trace event', () => {
   });
 
   it('session.abort("operation timed out after 30s") throws — reserved "timed out" substring', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     expect(() => session.abort('operation timed out after 30s')).toThrow(/timed out/);
     expect(session.abortSignal.aborted).toBe(false);
@@ -373,7 +373,7 @@ describe('AgentSession + closure trace event', () => {
   // first-writer-wins is the intended behavior.
 
   it('reason=model_end_turn when abort("sigterm") is called AFTER close() has already aborted', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     // close() runs first and internally calls abort('closed').
     await session.close();
