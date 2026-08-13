@@ -468,19 +468,14 @@ export interface AgentConfig {
    * set by an entry point. Direct SDK consumers that predate this marker are
    * additionally protected by shared TraceWriter identity.
    *
-   * Its one job today is witness-trace seal ownership. A session tree shares
-   * ONE TraceWriter by reference and `NdjsonTraceWriter.seal()` is a hard,
-   * one-shot gate: after it flips, `write()` throws and
-   * `emitSubagentLifecycle` swallows the rejection, so whichever session seals
-   * first silently truncates the record for every other session in the tree —
-   * the "started without terminal" orphan gap.
-   *
-   * This replaces probing `subagentToolOutputCapBytes` for the same signal on
-   * built-in forks.
-   * That field is a tool-output cap that merely *happened* to be fork-only, so
-   * the coupling was invisible and load-bearing: any top-level session
-   * legitimately setting an output cap would have silently stopped sealing its
-   * own trace. Seal ownership now has a field that means what it says.
+   * History: this field's original job was witness-trace seal ownership —
+   * preventing a fork from sealing the parent's shared TraceWriter. That role
+   * was superseded by the TraceSink/TraceWriter type split: seal ownership is
+   * now a separate constructor parameter (`ownedTraceWriter`), and
+   * `AgentConfig.traceWriter` is typed as `TraceSink` (write-only), so forks
+   * cannot express `seal()` at the type level. This field remains load-bearing
+   * for subagent identification (e.g. gating the session ledger off for forks,
+   * distinguishing forks in trace attribution).
    */
   isSubagentFork?: true;
 

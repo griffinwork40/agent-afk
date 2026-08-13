@@ -199,10 +199,13 @@ export class AgentSession implements IAgentSession {
   private readonly ledger = new LedgerLifecycle();
 
   constructor(config: AgentConfig, ownedTraceWriter?: TraceWriter) {
+    // Invariant: seal ownership requires the caller to explicitly supply the
+    // owner handle (second arg) AND it must be the same object as
+    // config.traceWriter. The TraceSink/TraceWriter type split prevents forks
+    // from promoting a write-only sink — the two-arg ceremony is defence-in-depth.
     this.ownsTraceSeal =
       ownedTraceWriter !== undefined &&
-      config.traceWriter === ownedTraceWriter &&
-      config.isSubagentFork !== true;
+      config.traceWriter === ownedTraceWriter;
     this.ownedTraceWriter = this.ownsTraceSeal ? ownedTraceWriter : undefined;
     // Wire the plan-exit control bridge for top-level sessions only (plan mode
     // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
@@ -1367,10 +1370,10 @@ export class AgentSession implements IAgentSession {
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
     // Invariant: only a session explicitly given the separate owner capability
-    // may seal the shared TraceWriter. Fork configs inherit only the TraceSink,
-    // and `isSubagentFork` additionally rejects an owner passed accidentally.
-    // seal() is a one-shot hard gate: a child sealing first would silently
-    // truncate all later records.
+    // (the second constructor arg) may seal the shared TraceWriter. Fork configs
+    // inherit only the TraceSink — the type split prevents promotion. seal() is
+    // a one-shot hard gate: a child sealing first would silently truncate all
+    // later records.
     // Subagents still emit their own `closure` record above; only the seal is
     // gated. If the top-level never runs close(), the process-exit backstop
     // still seals.
