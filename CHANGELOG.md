@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.116.0] - 2026-08-13
+
+### Added
+- add thread_id to send_telegram for topic targeting (#1053) (8f312cab)
+
+### Fixed
+- extract discoverPluginSkillsAndCommands helper (#989) (#1055) (3c2fc455)
+- add Invariant comment guarding sync block (#743) (#1054) (f0b26986)
+
 ## [5.115.4] - 2026-08-13
 
 ### Fixed
