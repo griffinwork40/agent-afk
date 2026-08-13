@@ -33,6 +33,7 @@ export function createSendTelegramHandler(
     const obj = input as Record<string, unknown>;
     const message = obj['message'];
     const chat = obj['chat'];
+    const threadId = obj['thread_id'];
 
     if (typeof message !== 'string') {
       return { content: 'Invalid input: message must be a string', isError: true };
@@ -43,6 +44,24 @@ export function createSendTelegramHandler(
         content: 'Invalid input: chat must be a number (chat id) or string (chat id or alias name)',
         isError: true,
       };
+    }
+
+    if (threadId !== undefined) {
+      if (typeof threadId !== 'number' || !Number.isInteger(threadId) || threadId <= 0) {
+        return {
+          content: 'Invalid input: thread_id must be a positive integer',
+          isError: true,
+        };
+      }
+      if (chat === undefined) {
+        return {
+          content:
+            'Invalid input: thread_id requires chat to be set explicitly. ' +
+            'Thread targeting without an explicit chat target is ambiguous — ' +
+            'default routing goes to a DM, which has no topics.',
+          isError: true,
+        };
+      }
     }
 
     if (message.length === 0) {
@@ -112,7 +131,12 @@ export function createSendTelegramHandler(
     const failures: string[] = [];
 
     for (const chatId of targets) {
-      const result = await pushFn({ token: botToken, chatId, text: message });
+      const result = await pushFn({
+        token: botToken,
+        chatId,
+        text: message,
+        ...(threadId !== undefined ? { messageThreadId: threadId as number } : {}),
+      });
       if (!result.ok) {
         failures.push(`chat ${chatId}: ${result.errorMessage ?? `HTTP ${result.status}`}`);
       }
@@ -137,7 +161,9 @@ export function createSendTelegramHandler(
     return {
       content:
         targets.length === 1
-          ? `Sent Telegram message to chat ${targets[0]}.`
+          ? threadId !== undefined
+            ? `Sent Telegram message to chat ${targets[0]} (topic ${threadId}).`
+            : `Sent Telegram message to chat ${targets[0]}.`
           : `Sent Telegram message to ${targets.length} chats.`,
     };
   };
