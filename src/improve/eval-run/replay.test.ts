@@ -381,9 +381,10 @@ describe('replayClosureAnomaly', () => {
   });
 
   it('FAILS closed for an anomalous reason the guardrail does not cover yet', async () => {
-    // `timeout` is anomalous (reproduces) but buildClosureGuidance returns null
-    // for it today → not neutralised → fail-closed (real guardrail, no inject).
-    const bytes = Buffer.from(closureContent('timeout'), 'utf8');
+    // `budget_exceeded` is anomalous (reproduces) but buildClosureGuidance
+    // returns null for it today → not neutralised → fail-closed (real
+    // guardrail, no inject).
+    const bytes = Buffer.from(closureContent('budget_exceeded'), 'utf8');
     const probe = await closureHandler!.run(makeClosureEvalCase(), bytes, {});
 
     expect(check(probe.checks, REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
