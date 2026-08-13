@@ -15,6 +15,7 @@ export function createSessionStats(model: AgentModelInput): SessionStats {
   return {
     totalTurns: 0,
     totalCostUsd: 0,
+    unpricedTurns: 0,
     totalTokens: 0,
     totalDurationMs: 0,
     sessionStartTime: Date.now(),
@@ -40,6 +41,7 @@ export function createSessionStats(model: AgentModelInput): SessionStats {
 export function resetStats(stats: SessionStats): void {
   stats.totalTurns = 0;
   stats.totalCostUsd = 0;
+  stats.unpricedTurns = 0;
   stats.totalTokens = 0;
   stats.totalDurationMs = 0;
   stats.sessionStartTime = Date.now();
@@ -70,6 +72,7 @@ export function recordTurn(
   toolEvents?: ToolEvent[],
 ): TurnRecord {
   const costUsd = metadata?.totalCostUsd ?? 0;
+  if (metadata?.totalCostUsd === undefined) stats.unpricedTurns += 1;
   const durationMs = metadata?.durationMs ?? 0;
   const aggInput = Number(metadata?.usage?.['input_tokens'] ?? 0);
   const aggOutput = Number(metadata?.usage?.['output_tokens'] ?? 0);

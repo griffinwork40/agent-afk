@@ -11,7 +11,7 @@ export interface InboundAttachmentRecord {
   readonly path: string;
   readonly mediaType: InboundMediaType;
   readonly sizeBytes: number;
-  readonly digest: string;
+  readonly digest: string;  // sha256 hex — avoids re-reading file on dedup
 }
 
 export interface InboundAttachmentRegistration extends InboundAttachmentRecord {
@@ -107,7 +107,7 @@ export class InboundAttachmentRegistry implements InboundAttachmentReader {
         return { id, ...record };
       }
 
-      if (existing.digest === digest) {
+      if (existing.mediaType === mediaType && existing.digest === digest) {
         return { id, ...existing };
       }
 

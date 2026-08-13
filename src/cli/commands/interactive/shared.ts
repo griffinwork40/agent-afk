@@ -45,6 +45,7 @@ export function reseedStatsFromStored(
 ): void {
   stats.totalTurns = stored.totalTurns;
   stats.totalCostUsd = stored.totalCostUsd;
+  stats.unpricedTurns = stored.unpricedTurns ?? 0;
   stats.totalTokens = stored.totalTokens;
   stats.totalDurationMs = stored.totalDurationMs;
   stats.turns = [...stored.turns];

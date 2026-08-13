@@ -42,6 +42,8 @@ export interface StoredSession {
   savedAt: number;
   totalTurns: number;
   totalCostUsd: number;
+  /** Count of turns where cost data was unavailable. Optional for backward compat with legacy sidecars. */
+  unpricedTurns?: number;
   totalTokens: number;
   totalDurationMs: number;
   turns: TurnRecord[];
@@ -156,6 +158,7 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     savedAt: Date.now(),
     totalTurns: stats.totalTurns,
     totalCostUsd: stats.totalCostUsd,
+    unpricedTurns: stats.unpricedTurns,
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: stats.turns,
