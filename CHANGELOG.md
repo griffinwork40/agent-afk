@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.114.0] - 2026-08-13
+
+### Added
+- surface truncatedSessions in search_witness results (#1036) (#1042) (0023b07b)
+
+### Changed
+- add negative assertion to no-git guard (#788) (#1026) (a9a6d3fc)
+- add unit tests for handler adapter layer (#1038) (#1039) (54e4c602)
+- pin shared allowance across alternating stall shapes (#947) (#1040) (8ea92519)
+
 ## [5.113.0] - 2026-08-12
 
 ### Added
