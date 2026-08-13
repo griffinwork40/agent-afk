@@ -25,7 +25,7 @@ import {
 import { createBashRestrictionHook } from './tools/hooks/bash-restriction-hook.js';
 import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 import type { PermissionMode } from './types/sdk-types.js';
-import type { TraceWriter } from './trace/index.js';
+import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
 
@@ -99,7 +99,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceWriter; afkPromptForApproval?: boolean },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();

@@ -14,7 +14,7 @@ export type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
 
 import type { ToolResult } from '../providers/shared/tool-result.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -84,7 +84,7 @@ export interface ToolHandlerContext {
    * Optional — handlers that don't emit trace events ignore this field.
    * Never required: missing writer is a no-op at the emit helper level.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Stable identifier for the current tool use block. Correlates handler-emitted
    * trace events with the surrounding `tool_call` started/completed records.

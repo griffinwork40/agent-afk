@@ -20,7 +20,7 @@
  * @module agent/providers/shared/turn-trace
  */
 
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 
 /**
@@ -38,7 +38,7 @@ export class TurnTrace {
    */
   constructor(
     private readonly signal: AbortSignal,
-    private readonly traceWriter: TraceWriter | undefined,
+    private readonly traceWriter: TraceSink | undefined,
     private readonly provider: 'anthropic-direct' | 'openai-compatible',
   ) {
     // Invariant: emit order matches the pre-split loop prologue — `loop_start`

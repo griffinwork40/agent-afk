@@ -16,7 +16,7 @@ import type {
 } from './sdk-types.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
@@ -442,7 +442,7 @@ export interface AgentConfig {
    * file's life is a separate, non-inherited capability — see
    * {@link AgentConfig.isSubagentFork}.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 
   /**
    * Cascade-abort and drain in-flight subagents before the trace writer is

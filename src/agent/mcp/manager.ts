@@ -29,7 +29,7 @@ import { McpClient, UnauthorizedError } from './client.js';
 import { buildMcpNameRegistry, sanitizeNameSegment } from './naming.js';
 import type { McpClientState, McpServerConfig } from './types.js';
 import { emitSessionPhase } from '../trace/emit.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 
 /**
  * Per-server runtime record. Holds the live client, the list of tools the
@@ -56,7 +56,7 @@ export interface McpManagerInitOptions {
    * Purely observational — emission is fire-and-forget and never affects
    * connect behavior or timing.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
 /**

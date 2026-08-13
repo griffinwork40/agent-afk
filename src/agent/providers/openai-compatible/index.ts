@@ -462,7 +462,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
        */
       subagentToolOutputCapBytes?: number;
-      traceWriter?: import('../../trace/index.js').TraceWriter;
+      traceWriter?: import('../../trace/index.js').TraceSink;
       /**
        * Live source for the `get_runtime_state` tool — see the matching
        * comment in `anthropic-direct/index.ts:buildDispatcher`.

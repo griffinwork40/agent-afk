@@ -23,7 +23,7 @@
  * @module agent/providers/anthropic-direct/tracing-fetch
  */
 
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { parseRetryAfterMs } from './usage-limit.js';
 
@@ -52,7 +52,7 @@ export interface ThrottleInfo {
  * callback can never disturb the request path or the SDK's retry loop.
  */
 export function makeTracingFetch(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   baseFetch: typeof fetch = fetch,
   onThrottle?: (info: ThrottleInfo) => void,
   onQuota?: (headers: Headers) => void,

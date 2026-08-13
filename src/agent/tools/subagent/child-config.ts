@@ -39,7 +39,7 @@ import type { RegisteredAgent } from '../../agents/index.js';
 import type { AgentRegistry } from '../../agents/index.js';
 import type { SkillExecutor } from '../skill-executor.js';
 import type { Surface } from '../../awareness/types.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
 import { isChildReplaySafe } from './retry-safety.js';
@@ -97,7 +97,7 @@ export interface BuildChildConfigArgs {
    *   2. the recursive child executor's ctx (so the chain holds to maxDepth,
    *      mirroring `cwd`).
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so

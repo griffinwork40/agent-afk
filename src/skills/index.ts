@@ -7,7 +7,7 @@
  */
 
 import type { AgentModelInput, IAgentSession } from '../agent/types.js';
-import type { TraceWriter } from '../agent/trace/index.js';
+import type { TraceSink } from '../agent/trace/index.js';
 import type { ReadScopeInputs } from '../agent/subagent-read-scope.js';
 
 /**
@@ -81,7 +81,7 @@ export interface SkillExecutionContext {
    * `AFK_TRACE_DISABLED=1`, or older SkillExecutor versions / test stubs that
    * do not provide it). In that case forking proceeds untraced, as before.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Reads the parent session's read scope ({@link ReadScopeInputs}) at
    * dispatch time (wired to the root

@@ -21,7 +21,7 @@
 import { BudgetExceededError, TimeoutError } from '../../utils/errors.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
 import { emitClosure } from '../trace/emit.js';
-import type { ClosureReason } from '../trace/index.js';
+import type { ClosureReason, TraceSink } from '../trace/index.js';
 import type { TraceWriter } from '../trace/writer.js';
 import { buildClosureGuidance } from './closure-guidance.js';
 import { classifyClosureReason } from './closure-reason.js';
@@ -121,7 +121,7 @@ export interface EmitClosureInput extends ClosureSignals, ClosureTotals {
  * anomalous reasons (benign reasons omit the field).
  */
 export async function emitClosureEvent(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   input: EmitClosureInput,
 ): Promise<void> {
   if (!writer) return;

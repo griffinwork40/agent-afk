@@ -8,7 +8,7 @@ import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
-import type { TraceWriter } from '../../../agent/trace/writer.js';
+import type { TraceWriter } from '../../../agent/trace/writer.js'; // owner handle — kept for pendingTraceWriter
 import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
 import { resolveBootstrapConfig } from './bootstrap-config.js';
 import { createBootstrapInfra } from './bootstrap-infra.js';
