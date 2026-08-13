@@ -303,3 +303,68 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
     expect(result.sessionsScanned).toBeLessThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// searchAcrossSessions — truncation signal (#1036)
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — truncation signal', () => {
+  /**
+   * Build a trace file that exceeds the 2 MB cap by writing many event lines.
+   * We do this by creating a large payload string on each event.
+   */
+  async function writeLargeTrace(sessionId: string, searchToken: string): Promise<void> {
+    const dir = join(tmpHome, 'state', 'witness', sessionId);
+    await mkdir(dir, { recursive: true });
+    const tracePath = join(dir, 'trace.jsonl');
+
+    // Write enough bytes to exceed MAX_READ_BYTES (2_097_152).
+    // Each line is ~2100 bytes; 1100 lines ≈ 2.31 MB.
+    const lines: string[] = [];
+    const filler = 'x'.repeat(2000);
+    for (let i = 0; i < 1100; i++) {
+      lines.push(
+        JSON.stringify({
+          kind: 'tool_call',
+          seq: i,
+          ts: new Date().toISOString(),
+          payload: { name: 'bash', filler, searchToken: i === 0 ? searchToken : 'nope' },
+        }),
+      );
+    }
+    // The searchable event is at the very beginning — it will be sliced off.
+    const { writeFile: wf } = await import('node:fs/promises');
+    await wf(tracePath, lines.join('\n') + '\n', 'utf-8');
+  }
+
+  it('populates truncatedSessions when a trace exceeds the 2 MB cap', async () => {
+    const sessionId = 'large-trace-session';
+    // Write a trace that is guaranteed to exceed 2 MB.
+    await writeLargeTrace(sessionId, 'unique-needle-xyz');
+
+    // Query for a token that appears in a line near the tail (not the head)
+    // so we can confirm the file was read at all, then separately check truncation.
+    const result = await searchAcrossSessions({ query: 'bash', sessions: 5 });
+
+    expect(result.truncatedSessions).toBeDefined();
+    expect(result.truncatedSessions).toContain(sessionId);
+  });
+
+  it('does NOT include truncatedSessions when all traces fit within 2 MB', async () => {
+    const sessionId = 'small-trace-session';
+    await writeTrace(sessionId, [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const result = await searchAcrossSessions({ query: 'end_turn', sessions: 5 });
+
+    // truncatedSessions should be absent (undefined), not an empty array.
+    expect(result.truncatedSessions).toBeUndefined();
+  });
+
+  it('truncatedSessions is absent (undefined) when no sessions are truncated', async () => {
+    // Empty witness dir — no sessions at all.
+    const result = await searchAcrossSessions({ query: 'anything', sessions: 5 });
+    expect(result.truncatedSessions).toBeUndefined();
+  });
+});

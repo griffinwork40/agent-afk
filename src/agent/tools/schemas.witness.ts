@@ -62,7 +62,10 @@ export const searchWitnessTool: AnthropicToolDef = {
     'Search across multiple sessions\' witness traces for a text pattern. Returns matching ' +
     'trace events grouped by session. Use to find patterns across sessions — recurring errors, ' +
     'specific tool usage, cost spikes, or any text that appears in trace event payloads. ' +
-    'Scans the N most recent sessions (default 20).',
+    'Scans the N most recent sessions (default 20). Each session trace is capped at 2 MB ' +
+    '(tail-slice); when a trace exceeds this limit only its most recent events are searched. ' +
+    'The result includes a `truncatedSessions` array listing any session IDs where the ' +
+    '2 MB cap was hit, so callers can detect incomplete coverage.',
   input_schema: {
     type: 'object',
     properties: {

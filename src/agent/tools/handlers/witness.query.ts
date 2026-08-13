@@ -74,13 +74,20 @@ function parseEvents(content: string): TraceEvent[] {
   return events;
 }
 
+/** Result type for `readTraceSafe`, including truncation signal. */
+interface ReadTraceSafeResult {
+  content: string;
+  /** True when the file exceeded MAX_READ_BYTES and only the tail was read. */
+  truncated: boolean;
+}
+
 /** Read a trace.jsonl file with a byte-size cap (async). */
-async function readTraceSafe(tracePath: string): Promise<string> {
-  if (!existsSync(tracePath)) return '';
+async function readTraceSafe(tracePath: string): Promise<ReadTraceSafeResult> {
+  if (!existsSync(tracePath)) return { content: '', truncated: false };
   try {
     const buf = await readFile(tracePath);
     if (buf.length <= MAX_READ_BYTES) {
-      return buf.toString('utf-8');
+      return { content: buf.toString('utf-8'), truncated: false };
     }
     // Slice from the tail then align to the next newline boundary to avoid
     // splitting a multi-byte UTF-8 sequence or a partial JSON object.
@@ -89,9 +96,9 @@ async function readTraceSafe(tracePath: string): Promise<string> {
     if (firstNewline !== -1) {
       capped = capped.subarray(firstNewline + 1);
     }
-    return capped.toString('utf-8');
+    return { content: capped.toString('utf-8'), truncated: true };
   } catch {
-    return '';
+    return { content: '', truncated: false };
   }
 }
 
@@ -210,7 +217,7 @@ export async function readSessionTrace(
     }
   }
 
-  const content = await readTraceSafe(tracePath);
+  const { content } = await readTraceSafe(tracePath);
   const allEvents = parseEvents(content);
 
   const filter: EventFilter = {
@@ -264,6 +271,12 @@ export interface SearchWitnessResult {
   query: string;
   sessionsScanned: number;
   matches: SearchMatch[];
+  /**
+   * Session IDs where the trace file exceeded the 2 MB read cap.
+   * Events from the earlier portion of those traces were not searched.
+   * Present only when at least one session was truncated.
+   */
+  truncatedSessions?: string[];
 }
 
 export async function searchAcrossSessions(
@@ -287,11 +300,13 @@ export async function searchAcrossSessions(
   const kindFilter = params.kinds ? new Set(params.kinds) : undefined;
   const queryLower = params.query.toLowerCase();
   const matches: SearchMatch[] = [];
+  const truncatedSessions: string[] = [];
   const matchLimit = MAX_LIMIT; // cap total matches
 
   for (const entry of traces) {
     if (matches.length >= matchLimit) break;
-    const content = await readTraceSafe(entry.tracePath);
+    const { content, truncated } = await readTraceSafe(entry.tracePath);
+    if (truncated) truncatedSessions.push(entry.sessionId);
     for (const line of content.split('\n')) {
       if (matches.length >= matchLimit) break;
       if (line.trim() === '') continue;
@@ -316,5 +331,6 @@ export async function searchAcrossSessions(
     query: params.query,
     sessionsScanned: traces.length,
     matches,
+    ...(truncatedSessions.length > 0 && { truncatedSessions }),
   };
 }
