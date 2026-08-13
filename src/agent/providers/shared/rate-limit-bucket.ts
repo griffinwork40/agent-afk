@@ -45,6 +45,7 @@ export interface RateLimitSnapshot {
   /** Epoch ms when the request window resets. */
   requestsResetAt?: number;
   inputTokensRemaining?: number;
+  inputTokensLimit?: number;
   /** Epoch ms when the input-token window resets. */
   inputTokensResetAt?: number;
   outputTokensRemaining?: number;
@@ -97,10 +98,14 @@ export class RateLimitBucket {
   // Request-per-minute window
   private requestsRemaining = -1;
   private requestsResetAt = 0;
+  /** Most recent requestsLimit from a snapshot; used to replenish on window reset. */
+  private requestsLimit = -1;
 
   // Input-token-per-minute window
   private inputTokensRemaining = -1;
   private inputTokensResetAt = 0;
+  /** Most recent inputTokensLimit from a snapshot; used to replenish on window reset. */
+  private inputTokensLimit = -1;
 
   // Output-token window (tracked but not gated — output size is unknown a priori,
   // so we cannot block a request on a number we cannot know before the call).
@@ -113,8 +118,10 @@ export class RateLimitBucket {
   resetForTests(): void {
     this.requestsRemaining = -1;
     this.requestsResetAt = 0;
+    this.requestsLimit = -1;
     this.inputTokensRemaining = -1;
     this.inputTokensResetAt = 0;
+    this.inputTokensLimit = -1;
     this.outputTokensRemainingVal = -1;
     this.frozenUntil = 0;
   }
@@ -126,12 +133,14 @@ export class RateLimitBucket {
   update(snap: RateLimitSnapshot): void {
     if (snap.requestsRemaining !== undefined) this.requestsRemaining = snap.requestsRemaining;
     if (snap.requestsResetAt !== undefined) this.requestsResetAt = snap.requestsResetAt;
+    if (snap.requestsLimit !== undefined) this.requestsLimit = snap.requestsLimit;
     if (snap.inputTokensRemaining !== undefined) this.inputTokensRemaining = snap.inputTokensRemaining;
     if (snap.inputTokensResetAt !== undefined) this.inputTokensResetAt = snap.inputTokensResetAt;
+    if (snap.inputTokensLimit !== undefined) this.inputTokensLimit = snap.inputTokensLimit;
     if (snap.outputTokensRemaining !== undefined) this.outputTokensRemainingVal = snap.outputTokensRemaining;
     // outputTokensResetAt is not stored — output tokens are not gated (size unknown before call).
-    // A successful response after a freeze clears it.
-    if (this.frozenUntil > 0) this.frozenUntil = 0;
+    // A freeze is only cleared by time expiration (frozenUntil > now check in acquirePermit),
+    // not by a concurrent successful response that may have been in-flight before the 429.
   }
 
   /**
@@ -148,13 +157,16 @@ export class RateLimitBucket {
   /** Advance windows whose deadline has already passed. */
   private maybeResetWindows(now: number): void {
     if (this.requestsResetAt > 0 && now >= this.requestsResetAt) {
-      // We don't know the new limit from inside the bucket — reset to unknown
-      // so the next response header sets the authoritative count.
-      this.requestsRemaining = -1;
+      // Replenish to the last known limit rather than resetting to -1 (unknown).
+      // Resetting to -1 would trigger the "unknown → unlimited passthrough" shortcut
+      // in acquirePermit, releasing ALL sleeping waiters at once and recreating the
+      // stampede the bucket is meant to prevent. Falls back to -1 if we never
+      // received a limit header (preserves fail-open for the initial cold-start case).
+      this.requestsRemaining = this.requestsLimit;
       this.requestsResetAt = 0;
     }
     if (this.inputTokensResetAt > 0 && now >= this.inputTokensResetAt) {
-      this.inputTokensRemaining = -1;
+      this.inputTokensRemaining = this.inputTokensLimit;
       this.inputTokensResetAt = 0;
     }
   }
@@ -165,7 +177,7 @@ export class RateLimitBucket {
    *
    * Resolves immediately when:
    *   - admission is disabled (`AFK_RATE_LIMIT_ADMISSION_DISABLED=1`),
-   *   - the bucket is in unknown state (no headers seen yet),
+   *   - the bucket is in unknown state on BOTH dimensions (no headers seen yet),
    *   - there is headroom in both the request AND the input-token windows.
    *
    * Sleeps with per-waiter jitter when capacity is exhausted, so concurrent
@@ -196,8 +208,8 @@ export class RateLimitBucket {
       // Advance windows that have already expired.
       this.maybeResetWindows(now);
 
-      // Unknown state → unlimited passthrough.
-      if (this.requestsRemaining === -1) return;
+      // Unknown state on BOTH dimensions → unlimited passthrough.
+      if (this.requestsRemaining === -1 && this.inputTokensRemaining === -1) return;
 
       // Check headroom: request slot AND (if known) input-token headroom.
       const tokenOk =
