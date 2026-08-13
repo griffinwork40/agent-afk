@@ -275,7 +275,7 @@ describe('searchAcrossSessions — invalid since date', () => {
     // No sessions in temp home, so result is empty — but must not throw.
     await expect(
       searchAcrossSessions({ query: 'x', since: '2024-01-01' }),
-    ).resolves.toMatchObject({ query: 'x', sessionsAvailable: 0, sessionsSearched: 0 });
+    ).resolves.toMatchObject({ query: 'x', sessionsAvailable: 0, sessionsSearched: 0, sessionsScanned: 0 });
   });
 });
 
@@ -304,6 +304,7 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
     // the post-filter count — both must be ≤ the sessions=1 ceiling.
     expect(result.sessionsAvailable).toBeLessThanOrEqual(1);
     expect(result.sessionsSearched).toBeLessThanOrEqual(result.sessionsAvailable);
+    expect(result.sessionsScanned).toBeLessThanOrEqual(1);
   });
 });
 
