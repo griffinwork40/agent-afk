@@ -421,7 +421,7 @@ export class SessionManager {
       sessionStartTime: stored.startedAt,
       totalTurns: stored.totalTurns,
       totalCostUsd: stored.totalCostUsd,
-      unpricedTurns: 0,
+      unpricedTurns: stored.unpricedTurns ?? 0,
       totalTokens: stored.totalTokens,
       totalDurationMs: stored.totalDurationMs,
       turns: stored.turns,
