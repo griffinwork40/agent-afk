@@ -6,7 +6,7 @@ import type { ThinkingConfig, EffortLevel } from '../../../agent/types.js';
 import type { AgentConfig } from '../../../agent/types.js';
 import type { ModelProvider } from '../../../agent/provider.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
-import type { TraceSink } from '../../../agent/trace/index.js';
+import type { TraceWriter } from '../../../agent/trace/index.js';
 import { getApiKeyForModel } from '../../shared-helpers.js';
 import type { CliConfig } from '../../config.js';
 
@@ -38,7 +38,7 @@ export interface BuildAgentSessionDeps {
    */
   providerFactory: (model: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
-  traceWriter: TraceSink | undefined;
+  traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   cwd: string | undefined;
   maxTurns: number;
@@ -84,7 +84,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     providerFactory: deps.providerFactory,
-  })));
+  })), deps.traceWriter);
 }
 
 /**
@@ -105,7 +105,7 @@ export function buildSharedDeps(a: {
   cliConfig: CliConfig;
   providerFactory: (m: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
-  traceWriter: TraceSink | undefined;
+  traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   effectiveCwd: string | undefined;
   maxTurns: string;

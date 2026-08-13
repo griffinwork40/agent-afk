@@ -53,12 +53,35 @@ function readTrace(dir: string): Array<{ kind: string; payload: Record<string, u
 }
 
 describe('witness seal ownership', () => {
+  it('accepts a write-only TraceSink without treating it as a seal owner', async () => {
+    const kinds: string[] = [];
+    const sink = {
+      async write(event: { kind: string }): Promise<void> {
+        kinds.push(event.kind);
+      },
+      getTracePath(): string {
+        return 'in-memory://write-only';
+      },
+    };
+    const session = new AgentSession({
+      model: 'sonnet',
+      provider: createMockProvider({ sessionId: `write-only-${Date.now()}` }),
+      traceWriter: sink,
+    });
+
+    await drainTurn(session, 'write only');
+    await session.close();
+
+    expect(kinds).toContain('closure');
+    expect(kinds).not.toContain('session_sealed');
+  });
+
   it('top-level session close() seals the trace (closure + session_sealed)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-top-'));
     try {
       const writer = new NdjsonTraceWriter({ traceDir: dir });
       const provider = createMockProvider({ sessionId: `seal-top-${Date.now()}` });
-      const session = new AgentSession({ model: 'sonnet', provider, traceWriter: writer });
+      const session = new AgentSession({ model: 'sonnet', provider, traceWriter: writer }, writer);
 
       await drainTurn(session, 'hello');
       await session.close();
@@ -133,7 +156,7 @@ describe('witness seal ownership', () => {
         model: 'sonnet',
         provider: createMockProvider({ sessionId: `seal-legacy-parent-${Date.now()}` }),
         traceWriter: writer,
-      });
+      }, writer);
       // Public SDK consumers historically constructed children directly with
       // this output-cap fork signal, before isSubagentFork existed.
       const child = new AgentSession({
@@ -170,7 +193,7 @@ describe('witness seal ownership', () => {
         provider,
         subagentToolOutputCapBytes: 100_000,
         traceWriter: writer,
-      });
+      }, writer);
 
       await drainTurn(session, 'top-level with a cap');
       await session.close();

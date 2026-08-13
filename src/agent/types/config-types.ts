@@ -439,8 +439,8 @@ export interface AgentConfig {
    * writer makes enforceable, and `src/agent/trace/` for shapes.
    *
    * Writing is the only capability a session needs here. Ending the shared
-   * file's life is a separate, non-inherited capability — see
-   * {@link AgentConfig.isSubagentFork}.
+   * file's life is a separate, non-inherited capability supplied directly to
+   * the `AgentSession` constructor by the writer's owner.
    */
   traceWriter?: TraceSink;
 

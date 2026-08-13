@@ -777,7 +777,10 @@ export class CronScheduler {
     try {
       const session = this.options.sessionFactory
         ? this.options.sessionFactory(config)
-        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
+        : new AgentSession(
+            injectCompanionPrimer(injectHotMemory(config)),
+            this.options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined,
+          );
       // Step 7: register the daemon session in the cross-surface registry.
       // Best-effort; dispose() (archive) is invoked by runOnce on session close
       // so the long-running daemon never accumulates registry handles.

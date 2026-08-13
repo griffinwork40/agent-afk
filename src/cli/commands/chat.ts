@@ -615,7 +615,7 @@ export function registerChatCommand(program: Command): void {
           // Wire resume/session-id config when a session flag is set.
           ...resumeConfig,
           provider,
-        })));
+        })), trace?.writer);
 
         boundSession = session;
 

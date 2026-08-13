@@ -20,7 +20,7 @@ import {
 } from './subagent-output-capture.js';
 import { AbortError } from '../../utils/errors.js';
 import { emitSessionPhase } from '../trace/emit.js';
-import type { TraceSink, TraceWriter } from '../trace/writer.js';
+import type { TraceWriter } from '../trace/writer.js';
 import type { HookRegistry } from '../hooks.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
@@ -90,16 +90,10 @@ import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep
 
 
 export class AgentSession implements IAgentSession {
-  /** Writers are claimed by the first session constructed with them. Forks
-   * share that writer, so seal ownership does not depend on every SDK caller
-   * knowing about an internal fork marker. */
-  private static readonly claimedTraceWriters = new WeakSet<TraceSink>();
   /**
-   * Owner-only handle retained for `sealTraceWriter()` calls. Populated at
-   * construction via a safe cast — every `TraceSink` that reaches here is in
-   * practice an `NdjsonTraceWriter` or `InMemoryTraceWriter`, both of which
-   * implement the full `TraceWriter` interface. `TraceSink` on `AgentConfig`
-   * prevents forks (which receive the config) from accessing `seal()`.
+   * Owner-only handle retained for `sealTraceWriter()` calls. This capability
+   * is supplied separately from `AgentConfig`, so write-only sinks and configs
+   * inherited by forks can never be promoted to seal owners.
    */
   private readonly ownedTraceWriter: TraceWriter | undefined;
   private config: AgentConfig;
@@ -204,18 +198,12 @@ export class AgentSession implements IAgentSession {
    */
   private readonly ledger = new LedgerLifecycle();
 
-  constructor(config: AgentConfig) {
+  constructor(config: AgentConfig, ownedTraceWriter?: TraceWriter) {
     this.ownsTraceSeal =
-      config.traceWriter !== undefined &&
-      config.isSubagentFork !== true &&
-      !AgentSession.claimedTraceWriters.has(config.traceWriter);
-    if (this.ownsTraceSeal) {
-      AgentSession.claimedTraceWriters.add(config.traceWriter!);
-    }
-    // Cast is safe: every TraceSink reaching here is an NdjsonTraceWriter or
-    // InMemoryTraceWriter — both implement TraceWriter. The cast is scoped to
-    // this owner field; subagents access only the TraceSink via config.
-    this.ownedTraceWriter = config.traceWriter as TraceWriter | undefined;
+      ownedTraceWriter !== undefined &&
+      config.traceWriter === ownedTraceWriter &&
+      config.isSubagentFork !== true;
+    this.ownedTraceWriter = this.ownsTraceSeal ? ownedTraceWriter : undefined;
     // Wire the plan-exit control bridge for top-level sessions only (plan mode
     // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
     // The model-callable `exit_plan_mode` tool uses these callbacks to flip the
@@ -1378,14 +1366,11 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    // Invariant: only the session that first claimed a shared TraceWriter may
-    // seal it. `isSubagentFork` prevents stub-parent forks from claiming an
-    // otherwise unseen writer; writer identity also protects SDK consumers
-    // that directly construct a child from the legacy fork config (which has
-    // `subagentToolOutputCapBytes` but not the newer marker). This avoids
-    // coupling ownership back to that unrelated output cap, so a top-level
-    // session may still set a cap and seal normally. seal() is a one-shot hard
-    // gate: a child sealing first would silently truncate all later records.
+    // Invariant: only a session explicitly given the separate owner capability
+    // may seal the shared TraceWriter. Fork configs inherit only the TraceSink,
+    // and `isSubagentFork` additionally rejects an owner passed accidentally.
+    // seal() is a one-shot hard gate: a child sealing first would silently
+    // truncate all later records.
     // Subagents still emit their own `closure` record above; only the seal is
     // gated. If the top-level never runs close(), the process-exit backstop
     // still seals.
