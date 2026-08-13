@@ -2,7 +2,7 @@
  * Unit tests for the xAI OAuth token store.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   clearXaiTokens,
   last4OfToken,
@@ -13,18 +13,29 @@ import {
   type XaiTokenBundle,
 } from './auth-store.js';
 
-function memStore(): XaiAuthStoreDeps & { files: Map<string, string> } {
+function memStore(): XaiAuthStoreDeps & {
+  files: Map<string, string>;
+  modes: Map<string, number>;
+} {
   const files = new Map<string, string>();
+  const modes = new Map<string, number>();
   return {
     files,
+    modes,
     authPath: () => '/tmp/xai-auth.json',
     readFile: (p) => files.get(p) ?? null,
     writeFile: (p, data) => {
       files.set(p, data);
+      // Simulate Node O_CREAT-only mode: first write records mode, overwrite does not.
+      if (!modes.has(p)) modes.set(p, 0o644);
+    },
+    chmod: (p, mode) => {
+      modes.set(p, mode);
     },
     mkdir: () => undefined,
     unlink: (p) => {
       files.delete(p);
+      modes.delete(p);
     },
     exists: (p) => files.has(p),
   };
@@ -106,5 +117,24 @@ describe('read/write/clearXaiTokens', () => {
   it('write uses JSON that does not leak into last4 helper', () => {
     expect(last4OfToken(sample.access_token)).toBe('abcd');
     expect(last4OfToken('xy')).toBe('xy');
+  });
+
+  it('chmods 0600 after every write (existing file cannot stay world-readable)', () => {
+    const chmod = vi.fn();
+    const s: XaiAuthStoreDeps & { files: Map<string, string> } = {
+      files: new Map(),
+      authPath: () => '/tmp/xai-auth.json',
+      readFile: (p) => s.files.get(p) ?? null,
+      writeFile: (p, data) => {
+        s.files.set(p, data);
+      },
+      chmod,
+      mkdir: () => undefined,
+    };
+    writeXaiTokens(sample, s);
+    expect(chmod).toHaveBeenCalledWith('/tmp/xai-auth.json', 0o600);
+    writeXaiTokens({ ...sample, access_token: 'rotated' }, s);
+    expect(chmod).toHaveBeenCalledTimes(2);
+    expect(chmod).toHaveBeenLastCalledWith('/tmp/xai-auth.json', 0o600);
   });
 });

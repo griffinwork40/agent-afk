@@ -220,6 +220,7 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Any other `grok-*` still routes and runs; unknown ids fall through to the
   // openai-compatible default via routesToOpenAICompatible (never invent
   // retired family windows here).
+  'grok-4.6': 500_000,
   'grok-4.5': 500_000,
   'grok-4.3': 1_000_000,
   'grok-4.20-0309-reasoning': 1_000_000,

@@ -48,6 +48,8 @@ function memStore(): XaiAuthStoreDeps & { files: Map<string, string> } {
     writeFile: (p, data) => {
       files.set(p, data);
     },
+    // In-memory store: no real FS path for chmodSync.
+    chmod: () => undefined,
     mkdir: () => undefined,
     unlink: (p) => {
       files.delete(p);
@@ -282,6 +284,52 @@ describe('ensureFreshAccessToken', () => {
     });
     expect(got).toBeNull();
     expect(readXaiTokens(store)).toBeNull();
+  });
+
+  it('single-flights concurrent refresh for the same store path', async () => {
+    const store = memStore();
+    store.authPath = () => '/tmp/xai-oauth-singleflight.json';
+    const now = 1_000_000;
+    const { writeXaiTokens } = await import('./auth-store.js');
+    writeXaiTokens(
+      {
+        access_token: 'old',
+        refresh_token: 'rt-old',
+        expires_at: now + 30,
+      },
+      store,
+    );
+
+    let tokenCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetchFn = vi.fn(async (url: RequestInfo) => {
+      if (String(url).includes('openid-configuration')) return jsonResponse(discoveryDoc);
+      tokenCalls += 1;
+      await gate;
+      return jsonResponse({
+        access_token: 'shared-fresh',
+        refresh_token: 'rt-shared',
+        expires_in: 3600,
+      });
+    });
+
+    const deps = {
+      store,
+      fetchFn: fetchFn as unknown as typeof fetch,
+      nowSeconds: () => now,
+    };
+    const p1 = ensureFreshAccessToken(deps);
+    const p2 = ensureFreshAccessToken(deps);
+    // Let both enter the in-flight path before the token response resolves.
+    await Promise.resolve();
+    release();
+    const [a, b] = await Promise.all([p1, p2]);
+    expect(a?.access_token).toBe('shared-fresh');
+    expect(b?.access_token).toBe('shared-fresh');
+    expect(tokenCalls).toBe(1);
   });
 });
 

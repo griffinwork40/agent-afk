@@ -44,32 +44,41 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
   const { args, forceMode, authDeps, getLastMode, delegate } = opts;
   let innerQuery: ProviderQuery | undefined;
   let initError: Error | undefined;
+  /** Single-flight init: concurrent iterators join one promise (no double delegate). */
+  let initPromise: Promise<ProviderQuery> | undefined;
 
   const ensureInner = async (): Promise<ProviderQuery> => {
     if (initError) throw initError;
     if (innerQuery) return innerQuery;
-    try {
-      // Refresh OAuth when needed; skip pure apikey construction mode.
-      if (forceMode !== 'apikey') {
-        await ensureFreshAccessToken({
-          store: authDeps.store as XaiAuthStoreDeps | undefined,
-        });
+    if (initPromise) return initPromise;
+    // Assign before any await so a second concurrent caller joins this flight.
+    initPromise = (async () => {
+      try {
+        // Refresh OAuth when needed; skip pure apikey construction mode.
+        if (forceMode !== 'apikey') {
+          await ensureFreshAccessToken({
+            store: authDeps.store as XaiAuthStoreDeps | undefined,
+          });
+        }
+        const resolution = resolveXaiAuth(args.config.apiKey, forceMode, authDeps);
+        if (resolution.apiKey === null || !resolution.mode) {
+          throw new Error(formatXaiAuthDiagnostic(resolution));
+        }
+        if (resolution.mode === 'oauth' && isAccessTokenExpired(resolution.expiresAt)) {
+          throw new Error(
+            'SuperGrok OAuth access token expired and refresh failed. Re-run `afk provider auth xai login`.',
+          );
+        }
+        innerQuery = delegate(args, resolution.apiKey, resolution.mode);
+        return innerQuery;
+      } catch (e) {
+        initError = e instanceof Error ? e : new Error(String(e));
+        throw initError;
+      } finally {
+        initPromise = undefined;
       }
-      const resolution = resolveXaiAuth(args.config.apiKey, forceMode, authDeps);
-      if (resolution.apiKey === null || !resolution.mode) {
-        throw new Error(formatXaiAuthDiagnostic(resolution));
-      }
-      if (resolution.mode === 'oauth' && isAccessTokenExpired(resolution.expiresAt)) {
-        throw new Error(
-          'SuperGrok OAuth access token expired and refresh failed. Re-run `afk provider auth xai login`.',
-        );
-      }
-      innerQuery = delegate(args, resolution.apiKey, resolution.mode);
-      return innerQuery;
-    } catch (e) {
-      initError = e instanceof Error ? e : new Error(String(e));
-      throw initError;
-    }
+    })();
+    return initPromise;
   };
 
   return {

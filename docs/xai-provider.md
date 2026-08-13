@@ -10,9 +10,9 @@ SuperGrok / SuperGrok Heavy / X Premium+ OAuth plus dual inference endpoints.
 
 ```bash
 export XAI_API_KEY=xai-...
-afk chat -m grok-4.5 "hello"
+afk chat -m grok-4.6 "hello"
 # or force mode:
-afk chat --provider xai -m grok-4.5 "hello"
+afk chat --provider xai -m grok-4.6 "hello"
 ```
 
 Default endpoint: `https://api.x.ai/v1`  
@@ -31,9 +31,9 @@ afk provider auth xai login
 # Browser PKCE loopback on http://127.0.0.1:56121/callback
 afk provider auth xai login --browser
 
-afk chat -m grok-4.5 "hello"
+afk chat -m grok-4.6 "hello"
 # or force OAuth mode when an API key is also present:
-afk chat --provider xai-oauth -m grok-4.5 "hello"
+afk chat --provider xai-oauth -m grok-4.6 "hello"
 
 afk provider auth xai logout   # clear tokens
 ```
@@ -97,6 +97,7 @@ are registered only for models still active on the public docs.x.ai catalog
 
 | Wire id | Context (approx.) | Notes |
 |---------|-------------------|--------|
+| `grok-4.6` | 500k | Newest flagship (public catalog) |
 | `grok-4.5` | 500k | Flagship coding / agentic |
 | `grok-4.3` | 1M | General long-context |
 | `grok-4.20-0309-reasoning` | 1M | |
@@ -118,7 +119,7 @@ quota). Prefer treating OAuth spend as unknown in UX.
 ```json
 {
   "models": {
-    "large": { "id": "grok-4.5", "provider": "xai-oauth" },
+    "large": { "id": "grok-4.6", "provider": "xai-oauth" },
     "medium": { "id": "grok-4.3", "provider": "xai" }
   }
 }

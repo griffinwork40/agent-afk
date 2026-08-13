@@ -26,17 +26,26 @@ describe('deriveXaiCallCostUsd', () => {
     expect(XAI_MODEL_PRICING.has('grok-4')).toBe(false);
   });
 
-  it('has entries only for the active 2026-08 set', () => {
+  it('prices grok-4.6 at list rates (same in/out as 4.5, cached 0.5)', () => {
+    const cost = deriveXaiCallCostUsd('grok-4.6', M, M, 0);
+    expect(cost).toBeCloseTo(2.0 + 6.0, 8);
+    const cached = deriveXaiCallCostUsd('grok-4.6', M, 0, M / 2);
+    expect(cached).toBeCloseTo(0.5 * 2.0 + 0.5 * 0.5, 8);
+  });
+
+  it('has entries only for the active public catalog set', () => {
+    expect(XAI_MODEL_PRICING.has('grok-4.6')).toBe(true);
     expect(XAI_MODEL_PRICING.has('grok-4.5')).toBe(true);
     expect(XAI_MODEL_PRICING.has('grok-4.3')).toBe(true);
     expect(XAI_MODEL_PRICING.has('grok-4.20-multi-agent-0309')).toBe(true);
     expect(XAI_MODEL_PRICING.has('grok-build-0.1')).toBe(true);
-    expect(XAI_MODEL_PRICING.size).toBe(6);
+    expect(XAI_MODEL_PRICING.size).toBe(7);
   });
 });
 
 describe('isGrokModelId', () => {
   it('matches grok prefixes', () => {
+    expect(isGrokModelId('grok-4.6')).toBe(true);
     expect(isGrokModelId('grok-4.5')).toBe(true);
     expect(isGrokModelId('grok_2')).toBe(true);
     expect(isGrokModelId('gpt-4o')).toBe(false);

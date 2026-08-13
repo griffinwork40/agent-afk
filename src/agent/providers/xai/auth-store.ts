@@ -13,7 +13,14 @@
  * @module agent/providers/xai/auth-store
  */
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getAfkStateDir } from '../../../paths.js';
 
@@ -40,6 +47,12 @@ export interface XaiAuthStoreDeps {
   authPath?: () => string;
   readFile?: (path: string) => string | null;
   writeFile?: (path: string, data: string, mode: number) => void;
+  /**
+   * Called after every write with the intended mode (0600). Required because
+   * Node's `writeFileSync({ mode })` only applies mode on create — existing
+   * files keep prior permissions without an explicit chmod.
+   */
+  chmod?: (path: string, mode: number) => void;
   mkdir?: (dir: string) => void;
   unlink?: (path: string) => void;
   exists?: (path: string) => boolean;
@@ -55,6 +68,11 @@ function defaultReadFile(path: string): string | null {
 
 function defaultWriteFile(path: string, data: string, mode: number): void {
   writeFileSync(path, data, { encoding: 'utf-8', mode });
+}
+
+function defaultChmod(path: string, mode: number): void {
+  // Invariant: always re-apply mode. writeFileSync mode is O_CREAT-only.
+  chmodSync(path, mode);
 }
 
 function defaultMkdir(dir: string): void {
@@ -112,11 +130,15 @@ export function readXaiTokens(deps: XaiAuthStoreDeps = {}): XaiTokenBundle | nul
  *
  * Contract: must include the latest refresh_token after every refresh —
  * xAI rotates refresh tokens on each successful refresh response.
+ *
+ * Invariant: after write, chmod to 0600 so an existing world-readable file
+ * (editor/migration) cannot keep open permissions across refreshes.
  */
 export function writeXaiTokens(bundle: XaiTokenBundle, deps: XaiAuthStoreDeps = {}): void {
   const path = (deps.authPath ?? getXaiAuthPath)();
   const mkdir = deps.mkdir ?? defaultMkdir;
   const writeFile = deps.writeFile ?? defaultWriteFile;
+  const chmod = deps.chmod ?? defaultChmod;
   mkdir(dirname(path));
   const payload: Record<string, unknown> = {
     access_token: bundle.access_token,
@@ -126,6 +148,7 @@ export function writeXaiTokens(bundle: XaiTokenBundle, deps: XaiAuthStoreDeps = 
   if (bundle.token_type !== undefined) payload['token_type'] = bundle.token_type;
   if (bundle.scope !== undefined) payload['scope'] = bundle.scope;
   writeFile(path, `${JSON.stringify(payload, null, 2)}\n`, 0o600);
+  chmod(path, 0o600);
 }
 
 /** Delete the token file (logout). No-op when the file is already gone. */
