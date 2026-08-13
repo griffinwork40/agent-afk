@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.115.4] - 2026-08-13
+
+### Fixed
+- accept bare "max" as alias for "enabled:max" in --thinking parser (#1052) (50879d31)
+
 ## [5.115.3] - 2026-08-13
 
 ### Changed
