@@ -62,7 +62,7 @@ export const searchWitnessTool: AnthropicToolDef = {
     'Search across multiple sessions\' witness traces for a text pattern. Returns matching ' +
     'trace events grouped by session. Use to find patterns across sessions — recurring errors, ' +
     'specific tool usage, cost spikes, or any text that appears in trace event payloads. ' +
-    'Scans the N most recent sessions (default 20).',
+    'Scans the N most recent sessions (default 20). Results are capped at 200 total matches.',
   input_schema: {
     type: 'object',
     properties: {
@@ -72,7 +72,12 @@ export const searchWitnessTool: AnthropicToolDef = {
       },
       sessions: {
         type: 'number',
-        description: 'Number of recent sessions to scan (default: 20, max: 100).',
+        description:
+          'Number of recent sessions to scan (default: 20, max: 100). ' +
+          'The result includes sessionsAvailable (sessions in this window before ' +
+          'any since filter) and sessionsSearched (sessions actually read after ' +
+          'the since filter) so you can distinguish "few sessions exist" from ' +
+          '"the date filter excluded most of them".',
       },
       kinds: {
         type: 'array',
