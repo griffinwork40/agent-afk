@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.120.0] - 2026-08-14
+
+### Added
+- add enable flag to cancel_schedule for re-enabling tasks (#1085) (bea30e69)
+
 ## [5.119.3] - 2026-08-14
 
 ### Changed
