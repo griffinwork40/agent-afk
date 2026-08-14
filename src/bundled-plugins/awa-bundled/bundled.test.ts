@@ -80,7 +80,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    'b04da3abfa4f79d4599928f62896143b88fb9751f0d0d26ca0eb27134f9ba17a',
+    'f24a0fbc572aa65dde3cbceb76ce1ec36d8ed8d88e142aa0007425ec3e906cad',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
@@ -108,7 +108,7 @@ const PINNED_HASHES = {
   // external-constraint rule it contradicted, and put the merge-decision rule
   // in Wave 2's receives list.
   // Full rationale: docs/bundled-plugins.md#review-726
-  review: 'c438ee698fd7af28401ce91e56954400c63b6a25afb2e1158cc466753e71e25b',
+  review: 'a669d27cb892247dc010f2ff24fcc4baf9469afeea2150773558206848820bb1',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
@@ -215,6 +215,15 @@ describe('bundled skills', () => {
       expect(content).toContain(
         '**Wave 1.5 — Citation + absence-claim verification (INLINE',
       );
+
+      // The Invariant paragraph is the ONLY place Wave 1 may name a git command —
+      // it exists to say what must not be mandated. Drop it, then no git may remain.
+      const withoutInvariant = waveOne.replace(/\*\*Invariant — why Wave 1[\s\S]*?\n\n/, '');
+      // Match commands in inline code or on their own shell line (including fenced
+      // snippets and optional shell prompts), regardless of subcommand or options.
+      const gitCommand = /(?:`+git(?=[\s`])|^[ \t]*(?:[$>][ \t]+)?git(?=\s))/m;
+      expect('```bash\ngit show HEAD:file\n```').toMatch(gitCommand);
+      expect(withoutInvariant).not.toMatch(gitCommand);
     });
 
     // Invariant: severity and disposition are separate axes (#937). The two

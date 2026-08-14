@@ -80,7 +80,7 @@
 import type { HookContext, HookDecision, HookHandler } from './hooks.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
-import type { TraceWriter } from './trace/index.js';
+import type { TraceSink } from './trace/index.js';
 import path from 'path';
 import { classifyRisk } from './risk-classifier.js';
 import { elicitationRouter } from './elicitation-router.js';
@@ -133,7 +133,7 @@ export interface AfkModeGateOptions {
    * `hook_decision` event on every approval decision (approve, deny, timeout,
    * cancel, decline, or unrecognised choice). No-op when undefined.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
 export function createAfkModeGate(

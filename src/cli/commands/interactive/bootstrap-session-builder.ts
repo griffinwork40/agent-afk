@@ -7,7 +7,7 @@ import type { AgentConfig } from '../../../agent/types.js';
 import type { ModelProvider } from '../../../agent/provider.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
-import { getApiKeyForModel } from '../../shared-helpers.js';
+import { explicitProviderHints, getApiKeyForModel } from '../../shared-helpers.js';
 import type { CliConfig } from '../../config.js';
 
 /**
@@ -39,12 +39,19 @@ export interface BuildAgentSessionDeps {
   providerFactory: (model: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
+  drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
   /** Initial session permission mode (e.g. 'bypassPermissions'). Omit for 'default'. */
   permissionMode?: PermissionMode;
   baseUrl?: string;
+  /**
+   * CLI `--provider` value when set. Threaded into credential resolution so
+   * `afk i --provider xai` does not inject Anthropic material for a Claude
+   * default model.
+   */
+  explicitProvider?: string;
 }
 
 /**
@@ -58,13 +65,11 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     // User-facing surface for trace `origin` attribution. The REPL is a CLI
     // entrypoint → 'cli'. (Mid-session swap reuses this helper, also 'cli'.)
     surface: 'cli',
-    // Resolve the credential for the ACTUAL session model, not the env-derived
-    // default. `getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL, so launching
-    // `afk -m gpt-5.5` while CLAUDE_MODEL is a Claude id would inject the
-    // Anthropic OAuth token into the OpenAI provider — leaking sk-ant-… to
-    // OpenAI and shadowing Codex ChatGPT OAuth. getApiKeyForModel routes via
-    // providerForModel → the correct family (anti-leak invariant).
-    apiKey: getApiKeyForModel(deps.model),
+    // Resolve the credential for the ACTUAL session model + explicit
+    // `--provider` (if any), not the env-derived default alone. Without
+    // explicit hints, `afk i --provider xai` with a Claude model would inject
+    // Anthropic material into XaiProvider forced-apikey mode.
+    apiKey: getApiKeyForModel(deps.model, explicitProviderHints(deps.explicitProvider)),
     maxTurns: deps.maxTurns,
     hookRegistry: deps.hookRegistry,
     ...(deps.permissionMode !== undefined ? { permissionMode: deps.permissionMode } : {}),
@@ -77,12 +82,13 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
+    ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     providerFactory: deps.providerFactory,
-  })));
+  })), deps.traceWriter);
 }
 
 /**
@@ -104,9 +110,11 @@ export function buildSharedDeps(a: {
   providerFactory: (m: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
+  drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
+  explicitProvider?: string;
 }): BuildAgentSessionDeps {
   return {
     model: a.sessionModel,
@@ -121,9 +129,11 @@ export function buildSharedDeps(a: {
     providerFactory: a.providerFactory,
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
+    drainSubagents: a.drainSubagents,
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
+    ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
   };
 }

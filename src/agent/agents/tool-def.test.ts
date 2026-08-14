@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildAgentToolDef } from './tool-def.js';
+import { builtinAgents } from './builtins.js';
 import { agentTool } from '../tools/schemas.js';
 import type { AgentRegistry, RegisteredAgent } from './types.js';
 
@@ -35,6 +36,17 @@ describe('buildAgentToolDef', () => {
     expect(def.description).toContain('- Explore: Explore does things');
     // required fields unchanged — agent_type stays optional
     expect(def.input_schema.required).toEqual(['prompt']);
+  });
+
+  it('advertises the research-agent write constraint before truncation', () => {
+    const def = buildAgentToolDef(builtinAgents());
+    const listingLine = def.description
+      ?.split('\n')
+      .find((line) => line.startsWith('- research-agent:'));
+
+    expect(listingLine).toContain(
+      'CANNOT write files, edit code, run bash, commit, or push — read-only enforced.',
+    );
   });
 
   it('does not mutate the static agentTool', () => {

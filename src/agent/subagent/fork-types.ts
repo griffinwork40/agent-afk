@@ -13,7 +13,7 @@ import type { CanUseTool } from '../types/sdk-types.js';
 import type { HookRegistry } from '../hooks.js';
 import type { AgentConfig, IAgentSession } from '../types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import type { Surface } from '../awareness/types.js';
 import type { PhaseRole } from '../tools/nesting.js';
 
@@ -214,7 +214,7 @@ export interface SubagentManagerOptions {
    * runs without trace emission and child sessions emit no traces (useful for
    * tests and harnesses that don't need the witness layer).
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Execution surface inherited by all forked children whose `config.surface`
    * is unset. Governs the `origin` field (`cli` / `telegram` / `daemon`) in

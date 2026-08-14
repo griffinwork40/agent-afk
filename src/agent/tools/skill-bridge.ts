@@ -126,7 +126,7 @@ export function buildSkillManifest(
   return [
     'Available skills (invoke via the `skill` tool):',
     '',
-    "Each skill either dispatches one or more context-isolated subagents (delegation — preserves the main session's context) or loads its instructions directly into your current context (`load` mode). Calling `skill` is the entry point for both; the executor picks the mode per skill. Prefer a skill over inline investigation when the task shape matches.",
+    "Each skill either forks an isolated subagent (delegation — preserves the main session's context) or loads its instructions directly into your current context for you to execute directly. The mode is fixed per-skill, not per-call. To run a skill N times in parallel with isolation, dispatch N subagents (via `agent` or `compose`) that each call `skill` once. Prefer a skill over inline investigation when the task shape matches.",
     '',
     ...lines,
   ].join('\n');
@@ -164,6 +164,16 @@ export interface BuildSkillManifestOptions extends CollectSkillEntriesOptions {
    * cannot read its own entry and re-dispatch itself.
    */
   excludeName?: string;
+}
+
+// Invariant: skills before commands — SKILL.md wins over a same-named commands/*.md
+// via the first-wins guard in each caller (Claude Code precedence). Single source of
+// truth shared by collectSkillEntries and discoverPluginSkillBodies.
+function discoverPluginSkillsAndCommands(pluginPath: string, knownToolNames: ReadonlySet<string>) {
+  return [
+    ...extractPluginSkills(pluginPath, knownToolNames),
+    ...extractPluginCommands(pluginPath, knownToolNames),
+  ];
 }
 
 /**
@@ -256,14 +266,8 @@ export function collectSkillEntries(
   const knownToolNames = resolveKnownToolNames();
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
-    // SKILL.md first, then commands/*.md — so a plugin shipping both forms
-    // under one name resolves to the skill, matching Claude Code ("if a skill
-    // and a command share the same name, the skill takes precedence"). The
-    // `seen` guard below is what enforces it.
-    const skills = [
-      ...extractPluginSkills(plugin.path, knownToolNames),
-      ...extractPluginCommands(plugin.path, knownToolNames),
-    ];
+    // Skills-before-commands ordering + first-wins guard: see discoverPluginSkillsAndCommands.
+    const skills = discoverPluginSkillsAndCommands(plugin.path, knownToolNames);
     for (const skill of skills) {
       if (!skill.name || seen.has(skill.name)) continue;
       if (!isSkillVisible({ audience: skill.audience }, internalUnlocked)) continue;
@@ -348,12 +352,8 @@ export function discoverPluginSkillBodies(
 
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
-    // Same order + first-wins rule as collectSkillEntries: a SKILL.md and a
-    // commands/*.md sharing one name resolve to the skill.
-    const skills = [
-      ...extractPluginSkills(plugin.path, knownToolNames),
-      ...extractPluginCommands(plugin.path, knownToolNames),
-    ];
+    // Skills-before-commands ordering + first-wins guard: see discoverPluginSkillsAndCommands.
+    const skills = discoverPluginSkillsAndCommands(plugin.path, knownToolNames);
     for (const skill of skills) {
       if (skill.name && skill.body && skill.body.length > 0 && !bodies.has(skill.name)) {
         bodies.set(skill.name, {

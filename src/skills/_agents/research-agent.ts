@@ -16,5 +16,10 @@ export const researchAgent = {
   // don't supply an `agents` registry the model falls back to `scope_check`.
   allowedTools: ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch'] as const,
   description:
-    'Read-only sub-agent for research, validation, verification, and codebase inspection. Mechanically locked to Read, Grep, Glob, WebFetch, WebSearch — cannot Edit, Write, Bash, commit, or push. Delegates git queries to `git-investigator`. Use when the dispatched task is findings-only.',
+    'CANNOT write files, edit code, run bash, commit, or push — read-only enforced. ' +
+    'Research, validation, verification, and codebase inspection only. ' +
+    'Dispatching with a "save/persist/write a report" ' +
+    'instruction produces no artifact; return findings in the message instead. ' +
+    'Mechanically locked to Read, Grep, Glob, WebFetch, WebSearch — cannot Bash, commit, or push. ' +
+    'Delegates git queries to `git-investigator`. Use for findings-only tasks.',
 };

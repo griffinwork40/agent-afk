@@ -37,7 +37,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
 import type {
   ProviderQuery,
@@ -83,6 +83,7 @@ import {
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
+import { isGrokModelId } from '../xai/pricing.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 import {
@@ -103,13 +104,8 @@ import { compactOpenAIHistory, readShrinkFraction, microcompactToolResults } fro
 import {
   oneShotChatCompletion,
   oneShotResponses,
-  ResponsesSummaryIncompleteError,
 } from './oneshot.js';
-import {
-  getErrorStatus,
-  isRetryableConnectionError,
-  isRetryableStreamError,
-} from './query/retry.js';
+import { getErrorStatus } from './query/retry.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -131,7 +127,8 @@ import {
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
-import { resolveClientFactory } from './query/client.js';
+import { checkContextOverflow } from './query/context-overflow.js';
+import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
 import { driveStream, type IterationResult } from './query/stream-drive.js';
 import {
   buildChatCompletionsRequestBody,
@@ -154,6 +151,12 @@ export interface OpenAICompatibleQueryOptions {
   auth: OpenAIAuthResolution;
   /** Optional baseURL override (NVIDIA NIM, Together, etc.). Defaults to OpenAI. */
   baseURL?: string;
+  /**
+   * Optional default headers for the OpenAI client (e.g. xAI CLI-proxy
+   * identity). Applied when the wire mode does not supply its own headers
+   * (ChatGPT subscription Responses path wins if both are set).
+   */
+  defaultHeaders?: Record<string, string>;
   /** Model id, passed straight through to the API. */
   model: string;
   /** Synthetic session id emitted on `session.init` before the first wire call. */
@@ -203,38 +206,10 @@ export interface OpenAICompatibleQueryOptions {
    * coverage. All emit calls are fire-and-forget; a broken writer never
    * stalls or crashes the session.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
-/**
- * Statuses that prove the endpoint refused the REQUEST ITSELF (its shape, route,
- * or media type) rather than transiently failing to serve it. 429 and 5xx are
- * deliberately absent (transient — see `isRetryableConnectionError`), as are
- * 401/403 (a credential can be hot-swapped mid-session, so an auth lapse must
- * not permanently disable compaction).
- */
-const UNSUPPORTED_REQUEST_STATUSES = new Set([400, 404, 405, 415, 422, 501]);
-
-/**
- * Contract: does `err` PROVE this endpoint cannot serve a Responses-wire
- * summarize at all — as opposed to having transiently failed one?
- *
- * Only an explicit, deterministic client-side refusal counts. The distinction
- * matters because the latch it guards is PERMANENT for the session, so a false
- * positive disables compaction until the session ends — re-creating the very
- * context-window exhaustion issue #653 fixed. Deliberately NOT proof:
- *   - 429 / 5xx and friends — transient, already classified by the retry preds;
- *   - status-less throws (network drop, DNS, bad baseURL) — a blip or a
- *     misconfiguration, neither of which is the backend refusing this shape;
- *   - {@link ResponsesSummaryIncompleteError} — the backend DID accept and serve
- *     the request, then streamed a failed/partial response. The wire works.
- */
-function provesResponsesCompactionUnsupported(err: unknown): boolean {
-  if (err instanceof ResponsesSummaryIncompleteError) return false;
-  if (isRetryableConnectionError(err) || isRetryableStreamError(err)) return false;
-  const status = getErrorStatus(err);
-  return status !== undefined && UNSUPPORTED_REQUEST_STATUSES.has(status);
-}
+import { provesResponsesCompactionUnsupported } from './query/compaction-guard.js';
 
 /** Internal record used to drive the per-turn iteration loop. */
 export class OpenAICompatibleQuery implements ProviderQuery {
@@ -251,7 +226,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   /** Static OpenAI list prices apply only when using the official public API endpoint. */
   private readonly useOpenAIPricing: boolean;
   /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
-  private readonly traceWriter: TraceWriter | undefined;
+  private readonly traceWriter: TraceSink | undefined;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];
@@ -317,7 +292,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.onPermissionMode = opts.onPermissionMode;
     this.onCwdChange = opts.onCwdChange;
     this.traceWriter = opts.traceWriter;
-    this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact);
+    this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
 
     // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
     // (and not the structural `ToolDispatcher` minimal interface) exposes
@@ -342,18 +317,27 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // Any explicit endpoint — including the private ChatGPT subscription
     // backend selected by resolveWireMode — may be free or have unrelated
     // rates. Model ids alone cannot prove its pricing, so leave cost unknown.
-    this.useOpenAIPricing = wire.baseURL === undefined && opts.baseURL === undefined;
+    // Metered Grok list prices apply only in API-key mode (not SuperGrok OAuth
+    // / forceXaiOAuth, where subscription quota may not match list rates).
+    this.useOpenAIPricing =
+      (wire.baseURL === undefined && opts.baseURL === undefined) ||
+      (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
 
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
     } else {
       const ctor = resolveClientFactory();
-      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } = {
+      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string>; fetch?: typeof globalThis.fetch } = {
         apiKey: opts.auth.apiKey,
       };
       const baseURL = wire.baseURL ?? opts.baseURL;
       if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+      // Wire-mode headers (ChatGPT subscription) win over caller defaults so
+      // the private backend is never missing its required identity headers.
       if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
+      else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
+      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
+      if (admissionFetch !== undefined) clientOpts.fetch = admissionFetch;
       this.client = ctor(clientOpts);
     }
   }
@@ -429,7 +413,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
                   sessionId: this.initSessionId,
                   trigger: 'auto',
                 });
-                await this.compactHistory('token_threshold');
+                const compactResult = await this.compactHistory('token_threshold');
+                // Overflow guard (#962): invalidate stale usage so it doesn't
+                // false-positive. Conditioned on `compacted` — a no-op must
+                // preserve the near-limit evidence or the next turn skips the
+                // guard entirely, letting the over-limit request through.
+                if (compactResult.compacted) this.lastUsage = null;
               } catch (compactErr) {
                 if (!(compactErr instanceof HookBlockedError)) throw compactErr;
                 // Hook blocked auto-compaction — continue the session normally.
@@ -505,6 +494,26 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // iteration + tool-dispatch so the user turn, history sanitize, and
     // tool-result image follow-up all agree. See issue #127 / model-capabilities.ts.
     const vision = supportsVision(this.currentModel);
+
+    // Context-overflow guard (#962): fail fast BEFORE sending a request the
+    // provider would reject with HTTP 400. Runs BEFORE the history push so
+    // the user message is not left in history on overflow. Yields an error
+    // event (rather than throwing) so the abort slot is cleared before
+    // control returns; throwing here leaves the slot set and makes compact()
+    // return 'turn-in-flight'. See query/context-overflow.ts and
+    // shared/auto-compact.ts for details.
+    const overflowErr = checkContextOverflow(
+      this.lastUsage,
+      this.currentModel,
+      this.opts.config.maxOutputTokens,
+      this.opts.config.model ?? this.currentModel,
+    );
+    if (overflowErr) {
+      this.abort.clear(controller);
+      yield { type: 'error', error: overflowErr };
+      return;
+    }
+
     this.priorTurns.push({
       role: 'user',
       content: buildUserContent(content, { vision, model: this.currentModel }),
@@ -1031,7 +1040,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
     // calls compactHistory('token_threshold') directly from the turn-boundary
     // check in run(), so the two paths differ only in the emitted trace trigger.
-    return this.compactHistory('manual');
+    const result = await this.compactHistory('manual');
+    // #962: invalidate stale usage so the overflow guard doesn't false-positive.
+    if (result.compacted) this.lastUsage = null; // no-op must keep evidence
+    return result;
   }
 
   private async compactHistory(
@@ -1318,6 +1330,7 @@ export function buildQueryFromConfig(
   promptStream: AsyncIterable<ProviderUserTurn>,
   options: {
     baseURL?: string;
+    defaultHeaders?: Record<string, string>;
     toolDispatcher?: ToolDispatcher;
     onPermissionMode?: (mode: string) => void;
     onCwdChange?: (cwd: string) => void;
@@ -1362,6 +1375,7 @@ export function buildQueryFromConfig(
     config,
   };
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
+  if (options.defaultHeaders !== undefined) opts.defaultHeaders = options.defaultHeaders;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
   if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
   if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;

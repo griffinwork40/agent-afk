@@ -27,7 +27,7 @@ export interface RunTurnInput {
   /** Effective Fast decision captured once at turn start. */
   fastMode?: boolean;
   baseUrl?: string;
-  traceWriter?: import('../../trace/index.js').TraceWriter;
+  traceWriter?: import('../../trace/index.js').TraceSink;
   subagentId?: string;
   onUsageProgress?: (usage: ProviderUsage) => void;
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;

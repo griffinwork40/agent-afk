@@ -1,4 +1,4 @@
-import { providerForModel } from '../agent/providers/index.js';
+import { providerForModel, type ProviderRouteHints } from '../agent/providers/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
 import { loadOpenAICredential, resolveCredentialForModel } from '../agent/auth/credential-resolver.js';
 import { env } from '../config/env.js';
@@ -65,12 +65,29 @@ export function getCodexApiKey(): string | undefined {
  * Codex-routed and openai-compatible models read `OPENAI_API_KEY` /
  * `CODEX_API_KEY` env only (never the Anthropic keychain).
  *
+ * Pass `hints.explicit` when the CLI `--provider` flag forces a family so the
+ * credential matches that provider (see {@link resolveCredentialForModel}).
+ *
  * Delegates to `resolveCredentialForModel` in `src/agent/auth/credential-resolver.ts`
  * — the canonical implementation now lives there so the agent layer can call
  * it directly without an upward import into `src/cli/`.
  */
-export function getApiKeyForModel(model: string | undefined): string | undefined {
-  return resolveCredentialForModel(model);
+export function getApiKeyForModel(
+  model: string | undefined,
+  hints?: ProviderRouteHints,
+): string | undefined {
+  return resolveCredentialForModel(model, hints);
+}
+
+/**
+ * Credential route hints from an optional CLI `--provider` string.
+ * Empty / unset → undefined (model + AFK_PROVIDER env routing only).
+ */
+export function explicitProviderHints(
+  provider: string | undefined,
+): ProviderRouteHints | undefined {
+  if (provider === undefined || provider.trim() === '') return undefined;
+  return { explicit: provider };
 }
 
 /**
@@ -115,8 +132,17 @@ export function getModel(): AgentModelInput {
 export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentModelInput {
   const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
   if (raw && raw.length > 0) return raw;
-  if (typeof parentModel === 'string' && providerForModel(parentModel) === 'openai-compatible') {
-    return parentModel;
+  if (typeof parentModel === 'string') {
+    const parentProvider = providerForModel(parentModel);
+    // Inherit parent for OpenAI-compatible and xAI/Grok families so local/Grok
+    // sessions do not silently fork Anthropic `medium` children.
+    if (
+      parentProvider === 'openai-compatible'
+      || parentProvider === 'xai'
+      || parentProvider === 'xai-oauth'
+    ) {
+      return parentModel;
+    }
   }
   return 'medium';
 }
@@ -133,14 +159,14 @@ export function parseThinking(raw: string | undefined): ThinkingConfig | undefin
   if (raw === undefined) return undefined;
   if (raw === 'adaptive') return { type: 'adaptive' };
   if (raw === 'disabled') return { type: 'disabled' };
-  if (raw === 'enabled:max') return { type: 'enabled', budgetTokens: Number.POSITIVE_INFINITY };
+  if (raw === 'max' || raw === 'enabled:max') return { type: 'enabled', budgetTokens: Number.POSITIVE_INFINITY };
   const m = /^enabled:(\d+)$/.exec(raw);
   if (m) {
     const budgetTokens = parseInt(m[1]!, 10);
     if (Number.isNaN(budgetTokens)) throw new Error(`Invalid thinking budget: ${raw}`);
     return { type: 'enabled', budgetTokens };
   }
-  throw new Error(`Invalid --thinking value: ${raw}. Expected 'adaptive' | 'disabled' | 'enabled:<N>' | 'enabled:max'`);
+  throw new Error(`Invalid --thinking value: ${raw}. Expected 'adaptive' | 'disabled' | 'max' | 'enabled:<N>' | 'enabled:max'`);
 }
 
 /** Valid effort levels. */

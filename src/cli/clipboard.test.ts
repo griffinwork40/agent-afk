@@ -81,18 +81,21 @@ describe('wrapTmuxPassthrough (DCS envelope)', () => {
   });
 });
 
-describe('osc52ClipboardSequence ($TMUX gating)', () => {
+describe('osc52ClipboardSequence (always raw — tmux set-clipboard handles forwarding)', () => {
   it('returns the bare OSC 52 sequence when $TMUX is unset', () => {
     expect(osc52ClipboardSequence('hi', {})).toBe(osc52Copy('hi'));
   });
 
-  it('wraps in the tmux DCS passthrough envelope when $TMUX is set', () => {
+  it('returns the bare OSC 52 sequence even when $TMUX is set (no DCS wrapping)', () => {
+    // tmux natively intercepts raw OSC 52 via set-clipboard (default: external)
+    // and forwards it to the outer terminal. DCS passthrough is unnecessary for
+    // clipboard and would require allow-passthrough on (off since tmux 3.3+).
     expect(osc52ClipboardSequence('hi', { TMUX: '/tmp/tmux-1000/default,123,0' })).toBe(
-      wrapTmuxPassthrough(osc52Copy('hi')),
+      osc52Copy('hi'),
     );
   });
 
-  it('treats an empty-string $TMUX as "not in tmux" (matches detectTerminal truthiness)', () => {
+  it('returns the bare sequence for empty-string $TMUX too', () => {
     expect(osc52ClipboardSequence('hi', { TMUX: '' })).toBe(osc52Copy('hi'));
   });
 });
@@ -104,10 +107,11 @@ describe('copyViaOsc52 (TTY-gated emitter)', () => {
     expect(sink.chunks.join('')).toBe(osc52Copy('hi'));
   });
 
-  it('writes the tmux-wrapped sequence when $TMUX is set', () => {
+  it('writes the raw (unwrapped) sequence even when $TMUX is set', () => {
     const sink = makeSink(true);
     expect(copyViaOsc52('hi', { TMUX: 'x' }, sink)).toBe(true);
-    expect(sink.chunks.join('')).toBe(wrapTmuxPassthrough(osc52Copy('hi')));
+    // Raw OSC 52 — tmux's set-clipboard forwards it without DCS wrapping.
+    expect(sink.chunks.join('')).toBe(osc52Copy('hi'));
   });
 
   it('is a no-op (false, writes nothing) when isTTY is undefined — piped output', () => {

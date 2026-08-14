@@ -312,4 +312,38 @@ describe('send_telegram handler', () => {
       expect(r.content).toMatch(/chat 222: network down/);
     });
   });
+
+  describe('thread_id (topic targeting)', () => {
+    it('forwards messageThreadId when thread_id + chat are both set', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '-100500' });
+      const r = await handler({ message: 'hi', chat: -100500, thread_id: 42 }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: -100500, text: 'hi', messageThreadId: 42 });
+      expect(r.content).toMatch(/topic 42/);
+    });
+
+    it('errors when thread_id is set but chat is omitted', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111' });
+      const r = await handler({ message: 'hi', thread_id: 5 }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/thread_id requires chat/);
+      expect(pushFn).not.toHaveBeenCalled();
+    });
+
+    it.each([['non-number', 'main'], ['zero', 0], ['negative', -1]])(
+      'errors when thread_id is %s', async (_label, bad) => {
+        const { handler, pushFn } = makeHarness({ token: 't', allowed: '111' });
+        const r = await handler({ message: 'hi', chat: 111, thread_id: bad }, signal);
+        expect(r.isError).toBe(true);
+        expect(r.content).toMatch(/positive integer/);
+        expect(pushFn).not.toHaveBeenCalled();
+      });
+
+    it('omitting thread_id keeps existing behavior (no messageThreadId in call)', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111' });
+      const r = await handler({ message: 'hi' }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: 111, text: 'hi' });
+    });
+  });
 });

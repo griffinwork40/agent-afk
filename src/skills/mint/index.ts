@@ -18,7 +18,7 @@
 
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
-import type { TraceWriter } from '../../agent/trace/index.js';
+import type { TraceSink } from '../../agent/trace/index.js';
 import {
   resolveChildManagerReadRoots,
   type ReadScopeInputs,
@@ -195,7 +195,7 @@ async function runPhasesAfterSpec(
   // threaded to every phase so their forked subagents emit subagent_lifecycle
   // events. Without it, mint phase forks were invisible in the witness trace
   // (their fork managers had no writer). Optional so resume/test paths degrade.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<MintResult> {
   if (!parentSession.sessionId) {
     throw new Error('runPhasesAfterSpec requires parentSession.sessionId');

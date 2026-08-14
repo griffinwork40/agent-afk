@@ -20,10 +20,15 @@
  *     401 refresh + write-back is owned by the provider via `tokenRefresher`.
  *   - Codex / OpenAI-compatible models: `OPENAI_API_KEY` / `CODEX_API_KEY`, or
  *     existing `codex login` state on disk.
+ *   - xAI / Grok (`xai` / `xai-oauth`): `XAI_API_KEY` and/or SuperGrok OAuth
+ *     store (`afk provider auth xai login`). OAuth tokens are never stashed into
+ *     `config.apiKey` (same CLI invariant as session bootstrap).
  */
 
 import { env } from '../config/env.js';
 import { detectAuthMode } from '../agent/providers/anthropic-direct/auth.js';
+import { loadXaiApiKey } from '../agent/auth/credential-resolver.js';
+import { resolveXaiAuth } from '../agent/providers/xai/auth.js';
 import { loadCredential } from '../cli/config.js';
 
 /** The env var a resolved Anthropic credential is stashed into, by token shape. */
@@ -32,9 +37,14 @@ export type AnthropicAuthEnvVar = 'CLAUDE_CODE_OAUTH_TOKEN' | 'ANTHROPIC_API_KEY
 export type TelegramCredentialPlan =
   /** OpenAI-routed model: nothing to stash; the provider resolves its own key. */
   | { kind: 'openai'; notices: string[] }
+  /**
+   * xAI / Grok: optional metered key to thread onto config; OAuth stays in the
+   * AFK store and is resolved inside `XaiProvider`.
+   */
+  | { kind: 'xai'; apiKey?: string; notices: string[] }
   /** Claude model with a resolved credential to stash + thread into config. */
   | { kind: 'anthropic'; credential: string; envVar: AnthropicAuthEnvVar; notices: string[] }
-  /** Claude model with no credential anywhere — the entrypoint must exit. */
+  /** No usable credential — the entrypoint must exit. */
   | { kind: 'missing'; errors: string[] };
 
 /** Injectable seams so the auth matrix can be exercised without real credentials. */
@@ -42,6 +52,9 @@ export interface TelegramCredentialDeps {
   openaiApiKey?: string | undefined;
   codexApiKey?: string | undefined;
   loadAnthropicCredential?: () => string | undefined;
+  loadXaiKey?: () => string | undefined;
+  /** True when SuperGrok OAuth tokens are readable from the store. */
+  hasXaiOAuth?: () => boolean;
   detectMode?: (token: string) => 'oauth' | 'api-key';
 }
 
@@ -50,9 +63,18 @@ export function isOpenAiRoutedProvider(providerName: string): boolean {
   return providerName === 'openai-compatible' || providerName === 'openai-codex';
 }
 
+/** True for first-class xAI / Grok provider family. */
+export function isXaiRoutedProvider(providerName: string): boolean {
+  return providerName === 'xai' || providerName === 'xai-oauth';
+}
+
+function defaultHasXaiOAuth(): boolean {
+  return resolveXaiAuth(undefined, 'oauth').apiKey != null;
+}
+
 /**
  * Decide which credential the Telegram bot should run on. Pure — performs no
- * env writes, no logging, and never exits.
+ * env writes, no logging, and never exits (aside from deps that may read env).
  */
 export function planTelegramCredential(
   providerName: string,
@@ -62,6 +84,8 @@ export function planTelegramCredential(
     openaiApiKey = env.OPENAI_API_KEY,
     codexApiKey = env.CODEX_API_KEY,
     loadAnthropicCredential = loadCredential,
+    loadXaiKey = loadXaiApiKey,
+    hasXaiOAuth = defaultHasXaiOAuth,
     detectMode = detectAuthMode,
   } = deps;
 
@@ -77,6 +101,58 @@ export function planTelegramCredential(
             // operator knows what the resolver will try.
             '📝 Will attempt API key from ~/.codex/auth.json (run `afk provider auth diagnose` for details)',
       ],
+    };
+  }
+
+  if (isXaiRoutedProvider(providerName)) {
+    const forceOAuth = providerName === 'xai-oauth';
+    const xaiKey = loadXaiKey();
+    const keyOk = !!xaiKey && xaiKey.length > 0;
+    const oauthOk = hasXaiOAuth();
+
+    if (forceOAuth) {
+      if (!oauthOk) {
+        return {
+          kind: 'missing',
+          errors: [
+            '❌ SuperGrok OAuth required for xai-oauth models.',
+            '   Run `afk provider auth xai login` (device-code), then restart the bot.',
+          ],
+        };
+      }
+      return {
+        kind: 'xai',
+        notices: [
+          '📝 Using SuperGrok / SuperGrok Heavy / X Premium+ OAuth for xAI',
+        ],
+      };
+    }
+
+    if (!keyOk && !oauthOk) {
+      return {
+        kind: 'missing',
+        errors: [
+          '❌ Grok models require XAI_API_KEY or SuperGrok OAuth.',
+          '   Set XAI_API_KEY, or run `afk provider auth xai login`.',
+        ],
+      };
+    }
+
+    const notices: string[] = [];
+    if (keyOk) notices.push('📝 Using XAI_API_KEY for metered xAI auth');
+    if (oauthOk && !keyOk) {
+      notices.push(
+        '📝 Using SuperGrok / SuperGrok Heavy / X Premium+ OAuth for xAI',
+      );
+    } else if (oauthOk && keyOk) {
+      notices.push(
+        '📝 Both XAI_API_KEY and SuperGrok OAuth present — use slot provider xai vs xai-oauth if ambiguous',
+      );
+    }
+    return {
+      kind: 'xai',
+      ...(keyOk ? { apiKey: xaiKey } : {}),
+      notices,
     };
   }
 
@@ -136,6 +212,14 @@ export function applyTelegramCredentialPlan(
     // is for log clarity and any code path that reads env directly.
     process.env[plan.envVar] = plan.credential;
     config.apiKey = plan.credential;
+  }
+
+  if (plan.kind === 'xai') {
+    // Only metered XAI_API_KEY is threaded onto config — never SuperGrok
+    // access_token (ambiguous-auth footgun; XaiProvider owns the store).
+    if (plan.apiKey !== undefined && plan.apiKey.length > 0) {
+      config.apiKey = plan.apiKey;
+    }
   }
 
   for (const line of plan.notices) log(line);

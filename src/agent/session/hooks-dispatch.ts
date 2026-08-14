@@ -27,7 +27,7 @@ import type {
   SessionStartContext,
 } from '../hooks.js';
 import { emitHookDecision } from '../trace/emit.js';
-import type { HookEventName, TraceWriter } from '../trace/index.js';
+import type { HookEventName, TraceSink } from '../trace/index.js';
 
 export interface SessionHookDispatchOptions {
   /** Abort signal forwarded to the registry; aborted signal short-circuits. */
@@ -40,11 +40,11 @@ export interface SessionHookDispatchOptions {
   onError?: (err: Error) => void;
   /** Witness-layer trace writer. When provided, every dispatch emits a
    *  `hook_decision` event with the decision outcome. */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
 async function emitSessionHookDecision(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   hookEvent: HookEventName,
   outcome:
     | { kind: 'decision'; decision: HookDecision }

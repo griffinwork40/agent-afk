@@ -11,6 +11,7 @@ import {
   planTelegramCredential,
   applyTelegramCredentialPlan,
   isOpenAiRoutedProvider,
+  isXaiRoutedProvider,
 } from './credentials.js';
 
 const OAUTH_TOKEN = 'sk-ant-oat01-example';
@@ -36,6 +37,64 @@ describe('isOpenAiRoutedProvider', () => {
     expect(isOpenAiRoutedProvider('openai-compatible')).toBe(true);
     expect(isOpenAiRoutedProvider('openai-codex')).toBe(true);
     expect(isOpenAiRoutedProvider('anthropic-direct')).toBe(false);
+  });
+});
+
+describe('isXaiRoutedProvider', () => {
+  it('covers xai and xai-oauth only', () => {
+    expect(isXaiRoutedProvider('xai')).toBe(true);
+    expect(isXaiRoutedProvider('xai-oauth')).toBe(true);
+    expect(isXaiRoutedProvider('openai-compatible')).toBe(false);
+    expect(isXaiRoutedProvider('anthropic-direct')).toBe(false);
+  });
+});
+
+describe('planTelegramCredential — xAI / Grok', () => {
+  it('accepts XAI_API_KEY without Anthropic', () => {
+    const plan = planTelegramCredential('xai', {
+      loadXaiKey: () => 'xai-key',
+      hasXaiOAuth: () => false,
+      loadAnthropicCredential: () => {
+        throw new Error('must not load Anthropic for xai');
+      },
+    });
+    expect(plan).toMatchObject({ kind: 'xai', apiKey: 'xai-key' });
+  });
+
+  it('accepts SuperGrok OAuth-only without XAI_API_KEY', () => {
+    const plan = planTelegramCredential('xai', {
+      loadXaiKey: () => undefined,
+      hasXaiOAuth: () => true,
+    });
+    expect(plan.kind).toBe('xai');
+    expect(plan.kind === 'xai' && plan.apiKey).toBeUndefined();
+    expect(plan.kind === 'xai' && plan.notices[0]).toMatch(/OAuth/i);
+  });
+
+  it('missing when neither key nor OAuth', () => {
+    const plan = planTelegramCredential('xai', {
+      loadXaiKey: () => undefined,
+      hasXaiOAuth: () => false,
+    });
+    expect(plan.kind).toBe('missing');
+  });
+
+  it('xai-oauth requires OAuth store', () => {
+    const plan = planTelegramCredential('xai-oauth', {
+      loadXaiKey: () => 'xai-key-only',
+      hasXaiOAuth: () => false,
+    });
+    expect(plan.kind).toBe('missing');
+  });
+
+  it('apply threads only apiKey for xai, never invents oauth into config', () => {
+    const config: { apiKey?: string } = {};
+    const plan = planTelegramCredential('xai', {
+      loadXaiKey: () => 'xai-metered',
+      hasXaiOAuth: () => true,
+    });
+    expect(applyTelegramCredentialPlan(plan, config, { log: () => {} })).toBe(true);
+    expect(config.apiKey).toBe('xai-metered');
   });
 });
 

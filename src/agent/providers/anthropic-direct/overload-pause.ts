@@ -30,22 +30,22 @@
 import { env } from '../../../config/env.js';
 import type { ProviderEvent } from '../../provider.js';
 
-/**
- * Terminal `stopReason` stamped on the `turn.completed` that ends a turn whose
- * mid-stream overload retry budget was exhausted.
- *
- * Consumed by three places, all of which must stay in agreement:
- *   - `query/retry-layer.ts` — {@link classifyOverloadExhaustion} keys the pause
- *     arm on it.
- *   - `session/closure-reason.ts` — maps it to the `abort` closure reason.
- *   - `session/closure-emitter.ts` — maps it to a `failed` seal status.
- */
-export const OVERLOAD_EXHAUSTED = 'overload_exhausted';
+// Imported for local use (classifyOverloadExhaustion) and re-exported so
+// existing `from './overload-pause.js'` import sites keep working (M4: the
+// three provider-neutral consumers have been updated to import from the shared
+// module directly, but anthropic-direct-internal consumers like loop.ts still
+// import from here).
+import { OVERLOAD_EXHAUSTED as _OVERLOAD_EXHAUSTED } from '../shared/overload-sentinel.js';
+export { OVERLOAD_EXHAUSTED } from '../shared/overload-sentinel.js';
 
 /**
- * Operator-facing copy for an exhausted overload. Emitted as a display-only
- * `assistant.message` (never pushed into history — it is operator context, not
- * model context), mirroring the `stop_reason: 'refusal'` notice in `loop.ts`.
+ * Operator-facing copy for an exhausted overload. Emitted as an
+ * `assistant.message`, mirroring the `stop_reason: 'refusal'` notice in
+ * `loop.ts`. Unlike the refusal notice, this IS visible to the model on
+ * `--resume`: `session/stream-consumer.ts` materializes non-empty
+ * `assistant.message` events into `conversationHistory`, which threads back
+ * as model context on the next turn. See `loop.ts:204-210` for the
+ * corrected contract.
  *
  * Exists because the raw SSE envelope (`{"type":"error","error":{"type":
  * "overloaded_error"}}`) reached operators verbatim and was misread as a
@@ -125,7 +125,7 @@ export function nextProbeDelayMs(random: () => number = Math.random): number {
  *          overload budget was exhausted.
  */
 export function classifyOverloadExhaustion(event: ProviderEvent): boolean {
-  return event.type === 'turn.completed' && event.usage.stopReason === OVERLOAD_EXHAUSTED;
+  return event.type === 'turn.completed' && event.usage.stopReason === _OVERLOAD_EXHAUSTED;
 }
 
 /** Surfaces on which parking on an upstream capacity event is acceptable. */

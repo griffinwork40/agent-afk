@@ -23,6 +23,7 @@ import { Markup, Telegraf } from 'telegraf';
 import type { ElicitationHandler } from '../agent/elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from '../agent/types/sdk-types.js';
 import type { MessageHandler } from './handlers/message.js';
+import { type TelegramRoute, routeKey, sendOptions } from './route.js';
 import {
   buildElicitationCallback,
   parseElicitationCallback,
@@ -70,33 +71,43 @@ function truncateLabel(label: string, maxBytes = 64): string {
  *
  * @param messageHandler - The message handler instance (for `pendingElicitations`).
  * @param bot - The Telegraf bot instance (for `bot.action` registration).
- * @param chatId - The Telegram chat ID to send questions to.
+ * @param target - The route to send questions to, or a bare chatId (General
+ *   topic). The route's key isolates the pending-elicitation entry from other
+ *   topics, and `sendOptions(route)` pins prompts/keyboards to the topic thread.
  * @param opts.ledgerOriginated - When true, every text-intercept entry also
- *   registers the chatId in `messageHandler.ledgerOriginatedPendingChats` so
+ *   registers the route in `messageHandler.ledgerOriginatedPendingChats` so
  *   the message handler's idle-guard fires the resolver even with no active
- *   AgentSession for this chat (the REPL session runs in a separate process).
+ *   AgentSession for this route (the REPL session runs in a separate process).
  */
 export function makeTelegramElicitationHandler(
   messageHandler: MessageHandler,
   bot: Telegraf,
-  chatId: number,
+  target: TelegramRoute | number,
   opts?: { ledgerOriginated?: boolean },
 ): ElicitationHandler {
+  // Normalize: a bare chatId is that chat's General topic. `key` isolates the
+  // pending entry per route (leak fix); `chatId` + `threadOpts` drive sends so
+  // a topic's prompt lands in the topic, not General.
+  const route: TelegramRoute = typeof target === 'number' ? { chatId: target } : target;
+  const chatId = route.chatId;
+  const key = routeKey(route);
+  const threadOpts = sendOptions(route);
+
   // Contract: ledgerOriginated elicitations bypass the session-state guard in
   // MessageHandler.handle() — the resolver fires on the next text reply
-  // regardless of whether an AgentSession exists for this chat.
+  // regardless of whether an AgentSession exists for this route.
   const ledgerOriginated = opts?.ledgerOriginated ?? false;
 
   // Helpers that keep pendingElicitations and ledgerOriginatedPendingChats in
   // sync. All text-intercept registrations and deletions must use these instead
   // of touching the maps directly, so the bypass set never drifts from reality.
   function setPending(resolver: (text: string) => void): void {
-    messageHandler.pendingElicitations.set(chatId, resolver);
-    if (ledgerOriginated) messageHandler.ledgerOriginatedPendingChats.add(chatId);
+    messageHandler.pendingElicitations.set(key, resolver);
+    if (ledgerOriginated) messageHandler.ledgerOriginatedPendingChats.add(key);
   }
   function deletePending(): void {
-    messageHandler.pendingElicitations.delete(chatId);
-    if (ledgerOriginated) messageHandler.ledgerOriginatedPendingChats.delete(chatId);
+    messageHandler.pendingElicitations.delete(key);
+    if (ledgerOriginated) messageHandler.ledgerOriginatedPendingChats.delete(key);
   }
   /**
    * H3: Single dispatch table for confirm/choice elicitations.
@@ -213,7 +224,7 @@ export function makeTelegramElicitationHandler(
           if (choiceIndex === CUSTOM_ENTRY_SENTINEL_INDEX) {
             resolved = false; // re-arm for the text intercept
             inCustomTextWait = true;
-            bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:').catch(() => {});
+            bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:', threadOpts).catch(() => {});
             if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
             setPending((text: string) => {
               if (resolved) return;
@@ -242,9 +253,10 @@ export function makeTelegramElicitationHandler(
           }
         });
 
-        // Send the keyboard message
+        // Send the keyboard message (pinned to the route's topic thread).
         bot.telegram.sendMessage(chatId, displayText, {
           parse_mode: 'HTML',
+          ...threadOpts,
           reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
         }).catch(() => {
           if (!resolved) {
@@ -266,8 +278,8 @@ export function makeTelegramElicitationHandler(
         resolved = true;
         // M6: log abandoned-entry cleanup so diagnostic traces surface if the
         // re-prompt race (H1) or an unanticipated path leaves a stale entry.
-        if (messageHandler.pendingElicitations.has(chatId)) {
-          console.warn('[elicitation-handler] abort: cleaning up stale pendingElicitation for chatId', chatId);
+        if (messageHandler.pendingElicitations.has(key)) {
+          console.warn('[elicitation-handler] abort: cleaning up stale pendingElicitation for route', key);
         }
         deletePending();
         resolve({ action: 'decline' });
@@ -301,7 +313,7 @@ export function makeTelegramElicitationHandler(
           if (trimmed === '' && !request.allowSkip) {
             resolved = false;
             isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, '❌ Please enter a number.').catch(() => {});
+            bot.telegram.sendMessage(chatId, '❌ Please enter a number.', threadOpts).catch(() => {});
             // H1: abort guard — if abort fired between `resolved = false` and `.set()`,
             // the promise is already settled; skip re-registration to avoid a dangling intercept.
             if (options.signal.aborted) return;
@@ -315,7 +327,7 @@ export function makeTelegramElicitationHandler(
             // Re-prompt: re-register and ask again
             resolved = false;
             isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, '❌ Please enter a valid number.').catch(() => {});
+            bot.telegram.sendMessage(chatId, '❌ Please enter a valid number.', threadOpts).catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
             setPending(handleText);
@@ -326,7 +338,7 @@ export function makeTelegramElicitationHandler(
           if (request.min !== undefined && n < request.min) {
             resolved = false;
             isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, `❌ Value must be ≥ ${request.min}.`).catch(() => {});
+            bot.telegram.sendMessage(chatId, `❌ Value must be ≥ ${request.min}.`, threadOpts).catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
             setPending(handleText);
@@ -337,7 +349,7 @@ export function makeTelegramElicitationHandler(
           if (request.max !== undefined && n > request.max) {
             resolved = false;
             isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, `❌ Value must be ≤ ${request.max}.`).catch(() => {});
+            bot.telegram.sendMessage(chatId, `❌ Value must be ≤ ${request.max}.`, threadOpts).catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
             setPending(handleText);
@@ -373,6 +385,7 @@ export function makeTelegramElicitationHandler(
               bot.telegram.sendMessage(
                 chatId,
                 `❌ Invalid selection. Enter comma-separated numbers between 1 and ${choices.length}.`,
+                threadOpts,
               ).catch(() => {});
               // H1: abort guard before re-registration.
               if (options.signal.aborted) return;
@@ -391,7 +404,7 @@ export function makeTelegramElicitationHandler(
         if (trimmed === '' && !request.allowSkip) {
           resolved = false;
           isFirstPrompt = false;
-          bot.telegram.sendMessage(chatId, '❌ Please enter a response (or type :cancel to skip).').catch(() => {});
+          bot.telegram.sendMessage(chatId, '❌ Please enter a response (or type :cancel to skip).', threadOpts).catch(() => {});
           // H1: abort guard before re-registration.
           if (options.signal.aborted) return;
           setPending(handleText);
@@ -433,13 +446,13 @@ export function makeTelegramElicitationHandler(
         }
       }
 
-      bot.telegram.sendMessage(chatId, promptText, { parse_mode: 'HTML' }).catch(() => {
+      bot.telegram.sendMessage(chatId, promptText, { parse_mode: 'HTML', ...threadOpts }).catch(() => {
         if (!resolved) {
           resolved = true;
           options.signal.removeEventListener('abort', onAbort);
           // M6: log sendMessage failure so callers can diagnose silent declines
           // without a visible error (e.g., MarkdownV2 parse failure, network error).
-          console.warn('[elicitation-handler] sendMessage failed; declining elicitation for chatId', chatId);
+          console.warn('[elicitation-handler] sendMessage failed; declining elicitation for route', key);
           deletePending();
           resolve({ action: 'decline' });
         }

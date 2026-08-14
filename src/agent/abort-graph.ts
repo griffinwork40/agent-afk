@@ -21,7 +21,7 @@
  */
 
 import { emitAbort } from './trace/emit.js';
-import type { AbortOrigin, TraceWriter } from './trace/index.js';
+import type { AbortOrigin, TraceSink } from './trace/index.js';
 
 export interface ChildAbortedEvent {
   parentId: string;
@@ -42,10 +42,19 @@ interface GraphNode {
 
 export class AbortGraph {
   private readonly nodes = new Map<string, GraphNode>();
-  private readonly traceWriter: TraceWriter | undefined;
+  private traceWriter: TraceSink | undefined;
 
-  constructor(traceWriter?: TraceWriter) {
+  constructor(traceWriter?: TraceSink) {
     this.traceWriter = traceWriter;
+  }
+
+  /**
+   * Re-point the witness sink. Called (via the bootstrap cascade) on a REPL
+   * `/resume` so abort records emitted after the swap go to the live writer
+   * rather than the outgoing session's sealed one (#985).
+   */
+  setTraceWriter(writer: TraceSink | undefined): void {
+    this.traceWriter = writer;
   }
 
   register(id: string, controller: AbortController): void {
@@ -56,6 +65,19 @@ export class AbortGraph {
       listeners: new Set(),
       cascading: false,
     });
+  }
+
+  /**
+   * Replace a node's terminal AbortController while preserving its links and
+   * listeners. This is only intended for reusable lifecycle roots after their
+   * current children have been cancelled (for example, an interactive
+   * session's `/clear` cycle).
+   */
+  rearm(id: string, controller: AbortController): void {
+    const node = this.nodes.get(id);
+    if (!node) throw new Error(`AbortGraph: ${id} not registered`);
+    node.controller = controller;
+    node.cascading = false;
   }
 
   has(id: string): boolean {

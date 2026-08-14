@@ -103,7 +103,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly baseUrl?: string;
   private readonly maxToolUseIterations?: number;
   private readonly softDeadlineMs?: number;
-  private readonly traceWriter?: import('../../trace/index.js').TraceWriter;
+  private readonly traceWriter?: import('../../trace/index.js').TraceSink;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
 
@@ -326,13 +326,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async compact(): Promise<ProviderCompactResult> {
-    return compactQueryHistory({
-      state: this.state,
-      abort: this.abort,
-      retry: this.retry,
+    const r = await compactQueryHistory({
+      state: this.state, abort: this.abort, retry: this.retry,
       initSessionId: this.initSessionId,
       ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
     });
+    if (r.compacted) this.state.lastUsage = null; // #962: stale usage → false-positive
+    return r;
   }
 
   listRewindTargets(): RewindTarget[] {

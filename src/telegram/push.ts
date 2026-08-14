@@ -35,6 +35,12 @@ export interface PushOptions {
    * can be added by widening the union when needed.
    */
   replyMarkup?: InlineKeyboardMarkup;
+  /**
+   * Optional Telegram `message_thread_id` for sending to a specific topic in
+   * a supergroup with topics enabled. Ignored when the target chat is not a
+   * supergroup with topics. Thread id 1 is the General topic and is a no-op.
+   */
+  messageThreadId?: number;
   /** Override fetch (tests). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
   /** Override API base (tests). */
@@ -71,6 +77,7 @@ export async function push(options: PushOptions): Promise<PushResult> {
   };
   if (options.parseMode) body['parse_mode'] = options.parseMode;
   if (options.replyMarkup) body['reply_markup'] = options.replyMarkup;
+  if (options.messageThreadId) body['message_thread_id'] = options.messageThreadId;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10_000);

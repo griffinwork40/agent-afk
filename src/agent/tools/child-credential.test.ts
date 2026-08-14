@@ -272,6 +272,27 @@ describe('applyManagerApiKeyFallback — provider-identity gate (parentProvider)
       }),
     ).toBe(ANTHROPIC_API);
   });
+
+  it('treats xai and xai-oauth as the same credential family for inheritance', () => {
+    const XAI_KEY = 'xai-metered-key';
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: 'grok-4.5',
+        configApiKey: undefined,
+        parentApiKey: XAI_KEY,
+        parentProvider: 'xai',
+      }),
+    ).toBe(XAI_KEY);
+    // Child forced to xai-oauth still same family as parent xai.
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: 'grok-4.5',
+        configApiKey: undefined,
+        parentApiKey: XAI_KEY,
+        parentProvider: 'xai-oauth',
+      }),
+    ).toBe(XAI_KEY);
+  });
 });
 
 // Fail-closed contract (#438): when the manager is built WITHOUT parentModel,

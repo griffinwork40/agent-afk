@@ -34,7 +34,7 @@ import { headAndTail } from './handlers/_output-cap.js';
 import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
 import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
 import { emitHookDecision, emitSessionPhase } from '../trace/emit.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
 import {
@@ -192,7 +192,7 @@ export interface SessionToolDispatcherOptions {
   sessionGrantManager?: GrantManager;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * When true, this dispatcher belongs to a read-only skill's forked subagent:
    * any `bash` call whose command is classified as MUTATING (see
@@ -269,7 +269,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * live grants. See {@link SessionToolDispatcherOptions.sessionGrantManager}.
    */
   private readonly sessionGrantManager: GrantManager | undefined;
-  private readonly traceWriter: TraceWriter | undefined;
+  private readonly traceWriter: TraceSink | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
   /**

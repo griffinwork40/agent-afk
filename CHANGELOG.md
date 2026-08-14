@@ -11,6 +11,174 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.118.0] - 2026-08-14
+
+### Added
+- process-wide admission control for outbound API requests (#941) (#1050) (6f473544)
+
+## [5.117.1] - 2026-08-14
+
+### Fixed
+- widen flaky timing threshold in dispatcher compose parallelism test (#1065) (a5b401d4)
+
+## [5.117.0] - 2026-08-14
+
+### Added
+- first-class xAI/Grok with API key and SuperGrok OAuth (#1019) (efd78cf7)
+
+### Changed
+- pin terminal width in quota-footer tests to fix #795 (#1056) (ac2ee6c5)
+
+## [5.116.0] - 2026-08-13
+
+### Added
+- add thread_id to send_telegram for topic targeting (#1053) (8f312cab)
+
+### Fixed
+- extract discoverPluginSkillsAndCommands helper (#989) (#1055) (3c2fc455)
+- add Invariant comment guarding sync block (#743) (#1054) (f0b26986)
+
+## [5.115.4] - 2026-08-13
+
+### Fixed
+- accept bare "max" as alias for "enabled:max" in --thinking parser (#1052) (50879d31)
+
+## [5.115.3] - 2026-08-13
+
+### Changed
+- split TraceWriter into write-only TraceSink and owner-only seal handle (#1051) (400f64f8)
+
+## [5.115.2] - 2026-08-13
+
+### Fixed
+- sanitize paths in registry warnings against terminal injection (#1029) (e73cc1a3)
+
+## [5.115.1] - 2026-08-13
+
+### Fixed
+- remove vestigial Claude Code slug from memory surveyor (#882) (#1008) (0ab11cd2)
+
+### Changed
+- golden-fingerprint test for denial reason slug stability (#853) (#1047) (9a7a603d)
+
+## [5.115.0] - 2026-08-13
+
+### Added
+- add recovery hints for iteration_cap and timeout closures (#1048) (8fbec4a2)
+
+## [5.114.1] - 2026-08-13
+
+### Fixed
+- add sessionsScanned compat alias and improve CLI label (#1037) (#1041) (d91ef1cf)
+
+## [5.114.0] - 2026-08-13
+
+### Added
+- surface truncatedSessions in search_witness results (#1036) (#1042) (0023b07b)
+
+### Changed
+- add negative assertion to no-git guard (#788) (#1026) (a9a6d3fc)
+- add unit tests for handler adapter layer (#1038) (#1039) (54e4c602)
+- pin shared allowance across alternating stall shapes (#947) (#1040) (8ea92519)
+
+## [5.113.0] - 2026-08-12
+
+### Added
+- add read_witness and search_witness built-in tools (#1034) (b36cc54a)
+
+## [5.112.6] - 2026-08-12
+
+### Fixed
+- surface rate-limit backoffs and retry sendOrEdit 429s (#1033) (1b8b124a)
+
+## [5.112.5] - 2026-08-12
+
+### Changed
+- compare digests instead of re-reading files on dedup (#885) (#1006) (00a7e1e8)
+
+## [5.112.4] - 2026-08-12
+
+### Fixed
+- correct concurrency floor figures and add light-regime budget (#1027) (0b99429c)
+
+## [5.112.3] - 2026-08-12
+
+### Changed
+- retire committedBandBottomRow erase-bound read in frame-preserve-archive (advances #540) (#1031) (dbfc1b5c)
+
+## [5.112.2] - 2026-08-12
+
+### Changed
+- split commitAbove into 7 sibling modules with invariant tests (#827) (#1032) (c3a4bade)
+
+## [5.112.1] - 2026-08-12
+
+### Fixed
+- use routeFromCtx in /afk and /help handlers (#1022) (#1028) (2b16957b)
+
+### Changed
+- fix stale comments and test cleanup at skill-dispatch sites (#744) (#1030) (7f16f9ff)
+
+## [5.112.0] - 2026-08-12
+
+### Added
+- bound the witness tree by age and aggregate size (#849) (#986) (4502e200)
+
+## [5.111.3] - 2026-08-12
+
+### Fixed
+- cascade-abort in-flight children before the owner seals (#733) (#987) (68b22395)
+
+## [5.111.2] - 2026-08-12
+
+### Fixed
+- give the resumed session a live writer instead of a sealed one (#731) (#985) (45a56a33)
+- path-guard NAME=value replacers so non-secret paths survive capture (#949) (#968) (eb7b8755)
+- suppress sealed-writer error on SessionEnd hook_decision emit (#1025) (1b4d7f9d)
+- gate plugin-shadowing notices behind AFK_DEBUG=1 (#1024) (39f8f35b)
+
+### Changed
+- document subagent tool-round budget in AFK.md and CLAUDE.md (#918) (#1007) (7027e56b)
+
+## [5.111.1] - 2026-08-12
+
+### Fixed
+- improve tmux compatibility — raw OSC 52 clipboard, truecolor detection, docs (#1017) (c2d6cdd2)
+
+## [5.111.0] - 2026-08-12
+
+### Added
+- native topics routing (step 6) + cross-surface CLI/daemon registration (step 7) (#1020) (5fdc806f)
+
+## [5.110.5] - 2026-08-12
+
+### Fixed
+- fail-fast context-overflow guard for max_tokens exceeding window (#1014) (72d56baa)
+
+## [5.110.4] - 2026-08-12
+
+### Fixed
+- clarify research-agent write constraint in tool-def listing (#944) (#1009) (efd3dc4f)
+
+## [5.110.3] - 2026-08-12
+
+### Fixed
+- clarify skill tool description for load vs fork modes (#1018) (44fbb5c2)
+
+## [5.110.2] - 2026-08-12
+
+### Fixed
+- surface research-agent read-only constraint at dispatch time (#1012) (0583e81d)
+
+### Changed
+- clarify advisory-only posture of 200-line function ceiling (#1016) (4e1254b0)
+
+## [5.110.1] - 2026-08-12
+
+### Fixed
+- block skill self-recursion through agent children (#1015) (e2b34c42)
+- address remaining #762 review items (M1, M4, M6, L1, listener leak) (#1013) (415d34fa)
+
 ## [5.110.0] - 2026-08-11
 
 ### Added

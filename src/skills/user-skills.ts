@@ -212,6 +212,7 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
         isSkillDispatch: true,
         // Suppresses this skill's own entry in the fork's manifest — without it
         // the fork can read its own catalogue entry and re-dispatch itself.
+        // Bare name is safe: skill-bridge's `endsWith(':<name>')` filter covers `user:<name>` / `project:<name>` aliases (#744).
         skillDispatchName: parsed.name,
       },
       idPrefix: `user-skill-${parsed.name}`,

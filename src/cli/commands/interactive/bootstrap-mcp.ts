@@ -1,6 +1,6 @@
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { palette } from '../../palette.js';
 import { recordBootWarning } from './boot-warning-recorder.js';
@@ -28,7 +28,7 @@ import { recordBootWarning } from './boot-warning-recorder.js';
 export async function connectReplMcp(a: {
   effectiveCwd: string | undefined;
   mcpConfigOverride: string | undefined;
-  traceWriter: TraceWriter | undefined;
+  traceWriter: TraceSink | undefined;
   bootWarnings: string[];
 }): Promise<McpManager | undefined> {
   // Use the worktree cwd for project-local `.mcp.json` resolution so each

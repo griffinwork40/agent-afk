@@ -2,7 +2,7 @@ import { createDefaultHookRegistry } from '../../../agent/default-hook-registry.
 import { loadHooksConfig } from '../../../agent/hooks/config-loader.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import type { SessionStats } from '../../slash/types.js';
 import type { CompletionWriter } from './shared.js';
 import { emitSubagentCompletion } from './progress-banner.js';
@@ -35,7 +35,7 @@ export function createReplHookRegistry(a: {
   memoryStore: MemoryStore;
   stats: SessionStats;
   effectiveCwd: string | undefined;
-  traceWriter: TraceWriter | undefined;
+  traceWriter: TraceSink | undefined;
 }): { hookRegistry: HookRegistry; pathApprovalGrantRef: { current: unknown } } {
   const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { emitSubagentCompletion(a.completionWriter, info); },

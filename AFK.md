@@ -25,7 +25,7 @@ pnpm scan:env:check                                # CI gate: docs/env-registry.
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # CI gate: 350-line source ceiling, ratcheted against .filesize-baseline.json
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values)
-pnpm audit:funcsize:check                          # CI gate: 200-line function ceiling, ratcheted against .funcsize-baseline.json
+pnpm audit:funcsize:check                          # advisory: 200-line function ceiling, warns but never fails CI
 pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
@@ -62,6 +62,12 @@ The other half of that gap — **what a child actually SAID** — is closable wi
 Capture is **incremental — flushed at every tool-call boundary — and that is the whole point**, not an optimization. The failure this exists to debug is a child that runs to its timeout and produces zero final output; at that moment every aggregate source is empty *by construction*: `conversationHistory` only gains an entry on `assistant.message` (once per completed `run()`), `SubagentStop.lastMessage` is `undefined`, and the trace's `partialOutputBytes` is `0`. Any capture pinned to an end-of-run boundary records nothing in exactly the case it is needed. Flushing per tool call means a killed child still leaves one record per call it made.
 
 One residual bug, worth recognizing: a parent ending mid-wave seals over live children and silently drops their terminal rows (`write()` throws on a sealed writer; `emitSubagentLifecycle` swallows it), so ~3% of dispatched subagents have no recorded fate — ~8% in daemon/cron parallel waves vs ~1% interactive. Detector: an **unmatched `started` in a trace that contains `session_sealed`** — not "a `started` is the last line", which misses it because the seal is written afterward.
+
+**Witness retention.** The tree is no longer unbounded (`src/agent/witness-sweep.ts`, #849). A sweep runs at root-session start — fire-and-forget beside `capJsonlBySize`, never able to fail construction — and evicts **whole session directories**, first any whose newest content is older than `AFK_WITNESS_MAX_AGE_DAYS` (default **30**), then oldest-first until the tree fits `AFK_WITNESS_MAX_BYTES` (default **2 GiB**). `AFK_WITNESS_RETENTION_DISABLE=1` turns it off entirely. Three properties are load-bearing and each has a test: the **active session is excluded by identity** (its witness label, never by timestamp); anything whose newest content is inside a 1-hour grace window is never evicted, which covers the concurrent REPL/daemon/telegram sessions this process cannot enumerate; and liveness is judged by the **newest mtime across a directory's contents, not the directory's own mtime** — POSIX does not bump a directory's mtime when an existing file inside it is appended to, so a long-running session that creates no new sidecars looks ancient and an mtime-only sweep would delete a live trace. Cost is bounded twice over: the sweep is deferred 5s off the construction path and `.unref()`ed (so a short-lived process never pays for it), and a `.last-sweep` stamp in the witness root caps it at one walk every 6 hours rather than one per session start.
+
+### Subagent tool-round budget
+
+The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (tools stripped from the next reply) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/session/budget-preamble.ts`. Full history and rationale: `docs/subagent-tool-budget.md`.
 
 ## Architecture
 
@@ -177,18 +183,18 @@ extracted sibling must be reachable from one of the three esbuild entrypoints or
 `build:dist` silently tree-shakes it with no CI signal. Campaign plan and
 per-wave protocol: `docs/file-size-ceiling.md`.
 
-### The 200-line function ceiling
+### The 200-line function ceiling (advisory)
 
-A sibling gate, and **not implied by the file ceiling**: `pnpm audit:funcsize:check`
-(`scripts/check-function-size.ts`) fails when any single function under `src/` or
-`scripts/` exceeds **200 lines**. File size measures how much you must *read* to
-edit safely; function size measures how much you must *hold in mind* to change one
-behaviour. They diverge both ways — a flat 900-line registry has no large function,
-and a 700-line function hides inside a file that passes 350 only because siblings
-were extracted around it (#919: #829 shrank `subagent.ts` and closed while
-`forkSubagent` never changed, and it has since grown to 586).
+An advisory sibling of the file ceiling — **not implied by it**: `pnpm audit:funcsize:check`
+(`scripts/check-function-size.ts`) warns when any single function under `src/` or
+`scripts/` exceeds **200 lines**, but never fails CI. File size measures how much
+you must *read* to edit safely; function size measures how much you must *hold in
+mind* to change one behaviour. They diverge both ways — a flat 900-line registry
+has no large function, and a 700-line function hides inside a file that passes 350
+only because siblings were extracted around it (#919: #829 shrank `subagent.ts`
+and closed while `forkSubagent` never changed, and it has since grown to 586).
 
-Same five-mode ratchet and the same never-hand-edit rule, against
+The baseline ratchet and the never-hand-edit rule still apply, against
 `.funcsize-baseline.json` (54 grandfathered = 1.2% of 4,388 functions; regenerate
 with `pnpm audit:funcsize:update`). Measurement is AST-based, so **JSDoc is
 excluded** — unlike the file metric, which counts it. The asymmetry is deliberate:

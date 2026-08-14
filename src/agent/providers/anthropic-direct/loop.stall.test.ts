@@ -386,7 +386,7 @@ describe('runTurn post-first-byte stall watchdog (#762)', () => {
     const writer = new InMemoryTraceWriter();
     const session = new AgentSession({
       model: 'sonnet', apiKey: 'test-key', provider, traceWriter: writer,
-    });
+    }, writer);
     await session.waitForInitialization();
     // 'provider-error' makes the mock yield a terminal `error` event — the same
     // ProviderEvent shape the stall watchdog produces in runTurn above.

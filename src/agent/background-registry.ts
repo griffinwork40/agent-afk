@@ -54,7 +54,7 @@ import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.
 import { buildResultFromError, createEmptyTrace } from './subagent/result.js';
 import { debugLog } from '../utils/debug.js';
 import { emitBackgroundAgent } from './trace/emit.js';
-import type { TraceWriter } from './trace/index.js';
+import type { TraceSink } from './trace/index.js';
 import { BgJobLogWriter } from './bg-job-log.js';
 import type { BgJobMeta } from './bg-job-log.js';
 import { getBgJobsRoot, getBgJobDir } from '../paths.js';
@@ -133,7 +133,7 @@ const CANCEL_DRAIN_TIMEOUT_MS = 5000; // 5 seconds
 
 export interface BackgroundRegistryOptions {
   /** Optional trace writer. Witness events become no-ops when undefined. */
-  traceWriter?: TraceWriter | undefined;
+  traceWriter?: TraceSink | undefined;
   /**
    * Maximum number of concurrently *running* background jobs.
    * `register()` throws `BackgroundJobCapError` when this limit is reached.
@@ -184,7 +184,10 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
    *  test workers (vitest runs files concurrently) don't produce
    *  colliding jobIds that share the same on-disk `bg/` directory. */
   private counter = Math.floor(Math.random() * 65536);
-  private readonly traceWriter: TraceWriter | undefined;
+  // Not readonly: a REPL `/resume` hands this long-lived registry a fresh
+  // writer via `setTraceWriter`, because the outgoing session sealed the one
+  // captured at construction (#731).
+  private traceWriter: TraceSink | undefined;
   private readonly maxConcurrentJobs: number;
 
   constructor(options: BackgroundRegistryOptions = {}) {
@@ -201,6 +204,19 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       5000,
     );
     sweepTimer.unref();
+  }
+
+  /**
+   * Re-point the writer this registry emits background-job lifecycle events
+   * into.
+   *
+   * Contract: called (via the bootstrap cascade) on a REPL `/resume`, where
+   * the outgoing session sealed the writer captured at construction. Jobs
+   * already in flight keep emitting into whatever writer they hold; only
+   * events emitted by the registry after this call use `writer` (#731).
+   */
+  setTraceWriter(writer: TraceSink | undefined): void {
+    this.traceWriter = writer;
   }
 
   /**

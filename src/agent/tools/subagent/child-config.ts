@@ -39,7 +39,7 @@ import type { RegisteredAgent } from '../../agents/index.js';
 import type { AgentRegistry } from '../../agents/index.js';
 import type { SkillExecutor } from '../skill-executor.js';
 import type { Surface } from '../../awareness/types.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
 import { isChildReplaySafe } from './retry-safety.js';
@@ -71,7 +71,7 @@ export interface BuildChildConfigArgs {
   childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'skillDispatchName'>;
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel?: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
@@ -81,6 +81,7 @@ export interface BuildChildConfigArgs {
     signal: AbortSignal,
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
+    skillDispatchName?: string,
   ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
@@ -96,7 +97,7 @@ export interface BuildChildConfigArgs {
    *   2. the recursive child executor's ctx (so the chain holds to maxDepth,
    *      mirroring `cwd`).
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
@@ -340,6 +341,8 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // `readRoots`, which is the farm pin that SUPPRESSES inheritance).
     // forkSubagent composes these with the child's inherited read scope.
     ...(parsed.readRoots !== undefined ? { extraReadRoots: parsed.readRoots } : {}),
+    // Fix B: unnamed children inherit skillDispatchName; named agents excluded.
+    ...(namedAgent === undefined && defaultConfig.skillDispatchName !== undefined ? { skillDispatchName: defaultConfig.skillDispatchName } : {}),
   } as AgentConfig;
 
   // Wire nesting: give the child its own executor + provider so it can
@@ -433,15 +436,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
         : {}),
       parentModel: childModel,
     });
+    const childReadScope = { parentReadRoots: args.childInheritedReadRoots, parentCwd: currentCwd }; // #547
     const childSkillExecutor = args.childSkillExecutorFactory
-      ? args.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd, {
-          // Read-scope inheritance (#547): hand the grandchild SkillExecutor
-          // this child's inherited read scope (same value seeded on the
-          // grandchild manager above) so a skill dispatched by an `agent`-tool
-          // child inherits ⊇ the child's scope, not the frozen session scope.
-          parentReadRoots: args.childInheritedReadRoots,
-          parentCwd: currentCwd,
-        })
+      ? args.childSkillExecutorFactory(
+          depth + 1, maxDepth, signal, currentCwd, childReadScope,
+          namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, // Fix A
+        )
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
     // OpenAICompatible per `providerForModel(model)`. Without this, every

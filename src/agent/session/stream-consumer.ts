@@ -21,7 +21,7 @@ import type {
 } from '../types.js';
 import { BudgetExceededError } from '../../utils/errors.js';
 import { emitBudget } from '../trace/emit.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
 
 /** Callbacks the transform needs to produce side effects. */
@@ -65,7 +65,7 @@ export type TransformDeps = {
    * later `closure: budget_exceeded` are the termination records. Today
    * the only `kind` emitted is `'monetary'`.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 };
 
 /**

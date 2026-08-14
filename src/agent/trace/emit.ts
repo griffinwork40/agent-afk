@@ -42,11 +42,11 @@ import type {
   SessionPhasePayload,
   SubagentLifecyclePayload,
   ToolCallPayload,
-  TraceWriter,
+  TraceSink,
 } from './index.js';
 
 export async function emitToolCall(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: ToolCallPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -58,7 +58,7 @@ export async function emitToolCall(
 }
 
 export async function emitHookDecision(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: HookDecisionPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -70,7 +70,7 @@ export async function emitHookDecision(
 }
 
 export async function emitSubagentLifecycle(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: SubagentLifecyclePayload,
 ): Promise<void> {
   if (!writer) return;
@@ -82,7 +82,7 @@ export async function emitSubagentLifecycle(
 }
 
 export async function emitBackgroundAgent(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: BackgroundAgentPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -94,7 +94,7 @@ export async function emitBackgroundAgent(
 }
 
 export async function emitBudget(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: BudgetPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -106,7 +106,7 @@ export async function emitBudget(
 }
 
 export async function emitAbort(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: AbortPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -118,7 +118,7 @@ export async function emitAbort(
 }
 
 export async function emitCompaction(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: CompactionPayloadInput,
 ): Promise<void> {
   if (!writer) return;
@@ -130,7 +130,7 @@ export async function emitCompaction(
 }
 
 export async function emitClosure(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: ClosurePayload,
 ): Promise<void> {
   if (!writer) return;
@@ -142,7 +142,7 @@ export async function emitClosure(
 }
 
 export async function emitClaim(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: ClaimPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -154,7 +154,7 @@ export async function emitClaim(
 }
 
 export async function emitBrowserEvent(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: BrowserEventPayload,
 ): Promise<void> {
   if (!writer) return;
@@ -166,7 +166,7 @@ export async function emitBrowserEvent(
 }
 
 export async function emitQueuedUserMessage(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: QueuedUserMessagePayload,
 ): Promise<void> {
   if (!writer) return;
@@ -178,7 +178,7 @@ export async function emitQueuedUserMessage(
 }
 
 export async function emitSessionPhase(
-  writer: TraceWriter | undefined,
+  writer: TraceSink | undefined,
   payload: SessionPhasePayload,
 ): Promise<void> {
   if (!writer) return;

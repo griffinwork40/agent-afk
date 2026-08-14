@@ -117,7 +117,7 @@ Implementation: `src/cli/slash/index.ts` (`registerAll()`), individual command m
 
 ## Models & providers
 
-`agent-afk` speaks to two providers through a single abstraction (`src/agent/providers/`):
+`agent-afk` speaks to providers through a single abstraction (`src/agent/providers/`):
 
 **Anthropic (direct)** — default. Selects from:
 - **fable** — most capable (Claude Fable 5, Mythos-class) — hardest reasoning + long-horizon agentic work; 1M context
@@ -128,6 +128,8 @@ Implementation: `src/cli/slash/index.ts` (`registerAll()`), individual command m
 **Model slots** — four rebindable capability tiers (cheapest → most capable): `local`, `small`, `medium`, `large`. Use `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` to point the `local` slot at Ollama, LM Studio, or any OpenAI-compatible shim. See [`docs/model-slots.md`](model-slots.md) for full configuration.
 
 **OpenAI-compatible models** — set `AFK_MODEL=codex` (or `gpt-*`, `o1*`/`o3*`/`o4*`, or a HuggingFace-style `org/model` id), or pass `--model`. Implementation lives in `src/agent/providers/openai-compatible/`; `'openai-codex'` is a deprecated alias. Tune reasoning effort via `AFK_EFFORT=low|medium|high`.
+
+**xAI / Grok** — `grok-*` models route to the first-class `xai` provider. Authenticate with `XAI_API_KEY` (metered) or SuperGrok / SuperGrok Heavy / X Premium+ OAuth via `afk provider auth xai login`. See [`docs/xai-provider.md`](xai-provider.md).
 
 ## Plugins & marketplaces
 

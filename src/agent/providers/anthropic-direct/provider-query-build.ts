@@ -96,6 +96,14 @@ export function buildProviderQuery(
       });
 
   const resolvedEffort = resolveEffort(config.effort, model);
+  // Use requestedModel (the alias, e.g. sonnet_1m) rather than the resolved
+  // wire id so safeAutoCompactThresholdFor sees the full 1M window when
+  // the alias carries that budget. Extracted to avoid calling
+  // resolveAutoCompactThreshold twice. (#1014 Item 3 & 4)
+  const autoCompactThreshold = resolveAutoCompactThreshold(
+    config.autoCompact,
+    typeof config.model === 'string' && config.model.length > 0 ? config.model : model,
+  );
   return new AnthropicDirectQuery({
     client,
     // In local-server mode, downgrade the effective auth mode to 'api-key'
@@ -163,9 +171,7 @@ export function buildProviderQuery(
       ctx.setCurrentPermissionMode(mode);
     },
     ...(ctx.mcpManager !== undefined ? { mcpManager: ctx.mcpManager } : {}),
-    ...(resolveAutoCompactThreshold(config.autoCompact) !== undefined
-      ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact) }
-      : {}),
+    ...(autoCompactThreshold !== undefined ? { autoCompactThreshold } : {}),
     // Thread the resolved hook registry into the query so auto-compaction
     // can dispatch PreCompact(trigger:'auto') before calling compact().
     // resolveSessionHookRegistry is already called above for the dispatcher;

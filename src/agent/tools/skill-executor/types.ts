@@ -15,7 +15,7 @@
 
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { ModelProvider } from '../../provider.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SdkPluginConfig } from '../../types/sdk-types.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
@@ -91,6 +91,11 @@ export interface SkillExecutorContext {
    * Factory for building a child {@link SkillExecutor} at depth+1, so a
    * skill child can in turn dispatch sibling skills. Mirrors
    * {@link SubagentExecutorContext.childSkillExecutorFactory}.
+   *
+   * The optional `skillDispatchName` 6th argument threads the originating
+   * skill name into the created executor's context so the execution-level
+   * self-recursion guard (Fix A, #skill-recursion) fires at every depth —
+   * not only at the direct skill-fork level.
    */
   childSkillExecutorFactory?: (
     depth: number,
@@ -98,6 +103,7 @@ export interface SkillExecutorContext {
     signal: AbortSignal,
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
+    skillDispatchName?: string,
   ) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
@@ -111,7 +117,7 @@ export interface SkillExecutorContext {
    * pre-wire, zero `subagent_lifecycle` events for any skill invocation
    * across 306 trace files.)
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Background-mode dispatch registry forwarded to forked child
    * {@link SubagentExecutor}s so a plugin/registry skill whose subagent
@@ -174,6 +180,22 @@ export interface SkillExecutorContext {
    * depth; see {@link SubagentExecutorContext.agentRegistry}.
    */
   agentRegistry?: import('../../agents/index.js').AgentRegistry;
+  /**
+   * Name of the skill this executor is running on behalf of — set when this
+   * executor was wired for a skill fork. Used by {@link SkillExecutor.execute}
+   * as an execution-level self-recursion guard: if the model calls
+   * `skill(skillDispatchName)`, the call is rejected immediately rather than
+   * forking a recursive copy of the same skill.
+   *
+   * Mirrors `AgentConfig.skillDispatchName` but lives on the executor context
+   * so the guard fires BEFORE `fork-dispatch.ts` sets up a subagent — no
+   * subagent is ever forked for a self-recursive call.
+   *
+   * Propagated through agent grandchildren via `buildChildConfig` (Fix B):
+   * when a skill fork's agent child dispatches its own agent grandchildren,
+   * those grandchildren inherit this name so the guard holds at all depths.
+   */
+  skillDispatchName?: string;
 }
 
 export interface SkillInput {

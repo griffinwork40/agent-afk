@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**153 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**163 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -47,7 +47,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_OPENAI_USE_RESPONSES` | boolean |  |  | `1` | Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag. |
 | `AFK_OVERLOAD_PAUSE_MS` | number |  |  | `600000` | Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity. |
 | `AFK_PROMPT_CACHE_TTL` | string |  | `1h` | `1h` | TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h. |
-| `AFK_PROVIDER` | string |  |  | `openai-compatible` | Force provider selection (anthropic \| anthropic-direct \| openai \| openai-compatible \| openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set. |
+| `AFK_PROVIDER` | string |  |  | `openai-compatible` | Force provider selection (anthropic \| anthropic-direct \| openai \| openai-compatible \| openai-codex \| xai \| xai-oauth). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set. |
+| `AFK_RATE_LIMIT_ADMISSION_DISABLED` | boolean |  | `0` | `1` | Bypass the process-wide rate-limit admission gate (issue #941). Set to 1 to skip pre-request capacity checks. Default 0 (gate active). OAuth subscription accounts already pass through automatically when no per-minute headers are returned. |
+| `AFK_RATE_LIMIT_STAGGER_MAX_MS` | number |  | `500` | `0` | Jitter ceiling (ms) for the rate-limit admission bucket: each waiter at a window boundary wakes at reset + random(0..ceiling) to avoid re-storming the API. Default 500. Set to 0 in tests for deterministic timing. |
 | `AFK_SUBAGENT_IDLE_TIMEOUT_MS` | number |  | `480000` | `300000` | Forked-subagent progress-aware idle-watchdog window in ms; 0 disables the watchdog; an explicit per-fork config.idleTimeoutMs still wins. Fires when a forked child produces no observable output event for this window, aborting the same controller the wall-clock timeout targets so partial output is preserved and the run classifies as a failure. This is distinct from AFK_SUBAGENT_TIMEOUT_MS, the blunt wall-clock that bounds total turn time: the idle watchdog is the tighter first-to-fire bound and never fires while the stream is legitimately parked on a provider-communicated backoff (OAuth pause, or a rate-limit event carrying a retry-after), extending the deadline for the pause window instead. Default 480000 (8 min) clears the worst-case transient-429 backoff the watchdog is currently blind to (about 363s) with roughly 2 min of margin, while staying materially tighter than the 45-min wall-clock. Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to disable the idle watchdog for a whole session (the wall-clock still applies). v1 applies to forked sub-agent turns only, not top-level or daemon sessions. |
 | `AFK_SUBAGENT_TIMEOUT_MS` | number |  | `2700000` | `3600000` | Foreground forked-subagent wall-clock budget in ms; 0 disables the cap; explicit per-fork config.timeoutMs and the 60-min background mode still win. Bounds how long a single forked child turn may run before `withTimeout` aborts its controller (cascading through the AbortGraph to descendants) and the parent receives a legible TimeoutError tool_result instead of hanging. Default 2700000 (45 min ≈ headroom over the longest healthy review/research agent observed in production). Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to opt a whole session back into unbounded child turns. Does NOT affect the background dispatch budget (SUBAGENT_BACKGROUND_TIMEOUT_MS) or a per-fork config.timeoutMs — both take precedence. |
 | `AFK_SUGGEST_ENABLED` | boolean |  |  |  | Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default. |
@@ -57,9 +59,11 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SYSTEM_PROMPT` | string |  |  | `You are a helpful agent.` | Raw operator-overlay prompt. Highest-priority overlay (over afk.config.json and AFK.md). Appended on top of the framework base (prompts/system-prompt.md) under an "# Operator configuration" header — it augments, never replaces, the base. |
 | `AFK_TASK_BUDGET` | number |  | `100000` | `200000` | Per-task token budget ceiling. Aborts when cumulative usage would exceed it. |
 | `AFK_TEMPERATURE` | number |  |  | `0.7` | Numeric temperature override for model sampling. Provider default if unset. |
-| `AFK_THINKING` | string |  | `adaptive` | `adaptive` | Extended-thinking mode. Accepts adaptive \| disabled \| enabled:<N> \| enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models). |
+| `AFK_THINKING` | string |  | `adaptive` | `adaptive` | Extended-thinking mode. Accepts adaptive \| disabled \| max \| enabled:<N> \| enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models). |
 | `AFK_TIMEOUT_MS` | number |  |  | `120000` | Per-turn timeout in milliseconds. Provider/SDK default if unset. |
 | `AFK_VISION_MODELS` | string |  |  | `qwen2.5-vl,!gpt-4o-mini` | Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. "qwen2.5-vl" matches a local VL id); prefix a token with "!" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families. |
+| `AFK_XAI_BASE_URL` | string |  |  | `https://api.x.ai/v1` | Base URL for xAI API-key mode. Default https://api.x.ai/v1. The OpenAI SDK appends /chat/completions. |
+| `AFK_XAI_OAUTH_BASE_URL` | string |  |  | `https://cli-chat-proxy.grok.com/v1` | Base URL for xAI SuperGrok / SuperGrok Heavy / X Premium+ OAuth inference. Default https://cli-chat-proxy.grok.com/v1 (subscription path). Some accounts work on https://api.x.ai/v1 with OAuth — override if needed. Distinct from AFK_XAI_BASE_URL (API-key mode). |
 | `CLAUDE_MODEL` | string |  |  | `sonnet` | Legacy alias for AFK_MODEL — supported for back-compat with pre-AFK_* deployments. |
 
 ## Auth
@@ -72,6 +76,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `CODEX_API_KEY` | string |  |  |  | Fallback OpenAI API key for the openai-compatible provider, read after OPENAI_API_KEY. Legacy name from the removed @openai/codex-sdk integration — prefer OPENAI_API_KEY. |
 | `EXA_API_KEY` | string |  |  |  | Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected. |
 | `OPENAI_API_KEY` | string |  |  |  | OpenAI API key for the openai-compatible provider (gpt-*, o1*, o3*, o4* models). |
+| `XAI_API_KEY` | string |  |  |  | xAI API key for the xai provider (Grok models) in API-key mode. Metered; distinct from SuperGrok / SuperGrok Heavy / X Premium+ OAuth. |
 
 ## Telegram
 
@@ -165,6 +170,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SKILL_STREAM_VERBOSE` | boolean |  |  |  | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. |
 | `AFK_TELEGRAM_TRACE` | boolean |  |  | `1` | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. |
 | `AFK_TRACE_DISABLED` | boolean |  |  | `1` | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. |
+| `AFK_WITNESS_MAX_AGE_DAYS` | number |  | `30` |  | Evict a witness session directory once its newest content is older than this many days. Default 30. |
+| `AFK_WITNESS_MAX_BYTES` | number |  | `2147483648` |  | Aggregate byte cap for the witness tree; oldest session directories are evicted first once exceeded. Default 2147483648 (2 GiB). |
+| `AFK_WITNESS_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the witness-tree retention sweep entirely, so no session directory is ever evicted. |
 | `AGENT_AFK_ASCII` | boolean |  |  | `1` | Force the interactive REPL tool-lane renderer to ASCII-only glyphs instead of the default Unicode box-drawing set. Accepts 1/true/yes (case-insensitive). Useful for terminals whose font lacks ┃├╰├ glyphs. |
 | `DEBUG` | string |  |  |  | Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG. |
 
@@ -180,6 +188,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |
 | `CI` | string |  |  | `true` | Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX. |
 | `COLORFGBG` | string |  |  | `15;0` | Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark. |
+| `COLORTERM` | string |  |  | `truecolor` | OS-level terminal color-depth hint. Accepted values: truecolor or 24bit (24-bit color), 256color (256-color). Set by the outer terminal emulator, not by AFK. Read by chalk's supports-color to set its initial color level; also read by configureColor() to recommend FORCE_COLOR=3 for tmux truecolor users on Node ≤ 24. |
 | `EDITOR` | string |  |  | `vim` | Standard POSIX env var naming the user's preferred editor (with optional flags). Consulted by the /editor slash command AFTER VISUAL, as the standard fallback. No default editor is assumed when both are unset — /editor prints a hint telling the user to set one. |
 | `FORCE_COLOR` | string |  |  | `1` | Standard Node convention. Force-enable ANSI color output even when stdout is not a TTY. |
 | `HOME` | string |  |  |  | Standard Unix home directory. Used as the fallback when AFK_HOME is unset. |
@@ -190,6 +199,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `PATH` | string |  |  |  | System PATH. Read for executable resolution (git, gh, etc.) in tool handlers. |
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
+| `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
 | `VISUAL` | string |  |  | `nvim` | Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing. |
 | `VITEST` | string |  |  |  | Set automatically by Vitest. Used at runtime to short-circuit code paths that should not fire in tests. |
 

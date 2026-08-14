@@ -54,8 +54,12 @@ import type {
   TraceEventInput,
 } from './types.js';
 
-/** Public interface every trace writer satisfies. */
-export interface TraceWriter {
+/**
+ * Write-only capability handle. Passed into AgentConfig and all
+ * pass-through plumbing that only needs to emit events. Does NOT expose
+ * `seal()` or `close()` — those are owner-only operations.
+ */
+export interface TraceSink {
   /** Append a single event. Resolves once the line is on disk (file
    *  writer) or in the buffer (in-memory writer). Rejects if the
    *  writer is sealed. */
@@ -68,7 +72,14 @@ export interface TraceWriter {
    *  the SessionEnd context so a hook can locate the trace without knowing the
    *  writer's randomly-generated session label. */
   getTracePath(): string;
+}
 
+/**
+ * Owner-only handle. Extends {@link TraceSink} with `seal()` and `close()`,
+ * which must only be called by the session that created the writer. Entry
+ * points and closure-emitter hold this; everything else holds {@link TraceSink}.
+ */
+export interface TraceWriter extends TraceSink {
   /** Write the terminal `session_sealed` record and close the underlying
    *  resource. Idempotent — subsequent calls resolve to no-op. After
    *  `seal()` returns, `write()` rejects. */
@@ -87,6 +98,12 @@ export interface TraceWriter {
 export interface NdjsonTraceWriterOptions {
   /** Per-session trace directory. Will be created if absent. */
   traceDir: string;
+  /**
+   * First `seq` value this writer will use. Defaults to 0.
+   * Pass `lastSeq + 1` when resuming an existing trace file so the
+   * new writer's events continue the file's monotonic sequence.
+   */
+  startSeq?: number;
 }
 
 /**
@@ -155,7 +172,7 @@ function ensureExitBackstop(): void {
 export class NdjsonTraceWriter implements TraceWriter {
   private readonly traceDir: string;
   private readonly tracePath: string;
-  private seq = 0;
+  private seq: number;
   private sealed = false;
   /**
    * Invariant (#171): flips to `true` only once a terminal `session_sealed`
@@ -176,6 +193,7 @@ export class NdjsonTraceWriter implements TraceWriter {
   constructor(options: NdjsonTraceWriterOptions) {
     this.traceDir = options.traceDir;
     this.tracePath = join(this.traceDir, 'trace.jsonl');
+    this.seq = options.startSeq ?? 0;
   }
 
   /** Absolute path to the JSONL file this writer appends to. */

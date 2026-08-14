@@ -44,7 +44,11 @@ export class ResponsesSummaryIncompleteError extends Error {
 }
 
 /** Test injection hook — supplants the real `OpenAI` constructor. */
-export type OneShotOpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
+export type OneShotOpenAIClientFactory = (opts: {
+  apiKey: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}) => OpenAI;
 let oneShotClientFactory: OneShotOpenAIClientFactory | null = null;
 
 /**
@@ -65,6 +69,8 @@ export interface OpenAIOneShotInput {
   apiKey?: string;
   /** Endpoint override (local shim, OpenRouter, etc.). Defaults to OpenAI. */
   baseURL?: string;
+  /** Extra client default headers (e.g. xAI CLI-proxy identity). */
+  defaultHeaders?: Record<string, string>;
   /** Model id, passed straight through to the API (no alias expansion). */
   model: string;
   /** System prompt. Sent as the first message with `role: 'system'`. */
@@ -110,7 +116,17 @@ export interface OpenAIOneShotInput {
  * suggest model) does not 400 on every keystroke.
  */
 export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
-  const { apiKey, baseURL, model, system, user, maxTokens = 64, signal, clientFactory } = input;
+  const {
+    apiKey,
+    baseURL,
+    defaultHeaders,
+    model,
+    system,
+    user,
+    maxTokens = 64,
+    signal,
+    clientFactory,
+  } = input;
 
   // A caller-supplied client (a live session reusing `this.client`) is used
   // verbatim — no auth resolution, no reconstruction — so the call inherits the
@@ -123,8 +139,13 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
     if (auth.apiKey === null) {
       throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
     }
-    const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: auth.apiKey };
+    const clientOpts: {
+      apiKey: string;
+      baseURL?: string;
+      defaultHeaders?: Record<string, string>;
+    } = { apiKey: auth.apiKey };
     if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+    if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
     const factory = clientFactory ?? oneShotClientFactory;
     client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
   }

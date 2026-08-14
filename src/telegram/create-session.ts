@@ -20,9 +20,10 @@ import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
 import { createTelegramTraceWriter } from './construct-session.js';
 import { loadTelegramMcpManager } from './mcp-session.js';
-import { isOpenAiRoutedProvider } from './credentials.js';
+import { isOpenAiRoutedProvider, isXaiRoutedProvider } from './credentials.js';
 import { buildAnthropicTelegramSession } from './session-anthropic.js';
 import { buildOpenAiTelegramSession } from './session-openai.js';
+import { buildXaiTelegramSession } from './session-xai.js';
 import type { TelegramBotConfig, TelegramSessionBuildContext } from './session-context.js';
 
 export interface TelegramSessionFactoryOptions {
@@ -54,9 +55,11 @@ export function createTelegramSessionFactory(
     // Historically called `isCodex` — this now means "is this an OpenAI-routed
     // session?" The openai-compatible provider replaced the legacy openai-codex
     // one in slice 5; the predicate stays for continuity of the downstream code
-    // paths that branch on it.
+    // paths that branch on it. xAI is a separate branch (dual endpoints).
     const isOpenAiRouted = isOpenAiRoutedProvider(sessionProviderName);
-    const maxOutputTokens = isOpenAiRouted ? undefined : getMaxOutputTokens();
+    const isXaiRouted = isXaiRoutedProvider(sessionProviderName);
+    // maxOutputTokens is Anthropic-oriented; skip for OpenAI + xAI Chat Completions.
+    const maxOutputTokens = isOpenAiRouted || isXaiRouted ? undefined : getMaxOutputTokens();
     // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
     // Unlike maxOutputTokens (Anthropic-only here), this applies to BOTH
     // providers via resolveMaxToolIterations(), so it is NOT gated on the
@@ -99,6 +102,10 @@ export function createTelegramSessionFactory(
     };
 
     try {
+      if (isXaiRouted) {
+        const xaiName = sessionProviderName === 'xai-oauth' ? 'xai-oauth' as const : 'xai' as const;
+        return await buildXaiTelegramSession({ ...ctx, providerName: xaiName });
+      }
       return isOpenAiRouted
         ? await buildOpenAiTelegramSession(ctx)
         : await buildAnthropicTelegramSession(ctx);

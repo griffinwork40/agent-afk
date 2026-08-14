@@ -149,3 +149,14 @@ export function resolveSubagentIdleTimeoutMs(): number {
  * doesn't have); explicit `config.timeoutMs` wins, `0` = unbounded.
  */
 export const SUBAGENT_BACKGROUND_TIMEOUT_MS = 60 * 60_000;
+
+/**
+ * Bound on how long the owner waits for in-flight children's terminal trace
+ * rows after cascade-aborting them, before sealing the writer anyway.
+ *
+ * Mirrors `CANCEL_DRAIN_TIMEOUT_MS` in background-registry.ts, which solves
+ * the identical problem for background jobs. The bound is mandatory, not
+ * defensive: without it a single wedged child converts "parent finished" into
+ * "parent hangs on close" (#733).
+ */
+export const SUBAGENT_DRAIN_TIMEOUT_MS = 5000;

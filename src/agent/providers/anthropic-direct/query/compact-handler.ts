@@ -70,7 +70,7 @@ export interface CompactHandlerDeps {
   abort: AbortCoordinator;
   retry: RetryLayer;
   initSessionId: string;
-  traceWriter?: import('../../../trace/index.js').TraceWriter;
+  traceWriter?: import('../../../trace/index.js').TraceSink;
 }
 
 /**

@@ -76,9 +76,13 @@ export function archiveBandPrefixAndRepaintSurvivors(
   // terminal, not this process, owns the intervening scroll.
 
   // (1) Erase the band's previous painted footprint, from the geometric floor
-  // through its tracked bottom.
+  // through the band's bottom row — derived from `floor + bandLen` rather than
+  // reading `committedBandBottomRow`, retiring that adjacency-coupling read per
+  // #540. The algebra is equivalent (`committedBandBottomRow === floor +
+  // bandLen - 1` by the class invariant), but the derivation is geometry-only
+  // and cannot be stale.
   let erase = '';
-  for (let r = floor; r <= self.committedBandBottomRow; r++) erase += eraseAndPaintRow(r);
+  for (let r = floor; r < floor + bandLen; r++) erase += eraseAndPaintRow(r);
 
   // (2) Archive the prefix as logical lines. Autowrap stays ON for this write
   // (load-bearing, and the exact opposite of the on-screen band paint in step

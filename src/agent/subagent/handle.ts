@@ -19,7 +19,7 @@ import type { OutputEvent, SubagentProgressSink, SubagentProgressMeta } from '..
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { dispatchSubagentStop } from '../subagent-hooks.js';
 import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import { IdleWatchdog } from './idle-watchdog.js';
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
@@ -165,7 +165,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     private readonly agentType?: string,
     progressSink?: SubagentProgressSink,
     parentId?: string,
-    private readonly traceWriter?: TraceWriter,
+    private readonly traceWriter?: TraceSink,
     /**
      * Optional callback invoked after a successful `run()`. Carries the
      * subagent's token usage and optional cost so the parent session can

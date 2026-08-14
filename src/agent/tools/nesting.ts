@@ -22,7 +22,7 @@ import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { READ_ONLY_PHASE_TOOLS } from '../tool-category.js';
 import { SkillExecutor } from './skill-executor.js';
 import type { SubagentExecutor } from './subagent-executor.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
 
@@ -295,22 +295,14 @@ export function buildReadOnlyReconProvider(
 
 /**
  * Build a depth-aware factory that produces a {@link SkillExecutor} for a
- * grandchild session at the given `depth`.
+ * grandchild session at the given `depth`. Closes over `childProviderFactory`
+ * so the grandchild itself can fan out further. The factory references itself
+ * recursively so any depth in the chain — skill→skill→skill — gets the same
+ * nesting wiring. Without propagation, skill grandchildren silently fall back
+ * to the bare provider (no `agent`/`skill` tools).
  *
- * The factory closes over `childProviderFactory` so the grandchild
- * SkillExecutor itself can fan out further (up to `maxDepth`). The
- * returned factory recursively references itself via the local `factory`
- * variable so any depth in the chain — skill→skill→skill — gets the same
- * nesting wiring. Without this propagation, the first nested skill child
- * would have `agent`/`skill` tools, but its skill grandchildren would
- * silently fall back to the bare provider (the same bug the depth-0
- * caller fixes).
- *
- * `defaultSubagentModel` is the resolved default-subagent policy
- * (`getDefaultSubagentModel(parentModel)`) threaded through every depth so
- * nested skill children inherit the SAME policy the top-level executors use.
- * When omitted (legacy/test callers), the nested SkillExecutor's
- * `defaultSubagentModel` stays undefined and its own fallback chain applies.
+ * `defaultSubagentModel` threads the resolved policy through every depth so
+ * nested SkillExecutors inherit it rather than falling back independently.
  *
  * Invariant: this parameter closes the "subagent model falls back to
  * Anthropic sonnet under an OpenAI-routed parent" leak. A nested SkillExecutor
@@ -329,7 +321,7 @@ export function createChildSkillExecutorFactory(
   apiKey: string | undefined,
   childProviderFactory: (args: ChildProviderFactoryArgs) => ModelProvider,
   baseUrl?: string,
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
   backgroundRegistry?: BackgroundAgentRegistry,
   cwd?: string,
   resolveApiKeyForModel?: (model: string) => string | undefined,
@@ -346,6 +338,7 @@ export function createChildSkillExecutorFactory(
   signal: AbortSignal,
   inheritedCwd?: string,
   inheritedReadScope?: ReadScopeInputs,
+  skillDispatchName?: string,
 ) => SkillExecutor {
   const factory: (
     depth: number,
@@ -353,7 +346,8 @@ export function createChildSkillExecutorFactory(
     signal: AbortSignal,
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
-  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope) => {
+    skillDispatchName?: string,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName) => {
     // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
     // born-named `afk -w` worktrees it is `undefined` (the worktree is
     // created on turn 1 via worktree-autoname, after bootstrap). A later
@@ -432,6 +426,8 @@ export function createChildSkillExecutorFactory(
       ...(inheritedReadScope !== undefined
         ? { getReadScopeInputs: () => inheritedReadScope }
         : {}),
+      // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
+      ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });
   };
   return factory;

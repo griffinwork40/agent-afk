@@ -64,7 +64,7 @@ export interface BuildDaemonSessionFactoryOpts {
  */
 export function buildDaemonSessionFactory(
   opts: BuildDaemonSessionFactoryOpts,
-): (config: AgentConfig) => AgentSession {
+): (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter) => AgentSession {
   // Invariant: exactly one MemoryStore per daemon process. The constructor
   // opens a SQLite handle synchronously (see memory-store.ts), so building a
   // fresh store inside the per-task closure would leak one file descriptor on
@@ -76,7 +76,7 @@ export function buildDaemonSessionFactory(
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
   // process.exit(), which reclaims the descriptor.
   let memoryStore: MemoryStore | undefined;
-  return (config: AgentConfig): AgentSession => {
+  return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
     const abortCtrl = new AbortController();
@@ -87,7 +87,7 @@ export function buildDaemonSessionFactory(
     // and threaded it in as config.traceWriter — reuse THAT SAME instance here
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
-    const { subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+    const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
       apiKey: opts.apiKey,
@@ -147,6 +147,11 @@ export function buildDaemonSessionFactory(
       // this is the production chokepoint the scheduler routes every task
       // through, so it also covers scheduler/cron-spawned sessions.
       isNonInteractive: true,
+      // Cascade-abort and drain in-flight children before the writer seals,
+      // so a wave still running when this session ends emits real `cancelled`
+      // rows instead of vanishing (#733).
+      drainSubagents: (reason) =>
+        rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
@@ -154,7 +159,7 @@ export function buildDaemonSessionFactory(
       ...(daemonMaxToolUseIterations !== undefined
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
-    })));
+    })), ownedTraceWriter);
   };
 }
 
@@ -260,7 +265,7 @@ export function registerDaemonCommand(program: Command): void {
       '--timeout-ms <ms>',
       'Per-tick session timeout in ms. Overrides AFK_TIMEOUT_MS. Defaults to the session default (120000).',
     )
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'")
+    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'")
     .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
     .option(
       '--trigger <mode>',

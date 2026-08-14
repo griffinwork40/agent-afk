@@ -175,6 +175,36 @@ export async function* runTurn(
       continue;
     }
 
+    // M6: connection-phase 529/503 budget exhausted — treat identically to
+    // mid-stream exhaustion so the pause machinery in `overload-pause-tier.ts`
+    // can park-and-probe. Fall through to the `overload-exhausted` branch
+    // below rather than the generic fatal path (pre-fix the error was thrown
+    // from createWithRetry, landed in openRound's catch, and yielded a raw
+    // `error` event → sawProviderError → closure {reason:'abort'} with no
+    // turn committed).
+    if (opened.kind === 'overload-exhausted') {
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'rate_limit',
+        metadata: {
+          reason: 'overloaded',
+          source: 'connection-phase',
+          attempt: OVERLOAD_MAX_RETRIES,
+          exhausted: true,
+        },
+      });
+      yield {
+        type: 'assistant.message',
+        text: OVERLOAD_EXHAUSTED_NOTICE,
+        sessionId: input.ctx.sessionId,
+      };
+      yield {
+        type: 'turn.completed',
+        usage: turn.withDuration({ ...turn.usage, stopReason: OVERLOAD_EXHAUSTED }),
+        sessionId: input.ctx.sessionId,
+      };
+      return;
+    }
+
     const { events, ttfb, stall, requestStartedAt } = opened;
 
     const outcome = yield* consumeRoundStream({

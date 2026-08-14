@@ -27,9 +27,11 @@ import { dequeueNext } from './queue-store.js';
 import { getQueueDir } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
+import { registerSurfaceSession } from '../session/register-surface-session.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
+import type { TraceWriter } from '../trace/index.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
@@ -123,8 +125,8 @@ export interface SchedulerOptions {
   sessionConfig?: Partial<AgentConfig>;
   /** Override the telemetry sink (tests). Defaults to `~/.afk/agent-framework/forge-telemetry.jsonl`. */
   telemetryPath?: string;
-  /** Override the session factory (tests). Defaults to `new AgentSession(config)`. */
-  sessionFactory?: (config: AgentConfig) => AgentSession;
+  /** Override the session factory (tests). Defaults to `new AgentSession(config, ownedTraceWriter)`. */
+  sessionFactory?: (config: AgentConfig, ownedTraceWriter?: TraceWriter) => AgentSession;
   /**
    * Default cooldown (ms) between sessionstart fires of the same task.
    * Can be overridden per-task via `ScheduledTask.debounceMs`. Defaults to
@@ -395,12 +397,14 @@ export class CronScheduler {
     let session: AgentSession | null = null;
     let memoryStore: MemoryStore | null = null;
     let mcpManager: McpManager | null = null;
+    let disposeRegistration: (() => void) | null = null;
     this.idleDetector.increment();
     try {
       const spawned = await this.spawnSession(task.taskId);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
       mcpManager = spawned.mcpManager ?? null;
+      disposeRegistration = spawned.dispose;
       const response = await session.sendMessage(task.command);
       const responseText = redactInlineSecrets(response.content);
       // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
@@ -448,6 +452,9 @@ export class CronScheduler {
           // already-closed sessions throw; ignore.
         }
       }
+      // Archive the cross-surface registry handle (frees its key) so the
+      // long-running daemon never accumulates handles. Best-effort.
+      disposeRegistration?.();
       if (mcpManager) {
         try {
           await mcpManager.disconnectAll();
@@ -645,6 +652,8 @@ export class CronScheduler {
     session: AgentSession;
     memoryStore: MemoryStore;
     mcpManager?: McpManager;
+    /** Archive the cross-surface registry handle. Called by runOnce on close. */
+    dispose: () => void;
   }> {
     // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
     // suffix, so each tick gets its own label) so hook commands receive a
@@ -767,10 +776,24 @@ export class CronScheduler {
       ...this.options.sessionConfig,
     };
     try {
+      const traceOwner = this.options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined;
       const session = this.options.sessionFactory
-        ? this.options.sessionFactory(config)
-        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
-      return { session, memoryStore, ...(mcpManager !== undefined ? { mcpManager } : {}) };
+        ? this.options.sessionFactory(config, traceOwner)
+        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)), traceOwner);
+      // Step 7: register the daemon session in the cross-surface registry.
+      // Best-effort; dispose() (archive) is invoked by runOnce on session close
+      // so the long-running daemon never accumulates registry handles.
+      const registration = registerSurfaceSession(session, {
+        surface: 'daemon',
+        model: config.model,
+        cwd: agentCwd,
+      });
+      return {
+        session,
+        memoryStore,
+        dispose: registration.dispose,
+        ...(mcpManager !== undefined ? { mcpManager } : {}),
+      };
     } catch (err) {
       if (mcpManager) {
         await mcpManager.disconnectAll().catch(() => undefined);

@@ -42,7 +42,7 @@ describe('AgentSession + witness-layer wiring', () => {
 
   describe('session_sealed', () => {
     it('writes a sealed-clean record with status=succeeded on normal close', async () => {
-      const session = new AgentSession(config);
+      const session = new AgentSession(config, writer);
       await session.waitForInitialization();
       await session.close();
 
@@ -57,7 +57,7 @@ describe('AgentSession + witness-layer wiring', () => {
     });
 
     it('seal is the LAST event in the trace', async () => {
-      const session = new AgentSession(config);
+      const session = new AgentSession(config, writer);
       await session.waitForInitialization();
       await session.close();
 
@@ -69,7 +69,7 @@ describe('AgentSession + witness-layer wiring', () => {
     it('records status=cancelled when an external abort fires before close', async () => {
       const externalAbort = new AbortController();
       const cancelConfig = { ...config, abortSignal: externalAbort.signal };
-      const session = new AgentSession(cancelConfig);
+      const session = new AgentSession(cancelConfig, writer);
       await session.waitForInitialization();
       externalAbort.abort('user-cancelled');
       // Allow microtasks to settle the abort wiring.
@@ -84,7 +84,7 @@ describe('AgentSession + witness-layer wiring', () => {
     });
 
     it('is idempotent — repeated close() calls do not write multiple seals', async () => {
-      const session = new AgentSession(config);
+      const session = new AgentSession(config, writer);
       await session.waitForInitialization();
       await session.close();
       await session.close();
@@ -94,7 +94,7 @@ describe('AgentSession + witness-layer wiring', () => {
     });
 
     it('seal fires on reset() too (the reason changes; status stays succeeded)', async () => {
-      const session = new AgentSession(config);
+      const session = new AgentSession(config, writer);
       await session.waitForInitialization();
       await session.reset();
       // reset rebuilds internal state; close the new session too so we
@@ -132,7 +132,7 @@ describe('AgentSession + witness-layer wiring', () => {
         throw new Error('disk full');
       };
       const angryConfig = { ...config, traceWriter: angry };
-      const session = new AgentSession(angryConfig);
+      const session = new AgentSession(angryConfig, angry);
       await session.waitForInitialization();
       await expect(session.close()).resolves.not.toThrow();
       // Restore so afterEach (if any) doesn't crash.
@@ -142,7 +142,7 @@ describe('AgentSession + witness-layer wiring', () => {
 
   describe('session_init_start — root model provenance', () => {
     it('records the configured alias + resolved wire id', async () => {
-      const session = new AgentSession(config); // model: 'sonnet'
+      const session = new AgentSession(config, writer); // model: 'sonnet'
       await session.waitForInitialization();
       await session.close();
 
@@ -160,7 +160,7 @@ describe('AgentSession + witness-layer wiring', () => {
     });
 
     it('is the FIRST event in the trace (earliest, provider-agnostic anchor)', async () => {
-      const session = new AgentSession(config);
+      const session = new AgentSession(config, writer);
       await session.waitForInitialization();
       await session.close();
 
@@ -219,7 +219,7 @@ describe('AgentSession + witness-layer wiring', () => {
     });
 
     it('back-compat: a config with no surface → origin unknown, actor main', async () => {
-      const session = new AgentSession(config); // no surface, no parent
+      const session = new AgentSession(config, writer); // no surface, no parent
       await session.waitForInitialization();
       await session.close();
       const p = initStartOf(writer);

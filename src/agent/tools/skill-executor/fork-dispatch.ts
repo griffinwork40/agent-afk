@@ -153,6 +153,11 @@ export async function executeForkedRegistrySkill(
       isSkillDispatch: true,
       // Suppresses this skill's own entry in the child's manifest — without it
       // the fork can read its own catalogue entry and re-dispatch itself.
+      // Uses the registry key (skill.name), which may be namespaced like
+      // `user:<name>` or `project:<name>`. Both the exact key and bare-name
+      // variants are safely excluded: skill-bridge's collectSkillEntries
+      // filter matches `e.name === exclude || e.name.endsWith(':<exclude>'),
+      // so a bare excludeName catches all namespaced aliases and vice-versa.
       skillDispatchName: skill.name,
       ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     } as AgentConfig,
@@ -248,6 +253,9 @@ export async function executePluginSkill(
     isSkillDispatch: true,
     // Suppresses this skill's own entry in the child's manifest — without it
     // the fork can read its own catalogue entry and re-dispatch itself.
+    // Uses the bare skillName (the lookup key, not a namespaced registry key).
+    // Safe: skill-bridge's suffix match (`endsWith(':<name>')`) ensures the
+    // bare name also excludes any `user:<name>` / `project:<name>` aliases.
     skillDispatchName: skillName,
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
   } as AgentConfig;
@@ -351,7 +359,8 @@ export async function runForkedSkillToResult(
     // instruction was a task brief, which it could satisfy by re-dispatching the
     // very skill it already was (observed on `ground-state`). Args stay verbatim
     // under a labelled delimiter so a SKILL.md body that greps its arguments
-    // (e.g. mint's "approved") still matches.
+    // (e.g. a fork skill whose handler anchors on a keyword like "approved")
+    // still matches.
     const anchor = `Run the ${label} skill now, following the instructions in your system prompt.`;
     const userMessage =
       args && args.length > 0 ? `${anchor}\n\nSkill arguments:\n${args}` : anchor;
