@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRoutingDecisionsPath } from '../../paths.js';
 import { readTailMb } from './daemon.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 import type { InsightsOptions, RoutingAggregates } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -69,26 +70,19 @@ export function aggregateRoutingDecisions(options: InsightsOptions): RoutingAggr
   }
 
   const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;
-  const lines = rawContent.split('\n');
 
   let totalComposeNodes = 0;
   let totalComposeEdges = 0;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  // parseJsonlLines handles split/trim/skip-empty/JSON.parse/catch. The guard
+  // filters non-object values (bare null, numbers, strings, arrays) before any
+  // property access, matching the previous hand-written null/typeof check.
+  const records = parseJsonlLines<Record<string, unknown>>(rawContent, {
+    guard: (x): x is Record<string, unknown> =>
+      x !== null && typeof x === 'object' && !Array.isArray(x),
+  });
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      continue; // malformed line — skip
-    }
-    // A valid-JSON-but-non-object line (bare `null`, a number, a string, an
-    // array) parses cleanly and escapes the catch above. Skip it before any
-    // property access so `null['event']` can never throw.
-    if (parsed === null || typeof parsed !== 'object') continue;
-    const record = parsed as Record<string, unknown>;
+  for (const record of records) {
 
     // Filter by the `ts` field every record carries (see appendRoutingDecision
     // in agent/routing-telemetry.ts). Missing/unparseable timestamps are

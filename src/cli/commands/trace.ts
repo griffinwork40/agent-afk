@@ -73,8 +73,9 @@ function looksLikeEvent(v: unknown): v is TraceEvent {
 export function parseTrace(content: string): ParsedTrace {
   let malformed = 0;
   // Use parseJsonlLines for the shared parse+trim+skip-empty contract.
-  // onParseError counts JSON-level failures; a second pass over the raw
-  // values counts structural rejections (valid JSON but not a TraceEvent).
+  // `looksLikeEvent` is NOT passed as `guard`: a guard silently drops non-event
+  // values, hiding them from `malformed`. Two-pass is intentional — both JSON
+  // failures (onParseError) and structural mismatches (below) must be counted.
   const raw = parseJsonlLines(content, { onParseError: () => { malformed++; } });
   const events: TraceEvent[] = [];
   for (const parsed of raw) {
