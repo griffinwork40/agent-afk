@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.117.0] - 2026-08-14
+
+### Added
+- first-class xAI/Grok with API key and SuperGrok OAuth (#1019) (efd78cf7)
+
+### Changed
+- pin terminal width in quota-footer tests to fix #795 (#1056) (ac2ee6c5)
+
 ## [5.116.0] - 2026-08-13
 
 ### Added
