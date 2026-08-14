@@ -54,11 +54,28 @@ export function resolveClientFactory(): OpenAIClientFactory {
 }
 
 /**
- * Endpoint substrings that bypass the rate-limit admission gate.
+ * Hostnames (exact) and hostname suffixes that bypass the rate-limit admission
+ * gate. Exact entries are matched as-is; suffix entries (starting with '.')
+ * match the hostname or any subdomain.
  * Includes IPv4/IPv6 loopback, any-address, and the ChatGPT-OAuth backend
  * (subscription pass-through — no per-minute rate limits apply there).
  */
-const LOCAL_PATTERNS = ['localhost', '127.', '0.0.0.0', '[::1]', 'chatgpt.com'];
+const LOCAL_EXACT = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', 'chatgpt.com']);
+const LOCAL_SUFFIXES = ['.chatgpt.com'];
+
+function isLocalEndpoint(baseURL: string | undefined): boolean {
+  if (!baseURL) return false;
+  let hostname: string;
+  try {
+    hostname = new URL(baseURL).hostname;
+  } catch {
+    // Malformed URL — fall through to admission gating (safe default).
+    return false;
+  }
+  if (LOCAL_EXACT.has(hostname)) return true;
+  if (hostname.startsWith('127.')) return true;
+  return LOCAL_SUFFIXES.some((s) => hostname === s.slice(1) || hostname.endsWith(s));
+}
 
 /**
  * Build a rate-limit admission fetch wrapper for the OpenAI SDK.
@@ -66,8 +83,7 @@ const LOCAL_PATTERNS = ['localhost', '127.', '0.0.0.0', '[::1]', 'chatgpt.com'];
  * See `rate-limit-bucket.ts` and `rate-limit-headers.ts` for the bucket details.
  */
 export function buildOpenAIAdmissionFetch(baseURL: string | undefined): typeof fetch | undefined {
-  const effective = baseURL ?? '';
-  if (LOCAL_PATTERNS.some((p) => effective.includes(p))) return undefined;
+  if (isLocalEndpoint(baseURL)) return undefined;
   const rateLimitObserver = (headers: Headers): void => {
     const snapshot = parseOpenAIRateLimitHeaders(headers);
     if (snapshot !== undefined) globalRateLimitBucket.update(snapshot);

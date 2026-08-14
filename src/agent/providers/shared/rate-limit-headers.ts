@@ -56,9 +56,14 @@ function parseIso8601(raw: string | null | undefined): number | undefined {
  * Parse OpenAI-style reset durations like "1m3s", "30s", "1h2m3s", or plain
  * ISO-8601 timestamps to epoch ms.
  *
+ * @param raw   - The raw header value to parse.
+ * @param now   - The epoch-ms reference time used when computing duration-based
+ *                reset timestamps. Defaults to `Date.now()` but callers should
+ *                pass a pinned value captured at call time for determinism.
+ *
  * Returns undefined if the string cannot be parsed to a valid duration.
  */
-function parseDurationOrIso(raw: string | null | undefined): number | undefined {
+function parseDurationOrIso(raw: string | null | undefined, now: number = Date.now()): number | undefined {
   if (raw == null || raw === '') return undefined;
   // Try ISO-8601 first (contains 'T' or '-')
   if (raw.includes('T') || raw.includes('-')) return parseIso8601(raw);
@@ -72,7 +77,7 @@ function parseDurationOrIso(raw: string | null | undefined): number | undefined 
   if (minMatch) { totalMs += parseInt(minMatch[1]!, 10) * 60_000; matched = true; }
   if (secMatch) { totalMs += parseFloat(secMatch[1]!) * 1_000; matched = true; }
   if (!matched) return undefined;
-  const resetAt = Date.now() + totalMs;
+  const resetAt = now + totalMs;
   return resetAt;
 }
 
@@ -126,12 +131,13 @@ export function parseAnthropicRateLimitHeaders(headers: Headers): RateLimitSnaps
  * them uniformly. Returns `undefined` when none of the expected headers appear.
  */
 export function parseOpenAIRateLimitHeaders(headers: Headers): RateLimitSnapshot | undefined {
+  const now = Date.now();
   const reqRemaining = parseCount(headers.get(O_REQ_REMAINING));
   const reqLimit = parseCount(headers.get(O_REQ_LIMIT));
-  const reqResetAt = parseDurationOrIso(headers.get(O_REQ_RESET));
+  const reqResetAt = parseDurationOrIso(headers.get(O_REQ_RESET), now);
   const tokRemaining = parseCount(headers.get(O_TOK_REMAINING));
   const tokLimit = parseCount(headers.get(O_TOK_LIMIT));
-  const tokResetAt = parseDurationOrIso(headers.get(O_TOK_RESET));
+  const tokResetAt = parseDurationOrIso(headers.get(O_TOK_RESET), now);
 
   if (reqRemaining === undefined && tokRemaining === undefined) return undefined;
 

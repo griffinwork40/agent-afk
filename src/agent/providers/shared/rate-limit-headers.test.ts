@@ -117,45 +117,52 @@ describe('parseOpenAIRateLimitHeaders', () => {
     expect(snap!.requestsLimit).toBe(200);
   });
 
-  it('parses duration "30s" to epoch ms (approx current + 30s)', () => {
-    const before = Date.now();
-    const snap = parseOpenAIRateLimitHeaders(
-      makeHeaders({
-        'x-ratelimit-remaining-requests': '1',
-        'x-ratelimit-reset-requests': '30s',
-      }),
-    );
-    const after = Date.now();
-    expect(snap!.requestsResetAt).toBeGreaterThanOrEqual(before + 30_000);
-    expect(snap!.requestsResetAt).toBeLessThanOrEqual(after + 30_000);
+  it('parses duration "30s" to epoch ms (deterministic fixed now)', () => {
+    const fixedNow = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      const snap = parseOpenAIRateLimitHeaders(
+        makeHeaders({
+          'x-ratelimit-remaining-requests': '1',
+          'x-ratelimit-reset-requests': '30s',
+        }),
+      );
+      expect(snap!.requestsResetAt).toBe(fixedNow + 30_000);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('parses duration "1m3s" correctly', () => {
-    const before = Date.now();
-    const snap = parseOpenAIRateLimitHeaders(
-      makeHeaders({
-        'x-ratelimit-remaining-requests': '1',
-        'x-ratelimit-reset-requests': '1m3s',
-      }),
-    );
-    const after = Date.now();
-    const expected = 63_000;
-    expect(snap!.requestsResetAt).toBeGreaterThanOrEqual(before + expected);
-    expect(snap!.requestsResetAt).toBeLessThanOrEqual(after + expected);
+    const fixedNow = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      const snap = parseOpenAIRateLimitHeaders(
+        makeHeaders({
+          'x-ratelimit-remaining-requests': '1',
+          'x-ratelimit-reset-requests': '1m3s',
+        }),
+      );
+      expect(snap!.requestsResetAt).toBe(fixedNow + 63_000);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('parses duration "1h2m3s" correctly', () => {
-    const before = Date.now();
-    const snap = parseOpenAIRateLimitHeaders(
-      makeHeaders({
-        'x-ratelimit-remaining-tokens': '100',
-        'x-ratelimit-reset-tokens': '1h2m3s',
-      }),
-    );
-    const after = Date.now();
-    const expected = 3600_000 + 120_000 + 3_000;
-    expect(snap!.inputTokensResetAt).toBeGreaterThanOrEqual(before + expected);
-    expect(snap!.inputTokensResetAt).toBeLessThanOrEqual(after + expected);
+    const fixedNow = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      const snap = parseOpenAIRateLimitHeaders(
+        makeHeaders({
+          'x-ratelimit-remaining-tokens': '100',
+          'x-ratelimit-reset-tokens': '1h2m3s',
+        }),
+      );
+      expect(snap!.inputTokensResetAt).toBe(fixedNow + 3_600_000 + 120_000 + 3_000);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('parses ISO-8601 reset timestamps via the x-ratelimit path', () => {

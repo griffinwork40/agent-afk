@@ -366,6 +366,26 @@ describe('maybeResetWindows — window replenishment', () => {
     await bucket.acquirePermit(100);
     expect(Date.now() - start).toBeLessThan(50);
   });
+
+  it('known cold-start-like passthrough after window reset without limit headers (partial-state stampede)', async () => {
+    // Scenario: both dimensions had remaining=0 (exhausted) and an expired reset
+    // window, but neither requestsLimit nor inputTokensLimit was ever received.
+    // After maybeResetWindows fires, both reset to -1 (unknown).
+    // The combined-unknown passthrough should fire immediately — no blocking.
+    const bucket = new RateLimitBucket();
+    bucket.update({
+      requestsRemaining: 0,
+      requestsResetAt: Date.now() - 1, // expired window
+      inputTokensRemaining: 0,
+      inputTokensResetAt: Date.now() - 1, // expired window
+      // NOTE: requestsLimit and inputTokensLimit deliberately never sent,
+      // simulating a server that omits limit headers in its responses.
+    });
+    const start = Date.now();
+    await bucket.acquirePermit(100);
+    // Both dimensions fall to -1 → unknown → combined passthrough → immediate.
+    expect(Date.now() - start).toBeLessThan(50);
+  });
 });
 
 // ── resetForTests ─────────────────────────────────────────────────────────────

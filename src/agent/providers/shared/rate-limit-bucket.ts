@@ -198,10 +198,11 @@ export class RateLimitBucket {
       // Hard freeze from a 429 — wait out the retry-after.
       if (this.frozenUntil > now) {
         const waitMs = this.frozenUntil - now;
-        await Promise.race([
-          sleep(waitMs),
-          signal ? new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true })) : new Promise<void>(() => {}),
-        ]);
+        if (signal) {
+          await Promise.race([sleep(waitMs), new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }))]);
+        } else {
+          await sleep(waitMs);
+        }
         continue;
       }
 
@@ -240,10 +241,11 @@ export class RateLimitBucket {
       const nextReset = candidates.length > 0 ? Math.min(...candidates) : now + defaultWaitMs;
       const sleepMs = Math.max(1, nextReset - now) + staggerJitterMs();
 
-      await Promise.race([
-        sleep(sleepMs),
-        signal ? new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true })) : new Promise<void>(() => {}),
-      ]);
+      if (signal) {
+        await Promise.race([sleep(sleepMs), new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }))]);
+      } else {
+        await sleep(sleepMs);
+      }
     }
   }
 }
