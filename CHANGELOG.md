@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.119.2] - 2026-08-14
+
+### Changed
+- extract shared pricing lookup into providers/shared/pricing-utils.ts (#1078) (bac408c8)
+
 ## [5.119.1] - 2026-08-14
 
 ### Fixed
