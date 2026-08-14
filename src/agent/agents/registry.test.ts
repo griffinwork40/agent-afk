@@ -165,19 +165,8 @@ describe('loadAgentRegistry', () => {
   // Invariant: for each builtin with a restricted tool set (explicit `tools:`
   // array), every tool granted at the registry entry beyond the vendored
   // allowlist constant must appear in the agent's composed prompt.
-  it('every restricted builtin: registry grants beyond the vendored base appear in the composed prompt (#942)', async () => {
-    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
-
-    // Vendored base allowlists — the upstream-pinned "closed set" each agent's
-    // body asserts. Map each builtin name to its vendored `allowedTools` const.
-    // Non-vendored builtins (Explore, general-purpose) are omitted: their
-    // prompts are AFK-authored and already name every tool they list, so there
-    // is no "closed-allowlist claim to supersede" and no extras can drift.
-    const { researchAgent, gitInvestigator } = await import('../../skills/_agents/index.js');
-    const vendoredBase: ReadonlyMap<string, readonly string[]> = new Map([
-      ['research-agent', researchAgent.allowedTools],
-      ['git-investigator', gitInvestigator.allowedTools],
-    ]);
+  it('every restricted builtin: registry grants beyond the vendored base appear in the composed prompt (#942)', () => {
+    const builtins = builtinAgents();
 
     // Guard: ensure this test covers real builtins (not vacuously-passing on
     // an empty map) and that at least one agent actually has registry extras,
@@ -185,11 +174,13 @@ describe('loadAgentRegistry', () => {
     // by having zero extras everywhere.
     let sawExtras = false;
 
-    for (const [name, base] of vendoredBase) {
-      const entry = registry.get(name);
-      expect(entry, `builtin ${name} missing from registry`).toBeDefined();
-      const tools = entry!.definition.tools ?? [];
-      const prompt = entry!.definition.prompt;
+    let sawVendored = false;
+    for (const [name, entry] of builtins) {
+      const base = entry.vendoredBaseTools;
+      if (base === undefined) continue;
+      sawVendored = true;
+      const tools = entry.definition.tools ?? [];
+      const prompt = entry.definition.prompt;
 
       // Extras = tools the registry grants beyond what the vendored body claims.
       const extras = tools.filter((t) => !(base as readonly string[]).includes(t));
@@ -209,14 +200,28 @@ describe('loadAgentRegistry', () => {
           prompt,
           `${name}: withRegistryGrants supplement must override the closed-allowlist claim`,
         ).toMatch(/superseded by this section/);
-        // And the supplement must not relax the read-only contract.
-        expect(
-          prompt,
-          `${name}: withRegistryGrants supplement must preserve the read-only contract`,
-        ).toMatch(/no Edit, no Write, no Bash, no mutation/);
+        // Preserve this agent's actual contract. In particular,
+        // git-investigator legitimately has read-only Bash, while research-agent
+        // does not; the supplement must never contradict either base allowlist.
+        for (const mutator of ['Edit', 'Write', 'Bash']) {
+          const prohibition = new RegExp(`no ${mutator}`);
+          if (base.includes(mutator)) {
+            expect(prompt, `${name}: supplement contradicts allowed ${mutator}`).not.toMatch(
+              prohibition,
+            );
+          } else {
+            expect(prompt, `${name}: supplement must preserve the no-${mutator} contract`).toMatch(
+              prohibition,
+            );
+          }
+        }
+        expect(prompt, `${name}: supplement must preserve the no-mutation contract`).toMatch(
+          /no mutation/,
+        );
       }
     }
 
+    expect(sawVendored, 'expected ≥1 vendored builtin in the builtin registry').toBe(true);
     expect(sawExtras, 'expected ≥1 vendored builtin to have registry extras (research-agent)').toBe(
       true,
     );

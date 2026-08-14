@@ -56,8 +56,14 @@ function vendoredPromptBody(raw: string): string {
  * green. Callers pass the SAME array they spread into `tools`, so the note and
  * the grant cannot drift apart.
  */
-function withRegistryGrants(body: string, grants: readonly string[]): string {
+function withRegistryGrants(
+  body: string,
+  grants: readonly string[],
+  baseTools: readonly string[],
+): string {
   if (grants.length === 0) return body;
+  const forbiddenMutators = ['Edit', 'Write', 'Bash'].filter((tool) => !baseTools.includes(tool));
+  const preservedContract = `${forbiddenMutators.map((tool) => `no ${tool}`).join(', ')}, and no mutation`;
   return `${body}
 
 ## Tools granted by this runtime, beyond the list above
@@ -67,7 +73,7 @@ This runtime additionally grants you: ${grants.join(', ')}.
 Any earlier statement in this prompt that your tool surface is a fixed or "hard"
 allowlist describes the upstream default, not your actual surface — it is
 superseded by this section. These tools are live; use them when relevant. Every
-other restriction above (no Edit, no Write, no Bash, no mutation) still holds.`;
+other restriction above (${preservedContract}) still holds.`;
 }
 
 /**
@@ -147,6 +153,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         prompt: withRegistryGrants(
           vendoredPromptBody(researchAgent.systemPrompt),
           RESEARCH_AGENT_REGISTRY_GRANTS,
+          researchAgent.allowedTools,
         ),
         // The scoped `Agent(git-investigator)` grant matches the vendored
         // prompt's frontmatter intent (`tools: …, Agent(git-investigator)`)
@@ -183,6 +190,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // agent-tool dispatch path and dies opaquely when cut off mid-loop.
         maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,
       },
+      vendoredBaseTools: researchAgent.allowedTools,
     },
     {
       name: gitInvestigator.name,
@@ -200,6 +208,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // capped-partial wind-down. See READONLY_AGENT_MAX_TOOL_USE_ITERATIONS.
         maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,
       },
+      vendoredBaseTools: gitInvestigator.allowedTools,
       // The vendored definition grants Bash for git archaeology; its contract
       // is read-only ("Runs git commands only — no mutations"). Enforce that
       // contract mechanically with the read-only bash gate.
