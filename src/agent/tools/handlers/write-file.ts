@@ -13,6 +13,7 @@ import { dirname } from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { fsErrorToToolResult } from './_fs-error.js';
 import { computeLineDiff, type DiffPayload } from '../../../utils/diff.js';
 
 /**
@@ -163,14 +164,9 @@ const writeFileImpl = async (
       ...(diff ? { render: { diff } } : {}),
     };
   } catch (err) {
+    const known = fsErrorToToolResult(err, file_path);
+    if (known) return known;
     if (err instanceof Error) {
-      if ('code' in err && err.code === 'EACCES') {
-        return {
-          content: `Permission denied: ${file_path}`,
-          isError: true,
-        };
-      }
-      // Generic error
       return {
         content: `Error writing file: ${err.message}`,
         isError: true,

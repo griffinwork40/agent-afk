@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.118.1] - 2026-08-14
+
+### Changed
+- extract FS error-to-tool-result helper for tool handlers (#1070) (#1077) (87d784cd)
+- clean up dead re-exports and double re-export chain (#1071) (#1076) (39b2da52)
+- extract read/write scope resolution from forkSubagent (#1075) (8f2a6b59)
+- generalize registry-grant prompt-consistency guard (#942) (#1057) (538889b4)
+
 ## [5.118.0] - 2026-08-14
 
 ### Added

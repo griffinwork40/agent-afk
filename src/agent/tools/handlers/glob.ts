@@ -15,6 +15,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { fsErrorToToolResult } from './_fs-error.js';
 import { isReadDenied } from './read-denylist.js';
 
 /**
@@ -264,14 +265,9 @@ export function createGlobHandler(cwd?: string): ToolHandler {
     return { content: output };
   } catch (err) {
     // Handle specific error types
+    const known = fsErrorToToolResult(err, basePath, 'Path');
+    if (known) return known;
     if (err instanceof Error) {
-      if ('code' in err && err.code === 'ENOENT') {
-        return { content: `Path not found: ${basePath}`, isError: true };
-      }
-      if ('code' in err && err.code === 'EACCES') {
-        return { content: `Permission denied: ${basePath}`, isError: true };
-      }
-      // Generic error
       return { content: `Error scanning directory: ${err.message}`, isError: true };
     }
     return { content: 'Unknown error scanning directory', isError: true };

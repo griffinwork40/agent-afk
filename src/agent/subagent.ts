@@ -34,9 +34,8 @@ import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
-import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
-import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
-import path from 'path';
+import { type ReadScopeInputs } from './subagent-read-scope.js';
+import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-scope.js';
 import { buildPhaseRestrictedProvider } from './tools/nesting.js';
 import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
@@ -359,117 +358,27 @@ export class SubagentManager {
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
 
-    // Read-scope inheritance (#416/#441 successor — see ./subagent-read-scope).
-    // Invariant: a forked read-only sub-agent must be able to READ everything
-    // its parent could; writes stay confined (writeRoots, below). When the
-    // caller did NOT pin `readRoots` — a caller that pins (e.g. `afk farm`,
-    // which deliberately confines each branch worker) is left untouched — derive
-    // the child's read roots from the parent's scope:
-    //   - UNCONFINED parent (top-level `afk`/`afk i` with no worktree →
-    //     resolveBase undefined → reads anywhere) → read-open child.
-    //   - CONFINED parent → union(child cwd, parent roots, worktree main root);
-    //     the main root lexically covers sibling `.afk-worktrees/*`.
-    // This replaces the prior single main-root grant that vanished silently on
-    // any `git rev-parse` failure, re-confining the child to `[cwd]` (#441) and
-    // hard-blocking every out-of-cwd read until a wall-clock timeout.
+    // Read-scope inheritance (#416/#441 successor — see ./subagent-read-scope
+    // and ./subagent/resolve-fork-scope). Extracted to `resolveReadScope` for
+    // readability; the invariants (Gap A/B/C, farm-pin, unconfined-parent)
+    // are documented and enforced inside that helper.
     const effectiveChildCwd = options.config.cwd ?? this.parentCwd;
-    let inheritedReadRoots: string[] | undefined;
-    if (options.config.readRoots === undefined) {
-      // An UNCONFINED parent yields a read-open child regardless of the worktree
-      // main root, so skip the (cached) git resolution in that case — the common
-      // top-level `afk` fan-out never pays for it. For a CONFINED parent the main
-      // root is best-effort; on git failure we ALSO try the parent cwd (Gap B
-      // below) so a confined *worktree* parent's fork still reaches the main
-      // checkout + siblings, and the child is additionally granted the AFK state
-      // dir (Gap A below) so ~/.afk/state reads are not hard-denied.
-      const parentUnconfined =
-        this.parentReadRoots === undefined && this.parentCwd === undefined;
-      let worktreeMainRoot: string | undefined;
-      if (!parentUnconfined && effectiveChildCwd !== undefined) {
-        worktreeMainRoot = await this.resolveMainRootForCwd(effectiveChildCwd);
-        // Gap B: when the child cwd yields no distinct main root (git failure, or
-        // the child cwd is not itself a linked worktree), fall back to the PARENT
-        // cwd. A confined parent is frequently ITSELF a linked worktree (`afk -w`);
-        // resolving from it recovers the repo root, which lexically covers the main
-        // checkout AND every sibling `.afk-worktrees/*` the fork would otherwise be
-        // hard-denied. Best-effort + cached; strictly additive (only ever adds a
-        // read root when one is found).
-        if (
-          worktreeMainRoot === undefined &&
-          this.parentCwd !== undefined &&
-          this.parentCwd !== effectiveChildCwd
-        ) {
-          worktreeMainRoot = await this.resolveMainRootForCwd(this.parentCwd);
-        }
-      }
-      inheritedReadRoots = computeInheritedReadRoots({
-        parentReadRoots: this.parentReadRoots,
-        parentCwd: this.parentCwd,
-        childCwd: effectiveChildCwd,
-        worktreeMainRoot,
-        // Gap A: a CONFINED fork's cwd+repo roots do not lexically contain
-        // ~/.afk/state, so skill-preflight inputs, todos, transcripts, and
-        // session ledgers were hard-denied (forks cannot prompt). Grant the STATE
-        // dir only — NEVER ~/.afk/config (credentials). Unconfined forks are
-        // already read-open, so this is a confined-parent-only grant.
-        ...(parentUnconfined ? {} : { afkStateRoot: getAfkStateDir() }),
-        // Gap C (the agent-framework read grant — distinct from Gap A/Gap B
-        // above): ~/.afk/agent-framework is a SIBLING of ~/.afk/state under the
-        // same AFK home, and a confined fork's cwd+repo roots do not lexically
-        // contain it either. It holds the framework's own artifacts (improve
-        // cards/proposals/eval-cases, forge telemetry, pattern-cards, briefs),
-        // so children dispatched by /orient, /harvest, /forge, /distill and the
-        // improve pipeline were hard-denied the one tree their task requires —
-        // 46 denials across 15 sessions (card subagent-read-denial-ab89c2bd6a6f,
-        // now HISTORICAL: that slug is a hash of the denial reason string, which
-        // was reworded when the read remedy moved to
-        // `tools/hooks/fork-denial-remedy.ts`. Post-rewording denials accumulate
-        // under a new slug; this card no longer accrues sightings).
-        // Same guard as Gap A: this dir only, NEVER ~/.afk/config (credentials).
-        ...(parentUnconfined
-          ? {}
-          : { afkFrameworkRoot: getAgentFrameworkDir() }),
-      });
-    }
+    const inheritedReadRoots = await resolveReadScope({
+      parentReadRoots: this.parentReadRoots,
+      parentCwd: this.parentCwd,
+      effectiveChildCwd,
+      callerReadRoots: options.config.readRoots,
+      callerExtraReadRoots: options.config.extraReadRoots,
+      resolveMainRoot: (cwd) => this.resolveMainRootForCwd(cwd),
+    });
 
-    // #662: additive read roots from the `readRoots` agent-tool param. Compose with
-    // the inherited scope so the child keeps its repo/worktree/state reach AND gains
-    // the named out-of-repo dirs. Mirrors composedWriteRoots (#435). Two guards:
-    //   - Invariant #1 (farm pin untouched): only compose when the caller did NOT
-    //     pin `config.readRoots`. A pin ("confine to exactly these" — `afk farm`)
-    //     suppresses inheritance entirely (the `=== undefined` gate above), so
-    //     `inheritedReadRoots` stays undefined; composing here would silently
-    //     override the pin at the childConfig literal. extraReadRoots flows through
-    //     the DISTINCT `extraReadRoots` field precisely so the pin is never touched.
-    //   - Invariant #2 (never confine an unconfined child): only compose when the
-    //     child is (or will be) CONFINED. An unconfined child (no inherited roots
-    //     AND no cwd -> resolveBase undefined -> read-open) can already read these
-    //     paths; turning its read scope into a finite list would REGRESS it from
-    //     read-open to confined.
-    if (
-      options.config.readRoots === undefined &&
-      options.config.extraReadRoots !== undefined &&
-      options.config.extraReadRoots.length > 0
-    ) {
-      const willBeConfined = inheritedReadRoots !== undefined || effectiveChildCwd !== undefined;
-      if (willBeConfined) {
-        const base = inheritedReadRoots ?? (effectiveChildCwd !== undefined ? [effectiveChildCwd] : []);
-        inheritedReadRoots = [...new Set([...base, ...options.config.extraReadRoots.map((r) => path.resolve(r))])];
-      }
-    }
-
-    // Explicit write-root pre-grant (#435): when the caller passed writeRoots on
-    // the agent tool, COMPOSE them with the child's own cwd so the child never
-    // loses write access to its own tree — the provider REPLACES the default
-    // [cwd] write root with config.writeRoots on first init (see
-    // anthropic-direct/index.ts ensureSharedRoots). Unlike the #416 read grant
-    // this is never automatic: writing outside the worktree breaks isolation, so
-    // it requires explicit parent intent.
-    let composedWriteRoots: string[] | undefined;
-    if (options.config.writeRoots !== undefined && options.config.writeRoots.length > 0) {
-      const base = effectiveChildCwd !== undefined ? [effectiveChildCwd] : [];
-      composedWriteRoots = [...new Set([...base, ...options.config.writeRoots])];
-    }
+    // Write-root composition (#435): compose explicit writeRoots with cwd so
+    // the child never loses write access to its own tree. Extracted to
+    // `composeWriteRoots` — see ./subagent/resolve-fork-scope.
+    const composedWriteRoots = composeWriteRoots(
+      options.config.writeRoots,
+      effectiveChildCwd,
+    );
 
     // #652: a Claude-family child model that this session's routing sends to the
     // openai-compatible provider (a global AFK_PROVIDER=openai-compatible force
