@@ -150,6 +150,31 @@ export function readManifest(waveId: string): WaveManifest | undefined {
  *
  * Read-modify-write using temp-file + rename. Fire-and-forget: never throws.
  * No-op when the waveId does not exist on disk.
+ *
+ * // Invariant: updateWaveUnit performs an UNLOCKED read-modify-write and
+ * // therefore has a TOCTOU race under concurrent callers. Two concurrent
+ * // calls on the same waveId will both read the current manifest, apply
+ * // their respective status update to independent in-memory copies, and
+ * // rename their temp files in some arbitrary order — the last writer wins
+ * // and the earlier write is silently dropped.
+ * //
+ * // This is intentional and accepted. The manifest is a RECOVERY HINT, not
+ * // authoritative execution state: losing a status transition (e.g. a unit
+ * // appears 'pending' in the recovered manifest instead of 'running')
+ * // degrades the resumption offer shown to the operator — the offered prompt
+ * // may be slightly stale — but never loses user work. Actual subagent
+ * // results are written to the witness layer (trace files), not to this
+ * // manifest. The cost of a lock (advisory file lock, mutex, or serialised
+ * // queue) exceeds the value: the wave runs at most once per session, units
+ * // in a wave are updated from their own goroutine-equivalent (promise), and
+ * // the race window is the duration of a single JSON stringify + rename.
+ * //
+ * // Degradation mode on concurrent write: the manifest file always contains
+ * // VALID JSON (the temp-file + rename write is atomic at the OS level), so
+ * // a reader can always parse it. The only observable effect is that one
+ * // unit's status reverts to its prior value — a resumption offer may show
+ * // a unit as 'pending' instead of 'running' or 'done', which is harmless
+ * // because the operator is expected to decide whether to re-dispatch.
  */
 export function updateWaveUnit(
   waveId: string,

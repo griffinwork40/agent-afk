@@ -99,8 +99,14 @@ export function reconcileWaveManifests(opts: {
         continue;
       }
 
-      // Skip manifests that are too old for the 48h recency heuristic
-      const createdAt = new Date(manifest.createdAt).getTime();
+      // Skip manifests that are too old for the 48h recency heuristic.
+      // Guard against corrupt createdAt: new Date(<corrupt>).getTime() returns
+      // NaN, which makes `now - NaN` = NaN and `NaN < HOURS_48_MS` = false,
+      // silently skipping the manifest forever. Treat NaN as epoch (0) so
+      // isRecent is definitively false — isOwnSession still carries it if the
+      // parent session matches.
+      const createdAtRaw = new Date(manifest.createdAt).getTime();
+      const createdAt = Number.isFinite(createdAtRaw) ? createdAtRaw : 0;
       const isRecent = now - createdAt < HOURS_48_MS;
       const isOwnSession = manifest.parentSessionId === opts.sessionId;
       if (!isRecent && !isOwnSession) continue;

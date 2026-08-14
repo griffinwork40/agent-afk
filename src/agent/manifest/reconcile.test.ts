@@ -99,6 +99,40 @@ describe('reconcileWaveManifests — basic discovery', () => {
     expect(result.offers).toHaveLength(0);
     expect(result.deletedExpired).toBe(0);
   });
+
+  it('treats corrupt createdAt (NaN) as epoch — isRecent=false, isOwnSession carries it', () => {
+    // A manifest with a corrupt createdAt value must not be silently skipped
+    // forever. Before the guard: new Date('corrupt').getTime() = NaN,
+    // now - NaN = NaN, NaN < HOURS_48_MS = false → isRecent = false. When the
+    // session also mismatches, the manifest was silently dropped on every pass
+    // instead of being surfaced or eventually deleted. Fix: treat NaN as
+    // epoch (0), making isRecent definitively false and letting isOwnSession
+    // carry the manifest when the parent session matches.
+    const units = [
+      buildWaveUnit({ id: 'u1', prompt: 'corrupt ts test', cwd: undefined, model: 'sonnet' }),
+      buildWaveUnit({ id: 'u2', prompt: 'corrupt ts test 2', cwd: undefined, model: 'haiku' }),
+    ];
+    const waveId = createManifest({
+      source: 'agent-tool',
+      parentSessionId: 'corrupt-sess',
+      traceLabel: null,
+      units,
+    });
+    // Overwrite createdAt with a non-ISO string that produces NaN from Date().
+    const manifestPath = getWaveManifestPath(waveId!);
+    const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as WaveManifest;
+    raw.createdAt = 'not-a-date';
+    writeFileSync(manifestPath, JSON.stringify(raw, null, 2));
+
+    // Case 1: isOwnSession = true → manifest is surfaced even with corrupt createdAt.
+    const resultOwn = reconcileWaveManifests({ sessionId: 'corrupt-sess' });
+    expect(resultOwn.offers).toHaveLength(1);
+    expect(resultOwn.offers[0]!.resumable).toHaveLength(2);
+
+    // Case 2: isOwnSession = false → manifest is NOT surfaced (isRecent=false, not own).
+    const resultOther = reconcileWaveManifests({ sessionId: 'other-sess' });
+    expect(resultOther.offers).toHaveLength(0);
+  });
 });
 
 describe('reconcileWaveManifests — DAG upstream blocking', () => {

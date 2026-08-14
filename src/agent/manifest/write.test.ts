@@ -222,3 +222,53 @@ describe('writeManifestSync atomicity', () => {
     expect(existsSync(tmpFile)).toBe(false);
   });
 });
+
+describe('updateWaveUnit — concurrent write characterization (last-writer-wins)', () => {
+  /**
+   * Characterization test — documents the known TOCTOU race in updateWaveUnit.
+   *
+   * Two concurrent calls on the same manifest race: the last rename wins and
+   * the earlier status update is dropped. This test asserts:
+   *   1. The file always contains valid JSON (OS-level atomic rename guarantee).
+   *   2. The surviving status is whichever call won the rename race.
+   *
+   * This is NOT a correctness test — it documents the accepted limitation.
+   * See the `// Invariant: updateWaveUnit performs an UNLOCKED read-modify-write`
+   * comment in write.ts for the full rationale and degradation mode.
+   */
+  it('leaves valid JSON and last-writer-wins status after two concurrent writes', async () => {
+    const units = [
+      buildWaveUnit({ id: 'cu1', prompt: 'concurrent a', cwd: undefined, model: 'sonnet' }),
+      buildWaveUnit({ id: 'cu2', prompt: 'concurrent b', cwd: undefined, model: 'haiku' }),
+    ];
+    const waveId = createManifest({
+      source: 'agent-tool',
+      parentSessionId: 'concurrent-sess',
+      traceLabel: null,
+      units,
+    });
+    expect(waveId).toBeDefined();
+
+    // Fire two concurrent updates to the SAME unit. Both read the initial
+    // manifest (status='pending'), apply different target statuses, and race
+    // to rename their temp file. The last rename wins.
+    await Promise.all([
+      Promise.resolve().then(() => updateWaveUnit(waveId!, 'cu1', 'running')),
+      Promise.resolve().then(() => updateWaveUnit(waveId!, 'cu1', 'done')),
+    ]);
+
+    // Invariant 1: file must be valid JSON after the race.
+    const after = readManifest(waveId!);
+    expect(after).toBeDefined();
+
+    // Invariant 2: the winning status is one of the two that raced —
+    // never 'pending' (which would mean neither write landed) and never
+    // an undefined/corrupt value. We do not assert WHICH won the race.
+    const cu1Status = after!.units.find((u) => u.id === 'cu1')!.status;
+    expect(['running', 'done']).toContain(cu1Status);
+
+    // Invariant 3: the untouched unit is unaffected.
+    const cu2Status = after!.units.find((u) => u.id === 'cu2')!.status;
+    expect(cu2Status).toBe('pending');
+  });
+});
