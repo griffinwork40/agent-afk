@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.118.2] - 2026-08-14
+
+### Changed
+- extract duplicated escapeRegExp into src/utils/regexp.ts (#1066) (#1079) (5ccb9209)
+
 ## [5.118.1] - 2026-08-14
 
 ### Changed
