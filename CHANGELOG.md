@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.119.1] - 2026-08-14
+
+### Fixed
+- delegate marketplace plugins to updateMarketplace (#1011) (cc0b2d00)
+
+### Changed
+- separate MAX_SEARCH_MATCHES from MAX_LIMIT (#1037) (#1046) (2627623c)
+
 ## [5.119.0] - 2026-08-14
 
 ### Added
