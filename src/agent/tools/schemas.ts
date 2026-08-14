@@ -700,23 +700,17 @@ export const cancelScheduleTool: AnthropicToolDef = {
   category: 'schedule',
   concurrencySafe: false,
   description:
-    'Disable or permanently remove a scheduled task. ' +
-    'If permanent is false (default), sets enabled: false so the task can be re-enabled later. ' +
-    'If permanent is true, removes the task from the store entirely. ' +
+    'Disable, re-enable, or permanently remove a scheduled task. ' +
+    'Default (no flags): sets enabled: false. enable: true re-enables and re-registers with the daemon. ' +
+    'permanent: true removes from the store entirely (takes precedence over enable). ' +
     'The result includes daemonSynced/syncDetail — when daemonSynced is false, a running daemon ' +
     'still has the task registered until it restarts.',
   input_schema: {
     type: 'object',
     properties: {
-      taskId: {
-        type: 'string',
-        description: 'The task ID (slug) to cancel.',
-      },
-      permanent: {
-        type: 'boolean',
-        description:
-          'If true, remove from store entirely. If false (default), only sets enabled: false.',
-      },
+      taskId: { type: 'string', description: 'The task ID (slug) to operate on.' },
+      permanent: { type: 'boolean', description: 'If true, remove from store entirely.' },
+      enable: { type: 'boolean', description: 'If true, re-enable a disabled task and register it with the daemon.' },
     },
     required: ['taskId'],
   },

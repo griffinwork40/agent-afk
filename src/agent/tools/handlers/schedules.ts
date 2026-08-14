@@ -23,6 +23,7 @@ import {
   addSchedule,
   removeSchedule,
   getSchedule,
+  toScheduledTask,
 } from '../../daemon/schedule-store.js';
 import { getTelemetryPath } from '../../../paths.js';
 import {
@@ -179,6 +180,7 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
   }
   const taskId = obj['taskId'] as string;
   const permanent = obj['permanent'] === true;
+  const enable = obj['enable'] === true;
 
   const existing = getSchedule(taskId);
   if (!existing) {
@@ -189,6 +191,17 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
   if (permanent) {
     removeSchedule(taskId);
     sync = await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+  } else if (enable) {
+    // Re-enable a previously disabled task and register with daemon
+    const schedules = loadSchedules();
+    const updated = schedules.map((s) =>
+      s.id === taskId ? { ...s, enabled: true, updatedAt: new Date().toISOString() } : s,
+    );
+    saveSchedules(updated);
+    const refreshed = getSchedule(taskId);
+    sync = refreshed
+      ? await trySyncToDaemon('POST', '/tasks', toScheduledTask(refreshed))
+      : await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
   } else {
     const schedules = loadSchedules();
     const updated = schedules.map((s) =>
@@ -204,6 +217,7 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
       ok: true,
       taskId,
       permanent,
+      enabled: enable ? true : permanent ? undefined : false,
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),

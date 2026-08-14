@@ -48,7 +48,7 @@
     "src/agent/tools/hooks/path-approval-hook.ts": { "loc": 652, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/nesting.ts": { "loc": 520, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/readonly-bash.ts": { "loc": 763, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/agent/tools/schemas.ts": { "loc": 1345, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/agent/tools/schemas.ts": { "loc": 1339, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/skill-bridge.ts": { "loc": 498, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/skill-executor.ts": { "loc": 456, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/skill-executor/fork-dispatch.ts": { "loc": 393, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
