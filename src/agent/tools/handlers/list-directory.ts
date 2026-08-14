@@ -11,6 +11,7 @@
 import { promises as fs } from 'fs';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { fsErrorToToolResult } from './_fs-error.js';
 
 /**
  * Validates input and lists a directory.
@@ -81,18 +82,9 @@ const listDirectoryImpl = async (
     return { content };
   } catch (err) {
     // Handle specific error types
+    const known = fsErrorToToolResult(err, resolvedPath, 'Directory');
+    if (known) return known;
     if (err instanceof Error) {
-      const errWithCode = err as Error & { code?: string };
-      if (errWithCode.code === 'ENOENT') {
-        return { content: `Directory not found: ${resolvedPath}`, isError: true };
-      }
-      if (errWithCode.code === 'ENOTDIR') {
-        return { content: `Not a directory: ${resolvedPath}`, isError: true };
-      }
-      if (errWithCode.code === 'EACCES') {
-        return { content: `Permission denied: ${resolvedPath}`, isError: true };
-      }
-      // Generic error
       return { content: `Error listing directory: ${err.message}`, isError: true };
     }
     return { content: 'Unknown error listing directory', isError: true };

@@ -11,6 +11,7 @@
 import { promises as fs } from 'fs';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { fsErrorToToolResult } from './_fs-error.js';
 
 /**
  * Validates input and reads a file.
@@ -127,15 +128,9 @@ const readFileImpl = async (
     return { content: formatted };
   } catch (err) {
     // Handle specific error types
+    const known = fsErrorToToolResult(err, filePath, 'File');
+    if (known) return known;
     if (err instanceof Error) {
-      const errWithCode = err as Error & { code?: string };
-      if (errWithCode.code === 'ENOENT') {
-        return { content: `File not found: ${filePath}`, isError: true };
-      }
-      if (errWithCode.code === 'EACCES') {
-        return { content: `Permission denied: ${filePath}`, isError: true };
-      }
-      // Generic error
       return { content: `Error reading file: ${err.message}`, isError: true };
     }
     return { content: 'Unknown error reading file', isError: true };
