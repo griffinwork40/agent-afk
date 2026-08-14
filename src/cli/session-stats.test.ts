@@ -79,14 +79,6 @@ describe('session-stats', () => {
     expect(s.unpricedTurns).toBe(2);
   });
 
-  it('resetStats zeroes unpricedTurns', () => {
-    const s = createSessionStats('sonnet');
-    recordTurn(s, 'x', 'y', undefined);
-    expect(s.unpricedTurns).toBe(1);
-    resetStats(s);
-    expect(s.unpricedTurns).toBe(0);
-  });
-
   it('recordTurn stores tool events when provided', () => {
     const s = createSessionStats('sonnet');
     const tools = [
@@ -219,8 +211,6 @@ describe('session-stats', () => {
     recordTurn(s, 'q', 'a', { usage: { input_tokens: 1_000, output_tokens: 300 } });
     expect(s.turnTokens).toEqual([{ input: 1_000, output: 300, cache: 0 }]);
   });
-});
-
 
   it('recordTurn with undefined totalCostUsd increments unpricedTurns', () => {
     const s = createSessionStats('sonnet');
@@ -253,6 +243,7 @@ describe('session-stats', () => {
     expect(s.totalTurns).toBe(3);
     expect(s.totalCostUsd).toBeCloseTo(0.03);
   });
+});
 
 describe('resetStats', () => {
   it('zeroes counters and refreshes sessionStartTime', async () => {

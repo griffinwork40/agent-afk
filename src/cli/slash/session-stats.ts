@@ -102,7 +102,7 @@ export function recordTurn(
 
   stats.totalTurns += 1;
   stats.totalCostUsd += costForSum;
-  if (costUsd === undefined || costUsd === null) {
+  if (costUsd === undefined) {
     stats.unpricedTurns += 1;
   }
   stats.totalDurationMs += durationMs;

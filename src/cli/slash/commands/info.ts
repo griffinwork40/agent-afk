@@ -39,10 +39,7 @@ const costCmd: SlashCommand = {
     out.line();
     out.line(palette.bold('Session cost'));
     out.line(divider());
-    const unpricedNote = stats.unpricedTurns > 0
-      ? palette.dim(` (${stats.unpricedTurns} turn${stats.unpricedTurns === 1 ? '' : 's'} unpriced — total is a lower bound)`)
-      : '';
-    out.line(`  total       ${palette.success(formatCost(stats.totalCostUsd))}${unpricedNote}`);
+    out.line(`  total       ${palette.success(formatCost(stats.totalCostUsd))}`);
     out.line(`  turns       ${palette.meta(String(stats.totalTurns))}`);
     if (stats.totalTurns > 0) {
       const avg = stats.totalCostUsd / stats.totalTurns;
