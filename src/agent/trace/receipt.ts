@@ -26,6 +26,7 @@ import { basename, dirname, join } from 'path';
 import { getReceiptsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { HookHandler } from '../hooks.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 import {
   BENIGN_FAILURE_CLASSES,
   type ClosureReason,
@@ -145,18 +146,7 @@ export interface ReceiptMeta {
  * receipt from the events that ARE intact.
  */
 export function parseTraceJsonl(raw: string): TraceEvent[] {
-  const out: TraceEvent[] = [];
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed === '') continue;
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (isTraceEvent(parsed)) out.push(parsed);
-    } catch {
-      // Skip malformed line — tolerance is the point.
-    }
-  }
-  return out;
+  return parseJsonlLines(raw, { guard: isTraceEvent });
 }
 
 function isTraceEvent(v: unknown): v is TraceEvent {

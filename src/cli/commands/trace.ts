@@ -36,6 +36,7 @@ import {
   listTraces,
   resolveLatestSession,
 } from '../../agent/trace/listing.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 
 // Re-export for consumers that imported these from this module before the
 // refactor. Maintains backward compatibility with existing CLI code paths.
@@ -70,18 +71,16 @@ function looksLikeEvent(v: unknown): v is TraceEvent {
 
 /** Parse NDJSON trace content into events, tolerating malformed lines. */
 export function parseTrace(content: string): ParsedTrace {
-  const events: TraceEvent[] = [];
   let malformed = 0;
-  for (const line of content.split('\n')) {
-    if (line.trim() === '') continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (looksLikeEvent(parsed)) {
-        events.push(parsed);
-      } else {
-        malformed++;
-      }
-    } catch {
+  // Use parseJsonlLines for the shared parse+trim+skip-empty contract.
+  // onParseError counts JSON-level failures; a second pass over the raw
+  // values counts structural rejections (valid JSON but not a TraceEvent).
+  const raw = parseJsonlLines(content, { onParseError: () => { malformed++; } });
+  const events: TraceEvent[] = [];
+  for (const parsed of raw) {
+    if (looksLikeEvent(parsed)) {
+      events.push(parsed);
+    } else {
       malformed++;
     }
   }
