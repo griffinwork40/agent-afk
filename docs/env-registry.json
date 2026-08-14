@@ -924,6 +924,33 @@
       "category": "model"
     },
     {
+      "name": "AFK_WAVE_MANIFEST_DISABLED",
+      "description": "Disable the wave manifest system entirely. When set to 1, no manifest is written for parallel subagent waves, and no resumption offer is made at session start.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WAVE_MANIFEST_TTL_HOURS",
+      "description": "Time-to-live for wave manifests in hours. Manifests older than this are deleted on reconciliation and by the witness sweep. Default 48 (two days).",
+      "type": "number",
+      "required": false,
+      "default": "48",
+      "example": "24",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WAVE_RESUME_UNATTENDED",
+      "description": "When set to 1, surface wave resumption offers even on non-interactive surfaces (daemon, one-shot chat). By default, offers are only made on interactive surfaces (REPL, Telegram).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_WEB_ALLOW_PRIVATE_HOSTS",
       "description": "Opt out of the web_scrape SSRF egress guard. When unset (default) the guard is ACTIVE: the markdown, raw, and headless-render paths refuse loopback (127/8, ::1), link-local (169.254/16 — including the 169.254.169.254 cloud instance-metadata endpoint), RFC1918 (10/8, 172.16/12, 192.168/16), carrier-grade NAT (100.64/10), IPv6 unique-local (fc00::/7), 0.0.0.0/8, and the IPv4-mapped/compatible IPv6 forms of all of those. Hostnames are resolved and the RESOLVED addresses are classified (DNS-rebinding guard), and the check is re-applied on every redirect hop. Set to 1/true to allow private-host access — needed only to scrape a local dev server. Enabling it restores a model-reachable SSRF path (issue #575).",
       "type": "boolean",

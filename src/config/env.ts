@@ -1287,6 +1287,40 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_WAVE_MANIFEST_DISABLED',
+    description:
+      'Disable the wave manifest system entirely. When set to 1, no manifest is written ' +
+      'for parallel subagent waves, and no resumption offer is made at session start.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_WAVE_MANIFEST_TTL_HOURS',
+    description:
+      'Time-to-live for wave manifests in hours. Manifests older than this are deleted ' +
+      'on reconciliation and by the witness sweep. Default 48 (two days).',
+    type: 'number',
+    required: false,
+    default: '48',
+    example: '24',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_WAVE_RESUME_UNATTENDED',
+    description:
+      'When set to 1, surface wave resumption offers even on non-interactive surfaces ' +
+      '(daemon, one-shot chat). By default, offers are only made on interactive surfaces ' +
+      '(REPL, Telegram).',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_SESSION_LEDGER_DISABLED',
     description:
       'Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). ' +
@@ -1853,6 +1887,11 @@ export const env = {
   get AFK_DIFF_LINES(): string | undefined { return process.env['AFK_DIFF_LINES']; },
   get AFK_SHELL_WRAPPER(): string | undefined { return process.env['AFK_SHELL_WRAPPER']; },
   get AFK_USER_CARD_MAX_ROWS(): string | undefined { return process.env['AFK_USER_CARD_MAX_ROWS']; },
+
+  // Wave manifest (interrupted-session recovery)
+  get AFK_WAVE_MANIFEST_DISABLED(): string | undefined { return process.env['AFK_WAVE_MANIFEST_DISABLED']; },
+  get AFK_WAVE_MANIFEST_TTL_HOURS(): string | undefined { return process.env['AFK_WAVE_MANIFEST_TTL_HOURS']; },
+  get AFK_WAVE_RESUME_UNATTENDED(): string | undefined { return process.env['AFK_WAVE_RESUME_UNATTENDED']; },
 } as const; // `as const` narrows getter return types — it does NOT call Object.freeze; the object is mutable at runtime.
 
 /**
