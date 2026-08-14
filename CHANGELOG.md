@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.121.0] - 2026-08-14
+
+### Added
+- extend injectContext to PreToolUse (block path) (#1088) (b423000a)
+
 ## [5.120.0] - 2026-08-14
 
 ### Added
