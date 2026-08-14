@@ -14,15 +14,7 @@
 
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import { dirname } from 'path';
-
-/**
- * Escape a string for safe literal use inside a `RegExp`. Env-var names are
- * normally `[A-Z0-9_]`, but callers may pass arbitrary keys (e.g. the
- * config-mutation engine), so we never interpolate a raw key into a pattern.
- */
-function escapeRegExp(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegExp } from './regexp.js';
 
 /**
  * Write `contents` to `filePath` atomically: write a sibling temp file, then
