@@ -26,7 +26,7 @@ import type { MemoryStore } from '../../memory/index.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { AnthropicToolDef, ToolHandler } from '../../tools/types.js';
 import type { CustomToolDef } from '../../tools/custom-tool.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
@@ -70,7 +70,7 @@ export interface BuildDispatcherOptions {
    * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
    */
   subagentToolOutputCapBytes?: number;
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Live source for the `get_runtime_state` tool. Constructed per-query
    * in `query()` so the handler closure captures the model name and

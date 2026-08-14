@@ -26,7 +26,7 @@
  */
 
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 
 /** Which producer collected the warning. Keep in sync with the two call
  *  sites — widening this set is explicitly out of scope for #754 (see the
@@ -49,7 +49,7 @@ export type BootWarningProducer = 'agent-registry' | 'mcp';
  */
 export function recordBootWarning(a: {
   bootWarnings: string[];
-  traceWriter: TraceWriter | undefined;
+  traceWriter: TraceSink | undefined;
   producer: BootWarningProducer;
   message: string;
 }): Promise<void> {

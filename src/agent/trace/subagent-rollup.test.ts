@@ -37,7 +37,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('session_sealed omits rollup fields when no subagents completed', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     await session.close();
 
@@ -49,7 +49,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('session_sealed includes subagentCount after one completion', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion(undefined, undefined);
     await session.close();
@@ -60,7 +60,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('accumulates subagentCount across multiple completions', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion();
     session.recordSubagentCompletion();
@@ -73,7 +73,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('accumulates token counts from multiple subagents', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion({ inputTokens: 1000, outputTokens: 200 });
     session.recordSubagentCompletion({ inputTokens: 500, outputTokens: 100, cacheReadTokens: 50 });
@@ -88,7 +88,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('accumulates cost from multiple subagents', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion(undefined, 0.05);
     session.recordSubagentCompletion(undefined, 0.03);
@@ -101,7 +101,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('omits subagentTokens field when all token counts are zero', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     // usage with all-zero counts
     session.recordSubagentCompletion({
@@ -120,7 +120,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('omits subagentCostUsd when cost is zero', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion(undefined, 0);
     await session.close();
@@ -131,7 +131,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('ignores NaN and Infinity in token counts', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion({ inputTokens: NaN, outputTokens: Infinity });
     session.recordSubagentCompletion({ inputTokens: 100 });
@@ -145,7 +145,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('ignores NaN cost', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion(undefined, NaN);
     session.recordSubagentCompletion(undefined, 0.02);
@@ -157,7 +157,7 @@ describe('AgentSession.recordSubagentCompletion → session_sealed rollup', () =
   });
 
   it('accumulates cache creation tokens', async () => {
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, writer);
     await session.waitForInitialization();
     session.recordSubagentCompletion({ cacheCreationTokens: 800 });
     session.recordSubagentCompletion({ cacheCreationTokens: 200 });

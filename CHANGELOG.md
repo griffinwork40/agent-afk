@@ -11,6 +11,51 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.117.1] - 2026-08-14
+
+### Fixed
+- widen flaky timing threshold in dispatcher compose parallelism test (#1065) (a5b401d4)
+
+## [5.117.0] - 2026-08-14
+
+### Added
+- first-class xAI/Grok with API key and SuperGrok OAuth (#1019) (efd78cf7)
+
+### Changed
+- pin terminal width in quota-footer tests to fix #795 (#1056) (ac2ee6c5)
+
+## [5.116.0] - 2026-08-13
+
+### Added
+- add thread_id to send_telegram for topic targeting (#1053) (8f312cab)
+
+### Fixed
+- extract discoverPluginSkillsAndCommands helper (#989) (#1055) (3c2fc455)
+- add Invariant comment guarding sync block (#743) (#1054) (f0b26986)
+
+## [5.115.4] - 2026-08-13
+
+### Fixed
+- accept bare "max" as alias for "enabled:max" in --thinking parser (#1052) (50879d31)
+
+## [5.115.3] - 2026-08-13
+
+### Changed
+- split TraceWriter into write-only TraceSink and owner-only seal handle (#1051) (400f64f8)
+
+## [5.115.2] - 2026-08-13
+
+### Fixed
+- sanitize paths in registry warnings against terminal injection (#1029) (e73cc1a3)
+
+## [5.115.1] - 2026-08-13
+
+### Fixed
+- remove vestigial Claude Code slug from memory surveyor (#882) (#1008) (0ab11cd2)
+
+### Changed
+- golden-fingerprint test for denial reason slug stability (#853) (#1047) (9a7a603d)
+
 ## [5.115.0] - 2026-08-13
 
 ### Added

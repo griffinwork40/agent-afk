@@ -21,6 +21,13 @@ describe('parseThinking', () => {
     });
   });
 
+  it('parses bare max as alias for enabled:max', () => {
+    expect(parseThinking('max')).toEqual({
+      type: 'enabled',
+      budgetTokens: Number.POSITIVE_INFINITY,
+    });
+  });
+
   it('returns undefined when input is undefined', () => {
     expect(parseThinking(undefined)).toBeUndefined();
   });

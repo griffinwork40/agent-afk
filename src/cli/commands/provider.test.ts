@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildProviderAuthDiagnose } from './provider.js';
+import { buildProviderAuthDiagnose, buildXaiAuthDiagnose } from './provider.js';
 
 describe('buildProviderAuthDiagnose', () => {
   const originalEnv = { ...process.env };
@@ -66,5 +66,41 @@ describe('buildProviderAuthDiagnose', () => {
     expect(r.message).not.toContain('sk-VERY');
     // last4 is fine
     expect(r.last4).toBe('1234');
+  });
+});
+
+describe('buildXaiAuthDiagnose', () => {
+  it('reports config key', () => {
+    const r = buildXaiAuthDiagnose('xai-key-abcd', 'apikey', {
+      readEnv: () => undefined,
+      store: { authPath: () => '/nope', readFile: () => null },
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.source).toBe('config');
+    expect(r.last4).toBe('abcd');
+    expect(r.message).not.toContain('xai-key-abcd');
+  });
+
+  it('reports no-usable-auth with hermetic store', () => {
+    const r = buildXaiAuthDiagnose(undefined, undefined, {
+      readEnv: () => undefined,
+      store: { authPath: () => '/nope', readFile: () => null },
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.message).toMatch(/XAI_API_KEY|provider auth xai login/i);
+  });
+});
+
+describe('diagnose JSON back-compat fields', () => {
+  it('buildProviderAuthDiagnose still exposes flat OpenAI shape fields', () => {
+    // Scripts depend on top-level source/message/exitCode; the CLI now also
+    // nests openai/xai but must keep the builder contract for OpenAI.
+    const r = buildProviderAuthDiagnose('sk-explicit-1234');
+    expect(r).toMatchObject({
+      source: 'config',
+      exitCode: 0,
+      last4: '1234',
+    });
+    expect(r.message).toMatch(/config/i);
   });
 });

@@ -38,6 +38,12 @@ export interface SlotCredentialTarget {
   openaiBaseUrl?: string;
   /** Set true for a `provider: 'chatgpt-oauth'` slot — forces ChatGPT OAuth. */
   forceChatgptOAuth?: boolean;
+  /** Set true for a `provider: 'xai-oauth'` slot — forces SuperGrok OAuth. */
+  forceXaiOAuth?: boolean;
+  /** Set true for a `provider: 'xai'` slot — forces metered API-key mode. */
+  forceXaiApiKey?: boolean;
+  /** Per-slot xAI endpoint only (never global AFK_OPENAI_BASE_URL). */
+  xaiBaseUrl?: string;
 }
 
 /**
@@ -63,10 +69,13 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   const slot = slotForInput(config.model, table);
   if (!slot) {
     // Not a configured slot (raw id / `auto`): no per-slot force. Clear any
-    // inherited forced-OAuth so a raw id switched to from a chatgpt-oauth
-    // startup slot doesn't keep forcing the ChatGPT token — `resolveInner`
+    // inherited forced-OAuth so a raw id switched to from a chatgpt-oauth /
+    // xai-oauth startup slot doesn't keep forcing those tokens — `resolveInner`
     // spreads a shared baseConfig for every /model target (#548).
     config.forceChatgptOAuth = false;
+    config.forceXaiOAuth = false;
+    config.forceXaiApiKey = false;
+    config.xaiBaseUrl = undefined;
     return;
   }
   const binding = table[slot];
@@ -76,7 +85,9 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
       ? 'anthropic-direct'
       : binding.provider === 'openai' || binding.provider === 'chatgpt-oauth'
         ? 'openai-compatible'
-        : providerForModel(config.model, bindings ? { slots: bindings } : undefined);
+        : binding.provider === 'xai' || binding.provider === 'xai-oauth'
+          ? 'xai'
+          : providerForModel(config.model, bindings ? { slots: bindings } : undefined);
 
   // A slot bound `provider: 'chatgpt-oauth'` selects the ChatGPT-subscription
   // token for THIS tier regardless of OPENAI_API_KEY / the global
@@ -87,10 +98,17 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   // else resolveOpenAIAuth keeps forcing the ChatGPT token and ignores the
   // tier/env key. The apiKey is still cleared below (route === 'openai-compatible').
   config.forceChatgptOAuth = binding.provider === 'chatgpt-oauth';
+  // SuperGrok OAuth vs metered API-key force — mutual exclusive per slot.
+  config.forceXaiOAuth = binding.provider === 'xai-oauth';
+  config.forceXaiApiKey = binding.provider === 'xai';
 
   if (binding.apiKey !== undefined) {
     config.apiKey = binding.apiKey;
-  } else if (route === 'openai-compatible' || binding.baseUrl !== undefined) {
+  } else if (
+    route === 'openai-compatible' ||
+    route === 'xai' ||
+    binding.baseUrl !== undefined
+  ) {
     // Authoritative clear: a slot with no per-slot key must not inherit a
     // credential loaded for the default/global model (the #548 gate runs before
     // bindings are installed). Cleared → the provider uses its own env source.
@@ -99,10 +117,16 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   // else: Anthropic cloud tier, no per-slot key — keep the resolved credential.
 
   if (binding.baseUrl !== undefined) {
-    if (route === 'openai-compatible') {
+    if (route === 'xai') {
+      // xAI slot baseUrl only — never via openaiBaseUrl (global AFK_OPENAI_BASE_URL).
+      config.xaiBaseUrl = binding.baseUrl;
+    } else if (route === 'openai-compatible') {
       config.openaiBaseUrl = binding.baseUrl;
     } else {
       config.baseUrl = binding.baseUrl;
     }
+  } else if (route === 'xai') {
+    // Clear stale slot override when switching to an xAI tier without baseUrl.
+    config.xaiBaseUrl = undefined;
   }
 }

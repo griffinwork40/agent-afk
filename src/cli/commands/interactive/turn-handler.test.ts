@@ -2480,13 +2480,33 @@ describe('printTurnFooter — subscription-quota line', () => {
   // an exactly-12-minute deadline can degrade to 719_999ms elapsed and floor
   // to `11m` — a flake that races the runner's speed. Freezing the clock
   // makes the deadline arithmetic exact instead of racing the runner.
+  //
+  // Width invariant: any code path that calls getTerminalWidth() (via
+  // boundLineToTerminal, clampToTerminal, or similar) reads
+  // process.stdout.columns, which is undefined in non-TTY CI environments
+  // and defaults to 80. A quota line exceeds 80 columns, so the assertion on
+  // the deadline suffix would fail on a narrow runner even when the text is
+  // correct. Pin to 200 so the full line is always present in captured output
+  // regardless of runner environment. See issue #795.
+  let _prevColumns: number | undefined;
   beforeEach(() => {
+    _prevColumns = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      writable: true,
+      value: 200,
+    });
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     resetQuotaCacheForTests();
     configStub.autoResume = true;
   });
   afterEach(() => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      writable: true,
+      value: _prevColumns,
+    });
     vi.useRealTimers();
     resetQuotaCacheForTests();
     configStub.autoResume = true;

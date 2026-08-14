@@ -37,7 +37,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
-import type { TraceWriter } from '../../trace/index.js';
+import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
 import type {
   ProviderQuery,
@@ -83,6 +83,7 @@ import {
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
+import { isGrokModelId } from '../xai/pricing.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 import {
@@ -150,6 +151,12 @@ export interface OpenAICompatibleQueryOptions {
   auth: OpenAIAuthResolution;
   /** Optional baseURL override (NVIDIA NIM, Together, etc.). Defaults to OpenAI. */
   baseURL?: string;
+  /**
+   * Optional default headers for the OpenAI client (e.g. xAI CLI-proxy
+   * identity). Applied when the wire mode does not supply its own headers
+   * (ChatGPT subscription Responses path wins if both are set).
+   */
+  defaultHeaders?: Record<string, string>;
   /** Model id, passed straight through to the API. */
   model: string;
   /** Synthetic session id emitted on `session.init` before the first wire call. */
@@ -199,7 +206,7 @@ export interface OpenAICompatibleQueryOptions {
    * coverage. All emit calls are fire-and-forget; a broken writer never
    * stalls or crashes the session.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
 }
 
 import { provesResponsesCompactionUnsupported } from './query/compaction-guard.js';
@@ -219,7 +226,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   /** Static OpenAI list prices apply only when using the official public API endpoint. */
   private readonly useOpenAIPricing: boolean;
   /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
-  private readonly traceWriter: TraceWriter | undefined;
+  private readonly traceWriter: TraceSink | undefined;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];
@@ -310,19 +317,28 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // Any explicit endpoint — including the private ChatGPT subscription
     // backend selected by resolveWireMode — may be free or have unrelated
     // rates. Model ids alone cannot prove its pricing, so leave cost unknown.
-    this.useOpenAIPricing = wire.baseURL === undefined && opts.baseURL === undefined;
+    // Metered Grok list prices apply only in API-key mode (not SuperGrok OAuth
+    // / forceXaiOAuth, where subscription quota may not match list rates).
+    this.useOpenAIPricing =
+      (wire.baseURL === undefined && opts.baseURL === undefined) ||
+      (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
 
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
     } else {
-      const baseURL = wire.baseURL ?? opts.baseURL;
-      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
-      this.client = resolveClientFactory()({
+      const ctor = resolveClientFactory();
+      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string>; fetch?: typeof globalThis.fetch } = {
         apiKey: opts.auth.apiKey,
-        ...(baseURL !== undefined ? { baseURL } : {}),
-        ...(wire.headers !== undefined ? { defaultHeaders: wire.headers } : {}),
-        ...(admissionFetch !== undefined ? { fetch: admissionFetch } : {}),
-      });
+      };
+      const baseURL = wire.baseURL ?? opts.baseURL;
+      if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+      // Wire-mode headers (ChatGPT subscription) win over caller defaults so
+      // the private backend is never missing its required identity headers.
+      if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
+      else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
+      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
+      if (admissionFetch !== undefined) clientOpts.fetch = admissionFetch;
+      this.client = ctor(clientOpts);
     }
   }
 
@@ -1314,6 +1330,7 @@ export function buildQueryFromConfig(
   promptStream: AsyncIterable<ProviderUserTurn>,
   options: {
     baseURL?: string;
+    defaultHeaders?: Record<string, string>;
     toolDispatcher?: ToolDispatcher;
     onPermissionMode?: (mode: string) => void;
     onCwdChange?: (cwd: string) => void;
@@ -1358,6 +1375,7 @@ export function buildQueryFromConfig(
     config,
   };
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
+  if (options.defaultHeaders !== undefined) opts.defaultHeaders = options.defaultHeaders;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
   if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
   if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;

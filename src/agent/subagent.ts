@@ -28,7 +28,7 @@ import type { AgentConfig } from './types.js';
 import type { SubagentProgressSink } from './types/session-types.js';
 import { dispatchSubagentStart } from './subagent-hooks.js';
 import { emitSubagentLifecycle } from './trace/emit.js';
-import type { AbortOrigin, TraceWriter } from './trace/index.js';
+import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
@@ -118,7 +118,7 @@ export class SubagentManager {
   // Not readonly: a REPL `/resume` swaps the session out from under this
   // long-lived manager and hands it a fresh writer via `setTraceWriter`,
   // because the outgoing session sealed the one captured here (#731).
-  private parentTraceWriter: TraceWriter | undefined;
+  private parentTraceWriter: TraceSink | undefined;
   private readonly parentSurface: Surface | undefined;
   private readonly parentAbortSignal: AbortSignal | undefined;
   private readonly abortGraph: AbortGraph;
@@ -227,7 +227,7 @@ export class SubagentManager {
    * would emit its lifecycle events into a sealed writer and be silently
    * dropped (#731).
    */
-  setTraceWriter(writer: TraceWriter | undefined): void {
+  setTraceWriter(writer: TraceSink | undefined): void {
     this.parentTraceWriter = writer;
     this.abortGraph.setTraceWriter(writer);
   }

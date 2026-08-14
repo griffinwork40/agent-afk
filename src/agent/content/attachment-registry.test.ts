@@ -18,6 +18,18 @@ describe('InboundAttachmentRegistry', () => {
     });
   });
 
+  it('stores the digest in the record and deduplicates by digest without re-reading disk', async () => {
+    const entries = new Map();
+    const registry = new InboundAttachmentRegistry(entries);
+    const bytes = Buffer.from('deduplicate me');
+    const first = await registry.put('session-digest', bytes, 'image/png');
+    expect(first.digest).toMatch(/^[0-9a-f]{64}$/);
+    // second put of identical bytes must return the same id and same digest
+    const second = await registry.put('session-digest', bytes, 'image/png');
+    expect(second.id).toBe(first.id);
+    expect(second.digest).toBe(first.digest);
+  });
+
   it('lengthens the hash prefix when different bytes collide', async () => {
     const registry = new InboundAttachmentRegistry(new Map(), (bytes) =>
       bytes[0] === 1 ? 'abcdef11'.padEnd(64, '1') : 'abcdef22'.padEnd(64, '2'));

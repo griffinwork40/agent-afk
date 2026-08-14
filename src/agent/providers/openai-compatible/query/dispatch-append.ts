@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
-import type { TraceWriter } from '../../../trace/index.js';
+import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
 import { extractRawToolInput } from '../../../facets/raw-input.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
@@ -27,7 +27,7 @@ export interface DispatchAndAppendInput {
   signal: AbortSignal;
   vision: boolean;
   toolDispatcher: ToolDispatcher | undefined;
-  traceWriter: TraceWriter | undefined;
+  traceWriter: TraceSink | undefined;
   priorTurns: OpenAIMessage[];
   sessionId: string;
   /**

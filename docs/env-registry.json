@@ -610,7 +610,7 @@
     },
     {
       "name": "AFK_PROVIDER",
-      "description": "Force provider selection (anthropic | anthropic-direct | openai | openai-compatible | openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set.",
+      "description": "Force provider selection (anthropic | anthropic-direct | openai | openai-compatible | openai-codex | xai | xai-oauth). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set.",
       "type": "string",
       "required": false,
       "example": "openai-compatible",
@@ -875,7 +875,7 @@
     },
     {
       "name": "AFK_THINKING",
-      "description": "Extended-thinking mode. Accepts adaptive | disabled | enabled:<N> | enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models).",
+      "description": "Extended-thinking mode. Accepts adaptive | disabled | max | enabled:<N> | enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models).",
       "type": "string",
       "required": false,
       "default": "adaptive",
@@ -1064,6 +1064,22 @@
       "type": "boolean",
       "required": false,
       "category": "misc"
+    },
+    {
+      "name": "AFK_XAI_BASE_URL",
+      "description": "Base URL for xAI API-key mode. Default https://api.x.ai/v1. The OpenAI SDK appends /chat/completions.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.x.ai/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_XAI_OAUTH_BASE_URL",
+      "description": "Base URL for xAI SuperGrok / SuperGrok Heavy / X Premium+ OAuth inference. Default https://cli-chat-proxy.grok.com/v1 (subscription path). Some accounts work on https://api.x.ai/v1 with OAuth — override if needed. Distinct from AFK_XAI_BASE_URL (API-key mode).",
+      "type": "string",
+      "required": false,
+      "example": "https://cli-chat-proxy.grok.com/v1",
+      "category": "model"
     },
     {
       "name": "AGENT_AFK_ASCII",
@@ -1290,6 +1306,14 @@
       "type": "string",
       "required": false,
       "category": "process"
+    },
+    {
+      "name": "XAI_API_KEY",
+      "description": "xAI API key for the xai provider (Grok models) in API-key mode. Metered; distinct from SuperGrok / SuperGrok Heavy / X Premium+ OAuth.",
+      "type": "string",
+      "required": false,
+      "category": "auth",
+      "secret": true
     }
   ]
 }

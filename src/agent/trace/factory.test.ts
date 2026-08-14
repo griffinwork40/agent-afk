@@ -92,7 +92,7 @@ describe('createDefaultTraceWriter', () => {
       provider,
       traceWriter: trace.writer,
     };
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, trace.writer);
     await session.waitForInitialization();
     await session.close();
 

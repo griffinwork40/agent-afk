@@ -8,7 +8,7 @@ import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
-import type { TraceWriter } from '../../../agent/trace/writer.js';
+import type { TraceWriter } from '../../../agent/trace/writer.js'; // owner handle — kept for pendingTraceWriter
 import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
 import { resolveBootstrapConfig } from './bootstrap-config.js';
 import { createBootstrapInfra } from './bootstrap-infra.js';
@@ -132,6 +132,7 @@ export async function bootstrapSession(
     // rows instead of vanishing (#733).
     drainSubagents: (reason) =>
       rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 
   // Import any plugin JS entrypoints (manifest `main`) before constructing the

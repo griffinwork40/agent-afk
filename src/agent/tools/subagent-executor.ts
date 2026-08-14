@@ -24,7 +24,7 @@ import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
 import type { SkillExecutor } from './skill-executor.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 import type { Surface } from '../awareness/types.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
@@ -166,7 +166,7 @@ export interface SubagentExecutorContext {
    * this field closes the same gap for the nested managers, mirroring how
    * `cwd` chains through every depth.
    */
-  traceWriter?: TraceWriter;
+  traceWriter?: TraceSink;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`
@@ -320,7 +320,7 @@ export class SubagentExecutor implements SubagentControl {
    * root manager that dispatches depth-1 forks, so the whole `agent`-tool tree
    * follows the resumed session's live writer instead of the sealed one (#731).
    */
-  setTraceWriter(writer: TraceWriter | undefined): void {
+  setTraceWriter(writer: TraceSink | undefined): void {
     this.ctx.traceWriter = writer;
     this.ctx.subagentManager.setTraceWriter(writer);
   }

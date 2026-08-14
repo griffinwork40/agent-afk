@@ -216,6 +216,17 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'mlx-community/qwen3-30b-a3b-4bit': 128_000,
   'mlx-community/qwen3-32b-4bit': 128_000,
   'mlx-community/qwen2.5-coder-32b-instruct-4bit': 131_072,
+  // xAI Grok — active wire ids only (docs.x.ai models/pricing, 2026-08).
+  // Any other `grok-*` still routes and runs; unknown ids fall through to the
+  // openai-compatible default via routesToOpenAICompatible (never invent
+  // retired family windows here).
+  'grok-4.6': 500_000,
+  'grok-4.5': 500_000,
+  'grok-4.3': 1_000_000,
+  'grok-4.20-0309-reasoning': 1_000_000,
+  'grok-4.20-0309-non-reasoning': 1_000_000,
+  'grok-4.20-multi-agent-0309': 1_000_000,
+  'grok-build-0.1': 256_000,
 } as const;
 
 const DEFAULT_CONTEXT_LIMIT = 200_000;
@@ -242,6 +253,8 @@ function routesToOpenAICompatible(model: string): boolean {
   if (lowered.startsWith('gpt-') || lowered.startsWith('gpt_')) return true;
   if (isOSeriesModel(lowered)) return true;
   if (lowered.startsWith('codex-') || lowered.startsWith('codex_') || lowered === 'codex') return true;
+  // Grok / xAI — first-class `xai` provider, OpenAI-compatible context defaults.
+  if (lowered === 'grok' || lowered.startsWith('grok-') || lowered.startsWith('grok_')) return true;
   return false;
 }
 

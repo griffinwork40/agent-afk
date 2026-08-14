@@ -21,6 +21,7 @@ import { makeOpenAITracingFetch } from '../tracing-fetch.js';
 export type OpenAIClientFactory = (opts: {
   apiKey: string;
   baseURL?: string;
+  /** Extra default headers (e.g. xAI CLI-proxy identity). Merged by callers. */
   defaultHeaders?: Record<string, string>;
   fetch?: typeof globalThis.fetch;
 }) => OpenAI;

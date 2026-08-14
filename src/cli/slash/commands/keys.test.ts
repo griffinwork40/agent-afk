@@ -18,6 +18,7 @@ function makeCtx(): { ctx: SlashContext; lines: string[] } {
     stats: {
       totalTurns: 0,
       totalCostUsd: 0,
+      unpricedTurns: 0,
       totalTokens: 0,
       totalDurationMs: 0,
       sessionStartTime: Date.now(),

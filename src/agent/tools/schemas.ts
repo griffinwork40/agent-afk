@@ -235,7 +235,9 @@ export const sendTelegramTool: AnthropicToolDef = {
     'pass a numeric chat id (e.g. -1001234567890 for a group) or a chat alias name defined in ' +
     'afk.config.json `telegram.chatAliases` (e.g. "ops"). An explicitly-targeted chat must be ' +
     'in the inbound allowlist (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — a non-allowlisted target is ' +
-    'rejected (fail-closed). Omit `chat` for the default behavior (unchanged).',
+    'rejected (fail-closed). Omit `chat` for the default behavior (unchanged).\n\n' +
+    'For supergroups with topics enabled, set `thread_id` alongside `chat` to send to a ' +
+    'specific topic thread.',
   input_schema: {
     type: 'object',
     properties: {
@@ -253,6 +255,14 @@ export const sendTelegramTool: AnthropicToolDef = {
           'looked up as a name in afk.config.json `telegram.chatAliases`. The resolved chat ' +
           'must be allowlisted (AFK_TELEGRAM_ALLOWED_CHAT_IDS) or the send is rejected. ' +
           'Omit to send to the configured default (primary DM chat / notify targets).',
+      },
+      thread_id: {
+        type: 'number',
+        description:
+          'Optional. Telegram message_thread_id for sending to a specific topic ' +
+          'in a supergroup with topics enabled. Pass the numeric thread/topic ID. ' +
+          'Ignored when the target chat is not a supergroup with topics. ' +
+          'Requires `chat` to be set explicitly (thread targeting without a chat target is ambiguous).',
       },
     },
     required: ['message'],

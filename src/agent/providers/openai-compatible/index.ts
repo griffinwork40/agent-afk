@@ -71,6 +71,12 @@ const PROVIDER_NAME = 'openai-compatible';
 export interface OpenAICompatibleProviderOptions {
   /** Override the default `https://api.openai.com/v1` endpoint. */
   baseURL?: string;
+  /**
+   * Optional default headers for every client built by this provider
+   * (e.g. xAI CLI-proxy identity). Per-query overrides may also be supplied
+   * via {@link OpenAICompatibleProvider.setEndpointDefaults}.
+   */
+  defaultHeaders?: Record<string, string>;
   /** Hook registry — PreToolUse / PostToolUse fire from the dispatcher. */
   hookRegistry?: HookRegistry;
   /** Tool permission gate (allowlist/denylist). */
@@ -129,6 +135,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly providerOpts: OpenAICompatibleProviderOptions;
   private readonly memoryStore: MemoryStore;
   private readonly schemas: AnthropicToolDef[];
+  /**
+   * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
+   * `defaultHeaders` are the baseline; {@link setEndpointDefaults} can replace
+   * them when a composing provider (xai) resolves mode-specific headers.
+   */
+  private _defaultHeaders: Record<string, string> | undefined;
 
   /**
    * Mutable read-root list shared across per-query dispatchers (same shared-
@@ -159,6 +171,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     this.providerOpts = opts;
+    this._defaultHeaders = opts.defaultHeaders;
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
@@ -191,6 +204,23 @@ export class OpenAICompatibleProvider implements ModelProvider {
       if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
     }
     this.schemas = schemas;
+  }
+
+  /**
+   * Update construction-time baseURL and/or default headers for subsequent
+   * `query()` calls. Used by the composing `xai` provider after resolving
+   * mode-specific endpoints (api.x.ai vs CLI chat proxy).
+   */
+  setEndpointDefaults(defaults: {
+    baseURL?: string;
+    defaultHeaders?: Record<string, string>;
+  }): void {
+    if (defaults.baseURL !== undefined) {
+      this.providerOpts.baseURL = defaults.baseURL;
+    }
+    if (defaults.defaultHeaders !== undefined) {
+      this._defaultHeaders = defaults.defaultHeaders;
+    }
   }
 
   query(args: ProviderQueryArgs): ProviderQuery {
@@ -300,6 +330,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     const buildOpts: {
       baseURL?: string;
+      defaultHeaders?: Record<string, string>;
       toolDispatcher?: ToolDispatcher;
       onPermissionMode?: (mode: string) => void;
       onCwdChange?: (cwd: string) => void;
@@ -314,6 +345,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // own endpoint overrides the process default. See model-slots Stage 2.
     const effectiveBaseURL = config.openaiBaseUrl ?? this.providerOpts.baseURL;
     if (effectiveBaseURL !== undefined) buildOpts.baseURL = effectiveBaseURL;
+    if (this._defaultHeaders !== undefined) buildOpts.defaultHeaders = this._defaultHeaders;
     buildOpts.toolDispatcher = dispatcher;
     // Path-approval half of the live `/bypass` toggle: keep the provider's
     // `_currentPermissionMode` (read by getGrants().allowAll) in sync with the
@@ -462,7 +494,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
        */
       subagentToolOutputCapBytes?: number;
-      traceWriter?: import('../../trace/index.js').TraceWriter;
+      traceWriter?: import('../../trace/index.js').TraceSink;
       /**
        * Live source for the `get_runtime_state` tool — see the matching
        * comment in `anthropic-direct/index.ts:buildDispatcher`.
@@ -705,6 +737,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (args.apiKey !== undefined) input.apiKey = args.apiKey;
     const baseURL = args.baseUrl ?? this.providerOpts.baseURL;
     if (baseURL !== undefined) input.baseURL = baseURL;
+    // Include endpoint defaults (e.g. xAI CLI-proxy identity headers set via
+    // setEndpointDefaults) so complete() matches query() credentials.
+    if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
     return oneShotChatCompletion(input);
   }

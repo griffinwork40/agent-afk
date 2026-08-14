@@ -31,7 +31,7 @@ import { buildSkillMaxDepthRefusal } from './skill-depth-message.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { isTrustedSkill } from '../_lib/trusted-skill-registry.js';
 import { emitTrustedSkillComplete, emitTrustedSkillStart } from '../_lib/trusted-skill-events.js';
-import type { TraceWriter } from '../trace/writer.js';
+import type { TraceSink } from '../trace/index.js';
 import type { SkillExecutorContext, SkillExecutorInternals, SkillInput } from './skill-executor/types.js';
 import { isGateSkill, sessionIdentity, truncateTelemetryString } from './skill-executor/telemetry.js';
 import { executeLoadedPluginSkill, executeLoadedRegistrySkill } from './skill-executor/load-mode.js';
@@ -111,7 +111,7 @@ export class SkillExecutor {
    * replaced the session that owned the previous writer. Only forks dispatched
    * after this call use `writer`; in-flight ones keep theirs (#731).
    */
-  setTraceWriter(writer: TraceWriter | undefined): void {
+  setTraceWriter(writer: TraceSink | undefined): void {
     this.ctx.traceWriter = writer;
   }
 
@@ -174,6 +174,14 @@ export class SkillExecutor {
     // Captured here (before registry and plugin lookups) so the "not found"
     // fallback at the bottom of this method can list available skills without
     // a second scan — both code paths share this single collection.
+    //
+    // Invariant: the collectSkillEntries() call and the getSkill() lookup below
+    // MUST remain in the same synchronous block — no `await` may be inserted
+    // between them. Concurrent sessions call evictSkillsByOrigin('project')
+    // when they rescan, which can remove this session's project-skill entries
+    // from the global registry at any point. An `await` here would open a race
+    // window where another session evicts those entries before getSkill() runs,
+    // causing a spurious "Skill not found" for a skill that exists on disk.
     const entries = collectSkillEntries(
       this.ctx.pluginConfigs,
       this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
@@ -246,9 +254,9 @@ export class SkillExecutor {
       );
     }
 
-    // 3. Not found — return available skills list. Resolve project skills
-    // against the session cwd (worktree / daemon-task / Telegram-chat dir),
-    // not the host process cwd — mirrors the manifest build in the provider.
+    // 3. Not found — return available skills list. `entries` was collected
+    // above (synchronously, before the registry lookup) so no second scan is
+    // needed here; it already reflects the session cwd.
     const available = entries.map((e) => e.name).join(', ');
     return {
       content: `Skill "${parsed.name}" not found. Available skills: ${available || '(none)'}`,

@@ -13,7 +13,7 @@ import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
 import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
@@ -135,13 +135,13 @@ export function registerChatCommand(program: Command): void {
     .option('-s, --stream', '[no-op] reserved; use --format stream-json for headless streaming', false)
     .option('-f, --format <format>', 'Output format (text|json|stream-json)', 'text')
     .option('--max-turns <number>', 'Maximum conversation turns', '10')
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
+    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'", 'enabled:max')
     .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
     .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json.', parseThemeFlag)
     .option('--max-budget-usd <usd>', 'Hard session cost ceiling in USD. Env: AFK_MAX_BUDGET_USD')
     .option('--task-budget <tokens>', 'Soft per-task token budget. Env: AFK_TASK_BUDGET')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
-    .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible. Default: auto-selected by model")
+    .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible|xai|xai-oauth. Default: auto-selected by model")
     .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
     .option(
       '-w, --worktree [branch]',
@@ -344,7 +344,8 @@ export function registerChatCommand(program: Command): void {
           }
         }
 
-        const apiKey = getApiKey();
+        const providerHints = explicitProviderHints(options.provider);
+        const apiKey = getApiKeyForModel(getModel(), providerHints);
         // System-prompt layering: the framework base (`prompts/system-prompt.md`)
         // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
         // is appended on top via resolveBaseSystemPrompt(), never substituted for
@@ -577,7 +578,10 @@ export function registerChatCommand(program: Command): void {
           // `cancelled` rows instead of vanishing (#733).
           drainSubagents: (reason) =>
             rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
-          apiKey: getApiKeyForModel(sessionModel),
+          // Resolve the credential for the ACTUAL session model + CLI
+          // `--provider` (if any). Without explicit hints, `--provider xai`
+          // with a Claude model injects Anthropic material into XaiProvider.
+          apiKey: getApiKeyForModel(sessionModel, providerHints),
           maxTurns: parseInt(options.maxTurns, 10),
           // One-shot `afk chat` is headless: no REPL/Telegram elicitation
           // handler is installed, so ask_question can only auto-decline. Strip
@@ -615,7 +619,7 @@ export function registerChatCommand(program: Command): void {
           // Wire resume/session-id config when a session flag is set.
           ...resumeConfig,
           provider,
-        })));
+        })), trace?.writer);
 
         boundSession = session;
 

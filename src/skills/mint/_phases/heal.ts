@@ -5,7 +5,7 @@
  */
 
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
@@ -38,7 +38,7 @@ export async function runHealPhase(
   parentReadRoots?: string[],
   // Witness layer: parent trace writer (ctx.traceWriter) so the heal fork AND
   // the re-run verify subagents emit subagent_lifecycle events. Mirrors research.ts.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<{
   healed: boolean;
   newHealIterations: number;

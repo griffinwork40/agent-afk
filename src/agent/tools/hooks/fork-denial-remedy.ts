@@ -4,6 +4,8 @@
  * two downstream consumers that key on it live in one documented place.
  */
 
+import { SUBAGENT_PATH_DENIAL_REASON_PREFIX } from '../denial-circuit-breaker.js';
+
 /** Which containment check produced the denial. */
 export type ForkDenialMode = 'read' | 'write';
 
@@ -20,17 +22,15 @@ export type ForkDenialMode = 'read' | 'write';
  * and sends the fork into retry-until-timeout — the exact failure #544 was
  * opened to stop.
  *
- * Contract: the CALLER prefixes this body with the byte-stable
- * `Sub-agent path access denied:` string — see `SUBAGENT_PATH_DENIAL_REASON_PREFIX`
- * in `../denial-circuit-breaker.ts`, matched by substring, not by prefix
- * position. The remedy body returned here is NOT byte-stable, but it IS
+ * Contract: `buildForkPathDenialReason` prefixes this body with the byte-stable
+ * `SUBAGENT_PATH_DENIAL_REASON_PREFIX` from `../denial-circuit-breaker.ts`.
+ * The remedy body returned here is NOT byte-stable, but it IS
  * fingerprinted: `src/improve/scan/detectors/subagent-read-denial.ts` hashes the
  * ENTIRE normalized reason (`normalizeReason` collapses path-shaped tokens to
  * `<path>`, then `computeFingerprint` SHA-256s it), so any reword here rotates
  * the failure-card slug and restarts that card's severity ladder. That rotation
- * is silent — every detector test builds its own fixture string rather than
- * importing this module — so a reword must be a deliberate decision, not a
- * drive-by edit.
+ * is guarded by a golden test that imports the complete reason producer, so a
+ * reword must be a deliberate decision, not a drive-by edit.
  */
 export function buildForkDenialRemedy(args: { mode: ForkDenialMode; resolvedPath: string }): string {
   const { mode, resolvedPath } = args;
@@ -51,5 +51,18 @@ export function buildForkDenialRemedy(args: { mode: ForkDenialMode; resolvedPath
     `read the path itself and pass the content to you in the prompt. A grant made ` +
     `after you were dispatched cannot reach you — your roots were fixed at dispatch. ` +
     `Return this exact path requirement to your parent.`
+  );
+}
+
+/** Build the complete path-containment denial emitted for a forked sub-agent. */
+export function buildForkPathDenialReason(args: {
+  mode: ForkDenialMode;
+  resolvedPath: string;
+}): string {
+  const { mode, resolvedPath } = args;
+  const remedy = buildForkDenialRemedy(args);
+  return (
+    `${SUBAGENT_PATH_DENIAL_REASON_PREFIX} ${resolvedPath} is outside the ` +
+    `session's granted ${mode} roots. ${remedy}`
   );
 }

@@ -61,6 +61,33 @@ export async function checkCodexKey(): Promise<Check> {
   };
 }
 
+export async function checkXaiAuth(): Promise<Check> {
+  // Lazy import keeps doctor load light when xAI is unused.
+  const { resolveXaiAuth } = await import('../../agent/providers/xai/auth.js');
+  const r = resolveXaiAuth(undefined, undefined);
+  if (r.apiKey) {
+    const mode = r.mode === 'oauth' ? 'SuperGrok OAuth' : 'XAI_API_KEY';
+    return {
+      name: 'xAI / Grok auth',
+      state: 'pass',
+      detail: `${mode} (…${r.last4 ?? '????'})`,
+    };
+  }
+  if (r.source === 'ambiguous-auth') {
+    return {
+      name: 'xAI / Grok auth',
+      state: 'warn',
+      detail: 'both XAI_API_KEY and SuperGrok OAuth present',
+      fix: 'Choose `--provider xai` or `--provider xai-oauth` explicitly',
+    };
+  }
+  return {
+    name: 'xAI / Grok auth',
+    state: 'warn',
+    fix: 'Set XAI_API_KEY or run `afk provider auth xai login` for SuperGrok / SuperGrok Heavy / X Premium+',
+  };
+}
+
 export async function checkNpmBinOnPath(): Promise<Check> {
   try {
     const prefix = execSync('npm config get prefix', {
@@ -235,6 +262,7 @@ export async function runDoctorChecks(): Promise<Check[]> {
 
   results.push(await checkAnthropicKey());
   results.push(await checkCodexKey());
+  results.push(await checkXaiAuth());
   results.push(await checkNpmBinOnPath());
   results.push(await checkDirWritable('Config Directory', getAfkConfigDir));
   results.push(await checkDirWritable('State Directory', getAfkStateDir));

@@ -36,8 +36,8 @@ export interface ConstructTelegramSessionDeps {
    * is available (mirrors `AFK_TRACE_DISABLED=1` behavior).
    */
   traceWriter?: TraceWriter | null;
-  /** Session constructor. Defaults to `new AgentSession(config)`. */
-  newSession?: (config: AgentConfig) => AgentSession;
+  /** Session constructor. Defaults to `new AgentSession(config, traceOwner)`. */
+  newSession?: (config: AgentConfig, traceOwner?: TraceWriter) => AgentSession;
 }
 
 /**
@@ -80,6 +80,7 @@ export function constructTelegramSession(
   const config: AgentConfig = writer
     ? { traceWriter: writer, ...baseConfig, surface: 'telegram' }
     : { ...baseConfig, surface: 'telegram' };
-  const construct = deps.newSession ?? ((c: AgentConfig) => new AgentSession(c));
-  return construct(config);
+  const construct =
+    deps.newSession ?? ((c: AgentConfig, owner?: TraceWriter) => new AgentSession(c, owner));
+  return construct(config, baseConfig.traceWriter === undefined ? writer ?? undefined : undefined);
 }

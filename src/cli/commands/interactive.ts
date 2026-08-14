@@ -204,7 +204,7 @@ export function registerInteractiveCommand(program: Command): void {
       getModel(),
     )
     .option('--max-turns <number>', 'Maximum conversation turns', '100')
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
+    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'", 'enabled:max')
     .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
     .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme.', parseThemeFlag)
     .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')
@@ -232,7 +232,7 @@ export function registerInteractiveCommand(program: Command): void {
       '--no-shell-passthrough',
       'Disable the ! shell-passthrough feature. When set, inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Also: AFK_SHELL_PASSTHROUGH set to 0, false, off, or no.',
     )
-    .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible. Default: auto-selected by model")
+    .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible|xai|xai-oauth. Default: auto-selected by model")
     .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
     .option('--dangerously-skip-permissions', 'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); disable persistently with `afk config set permissionMode default`. Does not affect ask_question.')
     .option(

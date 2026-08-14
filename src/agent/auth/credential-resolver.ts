@@ -21,7 +21,7 @@
  * original `getApiKeyForModel`.
  */
 
-import { providerForModel } from '../providers/index.js';
+import { providerForModel, type ProviderRouteHints } from '../providers/index.js';
 import { loadClaudeCodeOauthToken } from './keychain.js';
 import { env } from '../../config/env.js';
 
@@ -56,24 +56,66 @@ export function loadOpenAICredential(): string | undefined {
 }
 
 /**
+ * Metered xAI API key from the environment only (`XAI_API_KEY`).
+ *
+ * Invariant: SuperGrok / SuperGrok Heavy / X Premium+ OAuth access tokens are
+ * NEVER returned here. Session bootstrap injects this value into
+ * `AgentConfig.apiKey`; if an OAuth access_token were placed there,
+ * `resolveXaiAuth(config.apiKey, 'auto')` would treat it as an API key while
+ * also seeing the OAuth store → false `ambiguous-auth`. OAuth stays in the
+ * token store and is resolved only inside `XaiProvider`.
+ *
+ * Never returns OPENAI_API_KEY / Anthropic credentials.
+ */
+export function loadXaiApiKey(): string | undefined {
+  const k = env.XAI_API_KEY;
+  return k && k.length > 0 ? k : undefined;
+}
+
+/**
+ * @deprecated Use {@link loadXaiApiKey}. Kept as a named alias so older call
+ * sites do not silently reintroduce OAuth-token injection.
+ */
+export function loadXaiCredential(): string | undefined {
+  return loadXaiApiKey();
+}
+
+/**
  * Resolve a provider-appropriate credential for the given model string.
  *
  * Routing:
  *   - `openai-compatible` or `openai-codex` models → `OPENAI_API_KEY` /
  *     `CODEX_API_KEY` (never the Anthropic keychain).
+ *   - `xai` / `xai-oauth` → `XAI_API_KEY` only (never SuperGrok OAuth tokens;
+ *     never OpenAI keys). OAuth is owned by `XaiProvider` + the xAI store.
  *   - All other models (Anthropic-routed) → `ANTHROPIC_API_KEY` /
  *     `CLAUDE_CODE_OAUTH_TOKEN` / Claude Code keychain.
  *
  * Invariant: preserves the cross-provider anti-leak invariant from PR #640.
  * Anthropic credentials (`sk-ant-…`) never reach OpenAI-routed models, and
- * OpenAI credentials never reach Anthropic-routed models.
+ * OpenAI credentials never reach Anthropic-routed models. xAI never receives
+ * OPENAI_API_KEY either.
+ *
+ * Contract: pass `hints.explicit` (CLI `--provider`) so credential family
+ * matches the selected provider, not only the model id. Without that,
+ * `afk chat --provider xai -m sonnet` injects an Anthropic key into
+ * `AgentConfig.apiKey` and forced-apikey xAI mode would send it to api.x.ai.
+ * `AFK_PROVIDER` is already read by {@link providerForModel} when hints omit
+ * `explicit`.
  *
  * This is the relocated body of `getApiKeyForModel` from
  * `src/cli/shared-helpers.ts`, which becomes a thin delegate to this function.
  */
-export function resolveCredentialForModel(model: string | undefined): string | undefined {
-  const provider = providerForModel(model);
-  return provider === 'openai-compatible' || provider === 'openai-codex'
-    ? loadOpenAICredential()
-    : loadAnthropicCredential();
+export function resolveCredentialForModel(
+  model: string | undefined,
+  hints?: ProviderRouteHints,
+): string | undefined {
+  const provider = providerForModel(model, hints);
+  if (provider === 'openai-compatible' || provider === 'openai-codex') {
+    return loadOpenAICredential();
+  }
+  if (provider === 'xai' || provider === 'xai-oauth') {
+    return loadXaiApiKey();
+  }
+  return loadAnthropicCredential();
 }

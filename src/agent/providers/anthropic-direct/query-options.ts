@@ -99,7 +99,7 @@ export interface AnthropicDirectQueryOptions {
    */
   softDeadlineMs?: number;
   /** Witness-layer trace writer threaded into each per-turn run. */
-  traceWriter?: import('../../trace/index.js').TraceWriter;
+  traceWriter?: import('../../trace/index.js').TraceSink;
   /**
    * Owning subagent id when this query runs inside a forked child
    * (`AgentConfig.subagentId`). Threaded into `RunTurnInput.subagentId` so the

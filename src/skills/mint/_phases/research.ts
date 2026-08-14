@@ -8,7 +8,7 @@ import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
-import type { TraceWriter } from '../../../agent/trace/index.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 
 export async function runResearchPhase(
   spec: string,
@@ -27,7 +27,7 @@ export async function runResearchPhase(
   // Without it this phase's fork manager has no writer, so its subagent emits
   // NO subagent_lifecycle events — mint phases were the last dispatch path
   // still invisible in the trace. Mirrors the root/skill-fork managers.
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const researchPrompt = prompts['research.md'];

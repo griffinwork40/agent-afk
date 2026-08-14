@@ -1,0 +1,95 @@
+/**
+ * Shared HTTP/OIDC helpers for xAI OAuth (discovery + token response parse).
+ *
+ * @module agent/providers/xai/oauth-http
+ */
+
+import { XAI_OAUTH_ISSUER } from './oauth-constants.js';
+import type { XaiTokenBundle } from './auth-store.js';
+
+export type FetchFn = typeof fetch;
+
+export interface XaiOidcDiscovery {
+  issuer: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  device_authorization_endpoint?: string;
+  userinfo_endpoint?: string;
+}
+
+export interface OAuthHttpDeps {
+  fetchFn?: FetchFn;
+  /** Override issuer for tests (defaults to auth.x.ai). */
+  issuer?: string;
+  clientId?: string;
+  scopes?: string;
+  nowSeconds?: () => number;
+}
+
+export function asNonEmptyString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+export async function safeText(res: Response): Promise<string> {
+  try {
+    const t = await res.text();
+    return t.slice(0, 200);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Fetch OIDC discovery document from `{issuer}/.well-known/openid-configuration`.
+ */
+export async function discoverXaiOidc(deps: OAuthHttpDeps = {}): Promise<XaiOidcDiscovery> {
+  const fetchFn = deps.fetchFn ?? fetch;
+  const issuer = (deps.issuer ?? XAI_OAUTH_ISSUER).replace(/\/$/, '');
+  const url = `${issuer}/.well-known/openid-configuration`;
+  const res = await fetchFn(url, { method: 'GET' });
+  if (!res.ok) {
+    throw new Error(`xAI OIDC discovery failed: HTTP ${res.status} from ${url}`);
+  }
+  const body = (await res.json()) as Record<string, unknown>;
+  const authorization_endpoint = asNonEmptyString(body['authorization_endpoint']);
+  const token_endpoint = asNonEmptyString(body['token_endpoint']);
+  if (!authorization_endpoint || !token_endpoint) {
+    throw new Error('xAI OIDC discovery missing authorization_endpoint or token_endpoint');
+  }
+  const out: XaiOidcDiscovery = {
+    issuer: asNonEmptyString(body['issuer']) ?? issuer,
+    authorization_endpoint,
+    token_endpoint,
+  };
+  const device = asNonEmptyString(body['device_authorization_endpoint']);
+  if (device) out.device_authorization_endpoint = device;
+  const userinfo = asNonEmptyString(body['userinfo_endpoint']);
+  if (userinfo) out.userinfo_endpoint = userinfo;
+  return out;
+}
+
+/**
+ * Map a token-endpoint JSON body to {@link XaiTokenBundle}.
+ * When `fallbackRefresh` is set and the response omits refresh_token, use it
+ * (refresh grants that omit rotation — xAI usually rotates).
+ */
+export function tokenResponseToBundle(
+  json: Record<string, unknown>,
+  nowSeconds?: () => number,
+  fallbackRefresh?: string,
+): XaiTokenBundle | null {
+  const access = asNonEmptyString(json['access_token']);
+  if (!access) return null;
+  const refresh = asNonEmptyString(json['refresh_token']) ?? fallbackRefresh;
+  if (!refresh) return null;
+  const now = (nowSeconds ?? (() => Math.floor(Date.now() / 1000)))();
+  const expiresIn = typeof json['expires_in'] === 'number' ? json['expires_in'] : 3600;
+  const bundle: XaiTokenBundle = {
+    access_token: access,
+    refresh_token: refresh,
+    expires_at: now + expiresIn,
+  };
+  if (typeof json['token_type'] === 'string') bundle.token_type = json['token_type'];
+  if (typeof json['scope'] === 'string') bundle.scope = json['scope'];
+  return bundle;
+}

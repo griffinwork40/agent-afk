@@ -49,7 +49,7 @@ export interface TurnDriverContext {
   readonly baseUrl: string | undefined;
   readonly maxToolUseIterations: number | undefined;
   readonly softDeadlineMs: number | undefined;
-  readonly traceWriter: import('../../trace/index.js').TraceWriter | undefined;
+  readonly traceWriter: import('../../trace/index.js').TraceSink | undefined;
   readonly subagentId: string | undefined;
   readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   readonly hookRegistry: HookRegistry | undefined;

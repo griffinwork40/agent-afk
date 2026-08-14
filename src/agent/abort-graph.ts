@@ -21,7 +21,7 @@
  */
 
 import { emitAbort } from './trace/emit.js';
-import type { AbortOrigin, TraceWriter } from './trace/index.js';
+import type { AbortOrigin, TraceSink } from './trace/index.js';
 
 export interface ChildAbortedEvent {
   parentId: string;
@@ -42,9 +42,9 @@ interface GraphNode {
 
 export class AbortGraph {
   private readonly nodes = new Map<string, GraphNode>();
-  private traceWriter: TraceWriter | undefined;
+  private traceWriter: TraceSink | undefined;
 
-  constructor(traceWriter?: TraceWriter) {
+  constructor(traceWriter?: TraceSink) {
     this.traceWriter = traceWriter;
   }
 
@@ -53,7 +53,7 @@ export class AbortGraph {
    * `/resume` so abort records emitted after the swap go to the live writer
    * rather than the outgoing session's sealed one (#985).
    */
-  setTraceWriter(writer: TraceWriter | undefined): void {
+  setTraceWriter(writer: TraceSink | undefined): void {
     this.traceWriter = writer;
   }
 

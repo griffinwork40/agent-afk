@@ -22,6 +22,8 @@
 import type { ModelProvider } from '../provider.js';
 import { anthropicDirectProvider, AnthropicDirectProvider } from './anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
+import { XaiProvider } from './xai/index.js';
+import { resolveXaiConstructionAuthMode } from './xai/force-mode.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
 import { resolveBinding, type ModelSlots } from '../session/model-slots.js';
 import { isOSeriesModel } from '../model-capabilities.js';
@@ -60,7 +62,9 @@ export type BundledProviderName =
   | 'anthropic'
   | 'anthropic-direct'
   | 'openai-compatible'
-  | 'openai-codex'; // deprecated alias for openai-compatible
+  | 'openai-codex' // deprecated alias for openai-compatible
+  | 'xai'
+  | 'xai-oauth';
 
 /**
  * Optional context for {@link providerForModel}. When omitted, env vars fill
@@ -110,6 +114,8 @@ function normalizeExplicitProvider(raw: string | undefined): BundledProviderName
   ) {
     return 'openai-compatible';
   }
+  if (lowered === 'xai') return 'xai';
+  if (lowered === 'xai-oauth' || lowered === 'xai_oauth') return 'xai-oauth';
   return undefined;
 }
 
@@ -172,6 +178,8 @@ export function providerForModel(
   if (binding.provider === 'anthropic') return 'anthropic-direct';
   if (binding.provider === 'openai' || binding.provider === 'chatgpt-oauth')
     return 'openai-compatible';
+  if (binding.provider === 'xai') return 'xai';
+  if (binding.provider === 'xai-oauth') return 'xai-oauth';
 
   // Tier 2: Claude lock (beats env-hint tier — see Tier 4 docstring), applied
   // to the resolved bound id.
@@ -185,6 +193,15 @@ export function providerForModel(
     // has both AFK_LOCAL_BASE_URL and AFK_OPENAI_BASE_URL set (e.g. running
     // an Anthropic shim AND an OpenAI shim simultaneously).
     if (lowered.startsWith('local-') || lowered.startsWith('local_')) return 'anthropic-direct';
+  }
+
+  // Tier 2.5: Grok / xAI — first-class `xai` family (not generic openai-compatible).
+  // Auth mode (apikey vs SuperGrok OAuth) is resolved later by XaiProvider /
+  // forceXaiOAuth; routing only selects the family.
+  if (lowered) {
+    if (lowered.startsWith('grok-') || lowered.startsWith('grok_') || lowered === 'grok') {
+      return 'xai';
+    }
   }
 
   // Tier 3: known OpenAI-compatible patterns
@@ -287,6 +304,21 @@ export function resolveProvider(
     case 'openai-codex':
       // IMPORTANT: fresh instance per session — see docstring above.
       return new OpenAICompatibleProvider(ctorOpts);
+    case 'xai':
+    case 'xai-oauth': {
+      // Same construction rules as parseProvider / resolveXaiConstructionAuthMode.
+      const raw = (hints?.explicit ?? env.AFK_PROVIDER)?.trim().toLowerCase() ?? '';
+      const wasExplicit =
+        raw === 'xai' || raw === 'xai-oauth' || raw === 'xai_oauth' || name === 'xai-oauth';
+      const effective = name === 'xai-oauth' || raw === 'xai-oauth' || raw === 'xai_oauth'
+        ? 'xai-oauth' as const
+        : 'xai' as const;
+      const authMode = resolveXaiConstructionAuthMode(effective, wasExplicit);
+      return new XaiProvider({
+        ...ctorOpts,
+        ...(authMode !== undefined ? { authMode } : {}),
+      });
+    }
     case 'anthropic':
     case 'anthropic-direct':
     default:
@@ -298,3 +330,4 @@ export function resolveProvider(
 export { anthropicDirectProvider };
 export { AnthropicDirectProvider } from './anthropic-direct/index.js';
 export { OpenAICompatibleProvider, openaiCompatibleProvider } from './openai-compatible/index.js';
+export { XaiProvider } from './xai/index.js';

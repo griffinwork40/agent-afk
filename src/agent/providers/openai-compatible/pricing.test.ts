@@ -70,6 +70,17 @@ describe('deriveCallCostUsd — known models price correctly', () => {
   });
 });
 
+describe('deriveCallCostUsd — xAI / Grok fallthrough', () => {
+  it('routes grok-4.5 through deriveXaiCallCostUsd (not undefined, not silent $0)', () => {
+    // $2 input + $6 output per MTok → $8 for 1M+1M.
+    expect(deriveCallCostUsd('grok-4.5', M, M, 0)).toBeCloseTo(8.0, 8);
+  });
+
+  it('routes grok-4.6 through deriveXaiCallCostUsd', () => {
+    expect(deriveCallCostUsd('grok-4.6', M, M, 0)).toBeCloseTo(8.0, 8);
+  });
+});
+
 describe('deriveCallCostUsd — unknown model yields unknown, never zero', () => {
   it('returns undefined for a model absent from the table', () => {
     const cost = deriveCallCostUsd('some-model-nobody-has-heard-of', 1000, 1000, 0);

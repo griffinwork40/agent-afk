@@ -41,6 +41,7 @@ import { join } from 'node:path';
 
 import { getAfkHome } from '../../paths.js';
 import type { AgentDefinition } from '../types/sdk-types.js';
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import { parseAgentMarkdown } from './parser.js';
 import { builtinAgents } from './builtins.js';
 import type { AgentRegistry, AgentSource, RegisteredAgent } from './types.js';
@@ -147,7 +148,7 @@ function warnIfShadowsBuiltin(
       : prior.definition.tools !== undefined
         ? ' — the built-in restricts which tools it may use; the override replaces that restriction'
         : '';
-  warn(`[afk] agents: ${origin} overrides built-in agent ${JSON.stringify(name)}${restriction}`);
+  warn(`[afk] agents: ${sanitizeForDisplay(origin)} overrides built-in agent ${JSON.stringify(name)}${restriction}`);
 }
 
 /**
@@ -176,17 +177,18 @@ function scanScope(
     try {
       content = readFileSync(filePath, 'utf8');
     } catch (err) {
-      warn(`[afk] agents: cannot read ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+      const safeError = sanitizeForDisplay(err instanceof Error ? err.message : String(err));
+      warn(`[afk] agents: cannot read ${sanitizeForDisplay(filePath)}: ${safeError}`);
       continue;
     }
-    const parsed = parseAgentMarkdown(content, (msg) => warn(`[afk] agents: ${filePath}: ${msg}`));
+    const parsed = parseAgentMarkdown(content, (msg) => warn(`[afk] agents: ${sanitizeForDisplay(filePath)}: ${msg}`));
     if (parsed === undefined) continue;
 
     const priorInScope = seenInScope.get(parsed.name);
     if (priorInScope !== undefined) {
       warn(
         `[afk] agents: duplicate agent name ${JSON.stringify(parsed.name)} in ${source} scope — ` +
-          `keeping ${priorInScope}, ignoring ${filePath}`,
+          `keeping ${sanitizeForDisplay(priorInScope)}, ignoring ${sanitizeForDisplay(filePath)}`,
       );
       continue;
     }
@@ -200,7 +202,7 @@ function scanScope(
       if (priorInTier !== undefined) {
         warn(
           `[afk] agents: duplicate agent name ${JSON.stringify(parsed.name)} in ${source} scope — ` +
-            `${filePath} overrides ${priorInTier}`,
+            `${sanitizeForDisplay(filePath)} overrides ${sanitizeForDisplay(priorInTier)}`,
         );
       }
       crossDirSeen.set(parsed.name, filePath);
@@ -219,7 +221,7 @@ function scanScope(
 
     if (parsed.ignoredKeys !== undefined && parsed.ignoredKeys.length > 0) {
       warn(
-        `[afk] agents: ${filePath}: frontmatter field(s) not honored by AFK yet: ` +
+        `[afk] agents: ${sanitizeForDisplay(filePath)}: frontmatter field(s) not honored by AFK yet: ` +
           parsed.ignoredKeys.join(', '),
       );
     }

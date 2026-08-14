@@ -14,7 +14,7 @@ export function compactQueryHistory(options: {
   abort: AbortCoordinator;
   retry: RetryLayer;
   initSessionId: string;
-  traceWriter?: import('../../trace/index.js').TraceWriter;
+  traceWriter?: import('../../trace/index.js').TraceSink;
 }): Promise<ProviderCompactResult> {
   return compactHistory(options);
 }

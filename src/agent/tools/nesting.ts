@@ -22,7 +22,7 @@ import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { READ_ONLY_PHASE_TOOLS } from '../tool-category.js';
 import { SkillExecutor } from './skill-executor.js';
 import type { SubagentExecutor } from './subagent-executor.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
 
@@ -321,7 +321,7 @@ export function createChildSkillExecutorFactory(
   apiKey: string | undefined,
   childProviderFactory: (args: ChildProviderFactoryArgs) => ModelProvider,
   baseUrl?: string,
-  traceWriter?: TraceWriter,
+  traceWriter?: TraceSink,
   backgroundRegistry?: BackgroundAgentRegistry,
   cwd?: string,
   resolveApiKeyForModel?: (model: string) => string | undefined,

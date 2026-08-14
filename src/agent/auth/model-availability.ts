@@ -16,9 +16,17 @@ import { providerForModel } from '../providers/index.js';
 import { resolveBinding, type ModelSlotBinding, type ModelSlots } from '../session/model-slots.js';
 import { loadAnthropicCredential, loadOpenAICredential } from './credential-resolver.js';
 import { resolveOpenAIAuth } from '../providers/openai-compatible/auth.js';
+import { resolveXaiAuth } from '../providers/xai/auth.js';
 
 /** What kind of credential a model would need, for the hint message. */
-export type AvailabilityNeed = 'anthropic' | 'openai' | 'chatgpt-oauth' | 'local' | 'unknown';
+export type AvailabilityNeed =
+  | 'anthropic'
+  | 'openai'
+  | 'chatgpt-oauth'
+  | 'xai'
+  | 'xai-oauth'
+  | 'local'
+  | 'unknown';
 
 /** Result of an availability check. */
 export interface ModelAvailability {
@@ -54,6 +62,23 @@ export function modelAvailability(model: string | undefined, bindings?: ModelSlo
       const ok = resolveOpenAIAuth(undefined, {}, true).apiKey != null;
       return { available: ok, needs: 'chatgpt-oauth', hint: ok ? undefined : 'needs ChatGPT sign-in (~/.codex/auth.json)' };
     }
+    if (b.provider === 'xai-oauth') {
+      const ok = resolveXaiAuth(undefined, 'oauth').apiKey != null;
+      return {
+        available: ok,
+        needs: 'xai-oauth',
+        hint: ok ? undefined : 'needs SuperGrok OAuth (`afk provider auth xai login`)',
+      };
+    }
+    if (b.provider === 'xai') {
+      // Honor per-slot apiKey (same material applySlotCredentials injects).
+      const ok = resolveXaiAuth(b.apiKey, 'apikey').apiKey != null;
+      return {
+        available: ok,
+        needs: 'xai',
+        hint: ok ? undefined : 'needs XAI_API_KEY',
+      };
+    }
     if (b.apiKey) return { available: true, needs: 'unknown' };
     // Thread the supplied `bindings` through so provider routing resolves the
     // SAME table `resolveBinding` used above (mirrors applySlotCredentials);
@@ -69,6 +94,18 @@ export function modelAvailability(model: string | undefined, bindings?: ModelSlo
       if (b.baseUrl) return { available: true, needs: 'local' };
       const ok = !!loadOpenAICredential() || resolveOpenAIAuth(undefined, {}, false).apiKey != null;
       return { available: ok, needs: 'openai', hint: ok ? undefined : 'needs OPENAI_API_KEY' };
+    }
+    if (provider === 'xai' || provider === 'xai-oauth') {
+      const force = provider === 'xai-oauth' ? 'oauth' as const : undefined;
+      const r = resolveXaiAuth(undefined, force);
+      const ok = r.apiKey != null;
+      return {
+        available: ok,
+        needs: provider === 'xai-oauth' ? 'xai-oauth' : 'xai',
+        hint: ok
+          ? undefined
+          : 'needs XAI_API_KEY or SuperGrok OAuth (`afk provider auth xai login`)',
+      };
     }
     return { available: true, needs: 'unknown' };
   } catch {
