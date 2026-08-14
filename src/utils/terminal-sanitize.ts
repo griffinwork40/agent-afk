@@ -34,7 +34,9 @@
 //   2. DCS/PM/APC/SOS: ESC (P|^|_|X) … ST    — device-control strings
 //   3. CSI (7-bit):    ESC [ params … final  — SGR, cursor moves, clear-screen, DEC private (?…)
 //   4. CSI (8-bit):    0x9B params … final    — 8-bit C1 equivalent of CSI
-//   5. bare 2-byte:    ESC <0x40–0x5F>        — any other ESC-introduced pair
+//   5. bare 2-byte:    ESC <0x36–0x5F>        — any other ESC-introduced pair
+//      Covers 0x36–0x3F (ESC 6-9, ESC =/>/<, DECKPAM, DECPNM, DECBI, DECFI)
+//      and 0x40–0x5F (@-_: index, reverse-index, next-line, save/restore cursor, etc.)
 // If an OSC/DCS body were not consumed first, its payload (e.g. the URL inside
 // an OSC-8 hyperlink) would survive as visible text — the partial-strip bug in
 // the pre-extraction render-registry sanitiser that this module fixes.
@@ -47,7 +49,7 @@
 // (emoji, CJK, accents) are never touched.
 // eslint-disable-next-line no-control-regex
 const ESCAPE_RE =
-  /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)|\x1B[P^_X][^\x1B]*\x1B\\|\x1B\[[0-?]*[ -/]*[@-~]|\x9B[0-?]*[ -/]*[@-~]|\x1B[@-_]/g;
+  /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)|\x1B[P^_X][^\x1B]*\x1B\\|\x1B\[[0-?]*[ -/]*[@-~]|\x9B[0-?]*[ -/]*[@-~]|\x1B[6-_]/g;
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\x00-\x1F\x7F-\x9F]/g;
