@@ -48,6 +48,12 @@ export interface RegisteredAgent {
    */
   bashReadOnly?: boolean;
   /**
+   * Upstream-pinned tool surface for a vendored builtin. The builtin registry
+   * uses this marker to expose which entries need prompt/grant reconciliation;
+   * absent for file-defined and AFK-authored agents.
+   */
+  vendoredBaseTools?: readonly string[];
+  /**
    * Frontmatter keys that were recognized as Claude Code long-tail fields but
    * are not honored by AFK yet (e.g. `permissionMode`, `hooks`, `memory`).
    * Surfaced once as a scan warning; kept for `/agents` display.

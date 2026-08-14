@@ -147,37 +147,84 @@ describe('loadAgentRegistry', () => {
     }
   });
 
-  // The other half of #883. The test above proves the grant is mechanically
-  // REACHABLE; this proves the agent is TOLD it has it. The vendored body is
-  // byte-pinned upstream and asserts a closed allowlist ("Your tool surface is
-  // a hard allowlist enforced by Claude Code: Read, Grep, Glob, WebFetch,
-  // WebSearch"), so a grant made only in `tools:` is inert — the surveyor reads
-  // its prompt, believes it has five tools, and never calls the sixth. That is
-  // exactly what shipped: #883 was verified at the tool-access layer only, and
-  // the observable behaviour did not change.
-  it('tells research-agent about every registry grant beyond its vendored allowlist (#883)', async () => {
-    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
-    const entry = registry.get('research-agent');
-    expect(entry).toBeDefined();
+  // Structural invariant over ALL restricted builtin agents (#942).
+  //
+  // The other half of #883 (tool access ↔ prompt consistency), now generalised
+  // from a research-agent-specific assertion into a table-driven structural
+  // check. The failure class: vendored prompts assert a CLOSED tool allowlist
+  // in their body. A registry-entry grant made only in `tools:` is INERT
+  // because the agent reads its prompt, believes it has the closed set, and
+  // never attempts the added tool. #883 shipped with exactly this bug; #925
+  // and #928 repeated it. `withRegistryGrants()` in builtins.ts reconciles by
+  // composing a prompt supplement that names the extras and explicitly
+  // supersedes the closed-allowlist claim — but that helper is bespoke to
+  // research-agent today. This test enforces the invariant structurally, over
+  // the whole registry, so a newly-added restricted agent is caught
+  // automatically without a per-agent guard.
+  //
+  // Invariant: for each builtin with a restricted tool set (explicit `tools:`
+  // array), every tool granted at the registry entry beyond the vendored
+  // allowlist constant must appear in the agent's composed prompt.
+  it('every restricted builtin: registry grants beyond the vendored base appear in the composed prompt (#942)', () => {
+    const builtins = builtinAgents();
 
-    const { researchAgent } = await import('../../skills/_agents/index.js');
-    const prompt = entry!.definition.prompt;
+    // Guard: ensure this test covers real builtins (not vacuously-passing on
+    // an empty map) and that at least one agent actually has registry extras,
+    // so a future removal of withRegistryGrants can't silently make this pass
+    // by having zero extras everywhere.
+    let sawExtras = false;
 
-    // Anything granted at the registry entry but absent from the vendored
-    // allowlist is a tool the prompt does not otherwise account for.
-    const extras = (entry!.definition.tools ?? []).filter(
-      (t) => !researchAgent.allowedTools.includes(t as never),
-    );
-    expect(extras.length).toBeGreaterThan(0);
-    for (const tool of extras) {
-      expect(prompt, `prompt never mentions granted tool ${tool}`).toContain(tool);
+    let sawVendored = false;
+    for (const [name, entry] of builtins) {
+      const base = entry.vendoredBaseTools;
+      if (base === undefined) continue;
+      sawVendored = true;
+      const tools = entry.definition.tools ?? [];
+      const prompt = entry.definition.prompt;
+
+      // Extras = tools the registry grants beyond what the vendored body claims.
+      const extras = tools.filter((t) => !(base as readonly string[]).includes(t));
+
+      for (const tool of extras) {
+        expect(prompt, `${name}: prompt never mentions registry-granted tool "${tool}"`).toContain(
+          tool,
+        );
+      }
+
+      if (extras.length > 0) {
+        sawExtras = true;
+        // The reconciliation section must explicitly supersede the body's
+        // closed-allowlist claim — appending a name that the earlier sentence
+        // still contradicts is not sufficient.
+        expect(
+          prompt,
+          `${name}: withRegistryGrants supplement must override the closed-allowlist claim`,
+        ).toMatch(/superseded by this section/);
+        // Preserve this agent's actual contract. In particular,
+        // git-investigator legitimately has read-only Bash, while research-agent
+        // does not; the supplement must never contradict either base allowlist.
+        for (const mutator of ['Edit', 'Write', 'Bash']) {
+          const prohibition = new RegExp(`no ${mutator}`);
+          if (base.includes(mutator)) {
+            expect(prompt, `${name}: supplement contradicts allowed ${mutator}`).not.toMatch(
+              prohibition,
+            );
+          } else {
+            expect(prompt, `${name}: supplement must preserve the no-${mutator} contract`).toMatch(
+              prohibition,
+            );
+          }
+        }
+        expect(prompt, `${name}: supplement must preserve the no-mutation contract`).toMatch(
+          /no mutation/,
+        );
+      }
     }
 
-    // The reconciliation must explicitly override the body's closed-allowlist
-    // claim, not merely append a name the earlier sentence still contradicts.
-    expect(prompt).toMatch(/superseded by this section/);
-    // And it must not have relaxed the read-only contract on the way through.
-    expect(prompt).toMatch(/no Edit, no Write, no Bash, no mutation/);
+    expect(sawVendored, 'expected ≥1 vendored builtin in the builtin registry').toBe(true);
+    expect(sawExtras, 'expected ≥1 vendored builtin to have registry extras (research-agent)').toBe(
+      true,
+    );
   });
 
   it('strips vendored frontmatter from builtin prompts (body-only system prompt)', () => {
