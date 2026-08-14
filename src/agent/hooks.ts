@@ -18,7 +18,7 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop, UserPromptSubmit, Stop, and SessionStart):** Foreground
+ * **Context injection (PreToolUse, SubagentStop, UserPromptSubmit, Stop, and SessionStart):** Foreground
  * subagents hand their final assistant output to the parent through the normal
  * `agent` tool result; `injectContext` is a separate hook-generated framework
  * note, not text typed by the human user. When a `SubagentStop` handler returns
@@ -84,7 +84,7 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SessionStart, SubagentStop, UserPromptSubmit, and Stop) Framework-generated context to inject.
+   * (PreToolUse block-path, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the `isError` tool_result so a blocking handler can explain what to do instead.
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and
@@ -111,7 +111,7 @@ export interface HookDecision {
    * (see `AgentSession.pullInitialization`). Same concatenation merge policy
    * across handlers.
    *
-   * Ignored for all other hook events.
+   * Ignored for all other hook events (PostToolUse, PostToolUseFailure, SubagentStart, PreCompact).
    */
   injectContext?: string;
 }

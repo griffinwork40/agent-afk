@@ -212,6 +212,7 @@ class HookRegistryImpl implements HookRegistry {
           `hook handler blocked ${context.event}${decision.reason ? `: ${decision.reason}` : ''}`,
           context.event,
           decision.reason,
+          decision.injectContext !== undefined ? { injectContext: decision.injectContext } : undefined,
         );
       }
 

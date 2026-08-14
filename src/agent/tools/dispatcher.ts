@@ -930,7 +930,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       } catch (err) {
         if (err instanceof HookBlockedError) {
           return this.recordForkReadDenial(call, err.reason, {
-            content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
+            content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}${err.injectContext ? `\n\n${err.injectContext}` : ''}`,
             isError: true,
             failureClass: 'hook-block',
           });
