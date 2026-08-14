@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.117.1] - 2026-08-14
+
+### Fixed
+- widen flaky timing threshold in dispatcher compose parallelism test (#1065) (a5b401d4)
+
 ## [5.117.0] - 2026-08-14
 
 ### Added
