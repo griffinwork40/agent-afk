@@ -128,7 +128,7 @@ import {
   resolveReasoningEffort,
 } from './query/model-params.js';
 import { checkContextOverflow } from './query/context-overflow.js';
-import { resolveClientFactory } from './query/client.js';
+import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
 import { driveStream, type IterationResult } from './query/stream-drive.js';
 import {
   buildChatCompletionsRequestBody,
@@ -327,7 +327,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       this.client = null as unknown as OpenAI;
     } else {
       const ctor = resolveClientFactory();
-      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } = {
+      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string>; fetch?: typeof globalThis.fetch } = {
         apiKey: opts.auth.apiKey,
       };
       const baseURL = wire.baseURL ?? opts.baseURL;
@@ -336,6 +336,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // the private backend is never missing its required identity headers.
       if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
       else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
+      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
+      if (admissionFetch !== undefined) clientOpts.fetch = admissionFetch;
       this.client = ctor(clientOpts);
     }
   }

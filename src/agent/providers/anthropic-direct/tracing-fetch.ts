@@ -16,9 +16,15 @@
  *      retry loop — the per-turn loop is parked awaiting `messages.create`, so
  *      without this callback the banner cannot update until the wait is over.
  *
- * Purely observational: it forwards the request unchanged and returns the
- * Response untouched (only `res.headers` is read, which does not consume the
- * body), so retry behavior is exactly as before.
+ * Admission gate: when a {@link RateLimitGate} is provided, the wrapper calls
+ * `gate.acquirePermit` BEFORE forwarding the request. This gates outbound HTTP
+ * without touching the dispatch layer — no deadlock risk (the waiter holds no
+ * concurrency-pool slot; it is waiting for TIME, not for another coroutine to
+ * release a resource). See `rate-limit-bucket.ts` for the proof.
+ *
+ * Purely observational after the gate: it forwards the request unchanged and
+ * returns the Response untouched (only `res.headers` is read, which does not
+ * consume the body), so retry behavior is exactly as before.
  *
  * @module agent/providers/anthropic-direct/tracing-fetch
  */
@@ -26,6 +32,7 @@
 import type { TraceSink } from '../../trace/index.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { parseRetryAfterMs } from './usage-limit.js';
+import { estimateInputTokens } from '../shared/rate-limit-bucket.js';
 
 /** HTTP statuses that indicate throttling / transient overload. */
 const THROTTLE_STATUSES = new Set([429, 503, 529]);
@@ -41,28 +48,71 @@ export interface ThrottleInfo {
 }
 
 /**
+ * Admission gate interface. The fetch wrapper calls `acquirePermit` before
+ * every outbound request and `freeze` when a 429 arrives.
+ */
+export interface RateLimitGate {
+  acquirePermit(estimatedInputTokens: number, signal?: AbortSignal): Promise<void>;
+  freeze(retryAfterMs: number): void;
+}
+
+/**
  * Wrap a `fetch` implementation so throttled responses (429/503/529) emit a
  * `rate_limit` trace event AND (when provided) invoke `onThrottle` for a live
- * surface. Returns the wrapped fetch; when `writer`, `onThrottle`, AND
- * `onQuota` are all undefined the base fetch is returned unchanged (no
- * overhead).
+ * surface. When a `gate` is provided, each request waits for a permit before
+ * making the outbound call. Returns the wrapped fetch; when `writer`,
+ * `onThrottle`, `onQuota`, `onRateLimit`, AND `gate` are all undefined the base
+ * fetch is returned unchanged (no overhead).
  *
- * `onThrottle` and `onQuota` are fire-and-forget from the caller's
- * perspective — this wrapper guards both with try/catch so a throwing
- * callback can never disturb the request path or the SDK's retry loop.
+ * `onThrottle`, `onQuota`, and `onRateLimit` are fire-and-forget from the
+ * caller's perspective — this wrapper guards all three with try/catch so a
+ * throwing callback can never disturb the request path or the SDK's retry loop.
  */
 export function makeTracingFetch(
   writer: TraceSink | undefined,
   baseFetch: typeof fetch = fetch,
   onThrottle?: (info: ThrottleInfo) => void,
   onQuota?: (headers: Headers) => void,
+  onRateLimit?: (headers: Headers) => void,
+  gate?: RateLimitGate,
 ): typeof fetch {
-  if (!writer && !onThrottle && !onQuota) return baseFetch;
+  if (!writer && !onThrottle && !onQuota && !onRateLimit && !gate) return baseFetch;
   return async (
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
   ): Promise<Response> => {
+    // ADMISSION GATE: wait for a permit before making the outbound call.
+    // This is called BEFORE baseFetch so the request waits in the wrapper, not
+    // after committing to an HTTP round-trip that will 429 immediately.
+    if (gate) {
+      const estimated = estimateInputTokens(init);
+      const signal = init?.signal instanceof AbortSignal ? init.signal : undefined;
+      await gate.acquirePermit(estimated, signal);
+    }
+
     const res = await baseFetch(input, init);
+
+    // Per-minute rate-limit header capture: fires unconditionally on every
+    // response (not just throttled ones) so the bucket stays current. Guarded
+    // with try/catch — a broken observer must never disturb the request path.
+    if (onRateLimit) {
+      try {
+        onRateLimit(res.headers);
+      } catch {
+        // A broken observer must never disturb the SDK retry loop.
+      }
+    }
+
+    // Hard-freeze on 429 so concurrent waiters in acquirePermit also back off.
+    if (gate && res.status === 429) {
+      try {
+        const retryMs = parseRetryAfterMs({ headers: res.headers });
+        gate.freeze(retryMs ?? 5_000);
+      } catch {
+        // ignore
+      }
+    }
+
     // Passive quota capture: Anthropic returns `anthropic-ratelimit-unified-*`
     // headers on EVERY response under OAuth auth, not just throttled ones, so
     // this runs unconditionally (before the throttle-status gate below) and

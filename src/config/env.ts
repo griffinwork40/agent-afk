@@ -1500,6 +1500,26 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
 
+  // ── Rate-limit admission control ──────────────────────────────────────────
+  {
+    name: 'AFK_RATE_LIMIT_ADMISSION_DISABLED',
+    description: 'Bypass the process-wide rate-limit admission gate (issue #941). Set to 1 to skip pre-request capacity checks. Default 0 (gate active). OAuth subscription accounts already pass through automatically when no per-minute headers are returned.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'model',
+  },
+  {
+    name: 'AFK_RATE_LIMIT_STAGGER_MAX_MS',
+    description: 'Jitter ceiling (ms) for the rate-limit admission bucket: each waiter at a window boundary wakes at reset + random(0..ceiling) to avoid re-storming the API. Default 500. Set to 0 in tests for deterministic timing.',
+    type: 'number',
+    required: false,
+    default: '500',
+    example: '0',
+    category: 'model',
+  },
+
   // ── Web egress ────────────────────────────────────────────────────────────
   {
     name: 'AFK_WEB_ALLOW_PRIVATE_HOSTS',
@@ -1814,6 +1834,9 @@ export const env = {
   get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
 
+  // Rate-limit admission
+  get AFK_RATE_LIMIT_ADMISSION_DISABLED(): string | undefined { return process.env['AFK_RATE_LIMIT_ADMISSION_DISABLED']; },
+  get AFK_RATE_LIMIT_STAGGER_MAX_MS(): string | undefined { return process.env['AFK_RATE_LIMIT_STAGGER_MAX_MS']; },
   // Web egress
   get AFK_WEB_ALLOW_PRIVATE_HOSTS(): string | undefined { return process.env['AFK_WEB_ALLOW_PRIVATE_HOSTS']; },
 
@@ -1902,56 +1925,12 @@ declare const _parityEnv: _CheckEnvCoversRegistry;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 declare const _parityRegistry: _CheckRegistryCoversEnv;
 
-/**
- * Look up a registry entry by name. Returns undefined if the var is unknown.
- * Used by `/doctor` for the required-var check.
- */
-export function getEnvVarMeta(name: string): EnvVarMeta | undefined {
-  return ENV_REGISTRY.find((e) => e.name === name);
-}
-
-/**
- * Return the list of vars where `required: true` and the current process has
- * no value set. Consumed by `/doctor` and surface-specific bootstrap code.
- *
- * `requiredFor` lets callers scope the check — e.g., the Telegram surface
- * passes `'telegram'` and gets only TELEGRAM_BOT_TOKEN + AFK_TELEGRAM_ALLOWED_CHAT_IDS.
- */
-export function getMissingRequiredEnvVars(category?: EnvVarCategory): EnvVarMeta[] {
-  return ENV_REGISTRY.filter((e) => {
-    if (!e.required) return false;
-    if (category !== undefined && e.category !== category) return false;
-    return process.env[e.name] === undefined || process.env[e.name] === '';
-  });
-}
-
-/**
- * Whether an env var is currently set in this process's environment.
- *
- * The `env` object exposes a static getter per known var; this covers the
- * DYNAMIC case — checking presence of a name only known at runtime (e.g. while
- * iterating `ENV_REGISTRY`). Keeping the dynamic `process.env` read here, rather
- * than at the call site, preserves the "all env access lives in env.ts"
- * invariant enforced by `pnpm audit:env:check`.
- */
-export function isEnvVarSet(name: string): boolean {
-  return process.env[name] !== undefined;
-}
-
-/**
- * Read an env var's value by a name known only at runtime.
- *
- * Contract: returns `undefined` for both unset AND empty-string, because every
- * config-overriding read site in the loader is truthiness-gated (`if
- * (env.AFK_MODEL)`, env-tier.ts:206) — an empty var does NOT override config, so
- * reporting it as a live override would be a lie. This deliberately differs from
- * {@link isEnvVarSet}, which answers presence (`!== undefined`) and would call an
- * empty var "set".
- *
- * Same rationale as `isEnvVarSet` for living here: the dynamic `process.env` read
- * stays inside env.ts, preserving the invariant enforced by `pnpm audit:env:check`.
- */
-export function getEnvVarValue(name: string): string | undefined {
-  const raw = process.env[name];
-  return raw === undefined || raw === '' ? undefined : raw;
-}
+// Runtime helpers over the registry — extracted to env-helpers.ts to keep this
+// file within the 350-line ceiling. Re-exported here so all existing import
+// sites (`import { getEnvVarMeta } from './env.js'`) continue to resolve.
+export {
+  getEnvVarMeta,
+  getMissingRequiredEnvVars,
+  isEnvVarSet,
+  getEnvVarValue,
+} from './env-helpers.js';

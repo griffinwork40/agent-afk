@@ -45,6 +45,11 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
     file: 'src/config/env.ts',
     reason: 'The canonical read-point — every getter wraps a `process.env[...]` access.',
   },
+  {
+    file: 'src/config/env-helpers.ts',
+    reason:
+      'Extracted dynamic-access helpers from env.ts. Functions like isEnvVarSet() and getEnvVarValue() read vars by name known only at runtime (e.g. iterating ENV_REGISTRY), which cannot go through static getters.',
+  },
   // src/threads.ts is intentionally NOT whole-file allowlisted. The four
   // static reads (AFK_THREADS_ALLOWED_USERNAMES, AFK_THREADS_POLL_INTERVAL_MS,
   // AFK_THREADS_DRY_RUN, AFK_THREADS_REPLY_MODE) are migrated to env.X.
