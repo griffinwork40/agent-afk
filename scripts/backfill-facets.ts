@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readdirSync } from 'fs';
-import { basename, join } from 'path';
+import { basename } from 'path';
 import { getOrDeriveFacet, listSessionIds } from '../src/agent/facets/store.js';
 import { getFacetCacheDir } from '../src/paths.js';
 
