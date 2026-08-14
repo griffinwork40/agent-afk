@@ -432,11 +432,16 @@ export class SubagentExecutor implements SubagentControl {
     callId: string,
     status: 'running' | 'done' | 'failed',
     error?: string,
+    cwd?: string,
   ): void {
     const waveId = this.currentWaveId;
     if (waveId === undefined) return;
     if (!this.currentWaveCallIds.has(callId)) return;
-    updateWaveUnit(waveId, callId, status, error !== undefined ? { errorMessage: error } : undefined);
+    const extra: { errorMessage?: string; cwd?: string } | undefined =
+      error !== undefined || cwd !== undefined
+        ? { ...(error !== undefined ? { errorMessage: error } : {}), ...(cwd !== undefined ? { cwd } : {}) }
+        : undefined;
+    updateWaveUnit(waveId, callId, status, extra);
   }
 
   hasPromotableForeground(): boolean {
@@ -839,7 +844,12 @@ export class SubagentExecutor implements SubagentControl {
         childParentSession.sessionId = handle.id;
       }
       // Wave manifest: unit transitioned to 'running' once fork returns a handle.
-      this.updateCurrentWaveUnit(call.id, 'running');
+      this.updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
+      // TODO: background dispatches (mode='background') stay 'running' in the manifest
+      // until expiry — the background registry completion callback does not have a
+      // stable reference to currentWaveId (which may be cleared by notifyWaveEnd()
+      // before the job settles). Accept the limitation: manual manifest sweep handles
+      // stale 'running' entries via the 48h TTL.
       // Cancellation can land while a retry's fresh fork awaits hooks/read
       // scope resolution, before either foreground map contains the handle.
       if (retryCancelGeneration !== undefined && this.cancelGeneration !== retryCancelGeneration) {

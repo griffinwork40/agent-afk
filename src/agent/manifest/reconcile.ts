@@ -21,6 +21,7 @@ import { checkWorktreePresence } from './worktree.js';
 import { getWavesDir, getWaveManifestPath } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { WaveManifest, WaveUnit } from './types.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 const UNSETTLED_STATUSES = new Set<WaveUnit['status']>(['pending', 'running']);
 const HOURS_48_MS = 48 * 60 * 60 * 1000;
@@ -60,9 +61,6 @@ export interface ReconcileResult {
  */
 export function reconcileWaveManifests(opts: {
   sessionId: string;
-  /** Optional: only offer manifests whose parentSessionId matches this. When
-   * undefined, falls back to the 48h recency heuristic. */
-  matchSessionId?: boolean;
 }): ReconcileResult {
   const result: ReconcileResult = { offers: [], deletedExpired: 0 };
 
@@ -82,14 +80,16 @@ export function reconcileWaveManifests(opts: {
       if (!entry.endsWith('.json')) continue;
       // Extract waveId from filename (strip .json suffix)
       const waveId = entry.slice(0, -5);
+      // Validate waveId to prevent path traversal (must be hex-alphanumeric only).
+      if (!/^[A-Za-z0-9]+$/.test(waveId)) continue;
 
       const manifest = readManifest(waveId);
       if (manifest === undefined) continue;
 
       const expiresAt = new Date(manifest.expiresAt).getTime();
 
-      // Delete expired manifests
-      if (expiresAt < now) {
+      // Delete expired manifests. Non-finite (NaN for corrupt values) treated as expired.
+      if (!Number.isFinite(expiresAt) || expiresAt < now) {
         try {
           unlinkSync(getWaveManifestPath(waveId));
           result.deletedExpired += 1;
@@ -162,8 +162,8 @@ export function formatResumptionOffer(offer: StaleManifestOffer): string {
   if (resumable.length > 0) {
     lines.push(`  Units ready to resume:`);
     for (const { unit, worktreeStatus } of resumable) {
-      const headPreview = unit.promptDigest.head.slice(0, 80).replace(/\n/g, ' ');
-      const cwdNote = unit.cwd !== undefined ? `  (cwd: ${unit.cwd})` : '';
+      const headPreview = stripEscapeSequences(unit.promptDigest.head.slice(0, 80)).replace(/\n/g, ' ');
+      const cwdNote = unit.cwd !== undefined ? `  (cwd: ${stripEscapeSequences(unit.cwd)})` : '';
       const worktreeNote = worktreeStatus === 'missing'
         ? '  ⚠ worktree was swept — cannot re-dispatch without its working directory'
         : '';
@@ -189,8 +189,8 @@ export function formatResumptionOffer(offer: StaleManifestOffer): string {
  * AFK_WAVE_RESUME_UNATTENDED=1 is explicitly set. Interactive surfaces always
  * surface offers.
  */
-export function shouldSurfaceResumptionOffer(): boolean {
-  return env.AFK_WAVE_RESUME_UNATTENDED === '1';
+export function shouldSurfaceResumptionOffer(isInteractive: boolean): boolean {
+  return isInteractive || env.AFK_WAVE_RESUME_UNATTENDED === '1';
 }
 
 function formatAge(ms: number): string {
@@ -223,9 +223,11 @@ export function sweepExpiredManifests(): { deleted: number } {
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
       const waveId = entry.slice(0, -5);
+      if (!/^[A-Za-z0-9]+$/.test(waveId)) continue;
       const manifest = readManifest(waveId);
       if (manifest === undefined) continue;
-      if (new Date(manifest.expiresAt).getTime() >= now) continue;
+      const expiresAt = new Date(manifest.expiresAt).getTime();
+      if (Number.isFinite(expiresAt) && expiresAt >= now) continue;
       try {
         unlinkSync(getWaveManifestPath(waveId));
         deleted += 1;

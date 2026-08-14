@@ -770,6 +770,7 @@ export class ComposeExecutor {
       // a recoverable record. Only for ≥2 nodes (no manifest for solo dispatch).
       let composeWaveId: string | undefined;
       if (dagNodes.length >= 2) {
+        if ((this.ctx.depth ?? 0) === 0) {
         try {
           const manifestUnits = parsed.nodes.map((n) => {
             const effectiveCwd = this.currentCwd;
@@ -799,6 +800,7 @@ export class ComposeExecutor {
         } catch {
           // Fire-and-forget: manifest errors must never abort a compose wave.
         }
+        } // end depth === 0 guard
       }
 
       // Invariant: SubagentDAGOptions exposes no maxConcurrency field, so the

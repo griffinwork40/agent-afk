@@ -12,6 +12,7 @@ import {
   reconcileWaveManifests,
   formatResumptionOffer,
   sweepExpiredManifests,
+  shouldSurfaceResumptionOffer,
 } from './reconcile.js';
 import { createManifest, buildWaveUnit, updateWaveUnit } from './write.js';
 import { getWaveManifestPath } from '../../paths.js';
@@ -236,5 +237,29 @@ describe('reconcileWaveManifests — worktree missing detection', () => {
     expect(u1entry?.worktreeStatus).toBe('missing');
     const u2entry = offer!.resumable.find((r) => r.unit.id === 'u2');
     expect(u2entry?.worktreeStatus).toBe('ok');
+  });
+});
+
+describe('shouldSurfaceResumptionOffer', () => {
+  afterEach(() => {
+    delete process.env['AFK_WAVE_RESUME_UNATTENDED'];
+  });
+
+  it('returns false when not interactive and env var unset', () => {
+    delete process.env['AFK_WAVE_RESUME_UNATTENDED'];
+    expect(shouldSurfaceResumptionOffer(false)).toBe(false);
+  });
+
+  it('returns true when interactive regardless of env var', () => {
+    delete process.env['AFK_WAVE_RESUME_UNATTENDED'];
+    expect(shouldSurfaceResumptionOffer(true)).toBe(true);
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '0';
+    expect(shouldSurfaceResumptionOffer(true)).toBe(true);
+  });
+
+  it("returns true when env var is '1' regardless of interactive", () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    expect(shouldSurfaceResumptionOffer(false)).toBe(true);
+    expect(shouldSurfaceResumptionOffer(true)).toBe(true);
   });
 });

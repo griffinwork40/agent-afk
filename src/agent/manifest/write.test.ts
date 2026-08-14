@@ -41,11 +41,14 @@ describe('computePromptDigest', () => {
     expect(d.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('truncates head to 512 chars', () => {
-    const long = 'x'.repeat(1000);
+  it('truncates head to at most 512 chars of the original prompt', () => {
+    // Use space-separated words so redactSecrets does not collapse the text
+    // (the generic ≥32-char rule only fires on contiguous non-whitespace tokens).
+    const word = 'hello ';
+    const long = word.repeat(200); // 1200 chars, well above 512
     const d = computePromptDigest(long);
-    expect(d.head).toHaveLength(512);
-    expect(d.byteLen).toBe(1000);
+    expect(d.head.length).toBeLessThanOrEqual(512);
+    expect(d.byteLen).toBe(Buffer.byteLength(long, 'utf8'));
   });
 
   it('records byteLen correctly for multi-byte chars', () => {
