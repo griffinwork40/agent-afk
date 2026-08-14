@@ -198,10 +198,7 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
       s.id === taskId ? { ...s, enabled: true, updatedAt: new Date().toISOString() } : s,
     );
     saveSchedules(updated);
-    const refreshed = getSchedule(taskId);
-    sync = refreshed
-      ? await trySyncToDaemon('POST', '/tasks', toScheduledTask(refreshed))
-      : await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+    sync = await trySyncToDaemon('POST', '/tasks', toScheduledTask({ ...existing, enabled: true }));
   } else {
     const schedules = loadSchedules();
     const updated = schedules.map((s) =>
@@ -217,7 +214,7 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
       ok: true,
       taskId,
       permanent,
-      enabled: enable ? true : permanent ? undefined : false,
+      enabled: permanent ? undefined : enable ? true : false,
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),

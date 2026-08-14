@@ -448,4 +448,33 @@ describe('live-sync surface (daemonSynced)', () => {
     expect(parsed.daemonSynced).toBe(false);
     expect(parsed.syncNote).toMatch(/next daemon/i);
   });
+
+  it('enable:true against a live daemon re-registers and reports synced', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      // Create a disabled task (won't be registered with daemon)
+      await createScheduleHandler(
+        { name: 'Revive Me', command: '/x', cron: '59 23 31 12 *', enabled: false },
+        fakeSignal,
+      );
+      // Disable it via cancel (soft disable, not permanent)
+      await cancelScheduleHandler({ taskId: 'revive-me' }, fakeSignal);
+      // Re-enable via enable:true
+      const enable = await cancelScheduleHandler(
+        { taskId: 'revive-me', enable: true },
+        fakeSignal,
+      );
+      const parsed = JSON.parse(enable.content as string) as SyncShape;
+      expect(parsed.ok).toBe(true);
+      expect(parsed.daemonSynced).toBe(true);
+      expect(parsed.syncDetail).toBe('synced');
+      // Verify the daemon actually has the task registered
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+      }>;
+      expect(tasks.some((t) => t.taskId === 'revive-me')).toBe(true);
+    } finally {
+      await handle.stop();
+    }
+  });
 });

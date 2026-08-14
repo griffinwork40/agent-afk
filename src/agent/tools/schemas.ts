@@ -703,8 +703,8 @@ export const cancelScheduleTool: AnthropicToolDef = {
     'Disable, re-enable, or permanently remove a scheduled task. ' +
     'Default (no flags): sets enabled: false. enable: true re-enables and re-registers with the daemon. ' +
     'permanent: true removes from the store entirely (takes precedence over enable). ' +
-    'The result includes daemonSynced/syncDetail — when daemonSynced is false, a running daemon ' +
-    'still has the task registered until it restarts.',
+    'The result includes daemonSynced/syncDetail — when daemonSynced is false, the running daemon ' +
+    'did not pick up the change and will apply it on next restart.',
   input_schema: {
     type: 'object',
     properties: {
