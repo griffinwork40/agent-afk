@@ -14,6 +14,8 @@
  * @module agent/providers/xai/pricing
  */
 
+import { clampPositive, lookupPricing as sharedLookupPricing } from '../shared/pricing-utils.js';
+
 export interface XaiModelPricing {
   inputPerMTok: number;
   outputPerMTok: number;
@@ -43,12 +45,14 @@ export const XAI_MODEL_PRICING: ReadonlyMap<string, XaiModelPricing> = new Map([
 
 const DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Normalises the model id to lowercase before delegating to
+ * {@link sharedLookupPricing} with this provider's {@link DATE_SUFFIX} pattern,
+ * preserving the original trim-and-lowercase contract of this module.
+ */
 function lookupXaiPricing(model: string): XaiModelPricing | undefined {
   const lowered = model.trim().toLowerCase();
-  const exact = XAI_MODEL_PRICING.get(lowered);
-  if (exact) return exact;
-  const base = lowered.replace(DATE_SUFFIX, '');
-  return base === lowered ? undefined : XAI_MODEL_PRICING.get(base);
+  return sharedLookupPricing(lowered, XAI_MODEL_PRICING, DATE_SUFFIX);
 }
 
 /** True when the id looks like a Grok / xAI chat model. */
@@ -71,10 +75,9 @@ export function deriveXaiCallCostUsd(
   if (!pricing) return undefined;
 
   const M = 1_000_000;
-  const clamp = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
-  const safeInput = clamp(inputTokens);
-  const safeOutput = clamp(outputTokens);
-  const safeCached = Math.min(clamp(cachedInputTokens), safeInput);
+  const safeInput = clampPositive(inputTokens);
+  const safeOutput = clampPositive(outputTokens);
+  const safeCached = Math.min(clampPositive(cachedInputTokens), safeInput);
   const plainInput = safeInput - safeCached;
   const cachedRate = pricing.cachedInputPerMTok ?? pricing.inputPerMTok;
   return (
