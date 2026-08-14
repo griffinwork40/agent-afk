@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.119.0] - 2026-08-14
+
+### Added
+- wave manifest for interrupted session recovery (#940) (#1049) (dfda3445)
+
 ## [5.118.2] - 2026-08-14
 
 ### Changed
