@@ -1,16 +1,20 @@
 /**
- * Tests for the observe-only release-boundary detector (Wave 1 slice 2,
- * gate-migration).
+ * Tests for the two-tier release-boundary detector (Wave 1 block+explain
+ * upgrade, gate-migration).
  *
- * Three contracts:
+ * Six contracts:
  *   1. `detectReleaseBoundaryCommands` matches the curated publish/deploy/sync
  *      boundary patterns and — critically for calibration — does NOT flag
  *      common pre-boundary near misses (`npm version`, `git tag`, a plain
  *      `git push origin main`, `npm install`).
- *   2. The hook returns an `approve` catch-record (never a block) only on a
- *      `bash` PreToolUse with a boundary-crossing command; `{}` otherwise.
- *   3. It is wired into the default registry and, dispatched end-to-end, passes
- *      the command through (no throw) while recording `decision: 'approve'`.
+ *   2. OBSERVE patterns (sync-boundary) return `decision: 'approve'`.
+ *   3. BLOCK patterns (publish/deploy/infra) return `decision: 'block'` with a
+ *      reason naming the pattern and `injectContext` guidance.
+ *   4. When a compound command matches both tiers, BLOCK wins.
+ *   5. Non-boundary commands, non-bash tools, and non-PreToolUse events pass
+ *      through as `{}`.
+ *   6. Registry wiring: dispatched end-to-end, BLOCK-tier throws
+ *      HookBlockedError with injectContext; OBSERVE-tier records approve.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -19,7 +23,9 @@ import {
   createReleaseBoundaryDetect,
   detectReleaseBoundaryCommands,
   RELEASE_BOUNDARY_DETECT_REASON_PREFIX,
+  RELEASE_BOUNDARY_BLOCK_INJECT_CONTEXT,
 } from './release-boundary-detect.js';
+import { HookBlockedError } from '../utils/errors.js';
 import { createDefaultHookRegistry } from './default-hook-registry.js';
 
 function preCtx(command: string, toolName = 'bash'): HookContext {
@@ -73,20 +79,52 @@ describe('detectReleaseBoundaryCommands', () => {
   });
 });
 
-describe('createReleaseBoundaryDetect (observe-only hook)', () => {
+// ---------------------------------------------------------------------------
+// createReleaseBoundaryDetect — two-tier hook decisions
+// ---------------------------------------------------------------------------
+
+describe('createReleaseBoundaryDetect (two-tier hook)', () => {
   const hook = createReleaseBoundaryDetect();
 
-  it('returns an approve catch-record with the stable reason prefix on a boundary bash command', () => {
-    const decision = hook(preCtx('npm publish --provenance'));
-    expect(decision.decision).toBe('approve');
-    expect(decision.reason).toContain(RELEASE_BOUNDARY_DETECT_REASON_PREFIX);
-    expect(decision.reason).toContain('npm-publish');
+  // ── BLOCK patterns (publish/deploy/infra) must block with injectContext ────
+  it.each([
+    ['npm publish --provenance', 'npm-publish'],
+    ['pnpm publish --no-git-checks', 'pnpm-publish'],
+    ['yarn publish', 'yarn-publish'],
+    ['cargo publish', 'cargo-publish'],
+    ['twine upload dist/*', 'pypi-twine-upload'],
+    ['poetry publish --build', 'poetry-publish'],
+    ['gem push mygem-1.0.0.gem', 'gem-push'],
+    ['docker push registry.io/app:latest', 'docker-push'],
+    ['gh release create v1.2.3 --generate-notes', 'gh-release-create'],
+    ['terraform apply -auto-approve', 'terraform-apply'],
+    ['kubectl apply -f deploy.yaml', 'kubectl-apply'],
+  ])('BLOCK pattern %s returns block decision naming %s with injectContext', (command, expectedPatternId) => {
+    const decision: HookDecision = hook(preCtx(command));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain(expectedPatternId);
+    expect(decision.injectContext).toBe(RELEASE_BOUNDARY_BLOCK_INJECT_CONTEXT);
   });
 
-  it('NEVER blocks — no block decision, no continue:false (the interpreter-eval lesson)', () => {
-    const decision: HookDecision = hook(preCtx('git push --mirror git@github.com:org/x.git'));
+  // ── OBSERVE patterns (sync-boundary) must approve ─────────────────────────
+  it.each([
+    ['git push --mirror git@github.com:org/x.git', 'git-push-mirror'],
+    ['git push origin --tags', 'git-push-tags'],
+    ['git push origin main --follow-tags', 'git-push-tags'],
+  ])('OBSERVE pattern %s returns approve, not block', (command, _id) => {
+    const decision: HookDecision = hook(preCtx(command));
+    expect(decision.decision).toBe('approve');
     expect(decision.decision).not.toBe('block');
-    expect(decision.continue).not.toBe(false);
+    expect(decision.reason).toContain(RELEASE_BOUNDARY_DETECT_REASON_PREFIX);
+  });
+
+  // ── BLOCK wins when both tiers match in one compound command ───────────────
+  it('block wins over approve when a compound command matches both tiers', () => {
+    // npm publish → BLOCK; git push --tags → OBSERVE
+    const decision: HookDecision = hook(preCtx('npm publish && git push origin --tags'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('npm-publish');
+    expect(decision.injectContext).toBe(RELEASE_BOUNDARY_BLOCK_INJECT_CONTEXT);
   });
 
   it('passes through non-boundary bash commands', () => {
@@ -110,15 +148,35 @@ describe('createReleaseBoundaryDetect (observe-only hook)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Registry wiring
+// ---------------------------------------------------------------------------
+
 describe('release-boundary-detect wiring in the default registry', () => {
-  it('is registered and records approve (without blocking) for a boundary bash call', async () => {
+  it('throws HookBlockedError with injectContext for a BLOCK-tier boundary bash call', async () => {
     const { registry } = createDefaultHookRegistry(undefined, 'cli');
     const ctx: PreToolUseContext = {
       event: 'PreToolUse',
       toolName: 'bash',
       input: { command: 'npm publish --provenance' },
     };
-    // Must not throw (a block would throw HookBlockedError through dispatch).
+    try {
+      await registry.dispatch(ctx);
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HookBlockedError);
+      expect((err as HookBlockedError).injectContext).toBe(RELEASE_BOUNDARY_BLOCK_INJECT_CONTEXT);
+    }
+  });
+
+  it('records approve (without blocking) for an OBSERVE-tier sync-boundary call', async () => {
+    const { registry } = createDefaultHookRegistry(undefined, 'cli');
+    const ctx: PreToolUseContext = {
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'git push origin --tags' },
+    };
+    // Must not throw — OBSERVE tier passes through.
     const decision = await registry.dispatch(ctx);
     expect(decision.decision).toBe('approve');
     expect(decision.reason).toContain(RELEASE_BOUNDARY_DETECT_REASON_PREFIX);

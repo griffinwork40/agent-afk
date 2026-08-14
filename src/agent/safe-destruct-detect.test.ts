@@ -6,10 +6,11 @@
  *      flag common-but-safe near-misses.
  *   2. OBSERVE patterns return `decision: 'approve'` (never block).
  *   3. BLOCK patterns return `decision: 'block'` with a reason that names the
- *      pattern id.
+ *      pattern id and an `injectContext` guidance string.
  *   4. When a single compound command matches both tiers, BLOCK wins.
  *   5. Registry wiring: the hook is registered exactly once, produces approve
- *      for OBSERVE patterns, and throws HookBlockedError for BLOCK patterns.
+ *      for OBSERVE patterns, and throws HookBlockedError (with injectContext)
+ *      for BLOCK patterns.
  *
  * Note on the former 'NEVER blocks' test (~line 97-101 in the old file):
  *   It used `rm -rf / --no-preserve-root` as the fixture — that pattern moved
@@ -23,6 +24,7 @@ import {
   createSafeDestructDetect,
   detectDestructiveCommands,
   SAFE_DESTRUCT_DETECT_REASON_PREFIX,
+  SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT,
 } from './safe-destruct-detect.js';
 import { HookBlockedError } from '../utils/errors.js';
 import { createDefaultHookRegistry } from './default-hook-registry.js';
@@ -161,10 +163,11 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     ["psql -c 'DROP DATABASE prod'", 'sql-drop-truncate'],
     ["mysql -e 'TRUNCATE TABLE users'", 'sql-drop-truncate'],
     ['terraform destroy -auto-approve', 'terraform-destroy'],
-  ])('BLOCK pattern %s returns block decision naming %s', (command, expectedPatternId) => {
+  ])('BLOCK pattern %s returns block decision naming %s with injectContext', (command, expectedPatternId) => {
     const decision: HookDecision = hook(preCtx(command));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain(expectedPatternId);
+    expect(decision.injectContext).toBe(SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT);
   });
 
   // ── BLOCK wins when both tiers match in one compound command ─────────────
@@ -173,6 +176,7 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     const decision: HookDecision = hook(preCtx('rm -rf build && git push --force origin main'));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('git-push-force');
+    expect(decision.injectContext).toBe(SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT);
   });
 
   it('passes through benign bash commands', () => {
@@ -214,15 +218,21 @@ describe('safe-destruct-detect wiring in the default registry', () => {
     expect(decision.reason).toContain(SAFE_DESTRUCT_DETECT_REASON_PREFIX);
   });
 
-  it('throws HookBlockedError for a BLOCK-tier destructive bash call through the default registry', async () => {
+  it('throws HookBlockedError with injectContext for a BLOCK-tier destructive bash call through the default registry', async () => {
     const { registry } = createDefaultHookRegistry(undefined, 'cli');
     const ctx: PreToolUseContext = {
       event: 'PreToolUse',
       toolName: 'bash',
       input: { command: 'terraform destroy -auto-approve' },
     };
-    // BLOCK tier must throw HookBlockedError.
-    await expect(registry.dispatch(ctx)).rejects.toBeInstanceOf(HookBlockedError);
+    // BLOCK tier must throw HookBlockedError with injectContext.
+    try {
+      await registry.dispatch(ctx);
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HookBlockedError);
+      expect((err as HookBlockedError).injectContext).toBe(SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT);
+    }
   });
 
   it('leaves benign bash calls untouched through the default registry', async () => {

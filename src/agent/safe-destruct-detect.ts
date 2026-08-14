@@ -27,10 +27,11 @@
  * This whole program exists because an over-firing PreToolUse *hard block* (the
  * interpreter-eval guard) generated 18 nights of self-inflicted friction. The
  * plan's de-risking rule is "injectContext-first, shadow-window before
- * enforcing". PreToolUse cannot `injectContext` — the harness honors that field
- * only for `SubagentStop` / `UserPromptSubmit` (see `hooks.ts`) — so the OBSERVE
- * tier records attempts without blocking, building the shadow-window dataset. A
- * later slice uses real-world frequency per pattern to re-calibrate tiers.
+ * enforcing". BLOCK-tier patterns use `injectContext` (PR #1088) to explain
+ * *why* the command was blocked and *what to do instead*, so the agent receives
+ * actionable guidance — not a bare refusal. OBSERVE-tier patterns record
+ * attempts without blocking, building the shadow-window dataset. A later slice
+ * uses real-world frequency per pattern to re-calibrate tiers.
  *
  * # How the approve catch-record is emitted
  *
@@ -65,6 +66,19 @@ import { DESTRUCTIVE_PATTERNS } from './safe-destruct-patterns.js';
  */
 export const SAFE_DESTRUCT_DETECT_REASON_PREFIX =
   'safe-destruct observe-only: destructive-command attempt';
+
+/**
+ * Context injected into the `isError` tool_result when a BLOCK-tier pattern
+ * fires. Delivered via `HookBlockedError.injectContext` → `dispatcher.ts`
+ * block-path content (PR #1088). The agent sees this after the terse
+ * `blockReason` — it explains the hook's purpose and what to do next.
+ */
+export const SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT =
+  'This command was blocked by the safe-destruct hook because it matches an ' +
+  'irrecoverable or externally-irreversible operation pattern. The block ' +
+  'cannot be self-bypassed. If the destructive action is genuinely required, ' +
+  'stop and ask the operator to run it manually, or use a safer alternative ' +
+  'named in the block reason above.';
 
 /**
  * Return the ids of every destructive pattern the command matches.
@@ -116,6 +130,7 @@ export function createSafeDestructDetect(): (context: HookContext) => HookDecisi
         return {
           decision: 'block',
           reason: pattern.blockReason,
+          injectContext: SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT,
         };
       }
     }
