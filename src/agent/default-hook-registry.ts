@@ -16,6 +16,7 @@ import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
+import { createFacetSessionEndHook } from './facets/session-end-hook.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
 import {
@@ -280,6 +281,10 @@ export function createDefaultHookRegistry(
   // JSON+Markdown summary of the run under ~/.afk/state/receipts/. Best-effort
   // and never injects/blocks; skips subagents and honors AFK_RUN_RECEIPT_DISABLED.
   registry.register('SessionEnd', runReceiptSessionEndHook);
+  // Derive and cache a session facet at teardown so every top-level session
+  // is visible to harvest --rank and other facet consumers. Best-effort;
+  // skips subagents; never blocks teardown.
+  registry.register('SessionEnd', createFacetSessionEndHook());
   if (onSubagentComplete) {
     registry.register('SubagentStop', (context) => {
       if (context.event !== 'SubagentStop') return {};
