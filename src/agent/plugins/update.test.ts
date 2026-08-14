@@ -8,15 +8,16 @@ const resetScanCache = vi.hoisted(() => vi.fn());
 vi.mock('../plugins-scanner.js', () => ({ _resetPluginScanCache: resetScanCache, scanLocalPlugins: vi.fn(() => []) }));
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { updatePlugin, updateAll } from './update.js';
-import { readIndex, upsertPlugin, type PluginIndexEntry } from './index-store.js';
+import { readIndex, upsertPlugin, upsertMarketplace, type PluginIndexEntry } from './index-store.js';
 import type { GitRunner } from './git.js';
 
 let tmpDir: string;
 let pluginsDir: string;
+let cacheDir: string;
 let indexPath: string;
 
 function seed(name: string, entry: Partial<PluginIndexEntry> = {}): PluginIndexEntry {
@@ -85,8 +86,10 @@ function makeRunner(
 beforeEach(() => {
   tmpDir = join(tmpdir(), `afk-update-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   pluginsDir = join(tmpDir, 'plugins');
+  cacheDir = join(tmpDir, 'cache');
   indexPath = join(pluginsDir, '.index.json');
   mkdirSync(pluginsDir, { recursive: true });
+  mkdirSync(cacheDir, { recursive: true });
   resetScanCache.mockClear();
 });
 
@@ -329,5 +332,281 @@ describe('updatePlugin — cache invalidation (F2)', () => {
       updatePlugin('unknown', {}, { pluginsDir, indexPath, gitRunner: runner, now: () => new Date() }),
     ).rejects.toThrow(/not installed/);
     expect(resetScanCache).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Marketplace delegation tests (issue #993)
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed a marketplace entry + its cache dir + a minimal marketplace.json so
+ * `updateMarketplace` can parse the catalog without real git plumbing.
+ */
+function seedMarketplace(
+  mpName: string,
+  pluginKeys: string[],
+  entry: { ref?: string; commit?: string } = {},
+): void {
+  upsertMarketplace(
+    mpName,
+    {
+      source: 'owner/repo',
+      sourceType: 'github',
+      ref: entry.ref ?? 'main',
+      commit: entry.commit ?? 'oldsha',
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    },
+    indexPath,
+  );
+  const mpDir = join(cacheDir, mpName);
+  mkdirSync(join(mpDir, '.claude-plugin'), { recursive: true });
+  writeFileSync(
+    join(mpDir, '.claude-plugin', 'marketplace.json'),
+    JSON.stringify({
+      name: mpName,
+      plugins: pluginKeys.map((k) => ({ name: k, source: `./plugins/${k}` })),
+    }),
+    'utf8',
+  );
+  for (const k of pluginKeys) {
+    const pdir = join(mpDir, 'plugins', k, '.claude-plugin');
+    mkdirSync(pdir, { recursive: true });
+    writeFileSync(join(pdir, 'plugin.json'), JSON.stringify({ name: k, version: '1.0.0' }), 'utf8');
+    // Register the plugin in the index so updatePlugin can find it.
+    upsertPlugin(`${mpName}:${k}`, {
+      source: `${mpName}:${k}`,
+      sourceType: 'marketplace',
+      marketplace: mpName,
+      ref: null,
+      commit: null,
+      enabled: true,
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    }, indexPath);
+  }
+}
+
+/** Fake git runner for marketplace tests.
+ * `localSha` = local HEAD before any checkout; `remoteSha` = what
+ * origin/main resolves to. When both are equal, the updater reports up-to-date. */
+function makeMarketplaceRunner(remoteSha = 'newsha', localSha = 'oldsha'): { runner: GitRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  let head = localSha;
+  const runner: GitRunner = async (args) => {
+    const a = Array.from(args);
+    calls.push(a);
+    if (a.includes('checkout')) {
+      const ref = a[a.length - 1] ?? '';
+      if (ref.startsWith('refs/remotes/origin/')) head = remoteSha;
+      return { stdout: '', stderr: '' };
+    }
+    if (a[0] === 'tag') return { stdout: '\n', stderr: '' };
+    if (a[0] === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+    if (a[0] === 'rev-parse') {
+      const rev = a[a.length - 1] ?? '';
+      if (rev === 'HEAD') return { stdout: head + '\n', stderr: '' };
+      if (rev === 'refs/remotes/origin/main') return { stdout: remoteSha + '\n', stderr: '' };
+      throw new Error('fatal: Needed a single revision');
+    }
+    return { stdout: '', stderr: '' };
+  };
+  return { runner, calls };
+}
+
+describe('updatePlugin — marketplace delegation (issue #993)', () => {
+  it('delegates to updateMarketplace and reports updated when the clone advanced', async () => {
+    seedMarketplace('my-mp', ['plg-a']);
+    const { runner } = makeMarketplaceRunner('newsha');
+    const outcome = await updatePlugin(
+      'my-mp:plg-a',
+      {},
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome).toMatchObject({
+      name: 'my-mp:plg-a',
+      status: 'updated',
+      toRef: 'main',
+      commit: 'newsha',
+    });
+  });
+
+  it('reports up-to-date when the marketplace clone has not moved', async () => {
+    seedMarketplace('my-mp', ['plg-a'], { ref: 'main', commit: 'samesha' });
+    // Same SHA on both ends → up-to-date.
+    // Pass samesha as both remoteSha and localSha so the runner agrees.
+    const { runner } = makeMarketplaceRunner('samesha', 'samesha');
+    const outcome = await updatePlugin(
+      'my-mp:plg-a',
+      {},
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome.status).toBe('up-to-date');
+  });
+
+  it('calls _resetPluginScanCache after marketplace delegation', async () => {
+    seedMarketplace('my-mp', ['plg-a']);
+    const { runner } = makeMarketplaceRunner('newsha');
+    await updatePlugin(
+      'my-mp:plg-a',
+      {},
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    expect(resetScanCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns missing-dir for a corrupt index entry with no marketplace field', async () => {
+    // Seed a plugin with sourceType: 'marketplace' but no marketplace field
+    upsertPlugin('bad-mp:plg', {
+      source: 'bad-mp:plg',
+      sourceType: 'marketplace',
+      ref: null,
+      commit: null,
+      enabled: true,
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    }, indexPath);
+    const { runner } = makeMarketplaceRunner();
+    const outcome = await updatePlugin(
+      'bad-mp:plg',
+      {},
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome.status).toBe('missing-dir');
+  });
+});
+
+describe('updatePlugin — marketplace ref forwarding (P2)', () => {
+  it('forwards options.ref to updateMarketplace so the pin is honoured', async () => {
+    seedMarketplace('my-mp', ['plg-a']);
+    const calls: string[][] = [];
+    // Runner that resolves refs/remotes/origin/v1.0.0 as the explicit pin and
+    // advances HEAD so updateMarketplace reports "updated".
+    const runner: GitRunner = async (args) => {
+      const a = Array.from(args);
+      calls.push(a);
+      if (a.includes('checkout')) return { stdout: '', stderr: '' };
+      if (a[0] === 'tag') return { stdout: '\n', stderr: '' };
+      if (a[0] === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (a[0] === 'rev-parse') {
+        const rev = a[a.length - 1] ?? '';
+        if (rev === 'HEAD') return { stdout: 'newsha\n', stderr: '' };
+        if (rev === 'refs/remotes/origin/v1.0.0') return { stdout: 'v1sha\n', stderr: '' };
+        // oldsha is the HEAD at index time; v1sha != oldsha → update.
+        throw new Error('fatal: Needed a single revision');
+      }
+      return { stdout: '', stderr: '' };
+    };
+    const outcome = await updatePlugin(
+      'my-mp:plg-a',
+      { ref: 'v1.0.0' },
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    // The rev-parse call for refs/remotes/origin/v1.0.0 must appear, proving
+    // the ref was forwarded (updateMarketplace would not check that ref otherwise).
+    const revParseCalls = calls.filter((c) => c[0] === 'rev-parse');
+    expect(revParseCalls.some((c) => c.includes('refs/remotes/origin/v1.0.0'))).toBe(true);
+    // Outcome should report the pinned ref.
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v1.0.0');
+  });
+});
+
+describe('updatePlugin — removed-by-marketplace (P2)', () => {
+  it('returns removed-by-marketplace when the updated manifest drops the plugin', async () => {
+    // Seed the marketplace with plg-a present initially (localSha = 'oldsha').
+    seedMarketplace('my-mp', ['plg-a'], { commit: 'oldsha' });
+    const mpDir = join(cacheDir, 'my-mp');
+
+    // Runner that, on checkout, rewrites the manifest to drop plg-a — simulating
+    // a real `git checkout` that updates the working tree to a commit where the
+    // plugin was removed. HEAD starts at oldsha (local) while origin/main is at
+    // newsha, so the updater sees a diff and performs the checkout.
+    let head = 'oldsha';
+    const runner: GitRunner = async (args) => {
+      const a = Array.from(args);
+      if (a.includes('checkout')) {
+        head = 'newsha';
+        // Simulate the manifest after update: plg-a removed, plg-b added.
+        writeFileSync(
+          join(mpDir, '.claude-plugin', 'marketplace.json'),
+          JSON.stringify({ name: 'my-mp', plugins: [{ name: 'plg-b', source: './plugins/plg-b' }] }),
+          'utf8',
+        );
+        return { stdout: '', stderr: '' };
+      }
+      if (a[0] === 'tag') return { stdout: '\n', stderr: '' };
+      if (a[0] === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (a[0] === 'rev-parse') {
+        const rev = a[a.length - 1] ?? '';
+        if (rev === 'HEAD') return { stdout: head + '\n', stderr: '' };
+        if (rev === 'refs/remotes/origin/main') return { stdout: 'newsha\n', stderr: '' };
+        throw new Error('fatal: Needed a single revision');
+      }
+      return { stdout: '', stderr: '' };
+    };
+
+    const outcome = await updatePlugin(
+      'my-mp:plg-a',
+      {},
+      { pluginsDir, indexPath, cacheDir, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome).toEqual({ name: 'my-mp:plg-a', status: 'removed-by-marketplace', marketplace: 'my-mp' });
+  });
+});
+
+describe('updateAll — marketplace deduplication (issue #993)', () => {
+  it('updates marketplace plugins and regular plugins in one pass', async () => {
+    // One regular git plugin
+    seed('git-plugin', { ref: 'v1.0.0' });
+    // Two plugins from the same marketplace
+    seedMarketplace('corp-mp', ['tool-x', 'tool-y']);
+    const { runner: gitRunner } = makeRunner(['v2.0.0'], 'gitsha');
+    const { runner: mpRunner } = makeMarketplaceRunner('mpsha');
+
+    // Use mpRunner for marketplace calls (they go through cacheDir) and gitRunner for git plugin.
+    // Since updateAll shares one gitRunner dep, use mpRunner which handles both shapes.
+    const combinedRunner: GitRunner = async (args, cwd) => {
+      // Route based on presence of 'tag' (git plugin emits tags; marketplace has none)
+      if (String(cwd).includes('plugins')) return gitRunner(args, cwd);
+      return mpRunner(args, cwd);
+    };
+
+    const results = await updateAll({
+      pluginsDir,
+      indexPath,
+      cacheDir,
+      gitRunner: combinedRunner,
+      now: () => new Date(),
+    });
+
+    const names = results.map((r) => r.name).sort();
+    expect(names).toEqual(['corp-mp:tool-x', 'corp-mp:tool-y', 'git-plugin'].sort());
+
+    const gitResult = results.find((r) => r.name === 'git-plugin');
+    expect(gitResult?.status).toBe('updated');
+
+    const mpResults = results.filter((r) => r.name.startsWith('corp-mp:'));
+    // Both plugins share the same marketplace outcome (updated or up-to-date)
+    expect(mpResults.every((r) => r.status === 'updated' || r.status === 'up-to-date')).toBe(true);
+  });
+
+  it('emits missing-dir for marketplace plugins when updateMarketplace throws', async () => {
+    seedMarketplace('broken-mp', ['plg-z']);
+    // Marketplace dir is gone — updateMarketplace will throw "marketplace not installed"
+    // because seedMarketplace wrote the marketplace entry to the index. Let us
+    // remove the cache dir to force a missing-dir from updateMarketplace.
+    rmSync(join(cacheDir, 'broken-mp'), { recursive: true, force: true });
+    const { runner } = makeMarketplaceRunner();
+    const results = await updateAll({
+      pluginsDir,
+      indexPath,
+      cacheDir,
+      gitRunner: runner,
+      now: () => new Date(),
+    });
+    const r = results.find((o) => o.name === 'broken-mp:plg-z');
+    expect(r?.status).toBe('missing-dir');
   });
 });
