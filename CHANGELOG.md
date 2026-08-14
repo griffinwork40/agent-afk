@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.118.0] - 2026-08-14
+
+### Added
+- process-wide admission control for outbound API requests (#941) (#1050) (6f473544)
+
 ## [5.117.1] - 2026-08-14
 
 ### Fixed
