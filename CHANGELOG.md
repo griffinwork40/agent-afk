@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.119.3] - 2026-08-14
+
+### Changed
+- demote directive-class gate skills to prompt directives (Wave 4 partial) (#1084) (8792f6f5)
+
 ## [5.119.2] - 2026-08-14
 
 ### Changed
