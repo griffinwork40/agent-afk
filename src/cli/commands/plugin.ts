@@ -248,8 +248,12 @@ function formatOutcome(o: UpdateOutcome): string {
     }
     case 'skipped-local':
       return `${palette.meta('·')} ${palette.bold(o.name)}: skipped (local source)`;
+    case 'skipped-marketplace':
+      return `${palette.meta('·')} ${palette.bold(o.name)}: skipped (marketplace source — run "afk marketplace update ${o.marketplace}")`;
     case 'missing-dir':
       return `${palette.warning('!')} ${palette.bold(o.name)}: plugin dir missing (${o.dir})`;
+    case 'removed-by-marketplace':
+      return `${palette.warning('!')} ${palette.bold(o.name)}: removed by marketplace "${o.marketplace}" — run "afk plugin remove ${o.name}" to clean up`;
   }
 }
 
@@ -257,6 +261,6 @@ function printOutcome(o: UpdateOutcome, spinner: ReturnType<typeof ora>): void {
   const line = formatOutcome(o);
   if (o.status === 'updated') spinner.succeed(line);
   else if (o.status === 'up-to-date') spinner.info(line);
-  else if (o.status === 'skipped-local') spinner.info(line);
+  else if (o.status === 'skipped-local' || o.status === 'skipped-marketplace') spinner.info(line);
   else spinner.warn(line);
 }

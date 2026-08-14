@@ -24,7 +24,6 @@ export const GATE_SKILLS = new Set<string>([
   'fanout-pace',
   'right-size-delegation',
   'premise-gate',
-  'intent-lock',
   'long-bash-gate',
   'exploration-gate',
   'irreversible-action-gate',

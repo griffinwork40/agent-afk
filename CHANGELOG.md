@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.119.3] - 2026-08-14
+
+### Changed
+- demote directive-class gate skills to prompt directives (Wave 4 partial) (#1084) (8792f6f5)
+
+## [5.119.2] - 2026-08-14
+
+### Changed
+- extract shared pricing lookup into providers/shared/pricing-utils.ts (#1078) (bac408c8)
+
+## [5.119.1] - 2026-08-14
+
+### Fixed
+- delegate marketplace plugins to updateMarketplace (#1011) (cc0b2d00)
+
+### Changed
+- separate MAX_SEARCH_MATCHES from MAX_LIMIT (#1037) (#1046) (2627623c)
+
+
 ## [5.119.0] - 2026-08-14
 
 ### Added
