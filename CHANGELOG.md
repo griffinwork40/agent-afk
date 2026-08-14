@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.122.0] - 2026-08-14
+
+### Added
+- auto-derive session facets at SessionEnd + backfill script (#1089) (a6d0f332)
+
+### Changed
+- consolidate ANSI strip regex to canonical terminal-sanitize.ts (#1080) (1dac0356)
+
 ## [5.121.0] - 2026-08-14
 
 ### Added
