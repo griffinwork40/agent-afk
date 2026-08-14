@@ -11,10 +11,6 @@
  */
 
 export {
-  startShell,
-  DEFAULT_TIMEOUT_MS,
-  DEFAULT_MAX_BYTES,
-  type StartShellOptions,
   type ShellHandle,
   type ShellResult,
   type ShellErrorReason,
@@ -24,6 +20,5 @@ export {
   ShellJobRegistry,
   type ShellJob,
   type ShellJobStatus,
-  type ShellJobRegistryEvents,
   type StartJobOptions,
 } from './registry.js';
