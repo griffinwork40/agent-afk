@@ -143,6 +143,48 @@ describe('acquirePermit — abort signal', () => {
   });
 });
 
+// ── no-signal path (busy-loop regression) ────────────────────────────────────
+
+describe('acquirePermit — no signal (busy-loop regression)', () => {
+  it('resolves after freeze expires without signal (sleep wins, not busy-loop)', async () => {
+    // Regression: Promise.resolve() used to win the race instantly when signal was
+    // undefined, causing a 100% CPU tight loop. new Promise<void>(() => {}) fixes it.
+    const bucket = new RateLimitBucket();
+    // Freeze for 50ms — short enough that the test completes quickly.
+    bucket.freeze(50);
+    // Give the bucket some state so it doesn't immediately pass through after thaw.
+    // We want one iteration to sleep (freeze), then the second to pass (headroom).
+    bucket.update({ requestsRemaining: 5, requestsLimit: 100 });
+    const start = Date.now();
+    // No signal — the freeze sleep must win the race (not busy-loop).
+    await bucket.acquirePermit(100); // no signal arg
+    const elapsed = Date.now() - start;
+    // Should take at least 50ms (freeze) but not more than 2s (no infinite loop).
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it('resolves after window reset expires without signal (sleep wins)', async () => {
+    // Regression: same as above but in the window-exhausted branch.
+    const bucket = new RateLimitBucket();
+    // Exhaust the request window, reset in 60ms.
+    const resetAt = Date.now() + 60;
+    bucket.update({
+      requestsRemaining: 0,
+      requestsLimit: 10,
+      requestsResetAt: resetAt,
+      inputTokensRemaining: 50_000,
+      inputTokensLimit: 100_000,
+    });
+    const start = Date.now();
+    // No signal — must sleep until reset, not spin.
+    await bucket.acquirePermit(100); // no signal arg
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(50);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+});
+
 // ── freeze ────────────────────────────────────────────────────────────────────
 
 describe('freeze', () => {

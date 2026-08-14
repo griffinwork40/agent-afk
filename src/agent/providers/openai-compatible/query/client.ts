@@ -53,8 +53,12 @@ export function resolveClientFactory(): OpenAIClientFactory {
   return clientFactory ?? defaultClientFactory;
 }
 
-/** Local-endpoint substrings that indicate a self-hosted shim (no rate limits). */
-const LOCAL_PATTERNS = ['localhost', '127.', '0.0.0.0'];
+/**
+ * Endpoint substrings that bypass the rate-limit admission gate.
+ * Includes IPv4/IPv6 loopback, any-address, and the ChatGPT-OAuth backend
+ * (subscription pass-through — no per-minute rate limits apply there).
+ */
+const LOCAL_PATTERNS = ['localhost', '127.', '0.0.0.0', '[::1]', 'chatgpt.com'];
 
 /**
  * Build a rate-limit admission fetch wrapper for the OpenAI SDK.

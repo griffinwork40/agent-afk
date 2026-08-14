@@ -18,6 +18,7 @@ const A_REQ_REMAINING = 'anthropic-ratelimit-requests-remaining';
 const A_REQ_LIMIT = 'anthropic-ratelimit-requests-limit';
 const A_REQ_RESET = 'anthropic-ratelimit-requests-reset';
 const A_INPUT_REMAINING = 'anthropic-ratelimit-input-tokens-remaining';
+const A_INPUT_LIMIT = 'anthropic-ratelimit-input-tokens-limit';
 const A_INPUT_RESET = 'anthropic-ratelimit-input-tokens-reset';
 const A_OUTPUT_REMAINING = 'anthropic-ratelimit-output-tokens-remaining';
 const A_OUTPUT_RESET = 'anthropic-ratelimit-output-tokens-reset';
@@ -28,6 +29,7 @@ const O_REQ_REMAINING = 'x-ratelimit-remaining-requests';
 const O_REQ_LIMIT = 'x-ratelimit-limit-requests';
 const O_REQ_RESET = 'x-ratelimit-reset-requests';
 const O_TOK_REMAINING = 'x-ratelimit-remaining-tokens';
+const O_TOK_LIMIT = 'x-ratelimit-limit-tokens';
 const O_TOK_RESET = 'x-ratelimit-reset-tokens';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,6 +90,7 @@ export function parseAnthropicRateLimitHeaders(headers: Headers): RateLimitSnaps
   const reqLimit = parseCount(headers.get(A_REQ_LIMIT));
   const reqResetAt = parseIso8601(headers.get(A_REQ_RESET));
   const inputRemaining = parseCount(headers.get(A_INPUT_REMAINING));
+  const inputLimit = parseCount(headers.get(A_INPUT_LIMIT));
   const inputResetAt = parseIso8601(headers.get(A_INPUT_RESET));
   const outputRemaining = parseCount(headers.get(A_OUTPUT_REMAINING));
   const outputResetAt = parseIso8601(headers.get(A_OUTPUT_RESET));
@@ -107,6 +110,7 @@ export function parseAnthropicRateLimitHeaders(headers: Headers): RateLimitSnaps
   if (reqLimit !== undefined) snap.requestsLimit = reqLimit;
   if (reqResetAt !== undefined) snap.requestsResetAt = reqResetAt;
   if (inputRemaining !== undefined) snap.inputTokensRemaining = inputRemaining;
+  if (inputLimit !== undefined) snap.inputTokensLimit = inputLimit;
   if (inputResetAt !== undefined) snap.inputTokensResetAt = inputResetAt;
   if (outputRemaining !== undefined) snap.outputTokensRemaining = outputRemaining;
   if (outputResetAt !== undefined) snap.outputTokensResetAt = outputResetAt;
@@ -126,6 +130,7 @@ export function parseOpenAIRateLimitHeaders(headers: Headers): RateLimitSnapshot
   const reqLimit = parseCount(headers.get(O_REQ_LIMIT));
   const reqResetAt = parseDurationOrIso(headers.get(O_REQ_RESET));
   const tokRemaining = parseCount(headers.get(O_TOK_REMAINING));
+  const tokLimit = parseCount(headers.get(O_TOK_LIMIT));
   const tokResetAt = parseDurationOrIso(headers.get(O_TOK_RESET));
 
   if (reqRemaining === undefined && tokRemaining === undefined) return undefined;
@@ -134,9 +139,10 @@ export function parseOpenAIRateLimitHeaders(headers: Headers): RateLimitSnapshot
   if (reqRemaining !== undefined) snap.requestsRemaining = reqRemaining;
   if (reqLimit !== undefined) snap.requestsLimit = reqLimit;
   if (reqResetAt !== undefined) snap.requestsResetAt = reqResetAt;
-  // OpenAI's token header covers combined I/O — store as inputTokensRemaining
-  // so the bucket gates on it the same way it gates on Anthropic's ITPM field.
+  // OpenAI's token headers cover combined I/O — store as inputTokensRemaining /
+  // inputTokensLimit so the bucket gates on them the same way as Anthropic's ITPM.
   if (tokRemaining !== undefined) snap.inputTokensRemaining = tokRemaining;
+  if (tokLimit !== undefined) snap.inputTokensLimit = tokLimit;
   if (tokResetAt !== undefined) snap.inputTokensResetAt = tokResetAt;
   return snap;
 }

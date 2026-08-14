@@ -200,7 +200,7 @@ export class RateLimitBucket {
         const waitMs = this.frozenUntil - now;
         await Promise.race([
           sleep(waitMs),
-          signal ? new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true })) : Promise.resolve(),
+          signal ? new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true })) : new Promise<void>(() => {}),
         ]);
         continue;
       }
@@ -230,12 +230,19 @@ export class RateLimitBucket {
       const candidates: number[] = [];
       if (this.requestsResetAt > now) candidates.push(this.requestsResetAt);
       if (this.inputTokensResetAt > now) candidates.push(this.inputTokensResetAt);
-      const nextReset = candidates.length > 0 ? Math.min(...candidates) : now + 60_000;
+      // When no reset timestamp is known but a dimension is exhausted, use a short
+      // backoff (5 s) rather than 60 s so we converge quickly once headers arrive.
+      // The 60 s fallback is kept for the truly-unknown case (both dimensions at -1
+      // should have already returned via the pass-through above, but be defensive).
+      const knownExhausted =
+        this.requestsRemaining === 0 || this.inputTokensRemaining === 0;
+      const defaultWaitMs = knownExhausted ? 5_000 : 60_000;
+      const nextReset = candidates.length > 0 ? Math.min(...candidates) : now + defaultWaitMs;
       const sleepMs = Math.max(1, nextReset - now) + staggerJitterMs();
 
       await Promise.race([
         sleep(sleepMs),
-        signal ? new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true })) : Promise.resolve(),
+        signal ? new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true })) : new Promise<void>(() => {}),
       ]);
     }
   }

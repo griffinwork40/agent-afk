@@ -80,6 +80,25 @@ describe('parseAnthropicRateLimitHeaders', () => {
       ),
     ).not.toThrow();
   });
+
+  it('parses anthropic-ratelimit-input-tokens-limit into inputTokensLimit', () => {
+    const snap = parseAnthropicRateLimitHeaders(
+      makeHeaders({
+        'anthropic-ratelimit-input-tokens-remaining': '50000',
+        'anthropic-ratelimit-input-tokens-limit': '200000',
+      }),
+    );
+    expect(snap).toBeDefined();
+    expect(snap!.inputTokensRemaining).toBe(50_000);
+    expect(snap!.inputTokensLimit).toBe(200_000);
+  });
+
+  it('does not set inputTokensLimit when the header is absent', () => {
+    const snap = parseAnthropicRateLimitHeaders(
+      makeHeaders({ 'anthropic-ratelimit-input-tokens-remaining': '1000' }),
+    );
+    expect(snap!.inputTokensLimit).toBeUndefined();
+  });
 });
 
 describe('parseOpenAIRateLimitHeaders', () => {
@@ -183,6 +202,25 @@ describe('parseOpenAIRateLimitHeaders', () => {
         }),
       ),
     ).not.toThrow();
+  });
+
+  it('parses x-ratelimit-limit-tokens into inputTokensLimit', () => {
+    const snap = parseOpenAIRateLimitHeaders(
+      makeHeaders({
+        'x-ratelimit-remaining-tokens': '8000',
+        'x-ratelimit-limit-tokens': '90000',
+      }),
+    );
+    expect(snap).toBeDefined();
+    expect(snap!.inputTokensRemaining).toBe(8_000);
+    expect(snap!.inputTokensLimit).toBe(90_000);
+  });
+
+  it('does not set inputTokensLimit when x-ratelimit-limit-tokens is absent', () => {
+    const snap = parseOpenAIRateLimitHeaders(
+      makeHeaders({ 'x-ratelimit-remaining-tokens': '1000' }),
+    );
+    expect(snap!.inputTokensLimit).toBeUndefined();
   });
 });
 
