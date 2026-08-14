@@ -28,6 +28,7 @@ import { writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PreflightContext, PreflightResult, SkillInvocation, SkillPreflight } from './types.js';
 import { env } from '../../../config/env.js';
+import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -126,7 +127,7 @@ async function tryExec(cmd: string, args: string[], opts?: { cwd?: string; maxBu
     if (env.AFK_DEBUG === '1' && err instanceof Error && 'stderr' in err) {
       const raw = String((err as { stderr?: unknown }).stderr ?? '');
       // Strip ANSI escape sequences and truncate to 200 chars.
-      const sanitized = raw.replace(/\x1b\[[0-9;]*m/g, '').slice(0, 200).trim();
+      const sanitized = stripEscapeSequences(raw).slice(0, 200).trim();
       if (sanitized) {
         process.stderr.write(`[afk preflight] ${cmd} stderr: ${sanitized}\n`);
       }

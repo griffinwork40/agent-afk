@@ -19,6 +19,7 @@ import { readFile, mkdir, stat, open } from 'fs/promises';
 import { dirname } from 'path';
 import { O_WRONLY, O_CREAT, O_APPEND, O_NOFOLLOW, O_TRUNC } from 'node:constants';
 import { getReplHistoryPath } from '../../paths.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 const MAX_ENTRIES = 1_000;
 
@@ -31,13 +32,6 @@ const MAX_ENTRIES = 1_000;
 const SECRET_PATTERN =
   /(?:^sk-[A-Za-z0-9]|^ghp_[A-Za-z0-9]|^github_pat_[A-Za-z0-9]|^ghs_[A-Za-z0-9]|^xoxb-[0-9]|^glpat-[A-Za-z0-9]|bearer\s+\S|password\s*=\s*\S|token\s*=\s*\S|key\s*=\s*\S)/i;
 
-/**
- * Strip ANSI/VT escape sequences from a string (SEC-5).
- * Covers CSI sequences (ESC [ ... final) and two-char ESC sequences.
- */
-function stripAnsiEscapes(text: string): string {
-  return text.replace(/\x1b\[[^@-~]*[@-~]|\x1b[^[]/g, '');
-}
 
 interface HistoryEntry {
   text: string;
@@ -247,7 +241,7 @@ export async function loadHistory(): Promise<ReplHistory> {
         ) {
           const entry = parsed as HistoryEntry;
           // Strip ANSI/VT escape sequences before storing in memory (SEC-5).
-          const safe = stripAnsiEscapes(entry.text);
+          const safe = stripEscapeSequences(entry.text);
           // Skip empty after strip; enforce no-consecutive-duplicates (COR-5).
           if (safe.trim() && safe !== entries[entries.length - 1]) {
             entries.push(safe);

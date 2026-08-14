@@ -32,6 +32,7 @@ import type { BackgroundSummarizer } from '../../../agent/background-summarizer.
 import { BgJobLogReader } from '../../../agent/bg-job-log.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
 import { annotateIfIncomplete, isIncompleteStopReason } from '../../../agent/subagent/result.js';
+import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 
 let registryRef: BackgroundAgentRegistry | undefined;
 let summarizerRef: BackgroundSummarizer | undefined;
@@ -76,16 +77,13 @@ function ensureRegistry(ctx: Parameters<SlashCommand['handler']>[0]): Background
   return registryRef;
 }
 
-/** Regex matching ANSI escape sequences. */
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
-
 /**
  * Sanitize summary text for terminal rendering:
  * - Strip ANSI escape codes
  * - Truncate to terminal width (or a reasonable fallback)
  */
 function sanitizeSummaryText(text: string, maxCols = 120): string {
-  const stripped = text.replace(ANSI_RE, '').replace(/[\r\n]+/g, ' ').trim();
+  const stripped = stripEscapeSequences(text).replace(/[\r\n]+/g, ' ').trim();
   return stripped.length > maxCols ? `${stripped.slice(0, maxCols)}…` : stripped;
 }
 
@@ -296,7 +294,7 @@ export const bgsubJoinCmd: SlashCommand = {
 function formatDiskEvent(event: OutputEvent): string | null {
   if (event.type === 'chunk') {
     const chunk = event.chunk;
-    if (chunk.type === 'content') return chunk.content.replace(ANSI_RE, '');
+    if (chunk.type === 'content') return stripEscapeSequences(chunk.content);
     if (chunk.type === 'tool_use_detail') {
       return palette.dim(`  [tool: ${chunk.toolName}]`);
     }
@@ -306,7 +304,7 @@ function formatDiskEvent(event: OutputEvent): string | null {
   if (event.type === 'message') {
     const c = event.message.content;
     const text = typeof c === 'string' ? c : JSON.stringify(c);
-    return text.replace(ANSI_RE, '');
+    return stripEscapeSequences(text);
   }
   return null;
 }
