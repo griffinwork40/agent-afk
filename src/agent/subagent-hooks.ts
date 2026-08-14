@@ -200,8 +200,8 @@ export async function dispatchPreToolUse(
   registry: HookRegistry | undefined,
   context: PreToolUseContext,
   options: SubagentHookDispatchOptions = {},
-): Promise<void> {
-  if (!registry) return;
+): Promise<HookDecision> {
+  if (!registry) return {};
   try {
     const decision = await registry.dispatch(context, options.signal);
     await emitHookDecisionFromOutcome(
@@ -210,6 +210,7 @@ export async function dispatchPreToolUse(
       { toolName: context.toolName },
       { kind: 'decision', decision },
     );
+    return decision;
   } catch (err) {
     if (err instanceof HookBlockedError) {
       await emitHookDecisionFromOutcome(

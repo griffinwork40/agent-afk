@@ -34,6 +34,7 @@ auto-release workflow to deduplicate commits across successive runs.
 ### Changed
 - separate MAX_SEARCH_MATCHES from MAX_LIMIT (#1037) (#1046) (2627623c)
 
+
 ## [5.119.0] - 2026-08-14
 
 ### Added
