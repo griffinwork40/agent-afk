@@ -2,6 +2,8 @@
  * XML tag constants and breadcrumb formatter for command input metadata.
  */
 
+import { escapeRegExp } from '../../../utils/regexp.js';
+
 export const COMMAND_NAME_TAG = 'command-name';
 export const COMMAND_MESSAGE_TAG = 'command-message';
 export const COMMAND_ARGS_TAG = 'command-args';
@@ -78,9 +80,6 @@ export function stripCommandTags(text: string): string {
   return result;
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * Detect and strip `<skillName>` / `</skillName>` tags from content.

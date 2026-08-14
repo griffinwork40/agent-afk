@@ -91,6 +91,7 @@ import {
   afkAllowlistFileForms,
   relocatedAfkSensitiveRoots,
 } from './afk-home-refs.js';
+import { escapeRegExp } from '../../../utils/regexp.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -340,9 +341,6 @@ const PATH_LIKE_SPAN = /\/[^\s'"`;|&()<>]*/g;
  * any path characters so it can never itself satisfy a root or signal match. */
 const ALLOWLISTED_PLACEHOLDER = '<allowlisted-file>';
 
-function escapeRegExp(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * The exact-file carve-outs (`READ_ALLOWLIST_REL`) in every spelling a bash

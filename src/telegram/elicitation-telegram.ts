@@ -59,6 +59,7 @@ import type {
   ElicitationRequest,
   ElicitationResult,
 } from '../agent/types/sdk-types.js';
+import { escapeRegExp } from '../utils/regexp.js';
 
 /**
  * Prefix for path-approval / MCP elicitation callbacks. DISTINCT from the
@@ -290,9 +291,6 @@ function labelFor(choice: string): string {
   }
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * Compose the two Telegram elicitation handlers into ONE dispatcher for
