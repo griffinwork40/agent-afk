@@ -56,8 +56,11 @@ export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'lar
  * THIS tier — regardless of `OPENAI_API_KEY` and without the global
  * `AFK_OPENAI_CHATGPT_OAUTH` flag. This lets a ChatGPT-subscription model, a
  * custom keyed OpenAI model, and an Anthropic model coexist in one session.
+ *
+ * `xai` / `xai-oauth` route to the first-class xAI provider: API-key mode vs
+ * SuperGrok / SuperGrok Heavy / X Premium+ subscription OAuth.
  */
-export type SlotProvider = 'anthropic' | 'openai' | 'chatgpt-oauth';
+export type SlotProvider = 'anthropic' | 'openai' | 'chatgpt-oauth' | 'xai' | 'xai-oauth';
 
 /**
  * Binding for one capability tier.
@@ -385,6 +388,8 @@ function normalizeSlotProvider(value: unknown): SlotProvider | undefined {
   if (lowered === 'anthropic' || lowered === 'anthropic-direct') return 'anthropic';
   if (lowered === 'openai' || lowered === 'openai-compatible') return 'openai';
   if (lowered === 'chatgpt-oauth' || lowered === 'chatgpt') return 'chatgpt-oauth';
+  if (lowered === 'xai') return 'xai';
+  if (lowered === 'xai-oauth' || lowered === 'xai_oauth') return 'xai-oauth';
   return undefined;
 }
 

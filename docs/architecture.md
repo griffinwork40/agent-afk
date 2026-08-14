@@ -9,6 +9,7 @@ How `agent-afk` is put together. Reference for contributors and anyone embedding
 | `src/agent/` | Provider-agnostic session harness. `AgentSession` is the single runtime entry point; delegates to a `ModelProvider` from `providerForModel()`. |
 | `src/agent/providers/anthropic-direct/` | Wraps `@anthropic-ai/sdk` Messages API. Default for `claude-*`, `opus`, `sonnet`, `haiku`. `'anthropic'` is a silent alias. |
 | `src/agent/providers/openai-compatible/` | Talks directly to OpenAI's Chat Completions API (and any compatible endpoint via `baseURL`). Default for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`, and HuggingFace-style `org/model` ids served by local OpenAI-shim runners. `'openai-codex'` is a deprecated alias. |
+| `src/agent/providers/xai/` | First-class Grok provider. Composes openai-compatible for the wire path; owns SuperGrok / SuperGrok Heavy / X Premium+ OAuth and dual endpoints (`api.x.ai` vs CLI chat proxy). Default for `grok-*`. See [xai-provider.md](xai-provider.md). |
 | `src/cli/` | Commander-based terminal surface. Commands in `src/cli/commands/`. REPL: `commands/interactive/` (bootstrap → loop → turn → markdown stream → cleanup). Slash commands in `src/cli/slash/` via Levenshtein-hint dispatcher. |
 | `src/telegram/` | Telegraf bot, per-chat session management, allowlist via `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. |
 | `src/skills/` | Headless mirrors of plugin orchestration skills. Each has `prompts/` (markdown) loaded by `src/skills/_lib/prompt-loader.ts`. |

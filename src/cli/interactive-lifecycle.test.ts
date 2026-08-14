@@ -57,6 +57,7 @@ describe('interactive bootstrap status line hooks', () => {
       parseProvider: vi.fn(() => undefined),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
       getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),
@@ -213,6 +214,7 @@ function applyCommonMocks(): void {
     parseProvider: vi.fn(() => undefined),
     getApiKey: vi.fn(() => 'test-key'),
     getApiKeyForModel: vi.fn(() => 'test-key'),
+    explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
     getModel: vi.fn(() => 'sonnet'),
     getThinking: vi.fn(() => undefined),
     getEffort: vi.fn(() => undefined),
@@ -404,6 +406,7 @@ describe('interactive command exit teardown', () => {
       getModel: vi.fn(() => 'sonnet'),
       getApiKey: vi.fn(() => undefined),
       getApiKeyForModel: vi.fn(() => undefined),
+      explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
     }));
     vi.doMock('./session-store.js', () => ({
       saveSession: vi.fn(),
@@ -549,6 +552,7 @@ describe('interactive worktree flag', () => {
       getModel: vi.fn(() => 'sonnet'),
       getApiKey: vi.fn(() => undefined),
       getApiKeyForModel: vi.fn(() => undefined),
+      explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
     }));
     vi.doMock('./session-store.js', () => ({
       saveSession: vi.fn(),
@@ -982,6 +986,7 @@ describe('interactive signal-handler wiring (PR #486)', () => {
       getModel: vi.fn(() => 'sonnet'),
       getApiKey: vi.fn(() => undefined),
       getApiKeyForModel: vi.fn(() => undefined),
+      explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
     }));
     vi.doMock('./session-store.js', () => ({ saveSession: vi.fn() }));
     vi.doMock('./commands/interactive/transcript.js', () => ({
@@ -1211,6 +1216,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       parseProvider: vi.fn(() => stub),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
       getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),

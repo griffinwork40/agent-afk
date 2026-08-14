@@ -255,6 +255,11 @@ export class ProviderRouter implements ProviderQuery {
       // tier clears apiKey + shares the openai base with a plain openai tier, so
       // without this a switch between them would collide and skip the rebuild.
       innerConfig.forceChatgptOAuth ? 'chatgpt-oauth' : '',
+      // Symmetric for SuperGrok OAuth vs API-key xAI tiers.
+      innerConfig.forceXaiOAuth ? 'xai-oauth' : '',
+      innerConfig.forceXaiApiKey ? 'xai-apikey' : '',
+      // Slot-only xAI endpoint (not global AFK_OPENAI_BASE_URL).
+      innerConfig.xaiBaseUrl ?? '',
     ].join('\u0000');
 
     return { provider, innerConfig, signature };

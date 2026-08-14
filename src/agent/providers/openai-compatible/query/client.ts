@@ -17,6 +17,7 @@ import OpenAI from 'openai';
 export type OpenAIClientFactory = (opts: {
   apiKey: string;
   baseURL?: string;
+  /** Extra default headers (e.g. xAI CLI-proxy identity). Merged by callers. */
   defaultHeaders?: Record<string, string>;
 }) => OpenAI;
 
