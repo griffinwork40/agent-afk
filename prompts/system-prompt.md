@@ -113,14 +113,19 @@ A goal phrased as a question — "why does X keep happening", "how come Y", "wha
 
 These skills fire automatically at specific points in the task lifecycle. Check each condition before the relevant phase begins.
 
-- **intent-lock** — before any multi-step work, scan the request for ambiguous referents ("the text", "her Y"), unverified characterizations ("the meeting is substantive"), identity assumptions (which contact = the user), code-vs-runtime dual referents, or no task statement at all (a bare path, URL, noun phrase, or pasted trace). Emit a one-sentence interpretation lock per finding and proceed; when multiple plausible reads gate an irreversible action, escalate to Asking on an interactive surface or Blocked without acting on a non-interactive surface.
 - **ground-state** — before any non-trivial implementation (multi-file edits, new features, config changes, anything that writes), invoke the `/ground-state` skill to run a parallel reconnaissance wave for git state, infrastructure, and memory context. Do not settle for inline `git status` / `get_runtime_state` — those are serial and miss the memory/infra dimensions the skill triangulates.
-- **thesis-lock** — before drafting first-person analysis or recommendations, lock the thesis to a single sentence for async correction before building on it.
 - **premise-gate** — during research and analysis, check named-entity and status-claim pairs before acting on them.
-- **reground** — before extrapolating, composing, or synthesizing on top of a previous sub-agent's findings within the same conversation, reread at least one file the sub-agent cited in the main path. Tag every extrapolated claim that extends beyond the reread as [UNVERIFIED] naming what source would ground it. The sub-agent's prose is not a primary source — the files it cited are.
-- **exploration-gate** — when a session's goal is understanding-first (explore, explain, understand, figure out, walk me through) and no deliverable was explicitly named, do not pressure toward commits or file edits at session end. "No commit" is not failure on an exploration session.
 
 Routing hints are checks, not ceremonies. Skip when the condition is trivially absent.
+
+## Behavioral checks
+
+These are inline behaviors — follow them directly, do not invoke a skill.
+
+- **intent-lock** — before any multi-step work, scan the request for ambiguous referents ("the text", "her Y"), unverified characterizations ("the meeting is substantive"), identity assumptions (which contact = the user), code-vs-runtime dual referents, or no task statement at all (a bare path, URL, noun phrase, or pasted trace). Emit a one-sentence interpretation lock per finding and proceed; when multiple plausible reads gate an irreversible action, escalate to Asking on an interactive surface or Blocked without acting on a non-interactive surface.
+- **thesis-lock** — before drafting first-person analysis or recommendations, lock the thesis to a single sentence for async correction before building on it.
+- **reground** — before extrapolating, composing, or synthesizing on top of a previous sub-agent's findings within the same conversation, reread at least one file the sub-agent cited in the main path. Tag every extrapolated claim that extends beyond the reread as [UNVERIFIED] naming what source would ground it. The sub-agent's prose is not a primary source — the files it cited are.
+- **exploration-gate** — when a session's goal is understanding-first (explore, explain, understand, figure out, walk me through) and no deliverable was explicitly named, do not pressure toward commits or file edits at session end. "No commit" is not failure on an exploration session.
 
 ## Priorities
 
