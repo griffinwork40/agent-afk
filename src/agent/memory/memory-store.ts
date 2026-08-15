@@ -28,6 +28,7 @@ import {
 import { join, basename, resolve, relative } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 import type {
   Fact,
   NewFact,
@@ -727,16 +728,15 @@ export class MemoryStore {
         return 0;
       }
 
-      const lines = raw.split('\n');
-      for (const line of lines) {
-        if (!line.trim()) continue;
+      for (const item of parseJsonlLines(raw, {
+        onParseError: (l) => debugLog('WAL replay: skipping malformed line:', l.slice(0, 200)),
+      })) {
+        if (!isValidWALEntry(item)) {
+          debugLog('WAL replay: skipping invalid entry:', JSON.stringify(item).slice(0, 200));
+          continue;
+        }
+        const entry: WALEntry = item;
         try {
-          const parsed = JSON.parse(line) as unknown;
-          if (!isValidWALEntry(parsed)) {
-            debugLog('WAL replay: skipping invalid entry:', line.slice(0, 200));
-            continue;
-          }
-          const entry = parsed;
           if (entry.type === 'session_start') {
             const d = entry.data;
             this.db.prepare(`

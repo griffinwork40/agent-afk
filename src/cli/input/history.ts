@@ -19,6 +19,7 @@ import { readFile, mkdir, stat, open } from 'fs/promises';
 import { dirname } from 'path';
 import { O_WRONLY, O_CREAT, O_APPEND, O_NOFOLLOW, O_TRUNC } from 'node:constants';
 import { getReplHistoryPath } from '../../paths.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 const MAX_ENTRIES = 1_000;
@@ -36,6 +37,16 @@ const SECRET_PATTERN =
 interface HistoryEntry {
   text: string;
   ts: number;
+}
+
+/** Type guard for {@link HistoryEntry}. */
+function isHistoryEntry(v: unknown): v is HistoryEntry {
+  return (
+    v !== null &&
+    typeof v === 'object' &&
+    'text' in (v as object) &&
+    typeof (v as HistoryEntry).text === 'string'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -228,29 +239,19 @@ export async function loadHistory(): Promise<ReplHistory> {
   try {
     const raw = await readFile(path, 'utf8');
     const entries: string[] = [];
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed: unknown = JSON.parse(trimmed);
-        if (
-          parsed !== null &&
-          typeof parsed === 'object' &&
-          'text' in parsed &&
-          typeof (parsed as HistoryEntry).text === 'string'
-        ) {
-          const entry = parsed as HistoryEntry;
-          // Strip ANSI/VT escape sequences before storing in memory (SEC-5).
-          const safe = stripEscapeSequences(entry.text);
-          // Skip empty after strip; enforce no-consecutive-duplicates (COR-5).
-          if (safe.trim() && safe !== entries[entries.length - 1]) {
-            entries.push(safe);
-          }
-        }
-      } catch {
-        // Malformed line — skip silently.
-      }
-    }
+const historyEntries = parseJsonlLines<HistoryEntry>(raw, {
+  guard: isHistoryEntry,
+});
+
+for (const entry of historyEntries) {
+  // Strip ANSI/VT escape sequences before storing in memory (SEC-5).
+  const safe = stripEscapeSequences(entry.text);
+
+  // Skip empty after strip; enforce no-consecutive-duplicates (COR-5).
+  if (safe.trim() && safe !== entries[entries.length - 1]) {
+    entries.push(safe);
+  }
+}
     // PERF-3: seed the disk-entry counter so appendHistory can use the fast
     // path without re-reading the file on the next write.
     _diskEntryCount = entries.length;
@@ -313,23 +314,7 @@ function appendHistory(text: string): Promise<void> {
     let existing: HistoryEntry[] = [];
     try {
       const raw = await readFile(path, 'utf8');
-      for (const l of raw.split('\n')) {
-        const trimmed = l.trim();
-        if (!trimmed) continue;
-        try {
-          const parsed: unknown = JSON.parse(trimmed);
-          if (
-            parsed !== null &&
-            typeof parsed === 'object' &&
-            'text' in parsed &&
-            typeof (parsed as HistoryEntry).text === 'string'
-          ) {
-            existing.push(parsed as HistoryEntry);
-          }
-        } catch {
-          /* skip */
-        }
-      }
+      existing = parseJsonlLines<HistoryEntry>(raw, { guard: isHistoryEntry });
     } catch {
       // File doesn't exist yet — existing stays empty.
     }

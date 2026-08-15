@@ -23,6 +23,7 @@ import { readLedger } from '../../session-ledger.js';
 import { listTraces, resolveLatestSession } from '../../trace/listing.js';
 import type { TraceEvent } from '../../trace/index.js';
 import { readTraceSafe } from './witness.query.io.js';
+import { parseJsonlLines } from '../../../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -61,17 +62,7 @@ function isTraceEvent(v: unknown): v is TraceEvent {
 
 /** Parse NDJSON content into trace events, skipping malformed lines. */
 function parseEvents(content: string): TraceEvent[] {
-  const events: TraceEvent[] = [];
-  for (const line of content.split('\n')) {
-    if (line.trim() === '') continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (isTraceEvent(parsed)) events.push(parsed);
-    } catch {
-      // Malformed line — skip silently (live traces may have partial tails).
-    }
-  }
-  return events;
+  return parseJsonlLines<TraceEvent>(content, { guard: isTraceEvent });
 }
 
 /** Clamp a limit value to [1, MAX_LIMIT], defaulting to DEFAULT_LIMIT. */
@@ -302,23 +293,23 @@ export async function searchAcrossSessions(
     const { content, truncated } = await readTraceSafe(entry.tracePath);
     sessionsActuallySearched++;
     if (truncated) truncatedSessions.push(entry.sessionId);
-    for (const line of content.split('\n')) {
-      if (matches.length >= matchLimit) break;
-      if (line.trim() === '') continue;
-      if (!line.toLowerCase().includes(queryLower)) continue;
+    // Pre-filter by query string before parsing to avoid JSON.parse overhead
+    // on lines that cannot match. Then use parseJsonlLines to handle the
+    // split/trim/skip-empty/JSON.parse/catch contract uniformly.
+    const candidateLines = content
+      .split('\n')
+      .filter((l) => l.trim() !== '' && l.toLowerCase().includes(queryLower));
 
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (!isTraceEvent(parsed)) continue;
-        if (kindFilter && !kindFilter.has(parsed.kind)) continue;
-        matches.push({
-          sessionId: entry.sessionId,
-          event: parsed,
-          matchLine: line.length > 500 ? line.slice(0, 500) + '…' : line,
-        });
-      } catch {
-        // Malformed — skip.
-      }
+    for (const line of candidateLines) {
+      if (matches.length >= matchLimit) break;
+      const [event] = parseJsonlLines<TraceEvent>(line, { guard: isTraceEvent });
+      if (!event) continue;
+      if (kindFilter && !kindFilter.has(event.kind)) continue;
+      matches.push({
+        sessionId: entry.sessionId,
+        event,
+        matchLine: line.length > 500 ? line.slice(0, 500) + '…' : line,
+      });
     }
   }
 

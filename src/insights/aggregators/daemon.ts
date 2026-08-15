@@ -17,6 +17,7 @@
 import { existsSync, openSync, readSync, fstatSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTelemetryPath } from '../../paths.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 import type { InsightsOptions, DaemonAggregates } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -99,28 +100,21 @@ export function aggregateDaemonTelemetry(options: InsightsOptions): DaemonAggreg
   }
 
   const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;
-  const lines = rawContent.split('\n');
 
   const allErrors: Array<{ taskId: string; ts: number; message: string }> = [];
   let totalDurationMs = 0;
   let durationCount = 0;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  // parseJsonlLines handles split/trim/skip-empty/JSON.parse/catch for us.
+  // The guard filters out valid-JSON-but-non-object values (bare null, numbers,
+  // strings, arrays) before any property access, matching the previous
+  // hand-written null/typeof check.
+  const records = parseJsonlLines<Record<string, unknown>>(rawContent, {
+    guard: (x): x is Record<string, unknown> =>
+      x !== null && typeof x === 'object' && !Array.isArray(x),
+  });
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      continue; // malformed line — skip
-    }
-    // A valid-JSON-but-non-object line (bare `null`, a number, a string, an
-    // array) parses cleanly and escapes the catch above. Skip it before any
-    // property access so `null['triggeredAt']` can never throw.
-    if (parsed === null || typeof parsed !== 'object') continue;
-    const record = parsed as Record<string, unknown>;
-
+  for (const record of records) {
     // Filter by triggeredAt (ISO string → epoch ms)
     const triggeredAtRaw = record['triggeredAt'];
     if (typeof triggeredAtRaw !== 'string') continue;

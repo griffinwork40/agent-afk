@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import { getAfkStateDir } from '../../paths.js';
 import { TraceEventSchema } from '../../agent/trace/events.js';
 import type { InsightsOptions, TraceAggregates } from '../types.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Zero aggregates factory
@@ -155,19 +156,7 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     if (raw === null) {
       continue; // file was unreadable above — nothing to aggregate
     }
-    const lines = raw.split('\n');
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        continue; // malformed line — skip
-      }
-
+    for (const parsed of parseJsonlLines(raw)) {
       const result = TraceEventSchema.safeParse(parsed);
       if (!result.success) {
         continue; // schema mismatch — skip
