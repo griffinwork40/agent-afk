@@ -19,6 +19,7 @@ import { readdir, stat, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { env } from '../config/env.js';
 import { getWitnessRoot } from '../paths.js';
+import { sweepExpiredManifests as sweepWaveManifests } from './manifest/reconcile.js';
 
 /** Evict a session directory once its newest content is older than this. */
 export const WITNESS_MAX_AGE_DAYS_DEFAULT = 30;
@@ -214,6 +215,9 @@ export async function sweepWitnessTree(
     } catch {
       /* stamp is an optimization, not a correctness requirement */
     }
+    // Co-locate expired wave manifest cleanup. Same cadence as the witness
+    // sweep (gated on the shared stamp above). Fire-and-forget; never throws.
+    sweepWaveManifests();
     return result;
   } catch {
     return { skipped: false, scanned: 0, evicted: 0, freedBytes: 0, evictedLabels: [] };
@@ -229,3 +233,15 @@ export async function sweepWitnessTree(
  * a sweep it will not benefit from.
  */
 export const WITNESS_SWEEP_START_DELAY_MS = 5000;
+
+/**
+ * Co-locate expired wave manifest cleanup with the witness sweep.
+ *
+ * Runs at the same 6h dedup cadence as the witness tree sweep (the existing
+ * `.last-sweep` stamp covers both). Deletes all `*.json` in
+ * `~/.afk/state/waves/` where `expiresAt < now`. Best-effort: never throws.
+ *
+ * Called automatically from `sweepWitnessTree` when the witness sweep runs.
+ * Export is for tests and manual invocation.
+ */
+export { sweepWaveManifests as sweepExpiredWaveManifests };

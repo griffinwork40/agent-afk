@@ -6,7 +6,7 @@ import { promptToken, runAuthWizard } from '../auth-wizard.js';
 
 // Re-export upsertEnvVar so existing tests that import it from this module
 // continue to work without modification.
-export { upsertEnvVar } from '../auth-wizard.js';
+export { upsertEnvVar } from '../../utils/envFile.js';
 
 export { promptToken };
 

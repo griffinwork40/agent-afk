@@ -34,15 +34,12 @@ import {
 } from './elicitation-callback-data.js';
 import { randomBytes } from 'node:crypto';
 import { escapeHtml } from './formatter.js';
+import { escapeRegExp } from '../utils/regexp.js';
 
 function nextElicitationId(): string {
   return `elic-${randomBytes(8).toString('hex')}`;
 }
 
-/** Inline regex escape helper (same pattern as bot.ts). */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /** Sentinel returned by the custom-entry wildcard handler to the dispatch table. */
 const CUSTOM_ENTRY_SENTINEL_INDEX = -1;

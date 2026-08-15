@@ -351,6 +351,21 @@ describe('SessionToolDispatcher', () => {
       expect(result.failureClass).toBe('hook-block');
     });
 
+    it('PreToolUse block with injectContext appends explanation to content', async () => {
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', async () => ({
+        decision: 'block' as const,
+        reason: 'dangerous',
+        injectContext: 'Use a safer tool instead.',
+      }));
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('blocked by PreToolUse hook');
+      expect(result.content).toContain('Use a safer tool instead.');
+      expect(result.failureClass).toBe('hook-block');
+    });
+
     it('PreToolUse approve allows execution', async () => {
       const registry = createHookRegistryImpl();
       registry.register('PreToolUse', async () => ({

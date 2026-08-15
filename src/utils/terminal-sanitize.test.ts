@@ -92,6 +92,36 @@ describe('sanitizeForDisplay', () => {
     expect(sanitizeForDisplay('a\x1bEb')).toBe('ab'); // ESC E = next line
   });
 
+  it('strips newly covered Fs sequences in the [6-_] range', () => {
+    // ESC 7 = save cursor (DECSC), ESC 8 = restore cursor (DECRC)
+    expect(sanitizeForDisplay('a\x1b7b')).toBe('ab'); // 0x37 in [6-_]
+    expect(sanitizeForDisplay('a\x1b8b')).toBe('ab'); // 0x38 in [6-_]
+    // ESC = = keypad application mode (DECKPAM), ESC > = keypad numeric mode (DECPNM)
+    expect(sanitizeForDisplay('a\x1b=b')).toBe('ab'); // 0x3D in [6-_]
+    expect(sanitizeForDisplay('a\x1b>b')).toBe('ab'); // 0x3E in [6-_]
+    // ESC 6 = back index (DECBI)
+    expect(sanitizeForDisplay('a\x1b6b')).toBe('ab'); // 0x36 in [6-_]
+  });
+
+  it('strips 0x9C-terminated OSC sequences (no URL payload leak)', () => {
+    // OSC-8 hyperlink closed with 8-bit ST (0x9C) instead of BEL or ESC \
+    const osc8 = '\x1b]8;;https://evil.example/steal\x9cclick me\x1b]8;;\x9c';
+    const out = sanitizeForDisplay(osc8);
+    expect(out).toBe('click me');
+    expect(out).not.toContain('evil');
+    expect(out).not.toContain('https');
+  });
+
+  it('strips 0x9C-terminated OSC title-set sequences', () => {
+    // xterm title set: ESC ] 0 ; title 0x9C
+    expect(sanitizeForDisplay('\x1b]0;My Window Title\x9cdone')).toBe('done');
+  });
+
+  it('strips 0x9C-terminated DCS sequences', () => {
+    // DCS terminated by 0x9C instead of ESC \\ (7-bit ST)
+    expect(sanitizeForDisplay('a\x1bPdcs-payload\x9cb')).toBe('ab');
+  });
+
   it('leaves no raw ESC/control bytes even for a malformed OSC (embedded ESC)', () => {
     // A malformed OSC whose body contains a non-terminator ESC may leave some
     // payload TEXT visible (the partial-strip wart documented in the source),
@@ -143,5 +173,14 @@ describe('stripEscapeSequences', () => {
     expect(sanitizeForDisplay(multiLine)).toBe('color line2');
     // stripEscapeSequences removes the escapes only, preserves \n
     expect(stripEscapeSequences(multiLine)).toBe('color\nline2\n');
+  });
+
+  it('strips 0x9C-terminated OSC sequences without leaking payload', () => {
+    const osc8 = '\x1b]8;;https://example.com\x9clabel\x1b]8;;\x9c';
+    expect(stripEscapeSequences(osc8)).toBe('label');
+  });
+
+  it('strips 0x9C-terminated DCS sequences', () => {
+    expect(stripEscapeSequences('\x1bPpayload\x9ctext')).toBe('text');
   });
 });

@@ -30,6 +30,7 @@ import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-c
 import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
 import { routeFromCtx, sendOptions } from './route.js';
+import { escapeRegExp } from '../utils/regexp.js';
 
 /**
  * Bot configuration options
@@ -633,9 +634,4 @@ export class TelegramBot {
       console.log('[TelegramBot]', ...args);
     }
   }
-}
-
-/** Inline regex escape (avoids pulling in lodash for one call site). */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

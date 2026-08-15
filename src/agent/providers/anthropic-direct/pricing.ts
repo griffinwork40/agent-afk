@@ -37,6 +37,8 @@
  * is absent lives there too, keeping this module pure and env-free.
  */
 
+import { clampPositive, lookupPricing as sharedLookupPricing } from '../shared/pricing-utils.js';
+
 /** Multiplier on base input rate for a 5-minute cache write. */
 const CACHE_WRITE_5M_MULTIPLIER = 1.25;
 /** Multiplier on base input rate for a 1-hour cache write. */
@@ -196,12 +198,12 @@ function effectiveSpeed(speed: SpeedPricingContext): AnthropicSpeed {
  * no new imports and no env reads. A model with neither an exact nor a
  * stripped match still returns `undefined` — this only retries the same
  * table with a shorter key, it never invents a mapping.
+ *
+ * Delegates to {@link sharedLookupPricing} with this provider's
+ * {@link DATE_SUFFIX} pattern.
  */
 function lookupPricing(model: string): ModelPricing | undefined {
-  const exact = MODEL_PRICING.get(model);
-  if (exact) return exact;
-  const base = model.replace(DATE_SUFFIX, '');
-  return base === model ? undefined : MODEL_PRICING.get(base);
+  return sharedLookupPricing(model, MODEL_PRICING, DATE_SUFFIX);
 }
 
 /**
@@ -257,13 +259,11 @@ export function deriveCallCostUsd(
   // must not produce a negative or NaN totalCostUsd. `resolveCacheWriteSplit`
   // (types.ts) clamps the split fields on the production call path, but this
   // function is also called directly (see pricing.test.ts), so it re-clamps
-  // everything itself rather than trusting the caller. No import needed —
-  // `Number.isFinite` is a global — so this keeps the module pure.
-  const clamp = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
-  const safeInput = clamp(inputTokens);
-  const safeOutput = clamp(outputTokens);
-  const safeCachedInput = clamp(cachedInputTokens);
-  const safeCacheCreation = clamp(cacheCreationTokens);
+  // everything itself rather than trusting the caller.
+  const safeInput = clampPositive(inputTokens);
+  const safeOutput = clampPositive(outputTokens);
+  const safeCachedInput = clampPositive(cachedInputTokens);
+  const safeCacheCreation = clampPositive(cacheCreationTokens);
 
   // `input_tokens` already excludes cache reads and writes — use it verbatim.
   const inputCost = (safeInput / M) * pricing.inputPerMTok;
@@ -281,8 +281,8 @@ export function deriveCallCostUsd(
     ephemeral5m: safeCacheCreation,
     ephemeral1h: 0,
   };
-  const safe5m = clamp(split.ephemeral5m);
-  const safe1h = clamp(split.ephemeral1h);
+  const safe5m = clampPositive(split.ephemeral5m);
+  const safe1h = clampPositive(split.ephemeral1h);
 
   // Invariant: `cacheCreationTokens` is the API's authoritative billed total;
   // `ephemeral5m + ephemeral1h` is only the sum of the two TTL tiers this

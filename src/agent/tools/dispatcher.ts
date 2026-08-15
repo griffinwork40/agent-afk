@@ -930,7 +930,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       } catch (err) {
         if (err instanceof HookBlockedError) {
           return this.recordForkReadDenial(call, err.reason, {
-            content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
+            content: `Tool "${call.name}" blocked by PreToolUse hook${err.reason ? `: ${err.reason}` : ''}${err.injectContext ? `\n\n${err.injectContext}` : ''}`,
             isError: true,
             failureClass: 'hook-block',
           });
@@ -1092,6 +1092,24 @@ export class SessionToolDispatcher implements ToolDispatcher {
           }
           pending = deferred;
 
+          // Wave manifest: notify the subagent executor when ≥2 agent calls
+          // are about to run concurrently so it can persist dispatch state for
+          // interrupted-session recovery. Fire-and-forget; never throws.
+          const agentCallsInWave = wave
+            .map((batchIdx) => executableCalls[batchIdx]?.call)
+            .filter((c): c is ToolCall => c !== undefined && c.name === 'agent');
+          if (agentCallsInWave.length >= 2 && this.subagentExecutor) {
+            try {
+              this.subagentExecutor.notifyWaveStart(
+                agentCallsInWave,
+                this.sessionId ?? '',
+                null,
+              );
+            } catch {
+              // Fire-and-forget: manifest errors must never abort a wave.
+            }
+          }
+
           // Bounded concurrency remains in force within each admission wave.
           const settled = await settleWithConcurrencyLimit(
             wave,
@@ -1134,6 +1152,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
             const result = results[originalIndex];
             if (result !== undefined && result.failureClass !== 'abort') {
               this.repeatFailureGuard.note(call, result);
+            }
+          }
+          // Wave manifest: clear the active wave after all units settled.
+          if (agentCallsInWave.length >= 2 && this.subagentExecutor) {
+            try {
+              this.subagentExecutor.notifyWaveEnd();
+            } catch {
+              // Fire-and-forget.
             }
           }
         }

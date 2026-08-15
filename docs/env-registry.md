@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**163 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**166 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -225,6 +225,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_THEME` | string |  | `dark` | `light` | TUI color palette for the interactive REPL and all CLI rendering: dark \| light \| umber \| auto. Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). auto detects from COLORFGBG and falls back to dark; umber matches the Umber terminal, is dark-only, and is never chosen by auto. Overridden per-launch by --theme and mutable mid-session via /theme. Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark). |
 | `AFK_THINKING_UI` | string |  | `live` | `digest` | Default thinking-display mode for the interactive REPL: summary \| live \| digest \| off. Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored. |
 | `AFK_USER_CARD_MAX_ROWS` | number |  |  | `24` | Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim "…(N lines collapsed)" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies. |
+| `AFK_WAVE_MANIFEST_DISABLED` | boolean |  | `0` | `1` | Disable the wave manifest system entirely. When set to 1, no manifest is written for parallel subagent waves, and no resumption offer is made at session start. |
+| `AFK_WAVE_MANIFEST_TTL_HOURS` | number |  | `48` | `24` | Time-to-live for wave manifests in hours. Manifests older than this are deleted on reconciliation and by the witness sweep. Default 48 (two days). |
+| `AFK_WAVE_RESUME_UNATTENDED` | boolean |  | `0` | `1` | When set to 1, surface wave resumption offers even on non-interactive surfaces (daemon, one-shot chat). By default, offers are only made on interactive surfaces (REPL, Telegram). |
 | `AFK_WEB_ALLOW_PRIVATE_HOSTS` | boolean |  |  | `1` | Opt out of the web_scrape SSRF egress guard. When unset (default) the guard is ACTIVE: the markdown, raw, and headless-render paths refuse loopback (127/8, ::1), link-local (169.254/16 — including the 169.254.169.254 cloud instance-metadata endpoint), RFC1918 (10/8, 172.16/12, 192.168/16), carrier-grade NAT (100.64/10), IPv6 unique-local (fc00::/7), 0.0.0.0/8, and the IPv4-mapped/compatible IPv6 forms of all of those. Hostnames are resolved and the RESOLVED addresses are classified (DNS-rebinding guard), and the check is re-applied on every redirect hop. Set to 1/true to allow private-host access — needed only to scrape a local dev server. Enabling it restores a model-reachable SSRF path (issue #575). |
 | `AFK_WRITE_DENYLIST` | string |  |  | `**/.env,**/secrets/**` | Comma-separated list of additional path globs that the write_file tool refuses to write to. |
 | `AFK_WRITE_DIFF` | boolean |  |  |  | Show a diff preview before each write_file tool call. Defaults provider-controlled when unset. |

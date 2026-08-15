@@ -38,3 +38,5 @@ export {
   listSessionIds,
   type FacetStoreOptions,
 } from './store.js';
+
+export { createFacetSessionEndHook } from './session-end-hook.js';

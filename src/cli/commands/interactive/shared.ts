@@ -19,6 +19,7 @@ import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../context-sparkline.js';
 import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { palette } from '../../palette.js';
+import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 
 /**
  * Result of a mid-session resume swap attempt.
@@ -171,28 +172,9 @@ export function printResumeBanner(stats: SessionStats, writer: CompletionWriter)
  *     `palette.dim` styling AFTER stripping is safe because dim wraps
  *     the sanitized content, not raw bytes.
  *
- * The ANSI regex covers four escape categories that can land in stored
- * turn text (e.g., when the model echoes colorized tool output verbatim
- * in its reply):
- *   1. OSC sequences (incl. OSC 8 hyperlinks):    `ESC ] ... ST`
- *   2. DCS / SOS / PM / APC string sequences:     `ESC P|X|^|_ ... ST`
- *   3. Fe single-char escapes (cursor save/restore, index, etc.):
- *      `ESC <byte 0x40–0x5F excluding [, ], P, X, ^, _>` plus `ESC 6/7/8/9`
- *      and `ESC =` (DECKPAM). The exclusion list keeps this from
- *      consuming the opener of string-family sequences above.
- *   4. CSI sequences, 7-bit (`ESC [ params final`) and 8-bit C1
- *      (`0x9B params final`).
- *
- * Alternation order is load-bearing: the string-family openers (OSC, DCS)
- * must precede CSI because the CSI alternative is loose — it can match
- * `ESC <digit> <letter>` and would otherwise greedily eat into a
- * Fe escape like `ESC 7 s a v e d`. Likewise the Fe alternative must
- * come before CSI so `ESC 7` doesn't get misparsed as a digit-parameter
- * CSI. Mirrors the strategy of `strip-ansi` / `ansi-regex` (npm) with
- * extra coverage for Fe `ESC 7/8` and DCS — both of which the published
- * `ansi-regex@6` still misses. We inline the pattern (rather than depend
- * on `strip-ansi`) because the input is bounded to one banner line and
- * the additional alternatives are short.
+ * Uses the canonical `stripEscapeSequences` from `utils/terminal-sanitize.ts`,
+ * which strips OSC (including OSC-8 hyperlinks), DCS, PM, APC, SOS, 7-bit
+ * CSI, 8-bit C1 CSI, and bare 2-byte ESC sequences as whole units.
  */
 function flatten(s: string): string {
   // Order matters: strip ANSI first so any whitespace that surrounded a
@@ -200,12 +182,9 @@ function flatten(s: string): string {
   // Reversing this order leaves "before \x1bM after" as "before  after"
   // (double space) because the whitespace pass sees ESC-M as non-space
   // and can't merge across it.
-  const stripped = s.replace(ANSI_STRIP_RE, '');
+  const stripped = stripEscapeSequences(s);
   return stripped.replace(/\s+/g, ' ').trim();
 }
-
-// eslint-disable-next-line no-control-regex
-const ANSI_STRIP_RE = /\u001B\][\s\S]*?(?:\u0007|\u001B\\|\u009C)|\u001B[PX^_][\s\S]*?(?:\u0007|\u001B\\|\u009C)|\u001B[@-OQ-WY-Z\\`6-9=]|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
 
 /**
  * Return the first sentence of `s` (through the first `.`, `!`, or `?`

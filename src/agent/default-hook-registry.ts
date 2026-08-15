@@ -16,6 +16,7 @@ import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
+import { createFacetSessionEndHook } from './facets/session-end-hook.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
 import {
@@ -115,28 +116,22 @@ export function createDefaultHookRegistry(
   // router park-and-decline after the round-trip. No-op on REPL/Telegram
   // (handler installed; probed at call time). See ask-question-gate.ts.
   registry.register('PreToolUse', createAskQuestionGate());
-  // Safe-destruct detector (observe-only, ALL surfaces): witness — but never
-  // block — bash commands matching a curated destructive/irreversible pattern
-  // (rm -rf, git reset --hard, DROP DATABASE, dd of=/dev/*, mkfs, terraform
-  // destroy, ...). It emits a `hook_decision` catch-record via the unused
-  // `approve` outcome, so it (a) adds ZERO blocking friction — the interpreter-
-  // eval lesson that started this program — and (b) is filterable as
-  // decision==='approve' and ignored by the mechanical friction detectors. This
-  // is the Wave-1 shadow window whose records calibrate a later block/nudge
-  // slice. Registered unconditionally (no deps, never blocks → safe on headless/
-  // autonomous surfaces too). See safe-destruct-detect.ts and
-  // .afk/plans/friction-substrate-and-gate-migration.md §9.
+  // Safe-destruct detector (two-tier, ALL surfaces): OBSERVE-tier records
+  // destructive bash commands (rm -rf, git branch -D, etc.) via `approve`
+  // catch-records without blocking; BLOCK-tier hard-blocks irrecoverable
+  // operations (git reset --hard, git push --force, terraform destroy, etc.)
+  // with `injectContext` guidance explaining why and what to do instead.
+  // See safe-destruct-detect.ts, safe-destruct-patterns.ts, and
+  // .afk/plans/friction-substrate-and-gate-migration.md.
   registry.register('PreToolUse', createSafeDestructDetect());
-  // Release-boundary detector (observe-only, ALL surfaces): witness — but never
-  // block — bash commands that cross a publish/deploy boundary (npm/pnpm/yarn/
-  // cargo/twine/poetry/gem publish, docker push, gh release create, terraform/
-  // kubectl apply) or a sync boundary (git push --mirror / --tags). Same
-  // `approve`-outcome catch-record mechanism as safe-destruct: ZERO blocking
-  // friction (a release is often exactly what was asked — a block would be a
-  // false positive by construction), filterable as decision==='approve', ignored
-  // by the mechanical friction detectors. Wave-1 slice 2 shadow window. See
-  // release-boundary-detect.ts and
-  // .afk/plans/friction-substrate-and-gate-migration.md §9.
+  // Release-boundary detector (two-tier, ALL surfaces): BLOCK-tier hard-blocks
+  // externally-irreversible publish/deploy operations (npm/pnpm/yarn/cargo/
+  // twine/poetry/gem publish, docker push, gh release create, terraform/
+  // kubectl apply) with `injectContext` guidance; OBSERVE-tier records
+  // sync-boundary operations (git push --mirror / --tags) via `approve`
+  // catch-records without blocking. See release-boundary-detect.ts,
+  // release-boundary-patterns.ts, and
+  // .afk/plans/friction-substrate-and-gate-migration.md.
   registry.register('PreToolUse', createReleaseBoundaryDetect());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
@@ -280,6 +275,10 @@ export function createDefaultHookRegistry(
   // JSON+Markdown summary of the run under ~/.afk/state/receipts/. Best-effort
   // and never injects/blocks; skips subagents and honors AFK_RUN_RECEIPT_DISABLED.
   registry.register('SessionEnd', runReceiptSessionEndHook);
+  // Derive and cache a session facet at teardown so every top-level session
+  // is visible to harvest --rank and other facet consumers. Best-effort;
+  // skips subagents; never blocks teardown.
+  registry.register('SessionEnd', createFacetSessionEndHook());
   if (onSubagentComplete) {
     registry.register('SubagentStop', (context) => {
       if (context.event !== 'SubagentStop') return {};

@@ -200,6 +200,62 @@ describe('cancel_schedule handler', () => {
     }>;
     expect(list[0]?.enabled).toBe(false);
   });
+
+  it('enable: true → re-enables a disabled task', async () => {
+    await createScheduleHandler(
+      { name: 'Toggle Me', command: '/toggle', cron: '0 6 * * *' },
+      fakeSignal,
+    );
+    // Disable first
+    await cancelScheduleHandler({ taskId: 'toggle-me' }, fakeSignal);
+    const afterDisable = await listSchedulesHandler(null, fakeSignal);
+    const disabled = JSON.parse(afterDisable.content as string) as Array<{
+      id: string;
+      enabled: boolean;
+    }>;
+    expect(disabled[0]?.enabled).toBe(false);
+
+    // Re-enable
+    const result = await cancelScheduleHandler(
+      { taskId: 'toggle-me', enable: true },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as {
+      ok: boolean;
+      enabled: boolean;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.enabled).toBe(true);
+
+    // Verify via list
+    const afterEnable = await listSchedulesHandler(null, fakeSignal);
+    const enabled = JSON.parse(afterEnable.content as string) as Array<{
+      id: string;
+      enabled: boolean;
+    }>;
+    expect(enabled[0]?.enabled).toBe(true);
+  });
+
+  it('permanent: true takes precedence over enable: true', async () => {
+    await createScheduleHandler(
+      { name: 'Conflict', command: '/x', cron: '* * * * *' },
+      fakeSignal,
+    );
+    const result = await cancelScheduleHandler(
+      { taskId: 'conflict', permanent: true, enable: true },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as { ok: boolean; permanent: boolean };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.permanent).toBe(true);
+
+    // Should be removed from store
+    const listResult = await listSchedulesHandler(null, fakeSignal);
+    const list = JSON.parse(listResult.content as string) as unknown[];
+    expect(list).toHaveLength(0);
+  });
 });
 
 describe('get_schedule_history handler', () => {
@@ -391,5 +447,34 @@ describe('live-sync surface (daemonSynced)', () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.daemonSynced).toBe(false);
     expect(parsed.syncNote).toMatch(/next daemon/i);
+  });
+
+  it('enable:true against a live daemon re-registers and reports synced', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      // Create a disabled task (won't be registered with daemon)
+      await createScheduleHandler(
+        { name: 'Revive Me', command: '/x', cron: '59 23 31 12 *', enabled: false },
+        fakeSignal,
+      );
+      // Disable it via cancel (soft disable, not permanent)
+      await cancelScheduleHandler({ taskId: 'revive-me' }, fakeSignal);
+      // Re-enable via enable:true
+      const enable = await cancelScheduleHandler(
+        { taskId: 'revive-me', enable: true },
+        fakeSignal,
+      );
+      const parsed = JSON.parse(enable.content as string) as SyncShape;
+      expect(parsed.ok).toBe(true);
+      expect(parsed.daemonSynced).toBe(true);
+      expect(parsed.syncDetail).toBe('synced');
+      // Verify the daemon actually has the task registered
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+      }>;
+      expect(tasks.some((t) => t.taskId === 'revive-me')).toBe(true);
+    } finally {
+      await handle.stop();
+    }
   });
 });

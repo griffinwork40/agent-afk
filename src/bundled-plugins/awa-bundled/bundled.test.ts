@@ -81,11 +81,7 @@ const PINNED_HASHES = {
   // both lines are permanent bundled-only divergence.
   'ground-state':
     'f24a0fbc572aa65dde3cbceb76ce1ec36d8ed8d88e142aa0007425ec3e906cad',
-  // intent-lock is bundled-only (no upstream counterpart).
-  // Hash bumps need no parallel PR — document the change in the
-  // commit message instead.
-  'intent-lock':
-    'ecb4477a40c5f7a64b79779e01a6186f834dd3d4dc59c13a5c4e4b12191cf13b',
+
   // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
@@ -173,22 +169,7 @@ describe('bundled skills', () => {
       expect(entries).toEqual(registered);
     });
 
-    it('intent-lock preserves all signal classes and reconstructed-goal lock', () => {
-      const content = readBundled('intent-lock');
-      for (const heading of [
-        '**Ambiguous referents**',
-        '**Unverified characterizations**',
-        '**Identity assumptions**',
-        '**Code-vs-runtime dual referent**',
-        '**No task statement at all**',
-      ]) {
-        expect(content).toContain(heading);
-      }
-      expect(content).toContain('**Lock format (reconstructed goal):**');
-      expect(content).toContain(
-        '> Reading [fragment] as: [reconstructed task statement] (from [evidence]).',
-      );
-    });
+
 
     // Invariant: #726 — Wave 1 of /review dispatches `research-agent`, which has
     // no Bash. Any mandate to run a git command inside the Wave 1 section forces

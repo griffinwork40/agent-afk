@@ -32,6 +32,7 @@
  */
 
 import { deriveXaiCallCostUsd } from '../xai/pricing.js';
+import { clampPositive, lookupPricing as sharedLookupPricing } from '../shared/pricing-utils.js';
 
 /**
  * Rates are USD per 1 million tokens.
@@ -86,13 +87,14 @@ const DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/;
  * suffix and retry against the same table. Mirrors
  * `anthropic-direct/pricing.ts:lookupPricing` — a model matching neither form
  * returns `undefined`; this never invents a mapping.
+ *
+ * Normalises the model id to lowercase before delegating to
+ * {@link sharedLookupPricing} with this provider's {@link DATE_SUFFIX} pattern,
+ * preserving the original trim-and-lowercase contract of this provider.
  */
 function lookupPricing(model: string): ModelPricing | undefined {
   const lowered = model.trim().toLowerCase();
-  const exact = MODEL_PRICING.get(lowered);
-  if (exact) return exact;
-  const base = lowered.replace(DATE_SUFFIX, '');
-  return base === lowered ? undefined : MODEL_PRICING.get(base);
+  return sharedLookupPricing(lowered, MODEL_PRICING, DATE_SUFFIX);
 }
 
 /**
@@ -131,10 +133,9 @@ export function deriveCallCostUsd(
   }
 
   const M = 1_000_000;
-  const clamp = (n: number): number => (Number.isFinite(n) && n >= 0 ? n : 0);
-  const safeInput = clamp(inputTokens);
-  const safeOutput = clamp(outputTokens);
-  const safeCached = Math.min(clamp(cachedInputTokens), safeInput);
+  const safeInput = clampPositive(inputTokens);
+  const safeOutput = clampPositive(outputTokens);
+  const safeCached = Math.min(clampPositive(cachedInputTokens), safeInput);
   const plainInput = safeInput - safeCached;
 
   const cachedRate = pricing.cachedInputPerMTok ?? pricing.inputPerMTok;

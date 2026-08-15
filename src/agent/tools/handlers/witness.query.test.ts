@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { clampLimit, clampSessions, readSessionTrace, searchAcrossSessions } from './witness.query.js';
+import { clampLimit, clampSessions, readSessionTrace, searchAcrossSessions, MAX_SEARCH_MATCHES } from './witness.query.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -385,5 +385,27 @@ describe('searchAcrossSessions — truncatedSessions', () => {
     expect(result.matches.some((m) => m.sessionId === 'big-session-2')).toBe(true);
     // And truncation must be reported.
     expect(result.truncatedSessions).toContain('big-session-2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MAX_SEARCH_MATCHES — constant is exported and used as the search cap
+// ---------------------------------------------------------------------------
+
+describe('MAX_SEARCH_MATCHES', () => {
+  it('is exported and equals 200', () => {
+    expect(MAX_SEARCH_MATCHES).toBe(200);
+  });
+
+  it('caps total matches returned by searchAcrossSessions', async () => {
+    // Write one session with more lines than MAX_SEARCH_MATCHES, all matching.
+    const lines: string[] = [];
+    for (let i = 0; i < MAX_SEARCH_MATCHES + 10; i++) {
+      lines.push(makeEventLine('closure', i, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }));
+    }
+    await writeTrace('cap-session', lines);
+
+    const result = await searchAcrossSessions({ query: 'end_turn' });
+    expect(result.matches.length).toBeLessThanOrEqual(MAX_SEARCH_MATCHES);
   });
 });

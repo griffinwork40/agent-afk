@@ -49,12 +49,16 @@ export class HookBlockedError extends Error {
     message: string,
     public readonly event: string,
     public readonly reason?: string,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; injectContext?: string },
   ) {
     super(message);
     this.name = "HookBlockedError";
     if (options?.cause !== undefined) this.cause = options.cause;
+    if (options?.injectContext !== undefined) this.injectContext = options.injectContext;
   }
+
+  /** Optional explanation to append to the blocked tool_result content. */
+  public injectContext?: string;
 }
 
 /**

@@ -11,6 +11,69 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.0] - 2026-08-15
+
+### Added
+- upgrade safe-destruct and release-boundary to block+explain (#1088 consumer) (#1090) (35b3fe28)
+
+### Fixed
+- remove unused join import from backfill-facets script (#1091) (91640740)
+
+## [5.122.0] - 2026-08-14
+
+### Added
+- auto-derive session facets at SessionEnd + backfill script (#1089) (a6d0f332)
+
+### Changed
+- consolidate ANSI strip regex to canonical terminal-sanitize.ts (#1080) (1dac0356)
+
+## [5.121.0] - 2026-08-14
+
+### Added
+- extend injectContext to PreToolUse (block path) (#1088) (b423000a)
+
+## [5.120.0] - 2026-08-14
+
+### Added
+- add enable flag to cancel_schedule for re-enabling tasks (#1085) (bea30e69)
+
+## [5.119.3] - 2026-08-14
+
+### Changed
+- demote directive-class gate skills to prompt directives (Wave 4 partial) (#1084) (8792f6f5)
+
+## [5.119.2] - 2026-08-14
+
+### Changed
+- extract shared pricing lookup into providers/shared/pricing-utils.ts (#1078) (bac408c8)
+
+## [5.119.1] - 2026-08-14
+
+### Fixed
+- delegate marketplace plugins to updateMarketplace (#1011) (cc0b2d00)
+
+### Changed
+- separate MAX_SEARCH_MATCHES from MAX_LIMIT (#1037) (#1046) (2627623c)
+
+
+## [5.119.0] - 2026-08-14
+
+### Added
+- wave manifest for interrupted session recovery (#940) (#1049) (dfda3445)
+
+## [5.118.2] - 2026-08-14
+
+### Changed
+- extract duplicated escapeRegExp into src/utils/regexp.ts (#1066) (#1079) (5ccb9209)
+
+## [5.118.1] - 2026-08-14
+
+### Changed
+- extract FS error-to-tool-result helper for tool handlers (#1070) (#1077) (87d784cd)
+- clean up dead re-exports and double re-export chain (#1071) (#1076) (39b2da52)
+- extract read/write scope resolution from forkSubagent (#1075) (8f2a6b59)
+- generalize registry-grant prompt-consistency guard (#942) (#1057) (538889b4)
+
 ## [5.118.0] - 2026-08-14
 
 ### Added

@@ -30,14 +30,21 @@
 // Pass 1 (ESCAPE_RE) removes whole escape sequences. Its arms are ordered
 // most-specific-first so structured sequences are consumed as a unit before
 // the bare 2-byte ESC arm can match only their introducer:
-//   1. OSC:            ESC ] … (BEL | ST)   — OSC-8 links, title sets, iTerm2 images
-//   2. DCS/PM/APC/SOS: ESC (P|^|_|X) … ST    — device-control strings
-//   3. CSI (7-bit):    ESC [ params … final  — SGR, cursor moves, clear-screen, DEC private (?…)
-//   4. CSI (8-bit):    0x9B params … final    — 8-bit C1 equivalent of CSI
-//   5. bare 2-byte:    ESC <0x40–0x5F>        — any other ESC-introduced pair
+//   1. OSC:            ESC ] … (BEL | ST | 0x9C)  — OSC-8 links, title sets, iTerm2 images
+//   2. DCS/PM/APC/SOS: ESC (P|^|_|X) … (ST | 0x9C) — device-control strings
+//   3. CSI (7-bit):    ESC [ params … final        — SGR, cursor moves, clear-screen, DEC private (?…)
+//   4. CSI (8-bit):    0x9B params … final         — 8-bit C1 equivalent of CSI
+//   5. bare 2-byte:    ESC <0x36–0x5F>             — any other ESC-introduced pair
+//      Covers 0x36–0x3F (ESC 6-9, ESC =/>/<, DECKPAM, DECPNM, DECBI, DECFI)
+//      and 0x40–0x5F (@-_: index, reverse-index, next-line, save/restore cursor, etc.)
 // If an OSC/DCS body were not consumed first, its payload (e.g. the URL inside
 // an OSC-8 hyperlink) would survive as visible text — the partial-strip bug in
 // the pre-extraction render-registry sanitiser that this module fixes.
+//
+// 0x9C is the 8-bit String Terminator (ST), equivalent to the 7-bit ESC \.
+// OSC and DCS sequences can be terminated by either form; accepting only ESC \
+// causes the URL payload of an OSC-8 hyperlink closed with 0x9C to leak as
+// visible text (regression vs. the old shared.ts regex this module replaced).
 //
 // Pass 2 replaces any leftover C0 (0x00–0x1F), DEL (0x7F), and C1 (0x80–0x9F)
 // control byte with a single space — preserving word boundaries in
@@ -47,7 +54,7 @@
 // (emoji, CJK, accents) are never touched.
 // eslint-disable-next-line no-control-regex
 const ESCAPE_RE =
-  /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)|\x1B[P^_X][^\x1B]*\x1B\\|\x1B\[[0-?]*[ -/]*[@-~]|\x9B[0-?]*[ -/]*[@-~]|\x1B[@-_]/g;
+  /\x1B\][^\x07\x1B\x9C]*(?:\x07|\x1B\\|\x9C)|\x1B[P^_X][^\x1B\x9C]*(?:\x1B\\|\x9C)|\x1B\[[0-?]*[ -/]*[@-~]|\x9B[0-?]*[ -/]*[@-~]|\x1B[6-_]/g;
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\x00-\x1F\x7F-\x9F]/g;
