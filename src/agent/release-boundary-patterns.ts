@@ -70,7 +70,7 @@ export const RELEASE_BOUNDARY_PATTERNS: readonly ReleaseBoundaryPattern[] = [
   },
   {
     id: 'cargo-publish',
-    re: /\bcargo\s+publish\b/i,
+    re: /\bcargo\s+(?:--[\w-]+\s+)*publish\b/i,
     tier: 'block',
     blockReason:
       'release-boundary: blocked [cargo-publish] — publishes a crate to crates.io, externally irreversible (crates.io does not allow un-publishing); verify Cargo.toml version and changelog.',

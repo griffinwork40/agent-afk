@@ -70,15 +70,45 @@ export const RELEASE_BOUNDARY_BLOCK_INJECT_CONTEXT =
   'up-to-date before proceeding, and ask the operator to confirm publication.';
 
 /**
+ * Return true when the command carries a dry-run flag that renders its publish
+ * or deploy operation a no-op simulation. Dry-run variants should not be
+ * blocked — they are safe pre-flight checks.
+ *
+ * Covered flags:
+ *   `--dry-run`          — npm, pnpm, cargo, and most CLIs
+ *   `-refresh-only`      — terraform apply -refresh-only (read-only plan pass)
+ */
+function isDryRun(command: string): boolean {
+  return /--dry-run\b/i.test(command) || /-refresh-only\b/i.test(command);
+}
+
+/**
+ * Strip single-quoted string literals from a shell command before pattern
+ * matching. Single-quoted segments in POSIX shell are always literal — no
+ * variable expansion, no command substitution, and crucially, no execution.
+ * A publish keyword inside `'...'` is harmless (e.g. `rg 'npm publish'`).
+ *
+ * Also strips trailing `# comment` segments.
+ */
+function stripQuotedLiterals(command: string): string {
+  // Remove single-quoted segments (non-greedy, no nesting in POSIX sh).
+  let stripped = command.replace(/'[^']*'/g, '');
+  // Remove shell-comment tails.
+  stripped = stripped.replace(/#[^\n]*/g, '');
+  return stripped;
+}
+
+/**
  * Return the ids of every release-boundary pattern the command matches (empty
  * when none). Pure and stateless — no global-flag regexes, so `.test()` is safe
  * to call repeatedly. Exported for tests.
  */
 export function detectReleaseBoundaryCommands(command: string): string[] {
   if (!command) return [];
+  const stripped = stripQuotedLiterals(command);
   const hits: string[] = [];
   for (const { id, re } of RELEASE_BOUNDARY_PATTERNS) {
-    if (re.test(command)) hits.push(id);
+    if (re.test(stripped)) hits.push(id);
   }
   return hits;
 }
@@ -107,10 +137,30 @@ export function createReleaseBoundaryDetect(): (context: HookContext) => HookDec
     const matched = detectReleaseBoundaryCommands(command);
     if (matched.length === 0) return {};
 
+    // Dry-run exemption: commands like `npm publish --dry-run`,
+    // `cargo --locked publish --dry-run`, or `terraform apply -refresh-only`
+    // are simulation passes — they never mutate external state. Demote any
+    // BLOCK-tier match to OBSERVE-tier behavior so the agent can still run
+    // these pre-flight checks without friction. The matched ids are still
+    // returned so the observe record captures what would have been blocked.
+    if (isDryRun(command)) {
+      return {
+        decision: 'approve',
+        reason: `${RELEASE_BOUNDARY_DETECT_REASON_PREFIX} [${matched.join(', ')}] (dry-run: not blocked)`,
+      };
+    }
+
     // Precedence: if ANY matched pattern is BLOCK-tier, the entire command is
     // blocked. A compound command containing even one externally-irreversible
     // sub-operation must not pass through because it is mixed with an
     // observable one.
+    //
+    // Invariant: when multiple BLOCK patterns match in one compound command,
+    // the first BLOCK in RELEASE_BOUNDARY_PATTERNS table order wins. Only that
+    // pattern's blockReason is reported. This is deliberate: the pattern table
+    // is ordered by severity (package-registry → container → release-cut →
+    // infra), so the first hit is the highest-priority signal and the most
+    // actionable reason for the agent.
     for (const id of matched) {
       const pattern = getPattern(id);
       if (pattern?.tier === 'block') {

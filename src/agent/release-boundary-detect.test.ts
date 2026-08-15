@@ -51,6 +51,9 @@ describe('detectReleaseBoundaryCommands', () => {
     ['git push --mirror git@github.com:org/mirror.git', 'git-push-mirror'],
     ['git push origin main --follow-tags', 'git-push-tags'],
     ['git push origin --tags', 'git-push-tags'],
+    // cargo global options before subcommand
+    ['cargo --locked publish', 'cargo-publish'],
+    ['cargo --frozen --locked publish', 'cargo-publish'],
   ])('flags %j → %s', (command, expectedId) => {
     expect(detectReleaseBoundaryCommands(command)).toContain(expectedId);
   });
@@ -68,6 +71,10 @@ describe('detectReleaseBoundaryCommands', () => {
     ['terraform plan'], // plan, not apply
     ['kubectl get pods'],
     [''],
+    // quoted strings — keyword inside literal, not executed
+    ["rg 'npm publish' README.md"],
+    ["grep 'npm publish' docs/"],
+    ["echo 'npm publish'"],
   ])('does not flag pre-boundary/benign %j', (command) => {
     expect(detectReleaseBoundaryCommands(command)).toEqual([]);
   });
@@ -111,11 +118,11 @@ describe('createReleaseBoundaryDetect (two-tier hook)', () => {
     ['git push --mirror git@github.com:org/x.git', 'git-push-mirror'],
     ['git push origin --tags', 'git-push-tags'],
     ['git push origin main --follow-tags', 'git-push-tags'],
-  ])('OBSERVE pattern %s returns approve, not block', (command, _id) => {
+  ])('OBSERVE pattern %s returns approve, not block', (command, expectedId) => {
     const decision: HookDecision = hook(preCtx(command));
     expect(decision.decision).toBe('approve');
-    expect(decision.decision).not.toBe('block');
     expect(decision.reason).toContain(RELEASE_BOUNDARY_DETECT_REASON_PREFIX);
+    expect(decision.reason).toContain(expectedId);
   });
 
   // ── BLOCK wins when both tiers match in one compound command ───────────────
@@ -125,6 +132,36 @@ describe('createReleaseBoundaryDetect (two-tier hook)', () => {
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('npm-publish');
     expect(decision.injectContext).toBe(RELEASE_BOUNDARY_BLOCK_INJECT_CONTEXT);
+  });
+
+  // ── Dry-run exemptions: BLOCK-tier commands demoted to OBSERVE ────────────
+  it.each([
+    ['npm publish --dry-run', 'npm-publish'],
+    ['pnpm publish --dry-run', 'pnpm-publish'],
+    ['cargo publish --dry-run', 'cargo-publish'],
+    ['cargo --locked publish --dry-run', 'cargo-publish'],
+    ['kubectl apply --dry-run=client -f deploy.yaml', 'kubectl-apply'],
+    ['kubectl apply --dry-run=server -f deploy.yaml', 'kubectl-apply'],
+    ['terraform apply -refresh-only', 'terraform-apply'],
+  ])('dry-run %s is NOT blocked but IS observed', (command, expectedId) => {
+    const decision: HookDecision = hook(preCtx(command));
+    expect(decision.decision).toBe('approve');
+    expect(decision.decision).not.toBe('block');
+    expect(decision.reason).toContain(RELEASE_BOUNDARY_DETECT_REASON_PREFIX);
+    expect(decision.reason).toContain(expectedId);
+    expect(decision.reason).toContain('dry-run');
+  });
+
+  // ── Quoted strings: read-only tools with publish keyword must not block ────
+  it.each([
+    ["rg 'npm publish' README.md"],
+    ["grep 'npm publish' docs/"],
+    ["echo 'npm publish'"],
+    ["grep 'cargo publish' Makefile"],
+  ])('quoted command %s does not trigger detection', (command) => {
+    expect(detectReleaseBoundaryCommands(command)).toEqual([]);
+    const decision: HookDecision = hook(preCtx(command));
+    expect(decision).toEqual({});
   });
 
   it('passes through non-boundary bash commands', () => {
