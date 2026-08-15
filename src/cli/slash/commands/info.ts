@@ -39,10 +39,7 @@ const costCmd: SlashCommand = {
     out.line();
     out.line(palette.bold('Session cost'));
     out.line(divider());
-    const unpricedNote = stats.unpricedTurns > 0
-      ? palette.dim(` (${stats.unpricedTurns} turn${stats.unpricedTurns === 1 ? '' : 's'} unpriced — total is a lower bound)`)
-      : '';
-    out.line(`  total       ${palette.success(formatCost(stats.totalCostUsd))}${unpricedNote}`);
+    out.line(`  total       ${palette.success(formatCost(stats.totalCostUsd))}`);
     out.line(`  turns       ${palette.meta(String(stats.totalTurns))}`);
     if (stats.totalTurns > 0) {
       const avg = stats.totalCostUsd / stats.totalTurns;
@@ -51,6 +48,9 @@ const costCmd: SlashCommand = {
     if (stats.turnCosts.length > 0) {
       const last5 = stats.turnCosts.slice(-5).map(formatCost).join(palette.dim(' · '));
       out.line(`  last 5      ${last5}`);
+    }
+    if (stats.unpricedTurns > 0) {
+      out.line(`  unpriced    ${palette.warning(`${stats.unpricedTurns} turn${stats.unpricedTurns === 1 ? '' : 's'} had no cost metadata — total may be understated`)}`);
     }
     out.line();
     out.line(palette.dim('  This is session-local spend. For account-wide subscription quota, see /usage.'));
