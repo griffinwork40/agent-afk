@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.0] - 2026-08-15
+
+### Added
+- upgrade safe-destruct and release-boundary to block+explain (#1088 consumer) (#1090) (35b3fe28)
+
+### Fixed
+- remove unused join import from backfill-facets script (#1091) (91640740)
+
 ## [5.122.0] - 2026-08-14
 
 ### Added
