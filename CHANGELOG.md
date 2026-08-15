@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.1] - 2026-08-15
+
+### Fixed
+- track unpriced turns instead of coalescing unknown cost to zero (#866) (#1010) (3014e76f)
+
 ## [5.123.0] - 2026-08-15
 
 ### Added
