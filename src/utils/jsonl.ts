@@ -50,6 +50,9 @@ export interface ParseJsonlOptions<T> {
  *
  * Never throws — every failure path is a skip.
  *
+ * @typeParam T - The element type of the returned array. Without a `guard`,
+ *   `T` is an unchecked cast — prefer `unknown` or supply a guard for type
+ *   safety.
  * @param raw   - Raw JSONL string (may include trailing newline or blank lines).
  * @param options - Optional guard and error callback (see {@link ParseJsonlOptions}).
  * @returns Array of parsed (and optionally type-narrowed) values.

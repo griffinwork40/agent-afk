@@ -728,13 +728,14 @@ export class MemoryStore {
         return 0;
       }
 
-      const walEntries = parseJsonlLines<WALEntry>(raw, {
-        guard: isValidWALEntry,
-        onParseError: (line) => {
-          debugLog('WAL replay: skipping invalid entry:', line.slice(0, 200));
-        },
-      });
-      for (const entry of walEntries) {
+      for (const item of parseJsonlLines(raw, {
+        onParseError: (l) => debugLog('WAL replay: skipping malformed line:', l.slice(0, 200)),
+      })) {
+        if (!isValidWALEntry(item)) {
+          debugLog('WAL replay: skipping invalid entry:', JSON.stringify(item).slice(0, 200));
+          continue;
+        }
+        const entry: WALEntry = item;
         try {
           if (entry.type === 'session_start') {
             const d = entry.data;
