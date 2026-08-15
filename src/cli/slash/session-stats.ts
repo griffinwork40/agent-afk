@@ -71,8 +71,8 @@ export function recordTurn(
   metadata: ResponseMetadata | undefined,
   toolEvents?: ToolEvent[],
 ): TurnRecord {
-  const costUsd = metadata?.totalCostUsd ?? 0;
-  if (metadata?.totalCostUsd === undefined) stats.unpricedTurns += 1;
+  const costUsd = metadata?.totalCostUsd;
+  const costForSum = costUsd ?? 0;
   const durationMs = metadata?.durationMs ?? 0;
   const aggInput = Number(metadata?.usage?.['input_tokens'] ?? 0);
   const aggOutput = Number(metadata?.usage?.['output_tokens'] ?? 0);
@@ -101,10 +101,13 @@ export function recordTurn(
   }
 
   stats.totalTurns += 1;
-  stats.totalCostUsd += costUsd;
+  stats.totalCostUsd += costForSum;
+  if (costUsd === undefined) {
+    stats.unpricedTurns += 1;
+  }
   stats.totalDurationMs += durationMs;
   stats.totalTokens += aggInput + aggOutput;
-  stats.turnCosts.push(costUsd);
+  stats.turnCosts.push(costForSum);
   // Context-window footprint: the provider-computed last-round occupancy
   // (input + cache_read + cache_creation + output for Anthropic; prompt +
   // completion for OpenAI). Preferred by contextRatio over input+output+cache,
@@ -141,7 +144,7 @@ export function recordTurn(
     user: userInput,
     assistant: assistantText,
     timestamp: Date.now(),
-    costUsd,
+    costUsd: costForSum,
     durationMs,
     inputTokens: aggInput,
     outputTokens: aggOutput,
