@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.2] - 2026-08-16
+
+### Fixed
+- thread topic opts into auto-subscribe watch output (#1023) (e44a377c)
+
+### Changed
+- extract duplicated JSONL parse loop into src/utils/jsonl.ts (#1081) (f919e780)
+
 ## [5.123.1] - 2026-08-15
 
 ### Fixed
