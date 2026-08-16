@@ -1602,3 +1602,131 @@ describe('allow_custom — multi_choice type', () => {
     expect(result.content?.['value']).toEqual(['alpha', 'beta']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dynamic route resolution via elicitation-route-registry
+// ---------------------------------------------------------------------------
+
+describe('dynamic route resolution (topic-aware routing, issue #1021)', () => {
+  const PRIMARY_CHAT_ID = 9000;
+  const TOPIC_THREAD_ID = 77;
+
+  afterEach(() => {
+    // Clear any lingering registry entries set during these tests.
+    // Import is done inline to avoid polluting the top-level mock scope.
+    void import('./elicitation-route-registry.js').then(({ clearElicitationRoute }) => {
+      clearElicitationRoute('test-session-topic');
+      clearElicitationRoute('test-session-general');
+    });
+  });
+
+  it('falls back to primaryChatId when no sessionId is provided', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, PRIMARY_CHAT_ID);
+
+    const ac = makeAbort();
+    // No sessionId → should use PRIMARY_CHAT_ID (fallbackRoute)
+    const resultPromise = handler(textRequest(), { signal: ac.signal });
+    await Promise.resolve();
+
+    const sentChatId = sendMessage.mock.calls[0]?.[0] as number;
+    expect(sentChatId).toBe(PRIMARY_CHAT_ID);
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('falls back to primaryChatId when sessionId has no registry entry', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, PRIMARY_CHAT_ID);
+
+    const ac = makeAbort();
+    // sessionId present but NOT in registry → fallback
+    const resultPromise = handler(textRequest(), { signal: ac.signal, sessionId: 'unknown-session-id' });
+    await Promise.resolve();
+
+    const sentChatId = sendMessage.mock.calls[0]?.[0] as number;
+    expect(sentChatId).toBe(PRIMARY_CHAT_ID);
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('routes to the registered topic route when sessionId is in the registry', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, PRIMARY_CHAT_ID);
+
+    // Register a topic route for this session
+    const { setElicitationRoute } = await import('./elicitation-route-registry.js');
+    const topicRoute = { chatId: PRIMARY_CHAT_ID, threadId: TOPIC_THREAD_ID };
+    setElicitationRoute('test-session-topic', topicRoute);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest(), { signal: ac.signal, sessionId: 'test-session-topic' });
+    await Promise.resolve();
+
+    // Should be sent to PRIMARY_CHAT_ID with message_thread_id option
+    const sentChatId = sendMessage.mock.calls[0]?.[0] as number;
+    const sendOptions = sendMessage.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(sentChatId).toBe(PRIMARY_CHAT_ID);
+    expect(sendOptions?.message_thread_id).toBe(TOPIC_THREAD_ID);
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('registers pending text intercept under the resolved topic key', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, PRIMARY_CHAT_ID);
+
+    const { setElicitationRoute } = await import('./elicitation-route-registry.js');
+    const topicRoute = { chatId: PRIMARY_CHAT_ID, threadId: TOPIC_THREAD_ID };
+    setElicitationRoute('test-session-topic', topicRoute);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest(), { signal: ac.signal, sessionId: 'test-session-topic' });
+    await Promise.resolve();
+
+    // The pending entry should be keyed by the TOPIC route key, not the general key
+    const topicKey = `${PRIMARY_CHAT_ID}:${TOPIC_THREAD_ID}`;
+    const generalKey = String(PRIMARY_CHAT_ID);
+    expect(messageHandler.pendingElicitations.has(topicKey)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(generalKey)).toBe(false);
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('two concurrent sessions on different topics get their own pending entries', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, PRIMARY_CHAT_ID);
+
+    const { setElicitationRoute, clearElicitationRoute } = await import('./elicitation-route-registry.js');
+    setElicitationRoute('test-session-topic', { chatId: PRIMARY_CHAT_ID, threadId: TOPIC_THREAD_ID });
+    setElicitationRoute('test-session-general', { chatId: PRIMARY_CHAT_ID });
+
+    const ac1 = makeAbort();
+    const ac2 = makeAbort();
+    const p1 = handler(textRequest({ message: 'Q for topic' }), { signal: ac1.signal, sessionId: 'test-session-topic' });
+    await Promise.resolve();
+    const p2 = handler(textRequest({ message: 'Q for general' }), { signal: ac2.signal, sessionId: 'test-session-general' });
+    await Promise.resolve();
+
+    // Both topic key and general key should be pending simultaneously
+    const topicKey = `${PRIMARY_CHAT_ID}:${TOPIC_THREAD_ID}`;
+    const generalKey = String(PRIMARY_CHAT_ID);
+    expect(messageHandler.pendingElicitations.has(topicKey)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(generalKey)).toBe(true);
+
+    ac1.abort();
+    ac2.abort();
+    await Promise.all([p1, p2]);
+
+    clearElicitationRoute('test-session-general');
+  });
+});

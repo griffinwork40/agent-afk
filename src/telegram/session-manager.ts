@@ -6,6 +6,7 @@
 import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, ResponseMetadata } from '../agent/types.js';
 import { injectHotMemory } from '../agent/memory/index.js';
 import { injectCompanionPrimer } from '../agent/companion/index.js';
+import { setElicitationRoute, clearElicitationRoute } from './elicitation-route-registry.js';
 // Shared session-persistence utilities. These live under src/cli/ but are
 // surface-agnostic (pure functions over SessionStats / sidecar files); the
 // Telegram bot reuses them so a chat session lands in the SAME
@@ -349,6 +350,11 @@ export class SessionManager {
     const data = this.sessionData.get(key);
     if (data && stats.sessionId) data.sessionId = stats.sessionId;
 
+    // Register the sessionId → route mapping so the elicitation handler can
+    // route ask_question prompts to the correct topic thread. Idempotent — safe
+    // to call on every turn even when the mapping already exists.
+    if (stats.sessionId) setElicitationRoute(stats.sessionId, route);
+
     // Persist to the shared store. Requires a sessionId to key the file;
     // without one (rare provider that emits none) the turn stays in memory and
     // is flushed once a sessionId appears on a later turn.
@@ -533,6 +539,14 @@ export class SessionManager {
    * appending to the previous conversation's sidecar.
    */
   private _resetStats(key: string): void {
+    // Clear the elicitation route mapping for the session being torn down, so
+    // a future session that reuses the same SDK sessionId cannot accidentally
+    // route prompts to this route. Clear before deleting the stats entry, while
+    // the sessionId is still accessible.
+    const sessionId = this.sessionStats.get(key)?.sessionId
+      ?? this.sessionData.get(key)?.sessionId;
+    if (sessionId) clearElicitationRoute(sessionId);
+
     this.sessionStats.delete(key);
     // Fresh conversation → allow the autosave-failure notice to fire again.
     this.autosaveFailureLogged.delete(key);
