@@ -1,23 +1,8 @@
 import { Lexer, type Token, type Tokens } from 'marked';
-import { displayWidth, padDisplay, truncateDisplayWidth } from './display.js';
-import { highlightCode } from './syntax-highlight.js';
-import { wrapToWidth } from './wrap.js';
 import { palette } from './palette.js';
-
-function visualWidth(s: string): number {
-  return displayWidth(s);
-}
-function padCell(
-  content: string,
-  width: number,
-  align: 'left' | 'right' | 'center' | null,
-): string {
-  return padDisplay(content, width, align ?? 'left');
-}
-
-interface RenderMarkdownOptions {
-  maxWidth?: number;
-}
+import { renderTable } from './formatter.table.js';
+import { renderList } from './formatter.list.js';
+import { renderBlockquote, renderCodeBlock } from './formatter.block.js';
 
 /** Matches a whole codespan text that is a slash command (no surrounding path segments). */
 const SLASH_CODESPAN_RE = /^\/[A-Za-z][\w:-]*$/;
@@ -119,6 +104,10 @@ export function renderCardLine(text: string): string {
   }).join('');
 }
 
+interface RenderMarkdownOptions {
+  maxWidth?: number;
+}
+
 /**
  * Render markdown text to terminal-friendly ANSI output using marked tokens.
  */
@@ -159,37 +148,8 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           const para = token as Tokens.Paragraph;
           return renderInline(para.tokens as Tokens.Generic[]) + '\n';
         }
-        case 'code': {
-          const code = token as Tokens.Code;
-          const lang = code.lang || 'text';
-          // Loud-fail empty fences. Without this guard, a model emitting
-          // "```bash\n```" (open + language + close with no body) renders as
-          // just "│ bash" with no body line — visually indistinguishable from
-          // a code block whose contents got eaten by a render bug. Surface the
-          // omission as an explicit placeholder so reviewers see the missing
-          // command instead of assuming it rendered fine.
-          if (code.text.trim() === '') {
-            const label = code.lang ? `(empty ${code.lang} block)` : '(empty code block)';
-            // One trailing '\n' (line terminator), not '\n\n' — the same block
-            // rhythm invariant as the non-empty branch below and the heading /
-            // paragraph cases above (docs/tui-rhythm.md): every block token owns
-            // exactly one trailing newline; the inter-block blank comes solely
-            // from marked's `space` token. Emitting '\n\n' here double-spaced the
-            // gap after an empty fence in the non-streamed render paths.
-            return palette.dim(`│ ${label}`) + '\n';
-          }
-          const highlighted = highlightCode(code.text, lang);
-          const bodyLines = highlighted.split('\n');
-          // Drop trailing empty line so adjacent blocks don't double-space.
-          if (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') bodyLines.pop();
-          const gutter = palette.dim('│ ');
-          const body = bodyLines.map((line) => gutter + line).join('\n');
-          // Language tag only when explicitly given; no literal "[code]" header
-          // when the fence has no language. The dim left gutter visually marks
-          // the block (mirrors the blockquote convention above).
-          const header = code.lang ? palette.dim(`│ ${code.lang}`) + '\n' : '';
-          return header + body + '\n';
-        }
+        case 'code':
+          return renderCodeBlock(token as Tokens.Code, maxTableWidth);
         case 'codespan': {
           const raw = (token as Tokens.Codespan).text;
           return SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.tool(raw);
@@ -209,97 +169,8 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           const t = token as Tokens.Text;
           return t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
         }
-        case 'list': {
-          const list = token as Tokens.List;
-          const items: string[] = [];
-          // marked preserves the source-level starting index in `list.start`
-          // (e.g. "5. foo\n6. bar" → start=5). Using `i + 1` here would
-          // re-number from 1 every time the streamer chunks a loose ordered
-          // list at \n\n boundaries — each fragment gets re-lexed as its
-          // own one-item list and renders "1." regardless of the source.
-          const startNum = list.ordered ? (typeof list.start === 'number' ? list.start : 1) : 1;
-          for (let i = 0; i < list.items.length; i++) {
-            const item = list.items[i]!;
-            // Task-list items: emit the ☑/☐ glyph and drop the leading
-            // `checkbox` token so it does not also render raw "[x] ".
-            // Invariant: the `checkbox` token is always the first child of a
-            // task item — filter it out before passing tokens to renderTokens
-            // (below), and emit the glyph in the prefix instead.
-            // GFM allows task syntax on ordered items too (marked sets
-            // `item.task` for "1. [x] done"). The `isTask` branch must be
-            // reachable in BOTH the ordered and unordered cases: an ordered
-            // task keeps its number AND gains the glyph ("1. ☑ done").
-            // Checking `list.ordered` first without re-testing `isTask` dropped
-            // the glyph for ordered tasks — and because the `checkbox` token is
-            // filtered out regardless, the user got neither glyph nor "[x]".
-            const isTask = item.task === true;
-            const checkboxGlyph = item.checked ? '☑' : '☐';
-            const prefix = list.ordered
-              ? isTask
-                ? `  ${startNum + i}. ${checkboxGlyph} `
-                : `  ${startNum + i}. `
-              : isTask
-                ? `  ${checkboxGlyph} `
-                : '  • ';
-            const renderableTokens: Token[] = item.tokens
-              ? (isTask ? (item.tokens as Token[]).filter((t) => t.type !== 'checkbox') : (item.tokens as Token[]))
-              : [];
-            const itemText = renderableTokens.length > 0 ? renderTokens(renderableTokens) : item.text;
-            const lines: string[] = [];
-            let first = true;
-            const prefixWidth = visualWidth(prefix);
-            const hang = padDisplay(' '.repeat(prefixWidth), prefixWidth, 'left');
-            // Invariant: every continuation line — whether produced by a source
-            // newline or by a width wrap — must carry the prefix-width hanging
-            // indent. The commit-time formatter runs an indent-blind
-            // wrapToWidth pass after this; if a long item line leaves here
-            // unwrapped, that pass reflows the continuation to column 0 and the
-            // list visually dissolves. Wrap each source line to
-            // (maxTableWidth - prefixWidth) so prefix + content == maxTableWidth
-            // == the outer wrap width; the outer pass then never re-splits these
-            // lines. Mirrors the blockquote branch below.
-            //
-            // breakLongWords is load-bearing, not cosmetic: word-wrap alone
-            // (hard:false) leaves a token WIDER than innerWidth unbroken — a
-            // bare path/URL/`file.ts:12-34` codespan, which afk emits
-            // constantly — so the line escapes this branch over budget and the
-            // indent-blind commit pass breaks it at column 0, dropping the
-            // hanging indent. That is precisely the dissolution the invariant
-            // above forbids; enforcing the width here is what makes it true.
-            const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixWidth) : undefined;
-            for (const srcLine of itemText.trim().split('\n')) {
-              const wrapped = innerWidth
-                ? wrapToWidth(srcLine, innerWidth, { breakLongWords: true })
-                : srcLine;
-              const segs = wrapped.split('\n');
-              for (let s = 0; s < segs.length; s++) {
-                // Normalize continuation whitespace defensively at this formatting
-                // boundary. wrapToWidth removes generated edge spaces while preserving
-                // source indentation, but this branch also accepts styled and nested
-                // list content whose first segment may intentionally begin with spaces.
-                // Only continuations are left-trimmed; all segments are right-trimmed
-                // so whitespace cannot inflate the line past the width budget.
-                let seg = segs[s]!;
-                if (s > 0) seg = seg.replace(/^ +/, '');
-                seg = seg.replace(/ +$/, '');
-                if (!seg) {
-                  // Blank interior line: keep the gap, never emit a
-                  // hanging-indent-only orphan row.
-                  lines.push('');
-                  continue;
-                }
-                if (first) {
-                  lines.push(palette.dim(prefix) + seg);
-                  first = false;
-                } else {
-                  lines.push(hang + seg);
-                }
-              }
-            }
-            items.push(lines.join('\n'));
-          }
-          return items.join('\n') + '\n';
-        }
+        case 'list':
+          return renderList(token as Tokens.List, maxTableWidth, renderTokens);
         case 'space':
           return '\n';
         case 'hr': {
@@ -310,215 +181,10 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           const hrWidth = maxTableWidth ?? 40;
           return palette.dim('─'.repeat(hrWidth)) + '\n';
         }
-        case 'blockquote': {
-          const bq = token as Tokens.Blockquote;
-          const inner = bq.tokens ? renderTokens(bq.tokens as Token[]) : bq.text;
-          const prefix = palette.dim('  │ ');
-          const prefixCols = 4; // "  │ " = 2 spaces + box-draw + space
-          const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixCols) : undefined;
-          const lines: string[] = [];
-          for (const para of inner.split('\n')) {
-            // breakLongWords: same contract as the list branch above — an
-            // unbreakable token wider than innerWidth would otherwise leave
-            // here over budget, and the indent-blind commit-time wrap would
-            // re-split it at column 0, orphaning the continuation outside the
-            // `│ ` gutter.
-            const wrapped = innerWidth
-              ? wrapToWidth(para, innerWidth, { breakLongWords: true })
-              : para;
-            for (const line of wrapped.split('\n')) {
-              // Only stamp the prefix on non-empty lines; empty lines (produced
-              // by trailing \n\n on the inner paragraph token) must not become
-              // orphaned "  │ " rows at the end of the blockquote.
-              lines.push(line ? prefix + line : '');
-            }
-          }
-          return lines.join('\n') + '\n';
-        }
-        case 'table': {
-          const table = token as Tokens.Table;
-          const renderCell = (cell: Tokens.TableCell) =>
-            cell.tokens ? renderInline(cell.tokens as Tokens.Generic[]) : cell.text;
-          const headerCells = table.header.map(renderCell);
-          const dataRows = table.rows.map((row) => row.map(renderCell));
-          const colCount = headerCells.length;
-          const widths: number[] = new Array<number>(colCount).fill(0);
-          // longestWord[i] = widest UNBREAKABLE token in column i. A word cannot
-          // be wrapped, so it is the column's incompressible minimum — used by the
-          // squeeze below as a per-column floor so a narrow single-word column
-          // (e.g. a "Verdict" of CONFIRMED/OVERSTATED) is never crushed below its
-          // own content and chopped to an ellipsis.
-          const longestWord: number[] = new Array<number>(colCount).fill(0);
-          const wordWidth = (s: string): number => {
-            let max = 0;
-            for (const tok of s.split(/\s+/)) {
-              if (tok) max = Math.max(max, visualWidth(tok));
-            }
-            return max;
-          };
-          for (let i = 0; i < colCount; i++) {
-            let w = visualWidth(headerCells[i] ?? '');
-            let lw = wordWidth(headerCells[i] ?? '');
-            for (const row of dataRows) {
-              w = Math.max(w, visualWidth(row[i] ?? ''));
-              lw = Math.max(lw, wordWidth(row[i] ?? ''));
-            }
-            widths[i] = w;
-            longestWord[i] = lw;
-          }
-
-          const targetWidth = maxTableWidth ?? Number.POSITIVE_INFINITY;
-          const chromeWidth = (3 * colCount) + 1;
-          const availableContentWidth = Math.max(0, targetWidth - chromeWidth);
-          const totalContentWidth = widths.reduce((sum, width) => sum + width, 0);
-          if (Number.isFinite(targetWidth) && totalContentWidth > availableContentWidth) {
-            // Invariant: after this block sum(widths) <= availableContentWidth, so
-            // every emitted row fits maxTableWidth and the commit-time second
-            // wrapToWidth pass (markdown-stream-format.ts) stays a no-op for tables
-            // (a row even 1 col over budget would re-split at its last space into a
-            // fragment + orphan '│' line and desync the compositor's row count).
-            //
-            // Allocation is floor-based water-filling, NOT uniform proportional
-            // shrink. Proportional shrink scaled every column by the same factor,
-            // so a high overflow ratio crushed narrow single-word columns (a
-            // "Verdict" of CONFIRMED/OVERSTATED) below their content width and
-            // truncateDisplayWidth chopped them to "Verd…". Instead: floor each
-            // column at min(natural, longestWord, WORD_FLOOR_CAP) — its
-            // incompressible width, capped so one long token (a path/URL) cannot
-            // starve the rest — then hand the leftover budget to columns in
-            // proportion to their reducible slack (natural - floor). All the
-            // squeeze lands on genuinely wide columns; narrow ones stay readable.
-            const WORD_FLOOR_CAP = 14;
-            const floors = widths.map((w, i) =>
-              Math.min(w, Math.max(1, Math.min(longestWord[i] ?? 1, WORD_FLOOR_CAP))),
-            );
-            const floorTotal = floors.reduce((sum, w) => sum + w, 0);
-            const constrained = floors.slice();
-            if (floorTotal <= availableContentWidth) {
-              const slack = widths.map((w, i) => Math.max(0, w - (floors[i] ?? 0)));
-              const slackTotal = slack.reduce((sum, s) => sum + s, 0);
-              const leftover = availableContentWidth - floorTotal;
-              if (slackTotal > 0 && leftover > 0) {
-                for (let i = 0; i < colCount; i++) {
-                  constrained[i] = (floors[i] ?? 0) +
-                    Math.floor(((slack[i] ?? 0) / slackTotal) * leftover);
-                }
-                // Hand the Math.floor remainder to the widest-slack columns until
-                // the total reaches exactly availableContentWidth (never over it).
-                const order = constrained
-                  .map((_, i) => i)
-                  .sort((a, b) => (slack[b] ?? 0) - (slack[a] ?? 0));
-                let used = constrained.reduce((sum, w) => sum + w, 0);
-                let guard = 0;
-                while (used < availableContentWidth && order.length > 0 && guard < colCount * 4) {
-                  const i = order[guard % order.length]!;
-                  if ((constrained[i] ?? 0) < (widths[i] ?? 0)) {
-                    constrained[i] = (constrained[i] ?? 0) + 1;
-                    used += 1;
-                  }
-                  guard += 1;
-                }
-              }
-            } else {
-              // Degenerate: even the floors exceed the budget (too many columns
-              // for the width — chromeWidth alone can dominate). Shrink the floors
-              // proportionally to fit, preserving relative column sizes. The
-              // return-line cap below still guarantees no line exceeds the budget.
-              const scale = availableContentWidth / floorTotal;
-              for (let i = 0; i < colCount; i++) {
-                constrained[i] = Math.max(1, Math.floor((floors[i] ?? 0) * scale));
-              }
-              let constrainedTotal = constrained.reduce((sum, w) => sum + w, 0);
-              while (constrainedTotal > availableContentWidth) {
-                let widest = -1;
-                for (let i = 0; i < colCount; i++) {
-                  if ((constrained[i] ?? 0) > 1 &&
-                      (widest === -1 || (constrained[i] ?? 0) > (constrained[widest] ?? 0))) {
-                    widest = i;
-                  }
-                }
-                if (widest === -1) break;
-                constrained[widest] = (constrained[widest] ?? 0) - 1;
-                constrainedTotal -= 1;
-              }
-              // Grow back budget lost to flooring in the scale step: Math.floor
-              // discards fractional units, so the total can land BELOW
-              // availableContentWidth (e.g. natural widths [37,3,3,3,3] at
-              // maxWidth 30 use 11 of 14). Hand the reclaimed slack to the widest
-              // columns first (by natural width), capped at each column's natural
-              // width so none is padded past its content, until the budget is met.
-              // Keeps the table as wide as the budget allows. Bounded: the deficit
-              // is < colCount, so one pass over growOrder suffices.
-              const growOrder = constrained
-                .map((_, i) => i)
-                .sort((a, b) => (widths[b] ?? 0) - (widths[a] ?? 0) || a - b);
-              let grow = 0;
-              while (constrainedTotal < availableContentWidth && grow < colCount * 4) {
-                const i = growOrder[grow % growOrder.length]!;
-                if ((constrained[i] ?? 0) < (widths[i] ?? 0)) {
-                  constrained[i] = (constrained[i] ?? 0) + 1;
-                  constrainedTotal += 1;
-                }
-                grow += 1;
-              }
-            }
-            for (let i = 0; i < colCount; i++) {
-              widths[i] = constrained[i] ?? widths[i] ?? 0;
-            }
-          }
-
-          const aligns = table.align;
-          const borderLine = (left: string, mid: string, right: string) =>
-            palette.dim(left + widths.map((w) => '─'.repeat(w + 2)).join(mid) + right);
-          const wrapCell = (content: string, width: number) => {
-            if (width <= 0) return [''];
-            const rendered = wrapToWidth(content, width);
-            return rendered.split('\n').map((line) => truncateDisplayWidth(line, width));
-          };
-          const dataLines = (cells: string[], header = false) => {
-            const wrapped = cells.map((cell, i) =>
-              wrapCell(
-                header ? palette.bold(cell) : cell,
-                widths[i] ?? 0,
-              ),
-            );
-            const rowHeight = Math.max(1, ...wrapped.map((lines) => lines.length));
-            const lines: string[] = [];
-            for (let row = 0; row < rowHeight; row++) {
-              lines.push(
-                palette.dim('│') +
-                  wrapped
-                    .map((cellLines, i) => ' ' + padCell(cellLines[row] ?? '', widths[i] ?? 0, aligns[i] ?? null) + ' ')
-                    .join(palette.dim('│')) +
-                  palette.dim('│'),
-              );
-            }
-            return lines;
-          };
-          const lines: string[] = [borderLine('┌', '┬', '┐')];
-          lines.push(...dataLines(headerCells, true));
-          lines.push(borderLine('├', '┼', '┤'));
-
-          for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
-            lines.push(...dataLines(dataRows[rowIdx]!));
-            // Add a thin row separator between data rows (but not after the last row)
-            if (rowIdx < dataRows.length - 1) {
-              lines.push(borderLine('├', '┼', '┤'));
-            }
-          }
-
-          lines.push(borderLine('└', '┴', '┘'));
-          // Safety net: hard-cap every emitted line to the budget. In the normal
-          // and degenerate squeeze paths the rows already fit, so this is a no-op;
-          // it only bites in pathological cases (e.g. chromeWidth alone exceeds
-          // targetWidth), guaranteeing the downstream wrapToWidth never re-splits
-          // a structural table row regardless of column math.
-          if (!Number.isFinite(targetWidth)) {
-            return lines.join('\n') + '\n';
-          }
-          const lineCap = Math.floor(targetWidth);
-          return lines.map((line) => truncateDisplayWidth(line, lineCap)).join('\n') + '\n';
-        }
+        case 'blockquote':
+          return renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
+        case 'table':
+          return renderTable(token as Tokens.Table, maxTableWidth, renderInline);
         default:
           return token.raw;
       }
@@ -527,3 +193,6 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
 
   return renderTokens(tokens);
 }
+
+// Re-export for callers that import renderInlineTokens directly.
+export { renderInlineTokens };
