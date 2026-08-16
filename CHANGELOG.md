@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.3] - 2026-08-16
+
+### Changed
+- extract renderMarkdownToTerminal god function into concern siblings (#1081) (#1094) (6d1a89e3)
+
 ## [5.123.2] - 2026-08-16
 
 ### Fixed
