@@ -614,9 +614,16 @@ export class TelegramBot {
       // one REPL session per operator).
       for (const sessionId of afkSessionIds) {
         if (this.watchManager.watching(chatId) === sessionId) continue; // already watching
+        // Invariant: auto-subscribe has no inbound message context, so the
+        // route defaults to the General topic (no threadId). sendOptions()
+        // returns {} for General, which is byte-identical to the bare send —
+        // non-topic chats are unaffected. Topic-aware chats route to General;
+        // the manual /watch command targets the specific topic instead.
+        const autoRoute = { chatId };
+        const autoSendOpts = sendOptions(autoRoute);
         const send = async (msg: string): Promise<void> => {
           for (const part of splitLongMessage(msg)) {
-            await this.bot.telegram.sendMessage(chatId, part);
+            await this.bot.telegram.sendMessage(chatId, part, autoSendOpts);
           }
         };
         this.watchManager.start(chatId, sessionId, send);

@@ -364,6 +364,91 @@ describe('TelegramBot', () => {
     });
   });
 
+  describe('auto-subscribe watch output topic threading', () => {
+    test('auto-subscribe send callback passes sendOptions to sendMessage (General = no thread id)', async () => {
+      // Regression for #1023: auto-subscribe sent to sendMessage(chatId, part)
+      // with no options, so watch output always landed in General regardless of
+      // the watched session's topic. The fix threads sendOptions(route) through.
+      //
+      // For auto-subscribe the route is always General (bare chatId) because
+      // there is no inbound context to derive a thread from. General produces
+      // sendOptions = {}, so the third argument is {} (not undefined/absent) —
+      // non-topic chats receive byte-identical sends; the option is present but
+      // has no thread id key.
+      const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
+      (bot as any).bot.telegram.sendMessage = sendMessageMock;
+
+      const presence = await import('../agent/awareness/presence.js');
+      const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([
+        { surface: 'cli', afk: true, sessionId: 'session-abc', cwd: '/tmp', model: 'claude', pid: 1, startedAt: '' },
+      ] as Awaited<ReturnType<typeof presence.readLivePresenceFiles>>);
+
+      // Stub watchManager so it calls the send callback we capture.
+      let capturedSend: ((msg: string) => Promise<void>) | undefined;
+      const watchManagerSpy = vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
+        (_chatId: number, _sessionId: string, send: (msg: string) => Promise<void>) => {
+          capturedSend = send;
+        },
+      );
+      vi.spyOn((bot as any).watchManager, 'watching').mockReturnValue(undefined);
+      vi.spyOn((bot as any).watchManager, 'getWatched').mockReturnValue(undefined);
+
+      try {
+        await (bot as any).runAutoSubscribeTick();
+
+        // The watch was started.
+        expect(watchManagerSpy).toHaveBeenCalledTimes(1);
+        expect(capturedSend).toBeDefined();
+
+        // Now fire the send callback and verify sendMessage received options.
+        await capturedSend!('hello from CLI');
+
+        expect(sendMessageMock).toHaveBeenCalledTimes(1);
+        const [calledChatId, calledText, calledOpts] = sendMessageMock.mock.calls[0] as [number, string, unknown];
+        expect(calledChatId).toBe(12345);
+        expect(calledText).toBe('hello from CLI');
+        // General topic → sendOptions returns {} (no message_thread_id key).
+        expect(calledOpts).toEqual({});
+        expect(calledOpts).not.toHaveProperty('message_thread_id');
+      } finally {
+        presenceSpy.mockRestore();
+        watchManagerSpy.mockRestore();
+      }
+    });
+
+    test('auto-subscribe send callback uses chatId from allowed set, not hardcoded', async () => {
+      // Verify the send callback captures the loop's chatId, not a stale outer ref.
+      const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
+      (bot as any).bot.telegram.sendMessage = sendMessageMock;
+
+      const presence = await import('../agent/awareness/presence.js');
+      const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([
+        { surface: 'cli', afk: true, sessionId: 'session-xyz', cwd: '/tmp', model: 'claude', pid: 2, startedAt: '' },
+      ] as Awaited<ReturnType<typeof presence.readLivePresenceFiles>>);
+
+      let capturedSend: ((msg: string) => Promise<void>) | undefined;
+      vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
+        (_chatId: number, _sessionId: string, send: (msg: string) => Promise<void>) => {
+          capturedSend = send;
+        },
+      );
+      vi.spyOn((bot as any).watchManager, 'watching').mockReturnValue(undefined);
+      vi.spyOn((bot as any).watchManager, 'getWatched').mockReturnValue(undefined);
+
+      try {
+        await (bot as any).runAutoSubscribeTick();
+        expect(capturedSend).toBeDefined();
+        await capturedSend!('msg');
+
+        // The chatId forwarded to sendMessage must match the allowed chat.
+        expect(sendMessageMock.mock.calls[0]![0]).toBe(12345);
+      } finally {
+        presenceSpy.mockRestore();
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   describe('stats', () => {
     test('should track bot stats', () => {
       const stats = bot.getStats();
