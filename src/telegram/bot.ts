@@ -619,11 +619,9 @@ export class TelegramBot {
         // returns {} for General, which is byte-identical to the bare send —
         // non-topic chats are unaffected. Topic-aware chats route to General;
         // the manual /watch command targets the specific topic instead.
-        const autoRoute = { chatId };
-        const autoSendOpts = sendOptions(autoRoute);
         const send = async (msg: string): Promise<void> => {
           for (const part of splitLongMessage(msg)) {
-            await this.bot.telegram.sendMessage(chatId, part, autoSendOpts);
+            await this.bot.telegram.sendMessage(chatId, part, sendOptions({ chatId })); // #1023
           }
         };
         this.watchManager.start(chatId, sessionId, send);
