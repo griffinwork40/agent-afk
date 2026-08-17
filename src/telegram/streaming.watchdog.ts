@@ -61,7 +61,7 @@ export interface WatchdogState {
 }
 
 /** Extra slack (ms) added to the timeout deadline while paused. */
-const PAUSE_SLACK_MS = 90_000;
+export const PAUSE_SLACK_MS = 90_000;
 
 /**
  * Build the `nextWithTimeout` function for one streaming turn. Returns a
@@ -153,14 +153,13 @@ export function armProgressGateTimer(
   remainingMs: number,
   onOpen: () => void,
   isTurnEnded: () => boolean,
-  isEditInFlight: () => boolean,
 ): ReturnType<typeof setTimeout> {
   return setTimeout(() => {
     if (isTurnEnded()) return;
-    // A render already in flight computed its text before the gate
-    // opened; skip rather than racing it — the next event or the final
-    // delivery (finalBody, ungated) still surfaces the region.
-    if (isEditInFlight()) return;
+    // The onOpen callback gates its own render against editInFlight
+    // internally — do NOT gate the gate-open itself, or the progress
+    // gate stays permanently closed when an edit is in flight at timer-
+    // fire time and no further progress event re-arms it.
     onOpen();
   }, Math.max(0, remainingMs));
 }

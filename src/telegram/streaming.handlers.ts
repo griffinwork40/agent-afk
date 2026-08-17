@@ -15,15 +15,12 @@ import type { Message } from 'telegraf/types';
 import { splitLongMessage, markdownToTelegramHtml } from './formatter.js';
 import { sendOrEdit, deliverClean, DELIVERY_TRUNCATED_NOTICE } from './streaming.sender.js';
 import type { SenderState } from './streaming.sender.js';
-import { computeFinalBody } from './streaming.body.js';
 import type { ProgressEntry } from './streaming.preview.js';
 import { replyWithFloodRetry as replyWithFloodRetryImpl } from './streaming.retry.js';
 import type { ResponseMetadata } from '../agent/types.js';
 
 /** Countdown update granularity during a usage-limit pause: every 5 minutes. */
 export const PAUSE_COUNTDOWN_INTERVAL_MS = 5 * 60 * 1_000;
-/** Extra slack (ms) added to the timeout deadline while paused. */
-export const PAUSE_SLACK_MS = 90_000;
 
 /**
  * Full mutable state bag for a streaming turn. Passed by reference so handlers
@@ -261,6 +258,4 @@ export async function deliverOverflow(
   }
 }
 
-// Re-export computeFinalBody for use in streaming.ts so it doesn't need an
-// additional sibling import just for the inline finalBody closure.
-export { computeFinalBody };
+

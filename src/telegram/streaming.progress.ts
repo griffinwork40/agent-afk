@@ -11,10 +11,9 @@
 
 import type { Context } from 'telegraf';
 import type { OutputEvent, SubagentProgressMeta } from '../agent/types.js';
-import { formatTelegramAgentLabel, humanizeToolActivity, MAX_SUBAGENT_PREVIEW_LINES } from './streaming.activity.js';
+import { formatTelegramActivity, formatTelegramAgentLabel, humanizeToolActivity, MAX_SUBAGENT_PREVIEW_LINES } from './streaming.activity.js';
 import { sendOrEdit } from './streaming.sender.js';
 import type { SenderState } from './streaming.sender.js';
-import { formatTelegramActivity } from './streaming.activity.js';
 import { MAX_PROGRESS_ENTRIES } from './streaming.preview.js';
 import type { ProgressEntry } from './streaming.preview.js';
 import { armProgressGateTimer } from './streaming.watchdog.js';
@@ -120,7 +119,6 @@ export async function handleProgressEvent(
         void sendOrEdit(state, ctx, chatId, livePreview(), true).finally(() => { state.editInFlight = false; });
       },
       () => state.turnEnded,
-      () => state.editInFlight,
     );
   }
 }

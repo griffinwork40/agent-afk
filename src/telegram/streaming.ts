@@ -18,14 +18,13 @@ import {
 } from './streaming.activity.js';
 import {
   computeLivePreview,
-  MAX_PROGRESS_ENTRIES,
 } from './streaming.preview.js';
 import type { ProgressEntry } from './streaming.preview.js';
 import { computeFinalBody } from './streaming.body.js';
-import { sendOrEdit, deliverClean, EDIT_THROTTLE_MS } from './streaming.sender.js';
+import { sendOrEdit, deliverClean } from './streaming.sender.js';
 import {
   handlePaused, handleResumed, handleDone, handleError, deliverOverflow,
-  PAUSE_SLACK_MS, type StreamState, type HandlerParams,
+  type StreamState, type HandlerParams,
 } from './streaming.handlers.js';
 import {
   makeNextWithTimeout, PROGRESS_START_DELAY_MS, type WatchdogState,
@@ -69,13 +68,7 @@ export function renderActivityReceipt(toolRounds: number, elapsedMs: number): st
   return `\n\n⏱️ ${toolRounds} ${toolRounds === 1 ? 'step' : 'steps'} · ${secs}s`;
 }
 
-// Suppress unused-import warnings for re-exported constants from siblings that
-// were formerly defined in this file and still considered part of this module's
-// public contract. Callers that import them directly from this module (instead
-// of the siblings) continue to work via the sibling re-exports above.
-void EDIT_THROTTLE_MS;
-void PAUSE_SLACK_MS;
-void MAX_PROGRESS_ENTRIES;
+
 
 /**
  * Stream agent response back to Telegram by consuming getOutputStream() / sendMessageStream.
