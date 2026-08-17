@@ -14,6 +14,7 @@ import { harvestAllPluginSkillFlags, extractHintFromDescription } from './flags.
 import { state, bareName, type DiscoveredSkill } from './state.js';
 import type { SlashContext } from '../types.js';
 import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 
 type SkillSource = SkillManifestEntry['source'];
 
@@ -83,7 +84,7 @@ export function renderSkillDetail(
 
   if (!registrySkill && !pluginSkill) {
     ctx.out.line();
-    ctx.out.line(palette.dim(`  No skill found matching "${cleaned}".`));
+    ctx.out.line(palette.dim(`  No skill found matching "${sanitizeForDisplay(cleaned)}".`));
     ctx.out.line(palette.dim('  Run /skills to see everything available.'));
     ctx.out.line();
     return;

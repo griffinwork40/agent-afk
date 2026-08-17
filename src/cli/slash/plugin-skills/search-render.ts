@@ -16,7 +16,8 @@ import { padDisplayRight, displayWidth } from '../../display.js';
 import type { SlashContext } from '../types.js';
 import { searchSkills, type SearchableSkill, type SearchResult } from './search.js';
 import { extractHintFromDescription } from './flags.js';
-import type { DiscoveredSkill } from './state.js';
+import { state, bareName, type DiscoveredSkill } from './state.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 
 /**
  * Build a flat universe of searchable skills from the registry + discovered
@@ -29,6 +30,9 @@ export function buildSearchUniverse(
 ): SearchableSkill[] {
   const universe: SearchableSkill[] = [];
 
+  // Track names already added from the registry to prevent plugin duplicates.
+  const registryNames = new Set<string>();
+
   for (const name of listVisibleSkills(internalUnlocked)) {
     const skill = getSkill(name);
     const hintText = skill.argumentHint ?? extractHintFromDescription(skill.description);
@@ -37,12 +41,27 @@ export function buildSearchUniverse(
       description: skill.description,
       ...(hintText !== undefined ? { hint: hintText } : {}),
     });
+    registryNames.add(name);
+    // Also track the bare name so a namespaced registry entry like `user:mint`
+    // prevents a plugin `mint` from being added again.
+    registryNames.add(bareName(name));
   }
 
   for (const plugin of plugins) {
+    const bare = bareName(plugin.name);
+    // Skip if this name (full or bare) is already represented by a registry entry.
+    if (registryNames.has(plugin.name) || registryNames.has(bare)) continue;
+
+    // For colliding entries, advertise the alt slash name so search results
+    // reflect the actual slash the user must type, not the shadowed bare name.
+    const collision = state.collisions.find((c) => c.bare === bare);
+    const advertisedName = collision
+      ? collision.altSlash.replace(/^\//, '')
+      : plugin.name;
+
     const hintText = plugin.argumentHint ?? extractHintFromDescription(plugin.description);
     universe.push({
-      name: plugin.name,
+      name: advertisedName,
       description: plugin.description,
       ...(hintText !== undefined ? { hint: hintText } : {}),
     });
@@ -57,8 +76,8 @@ export type { SearchableSkill };
 /**
  * Render a search result row identical in style to the main listing:
  * padded display name on the left, wrapped description on the right.
- * Uses `palette.info` instead of `palette.warning` to visually distinguish
- * search results from the regular listing rows.
+ * Uses `palette.warning` to visually distinguish search results from the
+ * regular listing rows.
  */
 function renderSearchRow(
   ctx: SlashContext,
@@ -103,7 +122,7 @@ export function renderSkillSearch(
   ctx.out.line();
 
   if (results.length === 0) {
-    ctx.out.line(palette.dim(`  No skills matched "${query}".`));
+    ctx.out.line(palette.dim(`  No skills matched "${sanitizeForDisplay(query)}".`));
     ctx.out.line(palette.dim('  Try a shorter term, or run /skills to browse everything.'));
     ctx.out.line();
     return;
@@ -119,7 +138,7 @@ export function renderSkillSearch(
   const descW = Math.max(12, termW - 2 - nameW);
 
   ctx.out.line(
-    palette.bold('Skills matching') + palette.dim(`  "${query}"`) +
+    palette.bold('Skills matching') + palette.dim(`  "${sanitizeForDisplay(query)}"`) +
     palette.dim(`  (${results.length} result${results.length === 1 ? '' : 's'})`),
   );
   ctx.out.line();

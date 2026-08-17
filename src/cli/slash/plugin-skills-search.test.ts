@@ -99,14 +99,13 @@ describe('searchSkills()', () => {
     expect(found?.tier).toBe(2);
   });
 
-  it('tier 3: subsequence in description — "pllls" matches parallel skills', () => {
-    // "pllls" is a subsequence of "parallel" (p-a-r-a-l-l-e-l)... actually no.
-    // Test subsequence in desc via a word that spans boundaries.
-    const results = searchSkills(SKILLS, 'root');
-    const found = results.find((r) => r.skill.name === 'diagnose');
-    // "root-cause" contains "root" — tier 2 (substring)
+  it('tier 3: subsequence in description — "dlvr" is a subsequence of "Deliver" but not a substring', () => {
+    // "dlvr" matches d...l...v...r in "Deliver" — subsequence but NOT a substring.
+    // mint's description starts with "Deliver a feature…" so it should be tier 3.
+    const results = searchSkills(SKILLS, 'dlvr');
+    const found = results.find((r) => r.skill.name === 'mint');
     expect(found).toBeDefined();
-    expect(found!.tier).toBeLessThanOrEqual(2);
+    expect(found!.tier).toBe(3);
   });
 
   it('prefix matches rank above subsequence matches', () => {
@@ -214,12 +213,14 @@ describe('/skills <query> integration', () => {
 
   it('multi-word intent query returns relevant skills', async () => {
     const { ctx, lines } = makeCtx();
-    await initialSkillsCmd.handler(ctx, 'parallel');
+    // "bug test" is a true multi-word query: "bug" appears in diagnose description,
+    // "test" appears in diagnose description ("failing tests") — both tokens must match.
+    await initialSkillsCmd.handler(ctx, 'bug test');
     const out = stripAnsi(lines.join('\n'));
 
-    // "parallel" appears in both diagnose and review descriptions
     expect(out).toMatch(/Skills matching/i);
-    expect(out.toLowerCase()).toContain('parallel');
+    // diagnose description: "Parallel root-cause analysis for bugs and failing tests."
+    expect(out).toContain('diagnose');
   });
 
   it('no-results query shows helpful fallback', async () => {

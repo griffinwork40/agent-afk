@@ -23,6 +23,9 @@ import { palette } from '../../palette.js';
 /**
  * True when this is the user's first interactive REPL session.
  * Pure function over the filesystem — no side effects.
+ *
+ * Known race: concurrent fresh launches may both see !existsSync → both print.
+ * Consequence is a harmless duplicate banner, not data corruption.
  */
 export function isFirstRun(): boolean {
   try {
