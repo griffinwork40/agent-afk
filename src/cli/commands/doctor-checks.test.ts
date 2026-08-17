@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { checkImportAvailable } from './doctor-checks.js';
+import { describe, it, expect, vi } from 'vitest';
+import { checkImportAvailable, checkAnthropicKey } from './doctor-checks.js';
 import type { DetectedSource } from '../../config/import-sources.js';
 
 /** Minimal fixture for a present source with zero assets. */
@@ -18,6 +18,21 @@ function makeSource(
     ...overrides,
   };
 }
+
+vi.mock('../../agent/auth/credential-resolver.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../agent/auth/credential-resolver.js')>();
+  return { ...orig, preloadClaudeKeychainOAuth: vi.fn().mockResolvedValue(undefined) };
+});
+
+describe('checkAnthropicKey', () => {
+  it('calls preloadClaudeKeychainOAuth before checking the key', async () => {
+    const { preloadClaudeKeychainOAuth } = await import(
+      '../../agent/auth/credential-resolver.js'
+    );
+    await checkAnthropicKey();
+    expect(preloadClaudeKeychainOAuth).toHaveBeenCalledWith('anthropic-direct');
+  });
+});
 
 describe('checkImportAvailable', () => {
   it('returns null when detected list is empty', async () => {
