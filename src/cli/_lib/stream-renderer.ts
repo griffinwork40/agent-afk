@@ -27,7 +27,6 @@
  */
 
 import type { OutputEvent, SubagentProgressMeta, ProgressEvent } from '../../agent/types.js';
-import { debugLog } from '../../utils/debug.js';
 import type { Message } from '../../agent/types/message-types.js';
 import type { Writer } from '../slash/types.js';
 import { TerminalCompositor } from '../terminal-compositor.js';
@@ -39,161 +38,23 @@ import { createSlashRegistryView } from '../slash/registry.js';
 import { ToolLane } from '../commands/interactive/tool-lane.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
-import {
-  ORCHESTRATOR_SOURCE_KEY,
-  type SourceState,
-  freshSourceState,
-} from './stream-renderer-source.js';
+import { type SourceState } from './stream-renderer-source.js';
 import { ChildActivityTracker } from './child-activity-select.js';
-import { InFlightToolTracker, noteToolEvent } from '../input/work-derived-verb.js';
-import {
-  handleOrchestratorEvent,
-  setComposedOverlay,
-  type OrchestratorCtx,
-} from './stream-renderer-orchestrator.js';
+import { InFlightToolTracker } from '../input/work-derived-verb.js';
+import { type OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import { CommitCoordinator } from './commit-coordinator.js';
-import { commitBlockAbove } from './commit-block.js';
-import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker, type StageTrackerState } from '../commands/interactive/loop-stage.js';
 import { detectCaptureMode, detectReducedMotion, detectGoblinSpinner } from './capture-mode.js';
-import { makeDedupingLineWriter, type DedupingLineWriter } from './dedup-line-writer.js';
+import { makeDedupingLineWriter } from './dedup-line-writer.js';
 import { registerOverlaySlots, checkPauseAnnotations, subscribeToResize } from './stream-renderer-lifecycle.js';
 import { checkProgressBannerStaleness } from './stream-renderer-dead-zone.js';
-import { makeOrchestratorCtx, makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
+import { makeOrchestratorCtx } from './stream-renderer-contexts.js';
+import { processEvent, type ProcessCtx } from './stream-renderer-process.js';
+import { disposeRenderer, type DisposeCtx } from './stream-renderer-dispose.js';
 
-export interface StreamRendererOptions {
-  /** Where line-based output goes (non-TTY fallback + always-emitted compact lines). */
-  out: Writer;
-  /**
-   * Controls how orchestrator-side thinking is rendered:
-   * - `'off'` — suppressed entirely (no buffer, no overlay, no summary)
-   * - `'summary'` (default) — buffered, collapsed summary emitted on finalize
-   * - `'live'` — preview overlay during streaming, plus finalize summary
-   *
-   * Subagent thinking is always suppressed regardless of this flag.
-   */
-  thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
-  /**
-   * @deprecated Use `thinkingMode: 'live'` instead. Kept as a back-compat alias:
-   * `verbose: true` maps to `thinkingMode: 'live'`, `false`/unset to `'summary'`.
-   */
-  verbose?: boolean;
-  /** Optional cancel callback wired into TerminalCompositor (e.g., session.interrupt). */
-  onCancel?: () => void;
-  /** Optional background callback wired into TerminalCompositor (Ctrl+B). */
-  onBackground?: () => void;
-  /**
-   * Force the line-based fallback regardless of TTY detection. Used by tests
-   * and by surfaces that don't have a real terminal (Telegram, daemon).
-   */
-  forceNonTty?: boolean;
-  /**
-   * Active skill name (e.g. `'ship'`). When set, the orchestrator converts
-   * the model's `<skillname>` content tags into a styled visual badge.
-   */
-  activeSkillName?: string;
-  /**
-   * Shared history ring from the REPL session. When provided, the compositor
-   * supports ↑/↓ history navigation during the agent turn.
-   */
-  history?: IHistoryRing;
-  /**
-   * Shared autocomplete dropdown state from the REPL session. When provided,
-   * the compositor renders the autocomplete dropdown inside the log-update
-   * frame and keeps state consistent with the between-turn prompt surface.
-   */
-  autocompleteState?: AutocompleteState;
-  /**
-   * Prompt prefix rendered at the start of the input row inside the
-   * compositor frame. Captured once at construction — plan-mode and model
-   * toggles only flip between turns, so a fresh per-turn string is
-   * sufficient and matches the lifetime of this StreamRenderer instance.
-   *
-   * When omitted, the compositor falls back to its internal default
-   * (a dim chevron glyph). REPL turn paths supply the canonical
-   * `afk (model) ›` form so the agent-turn input row matches the
-   * between-turn prompt; standalone slash-command StreamRenderers
-   * (which spawn outside the main REPL ctx) may omit it.
-   *
-   * Ignored when {@link compositor} is supplied — the borrowed
-   * compositor's prompt was set by its owner (InputSurface) and is
-   * not mutated per-turn.
-   */
-  promptText?: string;
-  /**
-   * Optional DECSTBM scroll-region guard (typically the active StatusLine).
-   * Forwarded to the TerminalCompositor so its `commitAbove` writes use
-   * full-screen scroll semantics instead of being clipped by the
-   * sub-region scroll. Required to keep scrollback intact when a status
-   * line is active — REPL turn paths supply it; standalone slash-command
-   * StreamRenderers (which spawn outside the main REPL ctx) may omit it
-   * and accept the legacy behavior.
-   *
-   * Ignored when {@link compositor} is supplied — the borrowed
-   * compositor's scroll region was wired by its owner.
-   */
-  scrollRegion?: { withFullScrollRegion<T>(fn: () => T): T; getExtraRows(): number };
-  /**
-   * Capture-mode override. When omitted, resolved via `detectCaptureMode()`
-   * which reads `AFK_DEMO_CLEAN` / `SCRIPT` / `ASCIINEMA_REC` env vars.
-   * Tests pass `false` explicitly to keep the live-TTY behavior even when
-   * vitest is run under one of those env vars.
-   *
-   * When effective: suppresses the spinner ticker (no 12.5 Hz background
-   * repaints) and downgrades `thinkingMode: 'live'` → `'summary'` so the
-   * per-thinking-chunk overlay paints do not flood a captured stream.
-   * See `_lib/capture-mode.ts` for the full rationale.
-   */
-  captureMode?: boolean;
-  /**
-   * Reduced-motion mode override. When omitted, resolved via
-   * `detectReducedMotion()` which reads the `AFK_REDUCED_MOTION` env var.
-   *
-   * When effective: suppresses the spinner ticker animation at the
-   * stream-renderer call site (no 12.5 Hz background repaints), while leaving
-   * state-transition-driven repaints unaffected. A user preference for motion
-   * sensitivity, distinct in intent from capture-mode. See `_lib/capture-mode.ts`.
-   */
-  reducedMotion?: boolean;
-  /**
-   * Borrow an externally-armed TerminalCompositor instead of
-   * constructing + arming one internally. Used by the persistent
-   * InputSurface (Stage 3b+) so the same compositor serves both the
-   * idle-between-turns input row and the streaming agent-turn overlay.
-   *
-   * When provided:
-   *   - {@link arm} skips compositor construction; spinner/resize wiring
-   *     attach to the borrowed instance instead.
-   *   - The compositor's input mode is flipped to `'streaming'` so
-   *     Enter queues (legacy behavior). The surface flipped it to
-   *     `'idle'` before this point — arm flips back; dispose flips to
-   *     `'idle'` again, which fires onSubmit for any queued buffer.
-   *   - {@link dispose} clears spinner + overlay and restores idle
-   *     mode, but does NOT disarm the compositor — its lifetime is
-   *     owned by the surface (REPL startup → REPL exit).
-   *
-   * When omitted (the historical path), the renderer constructs and
-   * disposes its own compositor as before. All non-REPL callers
-   * (skills, standalone slash dispatchers, tests) use this path.
-   */
-  compositor?: TerminalCompositor;
-  /**
-   * Optional callback fired whenever the loop stage transitions
-   * (Observe → Model → Choose → Act → Update). Carries the new stage.
-   *
-   * Used by the REPL to repaint the `LoopStageBar` reserved footer row
-   * without the bar needing to poll or be threaded through the compositor.
-   * The callback fires in `process()` when `advanceStage` returns true.
-   *
-   * Best-effort: if the callback throws the error is swallowed so a bar
-   * paint failure never breaks the streaming event loop.
-   */
-  onStageChange?: (
-    stage: import('../commands/interactive/loop-stage.js').LoopStage,
-    signals?: import('../commands/interactive/loop-stage.js').StageSignals,
-  ) => void;
-}
+export type { StreamRendererOptions } from './stream-renderer-options.js';
+import type { StreamRendererOptions } from './stream-renderer-options.js';
 
 /**
  * Stream renderer. Construct once per skill invocation; call `sink` (or
@@ -305,7 +166,7 @@ export class StreamRenderer {
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
   /**
    * ResizeBus unsubscriber. Set in `arm()`, cleared in dispose. The handler
-   * re-derives the composed overlay (tool lane + thinking + progress banner)
+   * re-derives the composed overlay (tool lane / thinking / progress banner)
    * at the new terminal width via `setComposedOverlay` — without this, the
    * tool-lane overlay stays wrapped at the width-at-last-event after a
    * window resize. The `StreamingMarkdownRenderer` handles its own resize
@@ -553,11 +414,6 @@ export class StreamRenderer {
     }
   }
 
-
-  /**
-   * Process one OutputEvent. `meta.subagentId` identifies the source; absent
-   * meta is treated as the orchestrator source (`__main__`).
-   */
   /**
    * Build a fresh OrchestratorCtx snapshot from the renderer's live
    * collaborators (compositor, overlay composer, shared tool lane, thinking
@@ -587,208 +443,33 @@ export class StreamRenderer {
     });
   }
 
+  /**
+   * Process one OutputEvent. `meta.subagentId` identifies the source; absent
+   * meta is treated as the orchestrator source (`__main__`).
+   */
   process(event: OutputEvent, meta?: SubagentProgressMeta): void {
     if (this.disposed) return;
-
-    // Feed the spinner's work-derived verb. Done here — before delegation —
-    // because `process` is the one choke point that sees tool events from BOTH
-    // the orchestrator and every subagent, so neither handler needs its own
-    // call site. Pure bookkeeping plus one setter; fires no repaint of its own.
-    noteToolEvent(event, this.inFlightTools, this.compositor);
-    const sourceId = meta?.subagentId ?? ORCHESTRATOR_SOURCE_KEY;
-    const isOrchestrator = sourceId === ORCHESTRATOR_SOURCE_KEY;
-    let source = this.sources.get(sourceId);
-
-    if (!source) {
-      source = freshSourceState(meta?.agentType);
-      this.sources.set(sourceId, source);
-      if (!isOrchestrator) {
-        // Synthesize the `Agent(<label>)` parent on the very first event.
-        // Resolve nesting in priority order when `meta.parentId` is present.
-        // No deferred synthesis, no retroactive re-tagging.
-        const parentSyntheticId = resolveParentSyntheticId({
-          parentId: meta?.parentId,
-          sources: this.sources,
-          toolLane: this.toolLane,
-          sourceId,
-        });
-        synthesizeAgentEntry(sourceId, source, makeSubagentCtx({
-          isTTY: this.isTTY,
-          compositor: this.compositor,
-          toolLane: this.toolLane,
-          out: this.out,
-          streamingMarkdown: this.subagentMarkdown,
-          thinkingMode: this.thinkingMode,
-          orchestratorCtx: this.buildOrchestratorCtx(),
-        }), parentSyntheticId);
-      }
-    }
-
-    if (isOrchestrator) {
-      // Snapshot the stage before the event so we can fire onStageChange
-      // exactly when the stage transitions (not on every event).
-      const stageBefore = this.stageTracker.stage;
-      handleOrchestratorEvent(event, source, this.buildOrchestratorCtx());
-      // Fire onStageChange when the loop stage transitions so the LoopStageBar
-      // footer row repaints immediately — without polling or threading the bar
-      // through the overlay compositor. Swallows errors defensively.
-      //
-      // Also fire on an ERRORED tool result even when the stage did not change:
-      // a failed tool inside a parallel wave leaves other tools pending, so the
-      // stage stays 'acting' and the mascot band would never learn about the
-      // error. Consumers are idempotent repaints (LoopStageBar.repaint is a
-      // no-op re-render of the same stage), so the extra fire is free.
-      const toolErrored =
-        event.type === 'chunk' &&
-        event.chunk.type === 'tool_result' &&
-        event.chunk.isError === true;
-      if (this.onStageChange && (this.stageTracker.stage !== stageBefore || toolErrored)) {
-        try {
-          // Invariant: the no-signal case calls with ONE argument, never
-          // `(stage, undefined)`. Vitest's toHaveBeenCalledWith compares the
-          // whole argument array, so passing an explicit undefined would break
-          // every existing single-argument assertion on this callback — and any
-          // future one — for no benefit.
-          if (toolErrored) this.onStageChange(this.stageTracker.stage, { toolErrored: true });
-          else this.onStageChange(this.stageTracker.stage);
-        } catch { /* best-effort */ }
-      }
-    } else {
-      handleSubagentEvent(event, sourceId, source, makeSubagentCtx({
-        isTTY: this.isTTY,
-        compositor: this.compositor,
-        toolLane: this.toolLane,
-        out: this.out,
-        streamingMarkdown: this.subagentMarkdown,
-        thinkingMode: this.thinkingMode,
-        orchestratorCtx: this.buildOrchestratorCtx(),
-      }));
-      // Refresh staleness timestamp and clear any pause annotation on new activity.
-      source.lastEventAt = Date.now();
-      // Invariant: the quiet-banner latch is re-armed HERE, at the single site
-      // that records child activity — not by checkProgressBannerStaleness
-      // observing an intermediate fresh state on a later tick. The tick-side
-      // clear alone is not sufficient: it only fires if some tick lands inside
-      // the CHILD_QUIET_MS window after a resume, so a suspended process, a
-      // closed laptop lid, or an event loop blocked past 8s skips every such
-      // tick and strands the latch at true. The next genuine quiet transition
-      // would then be swallowed by the `already announced` guard and the dead
-      // zone would silently reopen for that child, permanently.
-      source.quietBannerAnnounced = false;
-      if (source.pauseAnnotation !== undefined && source.syntheticAgentToolUseId) {
-        source.pauseAnnotation = undefined;
-        // Reset stall counter — a heartbeat proves the source is alive again.
-        // Without this reset, K stalled ticks → heartbeat → K more ticks would
-        // fire the hard cutoff at 2K cumulative (30s after resume) instead of
-        // requiring 2K continuous ticks (60s) of new silence.
-        source.stalledTicks = 0;
-        const label = source.agentType ?? sourceId;
-        this.toolLane.addStartWithAgentContext(
-          source.syntheticAgentToolUseId, 'Agent', `(${label})`, undefined,
-        );
-      }
-      // Terminal event for a subagent stream: 'done' (normal completion) OR
-      // 'error' (aborted, timed-out, or provider-side failure). Both must
-      // trigger the same flush-to-scrollback path so the user sees the
-      // partial work in scrollback rather than losing it when the live
-      // overlay is torn down at turn end.
-      //
-      // History: pre-this-fix, only 'done' triggered the flush. Ctrl+C
-      // cascades aborts via AbortGraph; each subagent's iterator throws
-      // AbortError; each subagent emits `event.type === 'error'` (NOT done).
-      // The 'error' branch in handleSubagentEvent
-      // (stream-renderer-subagent.ts:408-432) sets source.errored = true,
-      // calls addResult with the error message, and refreshes the live
-      // overlay — but never schedules a coordinator batch or drains the
-      // subagent block to scrollback. The lane entry then either gets
-      // wiped by the dispose() safety net (with its own scrollback-push
-      // limitations) or by overlay.setOverlay('') at borrow-dispose,
-      // dropping the user's view of what the subagent was working on.
-      //
-      // The merged Agent root entry has agent.result set by addResult
-      // (either an error-result for 'error' or a synthetic done-result
-      // for 'done'), so flushSource() renders the block correctly in both
-      // cases. The user sees the in-flight tool calls + the error/done
-      // summary line for any subagent that produced events before
-      // terminating.
-      const isTerminal = event.type === 'done' || event.type === 'error';
-      if (isTerminal && this.isTTY) {
-        // Flush only this subagent's entries (parent + children) — other
-        // sources' entries remain in the overlay for still-running sub-agents.
-        const syntheticId = source.syntheticAgentToolUseId;
-        if (syntheticId && this.toolLane.hasEntry(syntheticId)) {
-          const lines = this.toolLane.flushSource(syntheticId);
-          const compositor = this.compositor;
-          const overlayComposer = this.overlayComposer;
-          const toolLane = this.toolLane;
-          const out = this.out;
-          this.coordinator.schedule({
-            anchor: `after-subagent:${sourceId}`,
-            commits: [() => {
-              if (compositor) {
-                // Atomic block commit — a subagent block is ONE coherent
-                // artifact; per-line commits desync band-hold under a tall
-                // overlay. See commit-block.ts.
-                commitBlockAbove(compositor, lines);
-                // One blank line after the subagent block so the next
-                // orchestrator message (or a subsequent subagent block) has
-                // breathing room in scrollback.
-                compositor.commitAbove('');
-                // Route the overlay update through the composer if available.
-                if (overlayComposer) {
-                  overlayComposer.markDirty('tool-lane');
-                  overlayComposer.flush();
-                } else {
-                  compositor.setOverlay(toolLane.getOverlay());
-                }
-              } else {
-                for (const line of lines) out.line(line);
-                out.line('');
-              }
-            }],
-          });
-          // Eager drain: commit subagent done-blocks to scrollback at the
-          // event-timeline position where the subagent FINISHED, not at the
-          // end of the turn. This is the fix for the "subagent rows pile up
-          // at the bottom" regression — without it, every Agent(...) block
-          // is deferred to flushAll() step 3 and lands below all prose.
-          //
-          // Bug #1 invariant preservation: before draining the subagent block,
-          // synchronously flush any pending markdown buffer via commitPending().
-          // The real StreamingMarkdownRenderer.commitPending() writes the
-          // ENTIRE buffer to scrollback via compositor.commitAbove (see
-          // markdown-stream.ts:191 — commitBlock commits whatever is in the
-          // buffer, partial-block included). This means all prose generated
-          // BEFORE the subagent's done-event lands above the subagent block,
-          // satisfying the "completed prose before subagent block" ordering
-          // invariant. Any subsequent orchestrator prose pushes into a fresh
-          // empty buffer and naturally lands below the subagent block —
-          // which is the desired chronological interleave.
-          //
-          // External constraint (pattern card: ordered-sequences governed by
-          // append-only scrollback): commitPending MUST run before
-          // drainSubagent. Append-only scrollback cannot retroactively insert
-          // prose above a previously-committed line.
-          try {
-            if (this.streamingMarkdownRef.current) {
-              this.streamingMarkdownRef.current.commitPending();
-            }
-          } finally {
-            // Invariant: drain MUST run even if commitPending throws — otherwise the
-            //   after-subagent batch in CommitCoordinator is permanently stranded.
-            //   Idempotency: drainSubagent deletes the batch on first execution, so a
-            //   later flushAll call is a no-op.
-            // History: an earlier `hasEmitted()` markdown-renderer guard could skip
-            //   drain on zero-emission subagents. Safety after removal: (1) the
-            //   coordinator.schedule(...) call above always registers a batch before
-            //   this drain runs, and (2) drainSubagent no-ops when no batch exists
-            //   (commit-coordinator.ts `if (batches)` guard).
-            this.coordinator.drainSubagent(sourceId);
-          }
-        }
-        setComposedOverlay(this.buildOrchestratorCtx());
-      }
-    }
+    const ctx: ProcessCtx = {
+      out: this.out,
+      isTTY: this.isTTY,
+      compositor: this.compositor,
+      overlayComposer: this.overlayComposer,
+      toolLane: this.toolLane,
+      thinkingLane: this.thinkingLane,
+      streamingMarkdownRef: this.streamingMarkdownRef,
+      stageTracker: this.stageTracker,
+      coordinator: this.coordinator,
+      childActivity: this.childActivity,
+      inFlightTools: this.inFlightTools,
+      sources: this.sources,
+      subagentMarkdown: this.subagentMarkdown,
+      lastProgressByTask: this.lastProgressByTask,
+      thinkingMode: this.thinkingMode,
+      activeSkillName: this.activeSkillName,
+      onStageChange: this.onStageChange,
+      buildOrchestratorCtx: () => this.buildOrchestratorCtx(),
+    };
+    processEvent(ctx, event, meta);
   }
 
   /**
@@ -798,189 +479,38 @@ export class StreamRenderer {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-
-    // Drop the resize subscription FIRST so any in-flight debounced fire
-    // doesn't land on a half-torn-down ctx — `setComposedOverlay` reads the
-    // tool lane and compositor, both of which are about to be released.
-    if (this.resizeUnsub) {
-      this.resizeUnsub();
-      this.resizeUnsub = null;
-    }
-
-    // Defensive eviction of any live progress entry. finalizeOrchestrator
-    // already clears this on the 'done' path; this covers turns that reach
-    // dispose without a 'done' event (error aborts, interrupts) so the
-    // overlay flushes below never repaint a stale progress banner.
-    this.lastProgressByTask.clear();
-
-    // Reset the soft-stop flag too — without this, an ESC that landed just
-    // before dispose() leaves `softStopping=true` past teardown. The
-    // borrowed-compositor path below invalidates + flushes the overlay
-    // composer to clear the live frame; with lastProgressByTask now empty but
-    // getSoftStopping() still true, the 'progress-banner' slot's synthetic
-    // fallback (stream-renderer-lifecycle.ts) recreates a `Turn / stopping…`
-    // banner instead of contributing '' — painting a stale banner into the
-    // idle prompt until the next unrelated repaint overwrites it. Clearing
-    // here BEFORE that flush guarantees the slot renders empty.
+    // Contract: clear softStopping on the class BEFORE building the DisposeCtx
+    // snapshot. The overlay's progress-banner slot reads this.softStopping via
+    // the getSoftStopping closure registered in arm(), not through the ref
+    // wrapper. If we only clear the ref inside disposeRenderer(), the closure
+    // still sees true and repaints a stale "stopping…" banner during the
+    // overlay flush. The write-back at the end is still needed for consistency.
     this.softStopping = false;
-
-    // CommitCoordinator.flushAll() is the single async owner at turn end.
-    // It drains all scheduled commit batches in fixed anchor order:
-    //   1. before-content (orchestrator tool-lane entries that precede prose)
-    //   2. await streamingMarkdown.flush() — injected here as the markdown flush
-    //   3. after-subagent:* (subagent result blocks, in registration order)
-    //   4. after-content (thinking summaries, skill badges, panels)
-    //
-    // External constraint: this call MUST come before any cleanup that would
-    // null streamingMarkdownRef.current or dispose the compositor — the
-    // coordinator's step 2 and steps 3–4 need both alive.
-    //
-    // The markdown renderer is passed as a bound flush callback rather than
-    // a stored reference so CommitCoordinator doesn't hold a direct dependency
-    // on StreamingMarkdownRenderer.
-    const markdownFlush = this.streamingMarkdownRef.current
-      ? () => this.streamingMarkdownRef.current!.flush()
-      : undefined;
-    await this.coordinator.flushAll(markdownFlush);
-
-    // Orchestrator markdown — dispose after coordinator has flushed it.
-    if (this.streamingMarkdownRef.current) {
-      this.streamingMarkdownRef.current.dispose();
-      this.streamingMarkdownRef.current = null;
-    }
-
-    // Subagent markdown renderers — flush and dispose any still active.
-    // These are NOT coordinator-managed (each subagent markdown stream has
-    // its own lifecycle); best-effort flush for any stragglers.
-    for (const renderer of this.subagentMarkdown.values()) {
-      try { await renderer.flush(); } catch { /* best effort */ }
-      renderer.dispose();
-    }
-    this.subagentMarkdown.clear();
-    // ToolLane — flush any pending entries that weren't captured by the
-    // coordinator (e.g. entries registered after flushAll ran, or in
-    // non-coordinator paths). This is the safety net; in normal operation
-    // the coordinator drains all tool-lane commits before this point.
-    //
-    // Invariant (TUI rhythm contract): the safety-net flush is an emitter
-    // like any other, so it MUST own ONE trailing blank after its lines.
-    // The post-dispose successor (verdict card, soft-stop notice, footer)
-    // never emits a leading blank, so without this trailing the footer
-    // would butt directly against the last tool result. Mirrors the
-    // coordinator done-path at stream-renderer-orchestrator.ts:363-382.
-    // See docs/tui-rhythm.md. History: use flushCompletedRoots() not the
-    // nuclear flush() — mirrors PR #95 fix at orchestrator-emit.ts:264;
-    // nuclear flush on dispose deletes in-flight subagent entries, causing
-    // stale-capture + causal-order violations (blank-row gaps, missing Done).
-    if (this.toolLane.hasPending()) {
-      const lines = this.toolLane.flushCompletedRoots();
-      if (this.isTTY && this.compositor) {
-        // Atomic block commit — the safety-net flush is ONE coherent block;
-        // per-line commits desync band-hold under a tall overlay. See
-        // commit-block.ts.
-        commitBlockAbove(this.compositor, lines);
-        this.compositor.commitAbove('');
-        if (this.overlayComposer) {
-          this.overlayComposer.markDirty('tool-lane');
-          this.overlayComposer.flush();
-        } else {
-          this.compositor.setOverlay(this.toolLane.getOverlay());
-        }
-      } else {
-        for (const line of lines) this.out.line(line);
-        this.out.line('');
-      }
-    }
-    if (this.pauseTickInterval) {
-      clearInterval(this.pauseTickInterval);
-      this.pauseTickInterval = null;
-    }
-    if (this.compositor) {
-      if (this.ownsCompositor) {
-        // Renderer-owned compositor — full teardown.
-        try { this.compositor.disarm(); } catch { /* best effort */ }
-      } else {
-        // Borrowed compositor — leave it armed for the surface to keep
-        // serving the idle input row. Reset the streaming-only state
-        // (spinner + overlay) so the bottom region looks clean; flip
-        // input mode back to 'idle' so the next Enter resolves the
-        // surface's pending readLine.
-        //
-        // Ordered-operation invariant (sequence): clear overlay BEFORE
-        // flipping mode. setInputMode('idle') can synchronously fire
-        // onSubmit (when a buffer was queued mid-stream) which may
-        // trigger the surface to commitAbove the user's submission
-        // echo. That echo must commit above a CLEAN bottom region, not
-        // above a stale spinner frame from the just-ended turn.
-        //
-        // Failure-isolation invariant (per-step try/catch): each call
-        // gets its own try/catch. A single bundled try/catch lets a
-        // throw in setSpinner silently skip setOverlay('') and
-        // setInputMode('idle') — leaving the stale frame painted
-        // (compositor stuck "on top") and the surface stuck in
-        // 'streaming' mode. The throw is reachable in production:
-        // logUpdate() can propagate EPIPE/EBADF when the TTY closes
-        // mid-session (see terminal-compositor.ts:676). Per-step
-        // isolation keeps the sequence above intact under partial
-        // failure: setOverlay still runs even if setSpinner threw.
-        try {
-          this.compositor.setSpinner({ enabled: false });
-        } catch (e) {
-          debugLog('[stream-renderer] borrow-dispose setSpinner: ' + String(e));
-        }
-        try {
-          if (this.overlayComposer) {
-            this.overlayComposer.invalidate();
-            this.overlayComposer.flush();
-          } else {
-            this.compositor.setOverlay('');
-          }
-        } catch (e) {
-          debugLog('[stream-renderer] borrow-dispose setOverlay: ' + String(e));
-        }
-        try {
-          this.compositor.setInputMode('idle');
-        } catch (e) {
-          debugLog('[stream-renderer] borrow-dispose setInputMode: ' + String(e));
-        }
-        // Restore the compositor's cancel handler to whatever the owner had
-        // installed before arm() swapped in this.onCancel. The owner
-        // (InputSurface.armCompositor) installs its sigintHandler via the
-        // TerminalCompositor constructor — there is no other path to recover
-        // it. Setting null here would leave onCancel === undefined, and
-        // idle-mode Ctrl+C silently no-ops in that state
-        // (terminal-compositor.ts:1106-1108).
-        //
-        // Passing `this.priorOnCancel ?? null` is type-safe: setOnCancel(null)
-        // maps to `this.onCancel = undefined` internally, which is the
-        // correct between-turns state ONLY when the owner never installed a
-        // handler in the first place (priorOnCancel was undefined at capture).
-        try {
-          this.compositor.setOnCancel(this.priorOnCancel ?? null);
-        } catch (e) {
-          debugLog('[stream-renderer] borrow-dispose setOnCancel: ' + String(e));
-        }
-        // Clear our captured reference so a re-dispose (defensive idempotent
-        // call) doesn't try to restore a stale handler.
-        this.priorOnCancel = undefined;
-      }
-      this.compositor = null;
-      this.borrowedCompositor = null;
-    }
-
-    // Capture-mode tail: if `this.out` is a deduping wrapper, finalize any
-    // suppressed trailing run so the artifact ends with an honest summary.
-    // Idempotent + safe when `this.out` is the bare opts.out (i.e. when
-    // capture-mode was off and no wrapping happened).
-    //
-    // External constraint (pattern card: ordered-sequences): this MUST run
-    // AFTER all upstream writes are drained (the compositor.disarm above is
-    // the last writer in the teardown chain). Otherwise a late line written
-    // post-flush would have no summary line preceding it.
-    const maybeDedup = this.out as Partial<DedupingLineWriter>;
-    if (typeof maybeDedup.flush === 'function') {
-      try { maybeDedup.flush(); } catch { /* best effort */ }
-    }
+    const ctx: DisposeCtx = {
+      out: this.out,
+      isTTY: this.isTTY,
+      ownsCompositor: this.ownsCompositor,
+      compositorRef: { current: this.compositor },
+      overlayComposerRef: { current: this.overlayComposer },
+      toolLane: this.toolLane,
+      streamingMarkdownRef: this.streamingMarkdownRef,
+      subagentMarkdown: this.subagentMarkdown,
+      lastProgressByTask: this.lastProgressByTask,
+      coordinator: this.coordinator,
+      resizeUnsubRef: { current: this.resizeUnsub },
+      pauseTickIntervalRef: { current: this.pauseTickInterval },
+      softStoppingRef: { current: this.softStopping },
+      priorOnCancelRef: { current: this.priorOnCancel },
+      borrowedCompositorRef: { current: this.borrowedCompositor },
+    };
+    await disposeRenderer(ctx);
+    // Write back the mutable refs that disposeRenderer may have nulled out.
+    this.compositor = ctx.compositorRef.current;
+    this.resizeUnsub = ctx.resizeUnsubRef.current;
+    this.pauseTickInterval = ctx.pauseTickIntervalRef.current;
+    this.softStopping = ctx.softStoppingRef.current;
+    this.priorOnCancel = ctx.priorOnCancelRef.current;
+    this.borrowedCompositor = ctx.borrowedCompositorRef.current;
   }
 
   /**
