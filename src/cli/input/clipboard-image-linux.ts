@@ -25,6 +25,7 @@ import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { env } from '../../config/env.js';
 import type { ImageAttachment } from './attachments.js';
 
 /**
@@ -33,9 +34,10 @@ import type { ImageAttachment } from './attachments.js';
  * clipboard-image.ts — evaluated at module load so re-import is required to
  * toggle within a test (identical to the macOS module's behaviour).
  */
-// Using dynamic env read rather than importing env.ts to avoid a circular dep
-// through config → paths. The clipboard module already accesses env this way.
-const DEBUG = !!(process.env['AFK_DEBUG_CLIPBOARD']);
+// Read through the typed env accessor (src/config/env.ts) — never raw
+// process.env — matching the sibling clipboard-image.ts. Evaluated at module
+// load, so a test must re-import the module to toggle the flag.
+const DEBUG = !!env.AFK_DEBUG_CLIPBOARD;
 
 function dbg(msg: string): void {
   process.stderr.write(`[afk-clipboard] ${msg}\n`);
