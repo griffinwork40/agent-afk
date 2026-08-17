@@ -9,6 +9,12 @@ import type { XaiTokenBundle } from './auth-store.js';
 
 export type FetchFn = typeof fetch;
 
+/** TTL for the in-memory OIDC discovery cache (24 hours in milliseconds). */
+const OIDC_DISCOVERY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Cached OIDC discovery result; keyed implicitly to the single issuer per process. */
+let cachedDiscovery: { result: XaiOidcDiscovery; expiresAt: number } | null = null;
+
 export interface XaiOidcDiscovery {
   issuer: string;
   authorization_endpoint: string;
@@ -24,6 +30,8 @@ export interface OAuthHttpDeps {
   clientId?: string;
   scopes?: string;
   nowSeconds?: () => number;
+  /** Override wall-clock ms for cache TTL in tests. */
+  nowMs?: () => number;
 }
 
 export function asNonEmptyString(v: unknown): string | undefined {
@@ -37,6 +45,13 @@ export async function safeText(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/**
+ * Reset the module-scope OIDC discovery cache. Intended for tests only.
+ */
+export function clearOidcCache(): void {
+  cachedDiscovery = null;
 }
 
 /**
@@ -66,6 +81,27 @@ export async function discoverXaiOidc(deps: OAuthHttpDeps = {}): Promise<XaiOidc
   const userinfo = asNonEmptyString(body['userinfo_endpoint']);
   if (userinfo) out.userinfo_endpoint = userinfo;
   return out;
+}
+
+/**
+ * Cached wrapper around {@link discoverXaiOidc}.
+ *
+ * Returns the cached discovery document if it was fetched within the last 24 hours
+ * (or `OIDC_DISCOVERY_TTL_MS` when `deps.nowMs` is injected for testing).
+ * On cache miss or expiry, fetches fresh and stores the result.
+ *
+ * The cache is process-scoped: different issuer overrides in tests should call
+ * {@link clearOidcCache} before each case to avoid cross-test contamination.
+ */
+export async function discoverXaiOidcCached(deps: OAuthHttpDeps = {}): Promise<XaiOidcDiscovery> {
+  const nowMs = deps.nowMs ?? (() => Date.now());
+  const now = nowMs();
+  if (cachedDiscovery && cachedDiscovery.expiresAt > now) {
+    return cachedDiscovery.result;
+  }
+  const result = await discoverXaiOidc(deps);
+  cachedDiscovery = { result, expiresAt: now + OIDC_DISCOVERY_TTL_MS };
+  return result;
 }
 
 /**

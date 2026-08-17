@@ -228,6 +228,8 @@ export {
   refreshXaiTokens,
   ensureFreshAccessToken,
   discoverXaiOidc,
+  discoverXaiOidcCached,
+  clearOidcCache,
 } from './oauth.js';
 export {
   deriveXaiCallCostUsd,
