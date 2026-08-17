@@ -37,9 +37,11 @@ describe('detectTrigger', () => {
       expect(result).toBeNull();
     });
 
-    it('returns null when buffer has text before /', () => {
+    it('detects a slash command after preceding text + space (mid-buffer)', () => {
+      // Slash-complete-anywhere: a slash token after whitespace triggers so
+      // completion fires in "please run /help"-style prompts, not only at start.
       const result = detectTrigger('hello /help', 11);
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'slash', query: 'help' });
     });
 
     it('allows hyphen and underscore in slash command names', () => {
@@ -47,19 +49,19 @@ describe('detectTrigger', () => {
       expect(result).toEqual({ kind: 'slash', query: 'my-cmd_name' });
     });
 
-    it('returns null when slash command is not at the start', () => {
+    it('detects a slash command that is not at the buffer start (after whitespace)', () => {
       const result = detectTrigger('text /cmd', 9);
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'slash', query: 'cmd' });
     });
 
-    it('returns null when slash command is preceded by leading whitespace', () => {
+    it('detects a slash command preceded by leading whitespace', () => {
       const result = detectTrigger(' /help', 6);
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'slash', query: 'help' });
     });
 
-    it('returns null when slash command appears on a later line', () => {
+    it('detects a slash command on a later line (after a newline)', () => {
       const result = detectTrigger('note\n/help', 10);
-      expect(result).toBeNull();
+      expect(result).toEqual({ kind: 'slash', query: 'help' });
     });
 
     it('returns null when slash command contains punctuation', () => {
