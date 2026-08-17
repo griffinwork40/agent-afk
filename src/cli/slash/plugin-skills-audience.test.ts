@@ -120,13 +120,17 @@ describe('/skills audience gate', () => {
 
   // ── Detail (/skills <name>) ──────────────────────────────────────────────
 
-  it('/skills forge returns "No skill found" when AFK_INTERNAL is unset', async () => {
+  it('/skills forge falls through to search (no detail card) when AFK_INTERNAL is unset', async () => {
+    // When `forge` is not visible (internal-locked), it is not an exact match,
+    // so the handler routes to fuzzy search instead of the detail card.
+    // The search result message must not leak the internal description.
     vi.stubEnv('AFK_INTERNAL', undefined as unknown as string);
     const { ctx, lines } = makeCtx();
     await initialSkillsCmd.handler(ctx, 'forge');
     const output = lines.join('\n');
 
-    expect(output).toMatch(/no skill found/i);
+    // The detail card "Source / When to use" block must not appear.
+    expect(output).not.toContain('Source');
     // Must not leak internal skill description
     expect(output).not.toContain('maintainer only');
   });
@@ -163,12 +167,16 @@ describe('/skills audience gate', () => {
 
   // ── /skills with leading slash ────────────────────────────────────────────
 
-  it('/skills /forge (with leading slash) returns "No skill found" when locked', async () => {
+  it('/skills /forge (with leading slash) falls through to search when locked', async () => {
+    // Leading-slash form: `/forge` cleaned to `forge` — not visible when locked,
+    // so routes to fuzzy search rather than detail card or 404.
     vi.stubEnv('AFK_INTERNAL', undefined as unknown as string);
     const { ctx, lines } = makeCtx();
     await initialSkillsCmd.handler(ctx, '/forge');
     const output = lines.join('\n');
 
-    expect(output).toMatch(/no skill found/i);
+    // Must not produce a detail card — search output is acceptable.
+    expect(output).not.toContain('Source');
+    expect(output).not.toContain('maintainer only');
   });
 });

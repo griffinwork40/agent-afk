@@ -557,6 +557,14 @@ export function getReplHistoryPath(): string {
   return join(getAfkStateDir(), 'repl-history.jsonl');
 }
 
+/**
+ * Path to the first-run marker file. Written once (empty) after the
+ * first-run welcome banner is shown, so the banner never repeats.
+ */
+export function getFirstRunMarkerPath(): string {
+  return join(getAfkStateDir(), '.first-run-shown');
+}
+
 // ---------------------------------------------------------------------------
 // Background job persistence paths
 // ---------------------------------------------------------------------------

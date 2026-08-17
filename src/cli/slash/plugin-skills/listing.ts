@@ -5,9 +5,12 @@
  * canonical skill listing (vendored + user + project + plugin under one
  * header) and the two `/skills` command variants (boot placeholder and the
  * post-init dynamic version).
+ *
+ * Detail rendering lives in `listing-detail.ts`; fuzzy search rendering lives
+ * in `search-render.ts` — both are split siblings kept under 350 lines.
  */
 
-import { getSkill, isSkillVisible, listVisibleSkills, type SkillMetadata } from '../../../skills/index.js';
+import { getSkill, listVisibleSkills } from '../../../skills/index.js';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { wrapToWidth } from '../../wrap.js';
@@ -15,9 +18,10 @@ import { getTerminalWidth } from '../../terminal-size.js';
 import { padDisplayRight, displayWidth } from '../../display.js';
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext } from '../types.js';
-import { harvestAllPluginSkillFlags, extractHintFromDescription } from './flags.js';
 import { state, bareName, type DiscoveredSkill } from './state.js';
 import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
+import { renderSkillDetail, registryOriginToSource, friendlySource, tryGetRegistrySkill } from './listing-detail.js';
+import { renderSkillSearch, buildSearchUniverse } from './search-render.js';
 
 /**
  * Where a listing row's skill came from. Drives the friendly source label.
@@ -60,17 +64,6 @@ interface ListingGroup {
   alts: ListingRow[];
 }
 
-/** Map a registry skill's `origin` (absent = vendored) to a listing source. */
-function registryOriginToSource(origin: SkillMetadata['origin']): SkillSource {
-  if (origin === 'user') return 'user';
-  if (origin === 'project') return 'project';
-  // `imported:<binary>` skills are live-read from a trusted source binary
-  // (Claude Code, Codex) via `importFrom`. Surface that provenance instead of
-  // mislabelling them as built-in (mirrors collectSkillEntries in skill-bridge).
-  if (origin?.startsWith('imported:')) return 'imported';
-  return 'builtin';
-}
-
 function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolean): Map<string, ListingGroup> {
   const groups = new Map<string, ListingGroup>();
 
@@ -91,15 +84,8 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
   for (const name of listVisibleSkills(internalUnlocked)) {
     const skill = getSkill(name);
     const slashName = `/${name}`;
-    const display = skill.argumentHint
-      ? `${slashName} ${skill.argumentHint}`
-      : slashName;
-    addRow({
-      slashName,
-      display,
-      description: skill.description,
-      source: registryOriginToSource(skill.origin),
-    });
+    const display = skill.argumentHint ? `${slashName} ${skill.argumentHint}` : slashName;
+    addRow({ slashName, display, description: skill.description, source: registryOriginToSource(skill.origin) });
   }
 
   // Pass 2: plugin skills. Group by bare name so a colliding plugin entry
@@ -113,36 +99,11 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
     const bare = bareName(skill.name);
     const altSlash = altSlashByBare.get(bare);
     const slashName = altSlash ?? `/${skill.name}`;
-    const display = skill.argumentHint
-      ? `${slashName} ${skill.argumentHint}`
-      : slashName;
-    addRow({
-      slashName,
-      display,
-      description: skill.description,
-      source: skill.source ?? 'plugin',
-    });
+    const display = skill.argumentHint ? `${slashName} ${skill.argumentHint}` : slashName;
+    addRow({ slashName, display, description: skill.description, source: skill.source ?? 'plugin' });
   }
 
   return groups;
-}
-
-/** Human-friendly source label — replaces the old raw `(user)`/`(plugin)` badges. */
-function friendlySource(source: SkillSource): string {
-  switch (source) {
-    case 'builtin':
-      return 'built-in';
-    case 'user':
-      return 'user';
-    case 'project':
-      return 'project';
-    case 'plugin':
-      return 'plugin';
-    case 'imported':
-      return 'imported';
-    case 'command':
-      return 'command';
-  }
 }
 
 /** Sort comparator: alphabetical by bare skill name. */
@@ -245,119 +206,19 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
   ctx.out.line();
 }
 
-function tryGetRegistrySkill(
-  name: string,
-  internalUnlocked: boolean,
-): SkillMetadata | undefined {
-  try {
-    const skill = getSkill(name);
-    return isSkillVisible(skill, internalUnlocked) ? skill : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * Collect the shadowed/alternative forms of a bare skill name — namespaced
- * registry collisions (`user:`/`project:`) plus shadowed plugin entries. These
- * are surfaced (not hidden) so a user always knows an alternative exists.
+ * True when `query` resolves to an exact skill by name — registry (bare or
+ * namespaced) or discovered plugins. Routes to the detail card; non-matches
+ * fall through to fuzzy search.
  */
-function collectAlternatives(
-  bare: string,
-  internalUnlocked: boolean,
-): Array<{ slash: string; source: SkillSource }> {
-  const alternatives: Array<{ slash: string; source: SkillSource }> = [];
-
-  for (const name of listVisibleSkills(internalUnlocked)) {
-    if (name.includes(':') && bareName(name) === bare) {
-      const source = registryOriginToSource(getSkill(name).origin);
-      alternatives.push({ slash: `/${name}`, source });
-    }
-  }
-  for (const collision of state.collisions) {
-    if (collision.bare === bare) {
-      alternatives.push({ slash: collision.altSlash, source: collision.source ?? 'plugin' });
-    }
-  }
-  return alternatives;
-}
-
-function renderSkillDetail(
-  ctx: SlashContext,
+function isExactSkillName(
   query: string,
   plugins: DiscoveredSkill[],
   internalUnlocked: boolean,
-): void {
+): boolean {
   const cleaned = query.replace(/^\//, '').trim();
-
-  const registrySkill = tryGetRegistrySkill(cleaned, internalUnlocked);
-  const pluginSkill = plugins.find(
-    (p) => bareName(p.name) === cleaned || p.name === cleaned,
-  );
-
-  if (!registrySkill && !pluginSkill) {
-    ctx.out.line();
-    ctx.out.line(palette.dim(`  No skill found matching "${cleaned}".`));
-    ctx.out.line(palette.dim('  Run /skills to see everything available.'));
-    ctx.out.line();
-    return;
-  }
-
-  const name = registrySkill?.name ?? bareName(pluginSkill!.name);
-  const description = registrySkill?.description ?? pluginSkill!.description;
-  const hint = registrySkill?.argumentHint ?? pluginSkill?.argumentHint;
-  const displayName = hint ? `/${name} ${hint}` : `/${name}`;
-  const source: SkillSource = registrySkill
-    ? registryOriginToSource(registrySkill.origin)
-    : (pluginSkill?.source ?? 'plugin');
-
-  // Wrap the body to the terminal width (capped) so long descriptions read as
-  // paragraphs instead of one runaway line.
-  const termW = Math.max(20, getTerminalWidth());
-  const bodyW = Math.max(20, Math.min(termW - 2, 100));
-
-  ctx.out.line();
-  ctx.out.line(`  ${palette.warning(displayName)}`);
-  ctx.out.line();
-  for (const line of wrapToWidth(description, bodyW).split('\n')) {
-    ctx.out.line(`  ${line}`);
-  }
-
-  // "When to use": structured field for vendored skills; for plugin/user skills
-  // fall back to plucking a "Use when…" sentence out of the description. Skip
-  // when it would merely echo the description verbatim.
-  const whenToUse = registrySkill?.whenToUse ?? extractHintFromDescription(description);
-  if (whenToUse && whenToUse !== description.trim()) {
-    ctx.out.line();
-    ctx.out.line(`  ${palette.bold('When to use')}`);
-    for (const line of wrapToWidth(whenToUse, bodyW).split('\n')) {
-      ctx.out.line(`  ${palette.dim(line)}`);
-    }
-  }
-
-  const flags = registrySkill?.flags ?? harvestAllPluginSkillFlags().get(cleaned);
-  if (flags && flags.length > 0) {
-    ctx.out.line();
-    ctx.out.line(`  ${palette.bold('Flags')}  ${palette.dim(flags.join(', '))}`);
-  }
-
-  ctx.out.line();
-  ctx.out.line(`  ${palette.bold('Source')}  ${palette.dim(friendlySource(source))}`);
-
-  const alternatives = collectAlternatives(name, internalUnlocked);
-  if (alternatives.length > 0) {
-    ctx.out.line();
-    ctx.out.line(`  ${palette.bold('Alternatives')}`);
-    for (const alt of alternatives) {
-      ctx.out.line(
-        `  ${palette.dim('↳')} ${palette.warning(alt.slash)} ${palette.dim(
-          `(${friendlySource(alt.source)} — shadowed by /${name})`,
-        )}`,
-      );
-    }
-  }
-
-  ctx.out.line();
+  if (tryGetRegistrySkill(cleaned, internalUnlocked) !== undefined) return true;
+  return plugins.some((p) => bareName(p.name) === cleaned || p.name === cleaned);
 }
 
 /**
@@ -370,15 +231,19 @@ export const initialSkillsCmd: SlashCommand = {
   name: '/skills',
   aliases: ['/builtin-skills'],
   summary: 'List all skills available in this session — vendored, user, and plugin',
-  usage: '/skills [name]',
-  hint: 'When you want to browse every skill the session can dispatch — pass a name for full details on one.',
+  usage: '/skills [name | query]',
+  hint: 'Browse every skill the session can dispatch — pass a name for full details, or a search query to find skills by intent.',
   async handler(ctx, args) {
     const internalUnlocked = env.AFK_INTERNAL === '1';
     const trimmed = args.trim();
     // A leading-dash token (e.g. `--all`) is reserved for future verbose modes;
     // for now it just renders the full listing rather than 404 as a skill name.
     if (trimmed && !trimmed.startsWith('-')) {
-      renderSkillDetail(ctx, trimmed, [], internalUnlocked);
+      if (isExactSkillName(trimmed, [], internalUnlocked)) {
+        renderSkillDetail(ctx, trimmed, [], internalUnlocked);
+      } else {
+        renderSkillSearch(ctx, buildSearchUniverse([], internalUnlocked), trimmed);
+      }
     } else {
       renderUnifiedListing(ctx, [], internalUnlocked);
     }
@@ -392,15 +257,19 @@ export function makeDynamicSkillsCmd(plugins: DiscoveredSkill[]): SlashCommand {
     name: '/skills',
     aliases: ['/builtin-skills'],
     summary: 'List all skills available in this session — vendored, user, and plugin',
-    usage: '/skills [name]',
-    hint: 'When you want to browse every skill the session can dispatch — pass a name for full details on one.',
+    usage: '/skills [name | query]',
+    hint: 'Browse every skill the session can dispatch — pass a name for full details, or a search query to find skills by intent.',
     async handler(ctx, args) {
       const internalUnlocked = env.AFK_INTERNAL === '1';
       const trimmed = args.trim();
       // A leading-dash token (e.g. `--all`) is reserved for future verbose
       // modes; for now it renders the full listing rather than 404 as a name.
       if (trimmed && !trimmed.startsWith('-')) {
-        renderSkillDetail(ctx, trimmed, plugins, internalUnlocked);
+        if (isExactSkillName(trimmed, plugins, internalUnlocked)) {
+          renderSkillDetail(ctx, trimmed, plugins, internalUnlocked);
+        } else {
+          renderSkillSearch(ctx, buildSearchUniverse(plugins, internalUnlocked), trimmed);
+        }
       } else {
         renderUnifiedListing(ctx, plugins, internalUnlocked);
       }
