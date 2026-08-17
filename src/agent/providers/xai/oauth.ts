@@ -22,13 +22,13 @@ import {
 } from './auth-store.js';
 import {
   asNonEmptyString,
-  discoverXaiOidc,
+  discoverXaiOidcCached,
   tokenResponseToBundle,
   type OAuthHttpDeps,
 } from './oauth-http.js';
 
 export type { FetchFn, OAuthHttpDeps, XaiOidcDiscovery } from './oauth-http.js';
-export { discoverXaiOidc, tokenResponseToBundle } from './oauth-http.js';
+export { clearOidcCache, discoverXaiOidc, discoverXaiOidcCached, tokenResponseToBundle } from './oauth-http.js';
 export {
   startDeviceCodeFlow,
   pollDeviceCodeToken,
@@ -64,7 +64,7 @@ export async function refreshXaiTokens(
   refreshToken: string,
   deps: OAuthHttpDeps & { store?: XaiAuthStoreDeps; persist?: boolean } = {},
 ): Promise<XaiTokenBundle> {
-  const discovery = await discoverXaiOidc(deps);
+  const discovery = await discoverXaiOidcCached(deps);
   const fetchFn = deps.fetchFn ?? fetch;
   const clientId = deps.clientId ?? XAI_OAUTH_CLIENT_ID;
   const body = new URLSearchParams({
