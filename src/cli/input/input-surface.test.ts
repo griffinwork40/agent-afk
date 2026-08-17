@@ -12,7 +12,7 @@
  * changes.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { Interface as ReadlineInterface } from 'readline';
 import chalk from 'chalk';
@@ -86,6 +86,22 @@ function makeStatusLine(): InputSurfaceStatusLine {
 }
 
 describe('InputSurface', () => {
+  // Stub multiplexer env vars so tests are isolated from the test runner's own
+  // $TMUX/$STY session. Without this, isPlainOutputRequested() returns true
+  // inside tmux and causes every TTY-path test to fail with `getCompositor()
+  // === null`. The afterEach in the AFK_PLAIN_OUTPUT sub-describe calls
+  // vi.unstubAllEnvs() which would restore the real TMUX value — so we
+  // re-stub at the outer level to keep the default safe for ALL tests.
+  beforeEach(() => {
+    vi.stubEnv('TMUX', '');
+    vi.stubEnv('STY', '');
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '');
+    vi.stubEnv('AFK_TMUX_PLAIN', '');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   describe('construction', () => {
     it('exposes the history ref passed at construction', () => {
       const history = makeHistory();

@@ -15,6 +15,7 @@ import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { palette } from '../../palette.js';
 import { boundLineToTerminal } from '../../render/bounded-line.js';
+import { tmuxPlainOutputNotice } from '../../../config/env.js';
 
 /**
  * Seed session stats + permission/thinking-UI mode, print the `trace:` and
@@ -85,6 +86,14 @@ export function createReplSurface(a: {
   // the path here so the startup banner ordering is preserved.
   if (a.trace) {
     console.log(palette.dim(`  trace: ${a.trace.tracePath}`));
+  }
+  // Auto-detection notice: inform the user when tmux/screen was detected and
+  // plain output was activated automatically, so the behavior change is
+  // observable. Printed in the same dim-log style as the trace line above.
+  // Not printed when the user set AFK_PLAIN_OUTPUT or AFK_TMUX_PLAIN explicitly.
+  const tmuxNotice = tmuxPlainOutputNotice();
+  if (tmuxNotice) {
+    console.log(palette.dim(`  ${tmuxNotice}`));
   }
   // Make a restored resume cwd legible: only when the cwd came from the stored
   // session (not an explicit --worktree, which the banner already implies) and

@@ -593,7 +593,7 @@
     },
     {
       "name": "AFK_PLAIN_OUTPUT",
-      "description": "Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the TerminalCompositor live overlay (both the persistent between-turn compositor AND the per-turn StreamRenderer overlay), AND the input surface downgrades to the simple non-TTY line reader instead of the fancy compositor-backed input box. Same code path already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior (live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true (case-insensitive).",
+      "description": "Force the interactive REPL to behave like a non-TTY surface: append-only plain-stdout instead of the TerminalCompositor live overlay, and the simple non-TTY line reader instead of the fancy input box. Same path used for pipes/CI. Also auto-set when $TMUX or $STY is detected and AFK_TMUX_PLAIN=1 (default). Set =0 to explicitly suppress auto-detection. Set =1 to force plain output. Falsy: 0. Truthy: 1, true.",
       "type": "boolean",
       "required": false,
       "example": "1",
@@ -898,6 +898,15 @@
       "required": false,
       "example": "120000",
       "category": "model"
+    },
+    {
+      "name": "AFK_TMUX_PLAIN",
+      "description": "Auto-detect tmux ($TMUX) and GNU screen ($STY) and enable plain output mode. 1 (default): when detected, activates plain output and prints a startup notice. 0: disables auto-detection; full TUI renders inside tmux/screen. AFK_PLAIN_OUTPUT=0 overrides this regardless.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "misc"
     },
     {
       "name": "AFK_TRACE_DISABLED",
@@ -1289,6 +1298,14 @@
       "category": "process"
     },
     {
+      "name": "STY",
+      "description": "GNU screen session identifier — set automatically by screen (e.g. 12345.pts-0.hostname). Not set by AFK. Read by isPlainOutputRequested() for auto plain-output when AFK_TMUX_PLAIN=1 (default).",
+      "type": "string",
+      "required": false,
+      "example": "12345.pts-0.hostname",
+      "category": "process"
+    },
+    {
       "name": "TELEGRAM_BOT_TOKEN",
       "description": "Telegram bot token from @BotFather. Required to run the Telegram bot surface.",
       "type": "string",
@@ -1313,7 +1330,7 @@
     },
     {
       "name": "TMUX",
-      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
+      "description": "OS-level tmux session identifier — set automatically by tmux (e.g. /tmp/tmux-501/default,12345,0). Not set by AFK. Read by configureColor() for truecolor detection; also read by isPlainOutputRequested() for auto plain-output when AFK_TMUX_PLAIN=1 (default). For truecolor on Node ≤ 24 inside tmux, set FORCE_COLOR=3.",
       "type": "string",
       "required": false,
       "example": "/tmp/tmux-501/default,12345,0",

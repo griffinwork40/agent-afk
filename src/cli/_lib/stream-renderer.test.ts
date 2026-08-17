@@ -9,7 +9,7 @@
  * lifecycle, and the structural shape of the output.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StreamRenderer } from './stream-renderer.js';
 import type { Writer } from '../slash/types.js';
 import type {
@@ -2003,6 +2003,15 @@ describe('StreamRenderer — AFK_PLAIN_OUTPUT full render opt-out (Lever 2)', ()
   const origStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
   const origStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 
+  beforeEach(() => {
+    // Isolate tests from the test runner's own $TMUX/$STY session — without
+    // this, isPlainOutputRequested() returns true inside tmux and forces isTTY
+    // false before the per-test stub takes effect, making TTY-path tests fail.
+    vi.stubEnv('TMUX', '');
+    vi.stubEnv('STY', '');
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '');
+    vi.stubEnv('AFK_TMUX_PLAIN', '');
+  });
   afterEach(() => {
     vi.unstubAllEnvs();
     if (origStdoutIsTTY) Object.defineProperty(process.stdout, 'isTTY', origStdoutIsTTY);
@@ -2041,6 +2050,10 @@ describe('StreamRenderer — AFK_PLAIN_OUTPUT full render opt-out (Lever 2)', ()
   it('isTTY stays true on a real TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', async () => {
     stubProcessTTY(true);
     vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+    // Stub multiplexer vars so this test is not affected by the test runner's
+    // own TMUX/STY environment (auto-detection must be off for this case).
+    vi.stubEnv('TMUX', undefined as unknown as string);
+    vi.stubEnv('STY', undefined as unknown as string);
 
     const { writer } = makeWriter();
     const r = new StreamRenderer({ out: writer });

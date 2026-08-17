@@ -822,12 +822,18 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'TMUX',
-    description:
-      'OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. ' +
-      'Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.',
+    description: 'OS-level tmux session identifier — set automatically by tmux (e.g. /tmp/tmux-501/default,12345,0). Not set by AFK. Read by configureColor() for truecolor detection; also read by isPlainOutputRequested() for auto plain-output when AFK_TMUX_PLAIN=1 (default). For truecolor on Node ≤ 24 inside tmux, set FORCE_COLOR=3.',
     type: 'string',
     required: false,
     example: '/tmp/tmux-501/default,12345,0',
+    category: 'process',
+  },
+  {
+    name: 'STY',
+    description: 'GNU screen session identifier — set automatically by screen (e.g. 12345.pts-0.hostname). Not set by AFK. Read by isPlainOutputRequested() for auto plain-output when AFK_TMUX_PLAIN=1 (default).',
+    type: 'string',
+    required: false,
+    example: '12345.pts-0.hostname',
     category: 'process',
   },
   {
@@ -1090,19 +1096,26 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_PLAIN_OUTPUT',
     description:
-      'Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, ' +
-      'even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the ' +
-      'TerminalCompositor live overlay (both the persistent between-turn compositor AND the ' +
-      'per-turn StreamRenderer overlay), AND the input surface downgrades to the simple ' +
-      'non-TTY line reader instead of the fancy compositor-backed input box. Same code path ' +
-      'already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/' +
-      'multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — ' +
-      'trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior ' +
-      '(live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true ' +
-      '(case-insensitive).',
+      'Force the interactive REPL to behave like a non-TTY surface: append-only plain-stdout instead of the TerminalCompositor ' +
+      'live overlay, and the simple non-TTY line reader instead of the fancy input box. Same path used for pipes/CI. ' +
+      'Also auto-set when $TMUX or $STY is detected and AFK_TMUX_PLAIN=1 (default). ' +
+      'Set =0 to explicitly suppress auto-detection. Set =1 to force plain output. Falsy: 0. Truthy: 1, true.',
     type: 'boolean',
     required: false,
     example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_TMUX_PLAIN',
+    description:
+      'Auto-detect tmux ($TMUX) and GNU screen ($STY) and enable plain output mode. ' +
+      '1 (default): when detected, activates plain output and prints a startup notice. ' +
+      '0: disables auto-detection; full TUI renders inside tmux/screen. ' +
+      'AFK_PLAIN_OUTPUT=0 overrides this regardless.',
+    type: 'boolean',
+    required: false,
+    default: '1',
+    example: '0',
     category: 'misc',
   },
   {
@@ -1768,6 +1781,7 @@ export const env = {
   get TELEGRAM_DATA_DIR(): string | undefined { return process.env['TELEGRAM_DATA_DIR']; },
   get TELEGRAM_VERBOSE(): string | undefined { return process.env['TELEGRAM_VERBOSE']; },
   get TMUX(): string | undefined { return process.env['TMUX']; },
+  get STY(): string | undefined { return process.env['STY']; },
   get AFK_TELEGRAM_TRACE(): string | undefined { return process.env['AFK_TELEGRAM_TRACE']; },
   get AFK_TELEGRAM_CWD(): string | undefined { return process.env['AFK_TELEGRAM_CWD']; },
 
@@ -1815,6 +1829,7 @@ export const env = {
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },
   get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
+  get AFK_TMUX_PLAIN(): string | undefined { return process.env['AFK_TMUX_PLAIN']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
   get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
   get AFK_GOBLIN_MASCOT(): string | undefined { return process.env['AFK_GOBLIN_MASCOT']; },
@@ -1894,29 +1909,11 @@ export const env = {
   get AFK_WAVE_RESUME_UNATTENDED(): string | undefined { return process.env['AFK_WAVE_RESUME_UNATTENDED']; },
 } as const; // `as const` narrows getter return types — it does NOT call Object.freeze; the object is mutable at runtime.
 
-/**
- * Truthy-check for `AFK_PLAIN_OUTPUT` (the `--plain` CLI flag's env twin).
- * Truthy iff `'1'` or `'true'`, case-insensitive, after trimming whitespace —
- * matching the convention used by other boolean-ish opt-in vars in this
- * codebase (see AFK_AUTO_ROUTING in env-tier.ts).
- *
- * Reads via `env.AFK_PLAIN_OUTPUT` (never `process.env` directly), keeping
- * this inside the CI-enforced single-read-point boundary (`pnpm audit:env:check`).
- *
- * Shared by every render-decision site that must treat a `--plain` /
- * `AFK_PLAIN_OUTPUT=1` TTY session as non-TTY for rendering purposes: the
- * REPL renderer seam (`repl-renderer.ts`, between-turn writes), the
- * persistent input surface's compositor arm (`input-surface.ts`), and the
- * per-turn StreamRenderer's `isTTY` computation (`stream-renderer.ts`).
- * Originally module-local to `repl-renderer.ts`; promoted here so all three
- * sites import one predicate instead of drifting copies.
- */
-export function isPlainOutputRequested(): boolean {
-  const raw = env.AFK_PLAIN_OUTPUT;
-  if (raw === undefined) return false;
-  const v = raw.trim().toLowerCase();
-  return v === '1' || v === 'true';
-}
+// Plain-output predicates live in `env.plain-output.ts` (extracted to keep
+// this file within the 350-line ceiling ratchet). Re-exported here so all
+// existing callers (`import { isPlainOutputRequested } from '../../config/env.js'`)
+// continue to work without touching their import paths.
+export { isPlainOutputRequested, tmuxPlainOutputNotice } from './env.plain-output.js';
 
 // ── Secret hardening ────────────────────────────────────────────────────────
 // Credential-bearing getters (auth keys, OAuth tokens, bot tokens) are
