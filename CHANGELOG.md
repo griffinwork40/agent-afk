@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.5] - 2026-08-17
+
+### Changed
+- extract helpers from readWithAutocompleteTty god function (#1072) (#1097) (fb5de645)
+
 ## [5.123.4] - 2026-08-17
 
 ### Changed
