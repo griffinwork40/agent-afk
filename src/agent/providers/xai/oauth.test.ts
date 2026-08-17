@@ -3,7 +3,7 @@
  * All network is mocked via injectable fetch.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildPkceAuthorizeUrl,
   codeChallengeS256,
@@ -162,23 +162,16 @@ describe('PKCE authorize URL', () => {
 });
 
 describe('exchangeAuthorizationCode', () => {
-  // Freeze Date.now() to 50 000 ms (= 50 s) so that both the injected
-  // nowSeconds hook AND any direct Date.now() / 1000 call in the production
-  // path produce the same deterministic base time.  Without this, a CI runner
-  // whose real clock is ahead of 50 s produces a different expires_at.
-  beforeEach(() => {
-    vi.useFakeTimers({ now: 50_000 });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it('returns token bundle on success', async () => {
+    // expires_in must exceed the floor guard (XAI_REFRESH_SKEW_SECONDS + 60 = 240s)
+    // added in 2339b1cc (#1059), otherwise tokenResponseToBundle clamps it up.
+    const EXPIRES_IN = 3600;
+    const NOW = 50;
     const fetchFn = vi.fn(async () =>
       jsonResponse({
         access_token: 'at-code',
         refresh_token: 'rt-code',
-        expires_in: 100,
+        expires_in: EXPIRES_IN,
       }),
     );
     const tokens = await exchangeAuthorizationCode(
@@ -188,10 +181,10 @@ describe('exchangeAuthorizationCode', () => {
         token_endpoint: discoveryDoc.token_endpoint,
       },
       { code: 'c', codeVerifier: 'v' },
-      { fetchFn: fetchFn as unknown as typeof fetch, nowSeconds: () => 50 },
+      { fetchFn: fetchFn as unknown as typeof fetch, nowSeconds: () => NOW },
     );
     expect(tokens.access_token).toBe('at-code');
-    expect(tokens.expires_at).toBe(150);
+    expect(tokens.expires_at).toBe(NOW + EXPIRES_IN);
   });
 });
 
