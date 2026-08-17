@@ -134,6 +134,9 @@ export const reloadPluginsCmd: SlashCommand = {
         await q.reloadPlugins();
       }
     } catch (err) {
+      // Contract: fail-soft — reloadPlugins() is a best-effort SDK flush;
+      // the user sees the warning and the re-registration below still runs
+      // against the current (possibly stale) SDK state rather than aborting.
       ctx.out.warn(`Plugin reload failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     // Refresh skills + agents in parallel — neither depends on the other.

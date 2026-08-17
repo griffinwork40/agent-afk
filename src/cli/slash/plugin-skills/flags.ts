@@ -37,6 +37,8 @@ export function harvestPluginSkillFlags(cacheRoot?: string): Map<string, string[
     try {
       entries = readdirSync(dir);
     } catch {
+      // Contract: fail-soft — an unreadable plugin directory (missing, permissions)
+      // must not abort the walk; flags from other dirs still apply.
       return;
     }
 
@@ -47,6 +49,8 @@ export function harvestPluginSkillFlags(cacheRoot?: string): Map<string, string[
       try {
         stat = statSync(fullPath);
       } catch {
+        // Contract: fail-soft — a stat error on a single entry (race, symlink
+        // dangling) skips that entry; the rest of the directory still walks.
         continue;
       }
 
@@ -60,6 +64,8 @@ export function harvestPluginSkillFlags(cacheRoot?: string): Map<string, string[
       try {
         content = readFileSync(fullPath, 'utf-8');
       } catch {
+        // Contract: fail-soft — an unreadable SKILL.md (permissions, race) skips
+        // that skill's flags; the walk continues for all other SKILL.md files.
         continue;
       }
 
