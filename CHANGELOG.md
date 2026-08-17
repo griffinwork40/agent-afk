@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.127.0] - 2026-08-17
+
+### Added
+- add fix-pr, polish, false-completion-gate to bundled skills (#943) (00e466d2)
+
+### Fixed
+- add missing SHA-256 pins for fix-pr, polish, false-completion-gate (#943) (#1127) (b74f2f32)
+
+### Changed
+- cache OIDC discovery response with 24h TTL (#1064) (#1124) (e309dd67)
+
 ## [5.126.1] - 2026-08-17
 
 ### Fixed
