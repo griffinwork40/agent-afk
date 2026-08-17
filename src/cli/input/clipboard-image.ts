@@ -23,6 +23,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ImageAttachment } from './attachments.js';
 import { env } from '../../config/env.js';
+import { readClipboardImageLinux } from './clipboard-image-linux.js';
 
 /**
  * When AFK_DEBUG_CLIPBOARD=1 (or any truthy value), structured diagnostic
@@ -54,6 +55,10 @@ function dbg(msg: string): void {
  * to PNG before returning.
  */
 export async function readClipboardImage(): Promise<ImageAttachment | null> {
+  if (process.platform === 'linux') {
+    return readClipboardImageLinux();
+  }
+
   if (process.platform !== 'darwin') {
     return null;
   }

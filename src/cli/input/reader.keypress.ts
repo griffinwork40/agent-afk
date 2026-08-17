@@ -20,6 +20,10 @@ import { isPrintableGrapheme } from './printable.js';
 import { isSoftNewlineEnter, endsWithBackslashContinuation } from './enter-decision.js';
 import { handlePasteStart, handlePasteEnd, handleCtrlV } from './reader.keypress.paste.js';
 import { handleNavKey, writeEofOutput } from './reader.keypress.nav.js';
+import {
+  enterReverseSearch,
+  handleReverseSearchKey,
+} from './reader.reverse-search.js';
 import type { ReaderState } from './reader.state.js';
 import type { RepaintCtx, repaint as _repaint, schedulePaint as _schedulePaint } from './reader.repaint.js';
 import type { applySelection as _applySelection } from './reader.selection.js';
@@ -86,6 +90,29 @@ export function handleKeypress(
 
   // Ctrl+V: paste image from clipboard.
   if (key?.ctrl && key?.name === 'v') { handleCtrlV(st, repaintCtx, schedulePaintFn); return; }
+
+  // Ctrl+R: reverse incremental history search.
+  // If the modal is already active, `handleReverseSearchKey` cycles to the next
+  // older match. If not, activate the modal now.
+  if (key?.ctrl && key?.name === 'r') {
+    const entries = opts.history?.getEntries?.() ?? [];
+    if (!st.reverseSearch.active) {
+      enterReverseSearch(st.reverseSearch, st);
+    }
+    // Delegate — this will cycle to the next match (or do nothing if no history).
+    handleReverseSearchKey(char, key, st.reverseSearch, st, entries, repaintCtx, repaintFn);
+    return;
+  }
+
+  // While reverse-search is active, route all keys through the search handler.
+  // The handler returns false only for Enter (accept+submit) and Ctrl-C (abort)
+  // — in those cases fall through to let the outer dispatcher handle them.
+  if (st.reverseSearch.active) {
+    const entries = opts.history?.getEntries?.() ?? [];
+    const consumed = handleReverseSearchKey(char, key, st.reverseSearch, st, entries, repaintCtx, repaintFn);
+    if (consumed) return;
+    // Key was not consumed (Enter or Ctrl-C) — fall through to normal handling.
+  }
 
   if (key?.name === 'escape') {
     if (st.ac.dropdownOpen) {

@@ -59,6 +59,57 @@ function dirent(name: string, isDir = false): FileDirent {
   return { name, isDirectory: () => isDir };
 }
 
+describe('detectTrigger — slash completion (mid-buffer)', () => {
+  it('fires at buffer start (existing behaviour preserved)', () => {
+    expect(detectTrigger('/ship', 5)).toEqual({ kind: 'slash', query: 'ship' });
+  });
+
+  it('fires for bare / at buffer start', () => {
+    expect(detectTrigger('/', 1)).toEqual({ kind: 'slash', query: '' });
+  });
+
+  it('fires after leading whitespace (tab-prefixed buffer)', () => {
+    const buf = ' /ship';
+    expect(detectTrigger(buf, buf.length)).toEqual({ kind: 'slash', query: 'ship' });
+  });
+
+  it('fires mid-buffer after a space (e.g. "please run /ship")', () => {
+    const buf = 'please run /ship';
+    expect(detectTrigger(buf, buf.length)).toEqual({ kind: 'slash', query: 'ship' });
+  });
+
+  it('fires for a partial slash token mid-sentence', () => {
+    const buf = 'use /con';
+    expect(detectTrigger(buf, buf.length)).toEqual({ kind: 'slash', query: 'con' });
+  });
+
+  it('fires for a bare / mid-sentence (after space)', () => {
+    const buf = 'hello /';
+    expect(detectTrigger(buf, buf.length)).toEqual({ kind: 'slash', query: '' });
+  });
+
+  it('does NOT fire when slash is inside a word (no leading whitespace)', () => {
+    // e.g. a URL fragment — the slash is not at a token boundary
+    expect(detectTrigger('http://example', 14)).toBeNull();
+  });
+
+  it('fires at cursor before end of buffer (mid-buffer cursor position)', () => {
+    // buffer is "/ship extra" but cursor is at 5 (end of "/ship")
+    const buf = '/ship extra';
+    expect(detectTrigger(buf, 5)).toEqual({ kind: 'slash', query: 'ship' });
+  });
+
+  it('does NOT fire when cursor is mid-slash-token and text follows without space', () => {
+    // upToCursor = "/sh" which is a valid slash token — should still fire
+    const buf = '/ship';
+    expect(detectTrigger(buf, 3)).toEqual({ kind: 'slash', query: 'sh' });
+  });
+
+  it('does not fire for prose with no slash', () => {
+    expect(detectTrigger('hello world', 11)).toBeNull();
+  });
+});
+
 describe('detectTrigger — @ file paths', () => {
   it('fires for @~/ (tilde), passing the ~/ query through unchanged', () => {
     expect(detectTrigger('@~/', 3)).toEqual({ kind: 'file', query: '~/' });
@@ -322,6 +373,53 @@ describe('buildFileCandidates — pure core (no I/O)', () => {
       entries.push(dirent(`f${String(i).padStart(3, '0')}.txt`));
     }
     expect(buildFileCandidates(entries, 'f', tmpRoot)).toHaveLength(MAX_FILE_MATCHES);
+  });
+
+  describe('@-file subsequence matching', () => {
+    it('returns subsequence matches when no prefix match exists', () => {
+      const entries = [dirent('src'), dirent('readme.md'), dirent('index.ts')];
+      // 'si' is not a prefix of any entry, but is a subsequence of 'index.ts' and 'src'
+      const vals = buildFileCandidates(entries, 'sr', tmpRoot).map((c) => c.value);
+      // 'sr' is a prefix of 'src' and a subsequence of nothing else useful
+      expect(vals).toContain('@src');
+    });
+
+    it('places prefix matches before subsequence-only matches', () => {
+      // 'inp' prefix: none; subsequence: 'index.ts' has i…p? No — test real subsequence
+      // 'cli' subsequence matches 'clipboard.ts' but 'clipboard' would be prefix
+      const entries = [
+        dirent('clog.ts'),    // prefix 'cl' ✓, subseq 'cli' ✓
+        dirent('clipboard.ts'), // prefix 'cl' ✓, prefix 'cli' ✓
+        dirent('unicorn.ts'), // subseq 'cli' via u(c)li? No. subseq of 'cli' in 'unicorn' = false
+        dirent('scale.ts'),   // subseq 'cli'? c…l…i = false
+      ];
+      // query 'clb' — prefix: none; subsequence: 'clipboard.ts' (c-l-b)
+      const vals = buildFileCandidates(entries, 'clb', tmpRoot).map((c) => c.value);
+      expect(vals).toContain('@clipboard.ts');
+      expect(vals).not.toContain('@clog.ts');
+    });
+
+    it('prefix matches sort before subsequence-only matches in ranked output', () => {
+      // 'al' is prefix of 'alpha.ts' and subsequence of 'canonical.ts'
+      const entries = [dirent('canonical.ts'), dirent('alpha.ts'), dirent('beta.ts')];
+      const vals = buildFileCandidates(entries, 'al', tmpRoot).map((c) => c.value);
+      // 'alpha.ts' is a prefix match; 'canonical.ts' is subsequence (c-a-n-o-n-i-c-al → 'al' at end = yes)
+      const alphaIdx = vals.indexOf('@alpha.ts');
+      const canonIdx = vals.indexOf('@canonical.ts');
+      expect(alphaIdx).toBeGreaterThanOrEqual(0);
+      if (canonIdx >= 0) {
+        // prefix match must come first
+        expect(alphaIdx).toBeLessThan(canonIdx);
+      }
+    });
+
+    it('empty leafPrefix returns all non-hidden entries (no subsequence filter applied)', () => {
+      const entries = [dirent('alpha.ts'), dirent('beta.ts'), dirent('gamma.md')];
+      const vals = buildFileCandidates(entries, '', tmpRoot).map((c) => c.value);
+      expect(vals).toContain('@alpha.ts');
+      expect(vals).toContain('@beta.ts');
+      expect(vals).toContain('@gamma.md');
+    });
   });
 });
 

@@ -15,6 +15,7 @@
 import type { InputCoreState } from '../input-core.js';
 import type { AutocompleteState } from './autocomplete-state.js';
 import type { ImageAttachment } from './attachments.js';
+import type { ReverseSearchState } from './reader.reverse-search.js';
 
 export interface ReaderState {
   /** Current text buffer + cursor position. */
@@ -48,4 +49,10 @@ export interface ReaderState {
    * repaints from firing after the promise has resolved or rejected.
    */
   settled: boolean;
+
+  /**
+   * Reverse-search modal state. Active when the user has pressed Ctrl-R.
+   * Threaded explicitly so the no-closure invariant is preserved.
+   */
+  reverseSearch: ReverseSearchState;
 }
