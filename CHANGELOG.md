@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.10] - 2026-08-17
+
+### Changed
+- remove dead altDescription field + annotate fail-soft swallows (#503) (#1106) (ac20fd14)
+
 ## [5.123.9] - 2026-08-17
 
 ### Fixed
