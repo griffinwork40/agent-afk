@@ -76,6 +76,7 @@ import {
   resolveReplayHandler,
   type LoopDriver,
 } from './replay.js';
+import { checkDetectorVersion } from './runner.staleness.js';
 
 /** Runner identity stamped into every result. */
 export const EVAL_RUN_RUNNER_VERSION = 'eval-run@v1';
@@ -155,6 +156,15 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
   const fixture = checkFixtureIntegrity(evalCase, ctx);
   checks.push(fixture.check);
   if (fixture.evidence) evidence.push(fixture.evidence);
+
+  // 1.5. Detector-version staleness guard — fails the run when the recorded
+  // detectorVersion no longer matches the live detector.  Matching versions
+  // are a no-op; see runner.staleness.ts for the full rationale.
+  const stalenessCheck = checkDetectorVersion(evalCase, nowIso);
+  if (stalenessCheck !== null) {
+    checks.push(stalenessCheck.check);
+    if (stalenessCheck.note !== null) notes.push(stalenessCheck.note);
+  }
 
   // 2. Run the pattern's validation contract (if one is registered).
   const contract = resolveContract(evalCase.assertion.patternId);
