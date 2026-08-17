@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.124.1] - 2026-08-17
+
+### Changed
+- shrink streamResponse (#890, #1073) (#1110) (517e6d5d)
+
 ## [5.124.0] - 2026-08-17
 
 ### Added
