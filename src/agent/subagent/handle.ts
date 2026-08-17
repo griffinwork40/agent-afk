@@ -33,6 +33,7 @@ import {
   type SubagentStatus,
   type SubagentTrace,
 } from './result.js';
+import { buildEmptyBufferError, synthesizeEmptyBufferPartial } from './empty-buffer-partial.js';
 
 export interface SubagentHandle<T = unknown> {
   /** Stable ID for tracking. */
@@ -617,13 +618,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // met by StreamIncompleteError's informative, actionable message, not by
     // masking the failure as a success.
     this.lastStopReason = STREAM_INCOMPLETE;
-    throw new StreamIncompleteError(
-      `subagent ${this.id} produced no output — its model stream ended without a ` +
-        `terminal message (stream_incomplete), and no partial text was streamed. ` +
-        `This is typically a first-token timeout while the provider was overloaded ` +
-        `(the connection was aborted mid retry-backoff). No findings were produced; ` +
-        `the parent should retry or fall back.`,
-    );
+    throw buildEmptyBufferError(this.id, this.currentTrace.toolResults);
   }
 
   async runToResult(
@@ -655,6 +650,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // on `SubagentResult` so this assignment is honest — no cast needed.
       if (this.lastStreamedContent.length > 0) {
         result.partialOutput = this.lastStreamedContent;
+      } else if (err instanceof StreamIncompleteError) {
+        // Empty text buffer: synthesize partial from accumulated tool results.
+        const p = synthesizeEmptyBufferPartial(this.id, this.currentTrace.toolResults);
+        if (p !== undefined) result.partialOutput = p;
       }
       return result;
     }

@@ -84,6 +84,15 @@ export class HookBlockedError extends Error {
  * and annotated at the consumption boundary.
  */
 export class StreamIncompleteError extends Error {
+  /**
+   * Number of tool results accumulated before the stream cut off.
+   * Set to a positive integer when the subagent completed real tool-call
+   * cycles (read_file, bash, grep, …) before the cut — so the parent can
+   * distinguish "died with N gathered results" from "died with nothing".
+   * Absent (undefined) when there were no prior tool results.
+   */
+  toolResultsGathered?: number;
+
   constructor(message: string) {
     super(message);
     this.name = "StreamIncompleteError";

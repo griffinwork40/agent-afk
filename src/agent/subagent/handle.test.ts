@@ -358,3 +358,96 @@ describe('pause-aware wall-clock ceiling (handle wiring)', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #724 — empty-buffer stream cut with prior tool results (#724)
+//
+// When a stream ends with no terminal message AND an empty text buffer, the
+// run classifies `failed` (StreamIncompleteError). If tool-call cycles
+// completed before the cut, partialOutput must carry a summary and
+// toolResultsGathered must be set on the error — so the parent can
+// distinguish "died with N gathered results" from "died with nothing".
+// ---------------------------------------------------------------------------
+
+describe('#724 — empty-buffer stream cut with prior tool results', () => {
+  let abortGraph: AbortGraph;
+  let controller: AbortController;
+
+  beforeEach(() => {
+    abortGraph = new AbortGraph();
+    controller = new AbortController();
+    abortGraph.register('root', controller);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeHandle(session: IAgentSession): SubagentHandleImpl<unknown> {
+    return new SubagentHandleImpl(
+      'sub-724',
+      session,
+      controller,
+      abortGraph,
+      undefined,  // outputSchema
+      5000,       // timeoutMs
+      undefined,  // hookRegistry
+      vi.fn(),    // onTerminal
+    );
+  }
+
+  /** Session that emits N tool_result chunks then ends abruptly (no message/done). */
+  function makeStreamCutSession(toolResultCount: number): IAgentSession {
+    return makeMinimalSession({
+      async *sendMessageStream(): AsyncIterable<OutputEvent> {
+        for (let i = 0; i < toolResultCount; i++) {
+          yield {
+            type: 'chunk',
+            chunk: {
+              type: 'tool_result',
+              toolUseId: `tu-${i}`,
+              content: 'some file content',
+              isError: false,
+              sizeBytes: 1000 + i * 500,
+            },
+          };
+        }
+        // No 'message' or 'done' event — stream ends abruptly.
+      },
+    });
+  }
+
+  it('classifies as failed when stream cuts with empty buffer and no tool results', async () => {
+    const handle = makeHandle(makeStreamCutSession(0));
+    const result = await handle.runToResult('go');
+    expect(result.status).toBe('failed');
+    expect(result.partialOutput).toBeUndefined();
+  });
+
+  it('classifies as failed AND populates partialOutput when stream cuts after 5 tool results', async () => {
+    const handle = makeHandle(makeStreamCutSession(5));
+    const result = await handle.runToResult('go');
+    expect(result.status).toBe('failed');
+    expect(result.partialOutput).toBeTypeOf('string');
+    expect(result.partialOutput as string).toContain('5 tool result(s)');
+    expect(result.partialOutput as string).toContain('sub-724');
+  });
+
+  it('sets toolResultsGathered on the error when tool results exist', async () => {
+    const handle = makeHandle(makeStreamCutSession(3));
+    const result = await handle.runToResult('go');
+    expect(result.status).toBe('failed');
+    // The error must carry toolResultsGathered for the retry-dispatch layer.
+    const { StreamIncompleteError: SIE } = await import('../../utils/errors.js');
+    expect(result.error).toBeInstanceOf(SIE);
+    expect((result.error as InstanceType<typeof SIE>).toolResultsGathered).toBe(3);
+  });
+
+  it('does NOT set toolResultsGathered when no tool results were gathered', async () => {
+    const handle = makeHandle(makeStreamCutSession(0));
+    const result = await handle.runToResult('go');
+    const { StreamIncompleteError: SIE } = await import('../../utils/errors.js');
+    expect(result.error).toBeInstanceOf(SIE);
+    expect((result.error as InstanceType<typeof SIE>).toolResultsGathered).toBeUndefined();
+  });
+});
