@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.127.1] - 2026-08-17
+
+### Fixed
+- surface partial tool results on empty-buffer stream cut-off (#724) (#1126) (3370b4d1)
+
 ## [5.127.0] - 2026-08-17
 
 ### Added
