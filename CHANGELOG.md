@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.125.0] - 2026-08-17
+
+### Added
+- slash-complete anywhere, @-file subsequence, Linux image paste, Ctrl-R reverse-search (#1116) (fa23b2a2)
+
 ## [5.124.1] - 2026-08-17
 
 ### Changed
