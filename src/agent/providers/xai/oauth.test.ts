@@ -3,7 +3,7 @@
  * All network is mocked via injectable fetch.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildPkceAuthorizeUrl,
   codeChallengeS256,
@@ -162,6 +162,17 @@ describe('PKCE authorize URL', () => {
 });
 
 describe('exchangeAuthorizationCode', () => {
+  // Freeze Date.now() to 50 000 ms (= 50 s) so that both the injected
+  // nowSeconds hook AND any direct Date.now() / 1000 call in the production
+  // path produce the same deterministic base time.  Without this, a CI runner
+  // whose real clock is ahead of 50 s produces a different expires_at.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: 50_000 });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('returns token bundle on success', async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({
