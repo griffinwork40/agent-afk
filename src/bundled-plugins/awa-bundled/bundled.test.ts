@@ -65,6 +65,12 @@ const PINNED_HASHES = {
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
   diagnose: '9a54f97470dce8adec5f1456f881aebe1bb550ee6f201ab9d63cccfd8a316096',
+  // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
+  // in #943. No upstream counterpart — bundled-only.
+  'false-completion-gate':
+    '9b0d90e150a9a4690c713d1063dd1901ce5b659d33b6c9f12b74e44b3d0163ce',
+  'fix-pr':
+    '07ae5b92882c42a94426b182ee3226a7d0271388478874e87b76816ac59aec02',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -82,6 +88,8 @@ const PINNED_HASHES = {
   'ground-state':
     'f24a0fbc572aa65dde3cbceb76ce1ec36d8ed8d88e142aa0007425ec3e906cad',
 
+  polish:
+    '03c7d8d1f593d4aca3327247d5c226e957bae84982b8a438c5834ba74ee4184c',
   // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
