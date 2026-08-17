@@ -35,6 +35,7 @@ import { ResizeBus } from '../terminal-size.js';
 import { repaint, schedulePaint } from './reader.repaint.js';
 import { applySelection } from './reader.selection.js';
 import { handleKeypress } from './reader.keypress.js';
+import { createReverseSearchState } from './reader.reverse-search.js';
 import type { ReaderState } from './reader.state.js';
 import type { RepaintCtx } from './reader.repaint.js';
 import type {
@@ -119,6 +120,7 @@ export async function readWithAutocompleteTty(
         lastKeypressAt: 0,
         repaintPending: false,
         settled: false,
+        reverseSearch: createReverseSearchState(),
       };
 
       // Adapter for the slash highlighter. Delegates membership to the

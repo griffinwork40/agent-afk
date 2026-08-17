@@ -127,11 +127,14 @@ describe('readClipboardImage', () => {
   });
 
   describe('platform check', () => {
-    it('returns null on non-darwin without spawning', async () => {
+    it('linux: routes through the Linux path (not darwin no-op)', async () => {
+      // Linux now has its own clipboard path via wl-paste/xclip.
+      // Neither tool is available in the test env (spawn ENOENT), so the
+      // result is null — but spawn IS called for the availability probe.
       Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      mockedSpawn.mockImplementation(() => createOsaChild({ shouldError: true }));
       const result = await readClipboardImage();
       expect(result).toBeNull();
-      expect(mockedSpawn).not.toHaveBeenCalled();
     });
 
     it('returns null on win32 without spawning', async () => {
@@ -346,7 +349,145 @@ describe('readClipboardImage', () => {
 });
 
 /**
- * Part B: AFK_DEBUG_CLIPBOARD env-var gating.
+ * Part B-Linux: Linux clipboard image support (wl-paste / xclip).
+ *
+ * The Linux path lives in clipboard-image-linux.ts and is invoked by
+ * readClipboardImage() when process.platform === 'linux'. All spawns (both the
+ * isCommandAvailable probe and the actual clipboard read) go through the same
+ * mocked `child_process.spawn`.
+ *
+ * Probe sequence for wl-paste path:
+ *   spawn #1: wl-paste --version          (availability probe) → emit close(0)
+ *   spawn #2: xclip -version              (availability probe) → emit error ENOENT
+ *   spawn #3: wl-paste --type image/png … (data read)          → emit stdout bytes + close(0)
+ *
+ * For xclip fallback: spawn #1 ENOENT (no wl-paste), spawn #2 close(0), spawn #3 data.
+ */
+describe('Linux clipboard (Part B-Linux)', () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockedUnlink.mockResolvedValue(undefined);
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  });
+
+  /** Build a child that immediately errors with ENOENT (tool not installed). */
+  function createEnoentChild(): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setImmediate(() => { child.emit('error', Object.assign(new Error('not found'), { code: 'ENOENT' })); });
+    return child as unknown as ChildProcess;
+  }
+
+  /** Build a child that closes with a given exit code, optionally emitting stdout data. */
+  function createChild(exitCode: number, data?: Buffer): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setImmediate(() => {
+      if (data) child.stdout.emit('data', data);
+      child.emit('close', exitCode);
+    });
+    return child as unknown as ChildProcess;
+  }
+
+  it('returns null when neither wl-paste nor xclip is available', async () => {
+    // Both availability probes emit ENOENT.
+    mockedSpawn.mockImplementation(() => createEnoentChild());
+    const result = await readClipboardImage();
+    expect(result).toBeNull();
+  });
+
+  it('reads PNG from wl-paste when available', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xaa, 0xbb]);
+    let call = 0;
+    mockedSpawn.mockImplementation(() => {
+      call++;
+      // call 1: wl-paste --version probe → available (close 0)
+      if (call === 1) return createChild(0);
+      // call 2: xclip -version probe → not available (ENOENT)
+      if (call === 2) return createEnoentChild();
+      // call 3: wl-paste actual data read
+      return createChild(0, png);
+    });
+    const result = await readClipboardImage();
+    expect(result).not.toBeNull();
+    expect(result?.mediaType).toBe('image/png');
+    expect(result?.bytes).toEqual(png);
+  });
+
+  it('falls back to xclip when wl-paste is absent', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    let call = 0;
+    mockedSpawn.mockImplementation(() => {
+      call++;
+      // call 1: wl-paste probe → ENOENT
+      if (call === 1) return createEnoentChild();
+      // call 2: xclip probe → available (close 0)
+      if (call === 2) return createChild(0);
+      // call 3: xclip actual data read
+      return createChild(0, jpeg);
+    });
+    const result = await readClipboardImage();
+    expect(result).not.toBeNull();
+    expect(result?.mediaType).toBe('image/jpeg');
+  });
+
+  it('returns null when wl-paste is available but clipboard holds no image (exit 1)', async () => {
+    let call = 0;
+    mockedSpawn.mockImplementation(() => {
+      call++;
+      if (call === 1) return createChild(0);     // wl-paste probe ok
+      if (call === 2) return createEnoentChild(); // xclip absent
+      return createChild(1);                      // wl-paste data read → exit 1 (no image)
+    });
+    const result = await readClipboardImage();
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the data is unrecognised magic bytes', async () => {
+    const unknown = Buffer.from([0x00, 0x01, 0x02, 0x03]);
+    let call = 0;
+    mockedSpawn.mockImplementation(() => {
+      call++;
+      if (call === 1) return createChild(0);
+      if (call === 2) return createEnoentChild();
+      return createChild(0, unknown);
+    });
+    const result = await readClipboardImage();
+    expect(result).toBeNull();
+  });
+
+  it('returns a valid uuid id on success', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let call = 0;
+    mockedSpawn.mockImplementation(() => {
+      call++;
+      if (call === 1) return createChild(0);
+      if (call === 2) return createEnoentChild();
+      return createChild(0, png);
+    });
+    const result = await readClipboardImage();
+    expect(result?.id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
+  it('win32 still returns null without spawning', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const result = await readClipboardImage();
+    expect(result).toBeNull();
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Part C: AFK_DEBUG_CLIPBOARD env-var gating.
  *
  * Because `const DEBUG = !!process.env.AFK_DEBUG_CLIPBOARD` is evaluated at
  * module load time, each sub-test must reset modules and re-import the module
@@ -357,7 +498,7 @@ describe('readClipboardImage', () => {
  * file with vi.mock() (hoisted), so they remain active across module resets.
  * We re-configure the spawn/readFile stubs via the already-mocked references.
  */
-describe('AFK_DEBUG_CLIPBOARD logging (Part B)', () => {
+describe('AFK_DEBUG_CLIPBOARD logging (Part C)', () => {
   const originalPlatform = process.platform;
 
   beforeEach(() => {
