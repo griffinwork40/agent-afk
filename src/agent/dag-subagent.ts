@@ -17,6 +17,7 @@ import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.j
 import { TimeoutError } from '../utils/errors.js';
 import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { resolveSubagentTimeoutMs } from './subagent/constants.js';
+import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
 
 export interface SubagentDAGNode {
   id: string;
@@ -93,6 +94,39 @@ export interface SubagentDAGOptions {
   nodeTimeoutMs?: number;
 }
 
+/**
+ * Validate that a DAG node's `cwd`, `readRoots`, and `writeRoots` pass the
+ * same grant-breadth guards that `parseAgentInput` enforces on the agent-tool
+ * path. Without this, `runSubagentDAG` is a second, unguarded doorway into
+ * `forkSubagent` — any root that would drop credential candidates from the
+ * bash restriction hook bypasses the guard entirely (#982).
+ *
+ * Farm's pinned roots (worktree subdirectories) pass both guards — they are
+ * deep project-specific paths, not home / filesystem root / AFK dirs.
+ */
+function validateDagNodeRoots(spec: SubagentDAGNode): void {
+  const candidates: Array<{ value: string; field: string }> = [];
+  if (spec.cwd !== undefined) candidates.push({ value: spec.cwd, field: 'cwd' });
+  for (const r of spec.readRoots ?? []) candidates.push({ value: r, field: 'readRoots' });
+  for (const r of spec.writeRoots ?? []) candidates.push({ value: r, field: 'writeRoots' });
+
+  for (const { value, field } of candidates) {
+    if (isTooBroadRoot(value)) {
+      throw new Error(
+        `DAG node "${spec.id}" ${field} "${value}" is too broad ` +
+          '(filesystem root, home directory, or AFK directory)',
+      );
+    }
+    const sensitive = ungatedSensitiveRoot(value);
+    if (sensitive !== undefined) {
+      throw new Error(
+        `DAG node "${spec.id}" ${field} "${value}" would un-gate ` +
+          `credential root "${sensitive}"`,
+      );
+    }
+  }
+}
+
 export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRunResult> {
   const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
@@ -115,6 +149,13 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
   const dagNodes: DAGNode[] = nodes.map((spec) => ({
     id: spec.id,
     async run(inputs: Record<string, unknown>, nodeSignal: AbortSignal): Promise<unknown> {
+      // Invariant (#982): validate roots BEFORE forkSubagent — this is the
+      // only guard on the DAG path. parseAgentInput guards the agent-tool path;
+      // this guards the library-API path. Without it, a caller that derives a
+      // root from model output bypasses both isTooBroadRoot and
+      // ungatedSensitiveRoot.
+      validateDagNodeRoots(spec);
+
       const handle = await manager.forkSubagent({
         parent: { sessionId: parentSession.sessionId },
         config: {

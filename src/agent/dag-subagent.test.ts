@@ -606,4 +606,55 @@ describe('runSubagentDAG', () => {
       expect(result.failed[0]!.error.message).not.toContain('exceeded nodeTimeoutMs');
     });
   });
+
+  describe('root validation (#982)', () => {
+    it('rejects a cwd that is the filesystem root', async () => {
+      const manager = makeFakeManager(() => makeFakeHandle('ok'));
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', cwd: '/' }],
+        edges: [],
+      });
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.error.message).toContain('too broad');
+    });
+
+    it('rejects a cwd that is the home directory', async () => {
+      const home = process.env['HOME'] ?? '/home/test';
+      const manager = makeFakeManager(() => makeFakeHandle('ok'));
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', cwd: home }],
+        edges: [],
+      });
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.error.message).toContain('too broad');
+    });
+
+    it('rejects readRoots that is the filesystem root', async () => {
+      const manager = makeFakeManager(() => makeFakeHandle('ok'));
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', readRoots: ['/'] }],
+        edges: [],
+      });
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.error.message).toContain('too broad');
+    });
+
+    it('allows a narrow project-specific cwd', async () => {
+      const manager = makeFakeManager(() => makeFakeHandle('ok'));
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', cwd: '/tmp/test-project' }],
+        edges: [],
+      });
+      expect(result.failed).toHaveLength(0);
+      expect(result.outputs['A']).toBeDefined();
+    });
+  });
 });
