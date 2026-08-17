@@ -72,7 +72,7 @@
     "src/cli/_lib/stream-renderer-orchestrator-emit.ts": { "loc": 440, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/_lib/stream-renderer-orchestrator.ts": { "loc": 536, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/_lib/stream-renderer-subagent.ts": { "loc": 509, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/_lib/stream-renderer.ts": { "loc": 1020, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/_lib/stream-renderer.ts": { "loc": 543, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/_lib/testing/virtual-screen.ts": { "loc": 598, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/chat.ts": { "loc": 806, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/daemon.ts": { "loc": 543, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
