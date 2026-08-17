@@ -29,6 +29,12 @@ export interface RunBackgroundBranchArgs {
   model: string | undefined;
   /** Optional: `IAgentSession.sessionId` is `string | undefined`; forwarded as-is into the registry record (preserves the pre-extraction contract). */
   parentSessionId: string | undefined;
+  /**
+   * Callback fired when the background job settles (done or failed).
+   * Captured at dispatch time so it is immune to `notifyWaveEnd()` clearing
+   * `currentWaveId` before the job finishes (#1083).
+   */
+  onSettled?: (isError: boolean) => void;
 }
 
 /**
@@ -50,7 +56,7 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
@@ -85,6 +91,20 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     }
     throw e;
   }
+  // Wire manifest settlement (#1083): when the background job finishes,
+  // fire the captured onSettled callback so the wave manifest transitions
+  // from 'running' to 'done'/'failed'. The waveId is captured at the call
+  // site (subagent-executor.ts) before notifyWaveEnd() can clear it.
+  if (onSettled) {
+    const settledJobId = job.jobId;
+    const handler = (settled: { jobId: string; status: string }): void => {
+      if (settled.jobId !== settledJobId) return;
+      registry.off('settled', handler);
+      onSettled(settled.status === 'failed' || settled.status === 'cancelled');
+    };
+    registry.on('settled', handler);
+  }
+
   const payload = {
     status: 'running' as const,
     jobId: job.jobId,
