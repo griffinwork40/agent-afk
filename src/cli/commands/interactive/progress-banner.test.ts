@@ -510,5 +510,67 @@ describe('formatRateLimitActivity', () => {
   });
 });
 
+describe('formatProgressBanner — parallel fan-out indicator', () => {
+  const baseEvent = mkEvent({ description: 'Working' });
+
+  it('does not show "N running" when runningCount is undefined', () => {
+    const lines = formatProgressBanner(baseEvent, Infinity);
+    expect(lines.join('')).not.toContain('running');
+  });
+
+  it('does not show "N running" when runningCount is 0', () => {
+    const lines = formatProgressBanner(baseEvent, Infinity, undefined, undefined, 0);
+    expect(lines.join('')).not.toContain('running');
+  });
+
+  it('does not show "N running" when runningCount is 1 (no fan-out)', () => {
+    const lines = formatProgressBanner(baseEvent, Infinity, undefined, undefined, 1);
+    expect(lines.join('')).not.toContain('running');
+  });
+
+  it('shows "2 running" when runningCount is 2', () => {
+    const lines = formatProgressBanner(baseEvent, Infinity, undefined, undefined, 2);
+    expect(stripAnsi(lines.join(''))).toContain('2 running');
+  });
+
+  it('shows "5 running" when runningCount is 5', () => {
+    const lines = formatProgressBanner(baseEvent, Infinity, undefined, undefined, 5);
+    expect(stripAnsi(lines.join(''))).toContain('5 running');
+  });
+
+  it('includes the fan-out indicator BEFORE the interrupt hint', () => {
+    const lines = formatProgressBanner(baseEvent, Infinity, undefined, undefined, 3);
+    const text = stripAnsi(lines.join(''));
+    const runningIdx = text.indexOf('3 running');
+    const escIdx = text.indexOf('esc to interrupt');
+    expect(runningIdx).toBeGreaterThan(-1);
+    expect(escIdx).toBeGreaterThan(-1);
+    expect(runningIdx).toBeLessThan(escIdx);
+  });
+
+  it('omits the fan-out indicator in stopping state but keeps running count in stats', () => {
+    // Stopping drops the interrupt hint but the fan-out count should still appear
+    // in the stats tail — it describes state (N agents running), not user action.
+    const lines = formatProgressBanner(baseEvent, Infinity, undefined, true, 4);
+    const text = stripAnsi(lines.join(''));
+    expect(text).toContain('4 running');
+    expect(text).not.toContain('esc to interrupt');
+  });
+
+  it('clamps the banner with the fan-out indicator to the column width', () => {
+    const cols = 60;
+    const lines = formatProgressBanner(
+      mkEvent({ description: 'A'.repeat(200) }),
+      cols,
+      undefined,
+      undefined,
+      7,
+    );
+    for (const line of lines) {
+      expect(displayWidth(stripAnsi(line))).toBeLessThanOrEqual(cols);
+    }
+  });
+});
+
 // Restore chalk level after tests run.
 chalk.level = savedLevel;

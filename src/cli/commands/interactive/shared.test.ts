@@ -441,3 +441,50 @@ describe('formatStatusFields — subscription-quota segment', () => {
     expect(windows?.fiveHour).toBeUndefined();
   });
 });
+
+describe('formatStatusFields — turn indicator', () => {
+  afterEach(() => {
+    resetQuotaCacheForTests();
+  });
+
+  function makeTurnStats(totalTurns: number): SessionStats {
+    return makeStats(Array.from({ length: totalTurns }, (_, i) => ({
+      role: 'user' as const,
+      content: `msg ${i}`,
+    }) as unknown as TurnRecord));
+  }
+
+  it('omits turnCount when totalTurns is 0 (before any turn completes)', () => {
+    const fields = formatStatusFields(makeTurnStats(0));
+    expect(fields.turnCount).toBeUndefined();
+    expect(fields.maxTurns).toBeUndefined();
+  });
+
+  it('includes turnCount equal to totalTurns when at least one turn completed', () => {
+    const fields = formatStatusFields(makeTurnStats(3));
+    expect(fields.turnCount).toBe(3);
+  });
+
+  it('omits maxTurns when the cap argument is 0 (unconstrained session)', () => {
+    const fields = formatStatusFields(makeTurnStats(2), undefined, undefined, 0);
+    expect(fields.maxTurns).toBeUndefined();
+  });
+
+  it('omits maxTurns when the cap argument is undefined', () => {
+    const fields = formatStatusFields(makeTurnStats(2));
+    expect(fields.maxTurns).toBeUndefined();
+  });
+
+  it('includes maxTurns when a positive cap is supplied', () => {
+    const fields = formatStatusFields(makeTurnStats(2), undefined, undefined, 10);
+    expect(fields.maxTurns).toBe(10);
+  });
+
+  it('does not include maxTurns when turnCount is absent (totalTurns === 0)', () => {
+    // Even if a cap is supplied, omitting the turn field is the right call before
+    // any turn completes — rendering `turn 0/10` would be confusing.
+    const fields = formatStatusFields(makeTurnStats(0), undefined, undefined, 10);
+    expect(fields.turnCount).toBeUndefined();
+    expect(fields.maxTurns).toBeUndefined();
+  });
+});

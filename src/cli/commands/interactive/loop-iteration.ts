@@ -721,7 +721,8 @@ export async function runInputLoop(
         setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),
         async onContextProgress() {
           await ctx.contextSampler.refresh();
-          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
+          const mt = parseInt(ctx.options.maxTurns, 10);
+          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, mt > 0 ? mt : undefined));
         },
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is
