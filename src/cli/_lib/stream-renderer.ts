@@ -857,7 +857,6 @@ export class StreamRenderer {
       renderer.dispose();
     }
     this.subagentMarkdown.clear();
-
     // ToolLane — flush any pending entries that weren't captured by the
     // coordinator (e.g. entries registered after flushAll ran, or in
     // non-coordinator paths). This is the safety net; in normal operation
@@ -869,9 +868,12 @@ export class StreamRenderer {
     // never emits a leading blank, so without this trailing the footer
     // would butt directly against the last tool result. Mirrors the
     // coordinator done-path at stream-renderer-orchestrator.ts:363-382.
-    // See docs/tui-rhythm.md.
+    // See docs/tui-rhythm.md. History: use flushCompletedRoots() not the
+    // nuclear flush() — mirrors PR #95 fix at orchestrator-emit.ts:264;
+    // nuclear flush on dispose deletes in-flight subagent entries, causing
+    // stale-capture + causal-order violations (blank-row gaps, missing Done).
     if (this.toolLane.hasPending()) {
-      const lines = this.toolLane.flush();
+      const lines = this.toolLane.flushCompletedRoots();
       if (this.isTTY && this.compositor) {
         // Atomic block commit — the safety-net flush is ONE coherent block;
         // per-line commits desync band-hold under a tall overlay. See
@@ -889,12 +891,10 @@ export class StreamRenderer {
         this.out.line('');
       }
     }
-
     if (this.pauseTickInterval) {
       clearInterval(this.pauseTickInterval);
       this.pauseTickInterval = null;
     }
-
     if (this.compositor) {
       if (this.ownsCompositor) {
         // Renderer-owned compositor — full teardown.
