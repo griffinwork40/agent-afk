@@ -184,8 +184,9 @@ export async function readWithAutocompleteTty(
       };
 
       const onAbort = (err: Error) => {
-        if (st.prevBufferRows > 0) {
-          stdout.write(ansiEscapes.cursorUp(st.prevBufferRows));
+        const abortUpRows = st.prevStatusRows + st.prevBufferRows;
+        if (abortUpRows > 0) {
+          stdout.write(ansiEscapes.cursorUp(abortUpRows));
         }
         if (st.rowsBelow > 0) {
           stdout.write(ansiEscapes.eraseDown);

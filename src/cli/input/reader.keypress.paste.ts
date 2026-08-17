@@ -48,6 +48,7 @@ export function handlePasteEnd(
     if (!st.clipboardInFlight) {
       st.clipboardInFlight = true;
       readClipboardImage().then((img) => {
+        if (st.settled) return;
         if (img) {
           st.clipboardFailureMsg = null;
           st.attachments.push(img);
@@ -65,6 +66,7 @@ export function handlePasteEnd(
     if (!st.clipboardInFlight) {
       st.clipboardInFlight = true;
       readClipboardImage().then((img) => {
+        if (st.settled) return;
         if (img) {
           st.clipboardFailureMsg = null;
           st.attachments.push(img);
@@ -92,6 +94,7 @@ export function handleCtrlV(
   if (!st.clipboardInFlight) {
     st.clipboardInFlight = true;
     readClipboardImage().then((img) => {
+      if (st.settled) return;
       if (img) {
         st.clipboardFailureMsg = null;
         st.attachments.push(img);

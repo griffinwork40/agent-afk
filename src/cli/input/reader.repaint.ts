@@ -104,6 +104,7 @@ export function repaint(st: ReaderState, ctx: RepaintCtx): void {
     st.ac.dropdownOpen = false;
     st.ac.candidates = [];
   }
+  // Order matters: bounds-check → up-follow → down-follow
   if (st.ac.selectedIndex >= st.ac.candidates.length) st.ac.selectedIndex = Math.max(0, st.ac.candidates.length - 1);
   if (st.ac.viewportStart > st.ac.selectedIndex) st.ac.viewportStart = st.ac.selectedIndex;
   if (st.ac.selectedIndex >= st.ac.viewportStart + st.maxDropdownRows) {
