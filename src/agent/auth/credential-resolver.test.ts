@@ -7,7 +7,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   loadXaiApiKey,
   resolveCredentialForModel,
+  preloadClaudeKeychainOAuth,
 } from './credential-resolver.js';
+import { refreshClaudeCodeOauthToken } from './keychain.js';
+
+// Keep the network/keychain refresh hermetic — preloadClaudeKeychainOAuth's
+// guard is what's under test, not the real token exchange.
+vi.mock('./keychain.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./keychain.js')>();
+  return { ...actual, refreshClaudeCodeOauthToken: vi.fn(async () => 'sk-ant-oat01-refreshed') };
+});
 
 // providerForModel is env-aware; keep hermetic for grok routing + explicit hints.
 vi.mock('../providers/index.js', async (importOriginal) => {
@@ -118,5 +127,47 @@ describe('resolveCredentialForModel — xAI injection contract', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-ok';
     delete process.env.XAI_API_KEY;
     expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-ok');
+  });
+});
+
+describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
+  const originalAnthropic = process.env.ANTHROPIC_API_KEY;
+  const originalOauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  });
+
+  afterEach(() => {
+    if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalAnthropic;
+    if (originalOauth === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOauth;
+  });
+
+  it('skips the refresh for non-Anthropic providers (no dead keychain work)', async () => {
+    expect(await preloadClaudeKeychainOAuth('openai-compatible')).toBeUndefined();
+    expect(await preloadClaudeKeychainOAuth('xai')).toBeUndefined();
+    expect(await preloadClaudeKeychainOAuth('xai-oauth')).toBeUndefined();
+    expect(refreshClaudeCodeOauthToken).not.toHaveBeenCalled();
+  });
+
+  it('skips the refresh when an env credential already takes precedence', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-env';
+    expect(await preloadClaudeKeychainOAuth('anthropic-direct')).toBeUndefined();
+
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-env';
+    expect(await preloadClaudeKeychainOAuth('anthropic-direct')).toBeUndefined();
+
+    expect(refreshClaudeCodeOauthToken).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the keychain token (and returns it) for Anthropic with no env credential', async () => {
+    const token = await preloadClaudeKeychainOAuth('anthropic-direct');
+    expect(refreshClaudeCodeOauthToken).toHaveBeenCalledOnce();
+    expect(token).toBe('sk-ant-oat01-refreshed');
   });
 });

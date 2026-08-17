@@ -86,6 +86,7 @@ import { registerInsightsCommand } from './commands/insights.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig, loadCredential } from './config.js';
 import { providerForModel } from '../agent/providers/index.js';
+import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
 import { getModel } from './shared-helpers.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { getVersion } from './version.js';
@@ -205,8 +206,17 @@ export function needsCredentialGate(argv: string[]): boolean {
  */
 export async function runFirstRunDetector(argv: string[] = process.argv): Promise<void> {
   if (!needsCredentialGate(argv)) return;
-  const credential = loadCredential();
   const provider = providerForModel(getModel() as string);
+  // Refresh a near-expiry / expired Claude Code keychain OAuth token and write
+  // it back to the store BEFORE the synchronous loadCredential() read below.
+  // Invariant: this gate runs before Commander dispatches any command action,
+  // so a daemon whose only credential is an expired keychain token would
+  // otherwise hit loadCredential() → undefined → process.exit(1) here, before
+  // the command's own refresh could run. The refresh is internally guarded to
+  // the keychain-OAuth case (Anthropic provider, no env credential), so it is a
+  // no-op for OpenAI/xAI/env-var users, and bounded by a fetch timeout.
+  await preloadClaudeKeychainOAuth(provider);
+  const credential = loadCredential();
   if (!credential && provider === 'anthropic-direct') {
     if (!process.stdin.isTTY) {
       process.stderr.write(

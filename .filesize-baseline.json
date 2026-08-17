@@ -78,7 +78,7 @@
     "src/cli/commands/daemon.ts": { "loc": 543, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/farm.ts": { "loc": 578, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive.ts": { "loc": 988, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/interactive/bootstrap.ts": { "loc": 361, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/interactive/bootstrap.ts": { "loc": 359, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/loop-iteration.ts": { "loc": 814, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/shared.ts": { "loc": 833, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/shell-passthrough.ts": { "loc": 399, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

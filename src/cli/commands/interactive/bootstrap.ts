@@ -5,7 +5,6 @@ import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, InteractiveCtx } from './shared.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
-import { refreshClaudeCodeOauthToken } from '../../../agent/auth/keychain.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -73,7 +72,6 @@ export async function bootstrapSession(
   // its own array so its catch block can still print them. Callers that don't
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
-  await refreshClaudeCodeOauthToken(); // refresh expired OAuth before sync read
 
   const {
     trace, apiKey, backgroundRegistry, bgSummarizer,

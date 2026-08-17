@@ -12,6 +12,12 @@ interface ParsedCredentials {
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
+// Contract: bound the token-refresh network call. `refreshClaudeCodeOauthToken`
+// is now awaited on the startup path (`preloadClaudeKeychainOAuth`), so an
+// unbounded `fetch` would let a stalled / captive network hang boot up to
+// undici's ~300s default. Cap it so a stalled refresh degrades to the prior
+// fast-fail (`undefined`) path instead of blocking startup.
+const OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
  * Read the Claude Code OAuth access token from its native credential store.
@@ -49,8 +55,21 @@ export function loadClaudeCodeOauthToken(): string | undefined {
  * macOS, credentials file on Linux) — preserving all non-OAuth fields
  * (e.g. `mcpOAuth`).
  *
- * Returns `undefined` when refresh is impossible or fails; callers should
- * surface the original 401 error.
+ * Returns `undefined` when refresh is impossible or fails, and never throws
+ * (every failure path returns `undefined` or writes to stderr), so it is safe
+ * to `await` on the startup critical path.
+ *
+ * Two callers, two contracts:
+ *   - Per-request 401 retry (the original use): on `undefined`, surface the
+ *     original 401 error.
+ *   - Startup preload via {@link preloadClaudeKeychainOAuth}: refresh a
+ *     near-expiry / expired keychain token and write it back BEFORE the
+ *     synchronous credential read at boot. The network call is bounded by
+ *     `OAUTH_REFRESH_TIMEOUT_MS` so it cannot hang startup.
+ *
+ * On a successful token exchange the fresh access token is returned even if
+ * the write-back to the store fails (locked / read-only) — callers that need a
+ * credential should use that return value rather than re-reading the store.
  */
 export async function refreshClaudeCodeOauthToken(): Promise<string | undefined> {
   const blob = readCredentialsBlob();
@@ -174,6 +193,9 @@ async function postTokenRefresh(refreshToken: string): Promise<TokenRefreshRespo
         refresh_token: refreshToken,
         client_id: OAUTH_CLIENT_ID,
       }),
+      // Bounded so a stalled network cannot hang startup; the AbortSignal.timeout
+      // rejection is caught below and surfaces as `undefined` (fast-fail).
+      signal: AbortSignal.timeout(OAUTH_REFRESH_TIMEOUT_MS),
     });
     if (!res.ok) return undefined;
     const data = await res.json() as Record<string, unknown>;
