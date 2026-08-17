@@ -22,6 +22,7 @@ import { renderMarkdownToTerminal } from '../formatter.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { refreshClaudeCodeOauthToken } from '../../agent/auth/keychain.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
 import { receiptPathsFor } from '../../agent/trace/receipt.js';
@@ -35,7 +36,6 @@ import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
 import { jsonDateReplacer } from '../json-date-replacer.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../../agent/trace/emit.js';
-
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
 function isUuidShaped(s: string): boolean {
@@ -345,6 +345,7 @@ export function registerChatCommand(program: Command): void {
         }
 
         const providerHints = explicitProviderHints(options.provider);
+        await refreshClaudeCodeOauthToken(); // refresh expired OAuth before sync read
         const apiKey = getApiKeyForModel(getModel(), providerHints);
         // System-prompt layering: the framework base (`prompts/system-prompt.md`)
         // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
@@ -548,7 +549,6 @@ export function registerChatCommand(program: Command): void {
             surface: 'cli',
             ...(mcpManager !== undefined ? { mcpManager } : {}),
           });
-
 
         // Import any plugin JS entrypoints (manifest `main`) before constructing
         // the session: the skill manifest is assembled synchronously in the

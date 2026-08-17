@@ -31,6 +31,7 @@ import { loadSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
 import { planTelegramCredential, applyTelegramCredentialPlan } from './credentials.js';
+import { refreshClaudeCodeOauthToken } from '../agent/auth/keychain.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
 import { startStatsTicker } from './stats-ticker.js';
@@ -55,6 +56,8 @@ export async function main(): Promise<void> {
   // Resolved once here and layered under the operator overlay per session,
   // so Telegram sessions carry the same unconditional base as chat / REPL.
   const frameworkBase = loadSystemPrompt();
+
+  await refreshClaudeCodeOauthToken(); // refresh expired OAuth before sync read
 
   const providerName = providerForModel(config.model as string);
   if (!applyTelegramCredentialPlan(planTelegramCredential(providerName), config)) {

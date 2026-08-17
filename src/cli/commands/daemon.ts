@@ -28,14 +28,14 @@ import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
-import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { refreshClaudeCodeOauthToken } from '../../agent/auth/keychain.js';
 import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
-import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
 
 /**
@@ -410,8 +410,8 @@ export function registerDaemonCommand(program: Command): void {
       // process's `process.cwd()`. Use this to point the daemon at a
       // specific repo/worktree without changing cwd before launch.
       const daemonCwd = env.AFK_DAEMON_CWD;
-
       const daemonModel = getModel();
+      await refreshClaudeCodeOauthToken(); // refresh expired OAuth before sync read
       const daemonApiKey = getApiKey();
       const daemonCwdResolved = daemonCwd !== undefined && daemonCwd.length > 0 ? daemonCwd : undefined;
 
