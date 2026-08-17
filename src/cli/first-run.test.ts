@@ -27,6 +27,17 @@ vi.mock('../agent/providers/index.js', async (importOriginal) => {
   };
 });
 
+// The startup keychain-OAuth refresh is exercised by its own guard tests in
+// credential-resolver.test.ts; here we only assert the detector WIRING (it is
+// awaited before the sync loadCredential() read), so stub it out.
+vi.mock('../agent/auth/credential-resolver.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../agent/auth/credential-resolver.js')>();
+  return {
+    ...original,
+    preloadClaudeKeychainOAuth: vi.fn(async () => undefined),
+  };
+});
+
 // dotenv config — prevent it from actually reading files during tests
 vi.mock('dotenv', () => ({
   config: vi.fn(),
@@ -37,6 +48,7 @@ vi.mock('dotenv', () => ({
 import { loadCredential } from './config.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { providerForModel } from '../agent/providers/index.js';
+import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
 import { runFirstRunDetector, needsCredentialGate } from './index.js';
 
 // Argv helper — tests pass explicit argv so vitest's own process.argv (test
@@ -152,5 +164,54 @@ describe('runFirstRunDetector', () => {
 
     expect(runAuthWizard).toHaveBeenCalledOnce();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the keychain OAuth token BEFORE the sync credential read', async () => {
+    const order: string[] = [];
+    vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
+    vi.mocked(preloadClaudeKeychainOAuth).mockImplementation(async () => {
+      order.push('preload');
+      return undefined;
+    });
+    vi.mocked(loadCredential).mockImplementation(() => {
+      order.push('loadCredential');
+      return 'sk-ant-api03-existing';
+    });
+
+    await runFirstRunDetector(argvFor('daemon'));
+
+    expect(preloadClaudeKeychainOAuth).toHaveBeenCalledWith('anthropic-direct');
+    expect(order).toEqual(['preload', 'loadCredential']);
+  });
+
+  it('recovers the non-TTY daemon path when the preload refreshes an expired token', async () => {
+    // Regression for the P1 gap: an expired keychain token makes the pre-parse
+    // loadCredential() return undefined, so before this fix the non-TTY daemon
+    // exited(1) here — before the command action's own refresh could run. The
+    // preload now writes a fresh token back so the post-preload read succeeds.
+    vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
+    let refreshed = false;
+    vi.mocked(preloadClaudeKeychainOAuth).mockImplementation(async () => {
+      refreshed = true;
+      return 'sk-ant-oat01-fresh';
+    });
+    vi.mocked(loadCredential).mockImplementation(() =>
+      refreshed ? 'sk-ant-oat01-fresh' : undefined,
+    );
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: false,
+      configurable: true,
+      writable: true,
+    });
+
+    await runFirstRunDetector(argvFor('daemon'));
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(runAuthWizard).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt a refresh for non-gated commands', async () => {
+    await runFirstRunDetector(argvFor('doctor'));
+    expect(preloadClaudeKeychainOAuth).not.toHaveBeenCalled();
   });
 });

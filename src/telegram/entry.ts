@@ -31,6 +31,8 @@ import { loadSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
 import { planTelegramCredential, applyTelegramCredentialPlan } from './credentials.js';
+import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
+import { loadCredential } from '../cli/config.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
 import { startStatsTicker } from './stats-ticker.js';
@@ -57,7 +59,17 @@ export async function main(): Promise<void> {
   const frameworkBase = loadSystemPrompt();
 
   const providerName = providerForModel(config.model as string);
-  if (!applyTelegramCredentialPlan(planTelegramCredential(providerName), config)) {
+  // Refresh a near-expiry / expired keychain OAuth token before the sync
+  // credential read below. Guarded internally to the keychain-OAuth case, so it
+  // is a no-op for OpenAI/xAI/env-var telegram bots. The returned token is a
+  // fallback for when the OAuth exchange succeeded but the write-back to the
+  // store failed (locked / read-only) — without it, planTelegramCredential
+  // would re-read the still-expired store and report missing credentials.
+  const refreshedToken = await preloadClaudeKeychainOAuth(providerName);
+  const credentialPlan = planTelegramCredential(providerName, {
+    loadAnthropicCredential: () => loadCredential() ?? refreshedToken,
+  });
+  if (!applyTelegramCredentialPlan(credentialPlan, config)) {
     process.exit(1);
   }
 
