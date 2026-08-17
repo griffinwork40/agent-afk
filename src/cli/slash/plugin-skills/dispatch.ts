@@ -90,6 +90,9 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
         try {
           prRefFromArgs = parsePrRef(dispatchArgs);
         } catch {
+          // Contract: fail-soft — an invalid PR ref (e.g. `/review 0`) must not
+          // abort the review dispatch. The reviewer still runs; the post step
+          // resolves the current branch's PR at publish time instead.
           prRefFromArgs = null;
         }
       }
@@ -253,7 +256,6 @@ export async function registerPluginSkills(
       collisions.push({
         bare,
         altSlash: `/${fallbackName}`,
-        altDescription: skill.description,
         ...(skill.source ? { source: skill.source } : {}),
       });
       shadowedBareNames.add(bare);
