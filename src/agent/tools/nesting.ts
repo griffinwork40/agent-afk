@@ -332,6 +332,8 @@ export function createChildSkillExecutorFactory(
   // child's restricted/depth-cap provider builders point at the configured
   // endpoint. Trailing optional — legacy positional callers stay valid.
   openaiBaseUrl?: string,
+  // xAI endpoint propagated to skill-forked agent descendants.
+  xaiBaseUrl?: string,
 ): (
   depth: number,
   maxDepth: number,
@@ -370,6 +372,7 @@ export function createChildSkillExecutorFactory(
       // Endpoint threads through every depth (factory closes over openaiBaseUrl,
       // so the recursive childSkillExecutorFactory below carries it too).
       ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
+      ...(xaiBaseUrl !== undefined ? { xaiBaseUrl } : {}),
       depth,
       maxDepth,
       childProviderFactory,

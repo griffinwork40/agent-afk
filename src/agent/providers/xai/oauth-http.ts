@@ -4,7 +4,7 @@
  * @module agent/providers/xai/oauth-http
  */
 
-import { XAI_OAUTH_ISSUER } from './oauth-constants.js';
+import { XAI_OAUTH_ISSUER, XAI_REFRESH_SKEW_SECONDS } from './oauth-constants.js';
 import type { XaiTokenBundle } from './auth-store.js';
 
 export type FetchFn = typeof fetch;
@@ -83,7 +83,11 @@ export function tokenResponseToBundle(
   const refresh = asNonEmptyString(json['refresh_token']) ?? fallbackRefresh;
   if (!refresh) return null;
   const now = (nowSeconds ?? (() => Math.floor(Date.now() / 1000)))();
-  const expiresIn = typeof json['expires_in'] === 'number' ? json['expires_in'] : 3600;
+  const rawExpiresIn = typeof json['expires_in'] === 'number' ? json['expires_in'] : 3600;
+  // Keep malformed/too-short lifetimes beyond the proactive refresh window.
+  // Otherwise every access sees the freshly stored token as already stale and
+  // a malformed refresh response can still cause a sequential refresh storm.
+  const expiresIn = Math.min(Math.max(rawExpiresIn, XAI_REFRESH_SKEW_SECONDS + 60), 86400);
   const bundle: XaiTokenBundle = {
     access_token: access,
     refresh_token: refresh,

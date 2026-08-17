@@ -14,8 +14,7 @@ Status: implemented (v1). Scope-frozen 2026-06-01.
 > `refactor`, `ship`, `spec`). Skills that orchestrate *from* the current agent
 > and feed their result back into the caller's decision stay `load`
 > (`gather`, `parallelize`, `devils-advocate`), as do in-context **guard**
-> skills (`ground-claim`, and `intent-lock` with one bounded reconstruction
-> dispatch). See the "Defaults" section
+> skills (`ground-claim`). See the "Defaults" section
 > below.
 
 ## Why this exists
@@ -121,9 +120,8 @@ the main context (`research`, `ground-state`, `refactor`, `ship`, `simplify`,
 `spec`).
 
 Bundled skills that stay `load`: `gather`, `parallelize`, `devils-advocate`,
-`contract`, `ground-claim`, `intent-lock`. These orchestrate *from* the current
-agent and feed their result back into the caller's decision, or are in-context
-guards (`intent-lock` permits one bounded reconstruction dispatch).
+`contract`, `ground-claim`. These orchestrate *from* the current agent and feed
+their result back into the caller's decision, or are in-context guards.
 
 ### Choosing fork vs load (the rule that matters)
 
@@ -141,14 +139,13 @@ rule that mis-pinned `devils-advocate` and the guards. Ask instead:
   (`research`, `ground-state`, `refactor`, `ship`).
 - **Otherwise** — the skill advises, enriches, orchestrates, or guards the
   *current* turn, and its output is meant to land in the caller's context →
-  `load` (`gather`, `parallelize`, `devils-advocate`, `ground-claim`,
-  `intent-lock`, an in-context guard with a bounded reconstruction dispatch). A
+  `load` (`gather`, `parallelize`, `devils-advocate`, `ground-claim`). A
   guard is ALWAYS `load`: a forked guard returns a digest about a context it
   cannot see, producing a false safety signal.
 
 A 2026-06 /devils-advocate review (and a follow-up user review of that review)
-moved `ground-claim`, `intent-lock`, and `devils-advocate` itself from the
-initial fork pin to `load`.
+moved `ground-claim` and `devils-advocate` itself from the initial fork pin
+to `load`.
 
 ## When to use which mode
 

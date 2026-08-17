@@ -20,10 +20,26 @@ import {
   renderSubagentFooter,
   MAX_SUBAGENT_PREVIEW_LINES,
 } from './streaming.activity.js';
+import {
+  floodRetryAfterMs,
+  realSleep,
+  replyWithFloodRetry as replyWithFloodRetryImpl,
+} from './streaming.retry.js';
+import {
+  computeLivePreview,
+  MAX_PROGRESS_ENTRIES,
+} from './streaming.preview.js';
+import type { ProgressEntry } from './streaming.preview.js';
+import { computeFinalBody } from './streaming.body.js';
 
 // Re-export so existing consumers (tests, other modules) keep importing from
 // this module unchanged — the extraction is invisible to callers.
 export { formatTelegramActivity, formatTelegramAgentLabel, renderSubagentFooter };
+// Retry helpers — moved to streaming.retry.ts; re-exported for backward compat.
+export { replyWithFloodRetry } from './streaming.retry.js';
+// Preview helpers — moved to streaming.preview.ts; re-exported for backward compat.
+export { renderProgressRegion, renderInterleavedPreview } from './streaming.preview.js';
+export type { ProgressEntry } from './streaming.preview.js';
 
 /** Minimum interval (ms) between Telegram edit requests to avoid rate limits */
 const EDIT_THROTTLE_MS = 300;
@@ -65,31 +81,12 @@ const TOOL_INFLIGHT_RECHECK_MS = 15_000;
  */
 const PROGRESS_START_DELAY_MS = 5_000;
 
-/**
- * Max `◦` tool-progress lines kept in the rolling live-preview region. Older
- * lines are trimmed rather than accumulated, so a long tool-heavy turn no longer
- * grows the preview without bound (which also meant one Telegram edit per round
- * against an ever-longer message). Same bounded-region treatment
- * `renderSubagentFooter` already applies to sub-agent steps.
- */
-const MAX_PROGRESS_LINES = 6;
-
 // StreamTimeoutError lives in its own module so the message handler's
 // `instanceof` check survives `vi.mock('./streaming.js')` in tests (see
 // stream-timeout-error.ts). Imported above for local use (the watchdog throws
 // it); re-exported here so callers/tests that import it from the streaming
 // module keep working.
 export { StreamTimeoutError };
-
-/** Max flood-control (429) retries per outbound message before giving up. */
-const MAX_FLOOD_RETRIES = 2;
-/** Upper bound on how long we honor a single Telegram `retry_after`. */
-const MAX_RETRY_AFTER_MS = 30_000;
-/** Fallback backoff when a 429 carries no `retry_after`. */
-const DEFAULT_FLOOD_BACKOFF_MS = 1_000;
-
-/** Real wall-clock sleep; injectable in tests via `replyWithFloodRetry` opts. */
-const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Shown as a fresh message when Telegram refuses part of a multi-message reply
@@ -98,192 +95,6 @@ const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r
  */
 const DELIVERY_TRUNCATED_NOTICE =
   '⚠️ Telegram dropped part of this reply (rate limit) — ask me to resend it.';
-
-/**
- * Telegram flood-control (429) retry-after in ms, or `null` when `e` is not a
- * 429. Prefers the structured `parameters.retry_after`, falls back to parsing
- * the "retry after N" description, then to a small default — always capped.
- */
-function floodRetryAfterMs(e: unknown): number | null {
-  if (!(e instanceof TelegramError) || e.code !== 429) return null;
-  const fromParams = e.parameters?.retry_after;
-  const fromText = Number(/retry after (\d+)/i.exec(e.description ?? '')?.[1]);
-  const secs =
-    typeof fromParams === 'number' && fromParams > 0
-      ? fromParams
-      : Number.isFinite(fromText) && fromText > 0
-        ? fromText
-        : 0;
-  return Math.min(secs > 0 ? secs * 1_000 : DEFAULT_FLOOD_BACKOFF_MS, MAX_RETRY_AFTER_MS);
-}
-
-/**
- * Send one message via `reply`, retrying on Telegram flood-control (429) up to
- * `maxRetries` times and honoring the server's `retry_after`. A long reply fans
- * out into several back-to-back sends; without this a single 429 aborted the
- * whole delivery and the tail was dropped silently. Non-429 errors (including the
- * 400 "can't parse entities" the caller handles specially) propagate immediately.
- * Exported for unit tests; `sleep` is injectable so tests never wait real seconds.
- */
-export async function replyWithFloodRetry(
-  reply: (text: string, extra?: { parse_mode?: 'HTML' }) => Promise<unknown>,
-  text: string,
-  extra?: { parse_mode?: 'HTML' },
-  opts: { maxRetries?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<void> {
-  const maxRetries = opts.maxRetries ?? MAX_FLOOD_RETRIES;
-  const sleep = opts.sleep ?? realSleep;
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await reply(text, extra);
-      return;
-    } catch (e) {
-      const waitMs = floodRetryAfterMs(e);
-      if (waitMs === null || attempt >= maxRetries) throw e;
-      await sleep(waitMs);
-    }
-  }
-}
-
-
-/**
- * Render the BOUNDED `◦` tool-progress region for the live preview. Returns ''
- * for no lines. Only the last MAX_PROGRESS_LINES are shown regardless of how
- * many are passed, so a tool-heavy turn keeps a fixed-height status region
- * instead of an ever-growing log. Pure + exported for unit tests.
- */
-export function renderProgressRegion(lines: readonly string[]): string {
-  const shown = lines.slice(-MAX_PROGRESS_LINES);
-  return shown.length > 0 ? shown.map((l) => `\n${l}`).join('') : '';
-}
-
-/**
- * One recorded `◦` tool-progress round: the rendered label plus the offset into
- * the content buffer at which it occurred, so the LIVE PREVIEW can place it
- * chronologically instead of piling every label into a trailing footer.
- */
-export type ProgressEntry = { readonly label: string; readonly at: number };
-
-/**
- * Max progress entries retained. Only the last MAX_PROGRESS_LINES render a
- * LABEL (the same global cap the footer enforces); older retained entries render
- * a bare line break so narration either side of a trimmed round stays separated
- * instead of running together. Past this the oldest are dropped outright, so the
- * list cannot grow with turn length.
- */
-const MAX_PROGRESS_ENTRIES = 32;
-
-/**
- * Contract: return an offset at or after `pos` at which a `◦` line may be
- * inserted without corrupting markdown that `markdownToTelegramHtml` parses
- * POSITIONALLY. That formatter extracts fenced blocks and inline-code spans
- * before its emphasis passes and rewrites `[text](url)` links after them
- * (formatter.ts), so a label spliced inside an unclosed fence, between the
- * backticks of a span, or into a half-written link is swallowed into
- * `<pre>`/`<code>`/an `href` — and broken backtick parity shifts which later
- * spans code-ify. When `pos` is unsafe this degrades to the END of the text,
- * i.e. exactly where the legacy footer put the line: never worse than before.
- */
-function safeSplicePoint(text: string, pos: number): number {
-  if (pos <= 0) return 0;
-  if (pos >= text.length) return text.length;
-  // Drop COMPLETE fenced blocks first; a leftover ``` means the offset sits
-  // inside a fence the model has not closed yet (routine mid-stream).
-  //
-  // External constraint: the pattern MIRRORS the formatter's own fence regex
-  // (formatter.ts step 2 — line-anchored, newline required after the opening
-  // fence). An unanchored /```[\s\S]*?```/ would count a single-line ```word```
-  // as a complete block that the formatter does NOT see as one, report the
-  // offset safe, and let the label fall into the formatter's inline-code pass.
-  // Both parse models must agree or "safe" means nothing.
-  const prefix = text.slice(0, pos).replace(/^ {0,3}```[\w]*\n[\s\S]*?```/gm, '');
-  if (prefix.includes('```')) return text.length;
-  // Odd backtick count => the offset falls inside an inline-code span.
-  if (((prefix.match(/`/g)?.length) ?? 0) % 2 !== 0) return text.length;
-  // A tool boundary routinely splits a link across rounds: `[docs](https://exa`
-  // now, `mple.com)` next round. formatter.ts step 7 rewrites `[text](url)`
-  // positionally, so a label spliced into either half is absorbed into the
-  // generated href — hiding the status AND corrupting the link target. Cheap
-  // prefix scan for the two open states, in the same spirit as the checks
-  // above; deliberately not a markdown parser.
-  const openBracket = prefix.lastIndexOf('[');
-  const closeBracket = prefix.lastIndexOf(']');
-  // `[label` with no `]` written yet.
-  if (openBracket > closeBracket) return text.length;
-  // `](url` with the closing paren still unwritten.
-  if (
-    closeBracket >= 0 &&
-    prefix[closeBracket + 1] === '(' &&
-    !prefix.includes(')', closeBracket + 1)
-  ) {
-    return text.length;
-  }
-  return pos;
-}
-
-/**
- * Render the live preview with `◦` progress lines interleaved chronologically
- * into `text` at the offsets where they occurred, instead of collected in a
- * trailing footer. Pure + exported for unit tests.
- *
- * Invariant: the GLOBAL cap on rendered labels is preserved — only the last
- * MAX_PROGRESS_LINES entries emit a `◦` label no matter how many are passed, so a
- * tool-heavy turn keeps a fixed-height status budget. That is the bound PR #702
- * established when it replaced an in-buffer splice, and it holds here for a
- * structural reason: trimming happens over the ENTRY LIST before rendering and
- * `text` is never mutated, so the failure mode of the reverted design — where
- * bounding the region required deleting from the middle of the content buffer,
- * which a following content chunk then froze in place — cannot recur.
- *
- * Offsets are clamped MONOTONICALLY into `text`, which covers mid-turn
- * TRUNCATION (`stream_retry` rewinding the buffer): an offset past the shortened
- * text collapses to the end, i.e. footer placement. It does NOT cover the
- * end-of-turn wholesale replace by the authoritative assistant message, whose
- * replacement text is frequently LONGER than an early offset — so the clamp
- * never fires and the offset is in range but meaningless. That case is handled
- * at the call site, which re-bases retained offsets to the new buffer length
- * before rendering (see the assistant-`message` handler in streamResponse).
- */
-export function renderInterleavedPreview(
-  text: string,
-  entries: readonly ProgressEntry[],
-): string {
-  if (entries.length === 0) return text;
-  const labelFrom = Math.max(0, entries.length - MAX_PROGRESS_LINES);
-  let out = '';
-  let pos = 0;
-  // Suppresses a leading/duplicate break when consecutive rounds sit at the SAME
-  // offset (a progress-only turn records every entry at offset 0): a bare break
-  // is only meaningful when real narration separated the two rounds.
-  let lastEmitAt = 0;
-  entries.forEach((entry, i) => {
-    const at = safeSplicePoint(text, Math.min(Math.max(entry.at, pos), text.length));
-    out += text.slice(pos, at);
-    pos = at;
-    // Offsets are forced monotonic and safeSplicePoint is idempotent, so a NEXT
-    // raw offset at or before the current effective one renders at EXACTLY this
-    // position. That entry then supplies the `\n` separator itself, and emitting
-    // another one here would leave a stray blank line between the narration and
-    // its label.
-    const nextRendersHere = (entries[i + 1]?.at ?? Infinity) <= at;
-    if (i >= labelFrom) {
-      out += `\n${entry.label}`;
-      lastEmitAt = at;
-      // Terminate the label: the next iteration appends `text.slice(pos, at)` —
-      // the following round's narration — which absorbs into the label when it
-      // does not start with a break (`◦ Using list schedulesNow I run…`).
-      // Invariant: only when narration actually follows HERE and does not
-      // already begin with `\n`. A label at END of text must stay bare, or a
-      // progress-only turn stops being byte-identical to renderProgressRegion()
-      // and finalBody()'s footer shape parity goes with it.
-      if (!nextRendersHere && at < text.length && text[at] !== '\n') out += '\n';
-    } else if (at > lastEmitAt && !nextRendersHere) {
-      out += '\n';
-      lastEmitAt = at;
-    }
-  });
-  return out + text.slice(pos);
-}
 
 /**
  * One-line activity receipt appended to the CLEAN final message, replacing the
@@ -417,7 +228,7 @@ export async function streamResponse(
   // limit anyway. Trimming over the ENTRY LIST keeps the bound global.
   //
   // The live preview interleaves those entries chronologically
-  // (renderInterleavedPreview); `finalBody()` deliberately keeps the legacy
+  // (computeLivePreview); `finalBody` deliberately keeps the legacy
   // trailing footer, because finalBody IS delivered to the user on a
   // progress-only or non-terminal-exit turn (see the `done` handler and the
   // post-loop overflow block) and that delivered output is held byte-stable.
@@ -440,6 +251,23 @@ export async function streamResponse(
       progressTimer = null;
     }
   };
+
+  // Helper: build a live-preview string from current turn state.
+  // Delegates to `computeLivePreview` (streaming.preview.ts) with explicit args
+  // instead of closing over mutable outer variables, keeping the call site
+  // readable and the helper independently testable.
+  const livePreview = (): string =>
+    computeLivePreview({
+      accumulated,
+      progressEntries,
+      progressGateOpen,
+      subagentSteps,
+      recentSubagentSteps,
+    });
+
+  // Helper: build the final delivery body from current turn state.
+  // Delegates to `computeFinalBody` (streaming.body.ts) with explicit args.
+  const finalBody = (): string => computeFinalBody({ accumulated, progressEntries });
 
   const sendOrEdit = async (text: string, force = false): Promise<void> => {
     // markdownToTelegramHtml runs 8 serial regex passes over the full accumulated
@@ -540,7 +368,7 @@ export async function streamResponse(
       try {
         for (const htmlChunk of splitLongMessage(markdownToTelegramHtml(chunk))) {
           if (htmlChunk) {
-            await replyWithFloodRetry(reply, htmlChunk, { parse_mode: 'HTML' });
+            await replyWithFloodRetryImpl(reply, htmlChunk, { parse_mode: 'HTML' });
             delivered = true;
           }
         }
@@ -548,7 +376,7 @@ export async function streamResponse(
         if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
           // Malformed HTML from the formatter — resend the raw chunk plain.
           try {
-            await replyWithFloodRetry(reply, chunk);
+            await replyWithFloodRetryImpl(reply, chunk);
             delivered = true;
           } catch {
             // plain retry failed; ignore
@@ -566,31 +394,6 @@ export async function streamResponse(
     }
     return delivered;
   };
-
-  // Content + the bounded `◦` progress region, as it should appear in a FINAL
-  // delivery. Invariant: the latency gate throttles LIVE churn only — once the
-  // turn is over there is nothing left to churn, so a finished turn always
-  // surfaces the progress it recorded instead of silently dropping lines the
-  // gate happened to withhold. Every terminal/fallback delivery path uses this;
-  // `accumulated` alone would be empty on a gated progress-only turn and would
-  // strand the user on the bare `Thinking…` placeholder.
-  // Invariant: keeps the LEGACY trailing-footer shape. finalBody is not
-  // preview-only — it is the text actually delivered when `answerText` is empty
-  // (progress-only turn) or when the stream ends without a terminal event, so its
-  // bytes are held stable and the interleave is confined to `livePreview()`.
-  const finalBody = (): string =>
-    accumulated + renderProgressRegion(progressEntries.map((e) => e.label));
-
-  // Live preview = content with the GATED progress lines interleaved at the
-  // offsets where they occurred, plus the bounded sub-agent footer. Used for every
-  // in-turn edit so progress and sub-agent activity stay visible without either
-  // region growing one line per tool call. Interleaving (rather than a trailing
-  // footer) is what keeps each round's narration next to the tool round it
-  // describes, and supplies the line break between consecutive rounds that
-  // `accumulated += content` does not.
-  const livePreview = (): string =>
-    (progressGateOpen ? renderInterleavedPreview(accumulated, progressEntries) : accumulated)
-    + renderSubagentFooter(subagentSteps, recentSubagentSteps);
 
   try {
     const stream =
@@ -1084,7 +887,7 @@ export async function streamResponse(
           try {
             for (let i = 1; i < chunks.length; i++) {
               const chunk = chunks[i];
-              if (chunk) await replyWithFloodRetry(reply, chunk, { parse_mode: 'HTML' });
+              if (chunk) await replyWithFloodRetryImpl(reply, chunk, { parse_mode: 'HTML' });
             }
           } catch (e) {
             if (e instanceof TelegramError) {
@@ -1141,3 +944,5 @@ export async function streamResponse(
     throw error;
   }
 }
+
+

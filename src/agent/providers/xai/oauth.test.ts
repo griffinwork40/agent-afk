@@ -163,11 +163,15 @@ describe('PKCE authorize URL', () => {
 
 describe('exchangeAuthorizationCode', () => {
   it('returns token bundle on success', async () => {
+    // expires_in must exceed the floor guard (XAI_REFRESH_SKEW_SECONDS + 60 = 240s)
+    // added in 2339b1cc (#1059), otherwise tokenResponseToBundle clamps it up.
+    const EXPIRES_IN = 3600;
+    const NOW = 50;
     const fetchFn = vi.fn(async () =>
       jsonResponse({
         access_token: 'at-code',
         refresh_token: 'rt-code',
-        expires_in: 100,
+        expires_in: EXPIRES_IN,
       }),
     );
     const tokens = await exchangeAuthorizationCode(
@@ -177,10 +181,10 @@ describe('exchangeAuthorizationCode', () => {
         token_endpoint: discoveryDoc.token_endpoint,
       },
       { code: 'c', codeVerifier: 'v' },
-      { fetchFn: fetchFn as unknown as typeof fetch, nowSeconds: () => 50 },
+      { fetchFn: fetchFn as unknown as typeof fetch, nowSeconds: () => NOW },
     );
     expect(tokens.access_token).toBe('at-code');
-    expect(tokens.expires_at).toBe(150);
+    expect(tokens.expires_at).toBe(NOW + EXPIRES_IN);
   });
 });
 
@@ -336,11 +340,11 @@ describe('ensureFreshAccessToken', () => {
 describe('tokenResponseToBundle', () => {
   it('uses fallback refresh when response omits rotation', () => {
     const b = tokenResponseToBundle(
-      { access_token: 'a', expires_in: 10 },
+      { access_token: 'a', expires_in: 3600 },
       () => 100,
       'fallback-rt',
     );
     expect(b?.refresh_token).toBe('fallback-rt');
-    expect(b?.expires_at).toBe(110);
+    expect(b?.expires_at).toBe(3700);
   });
 });
