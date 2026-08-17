@@ -18,6 +18,7 @@ import { TimeoutError } from '../utils/errors.js';
 import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { resolveSubagentTimeoutMs } from './subagent/constants.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
+import { realpathSafe } from './tools/handlers/_cwd-utils.js';
 
 export interface SubagentDAGNode {
   id: string;
@@ -111,13 +112,17 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
   for (const r of spec.writeRoots ?? []) candidates.push({ value: r, field: 'writeRoots' });
 
   for (const { value, field } of candidates) {
-    if (isTooBroadRoot(value)) {
+    // Resolve symlinks before checking — mirrors input-parse.ts's dual-check
+    // pattern. A symlink to $HOME or / passes the lexical check yet grants a
+    // broad real root at fork time (#982 symlink sub-vector).
+    const real = realpathSafe(value);
+    if (isTooBroadRoot(value) || isTooBroadRoot(real)) {
       throw new Error(
         `DAG node "${spec.id}" ${field} "${value}" is too broad ` +
           '(filesystem root, home directory, or AFK directory)',
       );
     }
-    const sensitive = ungatedSensitiveRoot(value);
+    const sensitive = ungatedSensitiveRoot(value) ?? ungatedSensitiveRoot(real);
     if (sensitive !== undefined) {
       throw new Error(
         `DAG node "${spec.id}" ${field} "${value}" would un-gate ` +
