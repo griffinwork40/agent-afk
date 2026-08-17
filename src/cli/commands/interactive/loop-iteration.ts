@@ -206,6 +206,8 @@ export async function runInputLoop(
   // half-typed line is never clobbered and a result that lands mid-turn just
   // delivers on the next drain. Bounded by MAX_AUTO_RESUMES_PER_SESSION as a
   // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
+  const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
+
   let autoResumeCount = 0;
   bgResultNotifier.onInjectable = () => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
@@ -675,6 +677,7 @@ export async function runInputLoop(
           // Re-sample the git branch each turn (cheap, local). The PR lookup
           // (network) is detached inside refresh() and lands on a later repaint.
           await ctx.gitStatusSampler.refresh();
+          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
           ctx.statusLine.rearm();
           // Reset the loop-stage bar to 'observing' so the footer rail shows
           // a clean "waiting" state between turns rather than the last active
@@ -721,8 +724,7 @@ export async function runInputLoop(
         setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),
         async onContextProgress() {
           await ctx.contextSampler.refresh();
-          const mt = parseInt(ctx.options.maxTurns, 10);
-          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, mt > 0 ? mt : undefined));
+          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
         },
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is

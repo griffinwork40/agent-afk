@@ -548,7 +548,7 @@ describe('formatProgressBanner — parallel fan-out indicator', () => {
     expect(runningIdx).toBeLessThan(escIdx);
   });
 
-  it('omits the fan-out indicator in stopping state but keeps running count in stats', () => {
+  it('keeps "N running" badge in stopping state; drops only the interrupt hint', () => {
     // Stopping drops the interrupt hint but the fan-out count should still appear
     // in the stats tail — it describes state (N agents running), not user action.
     const lines = formatProgressBanner(baseEvent, Infinity, undefined, true, 4);

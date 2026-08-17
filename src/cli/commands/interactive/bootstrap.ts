@@ -221,6 +221,7 @@ export async function bootstrapSession(
       contextSampler,
       gitStatusSampler,
       statusLine,
+      maxTurns: maxTurnsNum > 0 ? maxTurnsNum : undefined,
       backgroundRegistry,
       completionWriter,
       isInFlight: () => ctx.getInFlight?.() ?? false,
