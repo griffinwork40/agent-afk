@@ -15,6 +15,7 @@
 
 import { abortFailureClass } from '../abort-reason.js';
 import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
+import { debugLog } from '../../utils/debug.js';
 import {
   REPEAT_FAILURE_REFUSAL_THRESHOLD,
   repeatFailureFingerprint,
@@ -28,6 +29,8 @@ import type { Batch } from './dispatch-batching.js';
  * Indexed entry produced by `executeBatch`'s phase-1 loop. Each element pairs
  * an original `ToolCall` with its position in the `calls[]` input array so
  * results can be written back at the correct index regardless of execution order.
+ *
+ * @internal
  */
 export interface IndexedCall {
   call: ToolCall;
@@ -42,6 +45,8 @@ export interface IndexedCall {
  * {@link SessionToolDispatcher}; the names are intentionally identical so the
  * call-sites in `executeBatch` read as thin wrappers rather than deep
  * transformations.
+ *
+ * @internal
  */
 export interface BatchExecDeps {
   /** Guard that refuses a call after N identical consecutive failures. */
@@ -74,7 +79,11 @@ function checkRepeatGuard(
 ): ToolResult | null {
   if (exempt.has(call.name)) return null;
   const verdict = guard.check(call);
-  return verdict ? verdict.result : null;
+  if (verdict === null) return null;
+  debugLog(
+    `[repeat-failure-guard #723] refused ${verdict.tool} after ${verdict.count} identical failures`,
+  );
+  return verdict.result;
 }
 
 // ---------------------------------------------------------------------------

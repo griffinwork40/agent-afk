@@ -130,7 +130,7 @@
     "src/skills/audit-fit/index.ts": { "loc": 592, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/skills/mint/index.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/skills/score/index.ts": { "loc": 390, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/bot.ts": { "loc": 644, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/bot.ts": { "loc": 637, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/elicitation-handler.ts": { "loc": 459, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/formatter.ts": { "loc": 587, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 623, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
