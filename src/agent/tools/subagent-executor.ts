@@ -906,6 +906,8 @@ export class SubagentExecutor implements SubagentControl {
         prompt: parsed.prompt,
         model: childConfig.model,
         parentSessionId: this.ctx.parentSession.sessionId,
+        // Intentional: updateWaveUnit (not updateCurrentWaveUnit) — the wave
+        // may have ended before a background job settles (#1083).
         onSettled: capturedWaveId !== undefined
           ? (isError) => updateWaveUnit(capturedWaveId, capturedCallId, isError ? 'failed' : 'done')
           : undefined,

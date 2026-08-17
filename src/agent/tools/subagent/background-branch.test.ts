@@ -48,6 +48,34 @@ function fakeRegistry(
   return { register: vi.fn(register) } as unknown as RunBackgroundBranchArgs['registry'];
 }
 
+/**
+ * A registry double with `register` + `on`/`off` support for testing the
+ * onSettled wiring path.
+ */
+function fakeRegistryWithEvents(
+  register: (args: unknown) => BackgroundJob,
+): {
+  registry: RunBackgroundBranchArgs['registry'];
+  emitSettled: (job: BackgroundJob) => void;
+} {
+  const listeners = new Set<(job: BackgroundJob) => void>();
+  const registry = {
+    register: vi.fn(register),
+    on: vi.fn((_event: string, handler: (job: BackgroundJob) => void) => {
+      listeners.add(handler);
+    }),
+    off: vi.fn((_event: string, handler: (job: BackgroundJob) => void) => {
+      listeners.delete(handler);
+    }),
+  } as unknown as RunBackgroundBranchArgs['registry'];
+  return {
+    registry,
+    emitSettled: (job: BackgroundJob) => {
+      for (const handler of listeners) handler(job);
+    },
+  };
+}
+
 function makeJob(overrides?: Partial<BackgroundJob>): BackgroundJob {
   return {
     jobId: 'bg-abc123',
@@ -260,6 +288,162 @@ describe('runBackgroundBranch', () => {
         parentSessionId: undefined,
       });
       expect(() => JSON.parse(result.content)).not.toThrow();
+    });
+
+    it('does NOT call onSettled directly — settlement comes via the registry settled event', async () => {
+      const { handle } = fakeHandle();
+      const { registry } = fakeRegistryWithEvents(() => makeJob());
+      const onSettled = vi.fn();
+
+      await runBackgroundBranch({
+        handle,
+        registry,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: undefined,
+        onSettled,
+      });
+
+      // The function itself must not call onSettled — settlement is wired
+      // through the registry 'settled' event listener, not inline.
+      expect(onSettled).not.toHaveBeenCalled();
+    });
+
+    it('calls onSettled(false) when registry emits settled with status done', async () => {
+      const { handle } = fakeHandle();
+      const job = makeJob({ jobId: 'bg-evt', status: 'done' });
+      const { registry, emitSettled } = fakeRegistryWithEvents(() => job);
+      const onSettled = vi.fn();
+
+      await runBackgroundBranch({
+        handle,
+        registry,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: undefined,
+        onSettled,
+      });
+
+      // Simulate the registry emitting 'settled' for this job.
+      emitSettled({ ...job, status: 'done' });
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledWith(false);
+    });
+
+    it('calls onSettled(true) when registry emits settled with status failed', async () => {
+      const { handle } = fakeHandle();
+      const job = makeJob({ jobId: 'bg-fail', status: 'failed' });
+      const { registry, emitSettled } = fakeRegistryWithEvents(() => job);
+      const onSettled = vi.fn();
+
+      await runBackgroundBranch({
+        handle,
+        registry,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: undefined,
+        onSettled,
+      });
+
+      emitSettled({ ...job, status: 'failed' });
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledWith(true);
+    });
+
+    it('ignores settled events for other job IDs', async () => {
+      const { handle } = fakeHandle();
+      const job = makeJob({ jobId: 'bg-mine' });
+      const { registry, emitSettled } = fakeRegistryWithEvents(() => job);
+      const onSettled = vi.fn();
+
+      await runBackgroundBranch({
+        handle,
+        registry,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: undefined,
+        onSettled,
+      });
+
+      // Emit for a different job — should be ignored.
+      emitSettled({ ...job, jobId: 'bg-other', status: 'done' });
+      expect(onSettled).not.toHaveBeenCalled();
+
+      // Emit for our job — should fire.
+      emitSettled({ ...job, jobId: 'bg-mine', status: 'done' });
+      expect(onSettled).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('onSettled wiring on error paths', () => {
+    it('calls onSettled(true) when no registry is wired', async () => {
+      const { handle } = fakeHandle();
+      const onSettled = vi.fn();
+
+      await runBackgroundBranch({
+        handle,
+        registry: undefined,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: undefined,
+        onSettled,
+      });
+
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledWith(true);
+    });
+
+    it('calls onSettled(true) when BackgroundJobCapError is thrown', async () => {
+      const { handle } = fakeHandle();
+      const registry = fakeRegistry(() => {
+        throw new BackgroundJobCapError(1, 1);
+      });
+      const onSettled = vi.fn();
+
+      await runBackgroundBranch({
+        handle,
+        registry,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: undefined,
+        onSettled,
+      });
+
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledWith(true);
+    });
+
+    it('does not call onSettled when onSettled is undefined (no-registry path)', async () => {
+      const { handle } = fakeHandle();
+      // Should not throw when onSettled is omitted.
+      await expect(
+        runBackgroundBranch({
+          handle,
+          registry: undefined,
+          prompt: 'p',
+          model: 'sonnet',
+          parentSessionId: undefined,
+          // onSettled omitted
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    it('does not call onSettled when onSettled is undefined (cap error path)', async () => {
+      const { handle } = fakeHandle();
+      const registry = fakeRegistry(() => {
+        throw new BackgroundJobCapError(2, 2);
+      });
+      // Should not throw when onSettled is omitted.
+      await expect(
+        runBackgroundBranch({
+          handle,
+          registry,
+          prompt: 'p',
+          model: 'sonnet',
+          parentSessionId: undefined,
+          // onSettled omitted
+        }),
+      ).resolves.toBeDefined();
     });
   });
 });

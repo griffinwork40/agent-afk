@@ -13,7 +13,7 @@
  * @module agent/tools/subagent/background-branch
  */
 
-import { BackgroundJobCapError, type BackgroundAgentRegistry } from '../../background-registry.js';
+import { BackgroundJobCapError, type BackgroundAgentRegistry, type BackgroundJob } from '../../background-registry.js';
 import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
@@ -63,6 +63,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     await handle.teardown().catch((e: unknown) =>
       debugLog('subagent-executor: handle teardown failed: ' + (e instanceof Error ? e.message : String(e))),
     );
+    onSettled?.(true);
     return {
       content:
         'Background mode is not available in this session — no BackgroundAgentRegistry is wired. ' +
@@ -84,6 +85,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       await handle.teardown().catch((te: unknown) =>
         debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),
       );
+      onSettled?.(true);
       return {
         content: e.message,
         isError: true,
@@ -97,7 +99,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
   // site (subagent-executor.ts) before notifyWaveEnd() can clear it.
   if (onSettled) {
     const settledJobId = job.jobId;
-    const handler = (settled: { jobId: string; status: string }): void => {
+    const handler = (settled: BackgroundJob): void => {
       if (settled.jobId !== settledJobId) return;
       registry.off('settled', handler);
       onSettled(settled.status === 'failed' || settled.status === 'cancelled');

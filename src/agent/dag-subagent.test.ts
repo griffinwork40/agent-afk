@@ -645,6 +645,39 @@ describe('runSubagentDAG', () => {
       expect(result.failed[0]!.error.message).toContain('too broad');
     });
 
+    it('rejects writeRoots that is the filesystem root (too broad)', async () => {
+      const manager = makeFakeManager(() => makeFakeHandle('ok'));
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', writeRoots: ['/'] }],
+        edges: [],
+      });
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.error.message).toContain('too broad');
+    });
+
+    it('rejects writeRoots containing a sensitive root (un-gate guard)', async () => {
+      const home = process.env['HOME'] ?? '/home/test';
+      const manager = makeFakeManager(() => makeFakeHandle('ok'));
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [
+          {
+            id: 'A',
+            systemPrompt: 's',
+            promptBuilder: () => 'p',
+            // ~/.ssh is a known sensitive root — ungatedSensitiveRoot returns it.
+            writeRoots: [`${home}/.ssh`],
+          },
+        ],
+        edges: [],
+      });
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.error.message).toContain('un-gate');
+    });
+
     it('allows a narrow project-specific cwd', async () => {
       const manager = makeFakeManager(() => makeFakeHandle('ok'));
       const result = await runSubagentDAG({
