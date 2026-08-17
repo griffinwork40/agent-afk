@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.6] - 2026-08-17
+
+### Fixed
+- batch close 5 easy issues (#1087, #1086, #1061, #1059, #1060) (#1101) (8e02736d)
+- route-key elicitation handler for topic sessions (#1021) (#1095) (51b4dc3d)
+- fix pre-existing reader bugs flagged in PR #1097 review (#1102) (54322016)
+
+### Changed
+- Delete CLAUDE.md (4683427a)
+- Delete AGENTS.md (e4530713)
+
 ## [5.123.5] - 2026-08-17
 
 ### Changed
