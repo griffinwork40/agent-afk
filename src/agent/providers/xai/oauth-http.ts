@@ -83,7 +83,8 @@ export function tokenResponseToBundle(
   const refresh = asNonEmptyString(json['refresh_token']) ?? fallbackRefresh;
   if (!refresh) return null;
   const now = (nowSeconds ?? (() => Math.floor(Date.now() / 1000)))();
-  const expiresIn = typeof json['expires_in'] === 'number' ? json['expires_in'] : 3600;
+  const rawExpiresIn = typeof json['expires_in'] === 'number' ? json['expires_in'] : 3600;
+  const expiresIn = Math.min(Math.max(rawExpiresIn, 60), 86400);
   const bundle: XaiTokenBundle = {
     access_token: access,
     refresh_token: refresh,
