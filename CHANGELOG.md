@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.11] - 2026-08-17
+
+### Fixed
+- guard against stale detectorVersion replay (#860) (#1108) (0e20b32d)
+
+### Changed
+- add terminal-width discipline audit gate (#939) (#1107) (7567453a)
+
 ## [5.123.10] - 2026-08-17
 
 ### Changed
