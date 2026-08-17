@@ -282,6 +282,13 @@ export class SessionManager {
       const session = await this.options.createSession(injectCompanionPrimer(injectHotMemory(config)));
       this.sessions.set(key, session);
       this.sessionData.set(key, data);
+      // Seed elicitation routing before the first turn starts. ask_question can
+      // suspend that turn, so waiting for recordTelegramTurn (onComplete) would
+      // deadlock a topic's first question on the General-route fallback.
+      if (session.sessionId) {
+        setElicitationRoute(session.sessionId, route);
+        data.sessionId = session.sessionId;
+      }
       // Consume the staged resume only after a successful build: a thrown
       // createSession must leave it staged so the next getSession retries the
       // resume instead of silently starting a fresh conversation.

@@ -1678,6 +1678,25 @@ describe('dynamic route resolution (topic-aware routing, issue #1021)', () => {
     await resultPromise;
   });
 
+  it('accepts a keyboard callback from the non-primary resolved chat', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, PRIMARY_CHAT_ID);
+    const secondaryChatId = PRIMARY_CHAT_ID + 100;
+    const { setElicitationRoute, clearElicitationRoute } = await import('./elicitation-route-registry.js');
+    setElicitationRoute('test-session-secondary', { chatId: secondaryChatId });
+
+    const ac = makeAbort();
+    const resultPromise = handler(confirmRequest(), { signal: ac.signal, sessionId: 'test-session-secondary' });
+    await Promise.resolve();
+
+    const callArgs = sendMessage.mock.calls[0] as [number, string, { reply_markup: { inline_keyboard: { callback_data: string }[][] } }];
+    expect(callArgs[0]).toBe(secondaryChatId);
+    await fireCallbackFromChat(secondaryChatId, callArgs[2].reply_markup.inline_keyboard[0]![0]!.callback_data);
+    await expect(resultPromise).resolves.toEqual({ action: 'accept', content: { value: true } });
+    clearElicitationRoute('test-session-secondary');
+  });
+
   it('registers pending text intercept under the resolved topic key', async () => {
     const messageHandler = makeMockMessageHandler();
     const { bot } = makeMockBot();

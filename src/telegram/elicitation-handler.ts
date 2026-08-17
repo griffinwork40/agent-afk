@@ -94,12 +94,15 @@ export function makeTelegramElicitationHandler(
   const ledgerOriginated = opts?.ledgerOriginated ?? false;
   /**
    * H3: Single dispatch table for confirm/choice elicitations.
-   * Keys are composite `${routeKey}:${elicitId}` strings to prevent
-   * cross-topic aliasing when multiple sessions elicit simultaneously.
-   * Values are `(choiceIndex) => void` resolvers.
+   * Keys are cryptographically random elicitation IDs. Values retain both the
+   * destination chat and resolver so callback queries can be authenticated
+   * against the chat that received that particular keyboard.
    * Entries are deleted synchronously on resolve or abort.
    */
-  const pendingChoiceElicitations = new Map<string, (choiceIndex: number) => void>();
+  const pendingChoiceElicitations = new Map<
+    string,
+    { chatId: number; resolve: (choiceIndex: number) => void }
+  >();
 
   /**
    * H3: One wildcard action handler registered once.
@@ -116,12 +119,6 @@ export function makeTelegramElicitationHandler(
   bot.action(wildcardRe, async (ctx) => {
     // Answer the callback query FIRST to clear Telegram's spinner.
     await ctx.answerCbQuery().catch(() => {});
-    // Defence-in-depth: reject cross-chat replays. All elicitation keyboards
-    // are sent to a chat whose chatId matches the fallbackRoute (the primary
-    // allowed chat for this bot). Topics in that chat share the same chatId,
-    // so this guard accepts all topics while still blocking external replays.
-    if (ctx.chat?.id !== fallbackRoute.chatId) return;
-
     const callbackData =
       typeof ctx.callbackQuery === 'object' && 'data' in ctx.callbackQuery
         ? (ctx.callbackQuery as { data: string }).data
@@ -132,23 +129,21 @@ export function makeTelegramElicitationHandler(
     // The dispatch table is keyed by bare elicitId (the resolver lookup does
     // not need the routeKey prefix — elicitIds are cryptographically random
     // and globally unique within the process).
-    const resolver = pendingChoiceElicitations.get(parsed.id);
-    if (resolver) resolver(parsed.choiceIndex);
+    const pending = pendingChoiceElicitations.get(parsed.id);
+    if (pending && ctx.chat?.id === pending.chatId) pending.resolve(parsed.choiceIndex);
   });
 
   const customWildcardRe = new RegExp(`^${escapeRegExp(ELICITATION_CUSTOM_CALLBACK_PREFIX)}.+$`);
   bot.action(customWildcardRe, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
-    // Defence-in-depth: same cross-chat guard as the primary wildcard handler.
-    if (ctx.chat?.id !== fallbackRoute.chatId) return;
     const callbackData =
       typeof ctx.callbackQuery === 'object' && 'data' in ctx.callbackQuery
         ? (ctx.callbackQuery as { data: string }).data
         : undefined;
     const id = parseCustomElicitationCallback(callbackData);
     if (!id) return;
-    const resolver = pendingChoiceElicitations.get(id);
-    if (resolver) resolver(CUSTOM_ENTRY_SENTINEL_INDEX);
+    const pending = pendingChoiceElicitations.get(id);
+    if (pending && ctx.chat?.id === pending.chatId) pending.resolve(CUSTOM_ENTRY_SENTINEL_INDEX);
   });
 
   return async (
@@ -237,43 +232,46 @@ export function makeTelegramElicitationHandler(
         options.signal.addEventListener('abort', onAbort, { once: true });
 
         // H3: register a short-lived resolver in the dispatch table.
-        pendingChoiceElicitations.set(elicitId, (choiceIndex: number) => {
-          if (resolved) return;
-          resolved = true;
-          pendingChoiceElicitations.delete(elicitId);
-          options.signal.removeEventListener('abort', onAbort);
+        pendingChoiceElicitations.set(elicitId, {
+          chatId,
+          resolve: (choiceIndex: number) => {
+            if (resolved) return;
+            resolved = true;
+            pendingChoiceElicitations.delete(elicitId);
+            options.signal.removeEventListener('abort', onAbort);
 
-          // Custom-entry path: transition to text-intercept mode
-          if (choiceIndex === CUSTOM_ENTRY_SENTINEL_INDEX) {
-            resolved = false; // re-arm for the text intercept
-            inCustomTextWait = true;
-            bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:', threadOpts).catch(() => {});
-            if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
-            setPending((text: string) => {
-              if (resolved) return;
-              resolved = true;
-              options.signal.removeEventListener('abort', onAbort);
-              const trimmed = text.trim();
-              if (trimmed === ':cancel') { resolve({ action: 'cancel' }); return; }
-              resolve({ action: 'accept', content: { value: null, custom_value: trimmed } });
-            });
-            // H1: re-attach abort listener so abort during text wait resolves correctly
-            options.signal.addEventListener('abort', onAbort, { once: true });
-            return;
-          }
-
-          if (qType === 'confirm') {
-            // index 1 = Yes, index 0 = No
-            resolve({ action: 'accept', content: { value: choiceIndex === 1 } });
-          } else {
-            const choices = request.choices ?? [];
-            const selected = choices[choiceIndex];
-            if (selected === undefined) {
-              resolve({ action: 'decline' });
-            } else {
-              resolve({ action: 'accept', content: { value: selected } });
+            // Custom-entry path: transition to text-intercept mode
+            if (choiceIndex === CUSTOM_ENTRY_SENTINEL_INDEX) {
+              resolved = false; // re-arm for the text intercept
+              inCustomTextWait = true;
+              bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:', threadOpts).catch(() => {});
+              if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
+              setPending((text: string) => {
+                if (resolved) return;
+                resolved = true;
+                options.signal.removeEventListener('abort', onAbort);
+                const trimmed = text.trim();
+                if (trimmed === ':cancel') { resolve({ action: 'cancel' }); return; }
+                resolve({ action: 'accept', content: { value: null, custom_value: trimmed } });
+              });
+              // H1: re-attach abort listener so abort during text wait resolves correctly
+              options.signal.addEventListener('abort', onAbort, { once: true });
+              return;
             }
-          }
+
+            if (qType === 'confirm') {
+              // index 1 = Yes, index 0 = No
+              resolve({ action: 'accept', content: { value: choiceIndex === 1 } });
+            } else {
+              const choices = request.choices ?? [];
+              const selected = choices[choiceIndex];
+              if (selected === undefined) {
+                resolve({ action: 'decline' });
+              } else {
+                resolve({ action: 'accept', content: { value: selected } });
+              }
+            }
+          },
         });
 
         // Send the keyboard message (pinned to the route's topic thread).
