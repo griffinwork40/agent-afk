@@ -98,7 +98,6 @@
     "src/cli/input-core.ts": { "loc": 386, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/input/history.ts": { "loc": 353, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/input/input-surface.ts": { "loc": 688, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/input/reader.ts": { "loc": 900, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/markdown-stream.ts": { "loc": 408, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/render/welcome-banner.ts": { "loc": 464, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/session-store.ts": { "loc": 409, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
