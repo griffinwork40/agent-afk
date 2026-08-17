@@ -479,6 +479,13 @@ export class StreamRenderer {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Contract: clear softStopping on the class BEFORE building the DisposeCtx
+    // snapshot. The overlay's progress-banner slot reads this.softStopping via
+    // the getSoftStopping closure registered in arm(), not through the ref
+    // wrapper. If we only clear the ref inside disposeRenderer(), the closure
+    // still sees true and repaints a stale "stopping…" banner during the
+    // overlay flush. The write-back at the end is still needed for consistency.
+    this.softStopping = false;
     const ctx: DisposeCtx = {
       out: this.out,
       isTTY: this.isTTY,
