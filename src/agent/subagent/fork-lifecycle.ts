@@ -24,7 +24,7 @@ export interface EmitForkStartedArgs {
   parentSessionId: string | undefined;
   /** Manager rootId — fallback parentId when parentSessionId is undefined. */
   rootId: string;
-  effectiveChildModel: AgentModelInput | undefined;
+  effectiveChildModel: AgentModelInput;
   childConfig: AgentConfig;
   promptHead: string | undefined;
   effectiveAgentType: string | undefined;
