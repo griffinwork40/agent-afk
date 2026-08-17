@@ -336,11 +336,11 @@ describe('ensureFreshAccessToken', () => {
 describe('tokenResponseToBundle', () => {
   it('uses fallback refresh when response omits rotation', () => {
     const b = tokenResponseToBundle(
-      { access_token: 'a', expires_in: 10 },
+      { access_token: 'a', expires_in: 3600 },
       () => 100,
       'fallback-rt',
     );
     expect(b?.refresh_token).toBe('fallback-rt');
-    expect(b?.expires_at).toBe(110);
+    expect(b?.expires_at).toBe(3700);
   });
 });

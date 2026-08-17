@@ -71,7 +71,7 @@ export interface BuildChildConfigArgs {
   childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'skillDispatchName'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel?: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
@@ -316,6 +316,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
           ? `${defaultConfig.systemPrompt}\n\n${SUBAGENT_HANDOFF_CONTRACT}`
           : SUBAGENT_HANDOFF_CONTRACT,
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
+    ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
     maxTurns: effectiveMaxTurns,
     // Always set (default 0 = unlimited) so forkSubagent's `?? 50` fallback is
     // bypassed for agent-tool dispatches — see effectiveMaxToolUseIterations.

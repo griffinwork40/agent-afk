@@ -38,7 +38,7 @@ import { setPresenceBlocked } from './awareness/presence.js';
 
 export type ElicitationHandler = (
   request: ElicitationRequest,
-  options: { signal: AbortSignal },
+  options: { signal: AbortSignal; sessionId?: string },
 ) => Promise<ElicitationResult>;
 
 const DECLINE: ElicitationResult = { action: 'decline' };

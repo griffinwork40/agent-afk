@@ -169,8 +169,6 @@ describe('bundled skills', () => {
       expect(entries).toEqual(registered);
     });
 
-
-
     // Invariant: #726 — Wave 1 of /review dispatches `research-agent`, which has
     // no Bash. Any mandate to run a git command inside the Wave 1 section forces
     // each agent to nest a `git-investigator` just to run it, silently doubling a

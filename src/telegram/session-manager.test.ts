@@ -10,6 +10,7 @@ import { promises as fs, existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
+import { clearElicitationRoute, getElicitationRoute } from './elicitation-route-registry.js';
 
 // Mock agent session
 class MockAgentSession implements IAgentSession {
@@ -1115,6 +1116,15 @@ describe('SessionManager — per-route isolation (native topics)', () => {
     // Both stay live simultaneously (opening the topic did not tear down General).
     expect(await manager.getSession(general)).toBe(sGeneral);
     expect(manager.getSessionIfExists(topic)).toBe(sTopic);
+  });
+
+  test('registers a topic route as soon as the live session is created', async () => {
+    const topic = { chatId: 900, threadId: 8 };
+    const session = await manager.getSession(topic);
+
+    expect(session.sessionId).toBeDefined();
+    expect(getElicitationRoute(session.sessionId!)).toEqual(topic);
+    clearElicitationRoute(session.sessionId!);
   });
 
   test('per-route turns persist as separate resumable sidecars under the same chat', () => {

@@ -66,7 +66,6 @@ const bundledTarget: PinTarget = {
     gather: join(bundledSkillsDir, 'gather/SKILL.md'),
     'ground-claim': join(bundledSkillsDir, 'ground-claim/SKILL.md'),
     'ground-state': join(bundledSkillsDir, 'ground-state/SKILL.md'),
-
     parallelize: join(bundledSkillsDir, 'parallelize/SKILL.md'),
     refactor: join(bundledSkillsDir, 'refactor/SKILL.md'),
     research: join(bundledSkillsDir, 'research/SKILL.md'),

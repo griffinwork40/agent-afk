@@ -156,6 +156,7 @@ export function buildForkedChildConfig(
       // gets no baseURL and an OpenAI-routed great-grandchild POSTs to
       // api.openai.com. Mirrors the CLI SubagentExecutor wiring (chat/daemon/bootstrap).
       ...(ctx.openaiBaseUrl !== undefined ? { openaiBaseUrl: ctx.openaiBaseUrl } : {}),
+      ...(ctx.xaiBaseUrl !== undefined ? { xaiBaseUrl: ctx.xaiBaseUrl } : {}),
       // Fix B (#skill-recursion): thread skillDispatchName so buildChildConfig
       // propagates it to unnamed agent grandchildren at depth+2.  Source from
       // baseConfig (the CURRENT fork's identity) — ctx.skillDispatchName is the
