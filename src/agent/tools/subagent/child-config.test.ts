@@ -92,6 +92,7 @@ function baseArgs(overrides?: Partial<BuildChildConfigArgs>): BuildChildConfigAr
       systemPrompt: 'parent base prompt',
       baseUrl: undefined,
       openaiBaseUrl: undefined,
+      xaiBaseUrl: undefined,
     },
     resolveApiKeyForModel: vi.fn((_m: string) => 'child-resolved-key'),
     createChildExecutor: vi.fn((_ctx: SubagentExecutorContext) => stubChildExecutor()),
@@ -100,6 +101,13 @@ function baseArgs(overrides?: Partial<BuildChildConfigArgs>): BuildChildConfigAr
 }
 
 describe('buildChildConfig', () => {
+  it('copies the configured xAI endpoint into the spawned child config', () => {
+    const { childConfig } = buildChildConfig(
+      baseArgs({ defaultConfig: { ...baseArgs().defaultConfig, xaiBaseUrl: 'https://xai.test/v1' } }),
+    );
+    expect(childConfig.xaiBaseUrl).toBe('https://xai.test/v1');
+  });
+
   describe('turn budget (effectiveMaxTurns)', () => {
     it('uses the parse-time default when no named agent and not explicit', () => {
       const { childConfig } = buildChildConfig(baseArgs({ parsed: parsed({ max_turns: 10 }) }));
@@ -325,6 +333,7 @@ describe('buildChildConfig', () => {
             systemPrompt: undefined,
             baseUrl: undefined,
             openaiBaseUrl: undefined,
+            xaiBaseUrl: undefined,
           },
         }),
       );

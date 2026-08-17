@@ -66,7 +66,7 @@ export async function runXaiDeviceCodeLogin(opts: {
     if (result.status === 'slow_down') {
       // RFC 8628 / OpenCode: bump by at least 5s; also honor a larger server interval.
       const serverMs = positiveSeconds(result.interval, 5) * 1000;
-      intervalMs = Math.max(intervalMs + 5000, serverMs);
+      intervalMs = Math.min(Math.max(intervalMs + 5000, serverMs), 60_000);
       continue;
     }
     if (result.status === 'expired') {
