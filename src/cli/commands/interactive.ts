@@ -15,6 +15,7 @@ import { formatResumeCommand } from '../resume-command.js';
 import { formatCwd } from '../format-cwd.js';
 import { bootstrapSession } from './interactive/bootstrap.js';
 import { drainBootWarnings } from './interactive/boot-warnings.js';
+import { printFirstRunBanner } from './interactive/first-run.js';
 import { elicitationRouter } from '../../agent/elicitation-router.js';
 import { initTranscript } from './interactive/transcript.js';
 import { runReplLoop, type TurnState } from './interactive/repl-loop.js';
@@ -838,6 +839,14 @@ export function registerInteractiveCommand(program: Command): void {
         if (ctx.resumeTarget) {
           printResumeBanner(ctx.stats, ctx.completionWriter);
         }
+        // First-run welcome banner — shown exactly once, on the user's first
+        // interactive launch (no resume, real TTY). The marker is written before
+        // printing so a crash mid-banner doesn't cause a repeat. Newlines count
+        // into preArmAnchorRow just like the main banner and boot warnings.
+        printFirstRunBanner({
+          isTTY: Boolean(process.stdout.isTTY),
+          isResume: ctx.resumeTarget !== undefined,
+        });
         // Bootstrap warnings (#745). `bootstrapSession` above ran BEFORE the
         // screen clear, so any producer that printed directly — the
         // agent-registry built-in-shadow warning, MCP config warnings — had its

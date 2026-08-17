@@ -194,13 +194,17 @@ describe('/skills listing UX (Phase 1)', () => {
     expect(out).toContain('shadowed by /mint');
   });
 
-  it('detail for an unknown skill suggests running /skills', async () => {
+  it('unknown query falls through to fuzzy search and suggests running /skills', async () => {
+    // Previously the detail-card path rendered "No skill found" on miss.
+    // Now, a non-exact-name query routes to the fuzzy-search path which
+    // renders "No skills matched" plus a /skills hint — covering both the
+    // "typo in a skill name" and "intent keyword" cases.
     const { ctx, lines } = makeCtx();
     await initialSkillsCmd.handler(ctx, 'does-not-exist');
     const out = stripAnsi(lines.join('\n'));
 
-    expect(out).toMatch(/no skill found/i);
-    expect(out).toContain('Run /skills');
+    expect(out).toMatch(/no skills matched/i);
+    expect(out).toContain('/skills');
   });
 
   it('treats a leading-dash arg (--all) as the listing, not a 404 lookup', async () => {
