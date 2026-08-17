@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.4] - 2026-08-17
+
+### Changed
+- bump @types/node from 26.1.2 to 26.2.0 in /website (#1093) (37eda588)
+- bump the fumadocs group in /website with 3 updates (#1092) (c0833329)
+- extract helpers from streamResponse god function (#1073) (#1098) (d5326e0e)
+
 ## [5.123.3] - 2026-08-16
 
 ### Changed
