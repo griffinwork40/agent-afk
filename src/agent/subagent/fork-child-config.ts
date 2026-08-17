@@ -56,8 +56,8 @@ export interface AssembleChildConfigArgs<T> {
  * Build the `AgentConfig` for a forked child, applying all fork-time defaults,
  * invariants, and inheritance rules in a single deterministic pass.
  *
- * Returns the assembled config ready to pass to `injectToolBudgetPreamble` and
- * then `new AgentSession(...)`.
+ * Returns the assembled config — including the injected tool-budget preamble —
+ * ready to pass directly to `new AgentSession(...)`.
  *
  * Invariant (budget disclosure): the preamble is applied HERE, wrapping the
  * whole literal, because this is the sole path to a child AgentSession —

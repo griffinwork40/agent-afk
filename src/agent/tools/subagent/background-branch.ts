@@ -13,7 +13,7 @@
  * @module agent/tools/subagent/background-branch
  */
 
-import { BackgroundJobCapError, type BackgroundAgentRegistry } from '../../background-registry.js';
+import { BackgroundJobCapError, type BackgroundAgentRegistry, type BackgroundJob } from '../../background-registry.js';
 import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
@@ -29,6 +29,12 @@ export interface RunBackgroundBranchArgs {
   model: string | undefined;
   /** Optional: `IAgentSession.sessionId` is `string | undefined`; forwarded as-is into the registry record (preserves the pre-extraction contract). */
   parentSessionId: string | undefined;
+  /**
+   * Callback fired when the background job settles (done or failed).
+   * Captured at dispatch time so it is immune to `notifyWaveEnd()` clearing
+   * `currentWaveId` before the job finishes (#1083).
+   */
+  onSettled?: (isError: boolean) => void;
 }
 
 /**
@@ -50,13 +56,14 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
     await handle.teardown().catch((e: unknown) =>
       debugLog('subagent-executor: handle teardown failed: ' + (e instanceof Error ? e.message : String(e))),
     );
+    onSettled?.(true);
     return {
       content:
         'Background mode is not available in this session — no BackgroundAgentRegistry is wired. ' +
@@ -78,6 +85,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       await handle.teardown().catch((te: unknown) =>
         debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),
       );
+      onSettled?.(true);
       return {
         content: e.message,
         isError: true,
@@ -85,6 +93,20 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     }
     throw e;
   }
+  // Wire manifest settlement (#1083): when the background job finishes,
+  // fire the captured onSettled callback so the wave manifest transitions
+  // from 'running' to 'done'/'failed'. The waveId is captured at the call
+  // site (subagent-executor.ts) before notifyWaveEnd() can clear it.
+  if (onSettled) {
+    const settledJobId = job.jobId;
+    const handler = (settled: BackgroundJob): void => {
+      if (settled.jobId !== settledJobId) return;
+      registry.off('settled', handler);
+      onSettled(settled.status === 'failed' || settled.status === 'cancelled');
+    };
+    registry.on('settled', handler);
+  }
+
   const payload = {
     status: 'running' as const,
     jobId: job.jobId,

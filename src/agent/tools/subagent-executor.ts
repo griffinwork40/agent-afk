@@ -845,11 +845,6 @@ export class SubagentExecutor implements SubagentControl {
       }
       // Wave manifest: unit transitioned to 'running' once fork returns a handle.
       this.updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
-      // TODO: background dispatches (mode='background') stay 'running' in the manifest
-      // until expiry — the background registry completion callback does not have a
-      // stable reference to currentWaveId (which may be cleared by notifyWaveEnd()
-      // before the job settles). Accept the limitation: manual manifest sweep handles
-      // stale 'running' entries via the 48h TTL.
       // Cancellation can land while a retry's fresh fork awaits hooks/read
       // scope resolution, before either foreground map contains the handle.
       if (retryCancelGeneration !== undefined && this.cancelGeneration !== retryCancelGeneration) {
@@ -898,12 +893,24 @@ export class SubagentExecutor implements SubagentControl {
     if (parsed.mode === 'background') {
       // Invariant: no post-run warnings for background — attachments aren't resolved
       // until the foreground path, and the child hasn't run yet.
+      //
+      // Manifest settlement (#1083): capture waveId and callId NOW, before
+      // notifyWaveEnd() can clear this.currentWaveId. The onSettled closure
+      // outlives the wave and writes the terminal status when the background
+      // job finishes, preventing false resumption offers for completed work.
+      const capturedWaveId = this.currentWaveId;
+      const capturedCallId = call.id;
       return runBackgroundBranch({
         handle,
         registry: this.ctx.backgroundRegistry,
         prompt: parsed.prompt,
         model: childConfig.model,
         parentSessionId: this.ctx.parentSession.sessionId,
+        // Intentional: updateWaveUnit (not updateCurrentWaveUnit) — the wave
+        // may have ended before a background job settles (#1083).
+        onSettled: capturedWaveId !== undefined
+          ? (isError) => updateWaveUnit(capturedWaveId, capturedCallId, isError ? 'failed' : 'done')
+          : undefined,
       });
     }
 
