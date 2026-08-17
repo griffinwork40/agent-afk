@@ -309,10 +309,11 @@ export async function setupSurface(
     deps.getLoopStageBar()?.repaint(stage);
     deps.getMascotBar()?.onStage(stage, signals);
   };
+  const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
   ctx.slashCtx.onContextProgress = async () => {
     await ctx.contextSampler.refresh();
     await ctx.gitStatusSampler.refresh();
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
   };
   // Transcript parity for skill turns: runSkillDispatchTurn appends the
   // completed `/skill args → assistant text` exchange through this handle,
@@ -344,7 +345,7 @@ export async function setupSurface(
   // in ≈ a local git call and the PR lands when its network lookup settles;
   // onUpdate repaints the status line so both appear without waiting for a turn.
   ctx.gitStatusSampler.setOnUpdate(() => {
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
   });
   void ctx.gitStatusSampler.refresh();
 
@@ -358,7 +359,7 @@ export async function setupSurface(
   // sequence. Tests that invoke setupSurface more than once must call
   // resetQuotaCacheForTests() to clear the module-scope listener set.
   onQuotaUpdate(() => {
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
   });
 
   return { installSoftStop };

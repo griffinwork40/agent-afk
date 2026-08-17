@@ -1300,3 +1300,75 @@ describe('StatusLine clock ticker', () => {
     expect(stream.writes.length).toBe(0);
   });
 });
+
+describe('StatusLine — turn/budget indicator', () => {
+  /** Create a mock stream with a specific column width for narrow/wide terminal tests. */
+  function mockStreamWide(cols: number): MockStream {
+    const writes: string[] = [];
+    return {
+      writes,
+      write(chunk: string): boolean { writes.push(chunk); return true; },
+      rows: 24,
+      columns: cols,
+      isTTY: true,
+    };
+  }
+
+  it('renders "turn N" when turnCount is set and maxTurns is absent', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', turnCount: 5 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('turn 5');
+    expect(out).not.toContain('turn 5/');
+    status.stop();
+  });
+
+  it('renders "turn N/M" when both turnCount and maxTurns are set', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', turnCount: 3, maxTurns: 10 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('turn 3/10');
+    status.stop();
+  });
+
+  it('omits the turn segment when turnCount is undefined', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('turn ');
+    status.stop();
+  });
+
+  it('does not render "turn 0/M" when maxTurns is set but turnCount is absent', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', maxTurns: 5 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('turn 0');
+    expect(out).not.toContain('/5');
+    status.stop();
+  });
+
+  it('sheds the turn indicator before cost/tokens on a narrow terminal (priority 6 = drop first)', () => {
+    // 22 cols: narrow enough that `sonnet · $0.01 · turn 7/20` overflows but
+    // `sonnet · $0.01` fits (14 chars + 2-col maxW margin = 16 ≤ 20 maxW).
+    // Turn badge (priority 6) must drop first, before cost (priority 3).
+    const stream = mockStreamWide(22);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01, turnCount: 7, maxTurns: 20 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // The model must survive (never-drop)
+    expect(out).toContain('sonnet');
+    // The turn indicator should have been shed first (highest droppablePriority)
+    expect(out).not.toContain('turn 7');
+    status.stop();
+  });
+});

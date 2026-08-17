@@ -94,6 +94,23 @@ function runningChildren(
 }
 
 /**
+ * Return the number of concurrently active (not-done, not-errored, non-
+ * orchestrator) children tracked in `sources`. Used by the progress banner to
+ * show "N running" when a parallel fan-out is in flight so the operator knows
+ * multiple subagents are spinning simultaneously rather than one at a time.
+ *
+ * Returns 0 when `sources` is undefined (caller does not have a source map —
+ * single-stream sessions, tests) so callers can treat ≤1 as "no badge".
+ */
+export function countRunningChildren(
+  sources: ReadonlyMap<string, SourceState> | undefined,
+  now: number = Date.now(),
+): number {
+  if (!sources) return 0;
+  return runningChildren(sources, now).length;
+}
+
+/**
  * Compose the clause for one child. Priority is most-specific-first: an
  * explicit silence warning beats a stale round headline, which beats a bare
  * call count. Returns `undefined` when the child has produced nothing worth

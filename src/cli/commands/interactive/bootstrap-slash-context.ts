@@ -42,6 +42,10 @@ export function createReplSlashContext(a: {
   anthropicBaseUrl?: string;
   openaiBaseUrl?: string;
   explicitProvider?: string;
+  /** Session-level turn cap from `--max-turns`. Passed to `formatStatusFields` so
+   *  the status line can render `turn N/M` instead of bare `turn N`. `0` or
+   *  `undefined` means unconstrained — the indicator shows just `turn N`. */
+  maxTurns?: number;
 }): SlashContext {
   const slashCtx: SlashContext = {
     session: a.sessionRef,
@@ -72,12 +76,12 @@ export function createReplSlashContext(a: {
         process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
         a.statusLine.start();
         // Read contextSampler at call time so any swap-replaced sampler is used.
-        a.statusLine.repaint(formatStatusFields(a.stats, a.contextSampler, a.gitStatusSampler));
+        a.statusLine.repaint(formatStatusFields(a.stats, a.contextSampler, a.gitStatusSampler, a.maxTurns));
       },
       // Read contextSampler at call time (not at closure-capture time) so
       // a mid-session swap that calls contextSampler.attach(newSession) is
       // reflected on the next repaint.
-      repaintStatusLine: () => a.statusLine.repaint(formatStatusFields(a.stats, a.contextSampler, a.gitStatusSampler)),
+      repaintStatusLine: () => a.statusLine.repaint(formatStatusFields(a.stats, a.contextSampler, a.gitStatusSampler, a.maxTurns)),
     },
     ledger: a.ledger,
     fastMode: a.fastModeController,

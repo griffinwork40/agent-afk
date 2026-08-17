@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ChildActivityTracker,
+  countRunningChildren,
   deriveChildBanner,
   formatChildActivity,
   CHILD_QUIET_MS,
@@ -265,5 +266,60 @@ describe('deriveChildBanner', () => {
     sources.get('a')!.startedAt = NOW + 5_000;
     const banner = deriveChildBanner({ sources, childActivity: new ChildActivityTracker() }, NOW);
     expect(banner?.stats.durationMs).toBe(0);
+  });
+});
+
+describe('countRunningChildren', () => {
+  it('returns 0 for undefined sources (single-stream sessions)', () => {
+    expect(countRunningChildren(undefined, NOW)).toBe(0);
+  });
+
+  it('returns 0 for an empty map', () => {
+    expect(countRunningChildren(new Map(), NOW)).toBe(0);
+  });
+
+  it('does not count the orchestrator source', () => {
+    const sources = new Map<string, SourceState>([
+      [ORCHESTRATOR_SOURCE_KEY, activeChild('main')],
+    ]);
+    expect(countRunningChildren(sources, NOW)).toBe(0);
+  });
+
+  it('does not count done children', () => {
+    const sources = new Map<string, SourceState>([
+      ['a', activeChild('sees', { done: true })],
+    ]);
+    expect(countRunningChildren(sources, NOW)).toBe(0);
+  });
+
+  it('does not count errored children', () => {
+    const sources = new Map<string, SourceState>([
+      ['a', activeChild('sees', { errored: true })],
+    ]);
+    expect(countRunningChildren(sources, NOW)).toBe(0);
+  });
+
+  it('returns 1 for a single running child', () => {
+    const sources = new Map<string, SourceState>([['a', activeChild('sees')]]);
+    expect(countRunningChildren(sources, NOW)).toBe(1);
+  });
+
+  it('returns 3 for three concurrently running children', () => {
+    const sources = new Map<string, SourceState>([
+      ['a', activeChild('alpha')],
+      ['b', activeChild('beta')],
+      ['c', activeChild('gamma')],
+      [ORCHESTRATOR_SOURCE_KEY, activeChild('main')], // excluded
+    ]);
+    expect(countRunningChildren(sources, NOW)).toBe(3);
+  });
+
+  it('mixes done and running correctly', () => {
+    const sources = new Map<string, SourceState>([
+      ['a', activeChild('done-one', { done: true })],
+      ['b', activeChild('live-one')],
+      ['c', activeChild('live-two')],
+    ]);
+    expect(countRunningChildren(sources, NOW)).toBe(2);
   });
 });

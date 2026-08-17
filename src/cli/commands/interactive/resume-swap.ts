@@ -46,6 +46,7 @@ export interface ResumeSwapDeps {
    */
   gitStatusSampler?: GitStatusSampler;
   statusLine: StatusLine;
+  maxTurns?: number;
   backgroundRegistry: BackgroundAgentRegistry;
   completionWriter: CompletionWriter;
   isInFlight: () => boolean;
@@ -239,7 +240,7 @@ export async function performResumeSwap(
   printResumeBanner(deps.stats, deps.completionWriter);
 
   // Step 12 — Repaint status line.
-  deps.statusLine.repaint(formatStatusFields(deps.stats, deps.contextSampler, deps.gitStatusSampler));
+  deps.statusLine.repaint(formatStatusFields(deps.stats, deps.contextSampler, deps.gitStatusSampler, deps.maxTurns));
 
   return { ok: true, sessionId: newSession.sessionId ?? deps.stats.sessionId ?? target.resumeId };
 }

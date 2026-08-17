@@ -16,6 +16,7 @@ import type { OutputEvent, ProgressEvent } from '../../agent/types.js';
 import type { SourceState } from './stream-renderer-source.js';
 import {
   childBannerEvent,
+  countRunningChildren,
   deriveChildBanner,
   type ChildActivityTracker,
 } from './child-activity-select.js';
@@ -518,17 +519,22 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   // live child clause would contradict it. See deriveChildBanner.
   const childBanner = modelActivity ? undefined : deriveChildBanner(ctx);
   const activity = modelActivity ?? childBanner?.activity;
+  // Parallel fan-out indicator: count running (non-done, non-errored) children.
+  // Passed to formatProgressBanner so it can append "N running" to the stats
+  // tail when a wide fan-out is in flight. Counts only when sources is present
+  // (single-stream sessions return 0, so no badge appears).
+  const runningCount = countRunningChildren(ctx.sources);
   for (const progress of ctx.lastProgressByTask.values()) {
     const event = childBanner
       ? { ...progress, ...childBanner.stats, lastToolName: undefined }
       : progress;
-    bannerLines.push(...formatProgressBanner(event, undefined, activity));
+    bannerLines.push(...formatProgressBanner(event, undefined, activity, undefined, runningCount));
   }
   // A live child with no parent progress row to carry it — see childBannerEvent
   // for why lastProgressByTask is empty for a first-round foreground dispatch.
   if (childBanner && bannerLines.length === 0) {
     bannerLines.push(
-      ...formatProgressBanner(childBannerEvent(childBanner.stats), undefined, activity),
+      ...formatProgressBanner(childBannerEvent(childBanner.stats), undefined, activity, undefined, runningCount),
     );
   }
   if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));

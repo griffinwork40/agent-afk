@@ -125,6 +125,7 @@ export function formatProgressBanner(
   columns?: number,
   activity?: string,
   stopping?: boolean,
+  runningCount?: number,
 ): string[] {
   const { description, summary, lastToolName, totalTokens, toolUses, durationMs } = event;
   const stats: string[] = [];
@@ -136,6 +137,15 @@ export function formatProgressBanner(
   if (toolUses) stats.push(formatToolCallStat(toolUses));
   if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
   if (durationMs) stats.push(formatDuration(durationMs));
+  // Parallel fan-out indicator: when more than one child is concurrently active
+  // show "N running" so the operator knows a wide parallel batch is in flight
+  // rather than a sequential chain. Only shown for 2+ active children — a
+  // single child needs no indicator (the banner's detail clause already names
+  // it). Width-safe: rendered as a plain string inside the existing stats tail
+  // which is clamped to terminal width by clampToTerminal.
+  if (runningCount !== undefined && runningCount > 1) {
+    stats.push(`${runningCount} running`);
+  }
   // Drop the interrupt hint once a stop is already in flight — the ESC has been
   // accepted, so "esc to interrupt" would misrepresent the current state.
   if (!stopping) stats.push('esc to interrupt · ctrl+b background');

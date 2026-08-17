@@ -783,6 +783,7 @@ export function formatStatusFields(
   stats: SessionStats,
   sampler?: ContextSampler,
   gitSampler?: GitStatusSampler,
+  maxTurns?: number,
 ) {
   const pct = contextRatio(stats, sampler);
   const contextLimit = contextLimitFor(stats.model);
@@ -816,6 +817,14 @@ export function formatStatusFields(
   const pr = gitSampler?.getPr();
   const quotaWindows = quotaWindowsFromSnapshot(getQuotaSnapshot());
 
+  // Turn indicator: always include turnCount (1-based completed turns) so the
+  // status line can show `turn N`. Include maxTurns only when the caller
+  // supplies a positive cap so the indicator renders as `turn N/M` instead of
+  // `turn N/0` on unconstrained sessions. totalTurns is 0 before the first
+  // turn completes — rendering `turn 0` would be misleading, so suppress it
+  // until at least one turn has finished.
+  const turnCount = stats.totalTurns > 0 ? stats.totalTurns : undefined;
+
   return {
     model: stats.model,
     cost: stats.totalCostUsd,
@@ -829,5 +838,7 @@ export function formatStatusFields(
     ...(branch !== undefined ? { branch } : {}),
     ...(pr !== undefined ? { pr } : {}),
     ...(quotaWindows !== undefined ? { quotaWindows } : {}),
+    ...(turnCount !== undefined ? { turnCount } : {}),
+    ...(turnCount !== undefined && maxTurns && maxTurns > 0 ? { maxTurns } : {}),
   };
 }

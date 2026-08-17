@@ -178,12 +178,14 @@ export async function bootstrapSession(
   // swap to rebind the source and reset the cache; no call needed here.
   const contextSampler = new ContextSampler(session);
 
+  const maxTurnsNum = parseInt(options.maxTurns, 10);
   const slashCtx: SlashContext = createReplSlashContext({
     sessionRef, stats, writer, statusLine, contextSampler, gitStatusSampler,
     ledger: trustedSkillLedger, mcpManager, fastModeController,
     ...(cliConfig.baseUrl !== undefined ? { anthropicBaseUrl: cliConfig.baseUrl } : {}),
     ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
+    ...(maxTurnsNum > 0 ? { maxTurns: maxTurnsNum } : {}),
   });
 
   // requestResume delegates to performResumeSwap (resume-swap.ts).
@@ -219,6 +221,7 @@ export async function bootstrapSession(
       contextSampler,
       gitStatusSampler,
       statusLine,
+      maxTurns: maxTurnsNum > 0 ? maxTurnsNum : undefined,
       backgroundRegistry,
       completionWriter,
       isInFlight: () => ctx.getInFlight?.() ?? false,
