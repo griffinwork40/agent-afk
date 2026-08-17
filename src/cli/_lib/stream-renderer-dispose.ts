@@ -173,9 +173,12 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   // never emits a leading blank, so without this trailing the footer
   // would butt directly against the last tool result. Mirrors the
   // coordinator done-path at stream-renderer-orchestrator.ts:363-382.
-  // See docs/tui-rhythm.md.
+  // See docs/tui-rhythm.md. History: use flushCompletedRoots() not the
+  // nuclear flush() — mirrors PR #95 fix at orchestrator-emit.ts:264;
+  // nuclear flush on dispose deletes in-flight subagent entries, causing
+  // stale-capture + causal-order violations (blank-row gaps, missing Done).
   if (ctx.toolLane.hasPending()) {
-    const lines = ctx.toolLane.flush();
+    const lines = ctx.toolLane.flushCompletedRoots();
     if (ctx.isTTY && ctx.compositorRef.current) {
       // Atomic block commit — the safety-net flush is ONE coherent block;
       // per-line commits desync band-hold under a tall overlay. See
