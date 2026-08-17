@@ -73,6 +73,8 @@ export interface SkillExecutorContext {
    * `cliConfig.openaiBaseUrl` (env `AFK_OPENAI_BASE_URL`); the OpenAI peer of `baseUrl`.
    */
   openaiBaseUrl?: string;
+  /** xAI endpoint forwarded through skill-forked agent descendants. */
+  xaiBaseUrl?: string;
   pluginConfigs?: SdkPluginConfig[];
   depth?: number;
   maxDepth?: number;

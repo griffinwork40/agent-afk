@@ -101,6 +101,13 @@ function baseArgs(overrides?: Partial<BuildChildConfigArgs>): BuildChildConfigAr
 }
 
 describe('buildChildConfig', () => {
+  it('copies the configured xAI endpoint into the spawned child config', () => {
+    const { childConfig } = buildChildConfig(
+      baseArgs({ defaultConfig: { ...baseArgs().defaultConfig, xaiBaseUrl: 'https://xai.test/v1' } }),
+    );
+    expect(childConfig.xaiBaseUrl).toBe('https://xai.test/v1');
+  });
+
   describe('turn budget (effectiveMaxTurns)', () => {
     it('uses the parse-time default when no named agent and not explicit', () => {
       const { childConfig } = buildChildConfig(baseArgs({ parsed: parsed({ max_turns: 10 }) }));

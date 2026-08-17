@@ -236,6 +236,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     defaultSubagentModel,
     agentRegistry,
     openaiBaseUrl,
+    xaiBaseUrl,
   );
 
   // 5. `agent` tool.
@@ -279,6 +280,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...bgRegistryOpt,
     ...baseUrlOpt,
     ...openaiBaseUrlOpt,
+    ...xaiBaseUrlOpt,
     resolveApiKeyForModel,
     ...skillTraceOpt,
     ...nestedCwdOpt,

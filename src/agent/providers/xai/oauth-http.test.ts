@@ -10,19 +10,19 @@ describe('tokenResponseToBundle', () => {
     expect(b?.expires_at).toBe(1000 + 3600);
   });
 
-  it('floors expires_in: 0 to 60', () => {
+  it('floors expires_in: 0 above the refresh skew', () => {
     const b = tokenResponseToBundle({ ...base, expires_in: 0 }, fixedNow);
-    expect(b?.expires_at).toBe(1000 + 60);
+    expect(b?.expires_at).toBe(1000 + 240);
   });
 
-  it('floors negative expires_in to 60', () => {
+  it('floors negative expires_in above the refresh skew', () => {
     const b = tokenResponseToBundle({ ...base, expires_in: -500 }, fixedNow);
-    expect(b?.expires_at).toBe(1000 + 60);
+    expect(b?.expires_at).toBe(1000 + 240);
   });
 
-  it('floors expires_in below 60 to 60', () => {
+  it('floors expires_in below the refresh-safe minimum', () => {
     const b = tokenResponseToBundle({ ...base, expires_in: 30 }, fixedNow);
-    expect(b?.expires_at).toBe(1000 + 60);
+    expect(b?.expires_at).toBe(1000 + 240);
   });
 
   it('allows expires_in at the ceiling (86400)', () => {
