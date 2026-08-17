@@ -381,6 +381,19 @@ export function handleSubagentEvent(
     case 'panel':
       emitSubagentPanel(event.spec as CardSpec, sourceId, source, ctx);
       return;
+
+    case 'notice':
+      // Display-only harness notice from inside a subagent (issue #970).
+      // Subagent notices (truncation, refusal) are surfaced on non-TTY
+      // surfaces via the Writer so logs/CI capture them. On TTY they are
+      // a no-op here — the parent's tool lane already surfaces the Done
+      // row with a summary, and adding an interleaved info line mid-flight
+      // would break the single-lane invariant. A follow-up may wire these
+      // into the thinking-tail slot for richer live visibility.
+      if (!ctx.isTTY) {
+        ctx.out.line(event.text);
+      }
+      return;
   }
 }
 

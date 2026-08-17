@@ -516,6 +516,19 @@ export function transformProviderEvent(
         ...(event.retryAfterMs !== undefined ? { retryAfterMs: event.retryAfterMs } : {}),
       };
 
+    case 'notice':
+      // Display-only harness notice (issue #970). Surfaces on REPL and Telegram
+      // but MUST NOT enter conversationHistory — it is operator-facing, not model
+      // context. The `if (event.sessionId)` identity update is intentionally
+      // omitted: notices do not carry meaningful session routing beyond
+      // forwarding; keeping them out of the identity path is correct and safe.
+      //
+      // Exhaustiveness contract: this case MUST stay explicit (never fall to
+      // `default: return null`). A missing case is the same silent-drop bug this
+      // channel exists to fix — the tsc compiler catches it when the switch is
+      // exhaustive, so do not remove the `default` arm either.
+      return { type: 'notice', text: event.text, kind: event.kind };
+
     default:
       return null;
   }

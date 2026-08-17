@@ -117,6 +117,30 @@ export type ProviderEvent =
   | { type: 'delta.reasoning'; text: string; sessionId?: string }
   | { type: 'assistant.message'; text: string; sessionId?: string }
   | {
+      /**
+       * Display-only harness notice — carries an operator-facing message that
+       * must render on live surfaces (REPL, Telegram, chat) but MUST NOT enter
+       * `conversationHistory`, become a subagent's `finalMessage`, or appear in
+       * `input.messages`. Distinct from `assistant.message` so the zero-output
+       * detection chain in `handle.ts` remains reachable for textless turns.
+       *
+       * Contract (exhaustiveness): every consumer that switches on ProviderEvent
+       * must add an explicit `case 'notice':` arm. Failing to do so leaves the
+       * notice silently dropped — the same visibility gap this event exists to
+       * close. No @anthropic-ai/sdk import — this is a harness-owned type.
+       */
+      type: 'notice';
+      /** Short human-readable operator message (one sentence, no markdown). */
+      text: string;
+      /**
+       * Semantic category of the notice. Guides rendering (icon, color) and
+       * lets consumers programmatically distinguish notice classes without
+       * substring-matching `text`. Extend as new harness notice classes emerge.
+       */
+      kind: 'truncation' | 'refusal';
+      sessionId?: string;
+    }
+  | {
       type: 'tool.use.start';
       toolUseId: string;
       toolName: string;

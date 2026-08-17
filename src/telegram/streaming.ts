@@ -703,6 +703,17 @@ export async function streamResponse(
           answerText += `\n\n💡 ${event.suggestion}`;
           await sendOrEdit(livePreview());
         }
+        // Display-only harness notice (issue #970). Appended inline as a
+        // distinct italic info line so the operator sees truncations and
+        // refusals without the text blending with model output. The `ℹ`
+        // prefix makes the provenance clear. Not funnelled through answerText
+        // (that carries genuine model output only) — accumulated is the write
+        // target so `livePreview()` includes it in the sent message.
+        if (event.type === 'notice') {
+          const noticeText = `\n\n_ℹ ${event.text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}_`;
+          accumulated += noticeText;
+          await sendOrEdit(livePreview());
+        }
         if (event.type === 'paused') {
           // Start a 5-minute-granularity countdown updater so the Telegram
           // message reflects time remaining without flooding the edit API.

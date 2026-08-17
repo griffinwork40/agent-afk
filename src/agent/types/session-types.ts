@@ -114,6 +114,16 @@ export type OutputEvent =
   // `src/skills/_lib/emit-card.ts`; the renderer flushes pending content
   // and renders via `card(spec)` from `src/cli/render.ts`.
   | { type: 'panel'; spec: PanelSpec }
+  // Display-only harness notice (issue #970). Renders on live surfaces;
+  // never enters conversationHistory or a subagent's finalMessage. See
+  // ProviderEvent 'notice' for the full contract and exhaustiveness mandate.
+  | {
+      type: 'notice';
+      /** Short operator-facing message (one sentence, no markdown). */
+      text: string;
+      /** Semantic category — guides rendering and programmatic branching. */
+      kind: 'truncation' | 'refusal';
+    }
   // Usage-limit pause/resume events emitted by the provider layer when an
   // OAuth subscription limit is hit and the provider is waiting to auto-resume.
   | {

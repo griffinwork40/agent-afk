@@ -143,7 +143,7 @@ describe('openai-compatible truncation notice (#952)', () => {
     expect(events.some((e) => e.type === 'tool.start' || e.type === 'tool.end')).toBe(false);
   });
 
-  // #960 REGRESSION GUARD — do not "fix" this by making it expect a notice.
+  // #960 REGRESSION GUARD — do not "fix" the assistant.message assertion.
   //
   // A truncated turn that produced NO text must yield an EMPTY
   // assistant.message. The emptiness is the signal: stream-consumer's
@@ -153,8 +153,13 @@ describe('openai-compatible truncation notice (#952)', () => {
   // and what lets stream-cut-retry re-dispatch a read-only child that produced
   // nothing. Substituting the notice as the body here would set `finalMessage`
   // and hand the parent a SUCCESS whose entire content is the warning.
+  //
+  // Issue #970: the notice IS now emitted on the dedicated `notice` channel
+  // alongside the empty assistant.message — so the operator sees the truncation
+  // on live surfaces while the zero-output detection chain is unaffected. The
+  // stream-consumer maps 'notice' → {type:'notice'}, NOT {type:'message'}.
   // Mirrors the anthropic-direct guard in loop.orphan.test.ts.
-  it('emits an EMPTY assistant.message when the cap cuts a turn before any text', async () => {
+  it('emits an EMPTY assistant.message AND a notice when the cap cuts a turn before any text', async () => {
     pendingChunks = [
       {
         choices: [
@@ -179,9 +184,19 @@ describe('openai-compatible truncation notice (#952)', () => {
     const events = await collect(buildQueryFromConfig(baseConfig(), singleInput('read it')));
     const messages = assistantMessages(events);
 
+    // The assistant.message is still empty — the zero-output detection chain
+    // must remain reachable via stream-consumer's `if (event.text)` gate.
     expect(messages).toEqual(['']);
     expect(messages[0]).not.toContain('output-token limit');
     expect(events.some((e) => e.type === 'tool.start' || e.type === 'tool.end')).toBe(false);
+
+    // Issue #970: a notice IS emitted so the operator can see the truncation.
+    const noticeEvents = events.filter(
+      (e): e is Extract<ProviderEvent, { type: 'notice' }> => e.type === 'notice',
+    );
+    expect(noticeEvents).toHaveLength(1);
+    expect(noticeEvents[0]!.kind).toBe('truncation');
+    expect(noticeEvents[0]!.text).toContain('output-token limit');
   });
 
   it('classifies the turn as truncated on turn.completed (trace + closure signal)', async () => {

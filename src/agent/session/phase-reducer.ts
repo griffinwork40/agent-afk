@@ -194,6 +194,10 @@ export function reducePhase(
     case 'resumed':
       return 'investigating';
 
+    case 'notice':
+      // Display-only harness notice (issue #970) — no phase change.
+      return prev;
+
     default:
       return prev;
   }

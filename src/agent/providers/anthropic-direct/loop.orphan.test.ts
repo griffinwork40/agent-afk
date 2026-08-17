@@ -257,6 +257,15 @@ describe('loop.ts runTurn — orphan tool_use prevention', () => {
       ),
       'a textless truncated turn must not emit a standalone notice as assistant.message',
     ).toBe(false);
+    // Issue #970: a notice IS emitted on the dedicated notice channel so the
+    // operator can see the truncation on live surfaces without it becoming a
+    // terminal message. The zero-output detection path is unaffected because
+    // the stream-consumer maps 'notice' → {type:'notice'}, NOT {type:'message'}.
+    const noticeEvents = events.filter((e) => e.type === 'notice');
+    expect(noticeEvents).toHaveLength(1);
+    const notice = noticeEvents[0] as Extract<(typeof events)[0], { type: 'notice' }>;
+    expect(notice.kind).toBe('truncation');
+    expect(notice.text).toMatch(/output-token/);
     // A turn.completed must still follow — the turn ends cleanly, not as an error.
     // (The orphan-strip invariant itself is pinned by the first test above.)
     expect(events.some((e) => e.type === 'turn.completed')).toBe(true);

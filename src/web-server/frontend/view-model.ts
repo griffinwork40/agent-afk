@@ -302,6 +302,12 @@ export function createTranscriptModel(): TranscriptModel {
         }
         break;
       }
+      case 'notice':
+        // Display-only harness notice (issue #970). Render alongside other
+        // notice-kind items in the web transcript so truncations and refusals
+        // are visible in the web frontend.
+        items.push({ kind: 'notice', id: nextId('notice'), text: event.text });
+        break;
       default:
         // Forward-compatible: OutputEvent has variants outside this model's
         // documented input set (e.g. 'suggestion', 'panel'). Ignored rather

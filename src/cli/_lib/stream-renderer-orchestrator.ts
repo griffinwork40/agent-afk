@@ -48,6 +48,7 @@ import {
   flushToolLaneToScrollback,
   commitThinkingPhase,
 } from './stream-renderer-orchestrator-emit.js';
+import { palette } from '../palette.js';
 
 // Re-export from emit module
 export {
@@ -450,6 +451,25 @@ export function handleOrchestratorEvent(
     case 'panel':
       emitPanel(event.spec as CardSpec, source, ctx);
       return;
+
+    case 'notice': {
+      // Display-only harness notice (issue #970). Renders as a dim-but-visible
+      // info line so the operator can see truncations and refusals that would
+      // otherwise be invisible. Does NOT enter contentBuffer or conversationHistory
+      // — it is strictly operator-facing chrome, not model content.
+      //
+      // Flush any pending streamed content so the notice renders after the partial
+      // text rather than interleaved with it. On TTY the markdown renderer handles
+      // this; on non-TTY the contentBuffer must be drained first.
+      ctx.streamingMarkdown.current?.commitPending();
+      const line = palette.info('ℹ ') + palette.dim(event.text);
+      if (ctx.isTTY && ctx.compositor) {
+        ctx.compositor.commitAbove(line);
+      } else {
+        ctx.out.line(line);
+      }
+      return;
+    }
   }
 }
 
