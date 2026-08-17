@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.126.0] - 2026-08-17
+
+### Added
+- intent-based /skills search + first-run welcome banner (#1114) (d5b04086)
+- notice channel — surface textless truncations instead of dropping them (#970) (#1115) (84415983)
+
 ## [5.125.0] - 2026-08-17
 
 ### Added
