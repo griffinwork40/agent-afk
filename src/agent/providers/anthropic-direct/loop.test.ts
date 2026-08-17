@@ -94,12 +94,18 @@ describe('loop.ts runTurn', () => {
       }),
     );
 
-    // The refusal is surfaced as a visible assistant.message — not silent.
-    const msg = events.find((e) => e.type === 'assistant.message');
-    expect(msg).toBeDefined();
-    if (msg?.type === 'assistant.message') {
-      expect(msg.text).toContain('refusal');
+    // The refusal is surfaced as a visible `notice` (kind: 'refusal') — not
+    // silent, and NOT an assistant.message (which would enter conversation
+    // history via stream-consumer). Migrated off the overloaded
+    // assistant.message channel in issue #970.
+    const notice = events.find((e) => e.type === 'notice');
+    expect(notice).toBeDefined();
+    if (notice?.type === 'notice') {
+      expect(notice.text).toContain('refusal');
+      expect(notice.kind).toBe('refusal');
     }
+    // A no-content refusal emits no assistant.message at all — the point of #970.
+    expect(events.some((e) => e.type === 'assistant.message')).toBe(false);
     // The turn still completes cleanly so the session stays usable.
     expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
     // Display-only: the empty refusal turn is NOT pushed to history.
