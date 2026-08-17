@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.126.1] - 2026-08-17
+
+### Fixed
+- resolve 5 subagent issues — DAG root bypass, manifest settlement, type narrowing, barrel export, stale docs (#1121) (04e337f9)
+
 ## [5.126.0] - 2026-08-17
 
 ### Added
