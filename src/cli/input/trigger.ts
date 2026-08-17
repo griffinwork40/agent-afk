@@ -8,7 +8,7 @@
 
 import { readdirSync, promises as fsp, type Dirent } from 'fs';
 import { list as listSlashCommands, aliasEntries, lookup } from '../slash/registry.js';
-import { matchSlashCandidates, type CommandEntry } from './slash-match.js';
+import { matchSlashCandidates, isSubsequence, type CommandEntry } from './slash-match.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import type { Candidate, Trigger } from './types.js';
 
@@ -16,7 +16,10 @@ import type { Candidate, Trigger } from './types.js';
  * Detect the trigger kind and query from the buffer at the cursor position.
  *
  * Returns:
- *   - { kind: 'slash', query } if buffer up to cursor matches /^\/[A-Za-z_-]*$/
+ *   - { kind: 'slash', query } if the token at the cursor position is a slash
+ *     command (i.e. starts with `/` and contains only `[A-Za-z_-]` characters).
+ *     The slash token may appear at the start of the buffer OR after whitespace,
+ *     enabling completion mid-buffer or in multiline drafts.
  *   - { kind: 'file', query } if the last token up to cursor matches @<path>
  *   - { kind: 'flag', command, query } if the buffer starts with `/<cmd>` followed
  *     by whitespace and ends with `--<query>` (final token), AND that command is
@@ -38,9 +41,13 @@ import type { Candidate, Trigger } from './types.js';
 export function detectTrigger(buffer: string, cursorCol: number): Trigger | null {
   const upToCursor = buffer.slice(0, cursorCol);
 
-  // Slash command: matches /^\/[A-Za-z_-]*$/ from start
-  if (/^\/[A-Za-z_-]*$/.test(upToCursor)) {
-    return { kind: 'slash', query: upToCursor.slice(1) };
+  // Slash command: the token at cursor must be `/[A-Za-z_-]*`.
+  // Matches at buffer start OR after whitespace so completion fires mid-buffer
+  // and in multiline drafts (e.g. "please run /ship" with cursor at end).
+  // The trailing `$` anchors to the cursor position (end of upToCursor).
+  const slashMatch = /(?:^|(?<=\s))\/[A-Za-z_-]*$/.exec(upToCursor);
+  if (slashMatch) {
+    return { kind: 'slash', query: slashMatch[0].slice(1) };
   }
 
   // File completion: last token must start with @
@@ -187,8 +194,12 @@ export function __fileScanCacheSize(): number {
  *
  * Invariant: cap is MAX_FILE_MATCHES from the shared upstream source. Do NOT
  * re-cap to a smaller number here — a secondary cap silently hides entries
- * beyond it even when the dropdown scrolls. filter → sort → cap → decorate
- * matches the fileMatchesFor ordering contract.
+ * beyond it even when the dropdown scrolls.
+ *
+ * Ranking: exact-prefix matches first (alphabetical), then subsequence-only
+ * matches (alphabetical). This mirrors the slash-command ranking so abbreviations
+ * like `@src/inp` match `src/cli/input/` without displacing prefix hits. Both
+ * buckets are capped together at MAX_FILE_MATCHES.
  *
  * Directory flag is derived from the Dirent (`isDirectory()`), NOT a follow-up
  * `statSync`. Tradeoff: a symlink that points at a directory reports as a
@@ -203,21 +214,27 @@ export function buildFileCandidates(
   homeDir?: string,
 ): Candidate[] {
   const { leafPrefix, displayPrefix } = resolveQuery(query, rootDir, homeDir);
-  // Sort by NAME before the cap so the ≤MAX_FILE_MATCHES survivors are the
-  // alphabetically-first entries (readdir order is OS-unspecified), THEN
-  // decorate directories with a trailing '/'. Plain string `.sort()` on the
-  // bare name matches the sibling `fileMatchesFor` in multi-line-reader
-  // byte-for-byte (filter → sort names → cap → decorate) — keep them identical.
   const dirFlag = new Map<string, boolean>();
-  const names = entries
-    .filter((entry) => entry.name.startsWith(leafPrefix))
-    .filter((entry) => !(entry.name.startsWith('.') && !leafPrefix.startsWith('.')))
-    .map((entry) => {
-      dirFlag.set(entry.name, entry.isDirectory());
-      return entry.name;
-    })
-    .sort()
-    .slice(0, MAX_FILE_MATCHES);
+
+  // Partition into prefix-match and subsequence-only buckets.
+  // Hidden-file filter: skip dotfiles unless the leaf prefix itself starts with '.'.
+  const prefixNames: string[] = [];
+  const subseqNames: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') && !leafPrefix.startsWith('.')) continue;
+    dirFlag.set(entry.name, entry.isDirectory());
+    if (entry.name.startsWith(leafPrefix)) {
+      prefixNames.push(entry.name);
+    } else if (leafPrefix.length > 0 && isSubsequence(leafPrefix.toLowerCase(), entry.name.toLowerCase())) {
+      subseqNames.push(entry.name);
+    }
+  }
+
+  // Sort each bucket alphabetically, then merge and cap at MAX_FILE_MATCHES.
+  prefixNames.sort();
+  subseqNames.sort();
+  const names = [...prefixNames, ...subseqNames].slice(0, MAX_FILE_MATCHES);
+
   return names.map((name) => ({
     value: '@' + displayPrefix + name + (dirFlag.get(name) ? '/' : ''),
   }));

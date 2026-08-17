@@ -155,6 +155,22 @@ describe('planTelegramCredential — Claude models', () => {
     expect(plan.kind).toBe('missing');
   });
 
+  it('uses the refreshed token when the store still reads empty (write-back-failure fallback)', () => {
+    // Mirrors the entry.ts seam `() => loadCredential() ?? refreshedToken`: the
+    // OAuth exchange succeeded but the write-back to the store failed, so the
+    // store still returns undefined — the fresh token must not be discarded.
+    const storeRead = () => undefined; // expired / write-back failed
+    const refreshedToken = OAUTH_TOKEN;
+    const plan = planTelegramCredential('anthropic-direct', {
+      loadAnthropicCredential: () => storeRead() ?? refreshedToken,
+    });
+    expect(plan).toMatchObject({
+      kind: 'anthropic',
+      credential: OAUTH_TOKEN,
+      envVar: 'CLAUDE_CODE_OAUTH_TOKEN',
+    });
+  });
+
   it('is pure — writes nothing to process.env', () => {
     planTelegramCredential('anthropic-direct', { loadAnthropicCredential: () => OAUTH_TOKEN });
     expect(process.env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();

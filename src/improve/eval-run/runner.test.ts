@@ -25,6 +25,7 @@ import {
   runEvalCase,
   writeEvalRun,
 } from './runner.js';
+import { CURRENT_DETECTOR_VERSIONS, DETECTOR_VERSION_CHECK } from './runner.staleness.js';
 import { makeCheck } from './contracts.js';
 import {
   REPLAY_CHECK_CLOSURE_GUIDED,
@@ -157,11 +158,13 @@ function makeEvalCase(opts: {
     assertion: {
       kind: 'pattern-absent',
       patternId: pattern,
-      detectorVersion: `${pattern}@v1`,
+      // Use the live current version so the staleness guard passes by default.
+      // Tests that exercise the stale path override detectorVersion explicitly.
+      detectorVersion: CURRENT_DETECTOR_VERSIONS[pattern] ?? `${pattern}@v1`,
       rationale: 'test rationale',
     },
     provenance: {
-      detectorAtGeneration: `${pattern}@v1`,
+      detectorAtGeneration: CURRENT_DETECTOR_VERSIONS[pattern] ?? `${pattern}@v1`,
       fingerprintAtGeneration: null,
       cardOccurrenceCountAtGeneration: 1,
       cardLastSeenAtGeneration: '2026-06-11T11:00:00.000Z',
@@ -260,9 +263,11 @@ describe('runEvalCase', () => {
     // fixture-integrity is always the first check.
     expect(run.checks[0]?.name).toBe('fixture-integrity');
     expect(run.checks[0]?.status).toBe('pass');
-    // fixture-integrity + 4 circuit-breaker checks + 2 fixture-replay checks.
+    // fixture-integrity + detector-version + 4 circuit-breaker checks + 2
+    // fixture-replay checks = 8 total.
     expect(run.checks.every((c) => c.status === 'pass')).toBe(true);
-    expect(run.checks).toHaveLength(7);
+    expect(run.checks).toHaveLength(8);
+    expect(run.checks.find((c) => c.name === DETECTOR_VERSION_CHECK)?.status).toBe('pass');
     expect(run.checks.find((c) => c.name === REPLAY_CHECK_REPRODUCES)?.status).toBe('pass');
     expect(run.checks.find((c) => c.name === REPLAY_CHECK_NEUTRALIZED)?.status).toBe('pass');
   });
@@ -560,6 +565,74 @@ describe('runEvalCase fixture-replay', () => {
     expect(run.status).toBe('unsupported');
     expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('skipped');
     expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runEvalCase — detector-version staleness guard
+// ---------------------------------------------------------------------------
+
+describe('runEvalCase detector-version staleness guard', () => {
+  const baseCtx = {
+    evalRunId: 'slug-run-20260611-aabbcc',
+    now: FIXED_NOW,
+    clockMs: stubClock([0, 2]),
+  };
+
+  it('passes the version check and leaves status unchanged when versions match', async () => {
+    // makeEvalCase sets detectorVersion to the current live version by default.
+    const run = await runEvalCase(makeEvalCase({ pattern: 'repeated-tool-use' }), baseCtx);
+
+    const vc = run.checks.find((c) => c.name === DETECTOR_VERSION_CHECK);
+    expect(vc).toBeDefined();
+    expect(vc?.status).toBe('pass');
+    expect(vc?.expected).toBe(CURRENT_DETECTOR_VERSIONS['repeated-tool-use']);
+    expect(vc?.actual).toBe(CURRENT_DETECTOR_VERSIONS['repeated-tool-use']);
+    // Matching version → no staleness note added.
+    expect(run.notes.some((n) => n.text.includes('stale'))).toBe(false);
+  });
+
+  it('emits a fail check and a staleness note when detectorVersion is outdated', async () => {
+    // Build an eval-case with a deliberately old version string.
+    const staleCase = makeEvalCase({ pattern: 'repeated-tool-use' });
+    const outdatedVersion = 'repeated-tool-use@v0';
+    const staledCase = EvalCaseSchema.parse({
+      ...staleCase,
+      assertion: { ...staleCase.assertion, detectorVersion: outdatedVersion },
+    });
+
+    const run = await runEvalCase(staledCase, baseCtx);
+
+    expect(run.status).toBe('fail');
+    const vc = run.checks.find((c) => c.name === DETECTOR_VERSION_CHECK);
+    expect(vc).toBeDefined();
+    expect(vc?.status).toBe('fail');
+    expect(vc?.expected).toBe(CURRENT_DETECTOR_VERSIONS['repeated-tool-use']);
+    expect(vc?.actual).toBe(outdatedVersion);
+    // The staleness note must name both versions and the remediation command.
+    expect(run.notes.length).toBeGreaterThanOrEqual(1);
+    const note = run.notes.find((n) => n.text.includes('stale'));
+    expect(note).toBeDefined();
+    expect(note?.text).toContain(outdatedVersion);
+    expect(note?.text).toContain(CURRENT_DETECTOR_VERSIONS['repeated-tool-use'] as string);
+    expect(note?.text).toContain('eval-gen');
+  });
+
+  it('the staleness fail check beats a passing contract (version mismatch forces fail)', async () => {
+    // Even when the guardrail contract passes, a stale detectorVersion must
+    // force the run to `fail` — a stale eval-case cannot be trusted.
+    const staleCase = makeEvalCase({ pattern: 'tool-failure-density' });
+    const staledCase = EvalCaseSchema.parse({
+      ...staleCase,
+      assertion: { ...staleCase.assertion, detectorVersion: 'tool-failure-density@v0' },
+    });
+
+    const run = await runEvalCase(staledCase, baseCtx);
+    expect(run.status).toBe('fail');
+    // The contract itself still runs and passes …
+    expect(run.checks.filter((c) => c.name !== DETECTOR_VERSION_CHECK).some((c) => c.status === 'fail')).toBe(false);
+    // … but the staleness check forces the top-line status to fail.
+    expect(run.checks.find((c) => c.name === DETECTOR_VERSION_CHECK)?.status).toBe('fail');
   });
 });
 

@@ -22,7 +22,7 @@
  */
 
 import { providerForModel, type ProviderRouteHints } from '../providers/index.js';
-import { loadClaudeCodeOauthToken } from './keychain.js';
+import { loadClaudeCodeOauthToken, refreshClaudeCodeOauthToken } from './keychain.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -42,6 +42,35 @@ export function loadAnthropicCredential(): string | undefined {
     env.CLAUDE_CODE_OAUTH_TOKEN ||
     loadClaudeCodeOauthToken()
   );
+}
+
+/**
+ * Startup preload for the Claude Code keychain OAuth token.
+ *
+ * Refreshes a near-expiry / expired keychain OAuth access token and writes it
+ * back to the store BEFORE a synchronous credential read, but only when that
+ * keychain entry is the credential that will actually be used: an
+ * Anthropic-routed provider with no env credential (`ANTHROPIC_API_KEY` /
+ * `CLAUDE_CODE_OAUTH_TOKEN` take precedence and never need a refresh).
+ *
+ * The guard matters for two reasons the unconditional call did not handle:
+ *   1. OpenAI / xAI / local users, and Anthropic users already authenticated
+ *      via an env var, never read this keychain entry — so refreshing it is
+ *      dead work (a `security` subprocess on macOS) and can print a spurious
+ *      "OAuth token expired" warning from a stale `claude login` entry.
+ *   2. It keeps a network refresh off the startup path for those users.
+ *
+ * Returns the fresh access token when a refresh occurred and produced one, so
+ * callers can use it as a fallback if the write-back to the credential store
+ * failed (locked / read-only keychain); returns `undefined` when the guard
+ * skipped the refresh or no token was available. Never throws.
+ */
+export async function preloadClaudeKeychainOAuth(
+  provider: string,
+): Promise<string | undefined> {
+  if (provider !== 'anthropic-direct') return undefined;
+  if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) return undefined;
+  return refreshClaudeCodeOauthToken();
 }
 
 /**

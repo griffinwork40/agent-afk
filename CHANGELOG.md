@@ -11,6 +11,35 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.124.1] - 2026-08-17
+
+### Changed
+- shrink streamResponse (#890, #1073) (#1110) (517e6d5d)
+
+## [5.124.0] - 2026-08-17
+
+### Added
+- status-line turn/budget indicator + parallel fan-out count (#516) (#1113) (6fb028f0)
+
+## [5.123.13] - 2026-08-17
+
+### Changed
+- extract concerns from forkSubagent to shrink the 496-LOC function (#1109) (a8fa87d9)
+- terminal-width discipline gate + width-resize pty scenarios (#939) (#1112) (9b836f0b)
+
+## [5.123.12] - 2026-08-17
+
+### Fixed
+- refresh expired OAuth token at startup before sync credential read (#1111) (91357ead)
+
+## [5.123.11] - 2026-08-17
+
+### Fixed
+- guard against stale detectorVersion replay (#860) (#1108) (0e20b32d)
+
+### Changed
+- add terminal-width discipline audit gate (#939) (#1107) (7567453a)
+
 ## [5.123.10] - 2026-08-17
 
 ### Changed

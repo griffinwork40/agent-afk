@@ -71,6 +71,24 @@ export interface StatusLineFields {
    * `formatContextBar`.
    */
   quotaWindows?: QuotaWindows;
+  /**
+   * Current turn number (1-based count of completed turns in this session).
+   * Rendered as `turn N` when no budget is set, or `turn N/M` when `maxTurns`
+   * is also provided. Undefined means "no turn info available yet" and draws no
+   * segment at all.
+   *
+   * Given a LOW drop priority (sheds before branch, after cost) so it never
+   * pushes model/mode off the line on narrow terminals. The N/M form reveals
+   * budget constraint — valuable during a bounded run, invisible otherwise.
+   */
+  turnCount?: number;
+  /**
+   * Maximum turns configured for this session (from `--max-turns` / `maxTurns`
+   * config). When present alongside `turnCount`, renders the indicator as
+   * `turn N/M` so the user can see how far into the budget they are. Optional —
+   * 0 or undefined means "no turn cap" and the segment shows just `turn N`.
+   */
+  maxTurns?: number;
 }
 
 interface StatusLineOpts {
@@ -568,6 +586,22 @@ export class StatusLine {
         const priority = quota.severity === 'critical' && !quota.stale ? 0 : 5;
         parts.push({ text: quota.text, droppablePriority: priority });
       }
+    }
+
+    // Turn / budget indicator — droppablePriority 6 (shed FIRST, before quota
+    // at calm and tokens). Useful during bounded runs (`--max-turns N`) where
+    // the operator needs to see how far into the budget the session is, but low
+    // enough value on wide terminals that it sheds harmlessly when there is no
+    // room. Renders `turn N` without a cap or `turn N/M` when maxTurns > 0.
+    // Priority 6 is the highest number in the shed order and therefore the
+    // FIRST droppable to go — matching the "LOW drop-priority" contract in the
+    // task spec (shed before model/mode, which are never-drop).
+    if (f.turnCount !== undefined) {
+      const capSuffix = f.maxTurns && f.maxTurns > 0 ? `/${f.maxTurns}` : '';
+      parts.push({
+        text: palette.chrome(`turn ${f.turnCount}${capSuffix}`),
+        droppablePriority: 6, // drop first — most peripheral; sheds before tokens (4) and quota-calm (5)
+      });
     }
 
     // Join with separator and measure the result.

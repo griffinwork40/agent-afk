@@ -21,6 +21,7 @@ import { isDebugEnabled } from '../../utils/debug.js';
 import { syntheticResult, type SourceState } from './stream-renderer-source.js';
 import {
   childBannerEvent,
+  countRunningChildren,
   deriveChildBanner,
   type ChildActivityTracker,
 } from './child-activity-select.js';
@@ -160,11 +161,12 @@ export function registerOverlaySlots(
       // stats must be re-scoped along with the clause.
       const childBanner = modelActivity ? undefined : deriveChildBanner(ctx);
       const activity = modelActivity ?? childBanner?.activity;
+      const runningCount = countRunningChildren(ctx.sources);
       for (const progress of ctx.lastProgressByTask.values()) {
         const event = childBanner
           ? { ...progress, ...childBanner.stats, lastToolName: undefined }
           : progress;
-        bannerLines.push(...formatProgressBanner(event, undefined, activity, stopping));
+        bannerLines.push(...formatProgressBanner(event, undefined, activity, stopping, runningCount));
       }
       // ESC soft-stop must give visible feedback even on a text-only turn that
       // never emitted a `progress` event (lastProgressByTask empty). Synthesize
@@ -184,6 +186,7 @@ export function registerOverlaySlots(
             undefined,
             undefined,
             true,
+            runningCount,
           ),
         );
       }
@@ -198,6 +201,7 @@ export function registerOverlaySlots(
             undefined,
             activity,
             stopping,
+            runningCount,
           ),
         );
       }
