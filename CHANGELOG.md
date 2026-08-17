@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.124.0] - 2026-08-17
+
+### Added
+- status-line turn/budget indicator + parallel fan-out count (#516) (#1113) (6fb028f0)
+
 ## [5.123.13] - 2026-08-17
 
 ### Changed
