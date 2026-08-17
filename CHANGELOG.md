@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.9] - 2026-08-17
+
+### Fixed
+- use flushCompletedRoots on dispose path to prevent blank-row gaps (#1100) (c1f4486d)
+
 ## [5.123.8] - 2026-08-17
 
 ### Changed
