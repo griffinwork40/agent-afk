@@ -771,6 +771,8 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('refuses duplicate safe calls once failures reach the threshold within a batch', async () => {
+      vi.stubEnv('AFK_DEBUG', '1');
+      const debugSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const handler = vi.fn<ToolHandler>().mockResolvedValue({
         content: 'same failure',
         isError: true,
@@ -793,6 +795,11 @@ describe('SessionToolDispatcher', () => {
         isError: true,
         failureClass: 'repeat-failure',
       });
+      expect(debugSpy).toHaveBeenCalledWith(
+        `[repeat-failure-guard #723] refused echo after ${REPEAT_FAILURE_REFUSAL_THRESHOLD} identical failures`,
+      );
+      debugSpy.mockRestore();
+      vi.unstubAllEnvs();
     });
 
     it('records duplicate safe-call outcomes in input order, not settlement order', async () => {

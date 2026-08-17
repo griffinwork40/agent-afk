@@ -17,7 +17,7 @@ import {
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { abortFailureClass } from '../abort-reason.js';
-import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
+
 import type { HookRegistry, PreToolUseContext, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
@@ -52,11 +52,9 @@ import {
   SUSPECTED_LOOP_WINDOW_SIZE,
   type SuspectedLoopWindow,
 } from './suspected-loop-detector.js';
-import {
-  REPEAT_FAILURE_REFUSAL_THRESHOLD,
-  RepeatFailureGuard,
-  repeatFailureFingerprint,
-} from './repeat-failure-guard.js';
+import { RepeatFailureGuard } from './repeat-failure-guard.js';
+import { runConcurrentBatch, runSequentialBatch } from './dispatcher.batch-process.js';
+import type { IndexedCall, BatchExecDeps } from './dispatcher.batch-process.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -1010,6 +1008,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * Hook ordering: PreToolUse fires sequentially for every call BEFORE any
    * execution starts. Blocked calls get an immediate error result and are
    * excluded from execution. PostToolUse fires per-tool after completion.
+   *
+   * Implementation: the two execution branches (concurrent wave-admission and
+   * sequential loop) are extracted into {@link runConcurrentBatch} and
+   * {@link runSequentialBatch} in `dispatcher.batch-process.ts` to reduce
+   * nesting depth. This method retains the phase-1 gate loop, batch partitioning,
+   * batch-stamp pass, and the reset-on-success denial-breaker reset.
    */
   async executeBatch(calls: ToolCall[]): Promise<ToolResult[]> {
     if (calls.length === 0) return [];
@@ -1038,7 +1042,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
 
     // Phase 2: partition non-blocked calls into batches and execute.
-    const executableCalls = calls
+    const executableCalls: IndexedCall[] = calls
       .map((call, i) => ({ call, originalIndex: i }))
       .filter((_, i) => !blocked.has(i));
 
@@ -1049,136 +1053,29 @@ export class SessionToolDispatcher implements ToolDispatcher {
       this.classifier,
     );
 
+    // Dependency bundle threaded into the extracted batch helpers.
+    // Per-call abort check, not batch-level: each ToolCall carries its own
+    // `signal` and they are not type-constrained to be identical across a
+    // batch. Checking only `calls[0]!.signal` was correct by coincidence
+    // because the provider loop currently assigns the same per-turn signal
+    // to every call, but a future refactor to per-tool signals would
+    // silently misbehave in both directions — falsely aborting fresh calls
+    // when call[0] is stale, and falsely dispatching aborted calls when
+    // call[0] is fresh. Both helpers perform per-call abort checks.
+    const batchDeps: BatchExecDeps = {
+      repeatFailureGuard: this.repeatFailureGuard,
+      repeatBreakerExemptTools: REPEAT_BREAKER_EXEMPT_TOOLS,
+      executeCore: (call) => this.executeCore(call),
+      subagentExecutor: this.subagentExecutor,
+      sessionId: this.sessionId,
+      maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
+    };
+
     for (const batch of batches) {
-      // Per-call abort check, not batch-level: each ToolCall carries its own
-      // `signal` and they are not type-constrained to be identical across a
-      // batch. Checking only `calls[0]!.signal` was correct by coincidence
-      // because the provider loop currently assigns the same per-turn signal
-      // to every call, but a future refactor to per-tool signals would
-      // silently misbehave in both directions — falsely aborting fresh calls
-      // when call[0] is stale, and falsely dispatching aborted calls when
-      // call[0] is fresh. See the parallel-branch parity below.
       if (batch.isConcurrencySafe) {
-        // Admit calls in waves. Each normalized fingerprint gets only enough
-        // slots to reach the threshold, so a duplicate fan-out cannot run past
-        // the guard before its earlier results are known. Independent calls
-        // retain the existing bounded concurrency.
-        let pending = [...batch.indices];
-        while (pending.length > 0) {
-          const admittedByFingerprint = new Map<string, number>();
-          const wave: number[] = [];
-          const deferred: number[] = [];
-          for (const batchIdx of pending) {
-            const { call, originalIndex } = executableCalls[batchIdx]!;
-            const refusal = this.checkRepeatFailureGuard(call);
-            if (refusal) {
-              results[originalIndex] = refusal;
-              continue;
-            }
-            if (REPEAT_BREAKER_EXEMPT_TOOLS.has(call.name)) {
-              wave.push(batchIdx);
-              continue;
-            }
-            const fingerprint = repeatFailureFingerprint(call);
-            const capacity =
-              REPEAT_FAILURE_REFUSAL_THRESHOLD - this.repeatFailureGuard.streakFor(call);
-            const admitted = admittedByFingerprint.get(fingerprint) ?? 0;
-            if (admitted < capacity) {
-              admittedByFingerprint.set(fingerprint, admitted + 1);
-              wave.push(batchIdx);
-            } else {
-              deferred.push(batchIdx);
-            }
-          }
-          pending = deferred;
-
-          // Wave manifest: notify the subagent executor when ≥2 agent calls
-          // are about to run concurrently so it can persist dispatch state for
-          // interrupted-session recovery. Fire-and-forget; never throws.
-          const agentCallsInWave = wave
-            .map((batchIdx) => executableCalls[batchIdx]?.call)
-            .filter((c): c is ToolCall => c !== undefined && c.name === 'agent');
-          if (agentCallsInWave.length >= 2 && this.subagentExecutor) {
-            try {
-              this.subagentExecutor.notifyWaveStart(
-                agentCallsInWave,
-                this.sessionId ?? '',
-                null,
-              );
-            } catch {
-              // Fire-and-forget: manifest errors must never abort a wave.
-            }
-          }
-
-          // Bounded concurrency remains in force within each admission wave.
-          const settled = await settleWithConcurrencyLimit(
-            wave,
-            this.maxConcurrentSafeCalls,
-            async (batchIdx) => {
-              const { call, originalIndex } = executableCalls[batchIdx]!;
-              if (call.signal.aborted) {
-                return {
-                  result: {
-                    content: 'Tool call aborted',
-                    isError: true,
-                    failureClass: abortFailureClass(call.signal),
-                  } as ToolResult,
-                  originalIndex,
-                };
-              }
-              const result = await this.executeCore(call);
-              return { result, originalIndex };
-            },
-          );
-          for (const outcome of settled) {
-            if (outcome.status === 'fulfilled') {
-              results[outcome.value.originalIndex] = outcome.value.result;
-            } else {
-              // Invariant: executeCore catches today; retain this safety net
-              // for a future refactor that permits a rejection to escape.
-              const msg =
-                outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
-              const batchIdx = wave[settled.indexOf(outcome)]!;
-              results[executableCalls[batchIdx]!.originalIndex] = {
-                content: `Tool execution error: ${msg}`,
-                isError: true,
-              };
-            }
-          }
-          // Apply observations only after every handler settles, and in the
-          // batch's original call order rather than completion order.
-          for (const batchIdx of wave) {
-            const { call, originalIndex } = executableCalls[batchIdx]!;
-            const result = results[originalIndex];
-            if (result !== undefined && result.failureClass !== 'abort') {
-              this.repeatFailureGuard.note(call, result);
-            }
-          }
-          // Wave manifest: clear the active wave after all units settled.
-          if (agentCallsInWave.length >= 2 && this.subagentExecutor) {
-            try {
-              this.subagentExecutor.notifyWaveEnd();
-            } catch {
-              // Fire-and-forget.
-            }
-          }
-        }
+        await runConcurrentBatch(batch, executableCalls, results, batchDeps);
       } else {
-        for (const batchIdx of batch.indices) {
-          const { call, originalIndex } = executableCalls[batchIdx]!;
-          if (call.signal.aborted) {
-            results[originalIndex] = { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
-            continue;
-          }
-          const refusal = this.checkRepeatFailureGuard(call);
-          if (refusal) {
-            results[originalIndex] = refusal;
-            continue;
-          }
-          const result = await this.executeCore(call);
-          results[originalIndex] = result;
-          this.repeatFailureGuard.note(call, result);
-        }
+        await runSequentialBatch(batch, executableCalls, results, batchDeps);
       }
 
       // Stamp batch membership onto each result so downstream consumers

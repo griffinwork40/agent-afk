@@ -16,7 +16,6 @@
     "src/agent/subagent.ts::SubagentManager.forkSubagent": { "loc": 496, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/handle.ts::SubagentHandleImpl.streamToFinalMessage": { "loc": 232, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/compose-executor.ts::ComposeExecutor.execute": { "loc": 329, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/tools/dispatcher.ts::SessionToolDispatcher.executeBatch": { "loc": 201, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/bash.ts::createBashHandler": { "loc": 318, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/grep.ts::createGrepHandler": { "loc": 237, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent-executor.ts::SubagentExecutor.executeOnce": { "loc": 399, "reason": "legacy: predates the function-size gate; pending helper extraction" },
