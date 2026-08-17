@@ -34,20 +34,37 @@ export function* emitNonToolUseTerminal(
   // end the turn SILENTLY, indistinguishable from a hang: the operator sees a
   // turn that "stopped" with no answer and no reason. Worse, the flagged
   // content stays in the conversation, so every later turn refuses identically
-  // — the reported "it stopped and I can't send anything else". Surface an
-  // explicit, display-only notice (NOT pushed to history — it is
-  // operator-facing, not model context) so the refusal is legible and the
-  // operator can rephrase or start a fresh session.
+  // — the reported "it stopped and I can't send anything else".
+  //
+  // Issue #970: migrate from `assistant.message` to the dedicated `notice`
+  // channel. The refusal operator message was always display-only (never pushed
+  // to model history), but riding on `assistant.message` meant it ended up in
+  // `conversationHistory` (stream-consumer.ts pushes every non-empty
+  // assistant.message there). The `notice` channel renders on all live surfaces
+  // and is explicitly excluded from conversationHistory and from `finalMessage`
+  // capture in handle.ts — matching the "display-only" claim the comment above
+  // has always made but that `assistant.message` could not fully honour.
+  //
+  // If the model returned partial text alongside the refusal, yield it as a
+  // real assistant.message first so the content is visible and enters history
+  // in the normal way (it is genuine model output). The notice then follows as
+  // a separate operator-facing annotation.
   if (turnResult.stopReason === 'refusal') {
+    if (turnResult.text.length > 0) {
+      yield {
+        type: 'assistant.message',
+        text: turnResult.text,
+        sessionId: input.ctx.sessionId,
+      };
+    }
     yield {
-      type: 'assistant.message',
+      type: 'notice',
       text:
-        turnResult.text.length > 0
-          ? turnResult.text
-          : 'The model stopped with a content-safety refusal (stop_reason: "refusal") and returned no output. ' +
-            "This is Anthropic's safety system declining the request — not an afk error. " +
-            'Because the flagged context stays in the conversation, follow-up messages will likely be refused the same way; ' +
-            'rephrase the request or start a fresh session to continue.',
+        'The model stopped with a content-safety refusal (stop_reason: "refusal") and returned no output. ' +
+        "This is Anthropic's safety system declining the request — not an afk error. " +
+        'Because the flagged context stays in the conversation, follow-up messages will likely be refused the same way; ' +
+        'rephrase the request or start a fresh session to continue.',
+      kind: 'refusal' as const,
       sessionId: input.ctx.sessionId,
     };
     yield {
@@ -93,10 +110,21 @@ export function* emitNonToolUseTerminal(
   // branch "via an empty-text turn the stream consumer drops"; that assumption
   // is load-bearing and this branch must not break it.
   //
-  // Consequence, accepted deliberately: a truncation with no partial text stays
-  // invisible on live surfaces (unchanged from before #952). Fixing that needs a
-  // display-only event channel that renders WITHOUT becoming a terminal message
-  // — tracked as a follow-up, not bolted on here.
+  // Issue #970: a textless truncation previously stayed invisible on every live
+  // surface (REPL, Telegram, chat) — unchanged from before #952 and explicitly
+  // accepted as a deliberate consequence there. Now that the `notice` channel
+  // exists, emit it for the textless case so the operator sees the truncation
+  // without the event impersonating model output or touching conversationHistory.
+  //
+  // Invariant (#960): the textless-turn invariant is PRESERVED. A notice is NOT
+  // an `assistant.message`, so `stream-consumer.ts case 'notice':` returns a
+  // `{type:'notice'}` OutputEvent — NOT a `{type:'message'}`. The `handle.ts`
+  // `finalMessage` capture reads only `{type:'message'}` events, so a textless
+  // turn still leaves `finalMessage` unset, still reaches the ZERO-OUTPUT branch
+  // that stamps STREAM_INCOMPLETE and throws, and still resolves as `failed`.
+  // The retry predicate, `canRedispatch`, and `sideEffectFree` logic are
+  // untouched — this is additive visibility only. (#724 durability is out of
+  // scope for this PR.)
   const truncationText = isTruncationStopReason(turnResult.stopReason)
     ? truncationNotice(turnResult.toolUseBlocks.map((b) => b.name), turnResult.stopReason)
     : null;
@@ -116,6 +144,18 @@ export function* emitNonToolUseTerminal(
         sessionId: input.ctx.sessionId,
       };
     }
+  } else if (truncationText !== null) {
+    // Textless truncation: the model produced no output before hitting the
+    // output-token cap. Emit via the display-only `notice` channel so the
+    // operator sees the event without it becoming a terminal message. The
+    // zero-output detection chain is unaffected — `notice` is not a
+    // `{type:'message'}` and `finalMessage` in handle.ts stays unset.
+    yield {
+      type: 'notice',
+      text: truncationText,
+      kind: 'truncation' as const,
+      sessionId: input.ctx.sessionId,
+    };
   }
 
   // Anthropic API contract: every `tool_use` block in assistant content MUST be

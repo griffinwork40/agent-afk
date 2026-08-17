@@ -738,18 +738,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // applied AFTER the priorTurns push above: the notice is operator-facing
     // and must not enter conversation history.
     //
-    // Invariant (#960): the notice rides ONLY on non-empty model text. A turn
-    // that produced NO text must keep yielding an EMPTY assistant.message, so
-    // that stream-consumer's `if (event.text)` gate drops it and the turn stays
-    // textless downstream. That absence is load-bearing: it is what leaves
-    // `finalMessage` unset in `subagent/handle.ts`, letting the run reach the
-    // ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE and THROWS — which
-    // resolves a zero-output child as `failed` rather than a false `succeeded`,
-    // and lets `stream-cut-retry.ts` re-dispatch a read-only child that
-    // produced nothing. Substituting the notice as the message body here would
-    // make that chain unreachable and hand the parent a SUCCESS whose entire
-    // content is this warning. Mirrors the identical rule in
-    // `anthropic-direct/loop/turn-terminal.ts`.
+    // Issue #970: textless truncations now use the `notice` channel instead of
+    // silently dropping. See the identical logic in
+    // `anthropic-direct/loop/turn-terminal.ts` for the full invariant chain.
+    //
+    // Invariant (#960): the zero-output chain is PRESERVED. A `notice` event is
+    // not an `assistant.message`, so stream-consumer's `case 'notice':` returns
+    // a `{type:'notice'}` OutputEvent — NOT a `{type:'message'}`. The
+    // `handle.ts` `finalMessage` capture reads only `{type:'message'}` events,
+    // so a textless turn still leaves `finalMessage` unset, still reaches the
+    // ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE and throws, and still
+    // resolves as `failed`. The retry predicate, `canRedispatch`, and
+    // `sideEffectFree` logic are untouched — this is additive visibility only.
     const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
       ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
           // The ChatGPT OAuth Responses backend rejects every output-cap
@@ -760,14 +760,33 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           ),
         })
       : null;
-    yield {
-      type: 'assistant.message',
-      text:
-        truncationText && finalAssistantText.length > 0
-          ? `${finalAssistantText}\n\n${truncationText}`
-          : finalAssistantText,
-      sessionId: this.initSessionId,
-    };
+    if (finalAssistantText.length > 0) {
+      yield {
+        type: 'assistant.message',
+        text:
+          truncationText
+            ? `${finalAssistantText}\n\n${truncationText}`
+            : finalAssistantText,
+        sessionId: this.initSessionId,
+      };
+    } else {
+      // Textless turn: emit the plain assistant.message (possibly empty) so the
+      // zero-output detection chain is unaffected, then — if truncated — also
+      // emit a notice so the operator sees the event on live surfaces.
+      yield {
+        type: 'assistant.message',
+        text: finalAssistantText, // empty string → stream-consumer drops it
+        sessionId: this.initSessionId,
+      };
+      if (truncationText !== null) {
+        yield {
+          type: 'notice',
+          text: truncationText,
+          kind: 'truncation' as const,
+          sessionId: this.initSessionId,
+        };
+      }
+    }
     // If the turn was cut short by a spent budget, preserve that signal for
     // closure classification (session/closure-reason.ts) and telemetry, even
     // though the wind-down round itself ended naturally. The reason distinguishes

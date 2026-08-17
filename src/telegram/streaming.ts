@@ -289,6 +289,17 @@ export async function streamResponse(
             state.answerText += `\n\n💡 ${event.suggestion}`;
             await sendOrEdit(state, ctx, chatId, livePreview());
           }
+          // Display-only harness notice (issue #970). Appended inline as a
+          // distinct italic info line so the operator sees truncations and
+          // refusals without the text blending with model output. The `ℹ`
+          // prefix makes the provenance clear. Not funnelled through answerText
+          // (that carries genuine model output only) — accumulated is the write
+          // target so `livePreview()` includes it in the sent message.
+          if (event.type === 'notice') {
+            const noticeText = `\n\n_ℹ ${event.text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}_`;
+            state.accumulated += noticeText;
+            await sendOrEdit(state, ctx, chatId, livePreview());
+          }
           if (event.type === 'paused') { await handlePaused(event, handlerParams); continue; }
           if (event.type === 'resumed') { await handleResumed(event, handlerParams); continue; }
           if (event.type === 'done') { await handleDone(event.metadata, handlerParams); break; }

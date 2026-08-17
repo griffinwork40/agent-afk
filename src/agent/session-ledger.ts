@@ -143,6 +143,10 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
       };
     case 'resumed':
       return { kind: 'resumed' };
+    case 'notice':
+      // Display-only harness notice (issue #970). Skipped from the ledger
+      // — it is operator-facing chrome, not a session event worth persisting.
+      return null;
     default:
       // progress | suggestion | stream_retry | panel — intentionally skipped.
       return null;
