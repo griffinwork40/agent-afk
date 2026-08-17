@@ -30,6 +30,7 @@ import type { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
+import { renderTtfbWaitingLine, checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
 
 const PAUSE_THRESHOLD_MS = 30_000;
 const WAITING_LABEL_PREFIX = ' · waiting ';
@@ -37,9 +38,12 @@ const K = 375;
 
 /**
  * Context for lifecycle methods — encapsulates the pieces needed to arm the
- * compositor and set up overlay slots.
+ * compositor and set up overlay slots. Extends {@link TtfbTickCtx} so the
+ * TTFB elapsed-timer fields (ttfbStartedAt, ttfbDone, lastTtfbAnnotation) are
+ * defined in one place (stream-renderer-ttfb.ts) and reused here without
+ * duplication.
  */
-export interface LifecycleContext {
+export interface LifecycleContext extends TtfbTickCtx {
   compositor: TerminalCompositor | null;
   overlayComposer: OverlayComposer | null;
   stageTracker: ReturnType<typeof createStageTracker>;
@@ -49,9 +53,7 @@ export interface LifecycleContext {
   lastProgressByTask: Map<string, ProgressEvent>;
   thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   out: Writer;
-  isTTY: boolean;
   sources: Map<string, SourceState>;
-  disposed: boolean;
   pauseTickInterval: ReturnType<typeof setInterval> | null;
   resizeUnsub: (() => void) | null;
 }
@@ -91,6 +93,16 @@ export function registerOverlaySlots(
      * repaint. See stream-renderer's `setSoftStopping`.
      */
     getSoftStopping: () => boolean;
+    /**
+     * Live TTFB state accessors. When `getTtfbStartedAt()` returns a number and
+     * `isTtfbDone()` returns false, the progress-banner slot renders the elapsed
+     * waiting line in place of an empty banner (no progress events yet). Cleared
+     * by `notifyFirstContent()` on the StreamRenderer once the first content
+     * chunk arrives. Optional so existing non-TTY callers and tests are
+     * unchanged; when absent the waiting line is never shown.
+     */
+    getTtfbStartedAt?: () => number | undefined;
+    isTtfbDone?: () => boolean;
   },
 ): void {
   // Register overlay slots (thinking-live, markdown-pending, tool-lane,
@@ -205,6 +217,13 @@ export function registerOverlaySlots(
           ),
         );
       }
+      // TTFB waiting line: no progress events yet and no content has arrived.
+      // Delegates to renderTtfbWaitingLine (stream-renderer-ttfb.ts) which
+      // returns '' when the timer is inactive, done, or inside the grace period.
+      if (bannerLines.length === 0 && !stopping) {
+        const waiting = renderTtfbWaitingLine(ctx.getTtfbStartedAt, ctx.isTtfbDone, palette);
+        if (waiting) bannerLines.push(waiting);
+      }
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';
     },
   });
@@ -255,6 +274,10 @@ export function subscribeToResize(
  *     pause-annotation label (soft warning).
  *   - At stalledTicks === 2K (750 × 80ms = 60s): inject synthetic timed-out
  *     result and set source.done = true.
+ *
+ * Also delegates to `checkTtfbAnnotation` (stream-renderer-ttfb.ts) which
+ * advances the TTFB waiting-line counter once per second while no content has
+ * arrived yet (same 1 Hz change-detection pattern as the stall annotation).
  *
  * Returns true if the overlay was changed and needs a flush.
  */
@@ -311,5 +334,12 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
     ctx.overlayComposer.markDirty('tool-lane');
     ctx.overlayComposer.flush();
   }
+
+  // TTFB elapsed counter: delegates to checkTtfbAnnotation (stream-renderer-ttfb.ts)
+  // which fires a progress-banner flush at most once per second while waiting for
+  // the first content token. Mutates ctx.lastTtfbAnnotation in place; the caller
+  // (stream-renderer.ts) writes back the updated annotation on every tick.
+  checkTtfbAnnotation(ctx, now);
+
   return changed;
 }
