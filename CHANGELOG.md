@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.12] - 2026-08-17
+
+### Fixed
+- refresh expired OAuth token at startup before sync credential read (#1111) (91357ead)
+
 ## [5.123.11] - 2026-08-17
 
 ### Fixed
