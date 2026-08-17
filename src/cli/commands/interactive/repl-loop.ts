@@ -132,13 +132,17 @@ export async function runReplLoop(
     // notices into a buffer that will never drain.
     footer?.bgResultNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
-    // painted before the counts below it change. LoopStageBar positions from
-    // the full extraRows, so it must clear before mascotBar/bgStatusBar/
-    // verdictLedger shrink their counts. The mascot band positions from
-    // bgBarRowCount + ledgerRowCount, so it must clear before those two. The
-    // bg bar's clear row depends on the verdict count (its getAdjacentRows), so
-    // it must clear before the verdict ledger drops ledgerRowCount to 0. The
-    // verdict rail sits at the bottom (row N-1), independent of the others.
+    // painted before the counts below it change. HealthRail is the topmost
+    // reserved row, so it must clear first (its stop fires onRowCountChange(0)
+    // which calls loopStageBar.redraw() — loopStageBar must still be alive at
+    // that moment so it can shift back down). LoopStageBar then clears before
+    // mascotBar/bgStatusBar/verdictLedger shrink their counts. The mascot band
+    // positions from bgBarRowCount + ledgerRowCount, so it must clear before
+    // those two. The bg bar's clear row depends on the verdict count (its
+    // getAdjacentRows), so it must clear before the verdict ledger drops
+    // ledgerRowCount to 0. The verdict rail sits at the bottom (row N-1),
+    // independent of the others.
+    footer?.healthRail.stop();
     footer?.loopStageBar.stop();
     // The mascot band sits between the loop-stage rail and the bg bar, so it
     // clears after the rail above it and before the counts below it change.

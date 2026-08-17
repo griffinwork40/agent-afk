@@ -111,7 +111,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, mascotBar, verdictLedger, shellPassthrough, bgResultNotifier } =
+  const { contextPane, loopStageBar, mascotBar, healthRail, verdictLedger, shellPassthrough, bgResultNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -683,6 +683,9 @@ export async function runInputLoop(
           // a clean "waiting" state between turns rather than the last active
           // stage from the completed turn (which could be any of the five).
           loopStageBar?.repaint('observing');
+          // Refresh the health rail with the post-turn snapshot — turn count,
+          // elapsed time, and accumulated tool calls are now fully updated.
+          healthRail?.update(ctx.stats);
         },
         rearmStatus: () => ctx.statusLine.rearm(),
         onTerminalState: (state, meta) => {
@@ -704,6 +707,11 @@ export async function runInputLoop(
           // persistent compositor stays armed, corrupting log-update's
           // line tracker.
           turnState.activeCompositor = c;
+          // Dismiss the interrupt picker when the compositor clears at turn end.
+          if (c === null && turnState.interruptPickerAbort) {
+            turnState.interruptPickerAbort.abort();
+            turnState.interruptPickerAbort = null;
+          }
         },
         setInterruptNotifier: (fn) => {
           turnState.notifyInterrupting = fn;
@@ -725,6 +733,9 @@ export async function runInputLoop(
         async onContextProgress() {
           await ctx.contextSampler.refresh();
           ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
+          // Refresh the health rail so the context-usage percentage tracks
+          // mid-turn progress, not just end-of-turn snapshots.
+          healthRail?.update(ctx.stats);
         },
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is
