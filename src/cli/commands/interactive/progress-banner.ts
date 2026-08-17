@@ -15,11 +15,12 @@ import { sanitizeLabel } from './tool-lane-format-sanitize.js';
  * provided `columns` override used in tests).  Leaves ANSI reset codes intact
  * so the caller's `palette.dim(…)` wrapper still closes correctly.
  *
- * Falls back to 80 columns when `process.stdout.columns` is undefined (e.g.
- * non-TTY pipes) and skips clamping when `columns` is explicitly `Infinity`.
+ * Terminal width is read through `getTerminalWidth()` — never via raw
+ * `process.stdout.columns` — so the 80-column fallback for non-TTY pipes is
+ * centralised in `src/cli/terminal-size.ts`.
  */
 function clampToTerminal(line: string, columns?: number): string {
-  const cols = columns ?? process.stdout.columns ?? 80;
+  const cols = columns ?? getTerminalWidth();
   if (!Number.isFinite(cols) || cols <= 0) return line;
   return truncateDisplayWidth(line, cols);
 }
