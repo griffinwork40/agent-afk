@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.123.8] - 2026-08-17
+
+### Changed
+- reduce nesting depth in executeBatch (#1074) (#1099) (2d95f20a)
+
 ## [5.123.7] - 2026-08-17
 
 ### Changed
