@@ -92,6 +92,7 @@ function baseArgs(overrides?: Partial<BuildChildConfigArgs>): BuildChildConfigAr
       systemPrompt: 'parent base prompt',
       baseUrl: undefined,
       openaiBaseUrl: undefined,
+      xaiBaseUrl: undefined,
     },
     resolveApiKeyForModel: vi.fn((_m: string) => 'child-resolved-key'),
     createChildExecutor: vi.fn((_ctx: SubagentExecutorContext) => stubChildExecutor()),
@@ -325,6 +326,7 @@ describe('buildChildConfig', () => {
             systemPrompt: undefined,
             baseUrl: undefined,
             openaiBaseUrl: undefined,
+            xaiBaseUrl: undefined,
           },
         }),
       );

@@ -66,7 +66,7 @@ export interface SubagentExecutorContext {
    * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
    * workers that must not inherit routing directives. See ComposeExecutorContext.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'skillDispatchName'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.

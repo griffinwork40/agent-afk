@@ -88,6 +88,8 @@ export interface WireExecutorsOptions {
   baseUrl?: string;
   /** OpenAI-compatible endpoint forwarded to OpenAI-routed children. */
   openaiBaseUrl?: string;
+  /** xAI endpoint forwarded to xAI-routed children. */
+  xaiBaseUrl?: string;
   /**
    * Session/worktree cwd. Anchors the root manager, the named-agent scan, the
    * nested skill-executor factory, and compose DAG nodes.
@@ -162,6 +164,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     systemPrompt,
     baseUrl,
     openaiBaseUrl,
+    xaiBaseUrl,
     cwd,
     nestedCwd,
     traceWriter,
@@ -175,6 +178,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   // an absent key.
   const baseUrlOpt = baseUrl !== undefined ? { baseUrl } : {};
   const openaiBaseUrlOpt = openaiBaseUrl !== undefined ? { openaiBaseUrl } : {};
+  const xaiBaseUrlOpt = xaiBaseUrl !== undefined ? { xaiBaseUrl } : {};
   const cwdOpt = cwd !== undefined ? { cwd } : {};
   const nestedCwdOpt = nestedCwd !== undefined ? { cwd: nestedCwd } : {};
   const traceOpt = traceWriter !== undefined ? { traceWriter } : {};
@@ -244,6 +248,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...baseUrlOpt,
       ...openaiBaseUrlOpt,
+      ...xaiBaseUrlOpt,
     },
     defaultSubagentModel,
     childProviderFactory,
