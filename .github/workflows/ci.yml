@@ -62,6 +62,14 @@ jobs:
       - name: Audit chalk discipline (no raw chalk styling outside the palette)
         run: pnpm audit:chalk:check
 
+      - name: Audit terminal-width discipline (no raw process.stdout.columns outside terminal-size.ts)
+        # `check-terminal-width.ts` enforces that terminal width is only read
+        # through `getTerminalWidth()` from `src/cli/terminal-size.ts`. Raw
+        # `process.stdout.columns` reads outside that central helper bypass the
+        # 80-column fallback guard and the resize debounce, and have recurred as
+        # a bug ~7 times in 300 commits (fixed one call site at a time).
+        run: pnpm audit:width:check
+
       - name: Audit the 350-line source-file ceiling (one-way ratchet)
         # `.filesize-baseline.json` grandfathers the files that already exceeded
         # the ceiling when this gate landed. The ratchet fails four ways — a

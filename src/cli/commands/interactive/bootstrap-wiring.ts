@@ -15,6 +15,7 @@ import {
 import { formatTrustedSkillCompletion, formatTrustedSkillInFlight } from '../../trusted-skill-badge.js';
 import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js';
 import type { InputSurface } from '../../input/input-surface.js';
+import { getTerminalWidth } from '../../terminal-size.js';
 
 /**
  * Subscribe to trusted-skill start/completion events, emitting in-flight +
@@ -34,7 +35,7 @@ export function wireTrustedSkillEvents(
     completionWriter.fn(
       formatTrustedSkillInFlight(skillName, {
         isTTY: process.stdout.isTTY,
-        columns: process.stdout.columns,
+        columns: getTerminalWidth(),
       }),
     );
   };
@@ -43,7 +44,7 @@ export function wireTrustedSkillEvents(
     completionWriter.fn(
       formatTrustedSkillCompletion(result, {
         isTTY: process.stdout.isTTY,
-        columns: process.stdout.columns,
+        columns: getTerminalWidth(),
       }),
     );
     ledger.record(result);
