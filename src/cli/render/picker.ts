@@ -30,7 +30,8 @@
  * (single-element for `choice`). The compositor exits picker mode and
  * the entire frame disappears — restoring the live prompt row.
  *
- * On cancel (Esc / Ctrl+C / external abort signal): resolves with `null`.
+ * On Esc / external abort signal: resolves with `null`.
+ * On Ctrl+C: calls `opts.onCtrlC()` (if provided) then resolves with `null`.
  *
  * Invariant: the picker NEVER calls `setRawMode` or installs its own
  * `stdin.on('keypress')` listener. All input flows through the
@@ -97,6 +98,16 @@ export interface RunPickerOptions {
    * Ignored when `multi !== true`.
    */
   initialSelected?: ReadonlySet<number>;
+  /**
+   * Called when Ctrl+C is pressed inside the picker, BEFORE `finish(null)`
+   * resolves the promise. Use this to fire a hard-cancel action immediately
+   * so the picker's `null` resolution is not confused with an Esc/dismiss.
+   *
+   * Without this callback, Ctrl+C behaves identically to Esc (resolves
+   * `null`). With it, the hard-cancel fires synchronously on Ctrl+C while
+   * the picker still cleans up normally.
+   */
+  onCtrlC?: () => void;
 }
 
 const GLYPH_CURSOR = '▸';
@@ -120,7 +131,8 @@ const HELP_MULTI = '↑/↓ navigate · space toggle · enter confirm · esc can
  *    - Up/Down move the cursor.
  *    - Space toggles (multi only).
  *    - Enter confirms — resolves with the selected value(s).
- *    - Esc / Ctrl+C cancels — resolves with `null`.
+ *    - Esc cancels — resolves with `null`.
+ *    - Ctrl+C calls `opts.onCtrlC()` (if provided) then resolves with `null`.
  * 3. On resolution, `exitPickerMode` is called once. The host
  *    restores the input region.
  *
@@ -140,7 +152,7 @@ export function runPicker(
   opts: RunPickerOptions,
 ): Promise<readonly string[] | null> {
   return new Promise((resolve) => {
-    const { header, options, multi = false, signal, initialIndex = 0 } = opts;
+    const { header, options, multi = false, signal, initialIndex = 0, onCtrlC } = opts;
 
     if (options.length === 0) {
       resolve(null);
@@ -198,10 +210,17 @@ export function runPicker(
       key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string },
     ): void => {
       if (resolved) return;
-      // Cancel: Esc OR Ctrl+C. Mirrors the existing elicitation cancel
-      // semantics — picker UX matches what `:cancel` did in the
-      // numbered-text fallback (drop the question, return cancel).
-      if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+      // Esc: dismiss the picker without taking any action.
+      if (key.name === 'escape') {
+        finish(null);
+        return;
+      }
+      // Ctrl+C: hard-cancel safety hatch. Fire `onCtrlC` (if provided) BEFORE
+      // resolving so callers can trigger an immediate abort (e.g. hard-cancel)
+      // without waiting for the picker promise to settle. The picker still
+      // cleans up normally via finish(null).
+      if (key.ctrl && key.name === 'c') {
+        onCtrlC?.();
         finish(null);
         return;
       }

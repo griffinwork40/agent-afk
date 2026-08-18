@@ -8,16 +8,10 @@ import { describeForHistory } from '../../input/attachments.js';
 import { recordTurn } from '../../slash/session-stats.js';
 import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
-import { formatDuration, formatCost, formatTokens } from '../../format-utils.js';
 import { usageLimitBox } from '../../render.js';
 import { runPicker } from '../../render/picker.js';
 import { classifyError, presentError } from '../../errors/index.js';
-import { contextLimitFor } from '../../model-limits.js';
-import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
-import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
-import { formatQuotaUsage } from '../../quota-footer.js';
 import {
-  contextRatio,
   type CompletionWriter,
   type ThinkingUiMode,
   type TurnHandles,
@@ -35,10 +29,12 @@ import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { joinAtRoundSeam } from './turn-text-seam.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
-import { loadTelegramConfig, resolveAutoResumeOnUsageLimit } from '../../config.js';
+import { loadTelegramConfig } from '../../config.js';
+import { printTurnFooter } from './turn-handler.footer.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 import { promoteWithQueuedFlush, previewOneLine } from './queued-flush.js';
+import { createTurnTtfbState, emitPlainTtfbWaiting, observeFirstContent, ttfbRendererOptions } from './turn-handler.ttfb.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
@@ -67,6 +63,16 @@ export async function runTurn(
   }
 
   h.setInFlight(true);
+
+  // Capture turn-start time for the TTFB elapsed timer. Used by StreamRenderer
+  // to show "waiting for response… Ns" in the progress-banner overlay slot
+  // between prompt submission and the first streaming content token. Captured
+  // here (before any async I/O) so the timer starts at the moment the user
+  // submitted the prompt, not at first-event arrival.
+  const turnStartedAt = Date.now();
+  const turnTtfb = createTurnTtfbState(turnStartedAt);
+
+  emitPlainTtfbWaiting(completionWriter);
 
   // Terminal title (OSC 2): flip to the running state as the turn starts, so a
   // backgrounded/inactive tab reads "afk — <cwd> · running". Reset to idle at
@@ -199,6 +205,11 @@ export async function runTurn(
     // row updates on every stage transition without coupling the bar to the
     // overlay compositor. h.onStageChange is absent on non-REPL callers.
     ...(h.onStageChange ? { onStageChange: h.onStageChange } : {}),
+    // TTFB elapsed timer: pass the turn-start timestamp so the renderer can
+    // show "waiting for response… Ns" in the progress-banner overlay slot
+    // before the first streaming content token arrives. The renderer clears
+    // the line automatically when notifyFirstContent() is called below.
+    ...ttfbRendererOptions(turnTtfb),
   });
 
   // `let` (not `const`) so the resumed-event handler can swap in a fresh
@@ -416,11 +427,17 @@ export async function runTurn(
           break;
         }
 
+        const isFirstContentEvent = observeFirstContent(turnTtfb, event, streamingStarted);
+
         if (event.type === 'chunk' && event.chunk.type === 'content') {
           responseText = pendingRoundSeam
             ? joinAtRoundSeam(responseText, event.chunk.content)
             : responseText + event.chunk.content;
           pendingRoundSeam = false;
+          // Remember this before flipping streamingStarted; TTFB is cleared
+          // only after renderer.process below has staged the content repaint.
+          // That lets the content and waiting-line removal share one flush,
+          // rather than briefly painting an empty intermediate frame.
           streamingStarted = true;
         } else if (event.type === 'message' && !streamingStarted) {
           responseText = event.message.content;
@@ -650,6 +667,13 @@ export async function runTurn(
         }
 
         renderer.process(event);
+
+        if (isFirstContentEvent) {
+          // Deliberately follows process():
+          // notifyFirstContent flushes the overlay, so the markdown renderer
+          // must see the content event before the waiting slot is removed.
+          renderer.notifyFirstContent();
+        }
 
         if (event.type === 'done') {
           doneFired = true;
@@ -895,102 +919,7 @@ export async function runTurn(
   }
 }
 
-export type ContextTier = 'quiet' | 'normal' | 'caution' | 'near' | 'over';
-
-// Contract: maps a context-window usage ratio to an escalating footer line +
-// tier so the REPL warns *proactively* as a session approaches the model's
-// limit, not only once truncation is already happening. `text` is null for the
-// quiet tier (<=50% — no line, keeps short sessions uncluttered). The caller
-// maps tier -> palette color: over/near -> error, caution -> warning,
-// normal -> dim. Pure and color-free so it is unit-testable without a palette
-// or terminal. Thresholds are intentionally hardcoded (not config): 80% =
-// approaching, 95% = near, 100%+ = over.
-export function formatContextUsage(
-  contextPct: number,
-  contextLimit: number,
-): { tier: ContextTier; text: string | null } {
-  const pct = Math.round(contextPct * 100);
-  const limitStr = formatTokens(contextLimit);
-  if (contextPct >= 1.0) {
-    const overByTok = Math.round((contextPct - 1.0) * contextLimit);
-    const limitK = Math.round(contextLimit / 1000);
-    return {
-      tier: 'over',
-      text: `  context OVER ${limitK}k tok by ~${formatTokens(overByTok)} tok — model output may be silently truncated`,
-    };
-  }
-  if (contextPct >= 0.95) {
-    return {
-      tier: 'near',
-      text: `  context ${pct}% used of ${limitStr} — near limit; output may soon truncate (consider /clear or a fresh session)`,
-    };
-  }
-  if (contextPct >= 0.8) {
-    return { tier: 'caution', text: `  context ${pct}% used of ${limitStr} — approaching limit` };
-  }
-  if (contextPct > 0.5) {
-    return { tier: 'normal', text: `  context ${pct}% used of ${limitStr}` };
-  }
-  return { tier: 'quiet', text: null };
-}
-
-export function printTurnFooter(
-  meta: { durationMs?: number; totalCostUsd?: number; usage?: Record<string, unknown> } | undefined,
-  stats: SessionStats,
-  // Optional compositor-aware writer (Stage 3e). When `runTurn` calls
-  // this between `disposeRendererOnce()` and the finally block, the
-  // borrowed compositor is still armed — a raw `console.log` would
-  // corrupt log-update's line tracker and strand the verdict/footer
-  // above the live overlay. Defaults to console.log for direct callers
-  // that don't have a compositor lifecycle (tests, standalone).
-  write: (line: string) => void = console.log,
-): void {
-  if (!meta) return;
-  const parts: string[] = [];
-  if (meta.durationMs) parts.push(formatDuration(meta.durationMs));
-  if (meta.totalCostUsd !== undefined) parts.push(formatCost(meta.totalCostUsd));
-  const inTok = Number(meta.usage?.['input_tokens'] ?? 0);
-  const outTok = Number(meta.usage?.['output_tokens'] ?? 0);
-  if (inTok + outTok > 0) parts.push(formatTokens(inTok + outTok) + ' tok');
-  if (parts.length > 0) {
-    write(palette.dim('  ◦ ' + parts.join('  ·  ')));
-  }
-  const contextPct = contextRatio(stats);
-  const contextLimit = contextLimitFor(stats.model);
-  const usage = formatContextUsage(contextPct, contextLimit);
-  if (usage.text !== null) {
-    // Escalation is by severity/color, not by suppression: the footer already
-    // renders once per turn, so a single tier-colored line per turn is the
-    // expected cadence (no cross-turn tier tracking needed).
-    const colorFn =
-      usage.tier === 'over' || usage.tier === 'near'
-        ? palette.error
-        : usage.tier === 'caution'
-          ? palette.warning
-          : palette.dim;
-    write(colorFn(usage.text));
-  }
-  // Subscription quota, same cadence and tone mapping as the context line above.
-  // Ordered AFTER it deliberately: context is the constraint on THIS turn, quota
-  // is the constraint on the next hour — nearest deadline reads first. Silent
-  // below 80% (the status-line indicator covers that range ambiently) and silent
-  // forever under API-key auth, where the quota headers never arrive.
-  // The park-and-resume promise is conditional on the real retry configuration
-  // (see capNote, quota-footer.ts), so the flag is read rather than assumed.
-  // Via the memoized-tier resolver, NOT loadConfig(): the latter re-installs
-  // process-global slot bindings on every call, disqualifying it for a
-  // per-turn display read.
-  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
-    autoResume: resolveAutoResumeOnUsageLimit(),
-  });
-  if (quota.text !== null) {
-    const quotaColorFn =
-      quota.tier === 'over' || quota.tier === 'near'
-        ? palette.error
-        : quota.tier === 'caution'
-          ? palette.warning
-          : palette.dim;
-    write(quotaColorFn(quota.text));
-  }
-  write('');
-}
+// Footer helpers extracted to turn-handler.footer.ts to keep this file within
+// the baseline ceiling. Re-exported so all existing importers keep compiling.
+export type { ContextTier } from './turn-handler.footer.js';
+export { formatContextUsage, printTurnFooter } from './turn-handler.footer.js';

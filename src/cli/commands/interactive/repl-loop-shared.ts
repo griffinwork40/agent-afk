@@ -54,6 +54,14 @@ export interface TurnState {
    * turns. Null → the SIGINT handler falls back to a plain interrupt.
    */
   requestSoftStop?: (() => void) | null;
+  /**
+   * AbortController for the in-flight interrupt-and-steer picker. Set by
+   * `handleSigint` when the picker is shown; aborted on the second Ctrl+C
+   * (hard-cancel safety hatch) and automatically when the compositor clears
+   * at turn end (so the picker dismisses when the turn completes). Null when
+   * no picker is open.
+   */
+  interruptPickerAbort?: AbortController | null;
 }
 
 export function buildPrompt(mode: PermissionMode): string {

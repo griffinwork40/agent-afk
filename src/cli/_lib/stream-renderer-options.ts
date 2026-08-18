@@ -142,4 +142,19 @@ export interface StreamRendererOptions {
     stage: import('../commands/interactive/loop-stage.js').LoopStage,
     signals?: import('../commands/interactive/loop-stage.js').StageSignals,
   ) => void;
+  /**
+   * The timestamp at which the current turn started (typically `Date.now()` at
+   * the moment the user submitted the prompt). When provided and the TUI is
+   * active, the renderer shows a "waiting for response… Ns" line in the
+   * progress-banner overlay slot while no streaming content has arrived yet —
+   * bridging the TTFB (time-to-first-byte) dead zone where the terminal would
+   * otherwise show no feedback. The elapsed counter updates ~1s via the
+   * existing `checkPauseAnnotations` 80ms ticker (same mechanism as the
+   * `· waiting Ns` stall annotation, which fires when annotation text changes).
+   *
+   * Ignored when omitted or when `isTTY` is false (non-interactive surfaces
+   * have no overlay to drive). The timer clears automatically when the first
+   * streaming content chunk arrives (see `notifyFirstContent`).
+   */
+  turnStartedAt?: number;
 }
