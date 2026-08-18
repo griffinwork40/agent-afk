@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.5] - 2026-08-18
+
+### Fixed
+- stop killing telegram bot mid-session on upgrade (#1160) (165a0370)
+
 ## [5.128.4] - 2026-08-18
 
 ### Fixed
