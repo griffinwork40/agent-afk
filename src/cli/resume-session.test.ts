@@ -58,4 +58,40 @@ describe('resume-session', () => {
       sessionId: 'raw-provider-session',
     });
   });
+
+  it('appends tool summaries to assistant text when toolEvents are present', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(
+      stats,
+      'run a command',
+      'done',
+      { sessionId: 'sdk-tools' },
+      [{ toolName: 'bash', toolUseId: 'tu_1', input: 'echo hi', isError: false }],
+    );
+    saveSession(stats, 'tools-session');
+
+    const target = resolveResumeTarget({ resume: 'tools-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.assistant).toBe('done\n[Tools used: bash(echo hi)✓]');
+  });
+
+  it('leaves assistant text unchanged when turn has no toolEvents', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'hi there', { sessionId: 'sdk-notools' });
+    saveSession(stats, 'notools-session');
+
+    const target = resolveResumeTarget({ resume: 'notools-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.assistant).toBe('hi there');
+  });
+
+  it('leaves assistant text unchanged when toolEvents is an empty array', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'hi there', { sessionId: 'sdk-emptytools' }, []);
+    saveSession(stats, 'emptytools-session');
+
+    const target = resolveResumeTarget({ resume: 'emptytools-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.assistant).toBe('hi there');
+  });
 });
