@@ -53,7 +53,6 @@ import {
   readSourceEnabledState,
 } from '../../config/import-sources.js';
 
-
 export interface SkillManifestEntry {
   name: string;
   description: string;
@@ -252,6 +251,7 @@ export function collectSkillEntries(
       whenToUse: skill.whenToUse,
     });
     seen.add(name);
+    if (name.includes(':')) seen.add(name.split(':').pop()!); // bare name for plugin-walk dedup
   }
 
   // 3. Plugin skills — from SKILL.md frontmatter in plugin directories.

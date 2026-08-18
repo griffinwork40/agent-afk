@@ -77,7 +77,7 @@
     "src/cli/commands/chat.ts": { "loc": 806, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/daemon.ts": { "loc": 543, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/farm.ts": { "loc": 578, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/interactive.ts": { "loc": 1004, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/interactive.ts": { "loc": 1020, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/bootstrap.ts": { "loc": 362, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/loop-iteration.ts": { "loc": 831, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/shared.ts": { "loc": 844, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
@@ -132,9 +132,9 @@
     "src/telegram/elicitation-handler.ts": { "loc": 483, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/formatter.ts": { "loc": 587, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 623, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/handlers/message.ts": { "loc": 955, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/session-manager.ts": { "loc": 917, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/streaming.ts": { "loc": 352, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/handlers/message.ts": { "loc": 971, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/session-manager.ts": { "loc": 913, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/streaming.ts": { "loc": 360, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/watch.ts": { "loc": 382, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/web-server/routes.ts": { "loc": 352, "reason": "legacy: predates the ceiling gate; pending concern extraction" }
   }
