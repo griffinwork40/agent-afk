@@ -15,6 +15,7 @@ import { HookBlockedError } from '../../utils/errors.js';
 import { type TelegramRoute, routeFromCtx, routeKey } from '../route.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
+import { forwardProvenancePrefix } from '../forward-provenance.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { registerInboundImageBlocks } from '../../agent/content/attachment-registry.js';
 
@@ -466,20 +467,16 @@ export class MessageHandler {
       // Use spread-then-slice to count Unicode code points, not UTF-16 code units:
       // emoji and other non-BMP characters span two code units, and slicing at a
       // surrogate-pair boundary with plain .slice() produces malformed text.
-      // Prepend a system-trusted sender marker in group/supergroup chats so the
-      // model knows who sent the image (byte-identical no-op in private chats).
-      // See sender-attribution.ts for the sanitization / anti-spoofing rationale.
+      // system-trusted sender marker (no-op in private chats; see sender-attribution.ts)
       const prefix = senderPrefix(msg?.from, ctx.chat?.type);
-      // Prepend reply/quote context (if the photo replies to or quotes a message)
-      // before the sender marker, so `attribution` is the combined system-trusted
-      // preamble. Empty in the common case (no reply + private chat), keeping the
-      // no-caption path byte-identical. See reply-context.ts.
+      // reply/quote context + forward provenance (both empty in common case; see reply-context.ts, forward-provenance.ts)
       const replyCtx = replyContextPrefix({
         replyToMessage: msg?.reply_to_message as RepliedMessage | undefined,
         quote: msg?.quote,
         botId: ctx.botInfo?.id,
       });
-      const attribution = replyCtx + prefix;
+      const fwdPrefix = forwardProvenancePrefix(msg ?? {});
+      const attribution = replyCtx + fwdPrefix + prefix;
       const contentBlocks: ContentBlockParam[] = [];
       if (caption != null) {
         contentBlocks.push({ type: 'text', text: `${attribution}[User caption]: ${[...caption].slice(0, 1024).join('')}` });
@@ -559,11 +556,13 @@ export class MessageHandler {
       quote: tgMsg.quote,
       botId: ctx.botInfo?.id,
     });
-    const attributedMessageText = replyCtx + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
+    const fwdPrefix = forwardProvenancePrefix(tgMsg);
+    const attributedMessageText = replyCtx + fwdPrefix + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
     // Elicitation answers must NOT carry the reply-context marker: answering an
     // ask_question by replying to the bot's own question is the natural gesture, and
     // the resolver needs the literal answer (a "[in reply to …] 5" breaks number/
     // choice validation). Restores the pre-#688 elicitation value (senderPrefix + text).
+    // forward provenance prefix is also excluded intentionally — a forwarded elicitation answer would confuse the resolver
     const elicitationAnswer = senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
 
     // Answer consumed by active ask_question elicitation — never reaches
