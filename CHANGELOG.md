@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.132.0] - 2026-08-18
+
+### Added
+- support isolation:"worktree" with mode:"background" (#1185) (1b93bffe)
+
 ## [5.131.1] - 2026-08-18
 
 ### Fixed
