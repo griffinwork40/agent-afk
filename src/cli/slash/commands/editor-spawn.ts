@@ -47,6 +47,11 @@ export interface EditorSpawnDeps {
   filePath: string;
   /** One-line notice sink. Slash command → `ctx.out`; chord → a `commitAbove` writer. */
   notify: (kind: EditorNotifyKind, message: string) => void;
+  /** Pause periodic footer writers (health rail, bg bar, etc.) while the
+   *  editor owns the terminal. Optional — absent on non-REPL surfaces. */
+  suspendFooter?: () => void;
+  /** Resume periodic footer writers after the editor exits. */
+  resumeFooter?: () => void;
 }
 
 /**
@@ -118,9 +123,11 @@ export async function spawnEditorOnPath(deps: EditorSpawnDeps): Promise<EditorSp
     restored = true;
     try { process.stdin.resume(); } catch { /* best-effort */ }
     compositor.resumeInput();
+    deps.resumeFooter?.();
   };
 
   compositor.suspendInput();
+  deps.suspendFooter?.();
   try { process.stdin.pause(); } catch { /* best-effort */ }
 
   try {

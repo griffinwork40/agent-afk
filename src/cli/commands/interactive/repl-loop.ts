@@ -107,6 +107,15 @@ export async function runReplLoop(
 
     footer = setupFooterSubsystems(ctx, turnState);
 
+    // Invariant: periodic terminal writers (health rail 1s tick, bg-bar spinner,
+    // mascot animation) continue writing ANSI cursor escapes while a pager/editor
+    // owns the terminal via `stdio: 'inherit'`, corrupting its display. Wire
+    // stop/start on the health rail (the primary offender) as suspendFooter/
+    // resumeFooter so /transcript and /editor can bracket the handoff.
+    const f = footer;
+    ctx.slashCtx.suspendFooter = () => { f.healthRail.stop(); ctx.statusLine.stop(); };
+    ctx.slashCtx.resumeFooter = () => { ctx.statusLine.start(); f.healthRail.start(); };
+
     await runInputLoop(
       ctx,
       transcript,

@@ -29,6 +29,8 @@ export const editorCmd: SlashCommand = {
         else if (kind === 'warn') ctx.out.warn(message);
         else ctx.out.info(message);
       },
+      suspendFooter: ctx.suspendFooter,
+      resumeFooter: ctx.resumeFooter,
     });
     return 'continue';
   },

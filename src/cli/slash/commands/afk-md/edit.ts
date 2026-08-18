@@ -129,6 +129,8 @@ export async function editTarget(ctx: SlashContext, target: AfkMdTarget): Promis
       else if (kind === 'warn') ctx.out.warn(message);
       else ctx.out.info(message);
     },
+    suspendFooter: ctx.suspendFooter,
+    resumeFooter: ctx.resumeFooter,
   });
 
   if (outcome === 'no-tty' || outcome === 'no-editor') {
