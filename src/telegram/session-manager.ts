@@ -18,7 +18,8 @@ import { saveSession, loadSession, listSessions } from '../cli/session-store.js'
 import { resumeConfigFor } from '../cli/resume-session.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
-import { sessionRegistry, asHandleId } from '../agent/session/session-registry.js';
+import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
+import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -41,7 +42,7 @@ function toRoute(target: RouteTarget): TelegramRoute {
 /**
  * Session data for persistence
  */
-interface SessionData {
+export interface SessionData {
   /**
    * Telegram chat id — retained for provenance and outbound sends
    * (`stats.telegramChatId`, `bot.telegram.sendMessage(chatId, …)`). The
@@ -129,6 +130,12 @@ export interface SessionManagerOptions {
 
   /** Factory function to create agent sessions */
   createSession: (config: AgentConfig) => Promise<IAgentSession>;
+
+  /**
+   * Optional session registry override for test isolation. Defaults to the
+   * process-wide `sessionRegistry` singleton when not provided.
+   */
+  registry?: SessionRegistry;
 }
 
 /**
@@ -172,8 +179,8 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>> &
-    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>;
+  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry'>> &
+    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry'>;
 
   constructor(options: SessionManagerOptions) {
     this.options = {
@@ -187,6 +194,7 @@ export class SessionManager {
       effort: options.effort,
       botCwd: options.botCwd,
       createSession: options.createSession,
+      registry: options.registry,
     };
   }
 
@@ -200,7 +208,8 @@ export class SessionManager {
 
   /**
    * Get or create a session for a route (chat + optional topic thread).
-   * Concurrent calls share a single in-flight creation promise (no duplicate spawns).
+   * Concurrent calls share a single in-flight creation promise — two Telegram
+   * messages arriving within milliseconds must not spawn duplicate sessions.
    */
   async getSession(target: RouteTarget): Promise<IAgentSession> {
     const route = toRoute(target);
@@ -275,8 +284,8 @@ export class SessionManager {
       const session = await this.options.createSession(injectCompanionPrimer(injectHotMemory(config)));
       this.sessions.set(key, session);
       this.sessionData.set(key, data);
-      // Register with the session registry (create if absent, touch if present).
-      this._ensureRegistryHandle(route, data);
+      // Register with the session registry (best-effort: never orphan the live session).
+      try { this._ensureRegistryHandle(route, data); } catch { /* non-fatal */ }
       // Seed elicitation routing before the first turn starts. ask_question can
       // suspend that turn, so waiting for recordTelegramTurn (onComplete) would
       // deadlock a topic's first question on the General-route fallback.
@@ -319,29 +328,9 @@ export class SessionManager {
     if (data) data.lastActivity = new Date().toISOString();
   }
 
-  /**
-   * Create or resolve a session registry handle for a route. Idempotent.
-   * Uses routeKey as HandleId for backward compatibility (Step 3); a future
-   * step migrates to UUID-based ids for full cross-surface identity.
-   */
+  /** Delegate to the extracted registry-wiring module. Resolves the registry ref once. */
   private _ensureRegistryHandle(route: TelegramRoute, data: SessionData): void {
-    const key = routeKey(route);
-    const id = asHandleId(key);
-    const existing = sessionRegistry.resolve('telegram', key);
-    if (existing) {
-      sessionRegistry.touch(existing.id);
-      if (data.sessionId) sessionRegistry.attachSdkSessionId(existing.id, data.sessionId);
-      return;
-    }
-    // Singleton registry may hold the id from a prior conversation (archived or
-    // from a previous test). get() checks by id; if present, re-bind it.
-    const byId = sessionRegistry.get(id);
-    if (byId) {
-      sessionRegistry.bind(id, { surface: 'telegram', key });
-      if (data.sessionId) sessionRegistry.attachSdkSessionId(id, data.sessionId);
-      return;
-    }
-    sessionRegistry.create({ surface: 'telegram', key, model: data.model, id, sdkSessionId: data.sessionId });
+    ensureRegistryHandle(this.options.registry ?? sessionRegistry, route, data, this.options.defaultModel);
   }
 
   /** Record a completed turn. Reuses CLI's recordTurn + saveSession. Best-effort. */
@@ -569,6 +558,9 @@ export class SessionManager {
   async resetSession(target: RouteTarget): Promise<void> {
     const route = toRoute(target);
     const key = routeKey(route);
+    // Archive the registry handle FIRST so the stale handle is freed before
+    // _resetStats clears the sessionId. Best-effort: non-fatal if never registered.
+    try { archiveRegistryHandle(this.options.registry ?? sessionRegistry, key); } catch { /* best-effort */ }
     const oldSession = this.sessions.get(key);
     if (oldSession) {
       await oldSession.close();
@@ -592,6 +584,8 @@ export class SessionManager {
   async switchModel(target: RouteTarget, model: AgentModelInput): Promise<void> {
     const route = toRoute(target);
     const key = routeKey(route);
+    // Archive the stale registry handle before teardown (same rationale as resetSession).
+    try { archiveRegistryHandle(this.options.registry ?? sessionRegistry, key); } catch { /* best-effort */ }
     // Close old session
     const oldSession = this.sessions.get(key);
     if (oldSession) {
@@ -611,7 +605,9 @@ export class SessionManager {
       data.model = model;
       data.lastActivity = new Date().toISOString();
     }
-    
+
+    // Pre-register with the updated model (best-effort, non-fatal).
+    try { this._ensureRegistryHandle(route, data); } catch { /* non-fatal */ }
     // New session will be created on next message
   }
 

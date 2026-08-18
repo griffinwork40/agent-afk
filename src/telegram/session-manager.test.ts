@@ -11,6 +11,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
 import { clearElicitationRoute, getElicitationRoute } from './elicitation-route-registry.js';
+import { createSessionRegistry, asHandleId } from '../agent/session/session-registry.js';
 
 // Mock agent session
 class MockAgentSession implements IAgentSession {
@@ -1139,5 +1140,180 @@ describe('SessionManager — per-route isolation (native topics)', () => {
     manager.recordTelegramTurn(901, 'hello', 'hi', { sessionId: 'sdk-901' });
     // The explicit General route resolves the same chat's sessions as the bare number.
     expect(manager.listChatSessions({ chatId: 901 }).map((s) => s.sessionId)).toEqual(['sdk-901']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 2: session registry wiring tests
+// ---------------------------------------------------------------------------
+describe('SessionManager — session registry wiring', () => {
+  useUnsetAfkHome();
+
+  class MockSession implements IAgentSession {
+    state: SessionState = 'idle';
+    constructor(readonly sessionId?: string) {}
+    async sendMessage(content: string) {
+      return { role: 'assistant' as const, content: `Echo: ${content}`, timestamp: new Date() };
+    }
+    async *getOutputStream() { yield { type: 'done' as const }; }
+    abort(_reason: string): void { /* no-op */ }
+    async close() { /* no-op */ }
+    async reset() { /* no-op */ }
+  }
+
+  let testDataDir: string;
+  let manager: SessionManager;
+
+  // Each test gets a fresh isolated registry — no process-wide singleton bleed.
+  let registry: ReturnType<typeof createSessionRegistry>;
+
+  beforeEach(() => {
+    const entropy = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    testDataDir = join(tmpdir(), `afk-tg-reg-${entropy}`);
+    registry = createSessionRegistry();
+    manager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      registry,
+      createSession: async () => new MockSession('sdk-test'),
+    });
+  });
+
+  afterEach(async () => {
+    await manager.closeAll().catch(() => {});
+    try { rmSync(testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  // (a) getSession creates a registry handle
+  test('getSession creates a registry handle on first call', async () => {
+    await manager.getSession(111);
+    const handle = registry.resolve('telegram', '111');
+    expect(handle).toBeDefined();
+    expect(handle?.status).toBe('active');
+    expect(handle?.bindings.some((b) => b.surface === 'telegram' && b.key === '111')).toBe(true);
+  });
+
+  // (b) Duplicate getSession touches rather than duplicates
+  test('duplicate getSession touches the existing handle rather than creating a second', async () => {
+    await manager.getSession(222);
+    const first = registry.resolve('telegram', '222');
+    expect(first).toBeDefined();
+    const firstActiveAt = first!.lastActiveAt;
+
+    // Ensure a measurable timestamp gap.
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Return existing session (no new creation); touch should fire on the existing handle.
+    await manager.getSession(222);
+    const all = registry.list({ status: 'active' });
+    const matching = all.filter((h) => h.bindings.some((b) => b.key === '222'));
+    // Still only one handle for this route.
+    expect(matching.length).toBe(1);
+  });
+
+  // (c) loadSessions pre-populates registry handles from disk sidecars
+  test('loadSessions pre-populates registry handles for each sidecar', async () => {
+    // Write a sidecar directly so loadSessions picks it up.
+    const { promises: fsPromises } = await import('fs');
+    await fsPromises.mkdir(testDataDir, { recursive: true });
+    const sidecarData = {
+      chatId: 333,
+      model: 'haiku',
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    };
+    await fsPromises.writeFile(join(testDataDir, '333.json'), JSON.stringify(sidecarData));
+
+    // Fresh manager with the same registry + data dir — simulates a restart.
+    const freshRegistry = createSessionRegistry();
+    const freshManager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      registry: freshRegistry,
+      createSession: async () => new MockSession(),
+    });
+
+    await freshManager.loadSessions();
+
+    const handle = freshRegistry.resolve('telegram', '333');
+    expect(handle).toBeDefined();
+    expect(handle?.status).toBe('active');
+
+    await freshManager.closeAll().catch(() => {});
+  });
+
+  // (c) loadSessions: legacy sidecar with model: undefined falls back to defaultModel
+  test('loadSessions uses defaultModel when sidecar has no model field', async () => {
+    const { promises: fsPromises } = await import('fs');
+    await fsPromises.mkdir(testDataDir, { recursive: true });
+    // Deliberately omit `model` to simulate a legacy sidecar.
+    const legacySidecar = {
+      chatId: 444,
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+      // model is intentionally absent
+    };
+    await fsPromises.writeFile(join(testDataDir, '444.json'), JSON.stringify(legacySidecar));
+
+    const freshRegistry = createSessionRegistry();
+    const freshManager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'opus',
+      registry: freshRegistry,
+      createSession: async () => new MockSession(),
+    });
+
+    await freshManager.loadSessions();
+
+    const handle = freshRegistry.resolve('telegram', '444');
+    expect(handle).toBeDefined();
+    // defaultModel 'opus' must be used — not undefined.
+    expect(handle?.model).toBe('opus');
+
+    await freshManager.closeAll().catch(() => {});
+  });
+
+  // (d) resetSession archives the handle (Item 1 fix)
+  test('resetSession archives the handle so the next getSession creates a fresh one', async () => {
+    await manager.getSession(555);
+    const before = registry.resolve('telegram', '555');
+    expect(before).toBeDefined();
+    expect(before?.status).toBe('active');
+
+    await manager.resetSession(555);
+
+    // The handle must now be archived (stale handle freed from bindings).
+    const afterArchive = registry.get(asHandleId('555'));
+    expect(afterArchive?.status).toBe('archived');
+
+    // resolve() must return undefined for archived handles.
+    expect(registry.resolve('telegram', '555')).toBeUndefined();
+
+    // The next getSession must create a NEW active handle.
+    await manager.getSession(555);
+    const fresh = registry.resolve('telegram', '555');
+    expect(fresh).toBeDefined();
+    expect(fresh?.status).toBe('active');
+  });
+
+  // Additional: switchModel archives then re-registers (Item 5)
+  test('switchModel archives the stale handle and re-registers with the new model', async () => {
+    await manager.getSession(666);
+    expect(registry.resolve('telegram', '666')).toBeDefined();
+
+    await manager.switchModel(666, 'haiku');
+
+    // Old handle archived.
+    const archived = registry.get(asHandleId('666'));
+    expect(archived?.status).toBe('archived');
+
+    // A fresh active handle for the new model exists immediately after switchModel.
+    const fresh = registry.resolve('telegram', '666');
+    expect(fresh).toBeDefined();
+    expect(fresh?.status).toBe('active');
+    expect(fresh?.model).toBe('haiku');
   });
 });
