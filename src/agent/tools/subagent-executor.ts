@@ -910,7 +910,10 @@ export class SubagentExecutor implements SubagentControl {
           ? (isError) => updateWaveUnit(capturedWaveId, capturedCallId, isError ? 'failed' : 'done')
           : undefined,
         onCleanup: isolationTeardown
-          ? async () => { await teardownBackgroundWorktree(isolationTeardown); } : undefined,
+          ? async () => {
+              const result = await teardownBackgroundWorktree(isolationTeardown);
+              debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
+            } : undefined,
       });
     }
 

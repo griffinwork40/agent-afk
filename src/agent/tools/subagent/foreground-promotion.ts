@@ -31,7 +31,7 @@ import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailur
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
-import { lockWorktreeForBackground, teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
+import { lockWorktreeForBackground, teardownBackgroundWorktree, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
 import { withProvenanceHeader } from './foreground-promotion.provenance.js';
 export { withProvenanceHeader };
 
@@ -199,10 +199,15 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     // the background-job cap is hit — the subagent is never dropped.
     if (outcome.kind === 'promote') {
       if (registry) {
+        // Hoist isoTd so the catch block can unlock on cap-hit / refusal.
+        // Invariant: if lockWorktreeForBackground() succeeds but adoptRunning()
+        // throws, the worktree would stay permanently locked (git refuses
+        // `worktree remove` on a locked tree). The catch block unlocks it so the
+        // foreground finally can tear it down normally.
+        const isoTd = args.isolationTeardown;
         try {
           // Lock the worktree before handing to the registry — the promoted
           // job outlives the foreground finally that would have torn it down.
-          const isoTd = args.isolationTeardown;
           if (isoTd) await lockWorktreeForBackground(isoTd.repoRoot, isoTd.worktreePath);
           const job = registry.adoptRunning({
             handle,
@@ -210,7 +215,12 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             prompt: backgroundPrompt,
             model: model ?? 'sonnet',
             parentSessionId,
-            ...(isoTd ? { onCleanup: async () => { await teardownBackgroundWorktree(isoTd); } } : {}),
+            ...(isoTd ? {
+              onCleanup: async () => {
+                const result = await teardownBackgroundWorktree(isoTd);
+                debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
+              },
+            } : {}),
           });
           promoted = true;
           // Detach the end-of-turn abort bridge — the promoted job must
@@ -259,6 +269,18 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             'subagent-executor: promotion failed, staying foreground: ' +
               (e instanceof Error ? e.message : String(e)),
           );
+          // If the worktree was locked (before adoptRunning threw), unlock it
+          // now. The foreground finally will handle full teardown; a locked
+          // tree would cause `git worktree remove` to fail and leak permanently.
+          if (isoTd) {
+            try {
+              await unlockWorktreeForPromotion(isoTd.repoRoot, isoTd.worktreePath);
+            } catch (unlockErr) {
+              debugLog(
+                `[isolation] failed to unlock worktree after promotion failure: ${String(unlockErr)}`,
+              );
+            }
+          }
           resolveJob(null);
         }
       } else {

@@ -737,6 +737,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     }
 
     // Post-terminal cleanup (e.g. isolation:"worktree" unlock + teardown).
+    // Fires on ALL terminal states: completion, failure, and cancellation.
     // Placed after handle.teardown() so hooks can inspect state. Best-effort.
     if (job.onCleanup) {
       try {

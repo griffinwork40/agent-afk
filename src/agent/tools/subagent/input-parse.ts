@@ -132,10 +132,9 @@ export interface AgentInput {
    * child in the parent tree (or `cwd`).
    *
    * Mutually exclusive with {@link cwd} (the executor owns the child's cwd when
-   * isolating). Forbidden with `mode: 'background'` in this release: a detached
-   * child outlives the executor's teardown, so nothing would reclaim its
-   * worktree in-turn (see docs/proposals/first-class-worktree-isolation.md
-   * Open Question 1). Only the honored value is retained — `'none'` normalizes
+   * isolating). Supported with `mode: 'background'`: the worktree is locked
+   * during dispatch and unlocked+removed via `markTerminal`'s `onCleanup`
+   * callback when the background job settles. Only the honored value is retained — `'none'` normalizes
    * to `undefined` (no field) so the executor's `=== 'worktree'` check is total.
    */
   isolation?: 'worktree';

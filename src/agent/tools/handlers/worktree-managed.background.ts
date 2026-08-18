@@ -40,6 +40,22 @@ export async function lockWorktreeForBackground(
 }
 
 /**
+ * Unlock a worktree without removing it. Used in the foreground-promotion
+ * catch path: when `lockWorktreeForBackground` succeeds but `adoptRunning`
+ * throws (e.g. cap hit), the worktree must be unlocked so the foreground
+ * `finally` block can call `teardownIsolatedWorktree` (which refuses locked
+ * trees). Does NOT remove the worktree — the foreground finally handles that.
+ */
+export async function unlockWorktreeForPromotion(
+  repoRoot: string,
+  worktreePath: string,
+): Promise<void> {
+  await defaultExecFile('git', [
+    '-C', repoRoot, 'worktree', 'unlock', worktreePath,
+  ]);
+}
+
+/**
  * Unlock and tear down an isolated worktree after its background child
  * finishes. Called from markTerminal() in the background registry. Unlock
  * runs first (teardownIsolatedWorktree refuses locked trees); teardown

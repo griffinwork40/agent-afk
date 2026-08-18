@@ -28,6 +28,7 @@ import { BackgroundAgentRegistry, BackgroundJobCapError } from './background-reg
 import { InMemoryTraceWriter } from './trace/writer.js';
 import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.js';
 import type { Message } from './types.js';
+import { debugLog } from '../utils/debug.js';
 
 interface StubHandle extends SubagentHandle {
   /** Captured by `runInBackground` — invoke to trigger terminal-state. */
@@ -1233,6 +1234,60 @@ describe('BackgroundAgentRegistry', () => {
       );
       const entry = completedCalls[0]![0] as Record<string, unknown>;
       expect(entry['stop_reason']).toBeUndefined();
+    });
+  });
+
+  describe('onCleanup lifecycle', () => {
+    it('(a) onCleanup fires on natural completion via register path', async () => {
+      const handle = createStubHandle('oc-complete-1');
+      const onCleanup = vi.fn().mockResolvedValue(undefined);
+      registry.register({ handle, prompt: 'p', model: 'sonnet', onCleanup });
+
+      handle.__fireTerminal(successResult('oc-complete-1', 'done'));
+
+      // markTerminal is async — flush the microtask queue
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(onCleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('(b) onCleanup fires on cancellation via cancelJob', async () => {
+      const handle = createStubHandle('oc-cancel-1');
+      const onCleanup = vi.fn().mockResolvedValue(undefined);
+      const job = registry.register({ handle, prompt: 'p', model: 'sonnet', onCleanup });
+
+      await registry.cancelJob(job.jobId);
+
+      // markTerminal is async — flush the microtask queue
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(onCleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('(c) errors thrown by onCleanup are swallowed and logged via debugLog', async () => {
+      const handle = createStubHandle('oc-swallow-1');
+      const onCleanup = vi.fn().mockRejectedValue(new Error('boom'));
+      const mockedDebugLog = vi.mocked(debugLog);
+      mockedDebugLog.mockClear();
+      registry.register({ handle, prompt: 'p', model: 'sonnet', onCleanup });
+
+      // Should not throw — fire and wait for markTerminal's async chain to settle.
+      // markTerminal awaits handle.teardown() then onCleanup(), so we need
+      // enough ticks for the full chain (not just one microtask flush).
+      let threw = false;
+      try {
+        handle.__fireTerminal(successResult('oc-swallow-1', 'done'));
+        // Drain: handle.teardown() + onCleanup() rejection + debugLog call
+        await new Promise((r) => setTimeout(r, 20));
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(false);
+
+      expect(onCleanup).toHaveBeenCalledTimes(1);
+      expect(mockedDebugLog).toHaveBeenCalledWith(
+        expect.stringContaining('onCleanup failed'),
+      );
     });
   });
 });
