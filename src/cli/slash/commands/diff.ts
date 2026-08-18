@@ -16,9 +16,10 @@
  * @module cli/slash/commands/diff
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import type { SlashCommand } from '../types.js';
 
 /**
@@ -35,7 +36,7 @@ interface RawHunk {
 }
 
 interface ParsedDiff {
-  filePairs: Array<{ from: string; to: string; hunks: RawHunk[] }>;
+  filePairs: Array<{ from: string; to: string; metadata: string[]; hunks: RawHunk[] }>;
   totalAdded: number;
   totalRemoved: number;
 }
@@ -49,22 +50,27 @@ function parseDiff(raw: string): ParsedDiff {
   let currentFrom = '';
   let currentTo = '';
   let currentHunks: RawHunk[] = [];
+  let currentMetadata: string[] = [];
   let currentHunk: RawHunk | null = null;
 
   const flushFile = (): void => {
     if (currentHunk) currentHunks.push(currentHunk);
     if (currentFrom || currentTo) {
-      filePairs.push({ from: currentFrom, to: currentTo, hunks: currentHunks });
+      filePairs.push({ from: currentFrom, to: currentTo, metadata: currentMetadata, hunks: currentHunks });
     }
     currentFrom = '';
     currentTo = '';
     currentHunks = [];
+    currentMetadata = [];
     currentHunk = null;
   };
 
   for (const line of lines) {
     if (line.startsWith('diff --git ')) {
       flushFile();
+      const match = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
+      currentFrom = match?.[1] ?? line.slice('diff --git '.length);
+      currentTo = match?.[2] ?? currentFrom;
     } else if (line.startsWith('--- ')) {
       // "--- a/path/to/file" or "--- /dev/null"
       currentFrom = line.slice(4).replace(/^a\//, '');
@@ -76,6 +82,8 @@ function parseDiff(raw: string): ParsedDiff {
       // Extract the @@ header — everything up to (and including) the second @@
       const match = /^(@@ [^@]+ @@)/.exec(line);
       currentHunk = { header: match?.[1] ?? line, lines: [] };
+    } else if (!currentHunk && line !== '') {
+      currentMetadata.push(line);
     } else if (currentHunk) {
       if (line.startsWith('+')) {
         currentHunk.lines.push({ kind: '+', text: line.slice(1) });
@@ -83,7 +91,7 @@ function parseDiff(raw: string): ParsedDiff {
       } else if (line.startsWith('-')) {
         currentHunk.lines.push({ kind: '-', text: line.slice(1) });
         totalRemoved++;
-      } else if (line.startsWith(' ') || line === '') {
+      } else if (line.startsWith(' ')) {
         currentHunk.lines.push({ kind: ' ', text: line.slice(1) });
       }
       // Binary file notices, "no newline at end", etc. are intentionally skipped.
@@ -119,11 +127,19 @@ function renderParsedDiff(
 
   let bodyLines = 0;
   let truncated = false;
+  const configuredLimit = Number.parseInt(process.env['AFK_DIFF_LINES'] ?? '', 10);
+  const bodyLimit = configuredLimit === 0
+    ? Number.POSITIVE_INFINITY
+    : configuredLimit > 0 ? configuredLimit : MAX_DIFF_BODY_LINES;
+  const totalBodyLines = parsed.filePairs.reduce(
+    (total, file) => total + file.hunks.reduce((count, hunk) => count + hunk.lines.length, 0),
+    0,
+  );
 
   outer: for (const fp of parsed.filePairs) {
     // Normalize display name: deleted → from path, new → to path, renamed → from→to
-    const fromName = fp.from === '/dev/null' ? '' : fp.from;
-    const toName = fp.to === '/dev/null' ? '' : fp.to;
+    const fromName = sanitizeForDisplay(fp.from === '/dev/null' ? '' : fp.from);
+    const toName = sanitizeForDisplay(fp.to === '/dev/null' ? '' : fp.to);
     const label =
       fp.from === '/dev/null' ? palette.diffAdd(toName) :
       fp.to === '/dev/null' ? palette.diffRemove(fromName) :
@@ -132,17 +148,21 @@ function renderParsedDiff(
         : palette.warning(fromName);
     out.line(palette.bold(`  ${label}`));
 
+    for (const metadata of fp.metadata) {
+      out.line(palette.dim(`    ${sanitizeForDisplay(metadata)}`));
+    }
+
     for (const hunk of fp.hunks) {
       // Hunk headers don't count against the body-line cap.
-      out.line(palette.diffHunk(`    ${hunk.header}`));
+      out.line(palette.diffHunk(`    ${sanitizeForDisplay(hunk.header)}`));
 
       for (const dl of hunk.lines) {
-        if (bodyLines >= MAX_DIFF_BODY_LINES) {
+        if (bodyLines >= bodyLimit) {
           truncated = true;
           break outer;
         }
         const prefix = dl.kind === '+' ? '+ ' : dl.kind === '-' ? '- ' : '  ';
-        const text = `    ${prefix}${dl.text}`;
+        const text = `    ${prefix}${sanitizeForDisplay(dl.text)}`;
         if (dl.kind === '+') out.line(palette.diffAdd(text));
         else if (dl.kind === '-') out.line(palette.diffRemove(text));
         else out.line(palette.dim(text));
@@ -154,8 +174,7 @@ function renderParsedDiff(
   }
 
   if (truncated) {
-    const total = parsed.totalAdded + parsed.totalRemoved;
-    out.line(palette.dim(`  … ${total - bodyLines} more diff lines (set AFK_DIFF_LINES=0 or pipe to git diff for full output)`));
+    out.line(palette.dim(`  … ${totalBodyLines - bodyLines} more diff lines (set AFK_DIFF_LINES=0 or pipe to git diff for full output)`));
   }
 }
 
@@ -168,7 +187,7 @@ function runGitDiff(
   cwd: string,
 ): { ok: true; stdout: string } | { ok: false; message: string } {
   try {
-    const stdout = execSync(['git', 'diff', ...args].join(' '), {
+    const stdout = execFileSync('git', ['diff', ...args], {
       cwd,
       encoding: 'utf-8',
       // git diff exits 0 when there are diffs, 1 is not an error here —
@@ -235,7 +254,8 @@ export const diffCmd: SlashCommand = {
     }
 
     if (!result.stdout.trim()) {
-      const scope = file ? ` for ${palette.warning(file)}` : '';
+      const safeFile = file ? sanitizeForDisplay(file) : '';
+      const scope = safeFile ? ` for ${palette.warning(safeFile)}` : '';
       const modeNote = staged ? ' (staged)' : '';
       out.info(`No changes${modeNote}${scope}.`);
       return 'continue';
@@ -244,7 +264,7 @@ export const diffCmd: SlashCommand = {
     // Header label
     out.line();
     const modeLabel = staged ? 'Staged changes' : 'Uncommitted changes';
-    const fileLabel = file ? `  ${palette.dim(`— ${file}`)}` : '';
+    const fileLabel = file ? `  ${palette.dim(`— ${sanitizeForDisplay(file)}`)}` : '';
     out.line(palette.bold(`${modeLabel}${fileLabel}`));
     out.line(divider());
 
