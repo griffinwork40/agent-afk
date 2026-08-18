@@ -52,6 +52,7 @@ import { checkProgressBannerStaleness } from './stream-renderer-dead-zone.js';
 import { makeOrchestratorCtx } from './stream-renderer-contexts.js';
 import { processEvent, type ProcessCtx } from './stream-renderer-process.js';
 import { disposeRenderer, type DisposeCtx } from './stream-renderer-dispose.js';
+import { applyFirstContent } from './stream-renderer-ttfb.js';
 
 export type { StreamRendererOptions } from './stream-renderer-options.js';
 import type { StreamRendererOptions } from './stream-renderer-options.js';
@@ -94,19 +95,9 @@ export class StreamRenderer {
   private borrowedCompositor: TerminalCompositor | null = null;
 
   /**
-   * Captured owner-side onCancel from the borrowed compositor at {@link arm}
-   * time, so {@link dispose} can restore it after this renderer swaps in
-   * its own onCancel for the turn. Distinguishes "owner had no handler"
-   * (undefined) from "we never armed against a borrow" (the borrowedCompositor
-   * field being null is the source of truth for that — this field is only
-   * meaningful when ownsCompositor === false).
-   *
-   * Required because the owner (InputSurface.armCompositor) installs its
-   * sigintHandler via the compositor constructor; there is no other code path
-   * to recover it. Without capture+restore, calling setOnCancel(null) on
-   * dispose would silently break between-turns Ctrl+C after the first borrow
-   * (the compositor's onCancel becomes undefined, and idle-mode Ctrl+C is a
-   * no-op when onCancel is unset — terminal-compositor.ts:1106-1108).
+   * Owner's onCancel captured at borrow time; restored in dispose so
+   * between-turns Ctrl+C continues working after the skill exits.
+   * Only meaningful when ownsCompositor === false.
    */
   private priorOnCancel: (() => void) | undefined = undefined;
 
@@ -164,20 +155,14 @@ export class StreamRenderer {
 
   private disposed = false;
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
-  /**
-   * ResizeBus unsubscriber. Set in `arm()`, cleared in dispose. The handler
-   * re-derives the composed overlay (tool lane / thinking / progress banner)
-   * at the new terminal width via `setComposedOverlay` — without this, the
-   * tool-lane overlay stays wrapped at the width-at-last-event after a
-   * window resize. The `StreamingMarkdownRenderer` handles its own resize
-   * subscription for the markdown overlay path; this hook covers everything
-   * the markdown stream is NOT responsible for.
-   *
-   * Safe to fire when no overlay is active: `setComposedOverlay` is a no-op
-   * when none of {stageTracker, thinkingLane, toolLane, lastProgressByTask}
-   * contribute content.
-   */
+  /** ResizeBus unsubscriber — re-derives the overlay at the new terminal width on resize. */
   private resizeUnsub: (() => void) | null = null;
+
+  /** TTFB elapsed timer: start timestamp + done flag. See stream-renderer-ttfb.ts. */
+  private readonly ttfbStartedAt: number | undefined;
+  private ttfbDone: boolean;
+  /** Last annotation string rendered for the TTFB line — drives 1 Hz change detection. */
+  private lastTtfbAnnotation = '';
 
   /**
    * Pre-bound sink — pass directly to `runWithSink(...)` from callers.
@@ -243,6 +228,8 @@ export class StreamRenderer {
       this.borrowedCompositor = opts.compositor;
       this.ownsCompositor = false;
     }
+    this.ttfbStartedAt = opts.turnStartedAt;
+    this.ttfbDone = opts.turnStartedAt === undefined;
 
     this.sink = (event, meta) => this.process(event, meta);
   }
@@ -347,6 +334,8 @@ export class StreamRenderer {
       childActivity: this.childActivity,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
+      getTtfbStartedAt: () => this.ttfbStartedAt,
+      isTtfbDone: () => this.ttfbDone,
     });
 
     // Reduced-motion suppresses the spinner ticker at the source. State-transition
@@ -392,18 +381,8 @@ export class StreamRenderer {
   }
 
   /**
-   * Flip the live "stopping…" progress-banner state. Called from the REPL's
-   * ESC soft-stop handler (turn-handler.ts) the instant ESC is handled, so the
-   * banner shows the stop was accepted on the NEXT repaint — before the turn
-   * finishes tearing down (which can take seconds while subagents cancel).
-   *
-   * Invariant: the OverlayComposer is the single overlay owner — this flips the
-   * renderer's `softStopping` flag (read by the 'progress-banner' slot's
-   * render() via the `getSoftStopping` accessor) and triggers exactly one
-   * composed flush rather than writing the compositor overlay directly (the
-   * corruption-fix contract). Order: mutate state, THEN recompose. Mirrors
-   * {@link setInterrupting} — the Ctrl+C affordance's sibling. A no-op after
-   * dispose so a late ESC that lands during teardown can't touch a torn frame.
+   * Flip the live "stopping…" progress-banner state on ESC. Mirrors
+   * {@link setInterrupting} — the Ctrl+C affordance's sibling.
    */
   setSoftStopping(active: boolean): void {
     if (this.disposed) return;
@@ -412,6 +391,12 @@ export class StreamRenderer {
       this.overlayComposer.markDirty('progress-banner');
       this.overlayComposer.flush();
     }
+  }
+
+  /** Signal first streaming content — clears the TTFB waiting indicator. Idempotent. */
+  notifyFirstContent(): void {
+    if (this.disposed) return;
+    applyFirstContent(this.ttfbDone, () => { this.ttfbDone = true; }, this.overlayComposer);
   }
 
   /**
@@ -538,9 +523,13 @@ export class StreamRenderer {
       out: this.out,
       pauseTickInterval: this.pauseTickInterval,
       resizeUnsub: this.resizeUnsub,
+      ttfbStartedAt: this.ttfbStartedAt,
+      ttfbDone: this.ttfbDone,
+      lastTtfbAnnotation: this.lastTtfbAnnotation,
     };
     checkProgressBannerStaleness(lifecycleCtx);
     checkPauseAnnotations(lifecycleCtx);
+    this.lastTtfbAnnotation = lifecycleCtx.lastTtfbAnnotation;
   }
 
 }

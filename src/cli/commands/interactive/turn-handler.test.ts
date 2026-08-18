@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as path from 'node:path';
 import { runTurn, formatContextUsage, printTurnFooter } from './turn-handler.js';
+import { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { recordQuotaSnapshot, resetQuotaCacheForTests } from '../../../agent/quota-cache.js';
 
 // Only `resolveAutoResumeOnUsageLimit` is stubbed; every other config export
@@ -115,6 +116,25 @@ describe('runTurn — runWithSink wiring', () => {
 });
 
 describe('runTurn — happy path', () => {
+  it('processes first content before flushing away the TTFB indicator', async () => {
+    const processSpy = vi.spyOn(StreamRenderer.prototype, 'process');
+    const notifySpy = vi.spyOn(StreamRenderer.prototype, 'notifyFirstContent');
+
+    const session = streamFrom([
+      { type: 'chunk', chunk: { type: 'content', content: 'hello' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ]);
+    const { h } = makeHandles();
+
+    await runTurn({ text: 'q', attachments: [] }, session, makeStats(), h);
+
+    const contentProcessCall = processSpy.mock.invocationCallOrder[0];
+    const firstContentNotifyCall = notifySpy.mock.invocationCallOrder[0];
+    expect(contentProcessCall).toBeLessThan(firstContentNotifyCall!);
+    processSpy.mockRestore();
+    notifySpy.mockRestore();
+  });
+
   it('accumulates responseText from content chunks and calls recordTurn', async () => {
     const events: OutputEvent[] = [
       { type: 'chunk', chunk: { type: 'content', content: 'hello ' } },
@@ -276,6 +296,30 @@ describe('runTurn — usage-limit pause/resume', () => {
   // stream (retry-layer.ts: `yield* turnWithAuthRetry`). The turn handler
   // must reset its accumulators on `resumed` so the recorded turn reflects
   // only the replay, not the partial pre-pause content.
+
+  it('does not restart TTFB when rebuilding after content was already received', async () => {
+    const startedAtByArm: Array<number | undefined> = [];
+    const originalArm = StreamRenderer.prototype.arm;
+    const armSpy = vi.spyOn(StreamRenderer.prototype, 'arm').mockImplementation(function () {
+      startedAtByArm.push((this as unknown as { ttfbStartedAt: number | undefined }).ttfbStartedAt);
+      return originalArm.call(this);
+    });
+
+    const session = streamFrom([
+      { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
+      { type: 'paused', reason: 'usage-limit', autoResume: true },
+      { type: 'resumed', hotSwapped: false },
+      { type: 'chunk', chunk: { type: 'content', content: 'replay' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ]);
+    const { h } = makeHandles();
+
+    await runTurn({ text: 'q', attachments: [] }, session, makeStats(), h);
+
+    expect(startedAtByArm[0]).toEqual(expect.any(Number));
+    expect(startedAtByArm[1]).toBeUndefined();
+    armSpy.mockRestore();
+  });
 
   it('resets responseText on resumed so replay content does not double-accumulate', async () => {
     const resetsAt = new Date(Date.now() + 5 * 60_000);
