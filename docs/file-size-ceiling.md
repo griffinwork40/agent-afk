@@ -1,18 +1,18 @@
-# Enforce the 350-line ceiling
+# Enforce the 350-code-line ceiling
 
 **Status:** Phase 0 (the gate) implemented and green. The refactor waves have not
 started — this document is the protocol they must follow.
-**Decided:** 2026-08-10
+**Decided:** 2026-08-10. **Metric revised:** 2026-08-18 (raw → code-line).
 
-Counts below say "136", which is the population under `src/` at the time of
-measurement. The gate also scans `scripts/`, which contributes 2 more, so
-`.filesize-baseline.json` holds **138** entries. Both numbers are live and drift
-with the tree; re-measure with `pnpm audit:filesize:list` rather than trusting
-these.
+Counts below say "136", which was the population under `src/` at the time of the
+raw-line measurement. After the metric revision to code-only (non-blank,
+non-comment), **94 of 136 files retired immediately** — `.filesize-baseline.json`
+now holds ~42 entries. Both numbers are live and drift with the tree; re-measure
+with `pnpm audit:filesize:list` rather than trusting these.
 
 ## Problem
 
-136 of 885 non-test `.ts` files under `src/` exceed 350 raw lines (`wc -l`),
+136 of 885 non-test `.ts` files under `src/` exceeded 350 raw lines (`wc -l`),
 totalling 82,574 LOC with 34,974 lines of excess. Nine files exceed 1,000 lines;
 the largest is `src/config/env.ts` at 1,877.
 
@@ -22,23 +22,24 @@ context just to establish what it may safely touch, and the failure mode is
 silent, because the agent edits from a partial read. At the ceiling you pull one
 whole *concern* into a new file. You never shave lines and never raise the limit.
 
-**There is no file-size gate in this repo today.** Verified: no ESLint config of
-any kind, no husky, no lint-staged; `pnpm lint` is only `tsc --noEmit`. Nothing
-has ever stopped a file from growing.
+## Metric decision: 350 CODE lines (revised 2026-08-18)
 
-## Metric decision: 350 RAW lines (operator call)
+The original gate (2026-08-10) measured 350 **raw** lines (`wc -l` semantics) —
+comments counted deliberately. Operator overruled the code-line metric at the
+time, accepting the consequence that comment-heavy files near the ceiling would
+need extraction to add documentation.
 
-Measurement showed the 136 files average **45.5% comment + blank lines**. Under a
-non-comment/non-blank count only 46 files exceed 350 — 90 would drop out
-(82,574 raw → 45,113 code lines). I recommended the code-line metric; **the
-operator overruled in favour of 350 raw.** That decision is final and this plan
-implements it.
+In practice the raw metric created perverse incentive pressure: agents facing
+the ceiling shaved, condensed, or deleted comments to stay under — despite
+explicit instructions not to. The 128-entry baseline (all "pending concern
+extraction") never drained, and 48% of lines near the ceiling were
+comments/blanks. The operator reversed the decision on 2026-08-18.
 
-Consequence accepted with the decision: 37 files currently sit at 316–350 raw
-(one at exactly 350, `src/agent/tools/handlers/grep.ts`). Adding one mandated
-15-line `// Invariant:` block to any of them breaks the build. The WARN tier at
-315 gives early signal, and per the rule itself, a file pushing the limit is the
-signal to find its seam.
+**Current metric: 350 non-blank, non-comment lines.** A line-oriented heuristic
+classifies comments (`//`, block comments, JSDoc); lines with trailing comments
+count as code. The heuristic errs toward "not a comment" so the ceiling is never
+looser than reported. Comments are now free — write as many `Invariant:`,
+`Contract:`, and `History:` blocks as needed.
 
 ## Scope decision: file AND function (reconciles #831 / #832)
 
@@ -64,7 +65,7 @@ So both gates now exist, and they measure different things:
 
 | | measures | ceiling | baseline |
 |---|---|---|---|
-| `check-file-size.ts` | how much must be **read** to establish edit safety | 350 raw lines | 138 files (15.6%) |
+| `check-file-size.ts` | how much must be **read** to establish edit safety | 350 code lines | ~42 files (~4.2%) |
 | `check-function-size.ts` | how much must be **held in mind** to change one behaviour | 200 lines | 54 functions (1.2%) |
 
 Neither implies the other, in both directions: a 900-line flat registry is a
@@ -146,7 +147,7 @@ exempts prose. Reversible via one constant if tests should be included later.
 
 ### Phase 0 — the gate (blocks the waves)
 
-1. `scripts/check-file-size.ts` — raw `wc -l` equivalent, LIMIT 350, WARN 315.
+1. `scripts/check-file-size.ts` — code-line count (non-blank, non-comment), LIMIT 350, WARN 315.
 2. `.filesize-baseline.json` — grandfathers today's 138. **Generated, never
    hand-edited** (`--update-baseline`); `reason` / `permanent` preserved by key.
 3. Three failure modes, making the baseline a one-way ratchet:
