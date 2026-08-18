@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.0] - 2026-08-18
+
+### Added
+- wire SessionManager through session registry (Step 3) (#1162) (91cfc1cc)
+- mark forwarded-message provenance (#686) (#1159) (3457fa43)
+
+### Fixed
+- reserve claimedChats in compact/clear drain paths (#1149) (46276853)
+
+### Changed
+- add behavioral test for apiRoundInFlight watchdog suspension (#1148) (9a23e834)
+
 ## [5.129.0] - 2026-08-18
 
 ### Added
