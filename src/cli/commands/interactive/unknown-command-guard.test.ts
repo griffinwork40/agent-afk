@@ -1,14 +1,28 @@
 /**
- * Issue #710 mode 1: a mistyped subcommand (`afk config_set env X --unset`)
- * blamed its trailing flag (`error: unknown option '--unset'`) instead of
- * naming the unrecognized command. These tests exercise the guard directly
- * against real commander `Command` instances (no mocking of interactive.ts's
- * heavy bootstrap chain needed — the guard is a pure commander-level concern).
+ * Issue #710 — unknown subcommand guard (mode 1 + mode 2).
+ *
+ * Mode 1: a mistyped subcommand with a trailing flag (`afk config_set env X
+ * --unset`) blamed the flag instead of the command.  Fixed via `unknownOption`
+ * monkey-patch in `installUnknownCommandGuard`.
+ *
+ * Mode 2: a bare unknown single-word token with no flags (`afk skill`) was
+ * silently swallowed by the default `interactive` command, causing forkbombs
+ * when a subagent re-invoked itself.  Fixed via `checkBareUnknownCommand`
+ * called from the `interactive` action before any side-effect.
+ *
+ * These tests exercise both guards directly against real commander `Command`
+ * instances (no mocking of interactive.ts's heavy bootstrap chain needed —
+ * the guards are pure commander-level concerns).
  */
 
 import { describe, expect, it } from 'vitest';
 import { Command } from 'commander';
-import { isUnrecognizedCommandToken, installUnknownCommandGuard } from './unknown-command-guard.js';
+import {
+  isUnrecognizedCommandToken,
+  installUnknownCommandGuard,
+  checkBareUnknownCommand,
+  suggestCliCommand,
+} from './unknown-command-guard.js';
 
 /** Build a minimal program shaped like the real CLI: a default `interactive`
  * command plus a couple of named sibling subcommands, with the guard wired
@@ -29,6 +43,11 @@ function buildProgram(): Command {
   program
     .command('config')
     .description('config stuff')
+    .action(() => undefined);
+
+  program
+    .command('schedule')
+    .description('manage schedules')
     .action(() => undefined);
 
   installUnknownCommandGuard(interactiveCmd, program);
@@ -64,7 +83,79 @@ describe('isUnrecognizedCommandToken', () => {
   });
 });
 
-describe('installUnknownCommandGuard — end-to-end via commander parse', () => {
+describe('suggestCliCommand', () => {
+  const program = buildProgram();
+
+  it('suggests the close command for a typo within distance 2', () => {
+    // 'shedule' → distance 2 from 'schedule'
+    expect(suggestCliCommand('shedule', program)).toBe('schedule');
+  });
+
+  it('suggests the close command at distance 1', () => {
+    // 'schedul' → distance 1 from 'schedule'
+    expect(suggestCliCommand('schedul', program)).toBe('schedule');
+  });
+
+  it('returns undefined for a word with no near-miss (distance > 2)', () => {
+    // 'zzzbogus' is far from every registered name
+    expect(suggestCliCommand('zzzbogus', program)).toBeUndefined();
+  });
+
+  it('returns undefined for an exact known command name (already registered)', () => {
+    // 'config' → distance 0, but the function still returns it as a suggestion
+    // (the caller is responsible for filtering already-registered tokens earlier)
+    expect(suggestCliCommand('config', program)).toBe('config');
+  });
+});
+
+describe('checkBareUnknownCommand — mode 2 detection', () => {
+  const program = buildProgram();
+
+  it('returns isUnknown:true for a single word close to a subcommand name', () => {
+    // 'shedule' is distance 2 from 'schedule'
+    const result = checkBareUnknownCommand(['shedule'], program);
+    expect(result.isUnknown).toBe(true);
+    if (result.isUnknown) {
+      expect(result.token).toBe('shedule');
+      expect(result.suggestion).toBe('schedule');
+    }
+  });
+
+  it('returns isUnknown:false for a word with no near-miss (legitimate one-word prompt)', () => {
+    // 'zzzbogus' has no close registered command → treat as prompt
+    const result = checkBareUnknownCommand(['zzzbogus'], program);
+    expect(result.isUnknown).toBe(false);
+  });
+
+  it('returns isUnknown:false for a registered command name (already dispatched by Commander)', () => {
+    const result = checkBareUnknownCommand(['config'], program);
+    expect(result.isUnknown).toBe(false);
+  });
+
+  it('returns isUnknown:false for a multi-word input (quoted prompt)', () => {
+    // `afk "do a thing"` → input = ['do a thing'] — has space, never a command
+    const result = checkBareUnknownCommand(['do a thing'], program);
+    expect(result.isUnknown).toBe(false);
+  });
+
+  it('returns isUnknown:false for multiple input tokens (multi-word bare prompt)', () => {
+    // `afk do a thing` → input = ['do', 'a', 'thing']
+    const result = checkBareUnknownCommand(['do', 'a', 'thing'], program);
+    expect(result.isUnknown).toBe(false);
+  });
+
+  it('returns isUnknown:false for a slash-command launch token', () => {
+    const result = checkBareUnknownCommand(['/review'], program);
+    expect(result.isUnknown).toBe(false);
+  });
+
+  it('returns isUnknown:false for an empty input array (bare `afk`)', () => {
+    const result = checkBareUnknownCommand([], program);
+    expect(result.isUnknown).toBe(false);
+  });
+});
+
+describe('installUnknownCommandGuard — end-to-end via commander parse (mode 1)', () => {
   it('names the unrecognized command, not the trailing flag, for `config_set env X --unset`', async () => {
     const program = buildProgram();
     let caught: unknown;
@@ -119,11 +210,10 @@ describe('installUnknownCommandGuard — end-to-end via commander parse', () => 
     expect((caught as Error).message).toContain("unknown option '--badflag'");
   });
 
-  it('still boots the interactive action for an unrecognized bare token with no flags (mode 2, deliberately unfixed)', async () => {
+  it('still boots the interactive action for an unrecognized bare token with no near-miss', async () => {
     const program = buildProgram();
-    // `zzzbogus` never reaches unknownOption (no unknown flag present), so
-    // the guard cannot and does not intercept it — this documents the
-    // residual gap rather than asserting a fix for it.
+    // `zzzbogus` has no known-command near-miss — the mode-2 guard does not
+    // intercept it and `isUnknown` returns false, so the action runs normally.
     await expect(
       program.parseAsync(['node', 'afk', 'zzzbogus']),
     ).resolves.toBeDefined();
