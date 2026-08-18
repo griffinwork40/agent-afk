@@ -70,7 +70,7 @@ Assemble the survey results into a **6-line ground-truth snapshot**:
 - Infrastructure: CI present? package scripts? authoritative configs for this task
 - Memory hits: facts (1-line each) + which stores were consulted, or `none (consulted: …)`
 - Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"
-- Epistemic confidence: `<high|medium|low>` — based on how much state could be verified
+- Epistemic confidence: `<high|medium|low>` — based on how much state could be verified. Flag if working directory is sparse, if domain is unfamiliar, or if key artifacts may be missing.
 
 Surface the snapshot and stop. The orchestrator then uses these verified facts — not assumptions — to decide the next step. This skill never edits files.
 
