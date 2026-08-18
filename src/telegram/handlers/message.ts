@@ -839,17 +839,33 @@ export class MessageHandler {
   }
 
   /**
-   * Enqueue a clear command for later processing
+   * Enqueue a clear command for later processing.
+   * Respects MAX_QUEUE_DEPTH — a /clear command issued while the queue is
+   * full is dropped and the caller is notified rather than forcing the map
+   * to grow without bound.
    */
   enqueueClear(route: TelegramRoute, ctx: Context): void {
-    this.queueFor(route).push({ type: 'clear', ctx });
+    const queue = this.queueFor(route);
+    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
+      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
+      return;
+    }
+    queue.push({ type: 'clear', ctx });
   }
 
   /**
-   * Enqueue a compact command for later processing
+   * Enqueue a compact command for later processing.
+   * Respects MAX_QUEUE_DEPTH — a /compact command issued while the queue is
+   * full is dropped and the caller is notified rather than forcing the map
+   * to grow without bound.
    */
   enqueueCompact(route: TelegramRoute, ctx: Context): void {
-    this.queueFor(route).push({ type: 'compact', ctx });
+    const queue = this.queueFor(route);
+    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
+      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
+      return;
+    }
+    queue.push({ type: 'compact', ctx });
   }
 
   /**
@@ -955,9 +971,13 @@ export class MessageHandler {
    * Public so bot.ts can call it directly after /compact completes.
    */
   async drainQueue(route: TelegramRoute): Promise<void> {
-    const queue = this.messageQueues.get(routeKey(route));
+    const key = routeKey(route);
+    const queue = this.messageQueues.get(key);
     if (!queue?.length) return;
     const item = queue.shift()!;
+    // Prune the map entry once the queue is empty so messageQueues does not
+    // accumulate permanent entries for every route that has ever sent a message.
+    if (queue.length === 0) this.messageQueues.delete(key);
     if (item.type === 'message') {
       await this.processOne(route, item.ctx, item.text);
     } else if (item.type === 'photo') {
