@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
+import { env } from '../../../config/env.js';
 import type { SlashCommand } from '../types.js';
 
 /**
@@ -127,7 +128,7 @@ function renderParsedDiff(
 
   let bodyLines = 0;
   let truncated = false;
-  const configuredLimit = Number.parseInt(process.env['AFK_DIFF_LINES'] ?? '', 10);
+  const configuredLimit = Number.parseInt(env.AFK_DIFF_LINES ?? '', 10);
   const bodyLimit = configuredLimit === 0
     ? Number.POSITIVE_INFINITY
     : configuredLimit > 0 ? configuredLimit : MAX_DIFF_BODY_LINES;
@@ -199,7 +200,7 @@ function runGitDiff(
     const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; status?: number };
     // git diff --exit-code exits 1 when changes exist, but we do NOT pass
     // --exit-code, so any non-zero exit here is a real error (no repo, etc.)
-    const detail = (e.stderr ?? '').trim() || (e.message ?? '');
+    const detail = sanitizeForDisplay((e.stderr ?? '').trim() || (e.message ?? ''));
     return { ok: false, message: detail || 'git diff failed' };
   }
 }
