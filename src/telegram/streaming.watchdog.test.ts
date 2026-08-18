@@ -80,12 +80,15 @@ describe('WatchdogState — apiRoundInFlight fields', () => {
 
 describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
   it('suspends the watchdog while apiRoundInFlight=true, then fires past MAX_API_ROUND_INFLIGHT_MS', async () => {
+    // Install fake timers FIRST so that Date.now() inside makeState returns the
+    // fake epoch (0 ms). This makes apiRoundSince deterministically equal to the
+    // fake clock's origin, and the elapsed-time arithmetic below exact.
     vi.useFakeTimers();
     try {
       const { iter } = makeHangingIter();
       const state = makeState({
         apiRoundInFlight: true,
-        apiRoundSince: Date.now(),
+        apiRoundSince: Date.now(), // fake epoch = 0 ms
       });
       const next = makeNextWithTimeout(iter, state);
       const p = next();
@@ -102,10 +105,15 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
       await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
       expect(settled).toBe(false);
 
-      // Advance past MAX_API_ROUND_INFLIGHT_MS (measured from apiRoundSince).
-      // The watchdog ceiling is now exceeded — StreamTimeoutError must fire.
+      // Advance only the remaining budget to reach MAX_API_ROUND_INFLIGHT_MS
+      // (measured from apiRoundSince). The clock has already moved by
+      // 2 × (NEXT_EVENT_TIMEOUT_MS + 1), so we need only the difference.
+      // This keeps the assertion tight: an implementation granting even one
+      // extra inactivity window would cause the test to fail instead of pass.
+      const elapsed = 2 * (NEXT_EVENT_TIMEOUT_MS + 1);
+      const remaining = MAX_API_ROUND_INFLIGHT_MS - elapsed;
       const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
-      await vi.advanceTimersByTimeAsync(MAX_API_ROUND_INFLIGHT_MS);
+      await vi.advanceTimersByTimeAsync(remaining);
       await rejection;
     } finally {
       vi.useRealTimers();
