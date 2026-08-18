@@ -33,6 +33,7 @@ import { transcriptCmd } from './commands/transcript.js';
 import { editorCmd } from './commands/editor.js';
 import { afkMdCmd } from './commands/afk-md.js';
 import { searchCmd } from './commands/search.js';
+import { diffCmd } from './commands/diff.js';
 import { configDoctorCommands } from './commands/config-doctor.js';
 import { registerStaticPluginSkillCommands } from './plugin-skills.js';
 import { registerStaticPluginAgentCommands } from './plugin-agents.js';
@@ -67,6 +68,7 @@ export function registerAll(): void {
   register(editorCmd);
   register(afkMdCmd);
   register(searchCmd);
+  register(diffCmd);
   for (const cmd of configDoctorCommands) register(cmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
