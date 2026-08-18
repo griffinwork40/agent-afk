@@ -18,10 +18,12 @@ import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import { forwardProvenancePrefix } from '../forward-provenance.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { registerInboundImageBlocks } from '../../agent/content/attachment-registry.js';
+import { handleDocumentMessage } from './document.js';
 
 type QueueItem =
   | { type: 'message'; ctx: Context; text: string }
   | { type: 'photo'; ctx: Context; content: ContentBlockParam[] }
+  | { type: 'document'; ctx: Context; content: ContentBlockParam[] }
   | { type: 'clear'; ctx: Context }
   | { type: 'compact'; ctx: Context };
 
@@ -524,9 +526,43 @@ export class MessageHandler {
     }
   }
 
-  /**
-   * Handle user text messages
-   */
+  /** Handle document messages (PDF, text/code files). Mirrors handlePhoto. */
+  async handleDocument(ctx: Context): Promise<void> {
+    const route = routeFromCtx(ctx);
+    if (!route) return;
+    const key = routeKey(route);
+    let alreadyClaimed = false;
+    try {
+      alreadyClaimed = this.isClaimed(key);
+      if (!alreadyClaimed) this.reserveClaim(key);
+      const session = await this.sessionManager.getSession(route);
+      registerChatCommands(this.bot, route.chatId, session, this.registeredCommandChats, this.log)
+        .catch((err) => this.log('Failed to register chat commands:', err));
+      if (session.state !== 'idle' || alreadyClaimed) {
+        const q = this.messageQueues.get(key);
+        if ((q?.length ?? 0) >= MessageHandler.MAX_QUEUE_DEPTH) {
+          await ctx.reply('⏳ Queue full. Please wait for your messages to be processed.');
+          return;
+        }
+      }
+      const contentBlocks = await handleDocumentMessage(ctx, this.log);
+      if (contentBlocks === null) return;
+      if (session.state !== 'idle' || alreadyClaimed) {
+        const depth = this.enqueueDocument(route, ctx, contentBlocks);
+        if (depth !== false) await ctx.reply(formatQueued(depth));
+        return;
+      }
+      await this.processOne(route, ctx, contentBlocks);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      this.log('Document handling error:', raw.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/'));
+      await ctx.reply('❌ An error occurred processing your document. Please try again.');
+    } finally {
+      if (!alreadyClaimed) this.releaseClaim(key);
+    }
+  }
+
+  /** Handle user text messages */
   async handle(ctx: Context): Promise<void> {
     const route = routeFromCtx(ctx);
     const chatId = route?.chatId;
@@ -838,6 +874,17 @@ export class MessageHandler {
     return queue.length; // 1-based depth after push
   }
 
+  /** Enqueue a document message for later processing. Returns 1-based depth or false if full. */
+  private enqueueDocument(route: TelegramRoute, ctx: Context, content: ContentBlockParam[]): number | false {
+    const queue = this.queueFor(route);
+    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
+      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
+      return false;
+    }
+    queue.push({ type: 'document', ctx, content });
+    return queue.length;
+  }
+
   /**
    * Enqueue a clear command for later processing
    */
@@ -960,7 +1007,7 @@ export class MessageHandler {
     const item = queue.shift()!;
     if (item.type === 'message') {
       await this.processOne(route, item.ctx, item.text);
-    } else if (item.type === 'photo') {
+    } else if (item.type === 'photo' || item.type === 'document') {
       await this.processOne(route, item.ctx, item.content);
     } else if (item.type === 'compact') {
       await this.processCompactDirect(route, item.ctx);

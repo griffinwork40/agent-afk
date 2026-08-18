@@ -298,7 +298,8 @@ export class TelegramBot {
     // their own listener since Telegraf's filter is exact (a photo update never
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
-    // Note: documents, voice notes, video, and stickers remain unhandled.
+    this.bot.on('document', (ctx) => runDetached(this.messageHandler.handleDocument(ctx)));
+    // Note: voice notes, video, and stickers remain unhandled.
     // They can be added with the same pattern (download → build content blocks → processOne).
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
@@ -529,6 +530,10 @@ export class TelegramBot {
 
   async handlePhoto(ctx: Context): Promise<void> {
     return this.messageHandler.handlePhoto(ctx);
+  }
+
+  async handleDocument(ctx: Context): Promise<void> {
+    return this.messageHandler.handleDocument(ctx);
   }
 
   async handleModelSwitch(ctx: Context): Promise<void> {
