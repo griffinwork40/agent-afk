@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.6] - 2026-08-18
+
+### Fixed
+- reject unknown subcommands instead of falling through to interactive (#710) (#1137) (2527b2c5)
+
 ## [5.128.5] - 2026-08-18
 
 ### Fixed
