@@ -260,5 +260,35 @@ describe('bundled skills', () => {
       // Wave 2 emits the verdict, so its receives list carries the rule.
       expect(content).toContain('**the merge-decision rule and its counts format below**');
     });
+
+    // Invariant: #1134 — ground-state runs inline reconnaissance only. The skill
+    // body explicitly forbids dispatching sub-agents so that every survey is a
+    // deterministic read in the same fork, not a spawned child that could stall,
+    // hit depth limits, or produce non-deterministic results. A later edit that
+    // removes the prohibition or re-introduces `agent`/`skill` dispatch would
+    // silently break the no-dispatch guarantee the orchestrator depends on.
+    it('ground-state keeps the no-dispatch invariant (#1134)', () => {
+      const content = readBundled('ground-state');
+      const inlineRecon = content.match(
+        /## Inline reconnaissance\n([\s\S]*?)(?=\n## )/,
+      )?.[1];
+      expect(inlineRecon).toBeDefined();
+      expect(inlineRecon).toContain('Do NOT dispatch any sub-agents');
+      // The inline-recon section must name the tools the fork uses directly.
+      expect(inlineRecon).toContain('directly using your own tools');
+
+      // Remove the required prohibition before looking for a contradictory,
+      // affirmative dispatch directive in the same section.
+      const directives = inlineRecon!.replace(
+        /Do NOT dispatch any sub-agents[^.]*\./,
+        '',
+      );
+      const dispatchDirective =
+        /\b(?:(?:dispatch|invoke|call)\b[^.\n]*\b(?:sub-?agents?|agents?|skills?)|use\b[^.\n]*\b(?:agent|skill)\b[^.\n]*\btools?)\b/i;
+      expect('Dispatch a sub-agent for the state survey').toMatch(
+        dispatchDirective,
+      );
+      expect(directives).not.toMatch(dispatchDirective);
+    });
   });
 });
