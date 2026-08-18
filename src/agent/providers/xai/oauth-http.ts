@@ -71,8 +71,17 @@ export async function discoverXaiOidc(deps: OAuthHttpDeps = {}): Promise<XaiOidc
   if (!authorization_endpoint || !token_endpoint) {
     throw new Error('xAI OIDC discovery missing authorization_endpoint or token_endpoint');
   }
+  // RFC 8414 §3: token_endpoint and authorization_endpoint must share the issuer's origin.
+  const resolvedIssuer = asNonEmptyString(body['issuer']) ?? issuer;
+  const issuerOrigin = new URL(resolvedIssuer).origin;
+  if (new URL(token_endpoint).origin !== issuerOrigin) {
+    throw new Error('OIDC discovery: token_endpoint origin does not match issuer');
+  }
+  if (new URL(authorization_endpoint).origin !== issuerOrigin) {
+    throw new Error('OIDC discovery: authorization_endpoint origin does not match issuer');
+  }
   const out: XaiOidcDiscovery = {
-    issuer: asNonEmptyString(body['issuer']) ?? issuer,
+    issuer: resolvedIssuer,
     authorization_endpoint,
     token_endpoint,
   };

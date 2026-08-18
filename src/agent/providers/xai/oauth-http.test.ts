@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearOidcCache, discoverXaiOidcCached, tokenResponseToBundle } from './oauth-http.js';
+import {
+  clearOidcCache,
+  discoverXaiOidc,
+  discoverXaiOidcCached,
+  tokenResponseToBundle,
+} from './oauth-http.js';
 
 // ---------------------------------------------------------------------------
 // tokenResponseToBundle
@@ -128,5 +133,59 @@ describe('discoverXaiOidcCached', () => {
     clearOidcCache();
     await discoverXaiOidcCached(deps);
     expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RFC 8414 §3 origin validation
+// ---------------------------------------------------------------------------
+describe('discoverXaiOidc — origin validation', () => {
+  beforeEach(() => {
+    clearOidcCache();
+  });
+
+  it('accepts endpoints whose origin matches the issuer', async () => {
+    const fetchFn = makeFetchFn(DISCOVERY_BODY);
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).resolves.toMatchObject({
+      token_endpoint: DISCOVERY_BODY.token_endpoint,
+      authorization_endpoint: DISCOVERY_BODY.authorization_endpoint,
+    });
+  });
+
+  it('rejects a token_endpoint whose origin differs from the issuer', async () => {
+    const body = {
+      ...DISCOVERY_BODY,
+      token_endpoint: 'https://evil.example.com/token',
+    };
+    const fetchFn = makeFetchFn(body);
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('token_endpoint origin does not match issuer');
+  });
+
+  it('rejects an authorization_endpoint whose origin differs from the issuer', async () => {
+    const body = {
+      ...DISCOVERY_BODY,
+      authorization_endpoint: 'https://evil.example.com/auth',
+    };
+    const fetchFn = makeFetchFn(body);
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('authorization_endpoint origin does not match issuer');
+  });
+
+  it('validates against the issuer field in the document when present', async () => {
+    // Document advertises a different issuer subdomain; endpoints must match that, not the URL origin.
+    const body = {
+      issuer: 'https://auth2.x.ai',
+      authorization_endpoint: 'https://auth2.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token', // mismatch vs doc issuer
+    };
+    const fetchFn = makeFetchFn(body);
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth2.x.ai' }),
+    ).rejects.toThrow('token_endpoint origin does not match issuer');
   });
 });
