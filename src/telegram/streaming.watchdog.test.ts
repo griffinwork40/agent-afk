@@ -4,13 +4,41 @@
  * the provider is making a new `messages.create` API call between tool rounds.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   MAX_API_ROUND_INFLIGHT_MS,
   MAX_TOOL_INFLIGHT_MS,
+  NEXT_EVENT_TIMEOUT_MS,
   TOOL_INFLIGHT_RECHECK_MS,
+  makeNextWithTimeout,
   type WatchdogState,
 } from './streaming.watchdog.js';
+import { StreamTimeoutError } from './stream-timeout-error.js';
+
+/** Build a minimal WatchdogState with apiRoundInFlight pre-set to true. */
+function makeState(overrides: Partial<WatchdogState> = {}): WatchdogState {
+  return {
+    receivedAny: true,
+    timedOut: false,
+    lastActivityAt: Date.now(),
+    inFlightTools: new Set(),
+    toolInFlightSince: null,
+    pausedUntil: null,
+    apiRoundInFlight: false,
+    apiRoundSince: null,
+    ...overrides,
+  };
+}
+
+/** Async iterator that hangs forever until `release` is called. */
+function makeHangingIter(): { iter: AsyncIterator<never>; release: () => void } {
+  let release: () => void = () => {};
+  const hang = new Promise<void>((res) => { release = res; });
+  const iter: AsyncIterator<never> = {
+    next: () => hang.then(() => ({ value: undefined as never, done: true })),
+  };
+  return { iter, release };
+}
 
 describe('WatchdogState — apiRoundInFlight fields', () => {
   it('exports MAX_API_ROUND_INFLIGHT_MS as a positive number', () => {
@@ -48,4 +76,91 @@ describe('WatchdogState — apiRoundInFlight fields', () => {
     expect(state.apiRoundInFlight).toBe(true);
     expect(state.apiRoundSince).toBeTypeOf('number');
   });
+});
+
+describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
+  it('suspends the watchdog while apiRoundInFlight=true, then fires past MAX_API_ROUND_INFLIGHT_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({
+        apiRoundInFlight: true,
+        apiRoundSince: Date.now(),
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // Advance past NEXT_EVENT_TIMEOUT_MS — watchdog must NOT fire because
+      // apiRoundInFlight=true suspends it.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      expect(settled).toBe(false);
+
+      // Advance well past NEXT_EVENT_TIMEOUT_MS again — still suspended.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      expect(settled).toBe(false);
+
+      // Advance past MAX_API_ROUND_INFLIGHT_MS (measured from apiRoundSince).
+      // The watchdog ceiling is now exceeded — StreamTimeoutError must fire.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(MAX_API_ROUND_INFLIGHT_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('resumes normal watchdog cadence after a subsequent event clears apiRoundInFlight', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseFirst: () => void = () => {};
+      let resolveSecond: (v: IteratorResult<never>) => void = () => {};
+      // First call resolves immediately (simulates the subsequent event that
+      // clears apiRoundInFlight); second call hangs.
+      let callCount = 0;
+      const iter: AsyncIterator<never> = {
+        next: () => {
+          callCount++;
+          if (callCount === 1) {
+            return new Promise<IteratorResult<never>>((res) => { releaseFirst = () => res({ value: undefined as never, done: false }); });
+          }
+          return new Promise<IteratorResult<never>>((res) => { resolveSecond = res; });
+        },
+      };
+
+      const state = makeState({
+        apiRoundInFlight: true,
+        apiRoundSince: Date.now(),
+      });
+
+      // --- First call: simulate "subsequent event arrives" ---
+      const next = makeNextWithTimeout(iter, state);
+      const firstCall = next();
+      releaseFirst();
+      await firstCall;
+
+      // Caller (streaming.ts) would clear apiRoundInFlight on event receipt.
+      state.apiRoundInFlight = false;
+      state.apiRoundSince = null;
+      state.lastActivityAt = Date.now();
+
+      // --- Second call: watchdog should now run on normal NEXT_EVENT_TIMEOUT_MS ---
+      const secondCall = next();
+      let settled = false;
+      void secondCall.then(() => { settled = true; }, () => { settled = true; });
+
+      // Before the normal timeout: not fired.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+
+      // Past NEXT_EVENT_TIMEOUT_MS: fires with StreamTimeoutError (no suspension).
+      const rejection = expect(secondCall).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(2);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
 });
