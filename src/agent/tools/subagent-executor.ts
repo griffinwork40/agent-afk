@@ -863,6 +863,12 @@ export class SubagentExecutor implements SubagentControl {
         // reach. Safe on a never-run handle: inFlight is null, so cancel()
         // skips session.interrupt().
         await handle.cancel();
+        // Background: unlock + tear down the isolated worktree that will never
+        // be registered (no registry entry → no markTerminal → no onCleanup).
+        if (isolationTeardown && parsed.mode === 'background') {
+          await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
+            debugLog(`[isolation] background worktree teardown failed after cancel: ${String(e)}`));
+        }
         return { content: 'Agent tool call aborted', isError: true };
       }
     } catch (err) {
@@ -879,6 +885,12 @@ export class SubagentExecutor implements SubagentControl {
         error_message: truncate(message),
         depth,
       });
+      // Background: unlock + tear down the isolated worktree that will never
+      // be registered (no registry entry → no markTerminal → no onCleanup).
+      if (isolationTeardown && parsed.mode === 'background') {
+        await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
+          debugLog(`[isolation] background worktree teardown failed after fork error: ${String(e)}`));
+      }
       return {
         content: `Failed to fork subagent: ${message}`,
         isError: true,

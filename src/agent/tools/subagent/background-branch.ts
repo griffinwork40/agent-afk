@@ -17,7 +17,7 @@ import { BackgroundJobCapError, type BackgroundAgentRegistry, type BackgroundJob
 import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
-import { unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
+import { teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -67,18 +67,17 @@ export interface RunBackgroundBranchArgs {
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
   const { handle, registry, prompt, model, parentSessionId, onSettled, onCleanup, isolationTeardown } = args;
   if (!registry) {
-    if (isolationTeardown) {
-      try {
-        await unlockWorktreeForPromotion(isolationTeardown.repoRoot, isolationTeardown.worktreePath);
-      } catch (ue) {
-        debugLog(`subagent-executor: background worktree unlock failed without registry: ${String(ue)}`);
-      }
-    }
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
     await handle.teardown().catch((e: unknown) =>
       debugLog('subagent-executor: handle teardown failed: ' + (e instanceof Error ? e.message : String(e))),
     );
+    // Unlock + tear down the isolated worktree — no registry means no
+    // markTerminal and no onCleanup, so this is the only cleanup path.
+    if (isolationTeardown) {
+      await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
+        debugLog(`[isolation] background worktree teardown failed (no registry): ${String(e)}`));
+    }
     onSettled?.(true);
     return {
       content:
@@ -98,17 +97,16 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     });
   } catch (e) {
     if (e instanceof BackgroundJobCapError) {
-      if (isolationTeardown) {
-        try {
-          await unlockWorktreeForPromotion(isolationTeardown.repoRoot, isolationTeardown.worktreePath);
-        } catch (ue) {
-          debugLog(`subagent-executor: background worktree unlock failed after cap error: ${String(ue)}`);
-        }
-      }
       // Cap exceeded — tear down the orphaned handle so the fork isn't leaked.
       await handle.teardown().catch((te: unknown) =>
         debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),
       );
+      // Unlock + tear down the isolated worktree — cap rejection means no
+      // registry entry, so markTerminal/onCleanup will never fire.
+      if (isolationTeardown) {
+        await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>
+          debugLog(`[isolation] background worktree teardown failed (cap error): ${String(te)}`));
+      }
       onSettled?.(true);
       return {
         content: e.message,
