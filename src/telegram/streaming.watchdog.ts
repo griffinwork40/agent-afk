@@ -37,6 +37,18 @@ export const MAX_TOOL_INFLIGHT_MS = 660_000;
 export const TOOL_INFLIGHT_RECHECK_MS = 15_000;
 
 /**
+ * Ceiling on how long the watchdog stays SUSPENDED while the provider is
+ * making a new `messages.create` API call between tool rounds. After the last
+ * tool result arrives and before the first SSE byte of the next round, the
+ * parent stream is legitimately silent — the model is processing the full
+ * conversation context. The provider-level TTFB budget is 3 attempts × 120s
+ * = 360s worst case (see `retry-budget.ts`). This ceiling must exceed that so
+ * the provider's own retry logic gets a chance to recover before the Telegram
+ * watchdog fires a user-visible timeout.
+ */
+export const MAX_API_ROUND_INFLIGHT_MS = 420_000;
+
+/**
  * Tool-progress (`◦`) lines stay HIDDEN until the turn has been working this
  * long. Most turns finish faster than this and now render no progress noise at
  * all — the live preview goes straight from `Thinking…` to the answer.
@@ -58,6 +70,15 @@ export interface WatchdogState {
   inFlightTools: Set<string>;
   toolInFlightSince: number | null;
   pausedUntil: Date | null;
+  /**
+   * Set to `true` when a `progress` event arrives (end of a tool round),
+   * signalling that the provider is about to make a new `messages.create` call.
+   * Cleared when any subsequent event arrives. While `true`, the watchdog
+   * suspends (analogous to tool-in-flight) because the parent stream is
+   * legitimately silent during the API call's connection + inference phase.
+   */
+  apiRoundInFlight: boolean;
+  apiRoundSince: number | null;
 }
 
 /** Extra slack (ms) added to the timeout deadline while paused. */
@@ -99,6 +120,19 @@ export function makeNextWithTimeout(
             state.inFlightTools.size > 0 &&
             state.toolInFlightSince !== null &&
             Date.now() - state.toolInFlightSince < MAX_TOOL_INFLIGHT_MS
+          ) {
+            timeoutId = setTimeout(arm, TOOL_INFLIGHT_RECHECK_MS);
+            return;
+          }
+          // An API round in flight (the provider is calling messages.create
+          // between tool rounds) is silent on the parent stream while the
+          // model processes the context. Suspend the watchdog like we do for
+          // in-flight tools, bounded by MAX_API_ROUND_INFLIGHT_MS so a
+          // genuinely wedged API call still eventually trips.
+          if (
+            state.apiRoundInFlight &&
+            state.apiRoundSince !== null &&
+            Date.now() - state.apiRoundSince < MAX_API_ROUND_INFLIGHT_MS
           ) {
             timeoutId = setTimeout(arm, TOOL_INFLIGHT_RECHECK_MS);
             return;

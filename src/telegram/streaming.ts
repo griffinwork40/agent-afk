@@ -31,20 +31,13 @@ import {
 } from './streaming.watchdog.js';
 import { handleProgressEvent, makeSubagentSink } from './streaming.progress.js';
 
-// Re-export so existing consumers (tests, other modules) keep importing from
-// this module unchanged — the extraction is invisible to callers.
+// Backward-compat re-exports: extracted to sibling modules but callers still
+// import from this file. StreamTimeoutError is in its own module so
+// `instanceof` survives `vi.mock('./streaming.js')` in tests.
 export { formatTelegramActivity, formatTelegramAgentLabel, renderSubagentFooter };
-// Retry helpers — moved to streaming.retry.ts; re-exported for backward compat.
 export { replyWithFloodRetry } from './streaming.retry.js';
-// Preview helpers — moved to streaming.preview.ts; re-exported for backward compat.
 export { renderProgressRegion, renderInterleavedPreview } from './streaming.preview.js';
 export type { ProgressEntry } from './streaming.preview.js';
-
-// StreamTimeoutError lives in its own module so the message handler's
-// `instanceof` check survives `vi.mock('./streaming.js')` in tests (see
-// stream-timeout-error.ts). Imported above for local use (the watchdog throws
-// it); re-exported here so callers/tests that import it from the streaming
-// module keep working.
 export { StreamTimeoutError };
 
 /**
@@ -141,6 +134,7 @@ export async function streamResponse(
     receivedAny: false, timedOut: false, lastActivityAt: Date.now(),
     inFlightTools: new Set<string>(), toolInFlightSince: null,
     get pausedUntil() { return state.pausedUntil; },
+    apiRoundInFlight: false, apiRoundSince: null,
   };
 
   const subagentState = { subagentSteps: 0, recentSubagentSteps: [] as string[] };
@@ -204,6 +198,8 @@ export async function streamResponse(
           if (result.done) break;
           const event: OutputEvent = result.value;
           watchdog.lastActivityAt = Date.now();
+          // Any event ends the API-round silence (messages.create has streamed).
+          if (watchdog.apiRoundInFlight) { watchdog.apiRoundInFlight = false; watchdog.apiRoundSince = null; }
           if (!watchdog.receivedAny) {
             watchdog.receivedAny = true;
             console.log('📡 First stream event received:', event.type);
@@ -276,6 +272,10 @@ export async function streamResponse(
           // this assignment. See streaming.progress.ts for the full invariant comment.
           if (event.type === 'progress') {
             inContentRun = false;
+            // A tool round finished — the provider is about to call messages.create.
+            // Suspend the watchdog during the TTFB gap (see streaming.watchdog.ts).
+            watchdog.apiRoundInFlight = true;
+            watchdog.apiRoundSince = Date.now();
             await handleProgressEvent(
               event, state, progressGateOpen, progressDelayMs, ctx, chatId, livePreview,
               (v) => { progressGateOpen = v; }, clearProgressTimer,
