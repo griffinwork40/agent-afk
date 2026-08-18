@@ -76,7 +76,7 @@ const readFileImpl = async (
     const checkSize = Math.min(8192, buffer.length);
     for (let i = 0; i < checkSize; i++) {
       if (buffer[i] === 0) {
-        return { content: `File appears to be binary: ${filePath}`, isError: true };
+        return { content: `File appears to be binary: ${filePath}. Use extract_document for .docx, .pdf, .xlsx, .pptx, and .zip files.`, isError: true };
       }
     }
 
