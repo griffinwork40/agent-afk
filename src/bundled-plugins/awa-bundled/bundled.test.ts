@@ -260,5 +260,27 @@ describe('bundled skills', () => {
       // Wave 2 emits the verdict, so its receives list carries the rule.
       expect(content).toContain('**the merge-decision rule and its counts format below**');
     });
+
+    // Invariant: #1134 — ground-state must NOT dispatch sub-agents. Every
+    // lookup in the reconnaissance phase is a deterministic read the forked
+    // skill executes itself. Sub-agent dispatch during ground-state silently
+    // adds latency, burns budget, and can trigger tool-availability errors
+    // (the forked child's allowlist differs from the orchestrator's). The
+    // no-dispatch mandate is stated in the Inline reconnaissance section and
+    // is not recoverable from the hash alone — a partial rewrite that leaves
+    // the hash intact could still strip the clause.
+    it('ground-state keeps the no-dispatch invariant (#1134)', () => {
+      const content = readBundled('ground-state');
+
+      // The no-dispatch mandate must be present in the Inline reconnaissance section.
+      expect(content).toContain(
+        'Do NOT dispatch any sub-agents via the `agent` or `skill` tools',
+      );
+
+      // The self-execution instruction must accompany the mandate.
+      expect(content).toContain(
+        'every lookup in this phase is a deterministic read that you execute yourself',
+      );
+    });
   });
 });
