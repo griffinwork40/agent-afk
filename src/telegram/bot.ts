@@ -298,8 +298,8 @@ export class TelegramBot {
     // their own listener since Telegraf's filter is exact (a photo update never
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
-    // Note: documents, voice notes, video, and stickers remain unhandled.
-    // They can be added with the same pattern (download → build content blocks → processOne).
+    this.bot.on(['voice', 'video', 'sticker', 'video_note', 'audio'], (ctx) =>
+      ctx.chat && ctx.reply('I can process text and photo messages. Voice and video support is not yet available.').catch((e) => this.log('Failed to send unsupported-type reply:', e)));
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
     // middleware (registered above) already filters callback_query updates
@@ -350,8 +350,8 @@ export class TelegramBot {
 
     this.bot.catch((err, ctx) => {
       this.log('Bot error:', err);
-      ctx.reply(formatError('An unexpected error occurred. Please try again.'))
-        .catch(e => this.log('Failed to send error message:', e));
+      if (!ctx.chat) return;
+      ctx.reply(formatError('An unexpected error occurred. Please try again.')).catch(e => this.log('Failed to send error message:', e));
     });
   }
 
