@@ -714,6 +714,8 @@ export class MessageHandler {
       this.log('Clear error:', error);
       await ctx.reply(formatError(error as Error));
     } finally {
+      // No drainQueue here: processClearDirect is itself called FROM drainQueue,
+      // so re-draining would cascade back into drain and re-enter immediately.
       this.releaseClaim(routeKey(route));
     }
   }
