@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.129.0] - 2026-08-18
+
+### Added
+- add /diff slash command for inline git diff viewing (#1128) (d3ce7821)
+
+### Fixed
+- fork helpers, deliverOverflow contract, xAI OAuth tests, OIDC origin validation (#1119, #1122, #1063, #1058) (#1139) (33714849)
+
 ## [5.128.6] - 2026-08-18
 
 ### Fixed
