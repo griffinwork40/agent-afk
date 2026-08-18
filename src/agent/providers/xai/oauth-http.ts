@@ -71,13 +71,29 @@ export async function discoverXaiOidc(deps: OAuthHttpDeps = {}): Promise<XaiOidc
   if (!authorization_endpoint || !token_endpoint) {
     throw new Error('xAI OIDC discovery missing authorization_endpoint or token_endpoint');
   }
+  // RFC 8414 §3: authorization_endpoint and token_endpoint MUST share the issuer's origin.
+  // Validate against the resolved issuer (prefer body['issuer'] when present, else the
+  // configured issuer string) so spoofed discovery documents can't redirect token traffic.
+  const resolvedIssuer = asNonEmptyString(body['issuer']) ?? issuer;
+  const issuerOrigin = new URL(resolvedIssuer).origin;
+  if (new URL(authorization_endpoint).origin !== issuerOrigin) {
+    throw new Error('xAI OIDC discovery: authorization_endpoint origin does not match issuer');
+  }
+  if (new URL(token_endpoint).origin !== issuerOrigin) {
+    throw new Error('xAI OIDC discovery: token_endpoint origin does not match issuer');
+  }
   const out: XaiOidcDiscovery = {
-    issuer: asNonEmptyString(body['issuer']) ?? issuer,
+    issuer: resolvedIssuer,
     authorization_endpoint,
     token_endpoint,
   };
   const device = asNonEmptyString(body['device_authorization_endpoint']);
-  if (device) out.device_authorization_endpoint = device;
+  if (device) {
+    if (new URL(device).origin !== issuerOrigin) {
+      throw new Error('xAI OIDC discovery: device_authorization_endpoint origin does not match issuer');
+    }
+    out.device_authorization_endpoint = device;
+  }
   const userinfo = asNonEmptyString(body['userinfo_endpoint']);
   if (userinfo) out.userinfo_endpoint = userinfo;
   return out;
