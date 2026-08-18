@@ -46,6 +46,9 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
   let initError: Error | undefined;
   /** Single-flight init: concurrent iterators join one promise (no double delegate). */
   let initPromise: Promise<ProviderQuery> | undefined;
+  /** Buffered values to replay onto innerQuery once it initializes. */
+  let bufferedCwd: string | undefined;
+  let bufferedSystemPrompt: string | undefined | null; // null = explicitly set to undefined
 
   const ensureInner = async (): Promise<ProviderQuery> => {
     if (initError) throw initError;
@@ -70,6 +73,12 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
           );
         }
         innerQuery = delegate(args, resolution.apiKey, resolution.mode);
+        // Replay buffered calls that arrived before the inner query existed.
+        if (bufferedCwd !== undefined) innerQuery.setCwd?.(bufferedCwd);
+        if (bufferedSystemPrompt !== undefined)
+          innerQuery.setSystemPrompt?.(
+            bufferedSystemPrompt === null ? undefined : bufferedSystemPrompt,
+          );
         return innerQuery;
       } catch (e) {
         initError = e instanceof Error ? e : new Error(String(e));
@@ -116,10 +125,19 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
       await q?.setPermissionMode(mode);
     },
     setCwd(cwd: string) {
-      innerQuery?.setCwd?.(cwd);
+      if (innerQuery) {
+        innerQuery.setCwd?.(cwd);
+      } else {
+        bufferedCwd = cwd;
+      }
     },
     setSystemPrompt(basePrompt: string | undefined) {
-      return innerQuery?.setSystemPrompt?.(basePrompt) ?? false;
+      if (innerQuery) {
+        return innerQuery.setSystemPrompt?.(basePrompt) ?? false;
+      }
+      // null sentinel = caller explicitly passed undefined before init.
+      bufferedSystemPrompt = basePrompt === undefined ? null : basePrompt;
+      return false;
     },
     async reauth() {
       const q = innerQuery ?? (await ensureInner().catch(() => undefined));
