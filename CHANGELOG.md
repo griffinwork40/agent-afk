@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.0] - 2026-08-18
+
+### Added
+- show elapsed timer while waiting for first response token (#1132) (f7b5a826)
+- interrupt-and-steer picker on Ctrl+C + session health glance-rail (#1130) (de2b9d04)
+
 ## [5.127.4] - 2026-08-18
 
 ### Changed
