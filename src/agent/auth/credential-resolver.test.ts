@@ -6,8 +6,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   loadXaiApiKey,
+  loadAnthropicCredential,
   resolveCredentialForModel,
   preloadClaudeKeychainOAuth,
+  _resetRefreshedClaudeCodeOauthToken,
 } from './credential-resolver.js';
 import { refreshClaudeCodeOauthToken } from './keychain.js';
 
@@ -136,6 +138,7 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetRefreshedClaudeCodeOauthToken();
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   });
@@ -169,5 +172,12 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     const token = await preloadClaudeKeychainOAuth('anthropic-direct');
     expect(refreshClaudeCodeOauthToken).toHaveBeenCalledOnce();
     expect(token).toBe('sk-ant-oat01-refreshed');
+  });
+
+  it('uses the refreshed token for later reads when store write-back is unavailable', async () => {
+    await preloadClaudeKeychainOAuth('anthropic-direct');
+
+    expect(loadAnthropicCredential()).toBe('sk-ant-oat01-refreshed');
+    expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-oat01-refreshed');
   });
 });
