@@ -562,6 +562,7 @@ export class MessageHandler {
     // ask_question by replying to the bot's own question is the natural gesture, and
     // the resolver needs the literal answer (a "[in reply to …] 5" breaks number/
     // choice validation). Restores the pre-#688 elicitation value (senderPrefix + text).
+    // forward provenance prefix is also excluded intentionally — a forwarded elicitation answer would confuse the resolver
     const elicitationAnswer = senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
 
     // Answer consumed by active ask_question elicitation — never reaches

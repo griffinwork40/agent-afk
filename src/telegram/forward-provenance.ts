@@ -148,8 +148,11 @@ export function forwardProvenancePrefix(meta: ForwardMetadata): string {
       label = labelFromOriginChat(origin);
     } else if (origin.type === 'channel') {
       label = labelFromOriginChannel(origin);
+    } else {
+      // Unknown future origin type: fall through to legacy fields below.
+      // Warn so Bot API drift surfaces in logs rather than silently producing a blank marker.
+      console.warn(`[forward-provenance] unknown forward_origin.type "${(origin as { type: string }).type}" — Bot API may have added a new origin type`);
     }
-    // Unknown future origin type: fall through to legacy fields below.
   }
 
   // Legacy fallback (also covers clients that still send both sets of fields).
