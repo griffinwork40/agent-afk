@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.2] - 2026-08-18
+
+### Fixed
+- report pre-filter sessionsAvailable alongside sessionsSearched (#1147) (5f521a40)
+
+### Changed
+- document deliverOverflow guard contract (#1122) (#1154) (4aec6af4)
+- add test for refresh-failure graceful degradation (#1063) (#1153) (f99ab0a2)
+- document combined watchdog ceiling (#1144) (#1155) (c73ab3bc)
+- add unit tests for extracted fork helpers (#1119) (#1152) (c0a8e7cf)
+
 ## [5.128.1] - 2026-08-18
 
 ### Fixed
