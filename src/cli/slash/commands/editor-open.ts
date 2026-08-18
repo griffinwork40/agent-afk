@@ -39,6 +39,10 @@ export interface EditorHandoffDeps {
   compositor: TerminalCompositor | null;
   /** One-line notice sink. Slash command → `ctx.out`; chord → a `commitAbove` writer. */
   notify: (kind: EditorNotifyKind, message: string) => void;
+  /** Pause periodic footer writers while the editor owns the terminal. */
+  suspendFooter?: () => void;
+  /** Resume periodic footer writers after the editor exits. */
+  resumeFooter?: () => void;
 }
 
 /** Outcome of an editor handoff attempt — returned for tests and callers that branch on it. */
@@ -87,7 +91,10 @@ export async function openEditorForBuffer(deps: EditorHandoffDeps): Promise<Edit
   await fs.writeFile(filePath, original, { mode: 0o600 });
 
   try {
-    const { outcome, exitCode } = await spawnEditorOnPath({ compositor, filePath, notify });
+    const { outcome, exitCode } = await spawnEditorOnPath({
+      compositor, filePath, notify,
+      suspendFooter: deps.suspendFooter, resumeFooter: deps.resumeFooter,
+    });
 
     if (outcome === 'spawn-failed') {
       const editor = resolveEditor();

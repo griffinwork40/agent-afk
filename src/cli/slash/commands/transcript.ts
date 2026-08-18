@@ -169,8 +169,10 @@ export const transcriptCmd: SlashCommand = {
       restored = true;
       try { process.stdin.resume(); } catch { /* best-effort */ }
       compositor?.resumeInput();
+      ctx.resumeFooter?.();
     };
     compositor?.suspendInput();
+    ctx.suspendFooter?.();
     try { process.stdin.pause(); } catch { /* best-effort */ }
 
     return new Promise<'continue'>((resolve) => {
