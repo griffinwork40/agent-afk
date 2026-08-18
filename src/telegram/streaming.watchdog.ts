@@ -108,6 +108,40 @@ export function makeNextWithTimeout(
       // from the LAST activity. Sub-agent sink events bump `lastActivityAt`,
       // so an active fan-out re-arms the timer instead of tripping a false
       // timeout while the parent stream is legitimately quiet.
+      // Contract: combined suspension ceiling
+      //
+      // The watchdog has THREE independent suspension mechanisms that can
+      // overlap, and their ceilings are ADDITIVE rather than unified:
+      //
+      //   1. pausedUntil (rate-limit pause)
+      //      Extends `windowMs` to `(pausedUntil - now) + PAUSE_SLACK_MS`.
+      //      Applied at call-site BEFORE arm() is scheduled, so arm() sees
+      //      an already-inflated window.
+      //
+      //   2. inFlightTools (foreground tool call in progress)
+      //      Defers the reject inside arm() for up to MAX_TOOL_INFLIGHT_MS
+      //      beyond when `remaining` first hits 0.
+      //
+      //   3. apiRoundInFlight (provider messages.create between tool rounds)
+      //      Defers the reject inside arm() for up to MAX_API_ROUND_INFLIGHT_MS
+      //      beyond when `remaining` first hits 0.
+      //
+      // When pausedUntil fires at the same moment apiRoundInFlight is true
+      // (e.g. a rate-limit pause arriving while the provider is retrying its
+      // next round), the effective worst-case tolerance is:
+      //
+      //   pause_window + PAUSE_SLACK_MS + MAX_API_ROUND_INFLIGHT_MS
+      //   ≈ (pause_window) + 90 s + 420 s
+      //
+      // where pause_window is provider-governed (typically 60–600 s for
+      // Anthropic overload responses). There is no single cap combining
+      // all three; this is intentional — each mechanism covers a distinct
+      // legitimate silence that could exceed any single unified ceiling on
+      // its own. The tradeoff is that a pathological overlap (rate-limit
+      // pause + wedged API round) could defer a user-visible timeout by
+      // 10+ minutes. If that becomes a problem in practice, gate the
+      // apiRoundInFlight branch on `pausedUntil === null` to prevent the
+      // additive stack.
       const arm = (): void => {
         const remaining = windowMs - (Date.now() - state.lastActivityAt);
         if (remaining <= 0) {
