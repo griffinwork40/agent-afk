@@ -1096,10 +1096,10 @@ describe('parseAgentInput', () => {
       expect('isolation' in result).toBe(false);
     });
 
-    it('throws when isolation:worktree is combined with mode:background (MVP forbid)', () => {
-      expect(() =>
-        parseAgentInput({ prompt: 'p', isolation: 'worktree', mode: 'background' }),
-      ).toThrow(/not supported with mode:"background"/);
+    it('allows isolation:worktree with mode:background', () => {
+      const result = parseAgentInput({ prompt: 'p', isolation: 'worktree', mode: 'background' });
+      expect(result.isolation).toBe('worktree');
+      expect(result.mode).toBe('background');
     });
   });
 

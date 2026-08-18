@@ -35,6 +35,12 @@ export interface RunBackgroundBranchArgs {
    * `currentWaveId` before the job finishes (#1083).
    */
   onSettled?: (isError: boolean) => void;
+  /**
+   * Optional post-terminal cleanup. Forwarded to the registry so markTerminal()
+   * runs it after handle.teardown(). Used by isolation:"worktree" to unlock +
+   * tear down the child's worktree.
+   */
+  onCleanup?: () => Promise<void>;
 }
 
 /**
@@ -56,7 +62,7 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId, onSettled } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled, onCleanup } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
@@ -78,6 +84,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       prompt,
       model: model ?? 'sonnet',
       parentSessionId,
+      onCleanup,
     });
   } catch (e) {
     if (e instanceof BackgroundJobCapError) {

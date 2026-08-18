@@ -31,6 +31,9 @@ import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailur
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
+import { lockWorktreeForBackground, teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
+import { withProvenanceHeader } from './foreground-promotion.provenance.js';
+export { withProvenanceHeader };
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -91,24 +94,6 @@ export interface RunForegroundArgs {
    * later). A dirty / commits-ahead tree is preserved and locked, not removed.
    */
   isolationTeardown?: { repoRoot: string; worktreePath: string };
-}
-
-/**
- * Prepend a compact provenance header naming the subagent's model — but ONLY
- * when it differs from the parent's. That is the mixed-model fan-out case where
- * the parent benefits from knowing which model produced a finding (trust
- * calibration: a result from a cheaper/different model warrants independent
- * checking). When the child inherited the parent's model the header is pure
- * noise and is omitted, so same-model dispatches stay byte-for-byte unchanged.
- * Descriptive metadata, not an instruction.
- */
-export function withProvenanceHeader(
-  content: string,
-  model: string | undefined,
-  parentModel: string | undefined,
-): string {
-  if (!model || !parentModel || model === parentModel) return content;
-  return `[subagent result · model=${model} (parent: ${parentModel})]\n\n${content}`;
 }
 
 /**
@@ -215,12 +200,17 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     if (outcome.kind === 'promote') {
       if (registry) {
         try {
+          // Lock the worktree before handing to the registry — the promoted
+          // job outlives the foreground finally that would have torn it down.
+          const isoTd = args.isolationTeardown;
+          if (isoTd) await lockWorktreeForBackground(isoTd.repoRoot, isoTd.worktreePath);
           const job = registry.adoptRunning({
             handle,
             runPromise,
             prompt: backgroundPrompt,
             model: model ?? 'sonnet',
             parentSessionId,
+            ...(isoTd ? { onCleanup: async () => { await teardownBackgroundWorktree(isoTd); } } : {}),
           });
           promoted = true;
           // Detach the end-of-turn abort bridge — the promoted job must

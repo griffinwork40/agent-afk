@@ -47,8 +47,6 @@
  */
 
 import { EventEmitter } from 'node:events';
-import * as fsp from 'node:fs/promises';
-import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.js';
 import { buildResultFromError, createEmptyTrace } from './subagent/result.js';
@@ -57,10 +55,10 @@ import { emitBackgroundAgent } from './trace/emit.js';
 import type { TraceSink } from './trace/index.js';
 import { BgJobLogWriter } from './bg-job-log.js';
 import type { BgJobMeta } from './bg-job-log.js';
-import { getBgJobsRoot, getBgJobDir } from '../paths.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { boundedStopReason } from './tools/subagent/failure-payload.js';
 import { resolveMaxConcurrentBackgroundJobs } from '../config/concurrency.js';
+import { sweepOldBgJobs } from './background-registry.sweep.js';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -103,6 +101,8 @@ interface InternalJob extends BackgroundJob {
    * Surfaced to both routing-telemetry events and bg-job meta records.
    */
   parentSessionId?: string | undefined;
+  /** Post-terminal cleanup callback, forwarded from RegisterArgs. */
+  onCleanup?: () => Promise<void>;
 }
 
 /** Default TTL for evicting terminal jobs from the registry map. */
@@ -152,6 +152,12 @@ export interface RegisterArgs {
    * meta record for log correlation.
    */
   parentSessionId?: string | undefined;
+  /**
+   * Optional post-terminal cleanup callback. Called in markTerminal() after
+   * handle.teardown() finishes. Best-effort — errors are logged, never thrown.
+   * Used by isolation:"worktree" to unlock + tear down the child's worktree.
+   */
+  onCleanup?: () => Promise<void>;
 }
 
 /**
@@ -198,7 +204,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // 7-day eviction sweep: fire after 5 seconds so it doesn't block startup.
     // `.unref()` prevents the timer from keeping the Node process alive.
     const sweepTimer = setTimeout(
-      () => this._sweepOldJobs().catch((e: unknown) =>
+      () => sweepOldBgJobs().catch((e: unknown) =>
         process.stderr.write(`[afk] bg sweep error: ${String(e)}\n`),
       ),
       5000,
@@ -358,6 +364,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       settle,
       transcriptTail: '',
       parentSessionId: args.parentSessionId,
+      onCleanup: args.onCleanup,
     };
     this.jobs.set(jobId, job);
 
@@ -728,49 +735,14 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         `markTerminal: handle.teardown() failed for job ${jobId}: ${String(err)}`,
       );
     }
-  }
 
-  // ---------------------------------------------------------------------------
-  // 7-day disk eviction sweep
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Remove bg job directories whose `meta.json` shows `endedAt` older than
-   * 7 days. Called once on registry construction after a 5-second delay.
-   * Errors per-directory are logged and do not abort the sweep.
-   */
-  private async _sweepOldJobs(): Promise<void> {
-    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-    const root = getBgJobsRoot();
-    let entries: string[];
-    try {
-      entries = await fsp.readdir(root);
-    } catch {
-      return; // root doesn't exist yet — nothing to sweep
-    }
-    for (const entry of entries) {
-      const jobDir = getBgJobDir(entry);
-      const metaPath = path.join(jobDir, 'meta.json');
+    // Post-terminal cleanup (e.g. isolation:"worktree" unlock + teardown).
+    // Placed after handle.teardown() so hooks can inspect state. Best-effort.
+    if (job.onCleanup) {
       try {
-        // Symlink guard: lstat does not follow symlinks — skip anything that
-        // isn't a plain directory so we don't recursively remove symlink targets
-        // outside the jobs root.
-        const dirStat = await fsp.lstat(jobDir);
-        if (!dirStat.isDirectory()) {
-          process.stderr.write(`[afk] bg sweep: skipping non-directory entry ${entry}\n`);
-          continue;
-        }
-        const raw = await fsp.readFile(metaPath, 'utf8');
-        const meta = JSON.parse(raw) as { endedAt?: number; status?: string };
-        // Only evict terminal jobs
-        if (meta.status === 'running') continue;
-        if (meta.endedAt === undefined) continue;
-        if (Date.now() - meta.endedAt < SEVEN_DAYS_MS) continue;
-        await fsp.rm(jobDir, { recursive: true, force: true });
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code;
-        if (code === 'ENOENT') continue; // already gone
-        process.stderr.write(`[afk] bg sweep: error evicting ${entry}: ${String(e)}\n`);
+        await job.onCleanup();
+      } catch (err) {
+        debugLog(`markTerminal: onCleanup failed for job ${jobId}: ${String(err)}`);
       }
     }
   }
