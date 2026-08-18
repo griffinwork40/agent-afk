@@ -341,3 +341,81 @@ describe('MessageHandler tag-only gate — photo', () => {
     expect(getFileLink).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gate — document (handleDocument)
+// ---------------------------------------------------------------------------
+
+function makeDocumentCtx(opts: {
+  chatId: number;
+  caption?: string;
+  captionEntities?: MessageEntity[];
+  replyFromId?: number;
+  botInfo?: { id: number; username?: string } | undefined;
+}): { ctx: Context; getFileLink: ReturnType<typeof vi.fn> } {
+  const getFileLink = vi.fn(async () => new URL('https://api.telegram.org/file/bot-token/docs/f.pdf'));
+  const message: Partial<Message.DocumentMessage> = {
+    document: {
+      file_id: 'doc1',
+      file_unique_id: 'udoc1',
+      file_name: 'test.pdf',
+      mime_type: 'application/pdf',
+      file_size: 1024,
+    } as Message.DocumentMessage['document'],
+    caption: opts.caption,
+    caption_entities: opts.captionEntities,
+    ...(opts.replyFromId !== undefined
+      ? { reply_to_message: { from: { id: opts.replyFromId, is_bot: true, first_name: 'B' } } as Message }
+      : {}),
+  };
+  const ctx = {
+    chat: { id: opts.chatId, type: 'group' as const },
+    message,
+    botInfo: 'botInfo' in opts ? opts.botInfo : { id: BOT_ID, username: BOT_USERNAME },
+    react: vi.fn(async () => {}),
+    reply: vi.fn(async () => ({ message_id: 1 })),
+    sendChatAction: vi.fn(async () => true),
+    telegram: { getFileLink, editMessageText: vi.fn(async () => true) },
+  } as unknown as Context;
+  return { ctx, getFileLink };
+}
+
+describe('handleDocument: tag-only', () => {
+  const TAG_CHAT = -100123;
+
+  it('un-addressed document in a tag-only chat is dropped before getSession', async () => {
+    const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
+    const { ctx, getFileLink } = makeDocumentCtx({ chatId: TAG_CHAT, caption: 'here is my file' });
+
+    await handler.handleDocument(ctx);
+
+    // Drop signal: neither session lookup nor CDN download fires.
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getFileLink).not.toHaveBeenCalled();
+  });
+
+  it('addressed document (reply to the bot) in a tag-only chat proceeds to getSession', async () => {
+    const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
+    const { ctx } = makeDocumentCtx({ chatId: TAG_CHAT, caption: 'look', replyFromId: BOT_ID });
+
+    await handler.handleDocument(ctx);
+
+    // Proceed signal: session lookup was reached (document download may error;
+    // we only need to confirm the gate was passed).
+    expect(getSession).toHaveBeenCalled();
+  });
+
+  it('addressed document (@mention in caption) in a tag-only chat proceeds', async () => {
+    const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
+    const caption = `@${BOT_USERNAME} check this doc`;
+    const { ctx } = makeDocumentCtx({
+      chatId: TAG_CHAT,
+      caption,
+      captionEntities: [mentionEntity(caption, `@${BOT_USERNAME}`)],
+    });
+
+    await handler.handleDocument(ctx);
+
+    expect(getSession).toHaveBeenCalled();
+  });
+});
