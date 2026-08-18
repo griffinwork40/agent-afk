@@ -215,8 +215,11 @@ export async function runFirstRunDetector(argv: string[] = process.argv): Promis
   // the command's own refresh could run. The refresh is internally guarded to
   // the keychain-OAuth case (Anthropic provider, no env credential), so it is a
   // no-op for OpenAI/xAI/env-var users, and bounded by a fetch timeout.
-  await preloadClaudeKeychainOAuth(provider);
-  const credential = loadCredential();
+  const refreshedToken = await preloadClaudeKeychainOAuth(provider);
+  // Use the returned token directly as well as caching it in the resolver: a
+  // locked/read-only credential store may reject refresh write-back, so an
+  // immediate re-read can still return the expired token or no credential.
+  const credential = refreshedToken ?? loadCredential();
   if (!credential && provider === 'anthropic-direct') {
     if (!process.stdin.isTTY) {
       process.stderr.write(
