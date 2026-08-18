@@ -1024,7 +1024,7 @@ describe('port file lifecycle', () => {
 
   it('writes the port file by default and removes it on stop', async () => {
     const h = await startDaemon({ port: 0 });
-    expect(readFileSync(portFilePath(), 'utf-8').trim()).toBe(String(h.port));
+    expect(readFileSync(portFilePath(), 'utf-8').trim()).toBe(`${h.host}:${h.port}`);
     await h.stop();
     expect(existsSync(portFilePath())).toBe(false);
   });
