@@ -34,7 +34,7 @@ import { printTurnFooter } from './turn-handler.footer.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 import { promoteWithQueuedFlush, previewOneLine } from './queued-flush.js';
-import { isPlainOutputRequested } from '../../../config/env.js';
+import { createTurnTtfbState, emitPlainTtfbWaiting, observeFirstContent, ttfbRendererOptions } from './turn-handler.ttfb.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
@@ -70,17 +70,9 @@ export async function runTurn(
   // here (before any async I/O) so the timer starts at the moment the user
   // submitted the prompt, not at first-event arrival.
   const turnStartedAt = Date.now();
+  const turnTtfb = createTurnTtfbState(turnStartedAt);
 
-  // Plain-output mode: emit a single "waiting…" line to stdout so the operator
-  // has some feedback during the TTFB dead zone even without a live overlay.
-  // The line is written once and left in scrollback — there is no erasing it,
-  // so we deliberately do NOT update it on a timer (that would require an ANSI
-  // erase dance, which conflicts with the AFK_PLAIN_OUTPUT contract of
-  // plain-text output). A matching note is printed by the renderer's own
-  // non-TTY path, so this covers only the operator-visible plain-mode case.
-  if (isPlainOutputRequested()) {
-    (completionWriter ?? { fn: console.log }).fn(palette.dim('  ◦ waiting for response…'));
-  }
+  emitPlainTtfbWaiting(completionWriter);
 
   // Terminal title (OSC 2): flip to the running state as the turn starts, so a
   // backgrounded/inactive tab reads "afk — <cwd> · running". Reset to idle at
@@ -217,7 +209,7 @@ export async function runTurn(
     // show "waiting for response… Ns" in the progress-banner overlay slot
     // before the first streaming content token arrives. The renderer clears
     // the line automatically when notifyFirstContent() is called below.
-    turnStartedAt,
+    ...ttfbRendererOptions(turnTtfb),
   });
 
   // `let` (not `const`) so the resumed-event handler can swap in a fresh
@@ -435,19 +427,17 @@ export async function runTurn(
           break;
         }
 
+        const isFirstContentEvent = observeFirstContent(turnTtfb, event, streamingStarted);
+
         if (event.type === 'chunk' && event.chunk.type === 'content') {
           responseText = pendingRoundSeam
             ? joinAtRoundSeam(responseText, event.chunk.content)
             : responseText + event.chunk.content;
           pendingRoundSeam = false;
-          // Signal TTFB on the first content chunk. The renderer clears the
-          // "waiting for response… Ns" waiting line and immediately flushes
-          // the progress-banner slot so the transition from waiting → content
-          // lands on the same repaint frame. Idempotent: subsequent chunks
-          // (streamingStarted already true) are no-ops inside the renderer.
-          if (!streamingStarted) {
-            renderer.notifyFirstContent();
-          }
+          // Remember this before flipping streamingStarted; TTFB is cleared
+          // only after renderer.process below has staged the content repaint.
+          // That lets the content and waiting-line removal share one flush,
+          // rather than briefly painting an empty intermediate frame.
           streamingStarted = true;
         } else if (event.type === 'message' && !streamingStarted) {
           responseText = event.message.content;
@@ -677,6 +667,13 @@ export async function runTurn(
         }
 
         renderer.process(event);
+
+        if (isFirstContentEvent) {
+          // Deliberately follows process():
+          // notifyFirstContent flushes the overlay, so the markdown renderer
+          // must see the content event before the waiting slot is removed.
+          renderer.notifyFirstContent();
+        }
 
         if (event.type === 'done') {
           doneFired = true;
