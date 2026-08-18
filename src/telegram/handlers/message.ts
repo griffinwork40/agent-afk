@@ -701,6 +701,11 @@ export class MessageHandler {
    * keyed by chatId).
    */
   async processClearDirect(route: TelegramRoute, ctx: Context): Promise<void> {
+    // Reserve a slot so any handle() arriving while clear is in flight sees the
+    // chat as claimed and enqueues instead of double-entering. Mirrors the
+    // reserveClaim/releaseClaim pattern in processOne. Paired 1:1 with the
+    // releaseClaim in the finally.
+    this.reserveClaim(routeKey(route));
     try {
       await this.sessionManager.resetSession(route);
       this.registeredCommandChats.delete(route.chatId);
@@ -708,6 +713,8 @@ export class MessageHandler {
     } catch (error) {
       this.log('Clear error:', error);
       await ctx.reply(formatError(error as Error));
+    } finally {
+      this.releaseClaim(routeKey(route));
     }
   }
 
@@ -725,6 +732,11 @@ export class MessageHandler {
    * "Nothing to compact (session-busy)" no-op and dropping the request.
    */
   private async processCompactDirect(route: TelegramRoute, ctx: Context): Promise<void> {
+    // Reserve a slot so any handle() arriving while compact is in flight sees the
+    // chat as claimed and enqueues instead of double-entering. Mirrors the
+    // reserveClaim/releaseClaim pattern in processOne. Paired 1:1 with the
+    // releaseClaim in the finally.
+    this.reserveClaim(routeKey(route));
     // See processOne: when we re-enqueue because the session is busy, the active
     // turn's own finally will drain the item we pushed. Draining here too would
     // shift that item and re-enter immediately → busy-spin cascade.
@@ -775,11 +787,14 @@ export class MessageHandler {
         await ctx.reply(formatError(error as Error));
       }
     } finally {
+      // Order matters (mirrors processOne): fire drainQueue FIRST so the drained
+      // turn's own reserveClaim runs synchronously before we drop this slot.
       // Only drain when we did NOT re-enqueue — the active turn's finally will
       // drain the re-enqueued compact; draining here too causes a cascade.
       if (!reEnqueued) {
         this.drainQueue(route).catch(err => this.log('Drain error:', err));
       }
+      this.releaseClaim(routeKey(route));
     }
   }
 
