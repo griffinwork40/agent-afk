@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.4] - 2026-08-18
+
+### Fixed
+- clear apiRoundInFlight in streamResponse finally block (#1180) (fc1660b5)
+
 ## [5.130.3] - 2026-08-18
 
 ### Fixed
