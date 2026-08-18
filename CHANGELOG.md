@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.6] - 2026-08-18
+
+### Fixed
+- resolve session human names in read_witness and search_witness (#1184) (950fa781)
+
 ## [5.130.5] - 2026-08-18
 
 ### Fixed
