@@ -31,4 +31,20 @@ describe('parsePortFile', () => {
   it('"" → null', () => {
     expect(parsePortFile('')).toBeNull();
   });
+
+  it('"[::1]:7777" → { host: "::1", port: 7777 } (brackets stripped)', () => {
+    expect(parsePortFile('[::1]:7777')).toEqual({ host: '::1', port: 7777 });
+  });
+
+  it('"0" → null (port below valid range)', () => {
+    expect(parsePortFile('0')).toBeNull();
+  });
+
+  it('"65536" → null (port above valid range)', () => {
+    expect(parsePortFile('65536')).toBeNull();
+  });
+
+  it('"0.0.0.0:7777" → { host: "0.0.0.0", port: 7777 } (accepted)', () => {
+    expect(parsePortFile('0.0.0.0:7777')).toEqual({ host: '0.0.0.0', port: 7777 });
+  });
 });

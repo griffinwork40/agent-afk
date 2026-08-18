@@ -111,5 +111,9 @@ export function parsePortFile(raw: string): { host: string; port: number } | nul
   // Reject degenerate hosts that are only colons (e.g. "::" from splitting "::1").
   // A valid host must contain at least one non-colon character.
   if (/^:+$/.test(host)) return null;
-  return { host, port };
+  // Strip surrounding brackets from bracketed IPv6 literals (e.g. "[::1]" → "::1").
+  // trySyncToDaemon re-adds brackets when building the URL, so double-bracketing
+  // ([[::1]]) would cause a TypeError — strip here to keep the stored host clean.
+  const cleanHost = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  return { host: cleanHost, port };
 }
