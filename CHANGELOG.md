@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.3] - 2026-08-18
+
+### Fixed
+- use refreshed token as fallback for locked keychain (#1135) (50ae14d3)
+
 ## [5.128.2] - 2026-08-18
 
 ### Fixed
