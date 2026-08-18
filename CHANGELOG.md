@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.1] - 2026-08-18
+
+### Fixed
+- suspend watchdog during inter-round API calls (#1135) (#1141) (7ea04673)
+
 ## [5.128.0] - 2026-08-18
 
 ### Added
