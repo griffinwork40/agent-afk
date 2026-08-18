@@ -11,6 +11,36 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.131.1] - 2026-08-18
+
+### Fixed
+- carve out schedules.json from the read-denylist floor (#1187) (d5725ba5)
+
+### Changed
+- count code lines only — comments are free (#350-ceiling) (#1186) (01200d4d)
+
+## [5.131.0] - 2026-08-18
+
+### Added
+- accept inbound documents (text, code, PDF) (#1183) (151c662e)
+
+## [5.130.6] - 2026-08-18
+
+### Fixed
+- resolve session human names in read_witness and search_witness (#1184) (950fa781)
+
+## [5.130.5] - 2026-08-18
+
+### Fixed
+- bound sessionData/messageQueues growth and enforce queue depth (#1179) (358861d8)
+- await bot.start() and deduplicate signal handlers (#1177) (9a5fa6ab)
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1182) (be65adca)
+
+## [5.130.4] - 2026-08-18
+
+### Fixed
+- clear apiRoundInFlight in streamResponse finally block (#1180) (fc1660b5)
+
 ## [5.130.3] - 2026-08-18
 
 ### Fixed

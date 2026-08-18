@@ -348,6 +348,8 @@ export async function streamResponse(
       state.turnEnded = true;
       clearProgressTimer();
       state.editInFlight = false;
+      watchdog.apiRoundInFlight = false;
+      watchdog.apiRoundSince = null;
       // Always close the generator so session.currentState resets to 'idle' only after
       // all Telegram messages are sent. Without this, a throw at event.type === 'error'
       // skips iter.return() and leaves the session permanently "busy".

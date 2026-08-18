@@ -298,7 +298,8 @@ export class TelegramBot {
     // their own listener since Telegraf's filter is exact (a photo update never
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
-    // Note: documents, voice notes, video, and stickers remain unhandled.
+    this.bot.on('document', (ctx) => runDetached(this.messageHandler.handleDocument(ctx)));
+    // Note: voice notes, video, and stickers remain unhandled.
     // They can be added with the same pattern (download → build content blocks → processOne).
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
@@ -430,15 +431,10 @@ export class TelegramBot {
     // only read presence files and call watchManager; no second Telegraf poller).
     this.startAutoSubscribe();
 
-    // Graceful shutdown handlers
-    const shutdown = async (signal: string) => {
-      this.log(`Received ${signal}, shutting down...`);
-      await this.stop();
-      process.exit(0);
-    };
-
-    process.once('SIGINT', () => shutdown('SIGINT'));
-    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    // Invariant: SIGINT/SIGTERM handlers are NOT registered here. Signal
+    // ownership lives in the process entrypoint (entry.ts) so that resources
+    // it created (sharedMemoryStore, statsInterval) are correctly torn down.
+    // Adding handlers here would cause a double-shutdown sequence.
   }
 
   /**
@@ -529,6 +525,10 @@ export class TelegramBot {
 
   async handlePhoto(ctx: Context): Promise<void> {
     return this.messageHandler.handlePhoto(ctx);
+  }
+
+  async handleDocument(ctx: Context): Promise<void> {
+    return this.messageHandler.handleDocument(ctx);
   }
 
   async handleModelSwitch(ctx: Context): Promise<void> {

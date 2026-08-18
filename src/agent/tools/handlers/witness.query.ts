@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { getTraceDir } from '../../../paths.js';
 import { readLedger } from '../../session-ledger.js';
 import { listTraces, resolveLatestSession } from '../../trace/listing.js';
+import { resolveSessionByName } from '../../trace/session-name-resolver.js';
 import type { TraceEvent } from '../../trace/index.js';
 import { readTraceSafe } from './witness.query.io.js';
 import { parseJsonlLines } from '../../../utils/jsonl.js';
@@ -136,6 +137,51 @@ export interface ReadWitnessResult {
   note?: string;
 }
 
+// Resolve a session id to its trace.jsonl path.
+// Steps: (1) direct witness path, (2) ledger meta traceLabel rewrite,
+// (3) human-name sidecar scan + repeat steps 1–2 with the resolved SDK id.
+// Returns { tracePath, disabledNote }; disabledNote is set when tracing was
+// disabled for the session (traceLabel: null in the ledger).
+async function resolveTracePath(
+  rawId: string,
+): Promise<{ tracePath: string; disabledNote?: string }> {
+  const tryResolve = async (id: string) => {
+    // getTraceDir calls validateSessionId which rejects path-traversal.
+    let tp = join(getTraceDir(id), 'trace.jsonl');
+    if (!existsSync(tp)) {
+      try {
+        for await (const rec of readLedger(id)) {
+          if (rec.kind !== 'meta') continue;
+          if (rec.traceLabel === null) return { tracePath: tp, disabledNote: id };
+          if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
+            const relabeled = join(getTraceDir(rec.traceLabel), 'trace.jsonl');
+            if (existsSync(relabeled)) tp = relabeled;
+          }
+          break;
+        }
+      } catch { /* ledger unreadable — return best-effort path */ }
+    }
+    return { tracePath: tp, disabledNote: undefined };
+  };
+
+  const first = await tryResolve(rawId);
+  if (first.disabledNote !== undefined || existsSync(first.tracePath)) return first;
+
+  // Human-name fallback: scan session sidecars for a matching name/id.
+  try {
+    const resolved = resolveSessionByName(rawId);
+    if (resolved && resolved.sessionId !== rawId) {
+      const second = await tryResolve(resolved.sessionId);
+      if (second.disabledNote !== undefined) {
+        return { tracePath: second.tracePath, disabledNote: resolved.sessionId };
+      }
+      return second;
+    }
+  } catch { /* unexpected fs error — fall through */ }
+
+  return first; // unresolvable — caller gets an empty trace
+}
+
 export async function readSessionTrace(
   params: ReadWitnessParams,
 ): Promise<ReadWitnessResult> {
@@ -147,37 +193,15 @@ export async function readSessionTrace(
     return { sessionId: '(none)', events: [], totalInTrace: 0, filtered: 0 };
   }
 
-  // getTraceDir calls validateSessionId which rejects path-traversal attempts.
-  let tracePath = join(getTraceDir(sessionId), 'trace.jsonl');
-
-  // If the direct path doesn't exist, attempt ledger-based label resolution.
-  // Fresh sessions store the witness dir under a random UUID label; the session
-  // ledger's `meta` record maps session id → trace label.
-  if (!existsSync(tracePath)) {
-    try {
-      for await (const rec of readLedger(sessionId)) {
-        if (rec.kind !== 'meta') continue;
-        if (rec.traceLabel === null) {
-          // Session ran with tracing disabled.
-          return {
-            sessionId,
-            events: [],
-            totalInTrace: 0,
-            filtered: 0,
-            note: `Session "${sessionId}" ran with tracing disabled (traceLabel: null).`,
-          };
-        }
-        if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
-          const relabeled = join(getTraceDir(rec.traceLabel), 'trace.jsonl');
-          if (existsSync(relabeled)) {
-            tracePath = relabeled;
-          }
-        }
-        break; // meta is always the first record
-      }
-    } catch {
-      // Ledger unreadable — fall through to empty result gracefully.
-    }
+  const { tracePath, disabledNote } = await resolveTracePath(sessionId);
+  if (disabledNote !== undefined) {
+    return {
+      sessionId,
+      events: [],
+      totalInTrace: 0,
+      filtered: 0,
+      note: `Session "${disabledNote}" ran with tracing disabled (traceLabel: null).`,
+    };
   }
 
   const { content } = await readTraceSafe(tracePath);
