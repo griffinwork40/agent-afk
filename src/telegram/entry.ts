@@ -173,8 +173,27 @@ export async function main(): Promise<void> {
   // `bot.start()` via composeTelegramElicitation — a SINGLE composed handler,
   // so the two systems no longer clobber each other on `elicitationRouter
   // .install` (PR #477 review B1/B2). See `TelegramBot.start()`.
+  const statsInterval = startStatsTicker({ bot, spawnedVersion: daemonVersion });
+
+  const shutdown = async () => {
+    console.log('\n\n🛑 Shutting down bot...');
+    clearInterval(statsInterval);
+    await bot.stop();
+    sharedMemoryStore.close();
+    console.log('✅ Bot stopped.');
+    process.exit(0);
+  };
+
+  // Invariant: signal handlers are registered BEFORE bot.start() so a
+  // SIGTERM arriving during async startup still runs a clean shutdown.
+  // Use `once` — shutdown calls process.exit, so a second invocation
+  // is impossible and `on` would only risk stacking handlers.
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+
   try {
-    bot.start();
+    await bot.start();
+
     console.log('✅ Bot started successfully!');
     console.log('\n📝 Slash commands (Agent SDK):');
     console.log('  /start   - Welcome and command list');
@@ -185,21 +204,10 @@ export async function main(): Promise<void> {
     console.log('\n💬 Send any message to chat with the agent.');
     console.log('\n⏹️  Press Ctrl+C to stop the bot.');
 
-    const statsInterval = startStatsTicker({ bot, spawnedVersion: daemonVersion });
-
-    const shutdown = async () => {
-      console.log('\n\n🛑 Shutting down bot...');
-      clearInterval(statsInterval);
-      await bot.stop();
-      sharedMemoryStore.close();
-      console.log('✅ Bot stopped.');
-      process.exit(0);
-    };
-
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-
   } catch (error) {
+    clearInterval(statsInterval);
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
     console.error('❌ Failed to start bot:', error);
     process.exit(1);
   }

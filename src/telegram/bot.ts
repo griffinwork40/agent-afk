@@ -430,15 +430,10 @@ export class TelegramBot {
     // only read presence files and call watchManager; no second Telegraf poller).
     this.startAutoSubscribe();
 
-    // Graceful shutdown handlers
-    const shutdown = async (signal: string) => {
-      this.log(`Received ${signal}, shutting down...`);
-      await this.stop();
-      process.exit(0);
-    };
-
-    process.once('SIGINT', () => shutdown('SIGINT'));
-    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    // Invariant: SIGINT/SIGTERM handlers are NOT registered here. Signal
+    // ownership lives in the process entrypoint (entry.ts) so that resources
+    // it created (sharedMemoryStore, statsInterval) are correctly torn down.
+    // Adding handlers here would cause a double-shutdown sequence.
   }
 
   /**
