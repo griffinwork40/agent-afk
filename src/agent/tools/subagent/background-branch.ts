@@ -113,6 +113,15 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
         isError: true,
       };
     }
+    // Any other registration failure: clean up the orphaned handle + worktree
+    // before rethrowing. Without this, a locked worktree leaks permanently.
+    await handle.teardown().catch((te: unknown) =>
+      debugLog('subagent-executor: handle teardown failed after register error: ' + (te instanceof Error ? te.message : String(te))),
+    );
+    if (isolationTeardown) {
+      await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>
+        debugLog(`[isolation] background worktree teardown failed (register error): ${String(te)}`));
+    }
     throw e;
   }
   // Wire manifest settlement (#1083): when the background job finishes,
