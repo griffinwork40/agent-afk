@@ -90,8 +90,9 @@ export interface RunForegroundArgs {
   /**
    * Present when this dispatch runs in an isolated worktree (isolation:
    * "worktree"). Torn down in the finally unless the run was promoted to
-   * background (the detached job then owns the tree; the sweep reclaims it
-   * later). A dirty / commits-ahead tree is preserved and locked, not removed.
+   * background (the detached job then owns the tree; markTerminal() unlocks +
+   * tears it down via onCleanup when the job settles). A dirty / commits-ahead
+   * tree is preserved and locked, not removed.
    */
   isolationTeardown?: { repoRoot: string; worktreePath: string };
 }

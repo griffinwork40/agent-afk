@@ -17,6 +17,7 @@ import { BackgroundJobCapError, type BackgroundAgentRegistry, type BackgroundJob
 import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
+import { unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -41,6 +42,8 @@ export interface RunBackgroundBranchArgs {
    * tear down the child's worktree.
    */
   onCleanup?: () => Promise<void>;
+  /** Worktree lock to release when registration fails before onCleanup owns it. */
+  isolationTeardown?: { repoRoot: string; worktreePath: string };
 }
 
 /**
@@ -62,8 +65,15 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId, onSettled, onCleanup } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled, onCleanup, isolationTeardown } = args;
   if (!registry) {
+    if (isolationTeardown) {
+      try {
+        await unlockWorktreeForPromotion(isolationTeardown.repoRoot, isolationTeardown.worktreePath);
+      } catch (ue) {
+        debugLog(`subagent-executor: background worktree unlock failed without registry: ${String(ue)}`);
+      }
+    }
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
     await handle.teardown().catch((e: unknown) =>
@@ -88,6 +98,13 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     });
   } catch (e) {
     if (e instanceof BackgroundJobCapError) {
+      if (isolationTeardown) {
+        try {
+          await unlockWorktreeForPromotion(isolationTeardown.repoRoot, isolationTeardown.worktreePath);
+        } catch (ue) {
+          debugLog(`subagent-executor: background worktree unlock failed after cap error: ${String(ue)}`);
+        }
+      }
       // Cap exceeded — tear down the orphaned handle so the fork isn't leaked.
       await handle.teardown().catch((te: unknown) =>
         debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),

@@ -1264,6 +1264,29 @@ describe('BackgroundAgentRegistry', () => {
       expect(onCleanup).toHaveBeenCalledTimes(1);
     });
 
+    it('(d) onCleanup fires on natural completion via adoptRunning path', async () => {
+      const handle = createStubHandle('oc-adopt-1');
+      let resolveRun!: (result: SubagentResult) => void;
+      const runPromise = new Promise<SubagentResult>((resolve) => {
+        resolveRun = resolve;
+      });
+      const onCleanup = vi.fn().mockResolvedValue(undefined);
+
+      registry.adoptRunning({
+        handle,
+        runPromise,
+        prompt: 'promoted work',
+        model: 'sonnet',
+        onCleanup,
+      });
+      resolveRun(successResult('oc-adopt-1', 'done'));
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onCleanup).toHaveBeenCalledTimes(1);
+    });
+
     it('(c) errors thrown by onCleanup are swallowed and logged via debugLog', async () => {
       const handle = createStubHandle('oc-swallow-1');
       const onCleanup = vi.fn().mockRejectedValue(new Error('boom'));
@@ -1278,7 +1301,8 @@ describe('BackgroundAgentRegistry', () => {
       try {
         handle.__fireTerminal(successResult('oc-swallow-1', 'done'));
         // Drain: handle.teardown() + onCleanup() rejection + debugLog call
-        await new Promise((r) => setTimeout(r, 20));
+        await Promise.resolve();
+        await Promise.resolve();
       } catch {
         threw = true;
       }

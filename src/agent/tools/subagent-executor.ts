@@ -914,6 +914,7 @@ export class SubagentExecutor implements SubagentControl {
               const result = await teardownBackgroundWorktree(isolationTeardown);
               debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
             } : undefined,
+        isolationTeardown,
       });
     }
 
