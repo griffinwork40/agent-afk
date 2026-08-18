@@ -298,7 +298,7 @@ export class TelegramBot {
     // their own listener since Telegraf's filter is exact (a photo update never
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
-    this.bot.on(['voice', 'document', 'video', 'sticker', 'video_note', 'audio'], (ctx) => ctx.reply('I can process text and photo messages. Voice, video, and document support is not yet available.').catch(() => {}));
+    this.bot.on(['voice', 'video', 'sticker', 'video_note', 'audio'], (ctx) => ctx.reply('I can process text and photo messages. Voice and video support is not yet available.').catch(() => {}));
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
     // middleware (registered above) already filters callback_query updates
