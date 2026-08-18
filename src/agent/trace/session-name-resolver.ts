@@ -33,6 +33,7 @@ import { getSessionsDir } from '../../paths.js';
 interface SidecarMinimal {
   sessionId?: string;
   name?: string;
+  savedAt?: number;
 }
 
 /** How a session was resolved (for callers that want to log/debug). */
@@ -65,6 +66,7 @@ function parseSidecar(filePath: string): SidecarMinimal | undefined {
     return {
       sessionId: typeof o['sessionId'] === 'string' ? o['sessionId'] : undefined,
       name: typeof o['name'] === 'string' ? o['name'] : undefined,
+      savedAt: typeof o['savedAt'] === 'number' ? o['savedAt'] : undefined,
     };
   } catch {
     return undefined;
@@ -112,6 +114,15 @@ export function resolveSessionByName(
   sessionsDir: string = getSessionsDir(),
 ): ResolvedSession | undefined {
   const entries = loadAllSidecars(sessionsDir);
+
+  // Sort by savedAt descending (newest first) so that when multiple sessions
+  // share the same name, the newest one wins — mirroring the listSessions()
+  // sort in src/cli/session-store.ts. Entries missing savedAt sort last.
+  entries.sort((a, b) => {
+    const aTime = a.data.savedAt ?? -Infinity;
+    const bTime = b.data.savedAt ?? -Infinity;
+    return bTime - aTime;
+  });
 
   // Pass 1: exact matches (sidecar id, sessionId, name)
   for (const entry of entries) {
