@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.5] - 2026-08-18
+
+### Fixed
+- bound sessionData/messageQueues growth and enforce queue depth (#1179) (358861d8)
+- await bot.start() and deduplicate signal handlers (#1177) (9a5fa6ab)
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1182) (be65adca)
+
 ## [5.130.4] - 2026-08-18
 
 ### Fixed
