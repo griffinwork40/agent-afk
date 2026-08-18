@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.128.4] - 2026-08-18
+
+### Fixed
+- correct sessionsScanned to report post-filter count accurately (#1035) (#1136) (169486da)
+
 ## [5.128.3] - 2026-08-18
 
 ### Fixed
