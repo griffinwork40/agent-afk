@@ -109,7 +109,14 @@ function resolvePager(): { cmd: string; args: string[] } | null {
   const pager = env.PAGER;
   if (pager) {
     const parts = pager.split(/\s+/);
-    return { cmd: parts[0]!, args: parts.slice(1) };
+    const cmd = parts[0]!;
+    const args = parts.slice(1);
+    // Invariant: the formatted transcript contains ANSI color codes from
+    // palette.*() calls. `less` without `-R` renders them as raw escape
+    // bytes, corrupting the display and breaking navigation. Append `-R`
+    // when the resolved command is `less` and the flag is not already present.
+    if (cmd === 'less' && !args.includes('-R')) args.push('-R');
+    return { cmd, args };
   }
   return { cmd: 'less', args: ['-R'] };
 }
