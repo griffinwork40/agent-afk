@@ -23,7 +23,7 @@ pnpm audit:sdk:update-lock                         # add new symbols → .sdk-de
 pnpm audit:env:check                               # CI gate: no raw process.env reads outside src/config/env.ts
 pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
-pnpm audit:filesize:check                          # CI gate: 350-line source ceiling, ratcheted against .filesize-baseline.json
+pnpm audit:filesize:check                          # CI gate: 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values)
 pnpm audit:funcsize:check                          # advisory: 200-line function ceiling, warns but never fails CI
 pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction
@@ -143,38 +143,33 @@ The base system prompt is **layered**: the framework prompt (`prompts/system-pro
 - Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream, and bundled skills under `src/bundled-plugins/` are SHA-256 pinned in their test files. Editing either intentionally means running `pnpm fix:pins` to rewrite the pins (`pnpm fix:pins:check` is the CI gate); an unexplained pin failure means an edit you did not intend.
 - **Three agent-instruction files, different consumers**: this file is the AFK overlay; `CLAUDE.md` targets Claude Code and carries the same facts in longer form (incl. the long-comment audit recipe); `AGENTS.md` is generic operating protocol with no repo specifics. When architecture changes, `AFK.md` and `CLAUDE.md` both need the edit — they drifted apart once already on the provider layer.
 
-### The 350-line ceiling
+### The 350-code-line ceiling
 
-No source file under `src/` or `scripts/` exceeds **350 raw lines** (`wc -l`
-semantics). Gate: `pnpm audit:filesize:check` (`scripts/check-file-size.ts`),
-with a non-failing warn band at 316–350. Tests, `__fixtures__`, `__test-utils__`,
-and `.d.ts` are out of scope — a 3,000-line test file is a flat list of cases an
-agent greps into, not a file it must read whole to edit safely.
+No source file under `src/` or `scripts/` exceeds **350 code lines** (non-blank,
+non-comment). Gate: `pnpm audit:filesize:check` (`scripts/check-file-size.ts`),
+with a non-failing warn band at 316–350 code lines. Tests, `__fixtures__`,
+`__test-utils__`, and `.d.ts` are out of scope — a 3,000-line test file is a flat
+list of cases an agent greps into, not a file it must read whole to edit safely.
+
+Comments and blank lines are excluded from the count so documentation is never
+penalized. A line-oriented heuristic classifies comments (`//`, block comments,
+JSDoc); lines with trailing comments count as code. Write as many `Invariant:`,
+`Contract:`, and `History:` blocks as you need — they are free.
 
 At the ceiling you pull **one whole concern** into a sibling file. You never shave
-lines and never raise the limit. Concretely, for `src/foo/bar.ts` create
+code and never raise the limit. Concretely, for `src/foo/bar.ts` create
 `src/foo/bar.<concern>.ts`; the original **never moves** and keeps its exact
 public surface, so no importer is ever rewritten. For a file already inside its
 own directory, add plain-named siblings into that directory instead.
 
-`.filesize-baseline.json` grandfathers the 138 files that already exceeded the
-ceiling when the gate landed, and it is a **one-way ratchet** — it fails when a
-non-baselined file goes over, when a baselined file *grows*, when a baselined file
-now fits (remove it), and when a baselined path disappears. Regenerate it with
+`.filesize-baseline.json` grandfathers files that exceeded the ceiling when the
+gate landed, and it is a **one-way ratchet** — it fails when a non-baselined file
+goes over, when a baselined file *grows*, when a baselined file now fits (remove
+it), and when a baselined path disappears. Regenerate it with
 `pnpm audit:filesize:update`; never hand-edit `loc` values (the `reason` and
 `permanent` fields are yours and survive regeneration). It carries
 `-merge` in `.gitattributes`, so resolve conflicts by regenerating, never
 by editing conflict markers.
-
-**Getting under the ceiling without deleting documentation.** This repo mandates
-long `Invariant:`/`Contract:`/`History:` comment blocks, and the 136 originally
-over the line averaged 45.5% comment+blank. The lever is that **JSDoc travels with
-its declaration** — extract a declaration group and its docs go with it, so raw
-lines drop with nothing deleted. Never delete, reflow, or condense a comment to
-satisfy the gate, and never reclassify an `Invariant:`/`Contract:` block as
-`History:` to make it migratable (`History:` may legitimately migrate to
-`docs/<area>.md` leaving a ≤5-line summary + link — but only if it was genuinely
-`History:` to begin with; false-shrink is a regression).
 
 A split is only behaviour-preserving if state stays singular:
 `pnpm audit:module-state:check` fails when the same module-scope singleton or
@@ -190,17 +185,15 @@ An advisory sibling of the file ceiling — **not implied by it**: `pnpm audit:f
 `scripts/` exceeds **200 lines**, but never fails CI. File size measures how much
 you must *read* to edit safely; function size measures how much you must *hold in
 mind* to change one behaviour. They diverge both ways — a flat 900-line registry
-has no large function, and a 700-line function hides inside a file that passes 350
-only because siblings were extracted around it (#919: #829 shrank `subagent.ts`
+has no large function, and a 700-line function hides inside a file that passes the
+code-line ceiling only because siblings were extracted around it (#919: #829 shrank `subagent.ts`
 and closed while `forkSubagent` never changed, and it has since grown to 586).
 
 The baseline ratchet and the never-hand-edit rule still apply, against
 `.funcsize-baseline.json` (54 grandfathered = 1.2% of 4,388 functions; regenerate
 with `pnpm audit:funcsize:update`). Measurement is AST-based, so **JSDoc is
-excluded** — unlike the file metric, which counts it. The asymmetry is deliberate:
-extraction relieves a file ceiling and carries the docs along, but a function
-cannot be split from its own doc comment, so counting it would only pressure you
-to delete documentation.
+excluded** — same as the file metric, which also excludes comments and blanks.
+Both gates measure logic density, not documentation volume.
 
 At the ceiling, extract a **named helper taking explicit parameters** — not a
 closure over the enclosing locals, which relocates lines without reducing what you
