@@ -541,3 +541,268 @@ describe('runPicker — controller exit safety', () => {
     expect(removeSpy).toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Virtual scroll
+// ---------------------------------------------------------------------------
+
+describe('runPicker — virtual scroll', () => {
+  const makeOpts = (count: number) =>
+    Array.from({ length: count }, (_, i) => `option-${i + 1}`);
+
+  it('renders at most WINDOW_SIZE (20) rows for a long list', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, { header: [], options: makeOpts(50) });
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // header=0, 20 option rows, scroll indicator, help line
+    const optionRows = rows.filter((r) => r.includes('option-'));
+    expect(optionRows.length).toBe(20);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('shows a scroll indicator for lists longer than WINDOW_SIZE', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, { header: [], options: makeOpts(30) });
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    const hasIndicator = rows.some((r) => r.includes('of 30') && r.includes('scroll'));
+    expect(hasIndicator).toBe(true);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('no scroll indicator when list fits in window', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, { header: [], options: makeOpts(5) });
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    const hasIndicator = rows.some((r) => r.includes('scroll'));
+    expect(hasIndicator).toBe(false);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('scrolling Down past window edge advances viewport', async () => {
+    const host = new FakePickerHost();
+    const opts = makeOpts(25);
+    const p = runPicker(host, { header: [], options: opts });
+    // Move cursor past the first 20 rows to trigger scroll
+    for (let i = 0; i < 20; i++) host.pressKey('down');
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // option-21 should now be visible
+    expect(rows.some((r) => r.includes('option-21'))).toBe(true);
+    // option-1 should have scrolled off
+    expect(rows.some((r) => r.includes('option-1') && !r.includes('option-1'))).toBe(false);
+    // Confirm the viewport shifted by checking option-1 is not present
+    const firstOption = rows.find((r) => r.match(/option-\d+/));
+    expect(firstOption).not.toContain('option-1');
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('Home resets viewport to top', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, { header: [], options: makeOpts(30) });
+    for (let i = 0; i < 22; i++) host.pressKey('down');
+    host.pressKey('home');
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    expect(rows.some((r) => r.includes('option-1'))).toBe(true);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('End jumps to last option and scrolls correctly', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, { header: [], options: makeOpts(30) });
+    host.pressKey('end');
+    host.pressKey('return');
+    const result = await p;
+    expect(result).toEqual(['option-30']);
+  });
+
+  it('Enter on a scrolled list returns the correct option', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, { header: [], options: makeOpts(25) });
+    for (let i = 0; i < 22; i++) host.pressKey('down'); // cursor at option-23
+    host.pressKey('return');
+    const result = await p;
+    expect(result).toEqual(['option-23']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fuzzy search / filter (searchable: true)
+// ---------------------------------------------------------------------------
+
+describe('runPicker — searchable mode', () => {
+  it('printable char appends to filter query and narrows options', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana', 'apricot'],
+      searchable: true,
+    });
+    host.pressKey('a', { char: 'a' });
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // 'banana' contains 'a' too, so all three match; but filter row should appear
+    const filterRow = rows.find((r) => r.includes('Filter:'));
+    expect(filterRow).toBeDefined();
+    expect(filterRow).toContain('a');
+    host.pressKey('escape'); // clears filter (non-empty)
+    host.pressKey('escape'); // cancels
+    await p;
+  });
+
+  it('typing "appl" hides non-matching options', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana', 'apricot'],
+      searchable: true,
+    });
+    for (const ch of 'appl') {
+      host.pressKey(ch, { char: ch });
+    }
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // Only 'apple' matches 'appl'
+    expect(rows.some((r) => r.includes('apple'))).toBe(true);
+    expect(rows.some((r) => r.includes('banana'))).toBe(false);
+    expect(rows.some((r) => r.includes('apricot'))).toBe(false);
+    host.pressKey('escape');
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('Backspace removes last filter char', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana'],
+      searchable: true,
+    });
+    host.pressKey('z', { char: 'z' }); // no matches
+    host.pressKey('backspace');         // removes 'z', back to empty
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // Both options should be visible again
+    expect(rows.some((r) => r.includes('apple'))).toBe(true);
+    expect(rows.some((r) => r.includes('banana'))).toBe(true);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('Esc with non-empty filter clears query instead of cancelling', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana'],
+      searchable: true,
+    });
+    host.pressKey('a', { char: 'a' });
+    host.pressKey('escape'); // should clear filter, NOT cancel
+    expect(host.exitCalls).toBe(0); // picker still alive
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // Filter cleared — filter row should show empty query
+    const filterRow = rows.find((r) => r.includes('Filter:'));
+    expect(filterRow).toBeDefined();
+    // Both options visible
+    expect(rows.some((r) => r.includes('apple'))).toBe(true);
+    expect(rows.some((r) => r.includes('banana'))).toBe(true);
+    host.pressKey('escape'); // now cancel
+    await p;
+  });
+
+  it('Esc with empty filter cancels the picker', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana'],
+      searchable: true,
+    });
+    host.pressKey('escape'); // filter is empty → cancel
+    const result = await p;
+    expect(result).toBeNull();
+    expect(host.exitCalls).toBe(1);
+  });
+
+  it('Enter on filtered list returns the ORIGINAL option label', async () => {
+    // The /resume caller maps back via options.indexOf(choice) — must match
+    // the original string, not a potentially-styled filtered copy.
+    const host = new FakePickerHost();
+    const opts = ['apple', 'banana', 'apricot'];
+    const p = runPicker(host, {
+      header: [],
+      options: opts,
+      searchable: true,
+    });
+    // Type 'ban' so only 'banana' matches
+    for (const ch of 'ban') {
+      host.pressKey(ch, { char: ch });
+    }
+    host.pressKey('return');
+    const result = await p;
+    expect(result).toEqual(['banana']);
+    // Confirm it's a value present in the original array
+    expect(opts.indexOf(result![0]!)).toBe(1);
+  });
+
+  it('searchable=false: printable chars are still swallowed', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana'],
+      // searchable not set (defaults false)
+    });
+    host.pressKey('a', { char: 'a' });
+    host.pressKey('b', { char: 'b' });
+    host.pressKey('return');
+    const result = await p;
+    expect(result).toEqual(['apple']); // cursor unchanged
+    expect(host.exitCalls).toBe(1);
+  });
+
+  it('filter row appears in render output when searchable', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: ['header'],
+      options: ['alpha', 'beta'],
+      searchable: true,
+    });
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    expect(rows.some((r) => r.includes('Filter:'))).toBe(true);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('filter row does NOT appear when searchable is false', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: ['header'],
+      options: ['alpha', 'beta'],
+    });
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    expect(rows.some((r) => r.includes('Filter:'))).toBe(false);
+    host.pressKey('escape');
+    await p;
+  });
+
+  it('ANSI codes in options are stripped before matching', async () => {
+    // palette.dim() wraps with ANSI; the filter must match the visible text
+    const ESC = '\x1b';
+    const dimId = `${ESC}[2msome-uuid-1234${ESC}[0m`;
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: [`plain label  ${dimId}`],
+      searchable: true,
+    });
+    // Type part of the UUID that's inside ANSI codes
+    for (const ch of 'uuid') {
+      host.pressKey(ch, { char: ch });
+    }
+    const rows = host.renderSnapshot().map((r) => r.replace(/\u001b\[[0-9;]*m/g, ''));
+    // The option should still appear (matched despite ANSI wrapping)
+    expect(rows.some((r) => r.includes('plain label'))).toBe(true);
+    host.pressKey('escape');
+    host.pressKey('escape');
+    await p;
+  });
+});
