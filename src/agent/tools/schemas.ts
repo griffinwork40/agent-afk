@@ -468,8 +468,7 @@ export const agentTool: AnthropicToolDef = {
           '`worktree` tool). Mutually exclusive with `cwd` (the runtime owns the ' +
           "child's cwd when isolating) — to isolate, omit `cwd` rather than " +
           'blanking it. Ignored for read-only agents such as ' +
-          'research-agent — they have nothing to isolate. Not supported together ' +
-          'with mode:"background" in this release.',
+          'research-agent — they have nothing to isolate.',
       },
     },
     required: ['prompt'],

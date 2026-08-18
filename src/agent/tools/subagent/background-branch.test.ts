@@ -179,9 +179,9 @@ describe('runBackgroundBranch', () => {
           parentSessionId: undefined,
         }),
       ).rejects.toThrow('unexpected registry failure');
-      // A non-cap throw is NOT the leak-cleanup path — teardown is only wired
-      // for the cap branch, so it must not have been called here.
-      expect(teardownMock).not.toHaveBeenCalled();
+      // Non-cap errors now also tear down the orphaned handle to prevent
+      // worktree leaks (added in 2cd2c2f9).
+      expect(teardownMock).toHaveBeenCalledTimes(1);
     });
   });
 

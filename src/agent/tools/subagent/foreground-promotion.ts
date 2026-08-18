@@ -31,6 +31,9 @@ import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailur
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
+import { lockWorktreeForBackground, teardownBackgroundWorktree, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
+import { withProvenanceHeader } from './foreground-promotion.provenance.js';
+export { withProvenanceHeader };
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -87,28 +90,11 @@ export interface RunForegroundArgs {
   /**
    * Present when this dispatch runs in an isolated worktree (isolation:
    * "worktree"). Torn down in the finally unless the run was promoted to
-   * background (the detached job then owns the tree; the sweep reclaims it
-   * later). A dirty / commits-ahead tree is preserved and locked, not removed.
+   * background (the detached job then owns the tree; markTerminal() unlocks +
+   * tears it down via onCleanup when the job settles). A dirty / commits-ahead
+   * tree is preserved and locked, not removed.
    */
   isolationTeardown?: { repoRoot: string; worktreePath: string };
-}
-
-/**
- * Prepend a compact provenance header naming the subagent's model — but ONLY
- * when it differs from the parent's. That is the mixed-model fan-out case where
- * the parent benefits from knowing which model produced a finding (trust
- * calibration: a result from a cheaper/different model warrants independent
- * checking). When the child inherited the parent's model the header is pure
- * noise and is omitted, so same-model dispatches stay byte-for-byte unchanged.
- * Descriptive metadata, not an instruction.
- */
-export function withProvenanceHeader(
-  content: string,
-  model: string | undefined,
-  parentModel: string | undefined,
-): string {
-  if (!model || !parentModel || model === parentModel) return content;
-  return `[subagent result · model=${model} (parent: ${parentModel})]\n\n${content}`;
 }
 
 /**
@@ -214,13 +200,28 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     // the background-job cap is hit — the subagent is never dropped.
     if (outcome.kind === 'promote') {
       if (registry) {
+        // Hoist isoTd so the catch block can unlock on cap-hit / refusal.
+        // Invariant: if lockWorktreeForBackground() succeeds but adoptRunning()
+        // throws, the worktree would stay permanently locked (git refuses
+        // `worktree remove` on a locked tree). The catch block unlocks it so the
+        // foreground finally can tear it down normally.
+        const isoTd = args.isolationTeardown;
         try {
+          // Lock the worktree before handing to the registry — the promoted
+          // job outlives the foreground finally that would have torn it down.
+          if (isoTd) await lockWorktreeForBackground(isoTd.repoRoot, isoTd.worktreePath);
           const job = registry.adoptRunning({
             handle,
             runPromise,
             prompt: backgroundPrompt,
             model: model ?? 'sonnet',
             parentSessionId,
+            ...(isoTd ? {
+              onCleanup: async () => {
+                const result = await teardownBackgroundWorktree(isoTd);
+                debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
+              },
+            } : {}),
           });
           promoted = true;
           // Detach the end-of-turn abort bridge — the promoted job must
@@ -269,6 +270,18 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             'subagent-executor: promotion failed, staying foreground: ' +
               (e instanceof Error ? e.message : String(e)),
           );
+          // If the worktree was locked (before adoptRunning threw), unlock it
+          // now. The foreground finally will handle full teardown; a locked
+          // tree would cause `git worktree remove` to fail and leak permanently.
+          if (isoTd) {
+            try {
+              await unlockWorktreeForPromotion(isoTd.repoRoot, isoTd.worktreePath);
+            } catch (unlockErr) {
+              debugLog(
+                `[isolation] failed to unlock worktree after promotion failure: ${String(unlockErr)}`,
+              );
+            }
+          }
           resolveJob(null);
         }
       } else {
