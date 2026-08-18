@@ -62,9 +62,12 @@ export function listenWithRecovery(
       logFallback(requestedPort, host, fallback);
       return result;
     } catch (retryErr: unknown) {
-      // Fallback also failed — both addresses are in use. Log to stderr so
-      // the operator and launchd capture the recovery attempt, then re-throw
-      // an enriched error naming both the original and fallback addresses.
+      // Only diagnose "both occupied" when the fallback also hit EADDRINUSE.
+      // Other codes (EACCES, EADDRNOTAVAIL, etc.) are rethrown as-is so the
+      // operator sees the real failure, not misleading ghost-socket guidance.
+      const retryCode = (retryErr as NodeJS.ErrnoException)?.code;
+      if (retryCode !== 'EADDRINUSE') throw retryErr;
+
       process.stderr.write(
         `[daemon] EADDRINUSE on ${host}:${requestedPort} (ghost socket attempt) — ` +
           `fallback to ${fallback}:${requestedPort} also failed. ` +
@@ -147,7 +150,7 @@ function portHasOwner(port: number): boolean | null {
           'stderr' in err && typeof (err as { stderr: unknown }).stderr === 'string'
             ? (err as { stderr: string }).stderr
             : '';
-        if (stderr.includes('Permission denied') || stderr.includes('WARNING:')) return null;
+        if (stderr.includes('Permission denied')) return null;
         return false; // lsof ran cleanly, no listener → ghost
       }
     }

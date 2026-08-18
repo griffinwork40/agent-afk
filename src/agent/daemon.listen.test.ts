@@ -176,11 +176,34 @@ describe('listenWithRecovery', () => {
         expect((caught as NodeJS.ErrnoException).code).toBe('EADDRINUSE');
         expect(caught!.message).toContain('127.0.0.1');
         expect(caught!.message).toContain('::1');
+        expect(caught!.message).toContain('fallback');
         expect(
           stderrWrites.some((line) => line.includes('fallback') && line.includes('::1')),
         ).toBe(true);
       },
     );
+  });
+
+  describe('lsof permission denied: ownership unknown (exit status 1 + Permission denied)', () => {
+    beforeEach(() => {
+      mockExecFileSync.mockImplementation(() => {
+        const err = Object.assign(new Error('Command failed'), {
+          status: 1,
+          stderr: 'Permission denied',
+        });
+        throw err;
+      });
+    });
+
+    it('throws with lsof-unavailable message when lsof is permission-denied', async () => {
+      const blocker = tracked(createHttpServer());
+      const { port } = await listenWithRecovery(blocker, 0, '127.0.0.1');
+
+      const server = tracked(createHttpServer());
+      await expect(listenWithRecovery(server, port, '127.0.0.1')).rejects.toThrow(
+        /lsof unavailable/,
+      );
+    });
   });
 
   describe('lsof unavailable: ownership unknown (exit status 127)', () => {
