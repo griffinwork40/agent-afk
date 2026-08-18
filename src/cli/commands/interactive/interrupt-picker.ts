@@ -108,6 +108,10 @@ export async function showInterruptPicker(
       header: HEADER,
       options: OPTIONS,
       signal,
+      // Ctrl+C inside the picker fires hard-cancel immediately (safety hatch).
+      // Without this, Ctrl+C would resolve null and be indistinguishable from
+      // Esc — the hard-cancel path would be unreachable while the picker is open.
+      onCtrlC: onCancel,
     });
   } catch {
     // runPicker should never reject, but be defensive.
@@ -115,7 +119,8 @@ export async function showInterruptPicker(
   }
 
   if (result === null) {
-    // Esc / abort signal / external dismiss — no action, return to turn.
+    // Esc / Ctrl+C / abort signal / external dismiss — no further action needed
+    // (onCtrlC already fired hard-cancel synchronously for the Ctrl+C case).
     return 'dismissed';
   }
 

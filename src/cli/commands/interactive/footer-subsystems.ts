@@ -83,15 +83,15 @@ export function setupFooterSubsystems(
   //   rows [N-1-ledgerRows-bgRows .. N-2]    BackgroundStatusBar (0+ rows)
   //   rows above those                       MascotBar (0 or 3 rows, transient)
   //   row N - extraRows (topmost loop-stage) LoopStageBar (always 1 row)
-  //   row N - extraRows - 1                  HealthRail (always 1 row; above loop-stage)
+  //   row N - extraRows + 1                  HealthRail (always 1 row; below loop-stage)
   //
   //   reserved band = 1 (status) + extraRows, where
   //   extraRows = healthRailRows + loopStageRows + mascotRowCount
   //             + bgBarRowCount + ledgerRowCount
   //
-  // HealthRail paints at totalRows - getExtraRows() - 1 (one row above the
-  // loop-stage bar). Including its own 1 row in extraRows shifts LoopStageBar
-  // one row up, then HealthRail sits directly above it.
+  // HealthRail paints at totalRows - getExtraRows() + 1 (one row below the
+  // loop-stage bar). Both bars' rows are already counted in extraRows, so
+  // both paint within the reserved band without touching the scroll region.
   let bgBarRowCount = 0;
   let ledgerRowCount = 0;
   let mascotRowCount = 0;
@@ -185,9 +185,9 @@ export function setupFooterSubsystems(
   });
 
   // Health rail — compact single-line session-vitals glance indicator.
-  // Sits directly above the LoopStageBar (one row higher). Paint row:
-  //   totalRows - getExtraRows() - 1
-  // which is one row above `totalRows - getExtraRows()` (LoopStageBar's row).
+  // Sits directly below the LoopStageBar within the reserved footer block.
+  // Paint row: totalRows - getExtraRows() + 1
+  // (LoopStageBar paints at totalRows - getExtraRows(), the topmost reserved row.)
   // healthRailRowCount is included in the extraRows sum so both bars shift
   // together when any lower bar changes its row count.
   healthRail = new HealthRail({

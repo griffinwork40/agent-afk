@@ -733,9 +733,12 @@ export async function runInputLoop(
         async onContextProgress() {
           await ctx.contextSampler.refresh();
           ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
-          // Refresh the health rail so the context-usage percentage tracks
-          // mid-turn progress, not just end-of-turn snapshots.
-          healthRail?.update(ctx.stats);
+          // Pass the live context ratio from contextSampler so the health rail
+          // reflects mid-turn context usage. Without the override, update()
+          // falls back to stats.turnTokens which is only populated by
+          // recordTurn (end-of-turn), showing 0% during the first turn and a
+          // stale value during subsequent turns.
+          healthRail?.update(ctx.stats, ctx.contextSampler.getRatio());
         },
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is
