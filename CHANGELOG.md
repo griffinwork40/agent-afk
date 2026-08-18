@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.131.1] - 2026-08-18
+
+### Fixed
+- carve out schedules.json from the read-denylist floor (#1187) (d5725ba5)
+
+### Changed
+- count code lines only — comments are free (#350-ceiling) (#1186) (01200d4d)
+
 ## [5.131.0] - 2026-08-18
 
 ### Added
