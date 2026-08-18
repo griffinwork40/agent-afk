@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.2] - 2026-08-18
+
+### Fixed
+- buffer setCwd/setSystemPrompt before OAuth query init (#1062) (#1176) (e615cc5f)
+- parsePortFile rejects bracketed IPv6 and out-of-range ports (#1165) (#1174) (165c16d3)
+- deduplicate plugin skills whose bare name collides with a namespaced registry key (#1169) (c5ac09bf)
+
 ## [5.130.1] - 2026-08-18
 
 ### Fixed
