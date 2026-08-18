@@ -32,6 +32,7 @@ import { handleCommandError } from '../errors/index.js';
 import { type UpdateInfo, printUpdateBanner } from '../update-checker.js';
 import { getVersion } from '../version.js';
 import { runPicker } from '../render/picker.js';
+import { launchInterruptPicker } from './interactive/interrupt-picker.js';
 import {
   resolveWorktreeDisposition,
   resolveWorktreeExitPolicy,
@@ -644,38 +645,44 @@ export function registerInteractiveCommand(program: Command): void {
           return;
         }
         if (turnState.turnInFlight) {
-          // First Ctrl+C during a turn = ESC soft-stop: stop cleanly, keep
-          // completed work, and preserve the typed draft (the compositor no
-          // longer auto-queues it on Ctrl+C). requestSoftStop sets
-          // softStopRequested + interrupts, so the turn handler renders the
-          // "⏸ Stopped — work so far kept" notice and skips recordTurn exactly
-          // as ESC does. Falls back to a bare interrupt when no soft-stop
-          // handler is published (non-REPL turn, or a gap between turns).
-          if (turnState.requestSoftStop) {
-            turnState.requestSoftStop();
-          } else {
-            ctx.session.current.interrupt().catch(() => { /* swallow during teardown */ });
-          }
           turnState.lastSigintAt = now;
-          // Surface a live "interrupting…" affordance in the overlay. The
-          // renderer owns the OverlayComposer; this notifier was published by
-          // the turn handler at arm time (null between turns → no-op).
-          turnState.notifyInterrupting?.(true);
-          // The "⏸ Stopped — work so far kept" notice prints from the turn
-          // handler (the soft-stop path). Here we add ONLY the exit affordance:
-          // a second Ctrl+C within SIGINT_EXIT_WINDOW_MS quits. Route it
-          // through the active compositor's commitAbove when available — that
-          // path clears the live overlay, writes the line into scrollback, and
-          // repaints the overlay below, so the notice survives subsequent
-          // log-update clears. A bare console.log races the still-armed
-          // compositor's spinner-tick repaints and can be erased first.
-          const msg = '\n' + palette.info('ℹ ') + 'Press Ctrl+C again to exit.';
           const c = turnState.activeCompositor;
-          if (c && c.isArmed()) {
-            try { c.commitAbove(msg); } catch { console.log(msg); }
-          } else {
-            console.log(msg);
+
+          // Second Ctrl+C while the picker is open: abort the picker and hard-
+          // cancel immediately (safety hatch — the user must never be stuck).
+          if (turnState.interruptPickerAbort) {
+            turnState.interruptPickerAbort.abort();
+            turnState.interruptPickerAbort = null;
+            ctx.session.current?.abort('sigint');
+            ctx.rl.close();
+            return;
           }
+
+          // First Ctrl+C + armed compositor → show the interrupt-and-steer
+          // picker so the user can choose Stop (soft) vs Cancel (hard).
+          if (c && c.isArmed()) {
+            const doStop = () => {
+              if (turnState.requestSoftStop) { turnState.requestSoftStop(); }
+              else { ctx.session.current.interrupt().catch(() => { /* teardown */ }); }
+              turnState.notifyInterrupting?.(true);
+            };
+            launchInterruptPicker({
+              compositor: c,
+              turnState,
+              onStop: doStop,
+              onCancel: () => { ctx.session.current?.abort('sigint'); ctx.rl.close(); },
+            });
+            return;
+          }
+
+          // Fallback (non-TTY / compositor not armed): first Ctrl+C = soft-stop,
+          // same as ESC. Prints exit affordance so 2nd Ctrl+C is discoverable.
+          if (turnState.requestSoftStop) { turnState.requestSoftStop(); }
+          else { ctx.session.current.interrupt().catch(() => { /* swallow during teardown */ }); }
+          turnState.notifyInterrupting?.(true);
+          const msg = '\n' + palette.info('ℹ ') + 'Press Ctrl+C again to exit.';
+          if (c && c.isArmed()) { try { c.commitAbove(msg); } catch { console.log(msg); } }
+          else { console.log(msg); }
           return;
         }
         if (now - turnState.lastSigintAt < SIGINT_EXIT_WINDOW_MS) {

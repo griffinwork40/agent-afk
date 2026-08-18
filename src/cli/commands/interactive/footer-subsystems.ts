@@ -4,6 +4,7 @@ import { createVerdictLedger } from './verdict-ledger.js';
 import { BackgroundStatusBar } from '../../background-status-bar.js';
 import { LoopStageBar } from './loop-stage.js';
 import { MascotBar } from './mascot-bar.js';
+import { HealthRail } from '../../health-rail.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
@@ -20,6 +21,7 @@ export interface FooterSubsystems {
   bgStatusBar: BackgroundStatusBar;
   loopStageBar: LoopStageBar;
   mascotBar: MascotBar;
+  healthRail: HealthRail;
   verdictLedger: ReturnType<typeof createVerdictLedger>;
   shellPassthrough: ShellPassthrough;
   bgResultNotifier: BgResultNotifier;
@@ -70,58 +72,60 @@ export function setupFooterSubsystems(
   // resetting here is safe (no in-flight turn writes to the ledger).
   ctx.clearVerdictLedger = () => verdictLedger.reset();
 
-  // Row-count accounting for the three reserved footer painters that stack
-  // above the status line. Each painter reports its own row count; the status
-  // line receives the SUM via setExtraRows, so it has a single authority for
-  // how many rows to reserve below the DECSTBM scroll region.
+  // Row-count accounting for the reserved footer painters that stack above the
+  // status line. Each painter reports its own row count; the status line
+  // receives the SUM via setExtraRows, so it has a single authority for how
+  // many rows to reserve below the DECSTBM scroll region.
   //
   // Stacking, bottom → top (N = totalRows):
   //   row N                                  StatusLine
   //   row N-1                                verdict ledger rail (0 or 1 row)
   //   rows [N-1-ledgerRows-bgRows .. N-2]    BackgroundStatusBar (0+ rows)
   //   rows above those                       MascotBar (0 or 3 rows, transient)
-  //   row N - extraRows (topmost reserved)   LoopStageBar (always 1 row)
+  //   row N - extraRows (topmost loop-stage) LoopStageBar (always 1 row)
+  //   row N - extraRows + 1                  HealthRail (always 1 row; below loop-stage)
   //
   //   reserved band = 1 (status) + extraRows, where
-  //   extraRows = loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount
+  //   extraRows = healthRailRows + loopStageRows + mascotRowCount
+  //             + bgBarRowCount + ledgerRowCount
   //
-  // Each painter positions itself from the live counts: the verdict rail sits
-  // at the bottom (getAdjacentRows: () => 0), the bg bar floats just above it
-  // (getAdjacentRows: () => ledgerRowCount), the mascot band floats above the
-  // bg bar (getAdjacentRows: () => ledgerRowCount + bgBarRowCount), and the
-  // loop-stage bar reads the full extraRows so it always lands on the topmost
-  // reserved row.
+  // HealthRail paints at totalRows - getExtraRows() + 1 (one row below the
+  // loop-stage bar). Both bars' rows are already counted in extraRows, so
+  // both paint within the reserved band without touching the scroll region.
   let bgBarRowCount = 0;
   let ledgerRowCount = 0;
   let mascotRowCount = 0;
+  let healthRailRowCount = 0;
   const loopStageRows = 1; // LoopStageBar always occupies exactly 1 row.
   const syncExtraRows = () =>
     ctx.statusLine.setExtraRows(
-      loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount,
+      healthRailRowCount + loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount,
     );
 
   // Hoisted so the verdict-ledger row-count handler (registered before the
-  // bars are constructed) can reference them via closure. Both are assigned
+  // bars are constructed) can reference them via closure. All are assigned
   // unconditionally below — the `?.` in the handler guards the window before
   // assignment (the handler only fires once a count actually changes).
   let bgStatusBar: BackgroundStatusBar | undefined;
   let loopStageBar: LoopStageBar | undefined;
   let mascotBar: MascotBar | undefined;
+  let healthRail: HealthRail | undefined;
 
   // Register the verdict ledger row-count handler BEFORE constructing the bg
   // bar so its getAdjacentRows closure reads a consistent ledgerRowCount.
   verdictLedger.setRowCountChangeHandler((rows) => {
     ledgerRowCount = rows;
     syncExtraRows();
-    // The bars ABOVE the verdict rail (bg bar, loop-stage bar) position
-    // themselves from the live counts, but they do not repaint on their own
-    // when ledgerRowCount flips. Nudge them to reflow now so they don't keep a
-    // stale row until their next independent repaint — critical because the
-    // loop-stage bar otherwise only repaints on a stage change, which has
+    // The bars ABOVE the verdict rail (bg bar, loop-stage bar, health rail)
+    // position themselves from the live counts, but do not repaint on their
+    // own when ledgerRowCount flips. Nudge them to reflow now so they don't
+    // keep a stale row until their next independent repaint — critical because
+    // the loop-stage bar otherwise only repaints on a stage change, which has
     // already stopped by the time an end-of-turn terminal-state verdict pushes.
     bgStatusBar?.redraw();
     mascotBar?.redraw();
     loopStageBar?.redraw();
+    healthRail?.redraw();
   });
 
   bgStatusBar = new BackgroundStatusBar(ctx.backgroundRegistry, {
@@ -138,12 +142,13 @@ export function setupFooterSubsystems(
     // reason to repaint mid-turn (its own animation tick only fires while the
     // agent is working), so nudge it here or it keeps a stale row.
     mascotBar?.redraw();
-    // The loop-stage rail positions from the full extraRows (which just moved),
-    // but only repaints on its own on a stage change — a bg-bar-only resize
-    // between transitions would otherwise leave it at its old row, overlapping
-    // the displaced rows below it or orphaning a gap above them. Mirrors the
-    // same nudge in the verdict-ledger handler above. (PR #900 review.)
+    // The loop-stage rail and health rail both position from the full extraRows
+    // (which just moved) but only repaint on their own on a stage change or
+    // update() call — a bg-bar-only resize would otherwise leave them at their
+    // old rows. Mirrors the same nudge in the verdict-ledger handler above.
+    // (PR #900 review.)
     loopStageBar?.redraw();
+    healthRail?.redraw();
   });
 
   // Reacting goblin mini-sprite (issue #336) - opt-in via AFK_GOBLIN_MASCOT=1;
@@ -157,16 +162,19 @@ export function setupFooterSubsystems(
   mascotBar.setRowCountChangeHandler((rows) => {
     mascotRowCount = rows;
     syncExtraRows();
-    // The loop-stage rail positions from the full extraRows, so it must reflow
-    // when the mascot claims or releases its band - otherwise it keeps the row
-    // the mascot just took (or leaves a gap where it used to be).
+    // The loop-stage rail and health rail both position from the full extraRows,
+    // so they must reflow when the mascot claims or releases its band — otherwise
+    // they keep the row the mascot just took (or leave a gap where it was).
     loopStageBar?.redraw();
+    healthRail?.redraw();
   });
 
   loopStageBar = new LoopStageBar({
     // LoopStageBar paints at totalRows - getExtraRows(), i.e. the topmost
     // reserved row, so it always sits above both the bg bar and the verdict
-    // rail regardless of how their counts fluctuate.
+    // rail regardless of how their counts fluctuate. When the HealthRail is
+    // active its 1 row is included in extraRows, so LoopStageBar automatically
+    // shifts up by 1 and HealthRail paints directly above it.
     getExtraRows: () => ctx.statusLine.getExtraRows(),
   });
   loopStageBar.setRowCountChangeHandler((_rows) => {
@@ -174,6 +182,25 @@ export function setupFooterSubsystems(
     // Its start() fires this with 1 — establishing the base reservation — and
     // stop() with 0. Re-sync the combined total regardless of call order.
     syncExtraRows();
+  });
+
+  // Health rail — compact single-line session-vitals glance indicator.
+  // Sits directly below the LoopStageBar within the reserved footer block.
+  // Paint row: totalRows - getExtraRows() + 1
+  // (LoopStageBar paints at totalRows - getExtraRows(), the topmost reserved row.)
+  // healthRailRowCount is included in the extraRows sum so both bars shift
+  // together when any lower bar changes its row count.
+  healthRail = new HealthRail({
+    backgroundRegistry: ctx.backgroundRegistry,
+    getExtraRows: () => ctx.statusLine.getExtraRows(),
+  });
+  healthRail.setRowCountChangeHandler((rows) => {
+    healthRailRowCount = rows;
+    syncExtraRows();
+    // LoopStageBar is directly below the health rail and must shift when the
+    // health rail's reservation changes (start/stop). Without this nudge it
+    // keeps its stale row until the next stage transition.
+    loopStageBar?.redraw();
   });
 
   // Footer self-heal after a full-screen scroll. commitAbove() and
@@ -191,6 +218,7 @@ export function setupFooterSubsystems(
     bgStatusBar?.redraw();
     mascotBar?.redraw();
     loopStageBar?.redraw();
+    healthRail?.redraw();
   });
   bgStatusBar.start();
   // Start the mascot before the loop-stage bar for the same reason the bg bar
@@ -202,6 +230,12 @@ export function setupFooterSubsystems(
   // start with 0 rows (no jobs yet), in which case the loop-stage bar sits
   // immediately above the status line.
   loopStageBar.start();
+  // HealthRail starts AFTER LoopStageBar: its start() fires onRowCountChange(1),
+  // which syncs extraRows and nudges LoopStageBar to shift up by 1 row. Starting
+  // in this order ensures LoopStageBar is already registered and can respond to
+  // the nudge. The health rail's initial repaint then lands at the correct row
+  // (one above the just-shifted loop-stage bar).
+  healthRail.start();
 
   // Start the verdict ledger painter. The verdict rail always occupies the
   // fixed slot immediately above the status line (row totalRows-1). The bg
@@ -248,6 +282,7 @@ export function setupFooterSubsystems(
     bgStatusBar,
     loopStageBar,
     mascotBar,
+    healthRail,
     verdictLedger,
     shellPassthrough,
     bgResultNotifier,
