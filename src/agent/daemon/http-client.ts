@@ -88,18 +88,28 @@ export async function trySyncToDaemon(
  *  - Legacy: bare port number (e.g. "7777") — defaults host to "localhost"
  *
  * Returns `null` on parse failure.
+ *
+ * @internal — exported for testing.
  */
-function parsePortFile(raw: string): { host: string; port: number } | null {
+export function parsePortFile(raw: string): { host: string; port: number } | null {
   // Legacy: bare integer
   const barePort = parseInt(raw, 10);
   if (String(barePort) === raw && !Number.isNaN(barePort)) {
+    if (barePort < 1 || barePort > 65535) return null;
     return { host: 'localhost', port: barePort };
   }
   // New: last colon separates host from port (handles IPv6 like "::1:7777")
   const lastColon = raw.lastIndexOf(':');
   if (lastColon < 1) return null;
   const host = raw.slice(0, lastColon);
-  const port = parseInt(raw.slice(lastColon + 1), 10);
+  const portStr = raw.slice(lastColon + 1);
+  // Require the port segment to be a non-empty string of digits only.
+  if (!/^\d+$/.test(portStr)) return null;
+  const port = parseInt(portStr, 10);
   if (Number.isNaN(port)) return null;
+  if (port < 1 || port > 65535) return null;
+  // Reject degenerate hosts that are only colons (e.g. "::" from splitting "::1").
+  // A valid host must contain at least one non-colon character.
+  if (/^:+$/.test(host)) return null;
   return { host, port };
 }
