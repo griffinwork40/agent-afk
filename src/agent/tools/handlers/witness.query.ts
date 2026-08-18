@@ -196,7 +196,7 @@ export async function readSessionTrace(
   const { tracePath, disabledNote } = await resolveTracePath(sessionId);
   if (disabledNote !== undefined) {
     return {
-      sessionId: disabledNote,
+      sessionId,
       events: [],
       totalInTrace: 0,
       filtered: 0,

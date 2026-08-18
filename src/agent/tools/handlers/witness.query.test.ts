@@ -432,6 +432,95 @@ describe('searchAcrossSessions — truncatedSessions', () => {
 });
 
 // ---------------------------------------------------------------------------
+// readSessionTrace — human name resolution via sidecar lookup (integration)
+// ---------------------------------------------------------------------------
+
+describe('readSessionTrace — human name resolution', () => {
+  /**
+   * Write a sidecar file at $AFK_HOME/state/sessions/<sidecarId>.json.
+   * The sidecar maps a human name to the real SDK session UUID.
+   */
+  async function writeSidecar(
+    sidecarId: string,
+    sessionId: string,
+    name: string,
+  ): Promise<void> {
+    const dir = join(tmpHome, 'state', 'sessions');
+    await mkdir(dir, { recursive: true });
+    const sidecarPath = join(dir, `${sidecarId}.json`);
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ sessionId, name, savedAt: Date.now(), model: 'test-model' }),
+      'utf-8',
+    );
+  }
+
+  /**
+   * Write a ledger events.jsonl at $AFK_HOME/state/sessions/<sessionId>/events.jsonl
+   * with a meta record containing traceLabel: null (tracing disabled).
+   */
+  async function writeLedgerDisabled(sessionId: string): Promise<void> {
+    const dir = join(tmpHome, 'state', 'sessions', sessionId);
+    await mkdir(dir, { recursive: true });
+    const ledgerPath = join(dir, 'events.jsonl');
+    const metaRecord = JSON.stringify({
+      v: 1,
+      ts: Date.now(),
+      kind: 'meta',
+      sessionId,
+      model: 'test-model',
+      traceLabel: null,
+    });
+    await writeFile(ledgerPath, metaRecord + '\n', 'utf-8');
+  }
+
+  it('returns events when human name resolves via sidecar to a session with a trace', async () => {
+    const sdkId = 'sdk-uuid-abc123';
+    const humanName = 'my-cool-session';
+    const sidecarId = 'sidecar-def456';
+
+    // Write sidecar mapping human name → SDK UUID
+    await writeSidecar(sidecarId, sdkId, humanName);
+    // Write trace under the SDK UUID directory
+    await writeTrace(sdkId, [
+      makeEventLine('tool_call', 1, { phase: 'completed', isError: false, name: 'bash', resultBytes: 5, durationMs: 1 }),
+      makeEventLine('closure', 2, { reason: 'end_turn', finalCostUsd: 0.01, finalTurnCount: 1 }),
+    ]);
+
+    // Call with the human name — should resolve through sidecar and return events
+    const result = await readSessionTrace({ session: humanName });
+
+    // sessionId echoes caller's input (human name), not the SDK UUID
+    expect(result.sessionId).toBe(humanName);
+    expect(result.events).toHaveLength(2);
+    expect(result.totalInTrace).toBe(2);
+    expect(result.note).toBeUndefined();
+  });
+
+  it('echoes caller input as sessionId when name resolves but tracing was disabled', async () => {
+    const sdkId = 'sdk-uuid-disabled-xyz';
+    const humanName = 'no-trace-session';
+    const sidecarId = 'sidecar-disabled-xyz';
+
+    // Write sidecar mapping human name → SDK UUID
+    await writeSidecar(sidecarId, sdkId, humanName);
+    // Write a ledger with traceLabel: null (tracing disabled) — no trace.jsonl
+    await writeLedgerDisabled(sdkId);
+
+    // Call with the human name
+    const result = await readSessionTrace({ session: humanName });
+
+    // sessionId must echo the caller's input (human name), not the SDK UUID
+    expect(result.sessionId).toBe(humanName);
+    expect(result.events).toHaveLength(0);
+    expect(result.totalInTrace).toBe(0);
+    // note should mention the resolved SDK id for debug visibility
+    expect(result.note).toMatch(/tracing disabled/);
+    expect(result.note).toContain(sdkId);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MAX_SEARCH_MATCHES — constant is exported and used as the search cap
 // ---------------------------------------------------------------------------
 
