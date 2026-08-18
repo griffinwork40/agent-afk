@@ -265,6 +265,35 @@ describe('ensureFreshAccessToken', () => {
     expect(readXaiTokens(store)?.refresh_token).toBe('rt-fresh');
   });
 
+  it('falls back to current token when refresh fails but token is still valid', async () => {
+    const store = memStore();
+    const now = 1_000_000;
+    const { writeXaiTokens } = await import('./auth-store.js');
+    // Token is past the refresh skew threshold (needs refresh) but not yet hard-expired.
+    writeXaiTokens(
+      {
+        access_token: 'still-valid',
+        refresh_token: 'rt-current',
+        expires_at: now + 30, // within skew → refresh triggered, but > now → not expired
+      },
+      store,
+    );
+    const fetchFn = vi.fn(async (url: RequestInfo) => {
+      if (String(url).includes('openid-configuration')) return jsonResponse(discoveryDoc);
+      // Refresh call fails with a transient server error.
+      return jsonResponse({ error: 'server_error' }, 500);
+    });
+    const got = await ensureFreshAccessToken({
+      store,
+      fetchFn: fetchFn as unknown as typeof fetch,
+      nowSeconds: () => now,
+    });
+    // Should NOT throw — falls back to the existing valid token.
+    expect(got?.access_token).toBe('still-valid');
+    // The original token must remain in the store (not cleared).
+    expect(readXaiTokens(store)?.access_token).toBe('still-valid');
+  });
+
   it('clears store when refresh fails and access token is fully expired', async () => {
     const store = memStore();
     const now = 1_000_000;
