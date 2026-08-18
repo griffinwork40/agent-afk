@@ -323,6 +323,14 @@ export async function streamResponse(
           }
         }
       } else {
+        // Contract: deliverOverflow internalizes the full guard —
+        // `!(cleanFinal && answerText.trim()) && finalBodyText && preview` — so
+        // this bare `else` is safe without a redundant outer check. The function
+        // returns early (no-op) when: (a) the `done` handler already took the
+        // `deliverClean` path (preview null-checked out), (b) `finalBodyText` is
+        // empty/falsy, or (c) the cleanFinal+answerText guard matches the `done`
+        // handler's own delivery branch. Callers must never replicate that guard
+        // here; it belongs exclusively inside deliverOverflow (streaming.handlers.ts).
         await deliverOverflow(ctx, cleanFinal, state.answerText, finalBody(), preview);
       }
     } finally {
