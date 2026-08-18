@@ -788,4 +788,33 @@ describe('classifyBashCommand', () => {
     expect(classifyBashCommand('').mutating).toBe(false);
     expect(classifyBashCommand('   ').mutating).toBe(false);
   });
+
+  // ── Issue #881: allow redirection to $TMPDIR, block everything else ─────────
+  describe('redirection to $TMPDIR is allowed; all other targets remain blocked', () => {
+    const allowed: Array<[string, string]> = [
+      ['git diff > "$TMPDIR/x.diff"', 'double-quoted $TMPDIR (>)'],
+      ['git diff >> "$TMPDIR/x.diff"', 'double-quoted $TMPDIR (>>)'],
+      ['git diff > $TMPDIR/x.diff', 'bare $TMPDIR (>)'],
+      ['some-cmd > ${TMPDIR}/out.txt', '${TMPDIR} brace form'],
+    ];
+    for (const [cmd, label] of allowed) {
+      it(`allows: ${label} (${cmd})`, () => {
+        const result = classifyBashCommand(cmd);
+        expect(result.mutating, `expected "${cmd}" to be read-only`).toBe(false);
+      });
+    }
+
+    const blocked: Array<[string, string]> = [
+      ['echo x > ./tracked-file', 'relative path (not tmpdir)'],
+      ['echo x > ~/.zshrc', 'home-relative path'],
+      ['echo x > /tmp/../etc/hosts', 'traversal bypass'],
+      ['echo x > $UNKNOWN_VAR', 'unknown variable'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        const result = classifyBashCommand(cmd);
+        expect(result.mutating, `expected "${cmd}" to be mutating`).toBe(true);
+      });
+    }
+  });
 });
