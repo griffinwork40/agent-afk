@@ -866,9 +866,30 @@ export class SessionManager {
   }
 
   /**
+   * Evict sessionData entries that have had no activity for longer than
+   * `maxAgeMs` (default 24 hours). Called from closeAll so stale entries
+   * accumulated over a long bot uptime are pruned on each orderly shutdown
+   * without being so aggressive that UX-continuity state (model, cwd, name)
+   * is lost mid-conversation.
+   *
+   * Invariant: only entries whose route has NO live session are eligible — a
+   * session in `this.sessions` is by definition still active, so its data is
+   * always retained regardless of lastActivity.
+   */
+  private _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): void {
+    const now = Date.now();
+    for (const [key, data] of this.sessionData) {
+      if (this.sessions.has(key)) continue; // live session — never evict
+      const age = now - new Date(data.lastActivity).getTime();
+      if (age > maxAgeMs) this.sessionData.delete(key);
+    }
+  }
+
+  /**
    * Close all sessions and clean up
    */
   async closeAll(): Promise<void> {
+    this._evictStaleSessionData();
     await this.saveSessions();
     const closePromises = Array.from(this.sessions.values()).map(
       session => session.close().catch(err => console.error('Error closing session:', err))
