@@ -834,7 +834,11 @@ export class SessionManager {
           const route: TelegramRoute = { chatId: data.chatId };
           if (data.threadId !== undefined) route.threadId = data.threadId;
           this.sessionData.set(routeKey(route), data);
-          this._ensureRegistryHandle(route, data);
+          try {
+            this._ensureRegistryHandle(route, data);
+          } catch {
+            // non-fatal: registry error should not skip remaining sidecars
+          }
         }
       }
     } catch (error) {
