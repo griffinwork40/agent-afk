@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.1] - 2026-08-18
+
+### Fixed
+- recover from ghost EADDRINUSE by falling back to alternate loopback (#1161) (7ae7b5b4)
+
 ## [5.130.0] - 2026-08-18
 
 ### Added
