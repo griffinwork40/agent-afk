@@ -44,9 +44,11 @@ export function listenWithRecovery(
     const fallback = loopbackFallback(host);
     if (!fallback) throw enrichEaddrinuse(err, requestedPort, host);
 
-    // Only fall back when no live process owns the port — a real listener on
-    // the requested address should surface as a hard error, not silently move.
-    if (portHasOwner(requestedPort)) throw enrichEaddrinuse(err, requestedPort, host);
+    // Only fall back when we can confirm no live process owns the port.
+    // `true` = real owner, `null` = unknown (lsof unavailable) — both must
+    // surface as a hard error, not silently redirect the daemon.
+    const owned = portHasOwner(requestedPort);
+    if (owned !== false) throw enrichEaddrinuse(err, requestedPort, host);
 
     // Retry on the alternate loopback address.
     try {
@@ -99,19 +101,35 @@ function loopbackFallback(host: string): string | undefined {
 }
 
 /**
- * Best-effort check: does any process currently own a LISTEN socket on this port?
- * Uses `lsof` (macOS/Linux). Returns `true` when a live owner is found, `false`
- * when the port appears to be a ghost (or lsof is unavailable).
+ * Check whether a live process currently owns a LISTEN socket on this port.
+ * Uses `lsof` (macOS/Linux).
+ *
+ * Returns:
+ *  - `true`  — a live process owns the port (do NOT fall back).
+ *  - `false` — lsof ran successfully and found no listener (ghost socket).
+ *  - `null`  — lsof is unavailable or errored; ownership is unknown.
+ *
+ * Invariant: `null` (unknown) is treated as "unsafe to fall back" by the
+ * caller — a missing lsof must not silently redirect the daemon to another
+ * address when a real process may own the port.
  */
-function portHasOwner(port: number): boolean {
+function portHasOwner(port: number): boolean | null {
   try {
-    const out = execSync(`lsof -i :${port} -sTCP:LISTEN -t 2>/dev/null`, {
+    // lsof exits 0 with output when a listener exists, and exits 1 with no
+    // output when nothing matches. execSync throws on non-zero exit.
+    const out = execSync(`lsof -i :${port} -sTCP:LISTEN -t`, {
       encoding: 'utf-8',
       timeout: 3_000,
+      stdio: ['pipe', 'pipe', 'pipe'], // capture stderr to distinguish lsof-not-found
     });
     return out.trim().length > 0;
-  } catch {
-    return false; // lsof unavailable or no owner — safe to attempt fallback
+  } catch (err: unknown) {
+    // Distinguish "lsof ran, found nothing" (exit 1) from "lsof not found" (exit 127/ENOENT).
+    if (err && typeof err === 'object' && 'status' in err) {
+      const status = (err as { status: number | null }).status;
+      if (status === 1) return false; // lsof ran, no listener → ghost
+    }
+    return null; // lsof unavailable or unexpected error → unknown
   }
 }
 

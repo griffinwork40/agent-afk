@@ -135,10 +135,14 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   );
 
   // Write the port file so tool handlers can find the running daemon.
+  // Format: "host:port" (e.g. "127.0.0.1:7777" or "::1:7777"). The host is
+  // needed because ghost-socket recovery may bind an alternate loopback address.
+  // Backward compat: the reader falls back to localhost when only a bare port
+  // is found (pre-existing port files from before this change).
   if (writePortFile) {
     try {
       mkdirSync(dirname(portFilePath), { recursive: true });
-      writeFileSync(portFilePath, String(port), 'utf-8');
+      writeFileSync(portFilePath, `${host}:${port}`, 'utf-8');
     } catch {
       // Best-effort; daemon still functional without port file
     }
@@ -173,7 +177,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
       // daemon losing port-file discovery until its next (re)start.
       if (writePortFile) {
         try {
-          if (readFileSync(portFilePath, 'utf-8').trim() === String(port)) {
+          if (readFileSync(portFilePath, 'utf-8').trim() === `${host}:${port}`) {
             unlinkSync(portFilePath);
           }
         } catch {
