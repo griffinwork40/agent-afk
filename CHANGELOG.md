@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.130.3] - 2026-08-18
+
+### Fixed
+- suspend footer writers during pager/editor handoffs (#1168) (9513e1f7)
+
 ## [5.130.2] - 2026-08-18
 
 ### Fixed
