@@ -11,13 +11,14 @@
  * @module agent/daemon
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AgentConfig } from './types.js';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
 import type { ScheduledTask, TriggerMode } from './daemon/triggers.js';
 import { getDaemonStateDir } from '../paths.js';
+import { listenWithRecovery, closeServer } from './daemon.listen.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -127,7 +128,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   const portFilePath = join(getDaemonStateDir('default'), 'port');
 
   const server = createServer((req, res) => handleRequest(req, res, scheduler));
-  const { port, address: host } = await listen(
+  const { port, address: host } = await listenWithRecovery(
     server,
     options.port ?? DEFAULT_PORT,
     options.host ?? DEFAULT_HOST,
@@ -312,33 +313,4 @@ async function handleRequestAsync(
   res.end(JSON.stringify({ error: 'not found' }));
 }
 
-function listen(
-  server: Server,
-  requestedPort: number,
-  host: string,
-): Promise<{ port: number; address: string }> {
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    // Contract: passing `host` restricts the bind to that interface. Omitting
-    // it (the prior behaviour) made Node bind the unspecified address (all
-    // interfaces) — the vulnerability this argument closes.
-    server.listen(requestedPort, host, () => {
-      server.removeListener('error', reject);
-      const address = server.address();
-      if (typeof address === 'object' && address) {
-        resolve({ port: address.port, address: address.address });
-      } else {
-        resolve({ port: requestedPort, address: host });
-      }
-    });
-  });
-}
 
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
