@@ -13,6 +13,7 @@ import { getConcurrencyStatuses } from '../../config/concurrency.js';
 import { access, constants, mkdir, readFile } from 'fs/promises';
 import { execSync } from 'child_process';
 import { getApiKey, getCodexApiKey } from '../shared-helpers.js';
+import { preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
 import {
   getAfkConfigDir,
   getAfkStateDir,
@@ -34,6 +35,12 @@ export interface Check {
 }
 
 export async function checkAnthropicKey(): Promise<Check> {
+  // Attempt a keychain OAuth refresh before checking — without this, an expired
+  // Claude Code OAuth token (which expires hourly) causes a false negative.
+  // The guard inside `preloadClaudeKeychainOAuth` skips the refresh when an env
+  // credential already exists or the provider isn't anthropic-direct.
+  await preloadClaudeKeychainOAuth('anthropic-direct');
+
   const key = getApiKey();
   if (key) {
     return { name: 'Anthropic API Key', state: 'pass', detail: 'ANTHROPIC_API_KEY set' };
