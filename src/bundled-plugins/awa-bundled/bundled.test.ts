@@ -260,5 +260,18 @@ describe('bundled skills', () => {
       // Wave 2 emits the verdict, so its receives list carries the rule.
       expect(content).toContain('**the merge-decision rule and its counts format below**');
     });
+
+    // Invariant: #1134 — ground-state runs inline reconnaissance only. The skill
+    // body explicitly forbids dispatching sub-agents so that every survey is a
+    // deterministic read in the same fork, not a spawned child that could stall,
+    // hit depth limits, or produce non-deterministic results. A later edit that
+    // removes the prohibition or re-introduces `agent`/`skill` dispatch would
+    // silently break the no-dispatch guarantee the orchestrator depends on.
+    it('ground-state keeps the no-dispatch invariant (#1134)', () => {
+      const content = readBundled('ground-state');
+      expect(content).toContain('Do NOT dispatch any sub-agents');
+      // The inline-recon section must name the tools the fork uses directly.
+      expect(content).toContain('directly using your own tools');
+    });
   });
 });
