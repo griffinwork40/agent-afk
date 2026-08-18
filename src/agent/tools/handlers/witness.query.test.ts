@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clampLimit, clampSessions, readSessionTrace, searchAcrossSessions, MAX_SEARCH_MATCHES } from './witness.query.js';
@@ -305,6 +305,49 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
     expect(result.sessionsAvailable).toBeLessThanOrEqual(1);
     expect(result.sessionsSearched).toBeLessThanOrEqual(result.sessionsAvailable);
     expect(result.sessionsScanned).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchAcrossSessions — sessionsAvailable vs sessionsSearched pre/post-filter (#1035)
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — sessionsAvailable vs sessionsSearched pre/post-filter', () => {
+  it('sessionsAvailable is the pre-filter count; sessionsSearched is the post-filter count', async () => {
+    // Write three sessions: stamp two with a 2020 mtime (old) and one with a
+    // 2030 mtime (future-ish) so the since filter can cleanly split them.
+    const pathA = await writeTrace('prefilter-session-a', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+    const pathB = await writeTrace('prefilter-session-b', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+    const pathC = await writeTrace('prefilter-session-c', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const old = new Date('2020-06-01T00:00:00Z');
+    const fresh = new Date('2030-06-01T00:00:00Z');
+    await utimes(pathA, old, old);   // fails the since filter below
+    await utimes(pathB, old, old);   // fails the since filter below
+    await utimes(pathC, fresh, fresh); // survives the since filter below
+
+    // since='2025-01-01' keeps only pathC; pathA and pathB are excluded.
+    const result = await searchAcrossSessions({
+      query: 'end_turn',
+      sessions: 50,
+      since: '2025-01-01',
+    });
+
+    // Pre-filter: all 3 sessions were in the window.
+    expect(result.sessionsAvailable).toBe(3);
+    // Post-filter: only 1 session survived the since gate.
+    expect(result.sessionsSearched).toBe(1);
+    // Deprecated alias always mirrors sessionsSearched.
+    expect(result.sessionsScanned).toBe(result.sessionsSearched);
+    // At least one match from the surviving session.
+    expect(result.matches.length).toBeGreaterThanOrEqual(1);
+    expect(result.matches.every((m) => m.sessionId === 'prefilter-session-c')).toBe(true);
   });
 });
 
