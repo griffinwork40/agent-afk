@@ -16,7 +16,7 @@ import { type TelegramRoute, routeFromCtx, routeKey } from '../route.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import { forwardProvenancePrefix } from '../forward-provenance.js';
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import type { ContentBlockParam, DocumentBlockParam } from '@anthropic-ai/sdk/resources';
 import { registerInboundImageBlocks } from '../../agent/content/attachment-registry.js';
 import { handleDocumentMessage } from './document.js';
 
@@ -530,6 +530,25 @@ export class MessageHandler {
   async handleDocument(ctx: Context): Promise<void> {
     const route = routeFromCtx(ctx);
     if (!route) return;
+    const chatId = route.chatId;
+
+    // Tag-only response policy (mirrors handlePhoto): in a configured chat, drop a
+    // document that is not addressed to the bot BEFORE any session or CDN work.
+    // A document's caption carries the mention entities (caption_entities).
+    // Fail-closed if the bot identity is unknown.
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping document in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      const msg = ctx.message as import('telegraf/types').Message.DocumentMessage | undefined;
+      if (!addressedToBot(msg?.caption, msg?.caption_entities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed document in chat ${chatId}`);
+        return;
+      }
+    }
+
     const key = routeKey(route);
     let alreadyClaimed = false;
     try {
@@ -936,7 +955,11 @@ export class MessageHandler {
       // content-block (photo) messages, the raw string otherwise.
       const userText = typeof content === 'string'
         ? content
-        : content.map((b) => (b.type === 'text' ? b.text : '[image]')).join(' ');
+        : content.map((b) => {
+            if (b.type === 'text') return b.text;
+            if (b.type === 'document') return `[document: ${(b as DocumentBlockParam).title ?? 'file'}]`;
+            return '[image]';
+          }).join(' ');
       // Keep the "typing…" indicator alive for the whole (often multi-minute)
       // streamed turn; a one-shot chat action would expire after ~5s.
       await withTypingIndicator(ctx, () =>
@@ -957,7 +980,9 @@ export class MessageHandler {
         // Re-enqueue the item so it isn't silently dropped.
         const depth = typeof content === 'string'
           ? this.enqueueMessage(route, ctx, content)
-          : this.enqueuePhoto(route, ctx, content);
+          : content.some((b) => b.type === 'document')
+            ? this.enqueueDocument(route, ctx, content)
+            : this.enqueuePhoto(route, ctx, content);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         reEnqueued = true;
         return;

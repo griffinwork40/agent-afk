@@ -110,6 +110,18 @@ export function flattenUserContent(
     if (typeof block === 'object' && block && 'type' in block) {
       if (block.type === 'text') textSegments.push(block.text);
       else if (block.type === 'image') imageCount += 1;
+      else if (block.type === 'document') {
+        // Represent document blocks as inline text for non-Anthropic endpoints.
+        const docBlock = block as Extract<ContentBlockParam, { type: 'document' }>;
+        const title = docBlock.title ?? 'document';
+        const src = docBlock.source;
+        if (src && src.type === 'text') {
+          textSegments.push(`[Document: ${title}]\n${src.data}`);
+        } else {
+          const mimeLabel = src && 'media_type' in src ? String(src.media_type) : 'unknown';
+          textSegments.push(`[Document: ${title}, type: ${mimeLabel} — content not available for this provider]`);
+        }
+      }
     }
   }
   const text = textSegments.join('\n');
@@ -144,6 +156,17 @@ export function buildUserContent(
         if (url !== null) {
           parts.push({ type: 'image_url', image_url: { url } });
           hasImage = true;
+        }
+      } else if (block.type === 'document') {
+        // Document blocks: inline as text in the multimodal array too.
+        const docBlock = block as Extract<ContentBlockParam, { type: 'document' }>;
+        const title = docBlock.title ?? 'document';
+        const src = docBlock.source;
+        if (src && src.type === 'text') {
+          parts.push({ type: 'text', text: `[Document: ${title}]\n${src.data}` });
+        } else {
+          const mimeLabel = src && 'media_type' in src ? String(src.media_type) : 'unknown';
+          parts.push({ type: 'text', text: `[Document: ${title}, type: ${mimeLabel} — content not available for this provider]` });
         }
       }
     }

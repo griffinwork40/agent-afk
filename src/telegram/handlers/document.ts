@@ -11,6 +11,9 @@
 import { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { senderPrefix } from '../sender-attribution.js';
+import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
+import { forwardProvenancePrefix } from '../forward-provenance.js';
 
 // History: extracted from message.ts in PR #687 (document handler).
 // message.ts was already at its baselined ceiling, so all document
@@ -206,12 +209,25 @@ export async function handleDocumentMessage(
   // Build content blocks.
   const contentBlocks: ContentBlockParam[] = [];
 
+  // Attribution prefix — system-trusted sender marker + reply/forward context for
+  // group/supergroup chats (mirrors handlePhoto and handle()).
+  const prefix = senderPrefix(msg.from, ctx.chat?.type);
+  const replyCtx = replyContextPrefix({
+    replyToMessage: msg.reply_to_message as RepliedMessage | undefined,
+    botId: ctx.botInfo?.id,
+  });
+  const fwdPrefix = forwardProvenancePrefix(msg);
+  const attribution = replyCtx + fwdPrefix + prefix;
+
   // Caption block first.
   if (msg.caption != null) {
     // Cap at 1024 Unicode code points (Telegram's own limit) to prevent
     // prompt-injection via an arbitrarily long caption.
     const capped = [...msg.caption].slice(0, 1024).join('');
-    contentBlocks.push({ type: 'text', text: `[User caption]: ${capped}` });
+    contentBlocks.push({ type: 'text', text: `${attribution}[User caption]: ${capped}` });
+  } else if (attribution) {
+    // No caption but still attribute the sender and/or reply target.
+    contentBlocks.push({ type: 'text', text: `${attribution}(document, no caption)` });
   }
 
   if (kind === 'text') {
