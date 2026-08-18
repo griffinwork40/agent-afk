@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.131.0] - 2026-08-18
+
+### Added
+- accept inbound documents (text, code, PDF) (#1183) (151c662e)
+
 ## [5.130.6] - 2026-08-18
 
 ### Fixed
