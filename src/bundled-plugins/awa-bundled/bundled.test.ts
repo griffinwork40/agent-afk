@@ -279,6 +279,8 @@ describe('bundled skills', () => {
 
       // Remove the required prohibition before looking for a contradictory,
       // affirmative dispatch directive in the same section.
+      // No `g` flag: only one canonical prohibition sentence exists, so a single
+      // replace is intentional and avoids accidentally stripping repeated text.
       const directives = inlineRecon!.replace(
         /Do NOT dispatch any sub-agents[^.]*\./,
         '',

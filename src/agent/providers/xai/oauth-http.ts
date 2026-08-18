@@ -71,11 +71,23 @@ export async function discoverXaiOidc(deps: OAuthHttpDeps = {}): Promise<XaiOidc
   if (!authorization_endpoint || !token_endpoint) {
     throw new Error('xAI OIDC discovery missing authorization_endpoint or token_endpoint');
   }
-  // RFC 8414 §3: authorization_endpoint and token_endpoint MUST share the issuer's origin.
-  // Validate against the resolved issuer (prefer body['issuer'] when present, else the
-  // configured issuer string) so spoofed discovery documents can't redirect token traffic.
-  const resolvedIssuer = asNonEmptyString(body['issuer']) ?? issuer;
-  const issuerOrigin = new URL(resolvedIssuer).origin;
+  // RFC 8414 §3: all endpoints MUST share the issuer's origin. Anchor the origin check to
+  // the *configured* issuer (not the body-supplied one) so a spoofed discovery document
+  // cannot redirect token traffic by advertising its own origin as `issuer`.
+  const issuerOrigin = new URL(issuer).origin;
+  const bodyIssuer = asNonEmptyString(body['issuer']);
+  if (bodyIssuer) {
+    let bodyIssuerOrigin: string;
+    try {
+      bodyIssuerOrigin = new URL(bodyIssuer).origin;
+    } catch {
+      throw new Error('xAI OIDC discovery: body issuer origin does not match configured issuer');
+    }
+    if (bodyIssuerOrigin !== issuerOrigin) {
+      throw new Error('xAI OIDC discovery: body issuer origin does not match configured issuer');
+    }
+  }
+  const resolvedIssuer = bodyIssuer ?? issuer;
   if (new URL(authorization_endpoint).origin !== issuerOrigin) {
     throw new Error('xAI OIDC discovery: authorization_endpoint origin does not match issuer');
   }
@@ -95,7 +107,12 @@ export async function discoverXaiOidc(deps: OAuthHttpDeps = {}): Promise<XaiOidc
     out.device_authorization_endpoint = device;
   }
   const userinfo = asNonEmptyString(body['userinfo_endpoint']);
-  if (userinfo) out.userinfo_endpoint = userinfo;
+  if (userinfo) {
+    if (new URL(userinfo).origin !== issuerOrigin) {
+      throw new Error('xAI OIDC discovery: userinfo_endpoint origin does not match issuer');
+    }
+    out.userinfo_endpoint = userinfo;
+  }
   return out;
 }
 

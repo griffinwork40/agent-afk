@@ -319,6 +319,48 @@ describe('ensureFreshAccessToken', () => {
     expect(readXaiTokens(store)).toBeNull();
   });
 
+  it('concurrent callers both fall back gracefully when refresh fails but token is still valid', async () => {
+    const store = memStore();
+    store.authPath = () => '/tmp/xai-oauth-concurrent-graceful.json';
+    const now = 1_000_000;
+    const { writeXaiTokens } = await import('./auth-store.js');
+    const originalBundle: XaiTokenBundle = {
+      access_token: 'concurrent-valid',
+      refresh_token: 'rt-concurrent',
+      expires_at: now + 30, // within skew → triggers refresh; above now → still valid
+    };
+    writeXaiTokens(originalBundle, store);
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetchFn = vi.fn(async (url: RequestInfo) => {
+      if (String(url).includes('openid-configuration')) return jsonResponse(discoveryDoc);
+      // Block until both callers have joined the in-flight promise, then fail.
+      await gate;
+      return jsonResponse({ error: 'server_error', error_description: 'upstream unavailable' }, 503);
+    });
+
+    const deps = {
+      store,
+      fetchFn: fetchFn as unknown as typeof fetch,
+      nowSeconds: () => now,
+    };
+    const p1 = ensureFreshAccessToken(deps);
+    const p2 = ensureFreshAccessToken(deps);
+    // Yield so both callers enter the in-flight path before the response resolves.
+    await Promise.resolve();
+    release();
+    const [a, b] = await Promise.all([p1, p2]);
+
+    // Both should degrade gracefully — returning the still-valid token, not null/throw.
+    expect(a?.access_token).toBe('concurrent-valid');
+    expect(b?.access_token).toBe('concurrent-valid');
+    // Store must be intact (token not cleared).
+    expect(readXaiTokens(store)?.access_token).toBe('concurrent-valid');
+  });
+
   it('single-flights concurrent refresh for the same store path', async () => {
     const store = memStore();
     store.authPath = () => '/tmp/xai-oauth-singleflight.json';
