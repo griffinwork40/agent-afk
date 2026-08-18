@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.127.4] - 2026-08-18
+
+### Changed
+- eliminate 3-subagent dispatch overhead in pre-flight recon (#1134) (ca46b160)
+
 ## [5.127.3] - 2026-08-17
 
 ### Fixed
