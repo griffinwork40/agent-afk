@@ -37,7 +37,7 @@ import {
   resolveWorktreeDisposition,
   resolveWorktreeExitPolicy,
 } from './interactive/worktree-disposition.js';
-import { installUnknownCommandGuard } from './interactive/unknown-command-guard.js';
+import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
@@ -246,6 +246,22 @@ export function registerInteractiveCommand(program: Command): void {
       'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer (no persistent or per-turn compositor), AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM reserved rows misbehave. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
     )
     .action(async (input: string[], options: CliOptions) => {
+      // Issue #710 mode 2: a bare unknown token with no flags (`afk skill`)
+      // reaches this action because Commander's default-command swallows it
+      // silently.  Intercept here — before any side-effect — when the token is
+      // a single word close enough to a known subcommand name (Levenshtein ≤ 2)
+      // to be an obvious mis-type rather than a genuine one-word prompt.
+      const bareCheck = checkBareUnknownCommand(input, program);
+      if (bareCheck.isUnknown) {
+        const hint = bareCheck.suggestion
+          ? `\n\nDid you mean \`afk ${bareCheck.suggestion}\`?`
+          : '';
+        process.stderr.write(`error: unknown command '${bareCheck.token}'${hint}\n`);
+        process.stderr.write(`Run \`afk --help\` for a list of available commands.\n`);
+        process.exitCode = 1;
+        return;
+      }
+
       if (options.debug) {
         process.env['AFK_DEBUG'] = '1';
       }

@@ -292,6 +292,8 @@ export interface SlashContext {
    * surfaces that never install a stdin handler.
    */
   stdinElicitationHandler?: ElicitationHandler;
+  suspendFooter?: () => void; // pause periodic footer writers for pager/editor handoff
+  resumeFooter?: () => void;  // resume after child exit
 }
 
 /** The handler's return value — controls the REPL's next action. */

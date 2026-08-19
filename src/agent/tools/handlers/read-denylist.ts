@@ -181,6 +181,7 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
  */
 export const READ_ALLOWLIST_REL: readonly string[] = [
   '.afk/config/mcp.json',
+  '.afk/config/schedules.json',
   '.ssh/config',
   '.ssh/known_hosts',
 ];

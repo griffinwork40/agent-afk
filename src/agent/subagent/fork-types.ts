@@ -10,6 +10,7 @@
 
 import type { ZodType } from 'zod';
 import type { CanUseTool } from '../types/sdk-types.js';
+import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import type { HookRegistry } from '../hooks.js';
 import type { AgentConfig, IAgentSession } from '../types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
@@ -237,4 +238,10 @@ export interface SubagentManagerOptions {
     usage: import('./result.js').SubagentTrace['usage'],
     costUsd: number | undefined,
   ) => void;
+  /**
+   * Shared workspace store inherited by all forked children. When provided,
+   * child configs are augmented with a workspace context preamble containing
+   * relevant entries published by sibling agents.
+   */
+  workspaceStore?: WorkspaceStore;
 }

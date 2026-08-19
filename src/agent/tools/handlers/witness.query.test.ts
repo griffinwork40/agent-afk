@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clampLimit, clampSessions, readSessionTrace, searchAcrossSessions, MAX_SEARCH_MATCHES } from './witness.query.js';
@@ -309,6 +309,49 @@ describe('searchAcrossSessions — sessions/since ordering', () => {
 });
 
 // ---------------------------------------------------------------------------
+// searchAcrossSessions — sessionsAvailable vs sessionsSearched pre/post-filter (#1035)
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — sessionsAvailable vs sessionsSearched pre/post-filter', () => {
+  it('sessionsAvailable is the pre-filter count; sessionsSearched is the post-filter count', async () => {
+    // Write three sessions: stamp two with a 2020 mtime (old) and one with a
+    // 2030 mtime (future-ish) so the since filter can cleanly split them.
+    const pathA = await writeTrace('prefilter-session-a', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+    const pathB = await writeTrace('prefilter-session-b', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+    const pathC = await writeTrace('prefilter-session-c', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const old = new Date('2020-06-01T00:00:00Z');
+    const fresh = new Date('2030-06-01T00:00:00Z');
+    await utimes(pathA, old, old);   // fails the since filter below
+    await utimes(pathB, old, old);   // fails the since filter below
+    await utimes(pathC, fresh, fresh); // survives the since filter below
+
+    // since='2025-01-01' keeps only pathC; pathA and pathB are excluded.
+    const result = await searchAcrossSessions({
+      query: 'end_turn',
+      sessions: 50,
+      since: '2025-01-01',
+    });
+
+    // Pre-filter: all 3 sessions were in the window.
+    expect(result.sessionsAvailable).toBe(3);
+    // Post-filter: only 1 session survived the since gate.
+    expect(result.sessionsSearched).toBe(1);
+    // Deprecated alias always mirrors sessionsSearched.
+    expect(result.sessionsScanned).toBe(result.sessionsSearched);
+    // At least one match from the surviving session.
+    expect(result.matches.length).toBeGreaterThanOrEqual(1);
+    expect(result.matches.every((m) => m.sessionId === 'prefilter-session-c')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // searchAcrossSessions — truncatedSessions signal
 // ---------------------------------------------------------------------------
 
@@ -385,6 +428,95 @@ describe('searchAcrossSessions — truncatedSessions', () => {
     expect(result.matches.some((m) => m.sessionId === 'big-session-2')).toBe(true);
     // And truncation must be reported.
     expect(result.truncatedSessions).toContain('big-session-2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readSessionTrace — human name resolution via sidecar lookup (integration)
+// ---------------------------------------------------------------------------
+
+describe('readSessionTrace — human name resolution', () => {
+  /**
+   * Write a sidecar file at $AFK_HOME/state/sessions/<sidecarId>.json.
+   * The sidecar maps a human name to the real SDK session UUID.
+   */
+  async function writeSidecar(
+    sidecarId: string,
+    sessionId: string,
+    name: string,
+  ): Promise<void> {
+    const dir = join(tmpHome, 'state', 'sessions');
+    await mkdir(dir, { recursive: true });
+    const sidecarPath = join(dir, `${sidecarId}.json`);
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ sessionId, name, savedAt: Date.now(), model: 'test-model' }),
+      'utf-8',
+    );
+  }
+
+  /**
+   * Write a ledger events.jsonl at $AFK_HOME/state/sessions/<sessionId>/events.jsonl
+   * with a meta record containing traceLabel: null (tracing disabled).
+   */
+  async function writeLedgerDisabled(sessionId: string): Promise<void> {
+    const dir = join(tmpHome, 'state', 'sessions', sessionId);
+    await mkdir(dir, { recursive: true });
+    const ledgerPath = join(dir, 'events.jsonl');
+    const metaRecord = JSON.stringify({
+      v: 1,
+      ts: Date.now(),
+      kind: 'meta',
+      sessionId,
+      model: 'test-model',
+      traceLabel: null,
+    });
+    await writeFile(ledgerPath, metaRecord + '\n', 'utf-8');
+  }
+
+  it('returns events when human name resolves via sidecar to a session with a trace', async () => {
+    const sdkId = 'sdk-uuid-abc123';
+    const humanName = 'my-cool-session';
+    const sidecarId = 'sidecar-def456';
+
+    // Write sidecar mapping human name → SDK UUID
+    await writeSidecar(sidecarId, sdkId, humanName);
+    // Write trace under the SDK UUID directory
+    await writeTrace(sdkId, [
+      makeEventLine('tool_call', 1, { phase: 'completed', isError: false, name: 'bash', resultBytes: 5, durationMs: 1 }),
+      makeEventLine('closure', 2, { reason: 'end_turn', finalCostUsd: 0.01, finalTurnCount: 1 }),
+    ]);
+
+    // Call with the human name — should resolve through sidecar and return events
+    const result = await readSessionTrace({ session: humanName });
+
+    // sessionId echoes caller's input (human name), not the SDK UUID
+    expect(result.sessionId).toBe(humanName);
+    expect(result.events).toHaveLength(2);
+    expect(result.totalInTrace).toBe(2);
+    expect(result.note).toBeUndefined();
+  });
+
+  it('echoes caller input as sessionId when name resolves but tracing was disabled', async () => {
+    const sdkId = 'sdk-uuid-disabled-xyz';
+    const humanName = 'no-trace-session';
+    const sidecarId = 'sidecar-disabled-xyz';
+
+    // Write sidecar mapping human name → SDK UUID
+    await writeSidecar(sidecarId, sdkId, humanName);
+    // Write a ledger with traceLabel: null (tracing disabled) — no trace.jsonl
+    await writeLedgerDisabled(sdkId);
+
+    // Call with the human name
+    const result = await readSessionTrace({ session: humanName });
+
+    // sessionId must echo the caller's input (human name), not the SDK UUID
+    expect(result.sessionId).toBe(humanName);
+    expect(result.events).toHaveLength(0);
+    expect(result.totalInTrace).toBe(0);
+    // note should mention the resolved SDK id for debug visibility
+    expect(result.note).toMatch(/tracing disabled/);
+    expect(result.note).toContain(sdkId);
   });
 });
 

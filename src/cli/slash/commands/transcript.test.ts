@@ -80,6 +80,84 @@ async function flushUntilSpawn(): Promise<void> {
   }
 }
 
+describe('resolvePager — PAGER env resolution', () => {
+  let origPager: string | undefined;
+  let origIsTTY: boolean | undefined;
+  let pauseSpy: ReturnType<typeof vi.spyOn>;
+  let resumeSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    origPager = process.env['PAGER'];
+    origIsTTY = process.stdout.isTTY;
+    (process.stdout as { isTTY?: boolean }).isTTY = true;
+    pauseSpy = vi.spyOn(process.stdin, 'pause').mockReturnValue(process.stdin);
+    resumeSpy = vi.spyOn(process.stdin, 'resume').mockReturnValue(process.stdin);
+  });
+
+  afterEach(() => {
+    if (origPager === undefined) {
+      delete process.env['PAGER'];
+    } else {
+      process.env['PAGER'] = origPager;
+    }
+    (process.stdout as { isTTY?: boolean }).isTTY = origIsTTY;
+    vi.restoreAllMocks();
+  });
+
+  it('appends -R when PAGER is a full path to less', async () => {
+    process.env['PAGER'] = '/usr/bin/less';
+    const child = new EventEmitter();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const { ctx } = makeCtx();
+    const p = transcriptCmd.handler(ctx);
+    await flushUntilSpawn();
+
+    const call = mockSpawn.mock.calls[0]!;
+    const spawnArgs = call[1] as string[];
+    // -R must appear even though PAGER was set to an absolute path
+    expect(spawnArgs).toContain('-R');
+
+    child.emit('exit', 0);
+    await p;
+  });
+
+  it('does not duplicate -R when PAGER is less with -R already set', async () => {
+    process.env['PAGER'] = 'less -R';
+    const child = new EventEmitter();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const { ctx } = makeCtx();
+    const p = transcriptCmd.handler(ctx);
+    await flushUntilSpawn();
+
+    const call = mockSpawn.mock.calls[0]!;
+    const spawnArgs = call[1] as string[];
+    expect(spawnArgs.filter((a) => a === '-R')).toHaveLength(1);
+
+    child.emit('exit', 0);
+    await p;
+  });
+
+  it('does not append -R when PAGER is less with -r (deprecated variant) already set', async () => {
+    process.env['PAGER'] = '/usr/bin/less -r';
+    const child = new EventEmitter();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const { ctx } = makeCtx();
+    const p = transcriptCmd.handler(ctx);
+    await flushUntilSpawn();
+
+    const call = mockSpawn.mock.calls[0]!;
+    const spawnArgs = call[1] as string[];
+    expect(spawnArgs).not.toContain('-R');
+
+    child.emit('exit', 0);
+    await p;
+  });
+});
+
 describe('/transcript slash command — pager TTY handoff', () => {
   let origIsTTY: boolean | undefined;
   let pauseSpy: ReturnType<typeof vi.spyOn>;

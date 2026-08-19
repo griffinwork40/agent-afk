@@ -132,10 +132,9 @@ export interface AgentInput {
    * child in the parent tree (or `cwd`).
    *
    * Mutually exclusive with {@link cwd} (the executor owns the child's cwd when
-   * isolating). Forbidden with `mode: 'background'` in this release: a detached
-   * child outlives the executor's teardown, so nothing would reclaim its
-   * worktree in-turn (see docs/proposals/first-class-worktree-isolation.md
-   * Open Question 1). Only the honored value is retained — `'none'` normalizes
+   * isolating). Supported with `mode: 'background'`: the worktree is locked
+   * during dispatch and unlocked+removed via `markTerminal`'s `onCleanup`
+   * callback when the background job settles. Only the honored value is retained — `'none'` normalizes
    * to `undefined` (no field) so the executor's `=== 'worktree'` check is total.
    */
   isolation?: 'worktree';
@@ -475,9 +474,9 @@ export function parseAgentInput(input: unknown): AgentInput {
   //   - Mutually exclusive with cwd: isolating means the executor owns the
   //     child's cwd, so a caller-supplied cwd would be silently overwritten —
   //     reject loudly instead.
-  //   - Forbidden with mode:'background': a detached child outlives the
-  //     foreground teardown that removes the worktree, so nothing would reclaim
-  //     it in-turn (proposal Open Q1). Reject rather than leak.
+  //   - Background mode: the worktree is locked at creation so the sweep cannot
+  //     race-reap it; markTerminal() unlocks + tears down after the child
+  //     finishes (resolved Open Q1 from the original isolation PR).
   let isolation: 'worktree' | undefined;
   const isolationValue = readOptional(agentInput, 'isolation');
   if (isolationValue !== undefined && isolationValue !== 'none') {
@@ -506,11 +505,7 @@ export function parseAgentInput(input: unknown): AgentInput {
           'to keep the extra write grants.',
       );
     }
-    if (mode === 'background') {
-      throw new Error(
-        'Agent tool isolation:"worktree" is not supported with mode:"background" yet',
-      );
-    }
+
     isolation = 'worktree';
   }
 

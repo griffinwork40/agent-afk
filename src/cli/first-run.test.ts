@@ -210,6 +210,22 @@ describe('runFirstRunDetector', () => {
     expect(runAuthWizard).not.toHaveBeenCalled();
   });
 
+  it('uses the refreshed token when credential-store write-back fails', async () => {
+    vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
+    vi.mocked(preloadClaudeKeychainOAuth).mockResolvedValue('sk-ant-oat01-fresh');
+    vi.mocked(loadCredential).mockReturnValue(undefined);
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: false,
+      configurable: true,
+      writable: true,
+    });
+
+    await runFirstRunDetector(argvFor('chat'));
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(runAuthWizard).not.toHaveBeenCalled();
+  });
+
   it('does not attempt a refresh for non-gated commands', async () => {
     await runFirstRunDetector(argvFor('doctor'));
     expect(preloadClaudeKeychainOAuth).not.toHaveBeenCalled();

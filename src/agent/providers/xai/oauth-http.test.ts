@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearOidcCache, discoverXaiOidcCached, tokenResponseToBundle } from './oauth-http.js';
+import { clearOidcCache, discoverXaiOidc, discoverXaiOidcCached, tokenResponseToBundle } from './oauth-http.js';
 
 // ---------------------------------------------------------------------------
 // tokenResponseToBundle
@@ -128,5 +128,114 @@ describe('discoverXaiOidcCached', () => {
     clearOidcCache();
     await discoverXaiOidcCached(deps);
     expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RFC 8414 §3 — origin validation in discoverXaiOidc
+// ---------------------------------------------------------------------------
+describe('discoverXaiOidc — RFC 8414 §3 origin validation', () => {
+  beforeEach(() => {
+    clearOidcCache();
+  });
+
+  it('happy path: all endpoints share the issuer origin', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+    });
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).resolves.toMatchObject({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+    });
+  });
+
+  it('happy path: device_authorization_endpoint on same origin is accepted', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+      device_authorization_endpoint: 'https://auth.x.ai/oauth2/device',
+    } as Record<string, string>);
+    const result = await discoverXaiOidc({
+      fetchFn: fetchFn as unknown as typeof fetch,
+      issuer: 'https://auth.x.ai',
+    });
+    expect(result.device_authorization_endpoint).toBe('https://auth.x.ai/oauth2/device');
+  });
+
+  it('throws when authorization_endpoint origin mismatches issuer', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://evil.example.com/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+    });
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('authorization_endpoint origin does not match issuer');
+  });
+
+  it('throws when token_endpoint origin mismatches issuer', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://evil.example.com/oauth2/token',
+    });
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('token_endpoint origin does not match issuer');
+  });
+
+  it('throws when device_authorization_endpoint origin mismatches issuer', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+      device_authorization_endpoint: 'https://evil.example.com/oauth2/device',
+    } as Record<string, string>);
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('device_authorization_endpoint origin does not match issuer');
+  });
+
+  it('throws when userinfo_endpoint origin mismatches issuer', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://auth.x.ai',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+      userinfo_endpoint: 'https://evil.example.com/userinfo',
+    } as Record<string, string>);
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('userinfo_endpoint origin does not match issuer');
+  });
+
+  it('throws a typed error when body issuer is a malformed URL (not-a-url)', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'not-a-url',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+    });
+    // After Item 2 fix: body issuer is validated against the configured issuer origin.
+    // A malformed body issuer whose origin doesn't match should throw a clean typed error,
+    // not a raw TypeError from `new URL('not-a-url')`.
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('xAI OIDC discovery: body issuer origin does not match configured issuer');
+  });
+
+  it('throws when body issuer origin differs from configured issuer', async () => {
+    const fetchFn = makeFetchFn({
+      issuer: 'https://evil.example.com',
+      authorization_endpoint: 'https://auth.x.ai/oauth2/auth',
+      token_endpoint: 'https://auth.x.ai/oauth2/token',
+    });
+    await expect(
+      discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
+    ).rejects.toThrow('body issuer origin does not match configured issuer');
   });
 });

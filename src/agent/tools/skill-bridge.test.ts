@@ -533,6 +533,68 @@ describe('collectSkillEntries — plugin frontmatter audience filter', () => {
   });
 });
 
+describe('collectSkillEntries — registry/plugin dedup', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    vi.unstubAllEnvs();
+    vi.stubEnv('AFK_HOME', _isolatedAfkHome);
+    vi.stubEnv('AFK_INTERNAL', '');
+    tmpDir = mkdtempSync('/tmp/skill-bridge-dedup-test-');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    try {
+      rmSync(tmpDir, { recursive: true });
+    } catch {
+      // Non-fatal cleanup.
+    }
+  });
+
+  it('deduplicates plugin skill whose bare name collides with a namespaced registry key', () => {
+    // Simulate a builtin holding the bare slot, then a user-scope skill
+    // registered with a namespaced key (e.g. `user:my-skill`).
+    registerSkill({
+      name: 'my-skill',
+      description: 'Builtin my-skill',
+      handler: vi.fn(),
+    });
+    // Register a user-origin skill that collides → resolveSkillKey returns
+    // `user:my-skill`. We replicate this by registering directly with the
+    // namespaced key.
+    registerSkill({
+      name: 'user:my-skill',
+      description: 'User-origin my-skill',
+      handler: vi.fn(),
+      origin: 'user',
+    });
+
+    // Now create a plugin SKILL.md with the same bare name.
+    const plugin = join(tmpDir, 'test-plugin');
+    const skillDir = join(plugin, 'skills', 'my-skill');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: my-skill\ndescription: Plugin my-skill\n---\n# Body\n',
+    );
+
+    const entries = collectSkillEntries([{ type: 'local', path: plugin }]);
+    const hits = entries.filter(
+      (e) => e.name === 'my-skill' || e.name === 'user:my-skill',
+    );
+
+    // The bare name appears in the registry via the builtin, the namespaced
+    // key via the user-origin re-registration, and the plugin SKILL.md
+    // carries the same bare name. Without the fix, the plugin entry would
+    // slip past the `seen` guard and produce a third entry.
+    expect(hits).toHaveLength(2);
+    expect(hits.map((h) => h.name)).toContain('my-skill');
+    expect(hits.map((h) => h.name)).toContain('user:my-skill');
+  });
+});
+
 describe('plugin commands/*.md integration', () => {
   let tmpDir: string;
 

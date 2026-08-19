@@ -197,11 +197,21 @@ if (isMain) {
   // running process keeps the old module graph in memory after npm overwrites
   // the files on disk — only a restart swaps it.
   //
-  // 1. launchd-supervised services (telegram + daemon): restart in place so
-  //    they re-exec the new entrypoint. macOS only; fail-open.
+  // Invariant: the telegram service is EXCLUDED from postinstall restart.
+  // `launchctl kickstart -k` sends SIGTERM which kills all active sessions
+  // mid-turn — the relaunched binary starts cold and cannot resume them. The
+  // telegram bot has its own version-drift watchdog (stats-ticker.ts) that
+  // detects the on-disk version mismatch within 5 minutes and exits ONLY when
+  // no session is mid-turn (or after a bounded deferral window). Restarting it
+  // here bypasses that session-safety logic and is the root cause of "sessions
+  // that work but never respond" — see telegram-stuck-diagnosis.md.
+  //
+  // The daemon is stateless (no active user sessions) and safe to force-restart.
   if (process.platform === 'darwin') {
     try {
-      const restarted = restartLaunchdServices();
+      const restarted = restartLaunchdServices({
+        labels: ['com.afk.daemon'],
+      });
       if (restarted.length > 0) {
         const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
         process.stdout.write(

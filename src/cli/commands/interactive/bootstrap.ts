@@ -1,4 +1,5 @@
 import { MemoryStore } from '../../../agent/memory/index.js';
+import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
@@ -81,6 +82,7 @@ export async function bootstrapSession(
   });
 
   const sharedMemoryStore = new MemoryStore();
+  const sharedWorkspaceStore = new WorkspaceStore();
   const { FastModeController } = await import('../../../agent/fast-mode.js');
   const fastModeController = new FastModeController();
 
@@ -101,7 +103,7 @@ export async function bootstrapSession(
   // builder closes over `mcpManager`.
   const { providerFactory, startupProvider } = createReplProviders({
     options, cliConfig, sessionModel, subagentExecutor, skillExecutor, composeExecutor,
-    memoryStore: sharedMemoryStore, mcpManager, fastModeController,
+    memoryStore: sharedMemoryStore, workspaceStore: sharedWorkspaceStore, mcpManager, fastModeController,
   });
 
   // Stats, permission/thinking-UI seeding, startup banners (`trace:` /

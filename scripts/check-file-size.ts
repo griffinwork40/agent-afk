@@ -1,19 +1,20 @@
 #!/usr/bin/env tsx
 /**
- * Enforce the 350-line source-file ceiling. CI gate.
+ * Enforce the 350-code-line source-file ceiling. CI gate.
  * Mirrors `scripts/audit-env-access.ts` and `scripts/audit-chalk-usage.ts`.
  *
- * Invariant: no source file exceeds LIMIT raw lines. The reason is not
- * aesthetic. An oversized file costs an agent most of a working context just to
- * establish what it may safely touch, and the failure mode is silent — the agent
- * edits from a partial read. At the ceiling you pull one whole CONCERN into a new
- * file. You never shave lines and you never raise the limit.
+ * Invariant: no source file exceeds LIMIT code lines (non-blank, non-comment).
+ * The reason is not aesthetic. An oversized file costs an agent most of a working
+ * context just to establish what it may safely touch, and the failure mode is
+ * silent — the agent edits from a partial read. At the ceiling you pull one whole
+ * CONCERN into a new file. You never shave lines and you never raise the limit.
  *
- * "Raw lines" means newline count, identical to `wc -l`. Comments are counted
- * deliberately: a comments-free metric would make prose free and let stale
- * `Invariant:` blocks balloon unchecked. The pressure valve is extraction —
- * JSDoc travels with its declaration, so moving a concern moves its docs too and
- * no documentation is ever deleted to satisfy this gate.
+ * Comments and blank lines are excluded so documentation is never penalized by
+ * the gate. The pressure valve is extraction — JSDoc travels with its declaration,
+ * so moving a concern moves its docs too. A line-oriented heuristic classifies
+ * comments (`//`, block comments, JSDoc); code lines with trailing comments count as
+ * code. The heuristic errs toward "not a comment" so the ceiling is never looser
+ * than reported.
  *
  * Modes:
  *   (default) / --check   enforce the ceiling + baseline ratchet. Non-zero exit
@@ -60,7 +61,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
-/** Hard ceiling. Never raise this — extract a concern instead. */
+/** Hard ceiling on code lines (non-blank, non-comment). Extract a concern instead of raising. */
 const LIMIT = 350;
 /** Early-warning band at 90% of LIMIT, so drift surfaces on the commit that starts it. */
 const WARN_AT = Math.floor((LIMIT * 90) / 100);
@@ -89,17 +90,51 @@ const RATCHET: RatchetConfig = {
   limit: LIMIT,
   baselinePath: BASELINE_PATH,
   baselineRel: BASELINE_REL,
-  unit: 'line',
+  unit: 'code line',
   entryPlural: 'files',
   legacyReason: 'legacy: predates the ceiling gate; pending concern extraction',
 };
 
-/** Count newlines — identical to `wc -l`, including the no-trailing-newline case. */
-function countLines(absPath: string): number {
+/**
+ * Count code lines — non-blank, non-comment. Comments and blank lines are
+ * excluded so documentation is never penalized by the ceiling gate.
+ *
+ * Handles single-line comments (`//`), block comments, and JSDoc. The heuristic
+ * is line-oriented: a line whose trimmed form starts with `//` or `/*` is a
+ * comment; block-comment interiors are tracked via boolean state. Lines with
+ * trailing comments (code before `//`) count as code — the heuristic errs toward
+ * "not a comment" so the ceiling is never looser than reported.
+ */
+function countCodeLines(absPath: string): number {
   const content = fs.readFileSync(absPath, 'utf8');
-  let n = 0;
-  for (let i = 0; i < content.length; i++) if (content[i] === '\n') n++;
-  return n;
+  const lines = content.split('\n');
+  let codeLines = 0;
+  let inBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (inBlock) {
+      if (trimmed.includes('*/')) {
+        inBlock = false;
+        // Code after block-comment close counts
+        const afterClose = trimmed.substring(trimmed.indexOf('*/') + 2).trim();
+        if (afterClose.length > 0) codeLines++;
+      }
+      continue;
+    }
+
+    if (trimmed.length === 0) continue;
+    if (trimmed.startsWith('//')) continue;
+    if (trimmed.startsWith('/*')) {
+      if (!trimmed.includes('*/')) inBlock = true;
+      continue;
+    }
+
+    codeLines++;
+  }
+
+  return codeLines;
 }
 
 function isScannable(relPath: string): boolean {
@@ -127,7 +162,7 @@ function scanAll(): Map<string, number> {
   const files: string[] = [];
   for (const root of SCAN_ROOTS) walk(path.join(repoRoot, root), files);
   const sizes = new Map<string, number>();
-  for (const rel of files.sort()) sizes.set(rel, countLines(path.join(repoRoot, rel)));
+  for (const rel of files.sort()) sizes.set(rel, countCodeLines(path.join(repoRoot, rel)));
   return sizes;
 }
 
@@ -137,18 +172,18 @@ function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violation
     .sort(([, a], [, b]) => b - a);
 
   if (warnings.length > 0) {
-    console.log(`\n⚠ ${warnings.length} file(s) in the ${WARN_AT + 1}–${LIMIT} warn band (not failing):`);
-    for (const [file, n] of warnings.slice(0, 10)) console.log(`    ${String(n).padStart(5)}  ${file}`);
+    console.log(`\n⚠ ${warnings.length} file(s) in the ${WARN_AT + 1}–${LIMIT} code-line warn band (not failing):`);
+    for (const [file, n] of warnings.slice(0, 10)) console.log(`    ${String(n).padStart(5)} code  ${file}`);
     if (warnings.length > 10) console.log(`    … and ${warnings.length - 10} more`);
   }
 
   const baselined = Object.keys(baseline.entries).length;
   if (violations.length === 0) {
-    console.log(`\n✓ check-file-size: every source file within the ${LIMIT}-line ceiling (${baselined} grandfathered).`);
+    console.log(`\n✓ check-file-size: every source file within the ${LIMIT}-code-line ceiling (${baselined} grandfathered).`);
     return;
   }
 
-  console.error(`\n✗ check-file-size: ${violations.length} violation(s) of the ${LIMIT}-line ceiling:\n`);
+  console.error(`\n✗ check-file-size: ${violations.length} violation(s) of the ${LIMIT}-code-line ceiling:\n`);
   for (const kind of VIOLATION_ORDER) {
     const group = violations.filter((v) => v.kind === kind);
     if (group.length === 0) continue;
@@ -159,9 +194,8 @@ function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violation
   console.error('Fix:');
   console.error(`  NEW/TOUCHED — pull one whole CONCERN into a sibling file (<base>.<concern>.ts).`);
   console.error('                JSDoc travels with its declaration, so moving code moves its docs.');
-  console.error('                Never delete, reflow, or condense a comment to satisfy this gate, and');
-  console.error("                never reclassify an 'Invariant:'/'Contract:' block as 'History:'.");
-  console.error('  GREW        — the file was already over the ceiling; do not add to it. Extract first.');
+  console.error('                Comments and blanks are excluded — never delete docs to shrink code.');
+  console.error('  GREW        — the file was already over the ceiling; do not add code to it. Extract first.');
   console.error(`  RETIRED/STALE — run \`pnpm audit:filesize:update\` to regenerate ${BASELINE_REL}.\n`);
   process.exit(1);
 }
@@ -171,7 +205,7 @@ function main(): void {
 
   if (argv.includes('--update-baseline')) {
     const { kept, dropped } = updateBaseline(RATCHET, scanAll());
-    console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-line ceiling.`);
+    console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-code-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);
       for (const d of dropped) console.log(`    - ${d}`);

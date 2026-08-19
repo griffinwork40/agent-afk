@@ -138,6 +138,10 @@ export async function setupSurface(
             : palette.dim(message);
           compositor?.commitAbove(painted);
         },
+        // Late-bound: footer subsystems are constructed after this closure is
+        // defined, but the chord fires long after bootstrap completes.
+        suspendFooter: () => ctx.slashCtx.suspendFooter?.(),
+        resumeFooter: () => ctx.slashCtx.resumeFooter?.(),
       }).catch(() => {});
     },
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove

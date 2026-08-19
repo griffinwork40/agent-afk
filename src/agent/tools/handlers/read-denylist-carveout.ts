@@ -104,6 +104,7 @@ function gateRootsExcludingSource(
  */
 const CARVEOUT_PIERCED_SOURCE: Readonly<Record<string, string>> = {
   '.afk/config/mcp.json': `${homedir()}/.afk/config`,
+  '.afk/config/schedules.json': `${homedir()}/.afk/config`,
   '.ssh/config': `${homedir()}/.ssh`,
   '.ssh/known_hosts': `${homedir()}/.ssh`,
 };

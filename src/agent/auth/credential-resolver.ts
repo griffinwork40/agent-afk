@@ -25,12 +25,18 @@ import { providerForModel, type ProviderRouteHints } from '../providers/index.js
 import { loadClaudeCodeOauthToken, refreshClaudeCodeOauthToken } from './keychain.js';
 import { env } from '../../config/env.js';
 
+// Process-local fallback for a successfully refreshed token whose persistent
+// credential-store write-back failed. Keeping it in the resolver makes the
+// token available to every subsequent CLI credential read in this process.
+let refreshedClaudeCodeOauthToken: string | undefined;
+
 /**
  * Load an Anthropic credential from the environment or the Claude Code
  * keychain. Precedence:
  *   1. `ANTHROPIC_API_KEY` env
  *   2. `CLAUDE_CODE_OAUTH_TOKEN` env
- *   3. macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json`
+ *   3. A token refreshed during this process (write-back fallback)
+ *   4. macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json`
  *
  * Returns `undefined` when no credential is available. Mirrors the body of
  * `loadCredential()` in `src/cli/config.ts`, which becomes a thin delegate
@@ -40,6 +46,7 @@ export function loadAnthropicCredential(): string | undefined {
   return (
     env.ANTHROPIC_API_KEY ||
     env.CLAUDE_CODE_OAUTH_TOKEN ||
+    refreshedClaudeCodeOauthToken ||
     loadClaudeCodeOauthToken()
   );
 }
@@ -70,7 +77,14 @@ export async function preloadClaudeKeychainOAuth(
 ): Promise<string | undefined> {
   if (provider !== 'anthropic-direct') return undefined;
   if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) return undefined;
-  return refreshClaudeCodeOauthToken();
+  const token = await refreshClaudeCodeOauthToken();
+  if (token) refreshedClaudeCodeOauthToken = token;
+  return token;
+}
+
+/** Reset the process-local refresh fallback. Intended for isolated tests. */
+export function _resetRefreshedClaudeCodeOauthToken(): void {
+  refreshedClaudeCodeOauthToken = undefined;
 }
 
 /**

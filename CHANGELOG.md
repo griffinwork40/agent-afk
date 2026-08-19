@@ -11,6 +11,134 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.133.0] - 2026-08-19
+
+### Added
+- allow read-only bash redirection to $TMPDIR (#881) (#1158) (3d403d3d)
+
+## [5.132.3] - 2026-08-19
+
+### Fixed
+- SSE resilience — permanent error handling, composer disable, jitter (#8,#12,#27) (#1199) (ff24db4b)
+
+## [5.132.2] - 2026-08-19
+
+### Fixed
+- use authoritative contextLimitFor instead of stale heuristic (#1194) (768c7e2b)
+
+## [5.132.1] - 2026-08-19
+
+### Fixed
+- use basename for PAGER path comparison in resolvePager (#1171) (#1192) (d6fc6f9f)
+
+## [5.132.0] - 2026-08-18
+
+### Added
+- support isolation:"worktree" with mode:"background" (#1185) (1b93bffe)
+
+## [5.131.1] - 2026-08-18
+
+### Fixed
+- carve out schedules.json from the read-denylist floor (#1187) (d5725ba5)
+
+### Changed
+- count code lines only — comments are free (#350-ceiling) (#1186) (01200d4d)
+
+## [5.131.0] - 2026-08-18
+
+### Added
+- accept inbound documents (text, code, PDF) (#1183) (151c662e)
+
+## [5.130.6] - 2026-08-18
+
+### Fixed
+- resolve session human names in read_witness and search_witness (#1184) (950fa781)
+
+## [5.130.5] - 2026-08-18
+
+### Fixed
+- bound sessionData/messageQueues growth and enforce queue depth (#1179) (358861d8)
+- await bot.start() and deduplicate signal handlers (#1177) (9a5fa6ab)
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1182) (be65adca)
+
+## [5.130.4] - 2026-08-18
+
+### Fixed
+- clear apiRoundInFlight in streamResponse finally block (#1180) (fc1660b5)
+
+## [5.130.3] - 2026-08-18
+
+### Fixed
+- suspend footer writers during pager/editor handoffs (#1168) (9513e1f7)
+
+## [5.130.2] - 2026-08-18
+
+### Fixed
+- buffer setCwd/setSystemPrompt before OAuth query init (#1062) (#1176) (e615cc5f)
+- parsePortFile rejects bracketed IPv6 and out-of-range ports (#1165) (#1174) (165c16d3)
+- deduplicate plugin skills whose bare name collides with a namespaced registry key (#1169) (c5ac09bf)
+
+## [5.130.1] - 2026-08-18
+
+### Fixed
+- recover from ghost EADDRINUSE by falling back to alternate loopback (#1161) (7ae7b5b4)
+
+## [5.130.0] - 2026-08-18
+
+### Added
+- wire SessionManager through session registry (Step 3) (#1162) (91cfc1cc)
+- mark forwarded-message provenance (#686) (#1159) (3457fa43)
+
+### Fixed
+- reserve claimedChats in compact/clear drain paths (#1149) (46276853)
+
+### Changed
+- add behavioral test for apiRoundInFlight watchdog suspension (#1148) (9a23e834)
+
+## [5.129.0] - 2026-08-18
+
+### Added
+- add /diff slash command for inline git diff viewing (#1128) (d3ce7821)
+
+### Fixed
+- fork helpers, deliverOverflow contract, xAI OAuth tests, OIDC origin validation (#1119, #1122, #1063, #1058) (#1139) (33714849)
+
+## [5.128.6] - 2026-08-18
+
+### Fixed
+- reject unknown subcommands instead of falling through to interactive (#710) (#1137) (2527b2c5)
+
+## [5.128.5] - 2026-08-18
+
+### Fixed
+- stop killing telegram bot mid-session on upgrade (#1160) (165a0370)
+
+## [5.128.4] - 2026-08-18
+
+### Fixed
+- correct sessionsScanned to report post-filter count accurately (#1035) (#1136) (169486da)
+
+## [5.128.3] - 2026-08-18
+
+### Fixed
+- use refreshed token as fallback for locked keychain (#1135) (50ae14d3)
+
+## [5.128.2] - 2026-08-18
+
+### Fixed
+- report pre-filter sessionsAvailable alongside sessionsSearched (#1147) (5f521a40)
+
+### Changed
+- document deliverOverflow guard contract (#1122) (#1154) (4aec6af4)
+- add test for refresh-failure graceful degradation (#1063) (#1153) (f99ab0a2)
+- document combined watchdog ceiling (#1144) (#1155) (c73ab3bc)
+- add unit tests for extracted fork helpers (#1119) (#1152) (c0a8e7cf)
+
+## [5.128.1] - 2026-08-18
+
+### Fixed
+- suspend watchdog during inter-round API calls (#1135) (#1141) (7ea04673)
+
 ## [5.128.0] - 2026-08-18
 
 ### Added

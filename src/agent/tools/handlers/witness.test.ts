@@ -45,6 +45,8 @@ function makeReadResult(partial?: Partial<ReadWitnessResult>): ReadWitnessResult
 function makeSearchResult(partial?: Partial<SearchWitnessResult>): SearchWitnessResult {
   return {
     query: 'test',
+    sessionsAvailable: 0,
+    sessionsSearched: 0,
     sessionsScanned: 0,
     matches: [],
     ...partial,
@@ -289,7 +291,7 @@ describe('searchWitnessHandler — valid input', () => {
       kinds: ['subagent_lifecycle'],
       since: '2024-01-01T00:00:00Z',
     };
-    const expectedResult = makeSearchResult({ query: 'forkbomb', sessionsScanned: 10 });
+    const expectedResult = makeSearchResult({ query: 'forkbomb', sessionsAvailable: 10, sessionsSearched: 10, sessionsScanned: 10 });
     mockSearchAcrossSessions.mockResolvedValue(expectedResult);
 
     const result = await searchWitnessHandler(input, signal);

@@ -49,6 +49,9 @@ let pendingTimer: ReturnType<typeof setInterval> | undefined;
  */
 let turnActive = false;
 
+/** True while the SSE transport is in a reconnecting state. */
+let sseReconnecting = false;
+
 function $(id: string): HTMLElement {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing #${id}`);
@@ -145,6 +148,7 @@ function selectSession(id: string): void {
   stream?.stop();
 
   turnActive = false;
+  sseReconnecting = false;
   renderSidebar($('sessions'), sessions, activeId, selectSession);
   renderTranscript($('transcript'), items);
   syncComposer();
@@ -189,6 +193,10 @@ function selectSession(id: string): void {
       node.textContent = status === 'ended' ? 'session ended' : status;
       node.className = `status status-${status}`;
       if (status === 'ended') turnActive = false;
+      // Disable the composer while the transport is reconnecting so prompts
+      // cannot be submitted against a broken stream.
+      sseReconnecting = status === 'reconnecting' || status === 'connecting';
+      syncComposer();
       syncStop();
     },
   });
@@ -207,17 +215,24 @@ function renderMeter(): void {
  * readonly session. Those sessions run in another OS process whose elicitation
  * handler is unreachable from here, so an enabled button would be one that can
  * never resolve — the server enforces the same boundary with a 409.
+ *
+ * Additionally, the composer is disabled while the SSE transport is reconnecting
+ * so a queued prompt cannot be sent against a broken stream.
  */
 function syncComposer(): void {
   const live = isLive();
   const input = $('prompt') as HTMLTextAreaElement;
   const send = $('send') as HTMLButtonElement;
-  input.disabled = !live;
-  send.disabled = !live;
-  input.placeholder = live
-    ? 'Message the agent…  (queues while it works)'
-    : 'Read-only — this session runs in another process';
+  const blocked = !live || sseReconnecting;
+  input.disabled = blocked;
+  send.disabled = blocked;
+  input.placeholder = !live
+    ? 'Read-only — this session runs in another process'
+    : sseReconnecting
+      ? 'Reconnecting…'
+      : 'Message the agent…  (queues while it works)';
   $('composer').classList.toggle('is-readonly', !live);
+  $('composer').classList.toggle('is-reconnecting', live && sseReconnecting);
 }
 
 /**

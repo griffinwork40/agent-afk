@@ -39,9 +39,11 @@ export async function checkAnthropicKey(): Promise<Check> {
   // Claude Code OAuth token (which expires hourly) causes a false negative.
   // The guard inside `preloadClaudeKeychainOAuth` skips the refresh when an env
   // credential already exists or the provider isn't anthropic-direct.
-  await preloadClaudeKeychainOAuth('anthropic-direct');
+  // Use the return value as a fallback: on a locked/read-only keychain the
+  // refresh succeeds but write-back fails, so getApiKey() would read stale data.
+  const freshToken = await preloadClaudeKeychainOAuth('anthropic-direct');
 
-  const key = getApiKey();
+  const key = freshToken ?? getApiKey();
   if (key) {
     return { name: 'Anthropic API Key', state: 'pass', detail: 'ANTHROPIC_API_KEY set' };
   }

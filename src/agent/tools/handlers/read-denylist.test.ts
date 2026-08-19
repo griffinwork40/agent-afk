@@ -228,6 +228,32 @@ describe('isReadDenied — built-in exception for ~/.afk/config/mcp.json', () =>
   });
 });
 
+describe('isReadDenied — built-in exception for ~/.afk/config/schedules.json', () => {
+  const sched = join(homedir(), '.afk', 'config', 'schedules.json');
+
+  it('allows the schedule registry (task defs, not credentials)', () => {
+    expect(isReadDenied(sched).denied).toBe(false);
+  });
+
+  it('is an EXACT-file carve-out — siblings and pseudo-children stay denied', () => {
+    expect(isReadDenied(sched + '.bak').denied).toBe(true);
+    expect(isReadDenied(join(sched, 'child.json')).denied).toBe(true);
+    expect(isReadDenied(join(homedir(), '.afk', 'config')).denied).toBe(true);
+  });
+
+  it('stays re-deniable via AFK_READ_DENYLIST (extras outrank the exception)', () => {
+    process.env['AFK_READ_DENYLIST'] = sched;
+    _resetReadDenylistCacheForTests();
+    const verdict = isReadDenied(sched);
+    expect(verdict.denied).toBe(true);
+    expect(verdict.matched).toBe(sched);
+  });
+
+  it('assertNotReadDenied does not throw for the carve-out', () => {
+    expect(() => assertNotReadDenied(sched)).not.toThrow();
+  });
+});
+
 // Issue #579 O2 — `~/.ssh` stays whole-dir floored (SSH private keys have
 // arbitrary names like `github_key`, so a deny-glob would fail-open), but two
 // well-known NON-secret siblings are carved out as exact files so the agent can
@@ -318,6 +344,7 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     // inside ~/.ssh. Each entry must resolve into the dir that floors it.
     const expected: Record<string, string> = {
       '.afk/config/mcp.json': safeRealpath(join(homedir(), '.afk', 'config')),
+      '.afk/config/schedules.json': safeRealpath(join(homedir(), '.afk', 'config')),
       '.ssh/config': safeRealpath(join(homedir(), '.ssh')),
       '.ssh/known_hosts': safeRealpath(join(homedir(), '.ssh')),
     };
@@ -337,7 +364,7 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     // key material (id_rsa, etc.).
     for (const entry of BUILTIN_READ_ALLOWLIST) {
       const leaf = entry.split('/').pop();
-      expect(leaf).toMatch(/^(mcp\.json|config|known_hosts)$/);
+      expect(leaf).toMatch(/^(mcp\.json|schedules\.json|config|known_hosts)$/);
     }
     expect(isReadDenied(join(homedir(), '.ssh', 'id_rsa')).denied).toBe(true);
     expect(isReadDenied(join(homedir(), '.ssh', 'github_key')).denied).toBe(true);

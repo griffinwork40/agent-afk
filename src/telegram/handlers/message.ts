@@ -15,12 +15,15 @@ import { HookBlockedError } from '../../utils/errors.js';
 import { type TelegramRoute, routeFromCtx, routeKey } from '../route.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { forwardProvenancePrefix } from '../forward-provenance.js';
+import type { ContentBlockParam, DocumentBlockParam } from '@anthropic-ai/sdk/resources';
 import { registerInboundImageBlocks } from '../../agent/content/attachment-registry.js';
+import { handleDocumentMessage } from './document.js';
 
 type QueueItem =
   | { type: 'message'; ctx: Context; text: string }
   | { type: 'photo'; ctx: Context; content: ContentBlockParam[] }
+  | { type: 'document'; ctx: Context; content: ContentBlockParam[] }
   | { type: 'clear'; ctx: Context }
   | { type: 'compact'; ctx: Context };
 
@@ -466,20 +469,16 @@ export class MessageHandler {
       // Use spread-then-slice to count Unicode code points, not UTF-16 code units:
       // emoji and other non-BMP characters span two code units, and slicing at a
       // surrogate-pair boundary with plain .slice() produces malformed text.
-      // Prepend a system-trusted sender marker in group/supergroup chats so the
-      // model knows who sent the image (byte-identical no-op in private chats).
-      // See sender-attribution.ts for the sanitization / anti-spoofing rationale.
+      // system-trusted sender marker (no-op in private chats; see sender-attribution.ts)
       const prefix = senderPrefix(msg?.from, ctx.chat?.type);
-      // Prepend reply/quote context (if the photo replies to or quotes a message)
-      // before the sender marker, so `attribution` is the combined system-trusted
-      // preamble. Empty in the common case (no reply + private chat), keeping the
-      // no-caption path byte-identical. See reply-context.ts.
+      // reply/quote context + forward provenance (both empty in common case; see reply-context.ts, forward-provenance.ts)
       const replyCtx = replyContextPrefix({
         replyToMessage: msg?.reply_to_message as RepliedMessage | undefined,
         quote: msg?.quote,
         botId: ctx.botInfo?.id,
       });
-      const attribution = replyCtx + prefix;
+      const fwdPrefix = forwardProvenancePrefix(msg ?? {});
+      const attribution = replyCtx + fwdPrefix + prefix;
       const contentBlocks: ContentBlockParam[] = [];
       if (caption != null) {
         contentBlocks.push({ type: 'text', text: `${attribution}[User caption]: ${[...caption].slice(0, 1024).join('')}` });
@@ -527,9 +526,62 @@ export class MessageHandler {
     }
   }
 
-  /**
-   * Handle user text messages
-   */
+  /** Handle document messages (PDF, text/code files). Mirrors handlePhoto. */
+  async handleDocument(ctx: Context): Promise<void> {
+    const route = routeFromCtx(ctx);
+    if (!route) return;
+    const chatId = route.chatId;
+
+    // Tag-only response policy (mirrors handlePhoto): in a configured chat, drop a
+    // document that is not addressed to the bot BEFORE any session or CDN work.
+    // A document's caption carries the mention entities (caption_entities).
+    // Fail-closed if the bot identity is unknown.
+    if (this.tagOnlyChats.has(chatId)) {
+      const botId = ctx.botInfo?.id;
+      if (botId === undefined) {
+        this.log(`[tag-only] Dropping document in chat ${chatId}: bot identity unknown (botInfo missing)`);
+        return;
+      }
+      const msg = ctx.message as import('telegraf/types').Message.DocumentMessage | undefined;
+      if (!addressedToBot(msg?.caption, msg?.caption_entities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+        this.log(`[tag-only] Dropping un-addressed document in chat ${chatId}`);
+        return;
+      }
+    }
+
+    const key = routeKey(route);
+    let alreadyClaimed = false;
+    try {
+      alreadyClaimed = this.isClaimed(key);
+      if (!alreadyClaimed) this.reserveClaim(key);
+      const session = await this.sessionManager.getSession(route);
+      registerChatCommands(this.bot, route.chatId, session, this.registeredCommandChats, this.log)
+        .catch((err) => this.log('Failed to register chat commands:', err));
+      if (session.state !== 'idle' || alreadyClaimed) {
+        const q = this.messageQueues.get(key);
+        if ((q?.length ?? 0) >= MessageHandler.MAX_QUEUE_DEPTH) {
+          await ctx.reply('⏳ Queue full. Please wait for your messages to be processed.');
+          return;
+        }
+      }
+      const contentBlocks = await handleDocumentMessage(ctx, this.log);
+      if (contentBlocks === null) return;
+      if (session.state !== 'idle' || alreadyClaimed) {
+        const depth = this.enqueueDocument(route, ctx, contentBlocks);
+        if (depth !== false) await ctx.reply(formatQueued(depth));
+        return;
+      }
+      await this.processOne(route, ctx, contentBlocks);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      this.log('Document handling error:', raw.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/'));
+      await ctx.reply('❌ An error occurred processing your document. Please try again.');
+    } finally {
+      if (!alreadyClaimed) this.releaseClaim(key);
+    }
+  }
+
+  /** Handle user text messages */
   async handle(ctx: Context): Promise<void> {
     const route = routeFromCtx(ctx);
     const chatId = route?.chatId;
@@ -559,11 +611,13 @@ export class MessageHandler {
       quote: tgMsg.quote,
       botId: ctx.botInfo?.id,
     });
-    const attributedMessageText = replyCtx + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
+    const fwdPrefix = forwardProvenancePrefix(tgMsg);
+    const attributedMessageText = replyCtx + fwdPrefix + senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
     // Elicitation answers must NOT carry the reply-context marker: answering an
     // ask_question by replying to the bot's own question is the natural gesture, and
     // the resolver needs the literal answer (a "[in reply to …] 5" breaks number/
     // choice validation). Restores the pre-#688 elicitation value (senderPrefix + text).
+    // forward provenance prefix is also excluded intentionally — a forwarded elicitation answer would confuse the resolver
     const elicitationAnswer = senderPrefix(tgMsg.from, ctx.chat?.type) + messageText;
 
     // Answer consumed by active ask_question elicitation — never reaches
@@ -701,6 +755,11 @@ export class MessageHandler {
    * keyed by chatId).
    */
   async processClearDirect(route: TelegramRoute, ctx: Context): Promise<void> {
+    // Reserve a slot so any handle() arriving while clear is in flight sees the
+    // chat as claimed and enqueues instead of double-entering. Mirrors the
+    // reserveClaim/releaseClaim pattern in processOne. Paired 1:1 with the
+    // releaseClaim in the finally.
+    this.reserveClaim(routeKey(route));
     try {
       await this.sessionManager.resetSession(route);
       this.registeredCommandChats.delete(route.chatId);
@@ -708,6 +767,10 @@ export class MessageHandler {
     } catch (error) {
       this.log('Clear error:', error);
       await ctx.reply(formatError(error as Error));
+    } finally {
+      // No drainQueue here: processClearDirect is itself called FROM drainQueue,
+      // so re-draining would cascade back into drain and re-enter immediately.
+      this.releaseClaim(routeKey(route));
     }
   }
 
@@ -725,6 +788,11 @@ export class MessageHandler {
    * "Nothing to compact (session-busy)" no-op and dropping the request.
    */
   private async processCompactDirect(route: TelegramRoute, ctx: Context): Promise<void> {
+    // Reserve a slot so any handle() arriving while compact is in flight sees the
+    // chat as claimed and enqueues instead of double-entering. Mirrors the
+    // reserveClaim/releaseClaim pattern in processOne. Paired 1:1 with the
+    // releaseClaim in the finally.
+    this.reserveClaim(routeKey(route));
     // See processOne: when we re-enqueue because the session is busy, the active
     // turn's own finally will drain the item we pushed. Draining here too would
     // shift that item and re-enter immediately → busy-spin cascade.
@@ -775,11 +843,14 @@ export class MessageHandler {
         await ctx.reply(formatError(error as Error));
       }
     } finally {
+      // Order matters (mirrors processOne): fire drainQueue FIRST so the drained
+      // turn's own reserveClaim runs synchronously before we drop this slot.
       // Only drain when we did NOT re-enqueue — the active turn's finally will
       // drain the re-enqueued compact; draining here too causes a cascade.
       if (!reEnqueued) {
         this.drainQueue(route).catch(err => this.log('Drain error:', err));
       }
+      this.releaseClaim(routeKey(route));
     }
   }
 
@@ -822,18 +893,45 @@ export class MessageHandler {
     return queue.length; // 1-based depth after push
   }
 
-  /**
-   * Enqueue a clear command for later processing
-   */
-  enqueueClear(route: TelegramRoute, ctx: Context): void {
-    this.queueFor(route).push({ type: 'clear', ctx });
+  /** Enqueue a document message for later processing. Returns 1-based depth or false if full. */
+  private enqueueDocument(route: TelegramRoute, ctx: Context, content: ContentBlockParam[]): number | false {
+    const queue = this.queueFor(route);
+    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
+      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
+      return false;
+    }
+    queue.push({ type: 'document', ctx, content });
+    return queue.length;
   }
 
   /**
-   * Enqueue a compact command for later processing
+   * Enqueue a clear command for later processing.
+   * Respects MAX_QUEUE_DEPTH — a /clear command issued while the queue is
+   * full is dropped and the caller is notified rather than forcing the map
+   * to grow without bound.
+   */
+  enqueueClear(route: TelegramRoute, ctx: Context): void {
+    const queue = this.queueFor(route);
+    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
+      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
+      return;
+    }
+    queue.push({ type: 'clear', ctx });
+  }
+
+  /**
+   * Enqueue a compact command for later processing.
+   * Respects MAX_QUEUE_DEPTH — a /compact command issued while the queue is
+   * full is dropped and the caller is notified rather than forcing the map
+   * to grow without bound.
    */
   enqueueCompact(route: TelegramRoute, ctx: Context): void {
-    this.queueFor(route).push({ type: 'compact', ctx });
+    const queue = this.queueFor(route);
+    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
+      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
+      return;
+    }
+    queue.push({ type: 'compact', ctx });
   }
 
   /**
@@ -873,7 +971,11 @@ export class MessageHandler {
       // content-block (photo) messages, the raw string otherwise.
       const userText = typeof content === 'string'
         ? content
-        : content.map((b) => (b.type === 'text' ? b.text : '[image]')).join(' ');
+        : content.map((b) => {
+            if (b.type === 'text') return b.text;
+            if (b.type === 'document') return `[document: ${(b as DocumentBlockParam).title ?? 'file'}]`;
+            return '[image]';
+          }).join(' ');
       // Keep the "typing…" indicator alive for the whole (often multi-minute)
       // streamed turn; a one-shot chat action would expire after ~5s.
       await withTypingIndicator(ctx, () =>
@@ -894,7 +996,9 @@ export class MessageHandler {
         // Re-enqueue the item so it isn't silently dropped.
         const depth = typeof content === 'string'
           ? this.enqueueMessage(route, ctx, content)
-          : this.enqueuePhoto(route, ctx, content);
+          : content.some((b) => b.type === 'document')
+            ? this.enqueueDocument(route, ctx, content)
+            : this.enqueuePhoto(route, ctx, content);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         reEnqueued = true;
         return;
@@ -939,12 +1043,16 @@ export class MessageHandler {
    * Public so bot.ts can call it directly after /compact completes.
    */
   async drainQueue(route: TelegramRoute): Promise<void> {
-    const queue = this.messageQueues.get(routeKey(route));
+    const key = routeKey(route);
+    const queue = this.messageQueues.get(key);
     if (!queue?.length) return;
     const item = queue.shift()!;
+    // Prune the map entry once the queue is empty so messageQueues does not
+    // accumulate permanent entries for every route that has ever sent a message.
+    if (queue.length === 0) this.messageQueues.delete(key);
     if (item.type === 'message') {
       await this.processOne(route, item.ctx, item.text);
-    } else if (item.type === 'photo') {
+    } else if (item.type === 'photo' || item.type === 'document') {
       await this.processOne(route, item.ctx, item.content);
     } else if (item.type === 'compact') {
       await this.processCompactDirect(route, item.ctx);

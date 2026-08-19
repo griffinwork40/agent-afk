@@ -18,6 +18,8 @@ import { saveSession, loadSession, listSessions } from '../cli/session-store.js'
 import { resumeConfigFor } from '../cli/resume-session.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
+import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
+import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -40,7 +42,7 @@ function toRoute(target: RouteTarget): TelegramRoute {
 /**
  * Session data for persistence
  */
-interface SessionData {
+export interface SessionData {
   /**
    * Telegram chat id — retained for provenance and outbound sends
    * (`stats.telegramChatId`, `bot.telegram.sendMessage(chatId, …)`). The
@@ -105,7 +107,7 @@ export interface SessionManagerOptions {
    */
   defaultModel?: AgentModelInput;
 
-  /** API key for the active provider (Anthropic or OpenAI Codex). May be empty when using OAuth state. */
+  /** API key for the active provider (Anthropic or OpenAI-compatible). May be empty when using OAuth state. */
   apiKey: string;
 
   /** SDK settingSources (e.g. ['user','project']) so sessions load native slash commands/skills */
@@ -128,6 +130,12 @@ export interface SessionManagerOptions {
 
   /** Factory function to create agent sessions */
   createSession: (config: AgentConfig) => Promise<IAgentSession>;
+
+  /**
+   * Optional session registry override for test isolation. Defaults to the
+   * process-wide `sessionRegistry` singleton when not provided.
+   */
+  registry?: SessionRegistry;
 }
 
 /**
@@ -171,8 +179,8 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>> &
-    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>;
+  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry'>> &
+    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry'>;
 
   constructor(options: SessionManagerOptions) {
     this.options = {
@@ -186,6 +194,7 @@ export class SessionManager {
       effort: options.effort,
       botCwd: options.botCwd,
       createSession: options.createSession,
+      registry: options.registry,
     };
   }
 
@@ -199,15 +208,8 @@ export class SessionManager {
 
   /**
    * Get or create a session for a route (chat + optional topic thread).
-   *
-   * Concurrent calls for the same route that arrive before the first
-   * session is fully initialised (e.g. two Telegram messages arriving within
-   * milliseconds of each other) all share a single in-flight creation promise
-   * rather than spawning duplicate sessions. Different topics in the same chat
-   * are distinct routes → distinct sessions, never shared.
-   *
-   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
-   * @returns Agent session
+   * Concurrent calls share a single in-flight creation promise — two Telegram
+   * messages arriving within milliseconds must not spawn duplicate sessions.
    */
   async getSession(target: RouteTarget): Promise<IAgentSession> {
     const route = toRoute(target);
@@ -282,6 +284,8 @@ export class SessionManager {
       const session = await this.options.createSession(injectCompanionPrimer(injectHotMemory(config)));
       this.sessions.set(key, session);
       this.sessionData.set(key, data);
+      // Register with the session registry (best-effort: never orphan the live session).
+      try { this._ensureRegistryHandle(route, data); } catch { /* non-fatal */ }
       // Seed elicitation routing before the first turn starts. ask_question can
       // suspend that turn, so waiting for recordTelegramTurn (onComplete) would
       // deadlock a topic's first question on the General-route fallback.
@@ -324,16 +328,12 @@ export class SessionManager {
     if (data) data.lastActivity = new Date().toISOString();
   }
 
-  /**
-   * Record a completed turn into the shared session store so the CLI can
-   * resume this Telegram conversation by name (`afk i --resume <name>`).
-   *
-   * Reuses the CLI's `recordTurn` (auto-names from the first user message,
-   * captures the SDK sessionId from metadata, builds the TurnRecord) and
-   * `saveSession` (writes ~/.afk/state/sessions/<sessionId>.json, keyed by
-   * sessionId — never the name, so no duplicate sidecars). Best-effort:
-   * persistence failures never disrupt the chat.
-   */
+  /** Delegate to the extracted registry-wiring module. Resolves the registry ref once. */
+  private _ensureRegistryHandle(route: TelegramRoute, data: SessionData): void {
+    ensureRegistryHandle(this.options.registry ?? sessionRegistry, route, data, this.options.defaultModel);
+  }
+
+  /** Record a completed turn. Reuses CLI's recordTurn + saveSession. Best-effort. */
   recordTelegramTurn(
     target: RouteTarget,
     userText: string,
@@ -470,22 +470,9 @@ export class SessionManager {
   }
 
   /**
-   * Set the human-readable name for a chat's session, mirroring the CLI
-   * `/name` command. The caller passes an already-slugified name (the handler
-   * slugifies so it can reject invalid input before reaching here).
-   *
-   * Sets `stats.name` on the accumulating per-chat stats (creating the entry
-   * if needed). When the conversation already has a recorded turn AND a
-   * captured sessionId, persists immediately to the shared session store so
-   * `afk i --resume <name>` resolves it by name. Otherwise the name is held in
-   * memory and rides along on the first per-turn autosave — saveSession keys on
-   * sessionId, so persisting without one would fork a timestamp-id sidecar the
-   * autosave never updates.
-   *
-   * @returns `{ persisted }` — true when written to disk now, false when only
-   *   set in memory (no turn yet) and deferred to the next per-turn autosave.
-   * @throws Propagates a `saveSession` failure so the caller can report that
-   *   the name was set but the immediate persist failed (retries on next turn).
+   * Set the human-readable name for a chat's session. Persists to the shared
+   * store immediately when a sessionId exists, otherwise deferred to next turn.
+   * @returns `{ persisted }` — true when written to disk now, false when deferred.
    */
   setSessionName(target: RouteTarget, slug: string): { persisted: boolean } {
     const route = toRoute(target);
@@ -569,7 +556,11 @@ export class SessionManager {
    * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    */
   async resetSession(target: RouteTarget): Promise<void> {
-    const key = routeKey(toRoute(target));
+    const route = toRoute(target);
+    const key = routeKey(route);
+    // Archive the registry handle FIRST so the stale handle is freed before
+    // _resetStats clears the sessionId. Best-effort: non-fatal if never registered.
+    try { archiveRegistryHandle(this.options.registry ?? sessionRegistry, key); } catch { /* best-effort */ }
     const oldSession = this.sessions.get(key);
     if (oldSession) {
       await oldSession.close();
@@ -581,9 +572,7 @@ export class SessionManager {
 
     // Keep session data but create new session on next request
     const data = this.sessionData.get(key);
-    if (data) {
-      data.lastActivity = new Date().toISOString();
-    }
+    if (data) data.lastActivity = new Date().toISOString();
   }
 
   /**
@@ -595,6 +584,8 @@ export class SessionManager {
   async switchModel(target: RouteTarget, model: AgentModelInput): Promise<void> {
     const route = toRoute(target);
     const key = routeKey(route);
+    // Archive the stale registry handle before teardown (same rationale as resetSession).
+    try { archiveRegistryHandle(this.options.registry ?? sessionRegistry, key); } catch { /* best-effort */ }
     // Close old session
     const oldSession = this.sessions.get(key);
     if (oldSession) {
@@ -614,7 +605,9 @@ export class SessionManager {
       data.model = model;
       data.lastActivity = new Date().toISOString();
     }
-    
+
+    // Pre-register with the updated model (best-effort, non-fatal).
+    try { this._ensureRegistryHandle(route, data); } catch { /* non-fatal */ }
     // New session will be created on next message
   }
 
@@ -841,6 +834,11 @@ export class SessionManager {
           const route: TelegramRoute = { chatId: data.chatId };
           if (data.threadId !== undefined) route.threadId = data.threadId;
           this.sessionData.set(routeKey(route), data);
+          try {
+            this._ensureRegistryHandle(route, data);
+          } catch {
+            // non-fatal: registry error should not skip remaining sidecars
+          }
         }
       }
     } catch (error) {
@@ -868,15 +866,34 @@ export class SessionManager {
   }
 
   /**
+   * Evict sessionData entries that have had no activity for longer than
+   * `maxAgeMs` (default 24 hours). Called from closeAll so stale entries
+   * accumulated over a long bot uptime are pruned on each orderly shutdown
+   * without being so aggressive that UX-continuity state (model, cwd, name)
+   * is lost mid-conversation.
+   *
+   * Invariant: only entries whose route has NO live session are eligible — a
+   * session in `this.sessions` is by definition still active, so its data is
+   * always retained regardless of lastActivity.
+   */
+  private _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): void {
+    const now = Date.now();
+    for (const [key, data] of this.sessionData) {
+      if (this.sessions.has(key)) continue; // live session — never evict
+      const age = now - new Date(data.lastActivity).getTime();
+      if (age > maxAgeMs) this.sessionData.delete(key);
+    }
+  }
+
+  /**
    * Close all sessions and clean up
    */
   async closeAll(): Promise<void> {
+    this._evictStaleSessionData();
     await this.saveSessions();
-    
     const closePromises = Array.from(this.sessions.values()).map(
       session => session.close().catch(err => console.error('Error closing session:', err))
     );
-    
     await Promise.all(closePromises);
     this.sessions.clear();
   }

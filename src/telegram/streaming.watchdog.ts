@@ -10,6 +10,8 @@
 
 import { StreamTimeoutError } from './stream-timeout-error.js';
 import type { OutputEvent } from '../agent/types.js';
+import { resolveTtfbTimeoutMs } from '../agent/providers/shared/first-byte-timeout.js';
+import { TTFB_MAX_ATTEMPTS, ttfbAttemptTimeoutMs } from '../agent/providers/anthropic-direct/loop/retry-budget.js';
 
 /** Max wait for first stream event (e.g. SDK/API cold start) */
 export const FIRST_EVENT_TIMEOUT_MS = 90_000;
@@ -37,16 +39,48 @@ export const MAX_TOOL_INFLIGHT_MS = 660_000;
 export const TOOL_INFLIGHT_RECHECK_MS = 15_000;
 
 /**
- * Ceiling on how long the watchdog stays SUSPENDED while the provider is
- * making a new `messages.create` API call between tool rounds. After the last
- * tool result arrives and before the first SSE byte of the next round, the
- * parent stream is legitimately silent — the model is processing the full
- * conversation context. The provider-level TTFB budget is 3 attempts × 120s
- * = 360s worst case (see `retry-budget.ts`). This ceiling must exceed that so
- * the provider's own retry logic gets a chance to recover before the Telegram
- * watchdog fires a user-visible timeout.
+ * Slack added on top of the provider's TTFB worst case (ms). The provider
+ * budget is `TTFB_MAX_ATTEMPTS × ttfbAttemptTimeoutMs(configured)` — a
+ * runtime value. This constant pads it so the Telegram watchdog does not fire
+ * the instant the last TTFB attempt times out.
+ *
+ * Default derivation (AFK_MODEL_TTFB_TIMEOUT_MS = 180 000):
+ *   ttfbAttemptTimeoutMs(180 000) = floor(180 000 × 2 / 3) = 120 000
+ *   TTFB_MAX_ATTEMPTS (3) × 120 000 = 360 000
+ *   360 000 + 60 000 headroom = 420 000
+ * (matches the old hardcoded value exactly).
  */
-export const MAX_API_ROUND_INFLIGHT_MS = 420_000;
+export const MAX_API_ROUND_HEADROOM_MS = 60_000;
+
+/**
+ * Derive the ceiling on how long the watchdog stays SUSPENDED while the
+ * provider is making a new `messages.create` API call between tool rounds.
+ *
+ * After the last tool result arrives and before the first SSE byte of the
+ * next round, the parent stream is legitimately silent — the model is
+ * processing the full conversation context. The provider-level TTFB budget is
+ * `TTFB_MAX_ATTEMPTS × ttfbAttemptTimeoutMs(configured)` worst case (see
+ * `retry-budget.ts`). This ceiling must exceed that so the provider's own
+ * retry logic gets a chance to recover before the Telegram watchdog fires a
+ * user-visible timeout.
+ *
+ * Computed at call time from live env so operators who raise
+ * `AFK_MODEL_TTFB_TIMEOUT_MS` above the default automatically get a
+ * proportionally higher watchdog ceiling — preventing the watchdog from firing
+ * BEFORE the provider's own retry budget exhausts.
+ *
+ * Default (AFK_MODEL_TTFB_TIMEOUT_MS unset → 180 000 ms):
+ *   ttfbAttemptTimeoutMs(180 000) = 120 000
+ *   3 × 120 000 + 60 000 = 420 000  ← same as the old hardcoded constant
+ *
+ * When TTFB is disabled (configured = 0), `ttfbAttemptTimeoutMs` returns 0
+ * and the ceiling falls back to the headroom alone; callers should not rely on
+ * the ceiling in that mode anyway since the provider has no per-attempt bound.
+ */
+export function resolveMaxApiRoundInflightMs(): number {
+  const configured = resolveTtfbTimeoutMs();
+  return TTFB_MAX_ATTEMPTS * ttfbAttemptTimeoutMs(configured) + MAX_API_ROUND_HEADROOM_MS;
+}
 
 /**
  * Tool-progress (`◦`) lines stay HIDDEN until the turn has been working this
@@ -108,6 +142,40 @@ export function makeNextWithTimeout(
       // from the LAST activity. Sub-agent sink events bump `lastActivityAt`,
       // so an active fan-out re-arms the timer instead of tripping a false
       // timeout while the parent stream is legitimately quiet.
+      // Contract: combined suspension ceiling
+      //
+      // The watchdog has THREE independent suspension mechanisms that can
+      // overlap, and their ceilings are ADDITIVE rather than unified:
+      //
+      //   1. pausedUntil (rate-limit pause)
+      //      Extends `windowMs` to `(pausedUntil - now) + PAUSE_SLACK_MS`.
+      //      Applied at call-site BEFORE arm() is scheduled, so arm() sees
+      //      an already-inflated window.
+      //
+      //   2. inFlightTools (foreground tool call in progress)
+      //      Defers the reject inside arm() for up to MAX_TOOL_INFLIGHT_MS
+      //      beyond when `remaining` first hits 0.
+      //
+      //   3. apiRoundInFlight (provider messages.create between tool rounds)
+      //      Defers the reject inside arm() for up to resolveMaxApiRoundInflightMs()
+      //      beyond when `remaining` first hits 0.
+      //
+      // When pausedUntil fires at the same moment apiRoundInFlight is true
+      // (e.g. a rate-limit pause arriving while the provider is retrying its
+      // next round), the effective worst-case tolerance is:
+      //
+      //   pause_window + PAUSE_SLACK_MS + resolveMaxApiRoundInflightMs()
+      //   ≈ (pause_window) + 90 s + resolveMaxApiRoundInflightMs() (default 420 s)
+      //
+      // where pause_window is provider-governed (typically 60–600 s for
+      // Anthropic overload responses). There is no single cap combining
+      // all three; this is intentional — each mechanism covers a distinct
+      // legitimate silence that could exceed any single unified ceiling on
+      // its own. The tradeoff is that a pathological overlap (rate-limit
+      // pause + wedged API round) could defer a user-visible timeout by
+      // 10+ minutes. If that becomes a problem in practice, gate the
+      // apiRoundInFlight branch on `pausedUntil === null` to prevent the
+      // additive stack.
       const arm = (): void => {
         const remaining = windowMs - (Date.now() - state.lastActivityAt);
         if (remaining <= 0) {
@@ -127,12 +195,12 @@ export function makeNextWithTimeout(
           // An API round in flight (the provider is calling messages.create
           // between tool rounds) is silent on the parent stream while the
           // model processes the context. Suspend the watchdog like we do for
-          // in-flight tools, bounded by MAX_API_ROUND_INFLIGHT_MS so a
+          // in-flight tools, bounded by resolveMaxApiRoundInflightMs() so a
           // genuinely wedged API call still eventually trips.
           if (
             state.apiRoundInFlight &&
             state.apiRoundSince !== null &&
-            Date.now() - state.apiRoundSince < MAX_API_ROUND_INFLIGHT_MS
+            Date.now() - state.apiRoundSince < resolveMaxApiRoundInflightMs()
           ) {
             timeoutId = setTimeout(arm, TOOL_INFLIGHT_RECHECK_MS);
             return;
