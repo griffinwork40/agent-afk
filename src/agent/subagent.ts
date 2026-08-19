@@ -20,6 +20,7 @@
  */
 
 import type { CanUseTool } from './types/sdk-types.js';
+import type { WorkspaceStore } from './workspace/workspace-store.js';
 import { AbortGraph, type ChildAbortedListener } from './abort-graph.js';
 import type { HookRegistry } from './hooks.js';
 import { AgentSession } from './session.js';
@@ -118,6 +119,7 @@ export class SubagentManager {
   private parentTraceWriter: TraceSink | undefined;
   private readonly parentSurface: Surface | undefined;
   private readonly parentAbortSignal: AbortSignal | undefined;
+  private readonly workspaceStore: WorkspaceStore | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
   private rootController: AbortController;
@@ -141,6 +143,7 @@ export class SubagentManager {
     this.parentSurface = options.surface;
     this.parentAbortSignal = options.parentAbortSignal;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
+    this.workspaceStore = options.workspaceStore;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
     this.abortGraph = new AbortGraph(options.traceWriter);
@@ -404,6 +407,7 @@ export class SubagentManager {
       parentTraceWriter: this.parentTraceWriter,
       parentSurface: this.parentSurface,
       parentCanUseTool: this.parentCanUseTool,
+      workspaceStore: this.workspaceStore,
     });
 
     // Occupancy touch: subagents never write presence files (top-level-only

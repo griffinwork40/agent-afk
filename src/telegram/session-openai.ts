@@ -32,6 +32,7 @@ export async function buildOpenAiTelegramSession(
     traceWriter,
     mcpManager,
     memoryStore,
+    workspaceStore,
     reportSession,
   } = ctx;
 
@@ -55,6 +56,7 @@ export async function buildOpenAiTelegramSession(
   const codexProvider = new OpenAICompatibleProvider({
     surface: 'telegram',
     ...(mcpManager !== undefined ? { mcpManager } : {}),
+    workspaceStore,
   });
   // Same AFK autonomous-safety wiring as the Anthropic branch (live mode getter
   // registers the afk-mode gate + tracks `/afk on`; afkPromptForApproval:false

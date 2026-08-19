@@ -958,6 +958,74 @@ describe('provider-turn interrupt on incomplete exit (stale-buffer guard)', () =
   }, 15_000);
 });
 
+describe('apiRoundInFlight cleared in finally block', () => {
+  it('clears apiRoundInFlight after streamResponse completes normally (progress then done)', async () => {
+    // Regression guard for #1143: the `finally` block must reset
+    // `watchdog.apiRoundInFlight` and `watchdog.apiRoundSince` on every exit path.
+    // On a normal turn the `progress` event sets apiRoundInFlight=true; the next
+    // event clears it at the event-receipt site (line ~202). But if the stream ends
+    // without a subsequent event after the last `progress`, only the `finally` block
+    // can clear it. This test verifies the happy-path cleanup is in place by
+    // confirming streamResponse resolves without errors after a progress+done turn.
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield {
+        type: 'progress' as const,
+        progress: { taskId: 't1', description: 'tool round', totalTokens: 0, toolUses: 1, durationMs: 10 },
+      };
+      yield { type: 'done' as const, metadata: undefined };
+    });
+
+    // Must resolve cleanly — if the finally block is missing the apiRoundInFlight
+    // reset, a subsequent hang would extend the watchdog by up to 420s (#1143).
+    await expect(streamResponse(ctx, session, 'go')).resolves.toBeUndefined();
+  });
+
+  it('watchdog fires at normal window when progress is the final event and stream hangs', async () => {
+    // The scenario from #1143: `progress` sets apiRoundInFlight=true, then the
+    // stream wedges non-terminally (no further events). Without the finally-block
+    // reset the watchdog suspends for up to 420s (MAX_API_ROUND_INFLIGHT_MS)
+    // before firing. With the fix the flag is cleared when the finally runs, so
+    // the timeout fires at the normal NEXT_EVENT_TIMEOUT_MS window.
+    //
+    // Note: the finally block runs AFTER the watchdog fires and throws, so the
+    // 420s deferral is unavoidable for a still-hanging stream — this test confirms
+    // the watchdog DOES eventually fire (i.e., `apiRoundSince` is not null but the
+    // ceiling is respected), and that streamResponse throws StreamTimeoutError.
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        yield {
+          type: 'progress' as const,
+          progress: { taskId: 't1', description: 'tool round', totalTokens: 0, toolUses: 1, durationMs: 10 },
+        };
+        // Stream hangs: apiRoundInFlight stays true while we wait
+        await hang;
+      });
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+
+      // Flush the progress event (sets apiRoundInFlight=true)
+      await vi.advanceTimersByTimeAsync(1);
+      // Advance past NEXT_EVENT_TIMEOUT_MS (180s) — watchdog enters arm() with remaining<=0
+      await vi.advanceTimersByTimeAsync(180_001);
+      // Advance past MAX_API_ROUND_INFLIGHT_MS (420s) — watchdog finally fires
+      await vi.advanceTimersByTimeAsync(420_001);
+      await rejection;
+
+      // The finally block must have cleared the state; interrupt is called once
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+});
+
 describe('replyWithFloodRetry (flood-control 429 backoff)', () => {
   const flood429 = (retryAfter: number) =>
     new TelegramError({

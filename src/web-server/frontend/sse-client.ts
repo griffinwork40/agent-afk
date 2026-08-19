@@ -23,7 +23,7 @@ export type StreamStatus = 'connecting' | 'open' | 'reconnecting' | 'closed' | '
 
 export interface StreamHandlers {
   onEvent: (data: unknown, meta: { id?: string }) => void;
-  onStatus?: (status: StreamStatus) => void;
+  onStatus?: (status: StreamStatus, reason?: string) => void;
 }
 
 const MAX_BACKOFF_MS = 15_000;
@@ -70,7 +70,23 @@ export class SessionStream {
         headers,
         signal: this.controller.signal,
       });
-      if (!res.ok || res.body === null) throw new Error(`stream failed: ${res.status}`);
+      // Permanent errors: stop and surface them, do not retry.
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          this.stopped = true;
+          const reason =
+            res.status === 401
+              ? 'unauthorized'
+              : res.status === 403
+                ? 'forbidden'
+                : 'not-found';
+          this.handlers.onStatus?.('closed', reason);
+          return;
+        }
+        // 5xx and anything else: fall through to the catch block to retry.
+        throw new Error(`stream failed: ${res.status}`);
+      }
+      if (res.body === null) throw new Error(`stream failed: no body`);
 
       this.attempt = 0;
       this.handlers.onStatus?.('open');
@@ -128,7 +144,9 @@ export class SessionStream {
       return;
     }
     this.attempt += 1;
-    const delay = Math.min(BASE_BACKOFF_MS * 2 ** (this.attempt - 1), MAX_BACKOFF_MS);
+    // ±25% jitter prevents thundering-herd when multiple tabs reconnect together.
+    const jitter = 0.75 + Math.random() * 0.5;
+    const delay = Math.min(BASE_BACKOFF_MS * 2 ** (this.attempt - 1), MAX_BACKOFF_MS) * jitter;
     setTimeout(() => void this.connect(), delay);
   }
 }
