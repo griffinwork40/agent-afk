@@ -22,6 +22,8 @@
  * @module agent/providers/shared/tool-call-trace
  */
 
+import { createHash } from 'crypto';
+
 import type {
   ToolCallCompletedPayload,
   ToolCallStartedPayload,
@@ -40,16 +42,18 @@ import type { ToolResult } from '../anthropic-direct/types.js';
 export function buildToolCallStartedPayload(args: {
   toolUseId: string;
   name: string;
-  /** Raw tool input; inputBytes is computed from this. */
+  /** Raw tool input; inputBytes and argsFingerprint are computed from this. */
   input: unknown;
   subagentId?: string | undefined;
 }): ToolCallStartedPayload {
   const { toolUseId, name, input, subagentId } = args;
+  const serialized = JSON.stringify(input ?? {});
   return {
     phase: 'started',
     toolUseId,
     name,
-    inputBytes: Buffer.byteLength(JSON.stringify(input ?? {}), 'utf8'),
+    inputBytes: Buffer.byteLength(serialized, 'utf8'),
+    argsFingerprint: createHash('sha256').update(serialized).digest('hex'),
     ...(subagentId !== undefined ? { subagentId } : {}),
   };
 }

@@ -47,6 +47,18 @@ export interface ToolCallStartedPayload {
   toolUseId: string;
   name: string;
   inputBytes: number;
+  /**
+   * SHA-256 hex digest of `JSON.stringify(input ?? {})` — a deterministic
+   * content hash of the raw tool arguments. Enables exact deduplication
+   * across sibling subagents (e.g. "did two children read the same file?")
+   * without storing the full args blob in the trace.
+   *
+   * Replaces the proxy fingerprint (`v1-bytes-tuple`) that
+   * `repeated-tool-use.ts` derived from `(name, inputBytes, resultBytes,
+   * isError, subagentId)` — that scheme false-collided on unrelated calls
+   * with identical byte counts.
+   */
+  argsFingerprint: string;
   /** Present when the call originates inside a fork. */
   subagentId?: string;
 }

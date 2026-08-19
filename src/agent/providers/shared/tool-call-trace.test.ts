@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { describe, it, expect } from 'vitest';
 import {
   buildToolCallStartedPayload,
@@ -58,6 +59,47 @@ describe('buildToolCallStartedPayload', () => {
       input: {},
     });
     expect(payload.inputBytes).toBe(Buffer.byteLength(JSON.stringify({}), 'utf8'));
+  });
+
+  it('computes argsFingerprint as SHA-256 hex of JSON.stringify(input)', () => {
+    const input = { file_path: '/src/agent/session.ts', offset: 1, limit: 50 };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_fp1',
+      name: 'read_file',
+      input,
+    });
+    const expected = createHash('sha256')
+      .update(JSON.stringify(input))
+      .digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+    expect(payload.argsFingerprint).toHaveLength(64); // SHA-256 hex = 64 chars
+  });
+
+  it('produces identical argsFingerprint for identical inputs', () => {
+    const input = { file_path: '/src/foo.ts' };
+    const a = buildToolCallStartedPayload({ toolUseId: 'a', name: 'read_file', input });
+    const b = buildToolCallStartedPayload({ toolUseId: 'b', name: 'read_file', input });
+    expect(a.argsFingerprint).toBe(b.argsFingerprint);
+  });
+
+  it('produces different argsFingerprint for different inputs', () => {
+    const a = buildToolCallStartedPayload({
+      toolUseId: 'a', name: 'read_file', input: { file_path: '/src/a.ts' },
+    });
+    const b = buildToolCallStartedPayload({
+      toolUseId: 'b', name: 'read_file', input: { file_path: '/src/b.ts' },
+    });
+    expect(a.argsFingerprint).not.toBe(b.argsFingerprint);
+  });
+
+  it('argsFingerprint for undefined input matches empty-object hash', () => {
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_und',
+      name: 'noop',
+      input: undefined,
+    });
+    const expected = createHash('sha256').update(JSON.stringify({})).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
   });
 });
 

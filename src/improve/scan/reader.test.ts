@@ -65,7 +65,7 @@ describe('parseTraceContent', () => {
 
   it('parses a clean trace, preserving order and line numbers', () => {
     const lines = [
-      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100 }),
+      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) }),
       event(1, {
         phase: 'completed',
         toolUseId: 'a',
@@ -90,7 +90,7 @@ describe('parseTraceContent', () => {
 
   it('skips invalid JSON lines but counts them', () => {
     const lines = [
-      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100 }),
+      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) }),
       '{ this is not valid json',
       event(1, {
         phase: 'completed',
@@ -113,7 +113,7 @@ describe('parseTraceContent', () => {
 
   it('skips schema-mismatch lines but counts them', () => {
     const lines = [
-      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100 }),
+      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) }),
       // Valid JSON, missing required fields — should fail TraceEventSchema.
       JSON.stringify({ ts: '2020-01-01T00:00:00Z', seq: 1, kind: 'tool_call' }),
       event(1, {
@@ -134,7 +134,7 @@ describe('parseTraceContent', () => {
 
   it('ignores empty trailing lines', () => {
     const lines = [
-      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100 }),
+      event(0, { phase: 'started', toolUseId: 'a', name: 'grep', inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) }),
       '',
       '',
     ];

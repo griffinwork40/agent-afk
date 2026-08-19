@@ -11,6 +11,7 @@
  *   - Severity ladder: low / medium / high boundaries.
  */
 
+import { createHash } from 'crypto';
 import { describe, it, expect } from 'vitest';
 import { parseTraceContent, type SessionRead } from '../reader.js';
 import {
@@ -40,6 +41,13 @@ function resetSeq(): void {
   seqCounter = 0;
 }
 
+/** Derive a deterministic argsFingerprint from the spec's identity fields,
+ *  so identical calls produce the same hash and different calls diverge. */
+function specFingerprint(spec: ToolCallSpec): string {
+  const input = JSON.stringify({ name: spec.name, inputBytes: spec.inputBytes });
+  return createHash('sha256').update(input).digest('hex');
+}
+
 function startedLine(spec: ToolCallSpec): string {
   return JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
@@ -50,6 +58,7 @@ function startedLine(spec: ToolCallSpec): string {
       toolUseId: spec.toolUseId,
       name: spec.name,
       inputBytes: spec.inputBytes,
+      argsFingerprint: specFingerprint(spec),
       ...(spec.subagentId ? { subagentId: spec.subagentId } : {}),
     },
   });

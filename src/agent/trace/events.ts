@@ -28,6 +28,7 @@ export const ToolCallStartedPayloadSchema = z.object({
   toolUseId: z.string(),
   name: z.string(),
   inputBytes: z.number().int().nonnegative(),
+  argsFingerprint: z.string(),
   subagentId: z.string().optional(),
 });
 
