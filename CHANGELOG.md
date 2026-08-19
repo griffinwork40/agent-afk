@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.135.0] - 2026-08-19
+
+### Added
+- add argsFingerprint to tool_call events + dedup measurement harness (#1205) (bc5e7678)
+
 ## [5.134.0] - 2026-08-19
 
 ### Added
