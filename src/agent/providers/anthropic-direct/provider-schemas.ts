@@ -52,10 +52,10 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   // available — it reads in-memory state only, so there is no executor
   // gating like `agent`/`skill`/`compose`. The source is constructed
   // per-query in `query()` and merged into the dispatcher handler map.
-  // Workspace tool: workspace_publish. Always available — children publish
-  // findings to the shared per-session workspace; no readOnly gate (workspace
-  // is ephemeral, unlike cross-session memory).
-  schemas.push(...workspaceToolSchemas);
+  // Workspace tool: workspace_publish. Children and parents can publish when
+  // the shared store is enabled; omit the schema alongside its handler when
+  // AFK_WORKSPACE_DISABLED leaves the provider without a store.
+  if (opts.workspaceStore !== undefined) schemas.push(...workspaceToolSchemas);
   schemas.push(getRuntimeStateTool);
   // Custom (consumer-registered) tool schemas are appended last so their
   // names never silently shadow a builtin. A custom schema whose name

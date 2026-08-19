@@ -190,8 +190,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       schemas.push(...memoryToolSchemas);
     }
     // Workspace (per-session publish) + awareness (runtime-state) — parity
-    // with anthropic-direct/provider-schemas.ts.
-    schemas.push(...workspaceToolSchemas, getRuntimeStateTool);
+    // with anthropic-direct/provider-schemas.ts. Keep the workspace schema in
+    // lockstep with its handler when AFK_WORKSPACE_DISABLED omits the store.
+    schemas.push(...(this.workspaceStore !== undefined ? workspaceToolSchemas : []), getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name
     // collides with an already-present builtin (or an earlier custom tool) is
