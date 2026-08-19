@@ -66,6 +66,27 @@ describe('splitLongMessage', () => {
     const result = splitLongMessage('');
     expect(result).toEqual(['']);
   });
+
+  test('preserves newlines at split boundaries (regression: streaming newlines dropped)', () => {
+    // When a \n falls exactly at or near the 4096-char split point, it must not
+    // be stripped by trim(). The joined chunks must equal the original text.
+    const text = 'being used.' + 'x'.repeat(4084) + '\nFound it.';
+    const result = splitLongMessage(text);
+    expect(result.length).toBe(2);
+    expect(result.join('')).toBe(text);
+    // The \n must survive — either in the tail of chunk[0] or the head of chunk[1]
+    const joined = result.join('');
+    expect(joined).toContain('being used.');
+    expect(joined).toContain('\nFound it.');
+  });
+
+  test('reconstructed text equals original when splitting at newlines', () => {
+    // Splitting should be lossless — joining chunks must reproduce the original.
+    const text = 'Python:\n' + 'x'.repeat(4090) + '\nRight —\nvenv:\nNeeds httpx';
+    const result = splitLongMessage(text);
+    expect(result.length).toBeGreaterThan(1);
+    expect(result.join('')).toBe(text);
+  });
 });
 
 describe('markdownToTelegramHtml', () => {

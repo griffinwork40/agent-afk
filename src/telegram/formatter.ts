@@ -59,8 +59,8 @@ export function splitLongMessage(text: string, maxLength: number = MAX_MESSAGE_L
       }
     }
 
-    chunks.push(remaining.slice(0, splitIndex).trim());
-    remaining = remaining.slice(splitIndex).trim();
+    chunks.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex);
   }
 
   return chunks;
