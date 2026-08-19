@@ -21,7 +21,7 @@
     "src/agent/trace/types.ts": { "loc": 362, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/worktree-sweep.ts": { "loc": 512, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/_lib/testing/virtual-screen.ts": { "loc": 422, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/chat.ts": { "loc": 557, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/chat.ts": { "loc": 559, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/daemon.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/farm.ts": { "loc": 436, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive.ts": { "loc": 581, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

@@ -9,6 +9,7 @@ import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
@@ -487,8 +488,7 @@ export function registerChatCommand(program: Command): void {
             : {}),
           // No backgroundRegistry on the one-shot chat path — background
           // dispatch is interactive-only by contract.
-          // workspaceStore omitted: the provider creates one per-session;
-          // compose in one-shot chat is rare enough not to warrant early init.
+          workspaceStore: new WorkspaceStore(),
         });
 
         sharedMemoryStore = new MemoryStore();
