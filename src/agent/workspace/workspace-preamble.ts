@@ -85,7 +85,7 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
 /**
  * Append the workspace context preamble to a forked child's system prompt.
  *
- * No-op (returns config unchanged) when `entries` is empty.
+ * Always injects — a short hint when empty, full preamble when populated.
  * Handles the same system-prompt union as `injectToolBudgetPreamble`:
  *   - string → append with `\n\n`
  *   - preset object → append to `sp.append`
@@ -97,9 +97,9 @@ export function injectWorkspacePreamble(
   config: AgentConfig,
   entries: WorkspaceEntry[],
 ): AgentConfig {
-  if (entries.length === 0) return config;
-
-  const block = renderWorkspacePreamble(entries);
+  const block = entries.length > 0
+    ? renderWorkspacePreamble(entries)
+    : EMPTY_WORKSPACE_HINT;
   const sp = config.systemPrompt;
 
   if (typeof sp === 'string') {
@@ -124,6 +124,16 @@ export function injectWorkspacePreamble(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Injected when the workspace is empty so every child knows the tool exists.
+ * Without this, no agent ever publishes (chicken-and-egg: preamble only fires
+ * when entries exist, but entries only exist when an agent publishes).
+ */
+const EMPTY_WORKSPACE_HINT =
+  'You have a `workspace_publish` tool. When you discover an important finding, ' +
+  'root cause, key file, or hypothesis, publish it so sibling agents working on ' +
+  'the same task can see it and avoid re-reading files you already analyzed.';
 
 function capitalise(s: string): string {
   return s.length === 0 ? s : (s[0]?.toUpperCase() ?? '') + s.slice(1);

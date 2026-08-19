@@ -136,9 +136,11 @@ describe('renderWorkspacePreamble', () => {
 describe('injectWorkspacePreamble', () => {
   const baseConfig: AgentConfig = { model: 'sonnet' };
 
-  it('returns config unchanged when entries is empty', () => {
+  it('injects empty-workspace hint when entries is empty', () => {
     const result = injectWorkspacePreamble(baseConfig, []);
-    expect(result).toBe(baseConfig);
+    expect(result).not.toBe(baseConfig);
+    expect(typeof result.systemPrompt).toBe('string');
+    expect(result.systemPrompt as string).toContain('workspace_publish');
   });
 
   it('does not mutate the input config', () => {
