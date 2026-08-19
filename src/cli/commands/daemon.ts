@@ -75,7 +75,12 @@ export function buildDaemonSessionFactory(
   // store is intentionally not closed here: the daemon owns it for its whole
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
   // process.exit(), which reclaims the descriptor.
-  let memoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
+  //
+  // WorkspaceStore is intentionally NOT shared across tasks: one task's
+  // published entries are irrelevant to the next task's compose nodes, and
+  // reusing the store would inject stale workspace entries from a prior
+  // task's run. Create a fresh store per task invocation instead.
+  let memoryStore: MemoryStore | undefined;
   return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
@@ -88,7 +93,10 @@ export function buildDaemonSessionFactory(
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
     memoryStore ??= new MemoryStore();
-    workspaceStore ??= new WorkspaceStore();
+    // WorkspaceStore is fresh per task: one task's published entries are
+    // irrelevant to the next task's compose nodes, and reusing the store
+    // would inject stale workspace entries from a prior task's run.
+    const workspaceStore = new WorkspaceStore();
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
@@ -140,7 +148,7 @@ export function buildDaemonSessionFactory(
     // production chokepoint the scheduler routes every task through, so it also
     // caps scheduler/cron-spawned top-level sessions.
     const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    return new AgentSession(injectCompanionPrimer(injectHotMemory({
+    const session = new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless: no human watches to answer ask_question.
@@ -161,6 +169,19 @@ export function buildDaemonSessionFactory(
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
     })), ownedTraceWriter);
+    // Subagent-success rollup: wire both the root manager and the compose
+    // executor so all subagent token/cost data (including compose DAG nodes)
+    // accumulates into this session's session_sealed telemetry. Late-bound
+    // here because the session is constructed after the executors. The daemon
+    // creates a fresh session per task tick, so this wiring is per-tick too —
+    // each session's costs roll into ITS OWN sealed payload, not a shared one.
+    rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+      session.recordSubagentCompletion(usage, costUsd);
+    });
+    composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+      session.recordSubagentCompletion(usage, costUsd);
+    });
+    return session;
   };
 }
 

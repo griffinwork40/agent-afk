@@ -407,6 +407,8 @@ describe('SubagentManager', () => {
     expect(sp).toMatch(/^untouched/);
     // Cold-start hint is appended: workspace_publish tool must be mentioned.
     expect(sp).toContain('workspace_publish');
+    // No budget disclosure was injected (maxToolUseIterations: 0).
+    expect(sp).not.toContain('tool-use rounds');
   });
 
   // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth

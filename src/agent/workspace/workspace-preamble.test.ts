@@ -139,7 +139,9 @@ describe('injectWorkspacePreamble', () => {
   it('injects cold-start hint when entries is empty', () => {
     const result = injectWorkspacePreamble(baseConfig, []);
     expect(result).not.toBe(baseConfig);
+    expect(result.model).toBe('sonnet');
     expect(result.systemPrompt).toContain('workspace_publish');
+    expect(result.systemPrompt).toContain('No entries have been published yet');
   });
 
   it('does not mutate the input config', () => {

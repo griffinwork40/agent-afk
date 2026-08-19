@@ -97,8 +97,8 @@ export async function buildAnthropicTelegramSession(
     // the nested skill-executor factory (no `skillTraceWriter`) —
     // matching the pre-refactor wiring.
     ...(traceWriter !== null ? { traceWriter } : {}),
-    backgroundRegistry,
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    backgroundRegistry,
   });
 
   const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
@@ -188,5 +188,15 @@ export async function buildAnthropicTelegramSession(
   // prompt's "future sessions inherit it" promise holds. No-op when none.
   seedPersistedGrants(directProvider);
   boundSession = session;
+  // Subagent-success rollup: wire both the root manager and the compose
+  // executor so all subagent token/cost data (including compose DAG nodes)
+  // accumulates into this session's session_sealed telemetry. Late-bound here
+  // because the session is constructed after the executors.
+  rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+    session.recordSubagentCompletion(usage, costUsd);
+  });
+  composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+    session.recordSubagentCompletion(usage, costUsd);
+  });
   return session;
 }
