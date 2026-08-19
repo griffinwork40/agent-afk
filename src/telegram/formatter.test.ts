@@ -78,6 +78,9 @@ describe('splitLongMessage', () => {
     const joined = result.join('');
     expect(joined).toContain('being used.');
     expect(joined).toContain('\nFound it.');
+    // The newline must land at the tail of chunk[0] (boundary-position assertion:
+    // splitIndex = newlineIndex + 1 consumes the \n into chunk[0])
+    expect(result[0]).toMatch(/\n$/);
   });
 
   test('reconstructed text equals original when splitting at newlines', () => {
@@ -86,6 +89,19 @@ describe('splitLongMessage', () => {
     const result = splitLongMessage(text);
     expect(result.length).toBeGreaterThan(1);
     expect(result.join('')).toBe(text);
+  });
+
+  test('newline within the search window triggers the newline-split branch (not hard split)', () => {
+    // Newline at index 3700 — well inside the lastIndexOf('\n', maxLength-1)=4095 window.
+    // The newline branch fires: splitIndex = 3701; chunk[0] ends with '\n' and chunk[1]
+    // picks up the remaining 395 x's then 'tail'. Hard split (splitIndex=4096) must NOT fire.
+    const text = 'x'.repeat(3700) + '\n' + 'x'.repeat(395) + 'tail';
+    const result = splitLongMessage(text);
+    expect(result.length).toBe(2);
+    expect(result.every(chunk => chunk.length <= 4096)).toBe(true);
+    expect(result.join('')).toBe(text);
+    // chunk[0] ends with '\n' — proves the newline branch fired rather than hard split
+    expect(result[0]).toMatch(/\n$/);
   });
 
   test.each(['\n', ' '])(

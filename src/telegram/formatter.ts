@@ -45,9 +45,9 @@ export function splitLongMessage(text: string, maxLength: number = MAX_MESSAGE_L
       if (sentenceMatch && sentenceMatch.length > 0) {
         const lastMatch = sentenceMatch[sentenceMatch.length - 1];
         if (lastMatch) {
-          const lastSentenceEnd = remaining.lastIndexOf(lastMatch, maxLength);
+          const lastSentenceEnd = remaining.lastIndexOf(lastMatch, maxLength - 1);
           if (lastSentenceEnd > maxLength - 200 && lastSentenceEnd > 0) {
-            splitIndex = lastSentenceEnd + 2;
+            splitIndex = Math.min(lastSentenceEnd + lastMatch.length, maxLength);
           }
         }
       } else {
