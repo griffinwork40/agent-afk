@@ -150,9 +150,8 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
     vi.useFakeTimers();
     try {
       let releaseFirst: () => void = () => {};
-      let resolveSecond: (v: IteratorResult<never>) => void = () => {};
       // First call resolves immediately (simulates the subsequent event that
-      // clears apiRoundInFlight); second call hangs.
+      // clears apiRoundInFlight); second call hangs forever (never resolved).
       let callCount = 0;
       const iter: AsyncIterator<never> = {
         next: () => {
@@ -160,7 +159,7 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
           if (callCount === 1) {
             return new Promise<IteratorResult<never>>((res) => { releaseFirst = () => res({ value: undefined as never, done: false }); });
           }
-          return new Promise<IteratorResult<never>>((res) => { resolveSecond = res; });
+          return new Promise<IteratorResult<never>>(() => {});
         },
       };
 
