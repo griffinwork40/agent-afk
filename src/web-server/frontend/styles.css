@@ -129,7 +129,8 @@ html, body {
   background: var(--bg-raised); border-left: 2px solid var(--accent);
   padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0;
 }
-.msg-thinking { opacity: 0.75; font-style: italic; }
+.msg-thinking { font-style: italic; }
+.msg-thinking .msg-body { opacity: 0.75; }
 .msg-thinking summary { cursor: pointer; }
 .msg-error .msg-body { color: var(--error); }
 
