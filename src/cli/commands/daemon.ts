@@ -88,7 +88,7 @@ export function buildDaemonSessionFactory(
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
     memoryStore ??= new MemoryStore();
-    workspaceStore ??= new WorkspaceStore();
+    if (env.AFK_WORKSPACE_DISABLED !== '1') workspaceStore ??= new WorkspaceStore();
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
