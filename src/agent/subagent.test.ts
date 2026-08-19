@@ -402,9 +402,12 @@ describe('SubagentManager', () => {
       parent: { sessionId: 'p' },
       config: { model: 'sonnet', systemPrompt: 'untouched', maxToolUseIterations: 0 },
     });
-    expect((shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt']).toBe(
-      'untouched',
-    );
+    const sp = (shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'] as string;
+    // The cold-start workspace hint is always appended (even with empty entries)
+    // so the system prompt is no longer exactly 'untouched'. Verify the caller's
+    // prompt is preserved at the top and that NO budget disclosure was injected.
+    expect(sp).toMatch(/^untouched/);
+    expect(sp).not.toContain('tool-use rounds');
   });
 
   // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth

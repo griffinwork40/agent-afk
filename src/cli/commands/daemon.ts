@@ -75,7 +75,12 @@ export function buildDaemonSessionFactory(
   // store is intentionally not closed here: the daemon owns it for its whole
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
   // process.exit(), which reclaims the descriptor.
-  let memoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
+  //
+  // WorkspaceStore is intentionally NOT shared across tasks: one task's
+  // published entries are irrelevant to the next task's compose nodes, and
+  // reusing the store would inject stale workspace entries from a prior
+  // task's run. Create a fresh store per task invocation instead.
+  let memoryStore: MemoryStore | undefined;
   return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
@@ -87,7 +92,7 @@ export function buildDaemonSessionFactory(
     // and threaded it in as config.traceWriter — reuse THAT SAME instance here
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
-    memoryStore ??= new MemoryStore(); workspaceStore ??= new WorkspaceStore();
+    memoryStore ??= new MemoryStore(); const workspaceStore = new WorkspaceStore();
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
