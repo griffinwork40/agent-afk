@@ -113,8 +113,14 @@ export async function runReplLoop(
     // stop/start on the health rail (the primary offender) as suspendFooter/
     // resumeFooter so /transcript and /editor can bracket the handoff.
     const f = footer;
-    ctx.slashCtx.suspendFooter = () => { f.healthRail.stop(); ctx.statusLine.stop(); };
-    ctx.slashCtx.resumeFooter = () => { ctx.statusLine.start(); f.healthRail.start(); };
+    ctx.slashCtx.suspendFooter = () => {
+      f.bgStatusBar.stop(); f.mascotBar.stop();
+      f.healthRail.stop(); ctx.statusLine.stop();
+    };
+    ctx.slashCtx.resumeFooter = () => {
+      ctx.statusLine.start(); f.healthRail.start();
+      f.mascotBar.start(); f.bgStatusBar.start();
+    };
 
     await runInputLoop(
       ctx,
