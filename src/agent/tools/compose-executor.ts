@@ -23,6 +23,7 @@ import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { WorkspaceStore } from '../workspace/index.js';
 import type { TraceSink } from '../trace/index.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
@@ -154,6 +155,8 @@ export interface ComposeExecutorContext {
    * unset, nodes fall back to cwd-only derivation, unchanged.
    */
   getReadScopeInputs?: () => ReadScopeInputs;
+  /** Shared workspace store so compose DAG nodes can publish/receive findings. */
+  workspaceStore?: WorkspaceStore;
 }
 
 interface ComposeNodeInput {
@@ -674,6 +677,7 @@ export class ComposeExecutor {
       // 'daemon', not 'unknown') via forkSubagent's parentSurface fill.
       // this.ctx.surface already drives routing telemetry (deriveOrigin).
       ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
+      ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
     });
 
     const startedAt = Date.now();
