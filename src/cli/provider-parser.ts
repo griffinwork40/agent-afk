@@ -25,6 +25,8 @@ export type ParseProviderOptions = {
   composeExecutor?: import('../agent/tools/compose-executor.js').ComposeExecutor;
   /** Shared MemoryStore to pass into providers so only one SQLite DB is opened. */
   memoryStore?: import('../agent/memory/index.js').MemoryStore;
+  /** Shared WorkspaceStore so sibling sub-agents share one ephemeral scratchpad. */
+  workspaceStore?: import('../agent/workspace/workspace-store.js').WorkspaceStore;
   /**
    * Optional MCP manager. When supplied, every tool exposed by a
    * `connected` MCP server is added to the provider's allow-list AND
@@ -130,6 +132,7 @@ export function parseProvider(
       skillExecutor: opts?.skillExecutor,
       composeExecutor: opts?.composeExecutor,
       ...(opts?.memoryStore !== undefined ? { memoryStore: opts.memoryStore } : {}),
+      ...(opts?.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
       ...(opts?.mcpManager !== undefined ? { mcpManager: opts.mcpManager } : {}),
       ...(opts?.fastModeController !== undefined ? { fastModeController: opts.fastModeController } : {}),
     });
@@ -144,6 +147,7 @@ export function parseProvider(
       ...(opts?.skillExecutor !== undefined ? { skillExecutor: opts.skillExecutor } : {}),
       ...(opts?.composeExecutor !== undefined ? { composeExecutor: opts.composeExecutor } : {}),
       ...(opts?.memoryStore !== undefined ? { memoryStore: opts.memoryStore } : {}),
+      ...(opts?.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
       ...(opts?.mcpManager !== undefined ? { mcpManager: opts.mcpManager } : {}),
       ...(opts?.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
     });

@@ -18,6 +18,7 @@ import { resolveModelId } from '../agent/session/model-resolution.js';
 import { getMaxOutputTokens, getMaxToolUseIterations, composeSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
+import { WorkspaceStore } from '../agent/workspace/workspace-store.js';
 import { createTelegramTraceWriter } from './construct-session.js';
 import { loadTelegramMcpManager } from './mcp-session.js';
 import { isOpenAiRoutedProvider, isXaiRoutedProvider } from './credentials.js';
@@ -35,6 +36,8 @@ export interface TelegramSessionFactoryOptions {
   telegramCwd: string | undefined;
   /** Bot-global memory store shared by every chat's hook bundle. */
   memoryStore: MemoryStore;
+  /** Bot-global workspace store shared by every session (one SQLite per bot process). */
+  workspaceStore?: WorkspaceStore;
   log?: (message: string) => void;
 }
 
@@ -45,6 +48,7 @@ export function createTelegramSessionFactory(
   options: TelegramSessionFactoryOptions,
 ): (sessionConfig: AgentConfig) => Promise<AgentSession> {
   const { config, frameworkBase, telegramCwd, memoryStore } = options;
+  const sharedWorkspaceStore = options.workspaceStore ?? new WorkspaceStore();
   const log = options.log ?? console.log;
 
   return async function createSession(sessionConfig: AgentConfig): Promise<AgentSession> {
@@ -98,6 +102,7 @@ export function createTelegramSessionFactory(
       traceWriter,
       mcpManager,
       memoryStore,
+      workspaceStore: sharedWorkspaceStore,
       reportSession: (session) => { returnedSession = session; },
     };
 

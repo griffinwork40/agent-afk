@@ -34,6 +34,7 @@ export async function buildAnthropicTelegramSession(
     traceWriter,
     mcpManager,
     memoryStore,
+    workspaceStore,
     reportSession,
   } = ctx;
 
@@ -94,6 +95,7 @@ export async function buildAnthropicTelegramSession(
     skillExecutor,
     composeExecutor,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
+    workspaceStore,
     // Tag the presence file (~/.afk/state/presence/<id>.json) and
     // get_runtime_state as the Telegram surface. Without this the provider
     // defaults to 'cli' (anthropic-direct/index.ts) and `/watch`
