@@ -809,6 +809,8 @@ describe('classifyBashCommand', () => {
       ['echo x > ~/.zshrc', 'home-relative path'],
       ['echo x > /tmp/../etc/hosts', 'traversal bypass'],
       ['echo x > $UNKNOWN_VAR', 'unknown variable'],
+      ['echo x > /tmp/`echo ../../../etc/hosts`', 'backtick substitution traversal'],
+      ['echo x > $TMPDIR/$(echo ../etc)', 'subshell substitution in tmpdir path'],
     ];
     for (const [cmd, label] of blocked) {
       it(`blocks: ${label} (${cmd})`, () => {

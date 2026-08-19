@@ -263,6 +263,7 @@ function allRedirectsInTmpdir(command: string): boolean {
   REDIRECT_TARGET_RE.lastIndex = 0;
   while ((match = REDIRECT_TARGET_RE.exec(command)) !== null) {
     const raw = match[2]!;
+    if (/`/.test(raw)) return false; // backtick substitution — opaque, block
     if (raw === '/dev/null' || /^&?\d+$/.test(raw)) continue; // already-allowed sinks
     if (OTHER_VAR_RE.test(raw)) return false; // unknown variable — block
     const expanded = TMPDIR_VAR_RE.test(raw) ? raw.replace(TMPDIR_VAR_RE, tmpdir + '/') : raw;
@@ -793,6 +794,12 @@ export function classifyBashCommand(command: string): { mutating: boolean; reaso
     .replace(ARITHMETIC_EXPANSION, ' ')
     .replace(ALLOWED_REDIRECTS, ' ')
     .replace(/&(>>?)/g, '$1');  // normalize &> realfile → > realfile (ALLOWED_REDIRECTS already removed &>/dev/null)
+  // Contract: REAL_REDIRECT tests the stripped redirectView (ALLOWED_REDIRECTS
+  // already removed), while allRedirectsInTmpdir receives the raw command
+  // (needs the original $TMPDIR tokens that stripping would destroy). The two
+  // views agree on well-formed shell; the raw view is strictly more conservative
+  // (it may see redirect-like tokens inside data strings that the stripped view
+  // would have removed).
   if (REAL_REDIRECT.test(redirectView) && !allRedirectsInTmpdir(command)) {
     return { mutating: true, reason: 'output redirection to a file (`>`/`>>`)' };
   }
