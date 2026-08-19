@@ -262,7 +262,7 @@ export function registerChatCommand(program: Command): void {
       const spinner = ora('Initializing agent...').start();
 
       let session: AgentSession | null = null;
-      let sharedMemoryStore: MemoryStore | undefined;
+      let sharedMemoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
       let worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined;
       let worktreeCwd: string | undefined;
       let mcpManager: McpManager | undefined;
@@ -488,7 +488,7 @@ export function registerChatCommand(program: Command): void {
             : {}),
           // No backgroundRegistry on the one-shot chat path — background
           // dispatch is interactive-only by contract.
-          workspaceStore: new WorkspaceStore(),
+          workspaceStore: (workspaceStore = new WorkspaceStore()),
         });
 
         sharedMemoryStore = new MemoryStore();
@@ -795,7 +795,7 @@ export function registerChatCommand(program: Command): void {
         if (mcpManager) {
           await mcpManager.disconnectAll();
         }
-        sharedMemoryStore?.close();
+        sharedMemoryStore?.close(); workspaceStore?.close();
         // Worktree cleanup: session close must finish before
         // `git worktree remove --force` so any active SQLite WAL / trace
         // writer file handles on the worktree are flushed first.

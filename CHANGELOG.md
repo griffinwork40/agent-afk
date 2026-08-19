@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.138.1] - 2026-08-19
+
+### Fixed
+- cold-start hint + compose executor wiring gap (#1214) (3a16ca51)
+
 ## [5.138.0] - 2026-08-19
 
 ### Added

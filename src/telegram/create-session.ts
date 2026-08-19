@@ -36,8 +36,6 @@ export interface TelegramSessionFactoryOptions {
   telegramCwd: string | undefined;
   /** Bot-global memory store shared by every chat's hook bundle. */
   memoryStore: MemoryStore;
-  /** Bot-global workspace store shared by every session (one SQLite per bot process). */
-  workspaceStore?: WorkspaceStore;
   log?: (message: string) => void;
 }
 
@@ -51,8 +49,10 @@ export function createTelegramSessionFactory(
   const log = options.log ?? console.log;
 
   return async function createSession(sessionConfig: AgentConfig): Promise<AgentSession> {
-    // Fresh WorkspaceStore per session: each Telegram chat is isolated —
-    // workspace findings from one user's session must not leak into another's.
+    // Lifecycle: owned by this session — closed when session.close() →
+    // provider.close() → workspaceStore.close() tears down the chain.
+    // Per-chat isolation: each Telegram chat gets its own store so workspace
+    // findings from one user's session do not leak into another's.
     const workspaceStore = new WorkspaceStore();
     const fullModelId = resolveModelId(sessionConfig.model) ?? sessionConfig.model;
     log(`Creating session with model: ${sessionConfig.model} -> ${fullModelId}`);
