@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.132.2] - 2026-08-19
+
+### Fixed
+- use authoritative contextLimitFor instead of stale heuristic (#1194) (768c7e2b)
+
 ## [5.132.1] - 2026-08-19
 
 ### Fixed
