@@ -87,6 +87,17 @@ describe('splitLongMessage', () => {
     expect(result.length).toBeGreaterThan(1);
     expect(result.join('')).toBe(text);
   });
+
+  test.each(['\n', ' '])(
+    'keeps a preserved %j separator at the limit without exceeding the chunk size',
+    separator => {
+      const text = 'x'.repeat(4096) + separator + 'next';
+      const result = splitLongMessage(text);
+
+      expect(result.every(chunk => chunk.length <= 4096)).toBe(true);
+      expect(result.join('')).toBe(text);
+    }
+  );
 });
 
 describe('markdownToTelegramHtml', () => {

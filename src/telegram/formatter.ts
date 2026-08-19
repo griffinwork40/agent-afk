@@ -36,7 +36,7 @@ export function splitLongMessage(text: string, maxLength: number = MAX_MESSAGE_L
     let splitIndex = maxLength;
     
     // Look for newline within last 500 chars of the chunk
-    const newlineIndex = remaining.lastIndexOf('\n', maxLength);
+    const newlineIndex = remaining.lastIndexOf('\n', maxLength - 1);
     if (newlineIndex > maxLength - 500 && newlineIndex > 0) {
       splitIndex = newlineIndex + 1;
     } else {
@@ -52,7 +52,7 @@ export function splitLongMessage(text: string, maxLength: number = MAX_MESSAGE_L
         }
       } else {
         // Look for any space within last 100 chars
-        const spaceIndex = remaining.lastIndexOf(' ', maxLength);
+        const spaceIndex = remaining.lastIndexOf(' ', maxLength - 1);
         if (spaceIndex > maxLength - 100 && spaceIndex > 0) {
           splitIndex = spaceIndex + 1;
         }
