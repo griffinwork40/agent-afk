@@ -624,6 +624,19 @@ export function registerChatCommand(program: Command): void {
         })), trace?.writer);
 
         boundSession = session;
+        // Subagent-success rollup: wire both the root manager and the compose
+        // executor so all subagent token/cost data (including compose DAG nodes)
+        // accumulates into this session's session_sealed telemetry. Late-bound
+        // here because the session is constructed after the executors.
+        // Use a local const to give the TypeScript narrowing a stable reference
+        // (the outer `session` variable is `AgentSession | null`).
+        const wiredSession = session;
+        rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+          wiredSession.recordSubagentCompletion(usage, costUsd);
+        });
+        composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+          wiredSession.recordSubagentCompletion(usage, costUsd);
+        });
 
         spinner.text = 'Sending message...';
 

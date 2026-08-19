@@ -157,6 +157,23 @@ export interface ComposeExecutorContext {
   getReadScopeInputs?: () => ReadScopeInputs;
   /** Shared workspace store so compose DAG nodes can publish/receive findings. */
   workspaceStore?: WorkspaceStore;
+  /**
+   * Callback wired to the per-call compose {@link SubagentManager} so every
+   * successfully-completed DAG node's token usage and USD cost rolls up into
+   * the parent session's `session_sealed` telemetry. Mirrors the wiring that
+   * `bootstrap.ts` applies to the root manager via
+   * `rootManager.setOnSubagentSucceeded()`.
+   *
+   * The compose manager is ephemeral (created and torn down per `execute()`
+   * call), so the callback must route to the parent session's accumulator —
+   * i.e. `(usage, costUsd) => session.recordSubagentCompletion(usage, costUsd)`
+   * — rather than a local one. Late-bound via {@link ComposeExecutor.setOnSubagentSucceeded}
+   * after the session is constructed to avoid a circular reference.
+   */
+  onSubagentSucceeded?: (
+    usage: import('../subagent/result.js').SubagentTrace['usage'],
+    costUsd: number | undefined,
+  ) => void;
 }
 
 interface ComposeNodeInput {
@@ -558,6 +575,23 @@ export class ComposeExecutor {
     this.ctx.traceWriter = writer;
   }
 
+  /**
+   * Wire the subagent-success rollup callback so every DAG node's token usage
+   * and USD cost accumulates into the parent session's `session_sealed`
+   * telemetry. Mirrors the late-binding that `bootstrap.ts` applies to the
+   * root manager: session must be constructed first, then this is called with
+   * a closure over `session.recordSubagentCompletion`. Calling this more than
+   * once replaces the prior callback (matches `SubagentManager` semantics).
+   */
+  setOnSubagentSucceeded(
+    cb: (
+      usage: import('../subagent/result.js').SubagentTrace['usage'],
+      costUsd: number | undefined,
+    ) => void,
+  ): void {
+    this.ctx.onSubagentSucceeded = cb;
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Compose tool call aborted', isError: true };
@@ -679,6 +713,18 @@ export class ComposeExecutor {
       ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
       ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
     });
+    // Subagent-success rollup: wire the per-call manager with the same
+    // callback that the root manager receives (see bootstrap.ts and the
+    // daemon/telegram surfaces) so every DAG node's token usage and USD cost
+    // accumulates into the parent session's `session_sealed` telemetry.
+    // The compose manager is ephemeral — created and torn down per execute()
+    // call — so the callback must route to the parent session's accumulators
+    // rather than a local one. `ctx.onSubagentSucceeded` is populated by
+    // `setOnSubagentSucceeded()` (called once per session, after the session
+    // is constructed, from the same surface-level code that wires rootManager).
+    if (this.ctx.onSubagentSucceeded !== undefined) {
+      manager.setOnSubagentSucceeded(this.ctx.onSubagentSucceeded);
+    }
 
     const startedAt = Date.now();
     void appendRoutingDecision({

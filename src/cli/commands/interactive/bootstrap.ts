@@ -172,9 +172,16 @@ export async function bootstrapSession(
   // subagent completions into the live session's accumulators. Closing over
   // `session` would silently strand post-resume rollups on the old, discarded
   // session, dropping them from the active session's session_sealed payload.
-  rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+  const onSubagentSucceeded = (usage: import('../../../agent/subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined): void => {
     sessionRef.current?.recordSubagentCompletion(usage, costUsd);
-  });
+  };
+  rootManager.setOnSubagentSucceeded(onSubagentSucceeded);
+  // Wire the same rollup for compose DAG nodes. The compose executor creates
+  // a fresh SubagentManager per execute() call, so setOnSubagentSucceeded on
+  // rootManager does not reach compose node costs — they require their own
+  // wiring here. Without this, compose node token/cost data is silently
+  // dropped from session_sealed telemetry.
+  composeExecutor.setOnSubagentSucceeded(onSubagentSucceeded);
 
   // ContextSampler constructor assigns `session` as the source.  attach() is
   // called by performResumeSwap (resume-swap.ts step 8) on every mid-session

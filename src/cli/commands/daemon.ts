@@ -138,7 +138,7 @@ export function buildDaemonSessionFactory(
     // production chokepoint the scheduler routes every task through, so it also
     // caps scheduler/cron-spawned top-level sessions.
     const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    return new AgentSession(injectCompanionPrimer(injectHotMemory({
+    const session = new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless: no human watches to answer ask_question.
@@ -159,6 +159,19 @@ export function buildDaemonSessionFactory(
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
     })), ownedTraceWriter);
+    // Subagent-success rollup: wire both the root manager and the compose
+    // executor so all subagent token/cost data (including compose DAG nodes)
+    // accumulates into this session's session_sealed telemetry. Late-bound
+    // here because the session is constructed after the executors. The daemon
+    // creates a fresh session per task tick, so this wiring is per-tick too —
+    // each session's costs roll into ITS OWN sealed payload, not a shared one.
+    rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+      session.recordSubagentCompletion(usage, costUsd);
+    });
+    composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+      session.recordSubagentCompletion(usage, costUsd);
+    });
+    return session;
   };
 }
 
