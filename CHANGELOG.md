@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.138.3] - 2026-08-19
+
+### Fixed
+- thread workspaceStore through root manager, skill phases, and permission gates (#1213) (ed7cd385)
+
 ## [5.138.2] - 2026-08-19
 
 ### Fixed
