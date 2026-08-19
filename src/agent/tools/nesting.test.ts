@@ -11,6 +11,7 @@ import {
 } from './nesting.js';
 import { ENV_REGISTRY } from '../../config/env.js';
 import { checkToolPermission } from './permissions.js';
+import { READ_ONLY_PHASE_TOOLS } from '../tool-category.js';
 
 describe('CHILD_ALLOWED_TOOLS', () => {
   it("includes 'memory_search'", () => {
@@ -170,6 +171,37 @@ describe('RECON_ALLOWED_TOOLS (read-only skill child allowlist)', () => {
     expect(checkToolPermission('read_file', permissions).allowed).toBe(true);
     expect(checkToolPermission('bash', permissions).allowed).toBe(true);
     expect(checkToolPermission('agent', permissions).allowed).toBe(true);
+  });
+});
+
+describe('checkToolPermission — workspace_publish under a read-only phase context (PR #1213)', () => {
+  // Regression (PR #1213): workspace_publish is listed in READ_ONLY_PHASE_TOOLS
+  // so that read-only spec/research/plan phases (mint) can seed sibling findings
+  // via the workspace. If it were absent, the provider's permission gate would
+  // deny it in any phase-restricted fork, silently dropping all workspace
+  // findings from the preamble for those forks.
+  //
+  // The test drives enforcement through checkToolPermission with
+  // { allowedTools: READ_ONLY_PHASE_TOOLS } — exactly the shape that
+  // SubagentManager.forkSubagent passes to the dispatcher when phaseRole is
+  // 'read-only'. This is the same no-network seam the RECON_ALLOWED_TOOLS tests
+  // above use (permissions.allowedTools → checkToolPermission).
+  it("allows 'workspace_publish' when allowedTools is READ_ONLY_PHASE_TOOLS", () => {
+    const config = { allowedTools: [...READ_ONLY_PHASE_TOOLS] };
+    const result = checkToolPermission('workspace_publish', config);
+    expect(result.allowed).toBe(true);
+  });
+
+  it("still denies 'write_file' and 'edit_file' under the same read-only phase context", () => {
+    const config = { allowedTools: [...READ_ONLY_PHASE_TOOLS] };
+    expect(checkToolPermission('write_file', config).allowed).toBe(false);
+    expect(checkToolPermission('edit_file', config).allowed).toBe(false);
+  });
+
+  it("READ_ONLY_PHASE_TOOLS contains 'workspace_publish' (membership invariant)", () => {
+    // Belt-and-suspenders: if workspace_publish is ever removed from the
+    // constant, this fails loudly before the checkToolPermission tests even run.
+    expect(READ_ONLY_PHASE_TOOLS).toContain('workspace_publish');
   });
 });
 

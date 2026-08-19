@@ -226,6 +226,54 @@ describe('SkillExecutor', () => {
     expect(ctxArg.traceWriter).toBeUndefined();
   });
 
+  it('forwards ctx.workspaceStore to the inline handler so it can seed workspace findings for its own forks (PR #1213)', async () => {
+    // Regression (PR #1213): inline registry-skill handlers that fork their own
+    // SubagentManager (e.g. /mint phases, /audit-fit) bypass the root manager
+    // that carries the workspace store. Without forwarding the store on
+    // SkillExecutionContext, those forks cannot receive the sibling-findings
+    // preamble (injectWorkspacePreamble) — a silent data-loss regression.
+    //
+    // We use a plain object as the store stand-in so we avoid importing or
+    // constructing the real WorkspaceStore (which requires an SQLite setup).
+    // The executor stores and forwards the reference verbatim; identity
+    // equality is the correct assertion here, not structural deep-equality.
+    const fakeWorkspaceStore = { entries: [] } as unknown as import('../workspace/index.js').WorkspaceStore;
+    const handler = vi.fn().mockResolvedValue('ok');
+    registerSkill({ name: 'workspace-store-skill', description: 'test', handler });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+      workspaceStore: fakeWorkspaceStore,
+    });
+
+    await executor.execute(makeCall({ name: 'workspace-store-skill' }));
+
+    const ctxArg = handler.mock.calls[0]?.[2] as { workspaceStore?: unknown };
+    expect(ctxArg.workspaceStore).toBe(fakeWorkspaceStore);
+  });
+
+  it('omits workspaceStore from the handler ctx when the executor has none', async () => {
+    const handler = vi.fn().mockResolvedValue('ok');
+    registerSkill({ name: 'no-workspace-store-skill', description: 'test', handler });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    await executor.execute(makeCall({ name: 'no-workspace-store-skill' }));
+
+    const ctxArg = handler.mock.calls[0]?.[2] as { workspaceStore?: unknown };
+    expect(ctxArg.workspaceStore).toBeUndefined();
+  });
+
   it('should return error for unknown skill with available list', async () => {
     registerSkill({
       name: 'known-skill',
