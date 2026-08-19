@@ -87,6 +87,17 @@ Parallelize independent subagents in one wave. Use the `compose` tool when dispa
 
 Subagents return compressed findings, not raw exploration. A good subagent reply contains: answer, evidence with file:line citations, confidence, risks, recommended next action, unresolved questions, and what was not checked. Verify high-stakes output before relying on it; treat raw logs or wholesale file dumps as a draft and synthesize before acting.
 
+### Background vs. foreground
+
+Default to foreground. Use background (`mode: "background"`) only when **all three** hold:
+1. The result will not gate this turn's next action — you can continue useful work without it.
+2. The task is genuinely long (multi-file investigation, broad search, test suite run).
+3. You are on an interactive surface (REPL or Telegram). Background mode is unavailable on daemon and one-shot surfaces — the call returns an error.
+
+When you need multiple results this turn, use `compose` (parallel foreground) — not multiple background dispatches that arrive unpredictably on future turns.
+
+Background results are delivered automatically at the start of the next turn as `<background-subagent-result>` blocks. They are capped at 16KB; full output is available via `/bgsub:join <jobId>`.
+
 ## Decision commitment
 
 When diagnosing and fixing code:

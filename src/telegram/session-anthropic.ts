@@ -16,7 +16,9 @@ import {
   getDefaultSubagentModel,
   getApiKeyForModel,
 } from '../cli/shared-helpers.js';
+import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
+import { TelegramBgResultNotifier } from './bg-result-notifier.js';
 import { constructTelegramSession } from './construct-session.js';
 import { attachMcpCleanup } from './mcp-session.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
@@ -55,6 +57,14 @@ export async function buildAnthropicTelegramSession(
     get hookRegistry() { return boundSession?.hookRegistry; },
   };
 
+  // Background agent registry — enables `agent` tool with mode="background"
+  // on Telegram. Mirrors the REPL's bootstrap-infra.ts wiring. Per-session
+  // lifetime: cancelAll is called via drainSubagents on session close.
+  const backgroundRegistry = new BackgroundAgentRegistry(
+    traceWriter ? { traceWriter } : {},
+  );
+  const bgNotifier = new TelegramBgResultNotifier(backgroundRegistry);
+
   // Invariant: ONE root manager per session, shared by all three
   // executors. Inherit configured-or-host cwd so forked subagents stay
   // in the same working tree as the parent session — important when the
@@ -86,6 +96,7 @@ export async function buildAnthropicTelegramSession(
     // the nested skill-executor factory (no `skillTraceWriter`) —
     // matching the pre-refactor wiring.
     ...(traceWriter !== null ? { traceWriter } : {}),
+    backgroundRegistry,
   });
 
   const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
@@ -146,9 +157,14 @@ export async function buildAnthropicTelegramSession(
     maxTurns: 100,
     // Cascade-abort and drain in-flight children before the writer seals, so a
     // wave still running when this session ends emits real `cancelled` rows
-    // instead of vanishing (#733).
-    drainSubagents: (reason) =>
-      rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    // instead of vanishing (#733). Background jobs are cancelled alongside the
+    // SubagentManager drain; the notifier is disposed so the settled listener
+    // doesn't fire after the session is gone.
+    drainSubagents: async (reason) => {
+      bgNotifier.dispose();
+      await backgroundRegistry.cancelAll();
+      return rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset');
+    },
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
     ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
