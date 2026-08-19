@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS workspace_entries (
   seq INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_ws_session_seq ON workspace_entries(session_id, seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ws_session_seq ON workspace_entries(session_id, seq);
 `;
 
 // ── Store class ───────────────────────────────────────────────────────────────
@@ -123,25 +123,28 @@ export class WorkspaceStore {
    * `seq` is auto-incremented per session (max existing seq + 1, starting at 1).
    */
   publish(entry: WorkspacePublishInput): number {
-    const nextSeq = this.nextSeq(entry.session_id);
-    const stmt = this.db.prepare(`
-      INSERT INTO workspace_entries
-        (session_id, type, subject, content, evidence, confidence, agent_id, relates_to, relation_type, seq)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const result = stmt.run(
-      entry.session_id,
-      entry.type,
-      entry.subject ?? null,
-      entry.content,
-      entry.evidence !== undefined ? JSON.stringify(entry.evidence) : null,
-      entry.confidence ?? 1.0,
-      entry.agent_id ?? null,
-      entry.relates_to !== undefined ? JSON.stringify(entry.relates_to) : null,
-      entry.relation_type ?? null,
-      nextSeq,
-    );
-    return Number(result.lastInsertRowid);
+    const txn = this.db.transaction(() => {
+      const nextSeq = this.nextSeq(entry.session_id);
+      const stmt = this.db.prepare(`
+        INSERT INTO workspace_entries
+          (session_id, type, subject, content, evidence, confidence, agent_id, relates_to, relation_type, seq)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const result = stmt.run(
+        entry.session_id,
+        entry.type,
+        entry.subject ?? null,
+        entry.content,
+        entry.evidence !== undefined ? JSON.stringify(entry.evidence) : null,
+        entry.confidence ?? 1.0,
+        entry.agent_id ?? null,
+        entry.relates_to !== undefined ? JSON.stringify(entry.relates_to) : null,
+        entry.relation_type ?? null,
+        nextSeq,
+      );
+      return Number(result.lastInsertRowid);
+    });
+    return txn();
   }
 
   /**

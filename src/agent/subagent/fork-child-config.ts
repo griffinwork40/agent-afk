@@ -97,9 +97,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
   // Query the shared workspace for entries relevant to this child's task
   // and inject them as a system-prompt preamble so the child sees sibling
   // agents' findings without needing a workspace_query tool.
-  const taskPrompt = typeof options.config.systemPrompt === 'string'
+  const taskPrompt = resume ?? (typeof options.config.systemPrompt === 'string'
     ? options.config.systemPrompt
-    : '';
+    : '');
   const workspaceEntries = args.workspaceStore
     ? args.workspaceStore.queryRelevant(resume ?? '', taskPrompt)
     : [];

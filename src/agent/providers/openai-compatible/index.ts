@@ -534,7 +534,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       handlers.set(name, handler);
     }
     // Workspace tool: workspace_publish (per-session, ephemeral — no readOnly gate).
-    for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '')) handlers.set(n, h);
+    for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
     }

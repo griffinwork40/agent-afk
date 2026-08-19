@@ -160,7 +160,7 @@ export function buildDispatcher(
   // Workspace tool: workspace_publish. Registered for ALL sessions —
   // children publish findings; the parent can too. No readOnly gate
   // (workspace is per-session and ephemeral, unlike memory).
-  const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '');
+  const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '', opts?.subagentId);
   for (const [name, handler] of wsHandlers) {
     handlers.set(name, handler);
   }

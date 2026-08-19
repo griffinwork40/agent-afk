@@ -69,6 +69,9 @@ const WRITE_TOOLS = new Set([
   // load-bearing: it makes config_set plan-mode-blocked (excluded from
   // READ_ONLY_PHASE_TOOLS) and sequential (not concurrency-safe).
   'config_set',
+  // workspace-tools.ts — workspace_publish mutates ephemeral per-session
+  // state that influences sibling-agent system prompts.
+  'workspace_publish',
 ]);
 // These categorization sets intentionally list BOTH the Claude Code / SDK
 // PascalCase tool names (Bash, Agent, Task, Skill, Compose) and AFK's lowercase
