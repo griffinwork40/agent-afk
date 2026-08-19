@@ -37,6 +37,7 @@ import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { TraceSink } from '../trace/writer.js';
 import type { Surface } from '../awareness/types.js';
 import type { AgentModelInput } from '../types.js';
+import type { WorkspaceStore } from '../workspace/index.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 
 /** Options for {@link wireExecutors}. */
@@ -132,6 +133,8 @@ export interface WireExecutorsOptions {
    * default writer.
    */
   agentRegistryWarn?: (message: string) => void;
+  /** Shared workspace store forwarded to compose DAG nodes. */
+  workspaceStore?: WorkspaceStore;
 }
 
 /** The wired executor set returned by {@link wireExecutors}. */
@@ -204,11 +207,15 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...cwdOpt,
     ...traceOpt,
     surface,
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing
   //    OpenAI-routed children at the configured local shim when set.
-  const childProviderFactory = createChildProviderFactory(openaiBaseUrlOpt);
+  const childProviderFactory = createChildProviderFactory({
+    ...openaiBaseUrlOpt,
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+  });
 
   // 3. Named-agent registry: session-static scan enabling `agent_type`
   //    dispatch at every depth.
@@ -307,6 +314,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     depth: 0,
     maxDepth,
     ...traceOpt,
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
   return { rootManager, subagentExecutor, skillExecutor, composeExecutor };

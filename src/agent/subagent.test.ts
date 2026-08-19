@@ -402,9 +402,11 @@ describe('SubagentManager', () => {
       parent: { sessionId: 'p' },
       config: { model: 'sonnet', systemPrompt: 'untouched', maxToolUseIterations: 0 },
     });
-    expect((shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt']).toBe(
-      'untouched',
-    );
+    const sp = (shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'] as string;
+    // Budget preamble invariant: system prompt starts with the original value.
+    expect(sp).toMatch(/^untouched/);
+    // Cold-start hint is appended: workspace_publish tool must be mentioned.
+    expect(sp).toContain('workspace_publish');
   });
 
   // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth

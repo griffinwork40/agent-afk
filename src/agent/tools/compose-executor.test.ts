@@ -1125,6 +1125,31 @@ describe('ComposeExecutor', () => {
     });
   });
 
+  describe('workspaceStore forwarding', () => {
+    // Regression guard: compose DAG nodes share the session's workspace store so
+    // findings published by one node are visible to sibling nodes and to the
+    // parent session. Without forwarding, compose children get a fresh store and
+    // workspace_publish output is silently discarded.
+    it('forwards workspaceStore from ctx to the child SubagentManager', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const store = { close: vi.fn() } as unknown as import('../workspace/workspace-store.js').WorkspaceStore;
+      const executor = new ComposeExecutor(makeContext({ workspaceStore: store }));
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect((lastManagerOpts as { workspaceStore?: unknown })?.workspaceStore).toBe(store);
+    });
+
+    it('omits workspaceStore when ctx.workspaceStore is undefined', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect((lastManagerOpts as { workspaceStore?: unknown })?.workspaceStore).toBeUndefined();
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Budget enforcement is delegated to the provider loop: the per-node budget
   // rides in the node's fork config as `maxToolUseIterations`, where the

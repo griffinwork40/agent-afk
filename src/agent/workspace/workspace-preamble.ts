@@ -85,7 +85,7 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
 /**
  * Append the workspace context preamble to a forked child's system prompt.
  *
- * No-op (returns config unchanged) when `entries` is empty.
+ * Always returns a new config — injects a cold-start hint when entries is empty, otherwise the rendered preamble.
  * Handles the same system-prompt union as `injectToolBudgetPreamble`:
  *   - string → append with `\n\n`
  *   - preset object → append to `sp.append`
@@ -97,9 +97,12 @@ export function injectWorkspacePreamble(
   config: AgentConfig,
   entries: WorkspaceEntry[],
 ): AgentConfig {
-  if (entries.length === 0) return config;
-
-  const block = renderWorkspacePreamble(entries);
+  // Cold-start hint: even with zero entries, tell the child about workspace_publish
+  // so the first agent to discover something can seed the workspace for siblings.
+  const block =
+    entries.length === 0
+      ? COLD_START_HINT
+      : renderWorkspacePreamble(entries);
   const sp = config.systemPrompt;
 
   if (typeof sp === 'string') {
@@ -122,6 +125,21 @@ export function injectWorkspacePreamble(
   // No system prompt set — preamble becomes the system prompt.
   return { ...config, systemPrompt: block };
 }
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/**
+ * Injected when the workspace is empty so the first agent knows the tool exists.
+ * Breaks the chicken-and-egg: agents can't discover workspace_publish from an
+ * empty preamble, so nobody ever publishes, so the preamble stays empty.
+ */
+const COLD_START_HINT = [
+  '# Workspace (shared agent scratchpad)',
+  '',
+  'You have a `workspace_publish` tool. When you discover an important finding,',
+  'publish it so sibling agents working on the same task can skip re-deriving it.',
+  'No entries have been published yet — you may be the first.',
+].join('\n');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
