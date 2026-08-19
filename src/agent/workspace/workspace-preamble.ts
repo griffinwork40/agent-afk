@@ -69,7 +69,17 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
   }
 
   lines.push('---');
-  return lines.join('\n');
+  const full = lines.join('\n');
+
+  // Cap total preamble at 32 KiB to prevent sibling system-prompt bloat.
+  // Trim from the start (oldest entries) so the most-recent findings survive.
+  const MAX_BYTES = 32 * 1024;
+  if (full.length <= MAX_BYTES) return full;
+  const notice = '\n---\n[Workspace preamble truncated: too many entries. Earlier entries omitted.]\n';
+  const tail = full.slice(full.length - MAX_BYTES + notice.length);
+  const dividerIdx = tail.indexOf('\n---\n');
+  const aligned = dividerIdx >= 0 ? tail.slice(dividerIdx) : tail;
+  return notice + aligned;
 }
 
 /**

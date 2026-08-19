@@ -151,33 +151,49 @@ export class WorkspaceStore {
    * Query entries relevant to the given task prompt.
    *
    * Relevance: subject keyword overlap with `taskPrompt` words (≥3 chars).
-   * Falls back to all session entries when no subject matches.
+   * Falls back to all entries when no subject matches.
    * Always ordered by seq descending (most recent first). Capped at `limit`.
+   *
+   * When `sessionId` is `null`, the query scans all entries in the store
+   * regardless of which child published them. This is the correct mode for
+   * the fork-child-config preamble injection path: the store is already
+   * scoped to one root session (one `WorkspaceStore` instance per top-level
+   * session), and children publish under their own session IDs, so a
+   * session-filtered query would miss sibling findings.
    */
-  queryRelevant(sessionId: string, taskPrompt: string, limit = 50): WorkspaceEntry[] {
+  queryRelevant(sessionId: string | null, taskPrompt: string, limit = 50): WorkspaceEntry[] {
     const keywords = extractKeywords(taskPrompt);
 
     if (keywords.length > 0) {
       // Build a LIKE filter for subject overlap
       const conditions = keywords.map(() => `LOWER(COALESCE(subject,'')) LIKE ?`).join(' OR ');
-      const params: unknown[] = keywords.map((k) => `%${k}%`);
+      const likeParams: unknown[] = keywords.map((k) => `%${k}%`);
 
+      const sessionClause = sessionId !== null ? 'session_id = ? AND' : '';
       const sql = `
         SELECT * FROM workspace_entries
-        WHERE session_id = ? AND (${conditions})
+        WHERE ${sessionClause} (${conditions})
         ORDER BY seq DESC
         LIMIT ?
       `;
-      const rows = this.db.prepare(sql).all(sessionId, ...params, limit) as WorkspaceEntry[];
+      const params = sessionId !== null
+        ? [sessionId, ...likeParams, limit]
+        : [...likeParams, limit];
+      const rows = this.db.prepare(sql).all(...params) as WorkspaceEntry[];
       if (rows.length > 0) return rows;
     }
 
-    // Fallback: all entries for the session, most recent first
+    // Fallback: all entries (optionally filtered by session), most recent first
+    if (sessionId !== null) {
+      return this.db
+        .prepare(
+          'SELECT * FROM workspace_entries WHERE session_id = ? ORDER BY seq DESC LIMIT ?',
+        )
+        .all(sessionId, limit) as WorkspaceEntry[];
+    }
     return this.db
-      .prepare(
-        'SELECT * FROM workspace_entries WHERE session_id = ? ORDER BY seq DESC LIMIT ?',
-      )
-      .all(sessionId, limit) as WorkspaceEntry[];
+      .prepare('SELECT * FROM workspace_entries ORDER BY seq DESC LIMIT ?')
+      .all(limit) as WorkspaceEntry[];
   }
 
   /** All entries for a session, ordered by seq ascending. */
@@ -203,7 +219,12 @@ export class WorkspaceStore {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Extract lowercase search keywords (≥3 chars) from a prompt string. */
+/**
+ * Extract lowercase search keywords (≥3 chars) from a prompt string.
+ *
+ * Capped at 25 unique keywords to stay well under SQLite's expression-tree
+ * depth limit of 1000 (each keyword becomes one LIKE clause in an OR chain).
+ */
 function extractKeywords(prompt: string): string[] {
   return [
     ...new Set(
@@ -212,5 +233,5 @@ function extractKeywords(prompt: string): string[] {
         .split(/\W+/)
         .filter((w) => w.length >= 3),
     ),
-  ];
+  ].slice(0, 25);
 }

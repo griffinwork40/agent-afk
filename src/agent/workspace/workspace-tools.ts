@@ -21,7 +21,7 @@ import { WorkspaceStore } from './workspace-store.js';
 export const workspacePublishTool: AnthropicToolDef = {
   name: 'workspace_publish',
   category: 'write',
-  concurrencySafe: true,
+  concurrencySafe: false,
   description:
     'Publish a structured finding to the shared session workspace so sibling agents can see it. ' +
     'Use this to surface discoveries, evidence, hypotheses, decisions, artifacts, or status updates ' +
@@ -113,6 +113,12 @@ export function createWorkspaceHandlers(
 
 // ── Input parsing ─────────────────────────────────────────────────────────────
 
+/** Max chars for workspace entry content before truncation at ingest. */
+const CONTENT_MAX_CHARS = 8192;
+/** Max chars for workspace entry subject before truncation at ingest. */
+const SUBJECT_MAX_CHARS = 256;
+const TRUNCATION_MARKER = ' … [truncated]';
+
 const VALID_TYPES = new Set([
   'finding',
   'evidence',
@@ -152,13 +158,20 @@ function parsePublishInput(input: unknown): ParsedPublishInput {
     );
   }
 
-  const content = raw['content'];
-  if (typeof content !== 'string' || content.length === 0) {
+  const contentRaw = raw['content'];
+  if (typeof contentRaw !== 'string' || contentRaw.length === 0) {
     throw new Error('workspace_publish: content is required');
   }
+  const content = contentRaw.length > CONTENT_MAX_CHARS
+    ? contentRaw.slice(0, CONTENT_MAX_CHARS) + TRUNCATION_MARKER
+    : contentRaw;
 
   const subject =
-    typeof raw['subject'] === 'string' ? raw['subject'] : undefined;
+    typeof raw['subject'] === 'string'
+      ? raw['subject'].length > SUBJECT_MAX_CHARS
+        ? raw['subject'].slice(0, SUBJECT_MAX_CHARS) + TRUNCATION_MARKER
+        : raw['subject']
+      : undefined;
 
   const evidence =
     Array.isArray(raw['evidence']) &&

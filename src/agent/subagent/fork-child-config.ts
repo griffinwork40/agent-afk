@@ -97,11 +97,15 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
   // Query the shared workspace for entries relevant to this child's task
   // and inject them as a system-prompt preamble so the child sees sibling
   // agents' findings without needing a workspace_query tool.
+  //
+  // Invariant: pass `null` as sessionId — the store is already scoped to one
+  // root session, and children publish under their own IDs, so a session-
+  // filtered query would miss sibling findings (the partition mismatch bug).
   const taskPrompt = resume ?? (typeof options.config.systemPrompt === 'string'
     ? options.config.systemPrompt
     : '');
   const workspaceEntries = args.workspaceStore
-    ? args.workspaceStore.queryRelevant(resume ?? '', taskPrompt)
+    ? args.workspaceStore.queryRelevant(null, taskPrompt)
     : [];
 
   return injectWorkspacePreamble(injectToolBudgetPreamble({
