@@ -48,10 +48,12 @@ export function createTelegramSessionFactory(
   options: TelegramSessionFactoryOptions,
 ): (sessionConfig: AgentConfig) => Promise<AgentSession> {
   const { config, frameworkBase, telegramCwd, memoryStore } = options;
-  const sharedWorkspaceStore = options.workspaceStore ?? new WorkspaceStore();
   const log = options.log ?? console.log;
 
   return async function createSession(sessionConfig: AgentConfig): Promise<AgentSession> {
+    // Fresh WorkspaceStore per session: each Telegram chat is isolated —
+    // workspace findings from one user's session must not leak into another's.
+    const workspaceStore = new WorkspaceStore();
     const fullModelId = resolveModelId(sessionConfig.model) ?? sessionConfig.model;
     log(`Creating session with model: ${sessionConfig.model} -> ${fullModelId}`);
 

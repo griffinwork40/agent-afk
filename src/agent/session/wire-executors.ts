@@ -211,7 +211,10 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing
   //    OpenAI-routed children at the configured local shim when set.
-  const childProviderFactory = createChildProviderFactory(openaiBaseUrlOpt);
+  const childProviderFactory = createChildProviderFactory({
+    ...openaiBaseUrlOpt,
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+  });
 
   // 3. Named-agent registry: session-static scan enabling `agent_type`
   //    dispatch at every depth.
