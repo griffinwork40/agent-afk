@@ -114,8 +114,10 @@ function resolvePager(): { cmd: string; args: string[] } | null {
     // Invariant: the formatted transcript contains ANSI color codes from
     // palette.*() calls. `less` without `-R` renders them as raw escape
     // bytes, corrupting the display and breaking navigation. Append `-R`
-    // when the resolved command is `less` and the flag is not already present.
-    if (cmd === 'less' && !args.includes('-R')) args.push('-R');
+    // when the resolved command is `less` and neither `-R` nor the deprecated
+    // `-r` variant is already present. Use basename() so that a full-path
+    // PAGER value (e.g. `/usr/bin/less`) matches as well as a bare name.
+    if (path.basename(cmd) === 'less' && !args.includes('-R') && !args.includes('-r')) args.push('-R');
     return { cmd, args };
   }
   return { cmd: 'less', args: ['-R'] };
