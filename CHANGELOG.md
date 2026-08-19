@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.138.2] - 2026-08-19
+
+### Fixed
+- resolve cold-start chicken-and-egg in workspace preamble (#1209) (9622916b)
+
 ## [5.138.1] - 2026-08-19
 
 ### Fixed
