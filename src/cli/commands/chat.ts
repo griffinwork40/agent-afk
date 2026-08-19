@@ -487,6 +487,8 @@ export function registerChatCommand(program: Command): void {
             : {}),
           // No backgroundRegistry on the one-shot chat path — background
           // dispatch is interactive-only by contract.
+          // workspaceStore omitted: the provider creates one per-session;
+          // compose in one-shot chat is rare enough not to warrant early init.
         });
 
         sharedMemoryStore = new MemoryStore();

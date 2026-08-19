@@ -74,15 +74,16 @@ export async function bootstrapSession(
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
+  const sharedWorkspaceStore = new WorkspaceStore();
+  const sharedMemoryStore = new MemoryStore();
+
   const {
     trace, apiKey, backgroundRegistry, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
+    workspaceStore: sharedWorkspaceStore,
   });
-
-  const sharedMemoryStore = new MemoryStore();
-  const sharedWorkspaceStore = new WorkspaceStore();
   const { FastModeController } = await import('../../../agent/fast-mode.js');
   const fastModeController = new FastModeController();
 
