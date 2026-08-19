@@ -36,7 +36,7 @@ export function splitLongMessage(text: string, maxLength: number = MAX_MESSAGE_L
     let splitIndex = maxLength;
     
     // Look for newline within last 500 chars of the chunk
-    const newlineIndex = remaining.lastIndexOf('\n', maxLength);
+    const newlineIndex = remaining.lastIndexOf('\n', maxLength - 1);
     if (newlineIndex > maxLength - 500 && newlineIndex > 0) {
       splitIndex = newlineIndex + 1;
     } else {
@@ -45,22 +45,22 @@ export function splitLongMessage(text: string, maxLength: number = MAX_MESSAGE_L
       if (sentenceMatch && sentenceMatch.length > 0) {
         const lastMatch = sentenceMatch[sentenceMatch.length - 1];
         if (lastMatch) {
-          const lastSentenceEnd = remaining.lastIndexOf(lastMatch, maxLength);
+          const lastSentenceEnd = remaining.lastIndexOf(lastMatch, maxLength - 1);
           if (lastSentenceEnd > maxLength - 200 && lastSentenceEnd > 0) {
-            splitIndex = lastSentenceEnd + 2;
+            splitIndex = Math.min(lastSentenceEnd + lastMatch.length, maxLength);
           }
         }
       } else {
         // Look for any space within last 100 chars
-        const spaceIndex = remaining.lastIndexOf(' ', maxLength);
+        const spaceIndex = remaining.lastIndexOf(' ', maxLength - 1);
         if (spaceIndex > maxLength - 100 && spaceIndex > 0) {
           splitIndex = spaceIndex + 1;
         }
       }
     }
 
-    chunks.push(remaining.slice(0, splitIndex).trim());
-    remaining = remaining.slice(splitIndex).trim();
+    chunks.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex);
   }
 
   return chunks;

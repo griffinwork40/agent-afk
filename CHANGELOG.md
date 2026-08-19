@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.138.0] - 2026-08-19
+
+### Added
+- enable background subagent dispatch + improve bg/fg guidance (#1212) (9e1b81ce)
+
+## [5.137.1] - 2026-08-19
+
+### Fixed
+- preserve newlines when splitting long messages at 4096-char boundary (#1206) (ca27a31f)
+
 ## [5.137.0] - 2026-08-19
 
 ### Added
