@@ -29,8 +29,8 @@ export const ToolCallStartedPayloadSchema = z.object({
   name: z.string(),
   inputBytes: z.number().int().nonnegative(),
   /** Optional for backward compat: traces recorded before this field was
-   *  added lack it. New traces always produce it. */
-  argsFingerprint: z.string().optional(),
+   *  added lack it. New traces always produce it (SHA-256 hex = 64 chars). */
+  argsFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   subagentId: z.string().optional(),
 });
 

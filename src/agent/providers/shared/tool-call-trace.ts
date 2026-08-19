@@ -47,15 +47,36 @@ export function buildToolCallStartedPayload(args: {
   subagentId?: string | undefined;
 }): ToolCallStartedPayload {
   const { toolUseId, name, input, subagentId } = args;
-  const serialized = JSON.stringify(input ?? {});
+  const raw = input ?? {};
+  const serialized = JSON.stringify(raw);
+  // Invariant: argsFingerprint must NOT leak secrets. browser_act fill
+  // actions carry the typed secret in `value`; the browser witness layer
+  // (sanitize.ts) redacts it downstream, but we hash BEFORE that runs.
+  // Redact known-sensitive fields before hashing. inputBytes stays on the
+  // raw input for accurate sizing (it's a byte count, not content).
+  const hashInput = JSON.stringify(redactSensitiveFields(name, raw));
   return {
     phase: 'started',
     toolUseId,
     name,
     inputBytes: Buffer.byteLength(serialized, 'utf8'),
-    argsFingerprint: createHash('sha256').update(serialized).digest('hex'),
+    argsFingerprint: createHash('sha256').update(hashInput).digest('hex'),
     ...(subagentId !== undefined ? { subagentId } : {}),
   };
+}
+
+/**
+ * Strip known-sensitive tool input fields before hashing. Returns a shallow
+ * copy with secrets replaced by a fixed sentinel so the hash is stable but
+ * content-free. Only tools with known secret params need cases here.
+ */
+function redactSensitiveFields(toolName: string, input: unknown): unknown {
+  if (toolName !== 'browser_act' || typeof input !== 'object' || input === null) {
+    return input;
+  }
+  const obj = input as Record<string, unknown>;
+  if (obj['action'] !== 'fill' || !('value' in obj)) return input;
+  return { ...obj, value: '[REDACTED]' };
 }
 
 /**

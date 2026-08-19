@@ -13,7 +13,7 @@
  * same `argsFingerprint` invoked the same tool with identical arguments.
  *
  * History: before the `argsFingerprint` field was added to the trace
- * (PR #1198), this detector derived a proxy fingerprint from a 5-tuple
+ * (PR #1205), this detector derived a proxy fingerprint from a 5-tuple
  * `(name, inputBytes, resultBytes, isError, subagentId)` — tagged
  * `v1-bytes-tuple`. That scheme false-collided on unrelated calls with
  * identical byte counts. The `computeFingerprint` function is retained
@@ -53,8 +53,6 @@ export const DEFAULT_MIN_REPEATS = 4;
  */
 const MAX_EXCERPT_EVENTS_PER_FINDING = 8;
 
-/** Algorithm tag stored on every emitted card. */
-const FINGERPRINT_ALGORITHM = 'v2-args-hash';
 
 export interface RepeatedToolUseOptions {
   /** Override for the run-length threshold. Default {@link DEFAULT_MIN_REPEATS}. */
@@ -109,6 +107,8 @@ export interface ToolCallPair {
   /** Verbatim JSON line of the completed event for evidence excerpts. */
   rawLine: string;
   fingerprint: string;
+  /** True when fingerprint was derived from argsFingerprint (v2); false = v1 fallback. */
+  usedArgsHash: boolean;
 }
 
 function detectInSession(
@@ -168,6 +168,9 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
     // tools with identical args (especially `{}`) don't collide.
     // Use argsFingerprint from the started event when present (v2); fall back
     // to the v1-bytes-tuple proxy for pre-upgrade traces that lack it.
+    // History: v2 fingerprints on (toolName, argsHash) only — result fields
+    // (isError, resultBytes) are excluded, which widens detection to catch
+    // loops where successive calls alternate between success and failure.
     const argsHash = started.argsFingerprint;
     const fingerprint = argsHash
       ? createHash('sha256').update(`${ev.payload.name}|${argsHash}`).digest('hex')
@@ -191,6 +194,7 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
       subagentId: started.subagentId,
       rawLine: item.rawLine,
       fingerprint,
+      usedArgsHash: argsHash !== undefined,
     });
   }
 
@@ -308,7 +312,7 @@ function buildResult(
     evidence,
     detail: {
       detector: 'repeated-tool-use@v1',
-      fingerprintAlgorithm: FINGERPRINT_ALGORITHM,
+      fingerprintAlgorithm: first.usedArgsHash ? 'v2-args-hash' : 'v1-bytes-tuple',
       fingerprint: first.fingerprint,
       toolName: first.name,
       runLength: run.length,

@@ -101,6 +101,47 @@ describe('buildToolCallStartedPayload', () => {
     const expected = createHash('sha256').update(JSON.stringify({})).digest('hex');
     expect(payload.argsFingerprint).toBe(expected);
   });
+
+  it('redacts browser_act fill value from argsFingerprint (security)', () => {
+    const secret = 'my-super-secret-password-123';
+    const input = { action: 'fill', target: { kind: 'selector', selector: '#pw' }, value: secret };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_sec',
+      name: 'browser_act',
+      input,
+    });
+    // The hash must NOT be derivable from the secret — it should match the
+    // redacted version instead.
+    const redacted = { ...input, value: '[REDACTED]' };
+    const expectedHash = createHash('sha256').update(JSON.stringify(redacted)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expectedHash);
+
+    // And must NOT match a hash of the raw input.
+    const rawHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).not.toBe(rawHash);
+  });
+
+  it('does not redact browser_act non-fill actions', () => {
+    const input = { action: 'click', target: { kind: 'selector', selector: '#btn' } };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_click',
+      name: 'browser_act',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
+
+  it('does not redact non-browser_act tools', () => {
+    const input = { command: 'echo secret', value: 'should-not-be-touched' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_bash',
+      name: 'bash',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
 });
 
 describe('buildToolCallCompletedPayload', () => {

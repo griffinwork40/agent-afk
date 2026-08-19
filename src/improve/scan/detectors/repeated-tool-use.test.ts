@@ -64,6 +64,26 @@ function startedLine(spec: ToolCallSpec): string {
   });
 }
 
+/** Like startedLine but omits argsFingerprint — simulates a pre-upgrade trace. */
+function legacyStartedLine(spec: ToolCallSpec): string {
+  return JSON.stringify({
+    ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
+    seq: seqCounter++,
+    kind: 'tool_call',
+    payload: {
+      phase: 'started',
+      toolUseId: spec.toolUseId,
+      name: spec.name,
+      inputBytes: spec.inputBytes,
+      ...(spec.subagentId ? { subagentId: spec.subagentId } : {}),
+    },
+  });
+}
+
+function legacyPairLines(spec: ToolCallSpec): string[] {
+  return [legacyStartedLine(spec), completedLine(spec)];
+}
+
 function completedLine(spec: ToolCallSpec): string {
   return JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
@@ -332,6 +352,34 @@ describe('detectRepeatedToolUse', () => {
 
   it('uses DEFAULT_MIN_REPEATS when no threshold is supplied', () => {
     expect(DEFAULT_MIN_REPEATS).toBe(4);
+  });
+
+  it('falls back to v1-bytes-tuple when argsFingerprint is absent (legacy trace)', () => {
+    resetSeq();
+    const lines = [
+      ...legacyPairLines({ toolUseId: '1', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+      ...legacyPairLines({ toolUseId: '2', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+      ...legacyPairLines({ toolUseId: '3', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+      ...legacyPairLines({ toolUseId: '4', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+    ];
+    const session = makeSessionRead(lines);
+    const detections = detectRepeatedToolUse([session]);
+    expect(detections).toHaveLength(1);
+    expect(detections[0]?.detail['fingerprintAlgorithm']).toBe('v1-bytes-tuple');
+  });
+
+  it('labels v2-args-hash when argsFingerprint is present', () => {
+    resetSeq();
+    const lines = [
+      ...pairLines({ toolUseId: '1', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+      ...pairLines({ toolUseId: '2', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+      ...pairLines({ toolUseId: '3', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+      ...pairLines({ toolUseId: '4', name: 'grep', inputBytes: 100, resultBytes: 200 }),
+    ];
+    const session = makeSessionRead(lines);
+    const detections = detectRepeatedToolUse([session]);
+    expect(detections).toHaveLength(1);
+    expect(detections[0]?.detail['fingerprintAlgorithm']).toBe('v2-args-hash');
   });
 
   it('handles two independent runs in the same session', () => {

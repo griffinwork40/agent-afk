@@ -40,7 +40,8 @@ import { isAbsolute, join } from 'node:path';
 // Mirrors getAfkHome() in src/paths.ts. Resolved inline (not imported) so this
 // script runs without building.
 const AFK_HOME = process.env['AFK_HOME'] || join(homedir(), '.afk');
-const WITNESS_DIR = join(AFK_HOME, 'state', 'witness');
+const STATE_DIR = process.env['AFK_STATE_DIR'] || join(AFK_HOME, 'state');
+const WITNESS_DIR = join(STATE_DIR, 'witness');
 
 // ─── CLI args ────────────────────────────────────────────────────────────────
 
@@ -327,7 +328,7 @@ function printHuman(report: DedupReport): void {
   console.log(`╰────────────────────────────────────────────────────────────╯\n`);
 
   if (report.skippedNoFingerprint > 0) {
-    console.log(`⚠  ${report.skippedNoFingerprint} tool_call events lacked argsFingerprint (pre-upgrade trace)\n`);
+    console.log(`⚠  ${report.skippedNoFingerprint} ${report.toolFilter} events lacked argsFingerprint (pre-upgrade trace)\n`);
   }
 
   console.log(`  Total calls:             ${report.totalCalls}`);
