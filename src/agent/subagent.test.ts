@@ -403,10 +403,11 @@ describe('SubagentManager', () => {
       config: { model: 'sonnet', systemPrompt: 'untouched', maxToolUseIterations: 0 },
     });
     const sp = (shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'] as string;
-    // The cold-start workspace hint is always appended (even with empty entries)
-    // so the system prompt is no longer exactly 'untouched'. Verify the caller's
-    // prompt is preserved at the top and that NO budget disclosure was injected.
+    // Budget preamble invariant: system prompt starts with the original value.
     expect(sp).toMatch(/^untouched/);
+    // Cold-start hint is appended: workspace_publish tool must be mentioned.
+    expect(sp).toContain('workspace_publish');
+    // No budget disclosure was injected (maxToolUseIterations: 0).
     expect(sp).not.toContain('tool-use rounds');
   });
 

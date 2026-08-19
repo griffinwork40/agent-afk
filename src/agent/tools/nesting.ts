@@ -150,6 +150,16 @@ export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAM
 // mutation of daemon state). `bash` IS included (read-only recon needs it) and
 // is gated by classifyBashCommand in the dispatcher. `agent`/`skill` ARE
 // included so the surveyor fan-out the SKILL.md prescribes still works.
+//
+// `workspace_publish` IS included for the same reason READ_ONLY_PHASE_TOOLS
+// (tool-category.ts) admits it: the shared workspace is EPHEMERAL per-root-session
+// in-memory state, closed with the session — unlike memory_update, nothing it
+// records survives the run or reaches disk. A recon skill's whole job is
+// gathering findings for the surveyors it fans out, so denying the publish would
+// leave its `agent`/`skill` children unable to see what it already discovered
+// while the tool still appeared in their schema (provider-schemas.ts registers it
+// for every session). Read-only means "does not mutate the repo", not "cannot
+// talk to its own siblings".
 export const RECON_ALLOWED_TOOLS: readonly string[] = [
   'read_file',
   'glob',
@@ -162,6 +172,8 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   'web_scrape',
   ...AWARENESS_TOOL_NAMES,
   'memory_search',
+  // Ephemeral per-session workspace publish — see this block's header note.
+  'workspace_publish',
   'agent',
   'skill',
 ];
@@ -346,6 +358,14 @@ export function createChildSkillExecutorFactory(
   openaiBaseUrl?: string,
   // xAI endpoint propagated to skill-forked agent descendants.
   xaiBaseUrl?: string,
+  // Shared workspace store, propagated to every depth so a nested SkillExecutor's
+  // own fork managers (fork-dispatch.ts / fork-child-config.ts) carry it too.
+  // Without it the workspace READ channel stopped at depth 1: a skill dispatched
+  // BY a skill got a store-less executor, so its forks lost the sibling-findings
+  // preamble even though the depth-0 wiring was correct — the same shape as the
+  // cwd / traceWriter / defaultSubagentModel propagation leaks documented above.
+  // Trailing optional so legacy positional callers stay valid.
+  workspaceStore?: WorkspaceStore,
 ): (
   depth: number,
   maxDepth: number,
@@ -441,6 +461,10 @@ export function createChildSkillExecutorFactory(
       ...(inheritedReadScope !== undefined
         ? { getReadScopeInputs: () => inheritedReadScope }
         : {}),
+      // Workspace READ channel: propagates through every depth so this nested
+      // executor's own fork managers seed the sibling-findings preamble. Mirrors
+      // the traceWriter / cwd propagation above; see this factory's parameter.
+      ...(workspaceStore !== undefined ? { workspaceStore } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });

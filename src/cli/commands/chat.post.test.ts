@@ -96,9 +96,12 @@ vi.mock('../../agent/memory/index.js', () => ({
   createMemoryHandlers: () => new Map(),
 }));
 
-vi.mock('../../agent/subagent.js', () => ({
-  SubagentManager: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('../../agent/subagent.js', () => {
+  class StubManager {
+    setOnSubagentSucceeded = vi.fn();
+  }
+  return { SubagentManager: StubManager };
+});
 
 vi.mock('../../agent/tools/subagent-executor.js', () => ({
   SubagentExecutor: vi.fn().mockImplementation(() => ({})),
@@ -108,9 +111,12 @@ vi.mock('../../agent/tools/skill-executor.js', () => ({
   SkillExecutor: vi.fn().mockImplementation(() => ({})),
 }));
 
-vi.mock('../../agent/tools/compose-executor.js', () => ({
-  ComposeExecutor: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('../../agent/tools/compose-executor.js', () => {
+  class StubCompose {
+    setOnSubagentSucceeded = vi.fn();
+  }
+  return { ComposeExecutor: StubCompose };
+});
 
 vi.mock('../../agent/tools/nesting.js', () => ({
   createChildProviderFactory: vi.fn(() => ({})),

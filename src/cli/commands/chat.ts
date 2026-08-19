@@ -9,6 +9,7 @@ import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
@@ -261,7 +262,7 @@ export function registerChatCommand(program: Command): void {
       const spinner = ora('Initializing agent...').start();
 
       let session: AgentSession | null = null;
-      let sharedMemoryStore: MemoryStore | undefined;
+      let sharedMemoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
       let worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined;
       let worktreeCwd: string | undefined;
       let mcpManager: McpManager | undefined;
@@ -487,8 +488,7 @@ export function registerChatCommand(program: Command): void {
             : {}),
           // No backgroundRegistry on the one-shot chat path — background
           // dispatch is interactive-only by contract.
-          // workspaceStore omitted: the provider creates one per-session;
-          // compose in one-shot chat is rare enough not to warrant early init.
+          workspaceStore: (workspaceStore = new WorkspaceStore()),
         });
 
         sharedMemoryStore = new MemoryStore();
@@ -808,7 +808,7 @@ export function registerChatCommand(program: Command): void {
         if (mcpManager) {
           await mcpManager.disconnectAll();
         }
-        sharedMemoryStore?.close();
+        sharedMemoryStore?.close(); workspaceStore?.close();
         // Worktree cleanup: session close must finish before
         // `git worktree remove --force` so any active SQLite WAL / trace
         // writer file handles on the worktree are flushed first.

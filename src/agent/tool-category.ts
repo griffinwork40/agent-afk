@@ -174,12 +174,23 @@ function hasCI(set: Set<string>, name: string): boolean {
 // Membership rule: any tool whose handler MUST NOT mutate the repo, spawn
 // subagents, send outbound network traffic, or otherwise produce a
 // side-effect that survives the phase. This is the `READ_TOOLS` set plus the
-// always-on awareness introspection tools (AWARENESS_TOOL_NAMES) — kept narrow
-// because the post-spec approval gate is the user's chance to stop wrong work
-// BEFORE writes happen. Awareness qualifies: get_runtime_state is a pure
-// in-memory read with zero side-effects, and excluding it left phase-restricted
-// forks (mint spec/research/plan) staring at a tool the schema offered but the
-// allowlist rejected.
+// always-on awareness introspection tools (AWARENESS_TOOL_NAMES) and
+// `workspace_publish` — kept narrow because the post-spec approval gate is the
+// user's chance to stop wrong work BEFORE writes happen. Awareness qualifies:
+// get_runtime_state is a pure in-memory read with zero side-effects, and
+// excluding it left phase-restricted forks (mint spec/research/plan) staring at
+// a tool the schema offered but the allowlist rejected.
+//
+// `workspace_publish` qualifies for the SAME reason, despite being categorized
+// WRITE above: the two classifications answer different questions. The
+// READ/WRITE buckets ask "does this mutate state?" (yes — the shared workspace),
+// while this list asks "may this run before the approval gate?". Nothing the
+// workspace holds survives the phase: the store is per-root-session and
+// in-memory, closed when the session ends (provider-runtime.ts:238), so a
+// publish cannot touch the repo, the fact archive, or any file on disk. It is
+// admitted so mint's read-only spec/research/plan phases can seed findings for
+// their siblings instead of seeing the tool in their schema (provider-schemas.ts
+// registers it for every session) and being denied at the permission gate.
 //
 // Explicitly NOT included (and the failure mode if they were):
 //   - `write_file`, `edit_file` — file mutation before approval
@@ -216,6 +227,12 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'memory_search',
   // Witness-layer search — read-only NDJSON scan of trace.jsonl files.
   'read_witness', 'search_witness',
+  // Shared workspace publish — EPHEMERAL per-root-session state, not persistent
+  // like memory. Deliberately admitted despite its WRITE categorization above;
+  // see the membership-rule note in this block's header for why the two
+  // classifications diverge here. Mirrors CHILD_ALLOWED_TOOLS /
+  // RECON_ALLOWED_TOOLS (nesting.ts), which admit it for the same reason.
+  'workspace_publish',
   // Awareness introspection (get_runtime_state) — read-only, in-memory, zero
   // side-effects. Mirrors CHILD_ALLOWED_TOOLS (nesting.ts), which already appends
   // these. Single source of truth: AWARENESS_TOOL_NAMES (awareness/tool.ts).
