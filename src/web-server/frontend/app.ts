@@ -11,6 +11,7 @@
 import { readAndScrubToken } from './web-token.js';
 import { SessionStream } from './sse-client.js';
 import { wireComposerAffordances } from './composer-wiring.js';
+import { showToast, wireSidebarClose, toggleNewSessionForm } from './app-chrome.js';
 import type { CommandEntry } from '../../cli/input/slash-match.js';
 import {
   renderApprovals,
@@ -82,7 +83,7 @@ function panel(): QueuePanel {
         syncStop();
       },
       onError: (message: string) => {
-        $('status').textContent = message;
+        showToast(message);
       },
     });
   }
@@ -238,24 +239,28 @@ function syncStop(): void {
  * composer is live. Selecting an id the cache has never seen would render the
  * new session as read-only until the next 10s poll happened to correct it.
  */
-async function createSession(): Promise<void> {
+async function createSession(model: string, cwd: string): Promise<void> {
   const button = $('new-session') as HTMLButtonElement;
   button.disabled = true;
   button.textContent = 'starting…';
   try {
+    const body: Record<string, string> = { model };
+    if (cwd) body['cwd'] = cwd;
     const { session } = await api<{ session: { id: string } }>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     });
     await loadSessions();
     selectSession(session.id);
   } catch (err: unknown) {
-    $('status').textContent = err instanceof Error ? err.message : 'could not start session';
+    showToast(err instanceof Error ? err.message : 'could not start session');
   } finally {
     button.disabled = false;
     button.textContent = '+ New';
   }
 }
+
+
 
 /**
  * Poll for elicitations awaiting an answer.
@@ -297,7 +302,7 @@ function answerApproval(id: string, answer: ApprovalAnswer): void {
     method: 'POST',
     body: JSON.stringify({ requestId: id, response: answer }),
   }).catch((err: unknown) => {
-    $('status').textContent = err instanceof Error ? err.message : 'approval failed';
+    showToast(err instanceof Error ? err.message : 'approval failed');
   });
 }
 
@@ -320,10 +325,13 @@ async function main(): Promise<void> {
     loadCommands: async () => (await api<{ commands: CommandEntry[] }>('/api/commands')).commands,
   });
   panel().wire();
-  $('new-session').addEventListener('click', () => void createSession());
+  $('new-session').addEventListener('click', () => toggleNewSessionForm(
+    (model, cwd) => void createSession(model, cwd),
+  ));
+  wireSidebarClose();
   $('stop').addEventListener('click', () => {
     void stopTurn().catch((err: unknown) => {
-      $('status').textContent = err instanceof Error ? err.message : 'stop failed';
+      showToast(err instanceof Error ? err.message : 'stop failed');
     });
   });
   renderMeter();
@@ -337,5 +345,5 @@ async function main(): Promise<void> {
 }
 
 void main().catch((err: unknown) => {
-  $('status').textContent = err instanceof Error ? err.message : String(err);
+  showToast(err instanceof Error ? err.message : String(err));
 });
