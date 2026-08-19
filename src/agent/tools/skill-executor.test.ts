@@ -226,6 +226,54 @@ describe('SkillExecutor', () => {
     expect(ctxArg.traceWriter).toBeUndefined();
   });
 
+  it('forwards ctx.workspaceStore to the inline handler so it can seed workspace findings for its own forks (PR #1213)', async () => {
+    // Regression (PR #1213): inline registry-skill handlers that fork their own
+    // SubagentManager (e.g. /mint phases, /audit-fit) bypass the root manager
+    // that carries the workspace store. Without forwarding the store on
+    // SkillExecutionContext, those forks cannot receive the sibling-findings
+    // preamble (injectWorkspacePreamble) — a silent data-loss regression.
+    //
+    // We use a plain object as the store stand-in so we avoid importing or
+    // constructing the real WorkspaceStore (which requires an SQLite setup).
+    // The executor stores and forwards the reference verbatim; identity
+    // equality is the correct assertion here, not structural deep-equality.
+    const fakeWorkspaceStore = { entries: [] } as unknown as import('../workspace/index.js').WorkspaceStore;
+    const handler = vi.fn().mockResolvedValue('ok');
+    registerSkill({ name: 'workspace-store-skill', description: 'test', handler });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+      workspaceStore: fakeWorkspaceStore,
+    });
+
+    await executor.execute(makeCall({ name: 'workspace-store-skill' }));
+
+    const ctxArg = handler.mock.calls[0]?.[2] as { workspaceStore?: unknown };
+    expect(ctxArg.workspaceStore).toBe(fakeWorkspaceStore);
+  });
+
+  it('omits workspaceStore from the handler ctx when the executor has none', async () => {
+    const handler = vi.fn().mockResolvedValue('ok');
+    registerSkill({ name: 'no-workspace-store-skill', description: 'test', handler });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    await executor.execute(makeCall({ name: 'no-workspace-store-skill' }));
+
+    const ctxArg = handler.mock.calls[0]?.[2] as { workspaceStore?: unknown };
+    expect(ctxArg.workspaceStore).toBeUndefined();
+  });
+
   it('should return error for unknown skill with available list', async () => {
     registerSkill({
       name: 'known-skill',
@@ -2089,6 +2137,98 @@ describe('SkillExecutor', () => {
       const firstCtorCall = capturedCtorArgs[0];
       const ctorOpts = firstCtorCall?.[0];
       expect(ctorOpts?.backgroundRegistry).toBeUndefined();
+    });
+
+    it('propagates workspaceStore into the SubagentExecutor ctx for fork-skill grandchild agent forks (PR #1213)', async () => {
+      // Regression (PR #1213): buildForkedChildConfig threaded workspaceStore
+      // into the child SubagentManager (fork-child-config.ts:144) but NOT into
+      // the SubagentExecutor ctx. That broke the preamble chain at depth ≥ 3
+      // on the fork-skill path: a skill-forked child's `agent` grandchild got
+      // a store-less manager. The agent-tool path (child-config.ts) was correct.
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'workspace-store-fork-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      // Sentinel store — identity check proves wiring, not behavior.
+      const sentinelStore = { __sentinel: 'workspace-store' } as never;
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+        workspaceStore: sentinelStore,
+      });
+
+      await executor.execute(makeCall({ name: 'workspace-store-fork-skill' }));
+
+      // The SubagentExecutor constructed inside buildForkedChildConfig must
+      // carry workspaceStore so a depth-2+ `agent` fork from inside this
+      // skill child gets the sibling-findings preamble.
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      expect(firstCtorCall).toBeDefined();
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.workspaceStore).toBe(sentinelStore);
+    });
+
+    it('omits workspaceStore from the SubagentExecutor ctx when none is configured', async () => {
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'no-workspace-store-fork-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+        // workspaceStore intentionally omitted
+      });
+
+      await executor.execute(makeCall({ name: 'no-workspace-store-fork-skill' }));
+
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.workspaceStore).toBeUndefined();
     });
   });
 

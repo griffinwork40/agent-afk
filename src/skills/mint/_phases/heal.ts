@@ -6,6 +6,7 @@
 
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
+import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
@@ -39,6 +40,13 @@ export async function runHealPhase(
   // Witness layer: parent trace writer (ctx.traceWriter) so the heal fork AND
   // the re-run verify subagents emit subagent_lifecycle events. Mirrors research.ts.
   traceWriter?: TraceSink,
+  // Shared workspace (ctx.workspaceStore), seeded on the heal fork manager AND
+  // forwarded to the re-run verify phase so both receive the sibling-findings
+  // preamble (injectWorkspacePreamble) — the workspace READ channel. This is the
+  // phase that most depends on it: heal reads what the failing verify subagents
+  // published rather than re-deriving the failure. See spec.ts / skills/index.ts
+  // SkillExecutionContext.workspaceStore.
+  workspaceStore?: WorkspaceStore,
 ): Promise<{
   healed: boolean;
   newHealIterations: number;
@@ -102,6 +110,7 @@ export async function runHealPhase(
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
       ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
       ...(traceWriter !== undefined ? { traceWriter } : {}),
+      ...(workspaceStore !== undefined ? { workspaceStore } : {}),
     });
     const healHandle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId },
@@ -170,6 +179,7 @@ export async function runHealPhase(
       defaultSubagentModel,
       parentReadRoots,
       traceWriter,
+      workspaceStore,
     );
 
     return {
