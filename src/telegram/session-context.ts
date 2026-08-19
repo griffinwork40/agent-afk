@@ -41,8 +41,8 @@ export interface TelegramSessionBuildContext {
   mcpManager: TelegramMcpManager;
   /** Bot-global store shared across every chat's hook bundle. */
   memoryStore: MemoryStore;
-  /** Bot-global workspace store; one SQLite per bot process, shared by all sessions. */
-  workspaceStore: WorkspaceStore;
+  /** Bot-global workspace store; one SQLite per bot process, shared by all sessions. Undefined when AFK_WORKSPACE_DISABLED=1. */
+  workspaceStore?: WorkspaceStore;
   /**
    * Telegram chat id for the originating session. Threaded from
    * `sessionConfig.telegramChatId` so the `TelegramBgResultNotifier` can

@@ -108,7 +108,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ? args.workspaceStore.queryRelevant(null, taskPrompt)
     : [];
 
-  return injectWorkspacePreamble(injectToolBudgetPreamble({
+  const assembled = injectToolBudgetPreamble({
     ...options.config,
     // Invariant (trace seal ownership): mark this session as a fork so it
     // never seals the SHARED witness trace. The whole tree shares ONE
@@ -300,5 +300,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
       : {}),
-  }), workspaceEntries);
+  });
+
+  return args.workspaceStore
+    ? injectWorkspacePreamble(assembled, workspaceEntries)
+    : assembled;
 }

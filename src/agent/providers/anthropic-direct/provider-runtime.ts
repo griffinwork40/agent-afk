@@ -85,7 +85,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   /** Non-null only when the caller provides an explicit `opts.tools` override. */
   private readonly externalTools: ToolDispatcher | undefined;
   private readonly memoryStore: MemoryStore;
-  private readonly workspaceStore: WorkspaceStore;
+  private readonly workspaceStore: WorkspaceStore | undefined;
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
   // Fields retained for per-query dispatcher construction (fixes C2 env race).
@@ -154,7 +154,7 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
-    this.workspaceStore = opts.workspaceStore ?? new WorkspaceStore();
+    this.workspaceStore = opts.workspaceStore;
     this.externalTools = opts.tools;
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
@@ -235,7 +235,7 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   close(): void {
     this.memoryStore.close();
-    this.workspaceStore.close();
+    this.workspaceStore?.close();
   }
 
   /**

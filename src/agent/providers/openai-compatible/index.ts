@@ -136,7 +136,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
   private readonly providerOpts: OpenAICompatibleProviderOptions;
   private readonly memoryStore: MemoryStore;
-  private readonly workspaceStore: WorkspaceStore;
+  private readonly workspaceStore: WorkspaceStore | undefined;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -176,7 +176,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.providerOpts = opts;
     this._defaultHeaders = opts.defaultHeaders;
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
-    this.workspaceStore = opts.workspaceStore ?? new WorkspaceStore();
+    this.workspaceStore = opts.workspaceStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
     // Executor-supplied `agent` def advertises named agent types when a
@@ -190,8 +190,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       schemas.push(...memoryToolSchemas);
     }
     // Workspace (per-session publish) + awareness (runtime-state) — parity
-    // with anthropic-direct/provider-schemas.ts.
-    schemas.push(...workspaceToolSchemas, getRuntimeStateTool);
+    // with anthropic-direct/provider-schemas.ts. Keep the workspace schema in
+    // lockstep with its handler when AFK_WORKSPACE_DISABLED omits the store.
+    schemas.push(...(this.workspaceStore !== undefined ? workspaceToolSchemas : []), getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name
     // collides with an already-present builtin (or an earlier custom tool) is
@@ -534,7 +535,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
       handlers.set(name, handler);
     }
     // Workspace tool: workspace_publish (per-session, ephemeral — no readOnly gate).
-    for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
+    // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
+    if (this.workspaceStore !== undefined) {
+      for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
+    }
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
     }
@@ -709,7 +713,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   close(): void {
     this.memoryStore.close();
-    this.workspaceStore.close();
+    this.workspaceStore?.close();
   }
 
   /**
