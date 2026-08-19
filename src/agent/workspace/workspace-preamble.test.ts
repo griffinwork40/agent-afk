@@ -136,11 +136,10 @@ describe('renderWorkspacePreamble', () => {
 describe('injectWorkspacePreamble', () => {
   const baseConfig: AgentConfig = { model: 'sonnet' };
 
-  it('injects empty-workspace hint when entries is empty', () => {
+  it('injects cold-start hint when entries is empty', () => {
     const result = injectWorkspacePreamble(baseConfig, []);
     expect(result).not.toBe(baseConfig);
-    expect(typeof result.systemPrompt).toBe('string');
-    expect(result.systemPrompt as string).toContain('workspace_publish');
+    expect(result.systemPrompt).toContain('workspace_publish');
   });
 
   it('does not mutate the input config', () => {
@@ -189,6 +188,17 @@ describe('injectWorkspacePreamble', () => {
     const result = injectWorkspacePreamble(config, [makeEntry()]);
     const sp = result.systemPrompt as { type: string; append: string };
     expect(sp.append).toContain('# Workspace context');
+  });
+
+  it('injects cold-start hint into preset systemPrompt when entries is empty', () => {
+    const config: AgentConfig = {
+      model: 'sonnet',
+      systemPrompt: { type: 'preset', promptId: 'repl' },
+    };
+    const result = injectWorkspacePreamble(config, []);
+    const sp = result.systemPrompt as { type: string; append: string };
+    expect(sp.type).toBe('preset');
+    expect(sp.append).toContain('workspace_publish');
   });
 
   it('preserves all other config fields unchanged', () => {

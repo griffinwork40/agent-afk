@@ -24,7 +24,6 @@ import { TelegramBot } from './bot.js';
 import { parseAllowedChatIds } from './allowlist.js';
 import { validateBotToken } from './setup-wizard.js';
 import { MemoryStore } from '../agent/memory/index.js';
-import { WorkspaceStore } from '../agent/workspace/workspace-store.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { loadConfig, loadTelegramConfig } from '../cli/config.js';
 import { getEnvConfigPath } from '../paths.js';
@@ -138,7 +137,6 @@ export async function main(): Promise<void> {
   }
 
   const sharedMemoryStore = new MemoryStore();
-  const sharedWorkspaceStore = new WorkspaceStore();
 
   // Optional working-directory override for every bot-spawned session.
   // When set, all per-chat AgentSessions (and their forked subagents)
@@ -168,7 +166,6 @@ export async function main(): Promise<void> {
       frameworkBase,
       telegramCwd,
       memoryStore: sharedMemoryStore,
-      workspaceStore: sharedWorkspaceStore,
     }),
   });
 
@@ -183,7 +180,6 @@ export async function main(): Promise<void> {
     clearInterval(statsInterval);
     await bot.stop();
     sharedMemoryStore.close();
-    sharedWorkspaceStore.close();
     console.log('✅ Bot stopped.');
     process.exit(0);
   };

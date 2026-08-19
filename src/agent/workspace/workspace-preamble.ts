@@ -85,7 +85,7 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
 /**
  * Append the workspace context preamble to a forked child's system prompt.
  *
- * Always injects — a short hint when empty, full preamble when populated.
+ * Always returns a new config — injects a cold-start hint when entries is empty, otherwise the rendered preamble.
  * Handles the same system-prompt union as `injectToolBudgetPreamble`:
  *   - string → append with `\n\n`
  *   - preset object → append to `sp.append`
@@ -97,9 +97,12 @@ export function injectWorkspacePreamble(
   config: AgentConfig,
   entries: WorkspaceEntry[],
 ): AgentConfig {
-  const block = entries.length > 0
-    ? renderWorkspacePreamble(entries)
-    : EMPTY_WORKSPACE_HINT;
+  // Cold-start hint: even with zero entries, tell the child about workspace_publish
+  // so the first agent to discover something can seed the workspace for siblings.
+  const block =
+    entries.length === 0
+      ? COLD_START_HINT
+      : renderWorkspacePreamble(entries);
   const sp = config.systemPrompt;
 
   if (typeof sp === 'string') {
@@ -123,17 +126,22 @@ export function injectWorkspacePreamble(
   return { ...config, systemPrompt: block };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 
 /**
- * Injected when the workspace is empty so every child knows the tool exists.
- * Without this, no agent ever publishes (chicken-and-egg: preamble only fires
- * when entries exist, but entries only exist when an agent publishes).
+ * Injected when the workspace is empty so the first agent knows the tool exists.
+ * Breaks the chicken-and-egg: agents can't discover workspace_publish from an
+ * empty preamble, so nobody ever publishes, so the preamble stays empty.
  */
-const EMPTY_WORKSPACE_HINT =
-  'You have a `workspace_publish` tool. When you discover an important finding, ' +
-  'root cause, key file, or hypothesis, publish it so sibling agents working on ' +
-  'the same task can see it and avoid re-reading files you already analyzed.';
+const COLD_START_HINT = [
+  '# Workspace (shared agent scratchpad)',
+  '',
+  'You have a `workspace_publish` tool. When you discover an important finding,',
+  'publish it so sibling agents working on the same task can skip re-deriving it.',
+  'No entries have been published yet — you may be the first.',
+].join('\n');
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function capitalise(s: string): string {
   return s.length === 0 ? s : (s[0]?.toUpperCase() ?? '') + s.slice(1);

@@ -98,6 +98,7 @@ export async function buildAnthropicTelegramSession(
     // matching the pre-refactor wiring.
     ...(traceWriter !== null ? { traceWriter } : {}),
     backgroundRegistry,
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
   });
 
   const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
