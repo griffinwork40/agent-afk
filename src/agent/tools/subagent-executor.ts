@@ -172,8 +172,20 @@ export interface SubagentExecutorContext {
    * root manager's own manager-level writer (bootstrap/chat/telegram wiring);
    * this field closes the same gap for the nested managers, mirroring how
    * `cwd` chains through every depth.
+   *
+   * `workspaceStore` (declared on the same line below) is the exact parallel for
+   * the workspace READ channel: forwarded into the same per-call child manager so
+   * depth ≥ 2 `agent` forks receive the sibling-findings preamble
+   * `injectWorkspacePreamble` builds from it. Depth-1 forks are likewise covered
+   * by the root manager's own store (wire-executors.ts). Without it the READ
+   * channel stopped at depth 1 while the WRITE channel (the provider's
+   * `workspace_publish` handler) reached every depth — so a grandchild could
+   * publish into a store whose contents it was never shown.
+   *
+   * The two share one declaration line because this file is grandfathered in
+   * .filesize-baseline.json, whose ratchet permits only shrinkage.
    */
-  traceWriter?: TraceSink;
+  traceWriter?: TraceSink; workspaceStore?: import('../workspace/index.js').WorkspaceStore;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`
@@ -735,7 +747,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
       ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
-      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}), ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 

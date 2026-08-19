@@ -138,9 +138,10 @@ export function buildForkedChildConfig(
     // subagent-executor.ts:294.
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     // Read-scope inheritance (#547): see childInheritedReadRoots above.
+    // 2nd spread = workspace READ channel for grandchild `agent` forks.
     ...(childInheritedReadRoots !== undefined
       ? { parentReadRoots: childInheritedReadRoots }
-      : {}),
+      : {}), ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
   });
   const childExecutor = new SubagentExecutor({
     subagentManager: childManager,

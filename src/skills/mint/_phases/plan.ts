@@ -9,6 +9,7 @@ import { resolveCredentialForModel } from '../../../agent/auth/credential-resolv
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
+import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 
 export async function runPlanPhase(
   spec: string,
@@ -26,6 +27,12 @@ export async function runPlanPhase(
   // Witness layer: parent trace writer (ctx.traceWriter) so this phase's fork
   // emits subagent_lifecycle events. Mirrors research.ts.
   traceWriter?: TraceSink,
+  // Shared workspace (ctx.workspaceStore). Seeds the fork manager so this
+  // phase's subagent receives the sibling-findings preamble
+  // (injectWorkspacePreamble) — the workspace READ channel. Publishing already
+  // works without it; reading does not. See spec.ts / skills/index.ts
+  // SkillExecutionContext.workspaceStore.
+  workspaceStore?: WorkspaceStore,
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const planPrompt = prompts['plan.md'];
@@ -39,6 +46,7 @@ export async function runPlanPhase(
     ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     ...(traceWriter !== undefined ? { traceWriter } : {}),
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
   });
   const planHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },

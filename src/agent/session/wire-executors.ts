@@ -200,6 +200,16 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   // 1. The single root manager. Every executor below reads through this
   //    instance; a second manager would fork children outside the abort graph
   //    and outside the parent's read scope.
+  //
+  //    Workspace READ channel: the store must reach the MANAGER, not just the
+  //    child providers below. The two channels are separate and each is
+  //    load-bearing — the provider factory (step 2) registers the
+  //    `workspace_publish` handler against the shared store (WRITE), while the
+  //    manager is what feeds `assembleChildConfig` → `injectWorkspacePreamble`
+  //    (subagent/fork-child-config.ts:107), which queries relevant entries and
+  //    injects them into the child's system prompt (READ). Omitting it here left
+  //    every depth-1 `agent`/`skill` fork on every surface able to publish but
+  //    blind to what its siblings had already published.
   const rootManager = new SubagentManager({
     ...apiKeyOpt,
     parentModel: managerParentModel,
@@ -207,6 +217,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...cwdOpt,
     ...traceOpt,
     surface,
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing
@@ -243,6 +254,9 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     agentRegistry,
     openaiBaseUrl,
     xaiBaseUrl,
+    // Workspace READ channel at every nesting depth — a skill dispatched BY a
+    // skill otherwise gets a store-less executor and its forks lose the preamble.
+    opts.workspaceStore,
   );
 
   // 5. `agent` tool.
@@ -271,6 +285,10 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     inboundAttachmentRegistry,
     parentModel: model,
     ...traceOpt,
+    // Workspace READ channel for depth ≥ 2 `agent` forks. The root manager above
+    // covers depth 1; this covers the nested managers buildChildConfig creates,
+    // exactly as traceOpt does. See SubagentExecutorContext.workspaceStore.
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
   // 6. `skill` tool.
@@ -295,6 +313,11 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // session's read scope via the root manager — symmetric with the `agent`
     // tool. Read fresh so mid-session setCwd re-anchors are reflected.
     getReadScopeInputs: () => rootManager.getReadScopeInputs(),
+    // Workspace READ channel for INLINE skill handlers only. Fork-path skill
+    // children already inherit it via childProviderFactory + rootManager; an
+    // inline handler (`/mint` phases, `/audit-fit`) builds its own manager, so
+    // the store has to reach it as data on SkillExecutionContext.
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
   // 7. `compose` tool. Nodes receive the raw base prompt so they stay task
