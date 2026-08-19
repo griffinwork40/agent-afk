@@ -97,8 +97,8 @@ export async function buildAnthropicTelegramSession(
     // the nested skill-executor factory (no `skillTraceWriter`) —
     // matching the pre-refactor wiring.
     ...(traceWriter !== null ? { traceWriter } : {}),
-    backgroundRegistry,
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    backgroundRegistry,
   });
 
   const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
