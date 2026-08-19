@@ -199,8 +199,12 @@ interface DedupReport {
   toolFilter: string;
   totalCalls: number;
   uniqueFingerprints: number;
-  duplicatedCalls: number;
-  deduplicationRatio: number;
+  /** Calls where a *different* agent already read the same tool+args. */
+  crossAgentDuplicates: number;
+  /** Same agent repeating the same tool+args (retries / loops). */
+  selfDuplicates: number;
+  /** crossAgentDuplicates / totalCalls — the headline A/B metric. */
+  crossAgentDedupRatio: number;
   distinctAgents: number;
   /** Fingerprints read by >1 agent, sorted by total calls descending. */
   hotFingerprints: Array<{
@@ -221,13 +225,15 @@ function analyze(
   skippedNoFingerprint: number,
   totalToolCallStarted: number,
 ): DedupReport {
-  // Group by argsFingerprint
+  // Group by (toolName, argsFingerprint) so different tools with identical
+  // args (especially `{}`) don't collapse into one group.
   const groups = new Map<string, FingerprintGroup>();
   const allAgents = new Set<string>();
 
   for (const c of calls) {
     allAgents.add(c.subagentId);
-    let g = groups.get(c.argsFingerprint);
+    const groupKey = `${c.name}|${c.argsFingerprint}`;
+    let g = groups.get(groupKey);
     if (!g) {
       g = {
         fingerprint: c.argsFingerprint,
@@ -236,24 +242,51 @@ function analyze(
         totalCalls: 0,
         callDetails: [],
       };
-      groups.set(c.argsFingerprint, g);
+      groups.set(groupKey, g);
     }
     g.agents.add(c.subagentId);
     g.totalCalls++;
     g.callDetails.push({ subagentId: c.subagentId, seq: c.seq, ts: c.ts });
   }
 
-  // A call is "duplicated" if its fingerprint was seen by >1 distinct agent.
-  // The first occurrence per fingerprint is the "unique" read; every subsequent
-  // call with the same fingerprint from a different agent is redundant.
-  let duplicatedCalls = 0;
+  // Cross-agent duplication: for each group with >1 distinct agent, count
+  // calls beyond the first per group as cross-agent duplicates. But only
+  // count calls from the SECOND+ agent — the first agent's calls are
+  // original, not duplicated.
+  //
+  // Self-duplication: same agent repeating the same call (retries/loops).
+  // Tracked separately so it doesn't inflate the cross-agent metric.
+  let crossAgentDuplicates = 0;
+  let selfDuplicates = 0;
   const hotFingerprints: DedupReport['hotFingerprints'] = [];
 
   for (const g of groups.values()) {
-    if (g.agents.size > 1) {
-      // All calls beyond one-per-unique-agent are duplicates.
-      // Simple metric: totalCalls - 1 = redundant (the first was needed).
-      duplicatedCalls += g.totalCalls - 1;
+    // Count calls per agent within this group
+    const perAgent = new Map<string, number>();
+    for (const d of g.callDetails) {
+      perAgent.set(d.subagentId, (perAgent.get(d.subagentId) ?? 0) + 1);
+    }
+
+    // Self-duplicates: within any single agent, calls beyond the first
+    for (const count of perAgent.values()) {
+      if (count > 1) selfDuplicates += count - 1;
+    }
+
+    // Cross-agent duplicates: every agent beyond the first contributes
+    // all of its calls as cross-agent redundancy (the first agent "owns"
+    // the original read).
+    if (perAgent.size > 1) {
+      const agents = [...perAgent.entries()].sort((a, b) => {
+        // The agent with the earliest call owns the original
+        const aFirst = g.callDetails.find(d => d.subagentId === a[0])!;
+        const bFirst = g.callDetails.find(d => d.subagentId === b[0])!;
+        return aFirst.seq - bFirst.seq;
+      });
+      // Skip the first agent; count all calls from subsequent agents
+      for (let i = 1; i < agents.length; i++) {
+        crossAgentDuplicates += agents[i]![1];
+      }
+
       hotFingerprints.push({
         fingerprint: g.fingerprint.slice(0, 16),
         toolName: g.toolName,
@@ -261,24 +294,22 @@ function analyze(
         totalCalls: g.totalCalls,
         agents: [...g.agents],
       });
-    } else if (g.totalCalls > 1) {
-      // Same agent, same args — still redundant (self-dedup).
-      duplicatedCalls += g.totalCalls - 1;
     }
   }
 
   hotFingerprints.sort((a, b) => b.totalCalls - a.totalCalls);
 
   const totalCalls = calls.length;
-  const deduplicationRatio = totalCalls > 0 ? duplicatedCalls / totalCalls : 0;
+  const crossAgentDedupRatio = totalCalls > 0 ? crossAgentDuplicates / totalCalls : 0;
 
   return {
     tracePath,
     toolFilter: allTools ? 'all tools' : 'read_file only',
     totalCalls,
     uniqueFingerprints: groups.size,
-    duplicatedCalls,
-    deduplicationRatio,
+    crossAgentDuplicates,
+    selfDuplicates,
+    crossAgentDedupRatio,
     distinctAgents: allAgents.size,
     hotFingerprints: hotFingerprints.slice(0, 20),
     skippedNoFingerprint,
@@ -299,10 +330,11 @@ function printHuman(report: DedupReport): void {
     console.log(`⚠  ${report.skippedNoFingerprint} tool_call events lacked argsFingerprint (pre-upgrade trace)\n`);
   }
 
-  console.log(`  Total calls:           ${report.totalCalls}`);
-  console.log(`  Unique fingerprints:   ${report.uniqueFingerprints}`);
-  console.log(`  Duplicated calls:      ${report.duplicatedCalls}`);
-  console.log(`  Deduplication ratio:   ${(report.deduplicationRatio * 100).toFixed(1)}%`);
+  console.log(`  Total calls:             ${report.totalCalls}`);
+  console.log(`  Unique fingerprints:     ${report.uniqueFingerprints}`);
+  console.log(`  Cross-agent duplicates:  ${report.crossAgentDuplicates}  (sibling read same file)`);
+  console.log(`  Self-duplicates:         ${report.selfDuplicates}  (same agent repeated)`);
+  console.log(`  Cross-agent dedup ratio: ${(report.crossAgentDedupRatio * 100).toFixed(1)}%`);
   console.log();
 
   if (report.hotFingerprints.length > 0) {

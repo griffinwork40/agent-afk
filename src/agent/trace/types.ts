@@ -53,12 +53,15 @@ export interface ToolCallStartedPayload {
    * across sibling subagents (e.g. "did two children read the same file?")
    * without storing the full args blob in the trace.
    *
+   * Always present on new traces (the builder always emits it). Optional
+   * for backward compat with traces recorded before this field was added.
+   *
    * Replaces the proxy fingerprint (`v1-bytes-tuple`) that
    * `repeated-tool-use.ts` derived from `(name, inputBytes, resultBytes,
    * isError, subagentId)` — that scheme false-collided on unrelated calls
    * with identical byte counts.
    */
-  argsFingerprint: string;
+  argsFingerprint?: string;
   /** Present when the call originates inside a fork. */
   subagentId?: string;
 }

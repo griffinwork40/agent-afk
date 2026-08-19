@@ -28,7 +28,9 @@ export const ToolCallStartedPayloadSchema = z.object({
   toolUseId: z.string(),
   name: z.string(),
   inputBytes: z.number().int().nonnegative(),
-  argsFingerprint: z.string(),
+  /** Optional for backward compat: traces recorded before this field was
+   *  added lack it. New traces always produce it. */
+  argsFingerprint: z.string().optional(),
   subagentId: z.string().optional(),
 });
 

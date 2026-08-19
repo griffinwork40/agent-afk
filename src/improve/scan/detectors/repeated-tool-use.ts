@@ -140,7 +140,7 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
       seq: number;
       name: string;
       inputBytes: number;
-      argsFingerprint: string;
+      argsFingerprint: string | undefined;
       subagentId: string | undefined;
     }
   >();
@@ -164,12 +164,20 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
     if (!started) continue; // mismatched / out-of-order; ignore
     startedById.delete(ev.payload.toolUseId);
 
-    // Invariant: use argsFingerprint from the started event — a SHA-256 of
-    // the full serialized tool input — rather than the v1-bytes-tuple proxy.
-    // This eliminates false collisions from unrelated calls with identical
-    // byte counts. The proxy computeFingerprint is retained for backward
-    // compat with pre-upgrade traces that lack argsFingerprint.
-    const fingerprint = started.argsFingerprint;
+    // Invariant: the fingerprint must incorporate the tool name so different
+    // tools with identical args (especially `{}`) don't collide.
+    // Use argsFingerprint from the started event when present (v2); fall back
+    // to the v1-bytes-tuple proxy for pre-upgrade traces that lack it.
+    const argsHash = started.argsFingerprint;
+    const fingerprint = argsHash
+      ? createHash('sha256').update(`${ev.payload.name}|${argsHash}`).digest('hex')
+      : computeFingerprint({
+          name: ev.payload.name,
+          inputBytes: started.inputBytes,
+          resultBytes: ev.payload.resultBytes,
+          isError: ev.payload.isError,
+          subagentId: started.subagentId,
+        });
 
     pairs.push({
       toolUseId: ev.payload.toolUseId,
