@@ -44,6 +44,13 @@ export interface TelegramSessionBuildContext {
   /** Bot-global workspace store; one SQLite per bot process, shared by all sessions. */
   workspaceStore: WorkspaceStore;
   /**
+   * Telegram chat id for the originating session. Threaded from
+   * `sessionConfig.telegramChatId` so the `TelegramBgResultNotifier` can
+   * push background job notifications to the right chat in multi-chat setups.
+   * Undefined when not set (falls back to bot-global notify targets).
+   */
+  chatId?: number;
+  /**
    * Report the session the moment it is constructed.
    *
    * Invariant: the factory's catch block closes an already-constructed session

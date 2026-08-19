@@ -62,9 +62,16 @@ export class TelegramBgResultNotifier {
 
     const text = formatNotification(job);
     // Fire-and-forget: a push failure here is non-fatal — the job already
-    // settled and its result is available via the registry. Swallow errors
-    // to avoid leaking unhandled rejections into the session.
-    void pushIfConfigured(text, { target: this.chatId }).catch(() => {});
+    // settled and its result is available via the registry. Log failures for
+    // observability since push is the ONLY delivery path on Telegram (unlike
+    // REPL which also injects results into the next turn).
+    void pushIfConfigured(text, { target: this.chatId }).catch((err: unknown) => {
+      // Non-fatal: the job result is still in the registry (join-able).
+      console.error(`[bg-notifier] push failed for job ${job.jobId}:`, err);
+    });
+    // Emit a background_agent.delivered witness event so trace readers can
+    // distinguish push-notified settlements from explicit /bgsub:join calls.
+    this.registry.markDelivered(job.jobId);
   };
 
   /**

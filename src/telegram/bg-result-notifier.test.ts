@@ -173,7 +173,7 @@ describe('TelegramBgResultNotifier', () => {
     expect(pushMock).not.toHaveBeenCalled();
   });
 
-  it('swallows push errors without throwing', () => {
+  it('swallows push errors without throwing', async () => {
     pushMock.mockRejectedValueOnce(new Error('network failure'));
 
     const { handle, fireTerminal } = makeBgHandle();
@@ -183,8 +183,12 @@ describe('TelegramBgResultNotifier', () => {
       model: 'sonnet',
     });
 
-    // Should not throw — the error is swallowed.
-    expect(() => fireTerminal(succeed(job.jobId, 'done'))).not.toThrow();
-    expect(pushMock).toHaveBeenCalledTimes(1);
+    // fireTerminal is sync; the push rejection is async.
+    fireTerminal(succeed(job.jobId, 'done'));
+    // Drain microtask queue — if .catch() were missing, an unhandled
+    // rejection would surface here.
+    await vi.waitFor(() => {
+      expect(pushMock).toHaveBeenCalledTimes(1);
+    });
   });
 });
