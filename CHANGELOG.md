@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.138.4] - 2026-08-19
+
+### Fixed
+- wire compose executor's missing onSubagentSucceeded cost rollup (#1211) (31d04365)
+
+### Changed
+- harden portHasOwner — execFileSync, permission-denied, IPv6 guard (#1167) (#1175) (2d12806c)
+
 ## [5.138.3] - 2026-08-19
 
 ### Fixed
