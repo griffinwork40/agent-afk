@@ -55,6 +55,7 @@ describe('NdjsonTraceWriter', () => {
         toolUseId: 't1',
         name: 'bash',
         inputBytes: 42,
+        argsFingerprint: 'a'.repeat(64),
       },
     });
     await writer.write({

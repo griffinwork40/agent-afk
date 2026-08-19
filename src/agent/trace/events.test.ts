@@ -31,6 +31,7 @@ describe('tool_call payload', () => {
         toolUseId: 't1',
         name: 'bash',
         inputBytes: 100,
+        argsFingerprint: 'a'.repeat(64),
       }),
     ).not.toThrow();
   });
@@ -168,6 +169,7 @@ describe('tool_call payload', () => {
         toolUseId: 't1',
         name: 'bash',
         inputBytes: -1,
+        argsFingerprint: 'a'.repeat(64),
       }),
     ).toThrow();
   });
@@ -540,6 +542,7 @@ describe('TraceEventInputSchema (whole-event)', () => {
           toolUseId: 't',
           name: 'b',
           inputBytes: 0,
+          argsFingerprint: 'a'.repeat(64),
         },
       },
       {
