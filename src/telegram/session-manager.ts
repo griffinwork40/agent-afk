@@ -242,7 +242,7 @@ export class SessionManager {
       const config: AgentConfig = {
         model: data.model,
         apiKey: this.options.apiKey,
-      };
+        telegramChatId: route.chatId };
       if (this.options.settingSources?.length) {
         config.settingSources = this.options.settingSources;
       }
@@ -259,7 +259,6 @@ export class SessionManager {
       if (effectiveCwd !== undefined && effectiveCwd.length > 0) {
         config.cwd = effectiveCwd;
       }
-
       // /switch: continue a staged prior conversation instead of starting fresh.
       // Consumed after a successful build below — a failed createSession leaves it
       // staged so the next getSession retries the resume; teardown via _resetStats
