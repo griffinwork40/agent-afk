@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.136.0] - 2026-08-19
+
+### Added
+- auto-scroll to bottom on keypress when scrolled up (#1208) (#1208) (f8d45484)
+
 ## [5.135.0] - 2026-08-19
 
 ### Added
