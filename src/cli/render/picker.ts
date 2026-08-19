@@ -64,6 +64,8 @@ export interface PickerHost {
   enterPickerMode(controller: PickerController): void;
   exitPickerMode(): void;
   repaintPicker(): void;
+  /** Current terminal height, when the host can report it. */
+  terminalRows?(): number | undefined;
 }
 
 export interface RunPickerOptions {
@@ -201,6 +203,16 @@ export function runPicker(
     let cursor = clamp(initialIndex, 0, options.length - 1);
     let scrollOffset = 0;
 
+    /** Option rows that fit without crossing the compositor's bottom margin. */
+    const viewportSize = (optionCount: number): number => {
+      const terminalRows = host.terminalRows?.();
+      if (terminalRows === undefined) return WINDOW_SIZE;
+      const fixedRows = header.length + (searchable ? 1 : 0) + 1;
+      const withoutIndicator = Math.max(0, terminalRows - 1 - fixedRows);
+      const indicatorRows = optionCount > Math.min(WINDOW_SIZE, withoutIndicator) ? 1 : 0;
+      return Math.min(WINDOW_SIZE, Math.max(0, withoutIndicator - indicatorRows));
+    };
+
     /** Clamp cursor to the current active-option range and adjust scroll. */
     const clampCursorAndScroll = (): void => {
       const len = activeOptions().length;
@@ -209,11 +221,14 @@ export function runPicker(
         scrollOffset = 0;
         return;
       }
+      const windowSize = viewportSize(len);
       cursor = clamp(cursor, 0, len - 1);
       // Keep cursor in the visible window.
       if (cursor < scrollOffset) scrollOffset = cursor;
-      if (cursor >= scrollOffset + WINDOW_SIZE) scrollOffset = cursor - WINDOW_SIZE + 1;
-      scrollOffset = clamp(scrollOffset, 0, Math.max(0, len - WINDOW_SIZE));
+      if (windowSize > 0 && cursor >= scrollOffset + windowSize) {
+        scrollOffset = cursor - windowSize + 1;
+      }
+      scrollOffset = clamp(scrollOffset, 0, Math.max(0, len - windowSize));
     };
 
     const selected = new Set<number>(opts.initialSelected ?? []);
@@ -241,10 +256,12 @@ export function runPicker(
 
       const ao = activeOptions();
       const len = ao.length;
+      const windowSize = viewportSize(len);
+      clampCursorAndScroll();
 
       // Virtual-scroll window.
       const visStart = scrollOffset;
-      const visEnd = Math.min(scrollOffset + WINDOW_SIZE, len);
+      const visEnd = Math.min(scrollOffset + windowSize, len);
 
       for (let vi = visStart; vi < visEnd; vi++) {
         const label = ao[vi] ?? '';
@@ -271,7 +288,7 @@ export function runPicker(
       }
 
       // Scroll indicator — shown when the list is longer than the window.
-      if (len > WINDOW_SIZE) {
+      if (len > windowSize) {
         const lo = visStart + 1;
         const hi = visEnd;
         lines.push(palette.dim(`  (${lo}–${hi} of ${len}  ↑/↓ scroll)`));
@@ -337,6 +354,8 @@ export function runPicker(
       }
 
       if (key.name === 'return') {
+        // An empty filtered view has no highlighted option to confirm.
+        if (searchable && filteredResults.length === 0) return;
         if (multi) {
           const out: string[] = [];
           for (let i = 0; i < options.length; i++) {

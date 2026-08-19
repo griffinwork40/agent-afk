@@ -30,6 +30,12 @@ class FakePickerHost implements PickerHost {
   repaintCalls = 0;
   controller: PickerController | null = null;
 
+  constructor(private readonly rows?: number) {}
+
+  terminalRows(): number | undefined {
+    return this.rows;
+  }
+
   enterPickerMode(controller: PickerController): void {
     this.enterCalls += 1;
     this.controller = controller;
@@ -561,6 +567,20 @@ describe('runPicker — virtual scroll', () => {
     await p;
   });
 
+  it('sizes the viewport to the available terminal rows', async () => {
+    const host = new FakePickerHost(24);
+    const p = runPicker(host, {
+      header: ['one', 'two', 'three'],
+      options: makeOpts(50),
+      searchable: true,
+    });
+    const rows = host.renderSnapshot();
+    expect(rows.length).toBeLessThanOrEqual(23);
+    expect(rows.filter((row) => row.includes('option-')).length).toBe(17);
+    host.pressKey('escape');
+    await p;
+  });
+
   it('shows a scroll indicator for lists longer than WINDOW_SIZE', async () => {
     const host = new FakePickerHost();
     const p = runPicker(host, { header: [], options: makeOpts(30) });
@@ -634,6 +654,21 @@ describe('runPicker — virtual scroll', () => {
 // ---------------------------------------------------------------------------
 
 describe('runPicker — searchable mode', () => {
+  it('ignores Enter when the filter has no matches', async () => {
+    const host = new FakePickerHost();
+    const p = runPicker(host, {
+      header: [],
+      options: ['apple', 'banana'],
+      searchable: true,
+    });
+    host.pressKey('z', { char: 'z' });
+    host.pressKey('return');
+    expect(host.exitCalls).toBe(0);
+    host.pressKey('escape');
+    host.pressKey('escape');
+    expect(await p).toBeNull();
+  });
+
   it('printable char appends to filter query and narrows options', async () => {
     const host = new FakePickerHost();
     const p = runPicker(host, {
