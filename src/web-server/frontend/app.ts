@@ -139,6 +139,7 @@ async function loadSessions(): Promise<void> {
 
 function selectSession(id: string): void {
   activeId = id;
+  const snapshotId = activeId;
   items = [];
   panel().clear();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
@@ -152,6 +153,7 @@ function selectSession(id: string): void {
 
   stream = new SessionStream(id, token, {
     onEvent: (data) => {
+      if (activeId !== snapshotId) return;
       const frame = data as { record?: LedgerRecordLike };
       const record = frame.record;
       if (!record) return;
@@ -180,6 +182,7 @@ function selectSession(id: string): void {
       renderMeter();
     },
     onStatus: (status) => {
+      if (activeId !== snapshotId) return;
       const node = $('status');
       // Report the session's end honestly. 'ended' means the ledger reached its
       // terminal record and no further frame can arrive, so the indicator must
@@ -242,12 +245,14 @@ async function createSession(): Promise<void> {
   const button = $('new-session') as HTMLButtonElement;
   button.disabled = true;
   button.textContent = 'starting…';
+  const snapshotId = activeId;
   try {
     const { session } = await api<{ session: { id: string } }>('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({}),
     });
     await loadSessions();
+    if (activeId !== snapshotId) return;
     selectSession(session.id);
   } catch (err: unknown) {
     $('status').textContent = err instanceof Error ? err.message : 'could not start session';
