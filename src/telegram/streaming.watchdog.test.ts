@@ -193,7 +193,6 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
       await vi.advanceTimersByTimeAsync(2);
       await rejection;
 
-      void resolveSecond; // silence unused var warning
     } finally {
       vi.useRealTimers();
     }
