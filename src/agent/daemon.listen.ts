@@ -15,7 +15,7 @@
  */
 
 import type { Server } from 'node:http';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 // Invariant: these are the only two loopback literals the fallback considers.
 // 'localhost' is intentionally excluded — its resolution is OS-dependent and
@@ -62,8 +62,11 @@ export function listenWithRecovery(
       logFallback(requestedPort, host, fallback);
       return result;
     } catch (retryErr: unknown) {
-      // Fallback also failed — surface the original error with diagnostics.
-      throw enrichEaddrinuse(requestedPort, host);
+      // Fallback also failed — both loopback addresses are occupied.
+      process.stderr.write(
+        `[daemon] EADDRINUSE on ${host}:${requestedPort} and fallback ${fallback}:${requestedPort} — both loopback addresses are occupied.\n`,
+      );
+      throw enrichEaddrinuse(requestedPort, host, fallback);
     }
   });
 }
@@ -122,18 +125,31 @@ function loopbackFallback(host: string): string | undefined {
 function portHasOwner(port: number): boolean | null {
   try {
     // lsof exits 0 with output when a listener exists, and exits 1 with no
-    // output when nothing matches. execSync throws on non-zero exit.
-    const out = execSync(`lsof -i :${port} -sTCP:LISTEN -t`, {
+    // output when nothing matches. execFileSync throws on non-zero exit.
+    // Using execFileSync (no shell) eliminates shell-injection risk on `port`.
+    const out = execFileSync('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t'], {
       encoding: 'utf-8',
       timeout: 3_000,
       stdio: ['pipe', 'pipe', 'pipe'], // capture stderr to distinguish lsof-not-found
     });
     return out.trim().length > 0;
   } catch (err: unknown) {
-    // Distinguish "lsof ran, found nothing" (exit 1) from "lsof not found" (exit 127/ENOENT).
+    // Distinguish "lsof ran, found nothing" (exit 1) from "lsof not found"
+    // (exit 127/ENOENT) or permission-denied (exit 1 with stderr warning).
     if (err && typeof err === 'object' && 'status' in err) {
       const status = (err as { status: number | null }).status;
-      if (status === 1) return false; // lsof ran, no listener → ghost
+      if (status === 1) {
+        // A stderr "Permission denied" or "WARNING:" means lsof was restricted
+        // from inspecting the socket — we cannot confirm there is no owner.
+        const stderr =
+          'stderr' in err && typeof (err as { stderr: unknown }).stderr === 'string'
+            ? (err as { stderr: string }).stderr
+            : '';
+        if (stderr.includes('Permission denied') || stderr.includes('WARNING:')) {
+          return null; // lsof ran but was restricted → unknown
+        }
+        return false; // lsof ran cleanly, found no listener → ghost socket
+      }
     }
     return null; // lsof unavailable or unexpected error → unknown
   }
@@ -142,18 +158,27 @@ function portHasOwner(port: number): boolean | null {
 /**
  * Build an enriched EADDRINUSE error.
  *
- * @param ownershipStatus - `true` or `undefined` = real/unknown owner (default message);
- *                          `null` = lsof unavailable (ownership-unknown message).
+ * @param ownershipStatus - `null` = lsof unavailable (ownership-unknown message);
+ *                          a string = fallback address that also failed;
+ *                          `undefined` = real/unknown owner (default message).
  */
 function enrichEaddrinuse(
   port: number,
   host: string,
-  ownershipStatus?: boolean | null,
+  ownershipStatus?: string | null,
 ): NodeJS.ErrnoException {
-  const msg =
-    ownershipStatus === null
-      ? `listen EADDRINUSE: address already in use ${host}:${port}. lsof unavailable — ownership unknown; cannot determine if a ghost socket or a real listener holds the port. Try --port <other>.`
-      : `listen EADDRINUSE: address already in use ${host}:${port}. If no process owns this port (check: lsof -i :${port}), the kernel may hold a ghost socket from a killed daemon. A reboot clears it; or try --port <other>.`;
+  let msg: string;
+  if (ownershipStatus === null) {
+    msg = `listen EADDRINUSE: address already in use ${host}:${port}. lsof unavailable — ownership unknown; cannot determine if a ghost socket or a real listener holds the port. Try --port <other>.`;
+  } else if (typeof ownershipStatus === 'string') {
+    // ownershipStatus is the fallback address that also failed.
+    msg =
+      `listen EADDRINUSE: address already in use ${host}:${port} ` +
+      `(fallback ${ownershipStatus}:${port} also failed). ` +
+      `Both loopback addresses are occupied. Try --port <other>.`;
+  } else {
+    msg = `listen EADDRINUSE: address already in use ${host}:${port}. If no process owns this port (check: lsof -i :${port}), the kernel may hold a ghost socket from a killed daemon. A reboot clears it; or try --port <other>.`;
+  }
   const enriched = new Error(msg) as NodeJS.ErrnoException;
   enriched.code = 'EADDRINUSE';
   return enriched;
