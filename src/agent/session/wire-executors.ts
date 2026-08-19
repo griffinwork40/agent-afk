@@ -207,6 +207,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...cwdOpt,
     ...traceOpt,
     surface,
+    ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
   });
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing
