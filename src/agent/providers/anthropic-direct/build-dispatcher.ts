@@ -23,6 +23,8 @@ import type { CanUseTool } from '../../types/sdk-types.js';
 import type { PlanExitControls } from '../../types/config-types.js';
 import type { HookRegistry } from '../../hooks.js';
 import type { MemoryStore } from '../../memory/index.js';
+import type { WorkspaceStore } from '../../workspace/workspace-store.js';
+import { createWorkspaceHandlers } from '../../workspace/index.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
@@ -104,6 +106,7 @@ export interface BuildDispatcherOptions {
  */
 export interface BuildDispatcherDeps {
   memoryStore: MemoryStore;
+  workspaceStore: WorkspaceStore;
   surface: string;
   readOnlyMemory: boolean;
   readOnlyBash: boolean;
@@ -152,6 +155,13 @@ export function buildDispatcher(
   // `memory_update` / `procedure_write` despite the schema being absent.
   for (const [name, handler] of memoryHandlers) {
     if (deps.readOnlyMemory && name !== 'memory_search') continue;
+    handlers.set(name, handler);
+  }
+  // Workspace tool: workspace_publish. Registered for ALL sessions —
+  // children publish findings; the parent can too. No readOnly gate
+  // (workspace is per-session and ephemeral, unlike memory).
+  const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '', opts?.subagentId);
+  for (const [name, handler] of wsHandlers) {
     handlers.set(name, handler);
   }
   if (opts?.runtimeStateSource) {

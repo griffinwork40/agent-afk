@@ -28,15 +28,15 @@ import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
-import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory } from '../../agent/memory/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
-import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
+import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 
 /**
  * Options for {@link buildDaemonSessionFactory}.
@@ -75,7 +75,7 @@ export function buildDaemonSessionFactory(
   // store is intentionally not closed here: the daemon owns it for its whole
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
   // process.exit(), which reclaims the descriptor.
-  let memoryStore: MemoryStore | undefined;
+  let memoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
   return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
@@ -108,7 +108,7 @@ export function buildDaemonSessionFactory(
       // No backgroundRegistry: background dispatch is interactive-only.
     });
 
-    memoryStore ??= new MemoryStore();
+    memoryStore ??= new MemoryStore(); workspaceStore ??= new WorkspaceStore();
     const mcpManager = config.mcpManager;
     const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
 
@@ -116,7 +116,7 @@ export function buildDaemonSessionFactory(
       subagentExecutor,
       skillExecutor,
       composeExecutor,
-      memoryStore,
+      memoryStore, workspaceStore,
       model: String(opts.model),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(mcpManager !== undefined ? { mcpManager } : {}),
@@ -127,7 +127,7 @@ export function buildDaemonSessionFactory(
       subagentExecutor,
       skillExecutor,
       composeExecutor,
-      memoryStore,
+      memoryStore, workspaceStore,
       surface: 'daemon',
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });

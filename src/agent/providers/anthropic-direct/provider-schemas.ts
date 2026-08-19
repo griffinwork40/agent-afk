@@ -11,6 +11,7 @@
 
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
 import { memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
+import { workspaceToolSchemas } from '../../workspace/index.js';
 import { getRuntimeStateTool } from '../../awareness/index.js';
 import type { AnthropicDirectProviderOptions } from './provider-options.js';
 import type { AnthropicToolDef } from '../../tools/types.js';
@@ -51,6 +52,10 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   // available — it reads in-memory state only, so there is no executor
   // gating like `agent`/`skill`/`compose`. The source is constructed
   // per-query in `query()` and merged into the dispatcher handler map.
+  // Workspace tool: workspace_publish. Always available — children publish
+  // findings to the shared per-session workspace; no readOnly gate (workspace
+  // is ephemeral, unlike cross-session memory).
+  schemas.push(...workspaceToolSchemas);
   schemas.push(getRuntimeStateTool);
   // Custom (consumer-registered) tool schemas are appended last so their
   // names never silently shadow a builtin. A custom schema whose name
