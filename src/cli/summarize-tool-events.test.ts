@@ -66,12 +66,47 @@ describe('summarizeToolEvents', () => {
     expect(result).toBe('\n[Tools used: glob({"pattern":"**/*.ts"})✓]');
   });
 
-  it('truncates inputRaw fallback at 80 chars', () => {
+  it('truncates inputRaw fallback at 80 chars with ellipsis', () => {
     const longRaw = '"' + 'r'.repeat(100) + '"';
     const result = summarizeToolEvents([makeEvent({ input: '', inputRaw: longRaw })]);
-    // inputRaw is sliced to 80 before passing through the truncation
-    const raw80 = longRaw.slice(0, 80);
-    expect(result).toBe(`\n[Tools used: bash(${raw80})✓]`);
+    // longRaw is 102 chars — truncated uniformly at 77 chars + '…'
+    const expected = longRaw.slice(0, 77) + '…';
+    expect(result).toBe(`\n[Tools used: bash(${expected})✓]`);
+  });
+
+  it('deduplicates events with the same toolUseId, keeping the last (completed) entry', () => {
+    // Simulates the turn-handler writing a pending placeholder first (isError: false, no result)
+    // and then the real completed entry second (isError: true, with result).
+    const placeholder: ToolEvent = {
+      toolName: 'bash',
+      toolUseId: 'tu_abc',
+      input: 'echo hello',
+      isError: false, // placeholder shows success even for failed calls
+    };
+    const completed: ToolEvent = {
+      toolName: 'bash',
+      toolUseId: 'tu_abc',
+      input: 'echo hello',
+      isError: true, // real entry reflects the actual outcome
+      result: 'command not found',
+    };
+    const result = summarizeToolEvents([placeholder, completed]);
+    // Only one entry should appear, and it must be the completed (✗) entry
+    expect(result).toBe('\n[Tools used: bash(echo hello)✗]');
+  });
+
+  it('deduplicates multiple duplicate pairs, preserving original order of first appearances', () => {
+    const events: ToolEvent[] = [
+      { toolName: 'read_file', toolUseId: 'tu_1', input: 'a.ts', isError: false },
+      { toolName: 'bash', toolUseId: 'tu_2', input: 'ls', isError: false },
+      // Second write for tu_1 (last-write-wins → this one survives)
+      { toolName: 'read_file', toolUseId: 'tu_1', input: 'a.ts', isError: true },
+      // Second write for tu_2 (last-write-wins → this one survives)
+      { toolName: 'bash', toolUseId: 'tu_2', input: 'ls', isError: true },
+    ];
+    const result = summarizeToolEvents(events);
+    // Both IDs appear once each, with final (error) status
+    expect(result).toBe('\n[Tools used: read_file(a.ts)✗, bash(ls)✗]');
   });
 
   it('starts with \\n so it appends cleanly after assistant text', () => {

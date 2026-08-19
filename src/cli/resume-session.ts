@@ -58,7 +58,7 @@ export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Parti
       ? {
           resumeHistory: target.stored.turns.map((turn) => ({
             user: turn.user,
-            assistant: turn.assistant + summarizeToolEvents(turn.toolEvents),
+            assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
           })),
         }
       : {}),
