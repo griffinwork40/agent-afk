@@ -2138,6 +2138,98 @@ describe('SkillExecutor', () => {
       const ctorOpts = firstCtorCall?.[0];
       expect(ctorOpts?.backgroundRegistry).toBeUndefined();
     });
+
+    it('propagates workspaceStore into the SubagentExecutor ctx for fork-skill grandchild agent forks (PR #1213)', async () => {
+      // Regression (PR #1213): buildForkedChildConfig threaded workspaceStore
+      // into the child SubagentManager (fork-child-config.ts:144) but NOT into
+      // the SubagentExecutor ctx. That broke the preamble chain at depth ≥ 3
+      // on the fork-skill path: a skill-forked child's `agent` grandchild got
+      // a store-less manager. The agent-tool path (child-config.ts) was correct.
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'workspace-store-fork-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      // Sentinel store — identity check proves wiring, not behavior.
+      const sentinelStore = { __sentinel: 'workspace-store' } as never;
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+        workspaceStore: sentinelStore,
+      });
+
+      await executor.execute(makeCall({ name: 'workspace-store-fork-skill' }));
+
+      // The SubagentExecutor constructed inside buildForkedChildConfig must
+      // carry workspaceStore so a depth-2+ `agent` fork from inside this
+      // skill child gets the sibling-findings preamble.
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      expect(firstCtorCall).toBeDefined();
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.workspaceStore).toBe(sentinelStore);
+    });
+
+    it('omits workspaceStore from the SubagentExecutor ctx when none is configured', async () => {
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'no-workspace-store-fork-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+        // workspaceStore intentionally omitted
+      });
+
+      await executor.execute(makeCall({ name: 'no-workspace-store-fork-skill' }));
+
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.workspaceStore).toBeUndefined();
+    });
   });
 
   describe('read-only skill enforcement (RECON allowlist + readOnlyBash)', () => {
