@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.137.0] - 2026-08-19
+
+### Added
+- virtual-scroll picker with fuzzy search and relative timestamps (#1189) (a0e2d8f6)
+
 ## [5.136.0] - 2026-08-19
 
 ### Added
