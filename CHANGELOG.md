@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.133.0] - 2026-08-19
+
+### Added
+- allow read-only bash redirection to $TMPDIR (#881) (#1158) (3d403d3d)
+
 ## [5.132.3] - 2026-08-19
 
 ### Fixed
