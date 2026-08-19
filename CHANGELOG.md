@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.134.0] - 2026-08-19
+
+### Added
+- shared agent workspace v1 — publish tool + harness-injected retrieval (#1195) (8e6badd1)
+
+### Fixed
+- unbreak CI — remove dead variable + fix jitter-sensitive timer (#1207) (317b1891)
+- accessibility — focus-visible ring & WCAG AA contrast (#1197) (96d8eca8)
+- clear apiRoundInFlight in streamResponse finally block (#1143) (#1172) (1dd68bc8)
+- disclose cost-headline vs breakdown data-source divergence (#934) (#1151) (960cf6fe)
+
+### Changed
+- remove dead resolveSecond variable in watchdog test (#1163) (bed80a9f)
+
 ## [5.133.0] - 2026-08-19
 
 ### Added
