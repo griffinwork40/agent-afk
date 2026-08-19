@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.132.1] - 2026-08-19
+
+### Fixed
+- use basename for PAGER path comparison in resolvePager (#1171) (#1192) (d6fc6f9f)
+
 ## [5.132.0] - 2026-08-18
 
 ### Added
