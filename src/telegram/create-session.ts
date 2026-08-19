@@ -103,6 +103,7 @@ export function createTelegramSessionFactory(
       mcpManager,
       memoryStore,
       workspaceStore: sharedWorkspaceStore,
+      ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
       reportSession: (session) => { returnedSession = session; },
     };
 

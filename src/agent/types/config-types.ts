@@ -773,6 +773,16 @@ export interface AgentConfig {
   autoCompact?: boolean | { threshold: number };
 
   /**
+   * Telegram chat id for this session — set by the Telegram session manager
+   * before calling `createSession` so the `TelegramBgResultNotifier` can push
+   * background job notifications to the originating chat rather than falling
+   * back to the bot-global default notify targets.
+   *
+   * Telegram-scoped only: never set on REPL, daemon, or one-shot sessions.
+   */
+  telegramChatId?: number;
+
+  /**
    * In-process custom tools available to the session. Each entry is created
    * via the `tool()` helper and provides both a JSON-schema `AnthropicToolDef`
    * (so the model knows the tool exists) and a validated `ToolHandler`
