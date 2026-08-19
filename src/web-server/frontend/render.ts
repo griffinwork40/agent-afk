@@ -43,8 +43,8 @@ function el<K extends keyof HTMLElementTagNameMap>(
 /** Trailing path segment of `cwd`, or undefined when absent/degenerate. */
 function basename(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
-  const parts = cwd.split('/').filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : undefined;
+  const b = cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '';
+  return b && b !== '.' ? b : undefined;
 }
 
 /**

@@ -47,6 +47,18 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
   // S4: npm publish tokens and Docker registry credentials.
   `${homedir()}/.npmrc`,
   `${homedir()}/.docker/config.json`,
+  // S4-win32: Windows credential/config trees. On POSIX, APPDATA/USERPROFILE
+  // resolve to undefined so the spread is empty — no interference.
+  ...(env.APPDATA
+    ? [`${env.APPDATA}\\gcloud`, `${env.APPDATA}\\Docker`]
+    : []),
+  ...(env.USERPROFILE
+    ? [
+        `${env.USERPROFILE}\\.ssh`,
+        `${env.USERPROFILE}\\.aws`,
+        `${env.USERPROFILE}\\.gnupg`,
+      ]
+    : []),
 ];
 
 /**
@@ -127,7 +139,10 @@ export function getWriteDenylist(): readonly string[] {
   const key = `${env.AFK_WRITE_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}\u0000${env.AFK_STATE_DIR ?? ''}`;
   if (!cached || cached.key !== key) {
     const extra = env.AFK_WRITE_DENYLIST;
-    const extras = extra ? extra.split(':').map((p) => resolve(p)).filter(Boolean) : [];
+    // On Windows, paths contain colons (C:\…) so use ';' as the separator
+    // (matching Windows PATH convention); on POSIX, use ':'.
+    const listSep = process.platform === 'win32' ? ';' : ':';
+    const extras = extra ? extra.split(listSep).map((p) => resolve(p)).filter(Boolean) : [];
     cached = {
       key,
       unresolved: [

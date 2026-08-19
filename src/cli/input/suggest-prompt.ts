@@ -20,6 +20,7 @@
  * @module cli/input/suggest-prompt
  */
 
+import { basename } from 'node:path';
 import { redactSecrets } from '../../agent/redact-secrets.js';
 import { buildUserArc, extractOutcome } from './suggest-prompt.context.js';
 import type { CompleteRequest, SuggestContext } from './suggest-types.js';
@@ -102,7 +103,7 @@ export function buildPromptSuggestionSystem(): string {
  * and the agent finished with Z — what would they type next?"
  */
 export function buildPromptSuggestionUser(ctx: SuggestContext): string {
-  const cwdBase = ctx.cwd.split('/').filter(Boolean).pop() ?? ctx.cwd;
+  const cwdBase = basename(ctx.cwd) || ctx.cwd;
   const parts: string[] = [`cwd: ${cwdBase}`];
 
   // Layer 1: user arc (workflow trajectory)

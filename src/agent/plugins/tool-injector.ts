@@ -11,7 +11,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { normalizeSkillSource } from './source-guard.js';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 
@@ -418,7 +418,7 @@ export function resolveKnownToolNames(
  * @returns Plugin name derived from the path
  */
 export function extractPluginName(pluginPath: string): string {
-  const parts = pluginPath.split('/').filter(Boolean);
+  const parts = pluginPath.split(sep).filter(Boolean);
   if (parts.length === 0) return 'unknown';
 
   // Marketplace cache layout: ~/.afk/plugins/cache/<marketplace>/<plugin>/<version>

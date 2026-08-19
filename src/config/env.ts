@@ -914,6 +914,27 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     category: 'process',
   },
+  {
+    name: 'APPDATA',
+    description: 'Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'LOCALAPPDATA',
+    description: 'Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.).',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USERPROFILE',
+    description: 'Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
 
   // ── Daemon ────────────────────────────────────────────────────────────────
   {
@@ -1802,6 +1823,9 @@ export const env = {
 
   get HOME(): string | undefined { return process.env['HOME']; },
   get PATH(): string | undefined { return process.env['PATH']; },
+  get APPDATA(): string | undefined { return process.env['APPDATA']; },
+  get LOCALAPPDATA(): string | undefined { return process.env['LOCALAPPDATA']; },
+  get USERPROFILE(): string | undefined { return process.env['USERPROFILE']; },
 
   // Daemon
   get AFK_DAEMON_CWD(): string | undefined { return process.env['AFK_DAEMON_CWD']; },

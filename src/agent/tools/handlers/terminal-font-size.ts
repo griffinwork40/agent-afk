@@ -19,7 +19,9 @@
 
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, rename } from 'node:fs/promises';
+import { join } from 'node:path';
 import { expandHome } from '../../plugins/source.js';
+import { env } from '../../../config/env.js';
 import type { ToolHandler } from '../types.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ export interface TerminalFontSizeHandlerOpts {
 
 /**
  * Returns the list of `EditorTarget`s whose settings.json files exist on disk.
- * Checks macOS canonical paths; appends Linux paths when running on Linux.
+ * Checks macOS canonical paths; appends Linux and Windows paths per platform.
  */
 export function discoverEditors(): EditorTarget[] {
   const candidates: EditorTarget[] = [
@@ -69,7 +71,19 @@ export function discoverEditors(): EditorTarget[] {
     );
   }
 
-  return candidates.filter((c) => existsSync(expandHome(c.path)));
+  if (process.platform === 'win32') {
+    // Windows stores VS Code / Cursor settings under %APPDATA%.
+    // expandHome only handles ~/; construct absolute paths directly.
+    const appData = env.APPDATA ?? join(env.USERPROFILE ?? '', 'AppData', 'Roaming');
+    candidates.push(
+      { name: 'VS Code', path: join(appData, 'Code', 'User', 'settings.json') },
+      { name: 'VS Code Insiders', path: join(appData, 'Code - Insiders', 'User', 'settings.json') },
+      { name: 'Cursor', path: join(appData, 'Cursor', 'User', 'settings.json') },
+    );
+  }
+
+  // expandHome resolves ~/ to os.homedir(); Windows absolute paths pass through unchanged.
+  return candidates.filter((c) => existsSync(c.path.startsWith('~') ? expandHome(c.path) : c.path));
 }
 
 // ── Editor name normalisation ─────────────────────────────────────────────────

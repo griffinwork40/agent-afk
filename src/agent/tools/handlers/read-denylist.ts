@@ -145,6 +145,17 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   `${homedir()}/Library/Application Support/Microsoft Edge`,
   `${homedir()}/Library/Application Support/Arc`,
   `${homedir()}/Library/Application Support/Firefox`,
+  // S4-win32: Windows browser credential trees. On POSIX, LOCALAPPDATA
+  // resolves to undefined so the spread is empty — no interference.
+  ...(env.LOCALAPPDATA
+    ? [
+        `${env.LOCALAPPDATA}\\Google\\Chrome`,
+        `${env.LOCALAPPDATA}\\Chromium`,
+        `${env.LOCALAPPDATA}\\BraveSoftware`,
+        `${env.LOCALAPPDATA}\\Microsoft\\Edge`,
+        `${env.LOCALAPPDATA}\\Mozilla\\Firefox`,
+      ]
+    : []),
 ];
 
 /**
@@ -190,7 +201,7 @@ const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
-  (rel) => `${homedir()}/${rel}`,
+  (rel) => join(homedir(), rel),
 );
 
 /**
@@ -264,8 +275,11 @@ let cached:
  */
 export function parseReadDenylistEntries(raw: string | undefined): string[] {
   if (!raw) return [];
+  // On Windows, paths contain colons (C:\…) so use ';' as the separator
+  // (matching Windows PATH convention); on POSIX, use ':'.
+  const listSep = process.platform === 'win32' ? ';' : ':';
   return raw
-    .split(':')
+    .split(listSep)
     .map((p) => p.trim())
     .filter(Boolean)
     .map((p) => (p === '~' || p.startsWith('~/') ? expandHome(p.replace(/^~\/+/, '~/')) : p))
