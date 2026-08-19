@@ -22,6 +22,8 @@
  * @module agent/providers/shared/tool-call-trace
  */
 
+import { createHash } from 'crypto';
+
 import type {
   ToolCallCompletedPayload,
   ToolCallStartedPayload,
@@ -40,18 +42,62 @@ import type { ToolResult } from '../anthropic-direct/types.js';
 export function buildToolCallStartedPayload(args: {
   toolUseId: string;
   name: string;
-  /** Raw tool input; inputBytes is computed from this. */
+  /** Raw tool input; inputBytes and argsFingerprint are computed from this. */
   input: unknown;
   subagentId?: string | undefined;
 }): ToolCallStartedPayload {
   const { toolUseId, name, input, subagentId } = args;
+  const raw = input ?? {};
+  const serialized = JSON.stringify(raw);
+  // Invariant: argsFingerprint must NOT leak secrets. browser_act fill
+  // actions carry the typed secret in `value`; the browser witness layer
+  // (sanitize.ts) redacts it downstream, but we hash BEFORE that runs.
+  // Redact known-sensitive fields before hashing. inputBytes stays on the
+  // raw input for accurate sizing (it's a byte count, not content).
+  const hashInput = JSON.stringify(redactSensitiveFields(name, raw));
   return {
     phase: 'started',
     toolUseId,
     name,
-    inputBytes: Buffer.byteLength(JSON.stringify(input ?? {}), 'utf8'),
+    inputBytes: Buffer.byteLength(serialized, 'utf8'),
+    argsFingerprint: createHash('sha256').update(hashInput).digest('hex'),
     ...(subagentId !== undefined ? { subagentId } : {}),
   };
+}
+
+/**
+ * Strip known-sensitive tool input fields before hashing. Returns a shallow
+ * copy with secrets replaced by a fixed sentinel so the hash is stable but
+ * content-free. Only tools with known secret params need cases here.
+ *
+ * Invariant: `inputBytes` is computed from the RAW (un-redacted) input for
+ * accurate sizing. Only `argsFingerprint` uses this function's output.
+ */
+function redactSensitiveFields(toolName: string, input: unknown): unknown {
+  if (typeof input !== 'object' || input === null) return input;
+  const obj = input as Record<string, unknown>;
+
+  switch (toolName) {
+    case 'browser_act':
+      // `value` carries the typed secret for fill actions.
+      if (obj['action'] === 'fill' && 'value' in obj) {
+        return { ...obj, value: '[REDACTED]' };
+      }
+      return input;
+
+    case 'config_set':
+      // `value` may carry a secret when target=env (env vars include
+      // secret-class keys like API tokens). The engine refuses secret
+      // writes from agent tools, but the attempt's input is still hashed.
+      // Config keys (target=config) are all non-secret by design.
+      if (obj['target'] === 'env' && 'value' in obj) {
+        return { ...obj, value: '[REDACTED]' };
+      }
+      return input;
+
+    default:
+      return input;
+  }
 }
 
 /**

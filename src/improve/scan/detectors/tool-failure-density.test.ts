@@ -55,7 +55,7 @@ function toolPair(
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
     kind: 'tool_call',
-    payload: { phase: 'started', toolUseId, name, inputBytes: 100 },
+    payload: { phase: 'started', toolUseId, name, inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) },
   });
   const completedPayload: Record<string, unknown> = {
     phase: 'completed',
