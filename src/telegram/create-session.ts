@@ -19,6 +19,7 @@ import { getMaxOutputTokens, getMaxToolUseIterations, composeSystemPrompt } from
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
 import { WorkspaceStore } from '../agent/workspace/workspace-store.js';
+import { env } from '../config/env.js';
 import { createTelegramTraceWriter } from './construct-session.js';
 import { loadTelegramMcpManager } from './mcp-session.js';
 import { isOpenAiRoutedProvider, isXaiRoutedProvider } from './credentials.js';
@@ -53,7 +54,7 @@ export function createTelegramSessionFactory(
     // provider.close() → workspaceStore.close() tears down the chain.
     // Per-chat isolation: each Telegram chat gets its own store so workspace
     // findings from one user's session do not leak into another's.
-    const workspaceStore = new WorkspaceStore();
+    const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
     const fullModelId = resolveModelId(sessionConfig.model) ?? sessionConfig.model;
     log(`Creating session with model: ${sessionConfig.model} -> ${fullModelId}`);
 

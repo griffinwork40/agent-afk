@@ -1,5 +1,6 @@
 import { MemoryStore } from '../../../agent/memory/index.js';
 import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
+import { env } from '../../../config/env.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
@@ -74,7 +75,7 @@ export async function bootstrapSession(
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
-  const sharedWorkspaceStore = new WorkspaceStore();
+  const sharedWorkspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
   const sharedMemoryStore = new MemoryStore();
 
   const {

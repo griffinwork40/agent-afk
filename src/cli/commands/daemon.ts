@@ -96,7 +96,8 @@ export function buildDaemonSessionFactory(
     // WorkspaceStore is fresh per task: one task's published entries are
     // irrelevant to the next task's compose nodes, and reusing the store
     // would inject stale workspace entries from a prior task's run.
-    const workspaceStore = new WorkspaceStore();
+    // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
+    const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,

@@ -106,7 +106,7 @@ export interface BuildDispatcherOptions {
  */
 export interface BuildDispatcherDeps {
   memoryStore: MemoryStore;
-  workspaceStore: WorkspaceStore;
+  workspaceStore?: WorkspaceStore;
   surface: string;
   readOnlyMemory: boolean;
   readOnlyBash: boolean;
@@ -160,9 +160,12 @@ export function buildDispatcher(
   // Workspace tool: workspace_publish. Registered for ALL sessions —
   // children publish findings; the parent can too. No readOnly gate
   // (workspace is per-session and ephemeral, unlike memory).
-  const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '', opts?.subagentId);
-  for (const [name, handler] of wsHandlers) {
-    handlers.set(name, handler);
+  // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
+  if (deps.workspaceStore !== undefined) {
+    const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '', opts?.subagentId);
+    for (const [name, handler] of wsHandlers) {
+      handlers.set(name, handler);
+    }
   }
   if (opts?.runtimeStateSource) {
     handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
