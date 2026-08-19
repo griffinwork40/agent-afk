@@ -69,14 +69,35 @@ export function buildToolCallStartedPayload(args: {
  * Strip known-sensitive tool input fields before hashing. Returns a shallow
  * copy with secrets replaced by a fixed sentinel so the hash is stable but
  * content-free. Only tools with known secret params need cases here.
+ *
+ * Invariant: `inputBytes` is computed from the RAW (un-redacted) input for
+ * accurate sizing. Only `argsFingerprint` uses this function's output.
  */
 function redactSensitiveFields(toolName: string, input: unknown): unknown {
-  if (toolName !== 'browser_act' || typeof input !== 'object' || input === null) {
-    return input;
-  }
+  if (typeof input !== 'object' || input === null) return input;
   const obj = input as Record<string, unknown>;
-  if (obj['action'] !== 'fill' || !('value' in obj)) return input;
-  return { ...obj, value: '[REDACTED]' };
+
+  switch (toolName) {
+    case 'browser_act':
+      // `value` carries the typed secret for fill actions.
+      if (obj['action'] === 'fill' && 'value' in obj) {
+        return { ...obj, value: '[REDACTED]' };
+      }
+      return input;
+
+    case 'config_set':
+      // `value` may carry a secret when target=env (env vars include
+      // secret-class keys like API tokens). The engine refuses secret
+      // writes from agent tools, but the attempt's input is still hashed.
+      // Config keys (target=config) are all non-secret by design.
+      if (obj['target'] === 'env' && 'value' in obj) {
+        return { ...obj, value: '[REDACTED]' };
+      }
+      return input;
+
+    default:
+      return input;
+  }
 }
 
 /**

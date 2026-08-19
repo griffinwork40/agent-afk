@@ -173,7 +173,7 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
     // loops where successive calls alternate between success and failure.
     const argsHash = started.argsFingerprint;
     const fingerprint = argsHash
-      ? createHash('sha256').update(`${ev.payload.name}|${argsHash}`).digest('hex')
+      ? createHash('sha256').update(`${started.name}|${argsHash}`).digest('hex')
       : computeFingerprint({
           name: ev.payload.name,
           inputBytes: started.inputBytes,

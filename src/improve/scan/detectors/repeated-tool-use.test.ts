@@ -404,4 +404,40 @@ describe('detectRepeatedToolUse', () => {
     // Slugs differ because fingerprints differ.
     expect(detections[0]?.slug).not.toBe(detections[1]?.slug);
   });
+
+  it('v2: detects a loop where successive calls alternate between success and failure', () => {
+    // Contract: v2 fingerprints on (toolName, argsFingerprint) only — result fields
+    // (isError, resultBytes) are excluded from the fingerprint, so alternating
+    // success/failure calls with identical arguments still form a consecutive run.
+    resetSeq();
+    const lines = [
+      ...pairLines({ toolUseId: '1', name: 'grep', inputBytes: 100, resultBytes: 200, isError: false }),
+      ...pairLines({ toolUseId: '2', name: 'grep', inputBytes: 100, resultBytes: 0,   isError: true  }),
+      ...pairLines({ toolUseId: '3', name: 'grep', inputBytes: 100, resultBytes: 200, isError: false }),
+      ...pairLines({ toolUseId: '4', name: 'grep', inputBytes: 100, resultBytes: 0,   isError: true  }),
+    ];
+    const session = makeSessionRead(lines);
+    const detections = detectRepeatedToolUse([session]);
+
+    expect(detections).toHaveLength(1);
+    expect(detections[0]?.detail['fingerprintAlgorithm']).toBe('v2-args-hash');
+    expect(detections[0]?.detail['runLength']).toBe(4);
+    expect(detections[0]?.detail['toolName']).toBe('grep');
+  });
+
+  it('v1 contrast: legacy traces miss alternating-error loops because isError is in the fingerprint', () => {
+    // Contract: v1 fingerprint = sha256(name|inputBytes|resultBytes|isError|subagentId).
+    // Alternating isError produces two distinct fingerprints that interleave —
+    // no consecutive run of length >= 4 exists, so detectRepeatedToolUse returns nothing.
+    resetSeq();
+    const lines = [
+      ...legacyPairLines({ toolUseId: '1', name: 'grep', inputBytes: 100, resultBytes: 200, isError: false }),
+      ...legacyPairLines({ toolUseId: '2', name: 'grep', inputBytes: 100, resultBytes: 0,   isError: true  }),
+      ...legacyPairLines({ toolUseId: '3', name: 'grep', inputBytes: 100, resultBytes: 200, isError: false }),
+      ...legacyPairLines({ toolUseId: '4', name: 'grep', inputBytes: 100, resultBytes: 0,   isError: true  }),
+    ];
+    const session = makeSessionRead(lines);
+    // v1 sees fingerprints: A, B, A, B — longest consecutive run = 1; nothing flagged.
+    expect(detectRepeatedToolUse([session])).toHaveLength(0);
+  });
 });

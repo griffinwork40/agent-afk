@@ -142,6 +142,45 @@ describe('buildToolCallStartedPayload', () => {
     const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     expect(payload.argsFingerprint).toBe(expected);
   });
+
+  it('redacts config_set value when target=env (security)', () => {
+    const input = { target: 'env', key: 'SOME_SECRET', value: 'sk-live-abc123', action: 'set' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_cfg1',
+      name: 'config_set',
+      input,
+    });
+    // inputBytes uses RAW input — must include the real value length.
+    expect(payload.inputBytes).toBe(Buffer.byteLength(JSON.stringify(input), 'utf8'));
+    // Fingerprint must NOT match a hash of the raw input (secret is redacted).
+    const rawHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).not.toBe(rawHash);
+    // Stable: two calls with the same input produce the same fingerprint.
+    const p2 = buildToolCallStartedPayload({ toolUseId: 'tu_cfg2', name: 'config_set', input });
+    expect(payload.argsFingerprint).toBe(p2.argsFingerprint);
+  });
+
+  it('does not redact config_set with target=config (non-secret keys)', () => {
+    const input = { target: 'config', key: 'temperature', value: 0.7, action: 'set' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_cfg3',
+      name: 'config_set',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
+
+  it('does not redact config_set unset action (no value field)', () => {
+    const input = { target: 'env', key: 'SOME_VAR', action: 'unset' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_cfg4',
+      name: 'config_set',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
 });
 
 describe('buildToolCallCompletedPayload', () => {
