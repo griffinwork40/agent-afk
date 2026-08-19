@@ -349,6 +349,21 @@ details[open] > .tool-summary::before { transform: rotate(90deg); }
   cursor: pointer; padding: 0 4px; font-size: 12px;
 }
 .queue-btn:hover { color: var(--accent); }
+.queue-edit-input {
+  flex: 1; background: var(--bg-sunken); border: 1px solid var(--accent);
+  border-radius: 4px; color: var(--text); font: inherit; font-size: 12px;
+  padding: 1px 5px; min-width: 0;
+}
+
+/* ── sidebar backdrop (mobile close-on-outside-click) ────────────────────── */
+.sidebar-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 8;
+  background: rgba(0,0,0,0.5);
+}
+@media (max-width: 720px) {
+  .sidebar.is-open ~ .sidebar-backdrop { display: block; }
+}
 
 /* ── mobile ──────────────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
@@ -369,3 +384,35 @@ details[open] > .tool-summary::before { transform: rotate(90deg); }
   border: 1px solid var(--error); border-radius: 6px; padding: 0 14px;
 }
 .stop:hover { background: rgba(248, 113, 113, 0.12); }
+
+/* ── toast ───────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; top: 56px; right: 16px; z-index: 100;
+  max-width: 360px; padding: 10px 14px;
+  background: var(--bg-raised); border: 1px solid var(--error);
+  color: var(--error); border-radius: var(--radius);
+  font-size: 13px; line-height: 1.4;
+  opacity: 0; transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.toast.is-visible { opacity: 1; pointer-events: auto; }
+
+/* ── new-session form ────────────────────────────────────────────────────── */
+.new-session-form {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 14px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+.nsf-select, .nsf-input {
+  width: 100%; padding: 5px 8px;
+  background: var(--bg-sunken); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font: inherit; font-size: 12px;
+}
+.nsf-select:focus, .nsf-input:focus { outline: none; border-color: var(--accent); }
+.nsf-btn {
+  align-self: flex-start; padding: 4px 14px;
+  background: var(--accent); color: #1a0d05;
+  border: none; border-radius: 6px; font: inherit; font-size: 12px;
+  font-weight: 600; cursor: pointer;
+}
+.nsf-btn:hover { opacity: 0.88; }
