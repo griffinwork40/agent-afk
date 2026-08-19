@@ -85,7 +85,7 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
 /**
  * Append the workspace context preamble to a forked child's system prompt.
  *
- * No-op (returns config unchanged) when `entries` is empty.
+ * Always returns a new config — injects a cold-start hint when entries is empty, otherwise the rendered preamble.
  * Handles the same system-prompt union as `injectToolBudgetPreamble`:
  *   - string → append with `\n\n`
  *   - preset object → append to `sp.append`

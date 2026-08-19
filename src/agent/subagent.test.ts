@@ -402,9 +402,7 @@ describe('SubagentManager', () => {
       parent: { sessionId: 'p' },
       config: { model: 'sonnet', systemPrompt: 'untouched', maxToolUseIterations: 0 },
     });
-    expect((shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt']).toBe(
-      'untouched',
-    );
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'] as string).toMatch(/^untouched/);
   });
 
   // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth

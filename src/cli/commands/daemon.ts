@@ -87,7 +87,8 @@ export function buildDaemonSessionFactory(
     // and threaded it in as config.traceWriter — reuse THAT SAME instance here
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
-    memoryStore ??= new MemoryStore(); workspaceStore ??= new WorkspaceStore();
+    memoryStore ??= new MemoryStore();
+    workspaceStore ??= new WorkspaceStore();
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
@@ -106,7 +107,8 @@ export function buildDaemonSessionFactory(
       ...(config.traceWriter !== undefined
         ? { traceWriter: config.traceWriter, skillTraceWriter: config.traceWriter }
         : {}),
-      workspaceStore, // backgroundRegistry omitted: background dispatch is interactive-only.
+      // No backgroundRegistry: background dispatch is interactive-only.
+      workspaceStore,
     });
     const mcpManager = config.mcpManager;
     const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];

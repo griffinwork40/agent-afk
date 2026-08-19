@@ -36,8 +36,6 @@ export interface TelegramSessionFactoryOptions {
   telegramCwd: string | undefined;
   /** Bot-global memory store shared by every chat's hook bundle. */
   memoryStore: MemoryStore;
-  /** Bot-global workspace store shared by every session (one SQLite per bot process). */
-  workspaceStore?: WorkspaceStore;
   log?: (message: string) => void;
 }
 
