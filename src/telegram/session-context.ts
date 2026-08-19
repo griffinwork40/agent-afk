@@ -12,6 +12,7 @@
 import type { AgentSession } from '../agent/session.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
+import type { WorkspaceStore } from '../agent/workspace/workspace-store.js';
 import type { loadConfig } from '../cli/config.js';
 import type { createTelegramTraceWriter } from './construct-session.js';
 import type { loadTelegramMcpManager } from './mcp-session.js';
@@ -40,6 +41,8 @@ export interface TelegramSessionBuildContext {
   mcpManager: TelegramMcpManager;
   /** Bot-global store shared across every chat's hook bundle. */
   memoryStore: MemoryStore;
+  /** Bot-global workspace store; one SQLite per bot process, shared by all sessions. */
+  workspaceStore: WorkspaceStore;
   /**
    * Report the session the moment it is constructed.
    *

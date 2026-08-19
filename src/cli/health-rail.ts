@@ -32,6 +32,7 @@ import type { SessionStats } from './slash/types.js';
 import { formatHealthRail, type HealthRailFields } from './health-rail.format.js';
 import { ResizeBus } from './terminal-size.js';
 import { isPlainOutputRequested } from '../config/env.js';
+import { contextLimitFor } from './model-limits.js';
 
 export interface HealthRailOptions {
   stream?: NodeJS.WriteStream;
@@ -150,7 +151,7 @@ export class HealthRail {
     } else {
       const last = stats.turnTokens[stats.turnTokens.length - 1];
       contextRatio = last !== undefined
-        ? (last.footprint ?? last.input + last.output + last.cache) / contextLimitFor(stats)
+        ? (last.footprint ?? last.input + last.output + last.cache) / contextLimitFor(stats.model)
         : 0;
     }
 
@@ -221,22 +222,4 @@ export class HealthRail {
   }
 }
 
-/**
- * Approximate context-window limit for the session's model.
- *
- * Contract: this is a best-effort approximation used ONLY for the glance
- * indicator — it does not feed any operational decision. The authoritative
- * value lives in `model-limits.ts`; importing it here would drag the full
- * model table into the CLI render path, so we use a simple common-case
- * heuristic (200k for Claude) that keeps the health rail self-contained.
- * A better future option: accept `contextLimit` as a field in `update()`.
- */
-function contextLimitFor(stats: SessionStats): number {
-  const model = String(stats.model);
-  // Claude extended context tiers
-  if (model.includes('opus-5') || model.includes('claude-opus-5')) return 500_000;
-  if (model.includes('3-5') || model.includes('claude-3-5')) return 200_000;
-  if (model.includes('3-7') || model.includes('claude-3-7')) return 200_000;
-  // Default for other Claude / OpenAI models
-  return 200_000;
-}
+

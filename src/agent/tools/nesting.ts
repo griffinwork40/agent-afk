@@ -16,6 +16,7 @@ import type { Surface } from '../awareness/types.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { providerForModel } from '../providers/index.js';
 import { BUILTIN_TOOL_NAMES } from './schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
@@ -129,7 +130,7 @@ export function createStubParentSession(
 // sub-agent writes. If specific skills need memory write access, do it per-skill via a
 // buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
 // extending this global default.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill'];
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'workspace_publish', 'agent', 'skill'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's
@@ -192,6 +193,12 @@ export interface CreateChildProviderFactoryOptions {
    * api.openai.com.
    */
   openaiBaseUrl?: string;
+  /**
+   * Shared workspace store forwarded to child providers so every child
+   * session registers the `workspace_publish` tool against the same
+   * in-memory store as the parent.
+   */
+  workspaceStore?: WorkspaceStore;
 }
 
 /**
@@ -228,6 +235,7 @@ export function createChildProviderFactory(
       return new OpenAICompatibleProvider({
         ...providerOpts,
         ...(opts.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
+        ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
         readOnlyMemory: true,
       });
     }
@@ -235,7 +243,11 @@ export function createChildProviderFactory(
     // to recall prior facts but cannot persist new memory (no `memory_update` /
     // `procedure_write`). The parent session is the only writer; allowing writes
     // from subagents would cause uncoordinated fan-out into the shared store.
-    return new AnthropicDirectProvider({ ...providerOpts, readOnlyMemory: true });
+    return new AnthropicDirectProvider({
+      ...providerOpts,
+      ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+      readOnlyMemory: true,
+    });
   };
 }
 

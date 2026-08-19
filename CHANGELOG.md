@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.133.0] - 2026-08-19
+
+### Added
+- allow read-only bash redirection to $TMPDIR (#881) (#1158) (3d403d3d)
+
+## [5.132.3] - 2026-08-19
+
+### Fixed
+- SSE resilience — permanent error handling, composer disable, jitter (#8,#12,#27) (#1199) (ff24db4b)
+
+## [5.132.2] - 2026-08-19
+
+### Fixed
+- use authoritative contextLimitFor instead of stale heuristic (#1194) (768c7e2b)
+
 ## [5.132.1] - 2026-08-19
 
 ### Fixed
