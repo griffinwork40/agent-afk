@@ -170,6 +170,51 @@ describe('listenWithRecovery', () => {
     });
   });
 
+  describe.skipIf(!ipv6Available)(
+    'fallback-failure: both loopback addresses occupied',
+    () => {
+      // Stub execFileSync to simulate ghost-socket detection (lsof exit 1) so
+      // listenWithRecovery attempts the fallback — then occupy BOTH addresses so
+      // the retry also fails. The thrown error must carry EADDRINUSE and name
+      // both the original address and the fallback.
+      beforeEach(() => {
+        mockExecFileSync.mockImplementation(() => {
+          const err = Object.assign(new Error('Command failed'), { status: 1, stderr: '' });
+          throw err;
+        });
+      });
+
+      it('throws EADDRINUSE naming both addresses when fallback also fails', async () => {
+        // Hold a server on 127.0.0.1:P so the primary bind fails (EADDRINUSE).
+        const blockerV4 = tracked(createServer());
+        const { port } = await listenWithRecovery(blockerV4, 0, '127.0.0.1');
+
+        // Also hold a server on ::1:P so the fallback bind fails too.
+        const blockerV6 = tracked(createServer());
+        await new Promise<void>((resolve, reject) => {
+          blockerV6.once('error', reject);
+          blockerV6.listen(port, '::1', () => {
+            blockerV6.removeListener('error', reject);
+            resolve();
+          });
+        });
+
+        // listenWithRecovery detects ghost (lsof exit 1), tries ::1, also fails.
+        const server = tracked(createServer());
+        const err = await listenWithRecovery(server, port, '127.0.0.1').then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeDefined();
+        const errNode = err as NodeJS.ErrnoException;
+        expect(errNode.code).toBe('EADDRINUSE');
+        // Error message must reference the original address and the fallback.
+        expect(errNode.message).toMatch(/127\.0\.0\.1/);
+        expect(errNode.message).toMatch(/::1/);
+      });
+    },
+  );
+
   describe('permission-denied detection: lsof restricted (exit status 1 + stderr warning)', () => {
     // Stub execFileSync to simulate lsof running but being restricted by
     // macOS SIP or Linux capabilities — stderr carries "Permission denied" or

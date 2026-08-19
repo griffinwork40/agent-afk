@@ -1036,7 +1036,7 @@ describe('port file lifecycle', () => {
     expect(existsSync(portFilePath())).toBe(false);
   });
 
-  it('stop() leaves a port file it no longer owns intact', async () => {
+  it('stop() leaves a port file it no longer owns intact (bare-port format)', async () => {
     const h = await startDaemon({ port: 0 });
     // Another instance (re)claims the discovery path while we are running —
     // unconditional unlink would sever live-sync for that instance.
@@ -1044,6 +1044,16 @@ describe('port file lifecycle', () => {
     await h.stop();
     expect(existsSync(portFilePath())).toBe(true);
     expect(readFileSync(portFilePath(), 'utf-8')).toBe('65501');
+  });
+
+  it('stop() leaves a port file it no longer owns intact (host:port format)', async () => {
+    const h = await startDaemon({ port: 0 });
+    // Simulate a competing instance writing the new "host:port" format —
+    // stop() must recognise it does not own this value and leave it untouched.
+    writeFileSync(portFilePath(), '127.0.0.1:65501', 'utf-8');
+    await h.stop();
+    expect(existsSync(portFilePath())).toBe(true);
+    expect(readFileSync(portFilePath(), 'utf-8')).toBe('127.0.0.1:65501');
   });
 
   it('binds the control surface to loopback (127.0.0.1) by default', async () => {
