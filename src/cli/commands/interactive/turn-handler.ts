@@ -35,6 +35,7 @@ import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 import { promoteWithQueuedFlush, previewOneLine } from './queued-flush.js';
 import { createTurnTtfbState, emitPlainTtfbWaiting, observeFirstContent, ttfbRendererOptions } from './turn-handler.ttfb.js';
+import { tickContextProgress } from './turn-handler.context-progress.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
@@ -72,7 +73,7 @@ export async function runTurn(
   const turnStartedAt = Date.now();
   const turnTtfb = createTurnTtfbState(turnStartedAt);
 
-  emitPlainTtfbWaiting(completionWriter);
+  emitPlainTtfbWaiting(completionWriter, process.stdout, turnTtfb);
 
   // Terminal title (OSC 2): flip to the running state as the turn starts, so a
   // backgrounded/inactive tab reads "afk — <cwd> · running". Reset to idle at
@@ -115,7 +116,6 @@ export async function runTurn(
   // the latest write even though the assignment happens in a microtask.
   const pickerRef: { abort: AbortController | null } = { abort: null };
   let lastContextProgressMs = 0;
-  const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 3_000;
   const toolEvents: ToolEvent[] = [];
   const pendingTools = new Map<string, ToolEvent>();
 
@@ -386,6 +386,7 @@ export async function runTurn(
     // renderer routes them via meta.subagentId.
     const ambientSink = (event: OutputEvent, meta?: SubagentProgressMeta): void => {
       renderer.process(event, meta);
+      if (meta) turnTtfb.plainHooks?.onSubagentEvent(event, meta);
     };
     await runWithSink(ambientSink, async () => {
       for await (const event of stream) {
@@ -461,6 +462,7 @@ export async function runTurn(
           const te: ToolEvent = { toolName: c.toolName, toolUseId: c.toolUseId, input: c.toolInput, ...(c.toolInputRaw !== undefined && { inputRaw: c.toolInputRaw }) };
           pendingTools.set(c.toolUseId, te);
           toolEvents.push(te);
+          turnTtfb.plainHooks?.onToolStart(c);
         } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
           const c = event.chunk;
           // Round boundary: the next round's text appends after this point.
@@ -475,21 +477,8 @@ export async function runTurn(
             pending.isError = c.isError;
             pendingTools.delete(c.toolUseId);
           }
-          if (h.onContextProgress) {
-            const now = Date.now();
-            if (now - lastContextProgressMs >= CONTEXT_PROGRESS_MIN_INTERVAL_MS) {
-              lastContextProgressMs = now;
-              try {
-                const r = h.onContextProgress();
-                if (r instanceof Promise) await r;
-              } catch (err) {
-                // Best-effort: never let a status refresh break the turn.
-                if (isDebugEnabled()) {
-                  console.error('  ' + palette.error('onContextProgress (status refresh) failed:'), err);
-                }
-              }
-            }
-          }
+          turnTtfb.plainHooks?.onToolResult(c, pending?.toolName);
+          lastContextProgressMs = await tickContextProgress(h.onContextProgress, lastContextProgressMs);
         }
 
         if (event.type === 'paused') {
@@ -669,6 +658,7 @@ export async function runTurn(
         renderer.process(event);
 
         if (isFirstContentEvent) {
+          turnTtfb.plainHooks?.onFirstContent(process.stdout);
           // Deliberately follows process():
           // notifyFirstContent flushes the overlay, so the markdown renderer
           // must see the content event before the waiting slot is removed.
