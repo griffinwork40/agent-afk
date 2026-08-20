@@ -265,10 +265,11 @@ describe('SessionToolDispatcher', () => {
     expect(result.failureClass).toBe('abort');
   });
 
-  it('exposes toolDefs from schemas (no allowlist = full pass-through)', () => {
-    // Pass undefined permissions so no allowlist is configured — full schema returned.
+  it('hides cancel_background_job when no background-capable executor is wired', () => {
     const dispatcher = makeDispatcher({ permissions: undefined });
-    expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+    expect(dispatcher.toolDefs).toEqual(
+      builtinToolSchemas.filter((schema) => schema.name !== 'cancel_background_job'),
+    );
   });
 
   describe('toolDefs allowlist subsetting', () => {
@@ -278,7 +279,9 @@ describe('SessionToolDispatcher', () => {
         schemas: [...builtinToolSchemas],
         // no permissions → undefined
       });
-      expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+      expect(dispatcher.toolDefs).toEqual(
+        builtinToolSchemas.filter((schema) => schema.name !== 'cancel_background_job'),
+      );
     });
 
     it('returns only allowlisted schemas when allowedTools is set', () => {

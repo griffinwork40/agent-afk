@@ -215,6 +215,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             runPromise,
             prompt: backgroundPrompt,
             model: model ?? 'sonnet',
+            provenance: 'user',
             parentSessionId,
             ...(isoTd ? {
               onCleanup: async () => {

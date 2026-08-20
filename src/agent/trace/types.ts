@@ -393,67 +393,16 @@ export type SubagentLifecyclePayload =
 // job's full lifecycle without filtering against join/cancel timing.
 // ---------------------------------------------------------------------------
 
-export interface BackgroundAgentStartedPayload {
-  transition: 'started';
-  /** Stable id assigned by `BackgroundAgentRegistry.register()`. */
-  jobId: string;
-  /** Underlying `SubagentHandle.id` for cross-correlation with subagent_lifecycle. */
-  subagentId: string;
-  /** Truncated first 80 chars of the prompt for at-a-glance audit. */
-  label: string;
-  model: string;
-}
-
-export interface BackgroundAgentCompletedPayload {
-  transition: 'completed';
-  jobId: string;
-  subagentId: string;
-  durationMs: number;
-  outputBytes: number;
-}
-
-export interface BackgroundAgentFailedPayload {
-  transition: 'failed';
-  jobId: string;
-  subagentId: string;
-  durationMs: number;
-  errorClass: string;
-  errorMessage: string;
-}
-
-export interface BackgroundAgentCancelledPayload {
-  transition: 'cancelled';
-  jobId: string;
-  subagentId: string;
-  /** `'explicit'` — `/bgsub:cancel` or `registry.cancelJob()`. `'cascade'` — parent abort. */
-  source: 'explicit' | 'cascade';
-}
-
-export interface BackgroundAgentJoinedPayload {
-  transition: 'joined';
-  jobId: string;
-  subagentId: string;
-  /** Terminal status at the moment of join. */
-  jobStatus: 'completed' | 'failed' | 'cancelled';
-}
-
-export interface BackgroundAgentDeliveredPayload {
-  /** Result auto-delivered into the parent conversation by a surface notifier
-   *  (BgResultNotifier) — distinct from an explicit `joined`. */
-  transition: 'delivered';
-  jobId: string;
-  subagentId: string;
-  /** Terminal status at the moment of delivery. */
-  jobStatus: 'completed' | 'failed' | 'cancelled';
-}
-
-export type BackgroundAgentPayload =
-  | BackgroundAgentStartedPayload
-  | BackgroundAgentCompletedPayload
-  | BackgroundAgentFailedPayload
-  | BackgroundAgentCancelledPayload
-  | BackgroundAgentJoinedPayload
-  | BackgroundAgentDeliveredPayload;
+export type {
+  BackgroundAgentStartedPayload,
+  BackgroundAgentCompletedPayload,
+  BackgroundAgentFailedPayload,
+  BackgroundAgentCancelledPayload,
+  BackgroundAgentJoinedPayload,
+  BackgroundAgentDeliveredPayload,
+  BackgroundAgentPayload,
+} from './background-agent-payloads.js';
+import type { BackgroundAgentPayload } from './background-agent-payloads.js';
 
 // ---------------------------------------------------------------------------
 // budget — threshold record. Closure handles termination separately.

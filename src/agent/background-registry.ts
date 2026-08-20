@@ -55,25 +55,16 @@ import { emitBackgroundAgent } from './trace/emit.js';
 import type { TraceSink } from './trace/index.js';
 import { BgJobLogWriter } from './bg-job-log.js';
 import type { BgJobMeta } from './bg-job-log.js';
-import { appendRoutingDecision } from './routing-telemetry.js';
+import { emitBackgroundRoutingTelemetry } from './background-registry.telemetry.js';
 import { boundedStopReason } from './tools/subagent/failure-payload.js';
-import { resolveMaxConcurrentBackgroundJobs } from '../config/concurrency.js';
 import { sweepOldBgJobs } from './background-registry.sweep.js';
+import { BackgroundJobCapError, resolveBackgroundJobCap } from './background-registry.cap.js';
+import { appendTranscriptTail } from './background-registry.transcript.js';
+import type { BackgroundJob, BackgroundJobProvenance, BackgroundJobStatus } from './background-registry.types.js';
 
-export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
-
-export interface BackgroundJob {
-  readonly jobId: string;
-  readonly subagentId: string;
-  readonly label: string;
-  readonly model: string;
-  readonly startedAt: number;
-  readonly status: BackgroundJobStatus;
-  /** Terminal-state result, set when status leaves 'running'. */
-  readonly result?: SubagentResult;
-  /** Monotonic completion timestamp. Undefined while running. */
-  readonly endedAt?: number;
-}
+export { BackgroundJobCapError } from './background-registry.cap.js';
+export { MAX_TRANSCRIPT_TAIL_BYTES } from './background-registry.transcript.js';
+export type { BackgroundJob, BackgroundJobProvenance, BackgroundJobStatus } from './background-registry.types.js';
 
 interface InternalJob extends BackgroundJob {
   status: BackgroundJobStatus;
@@ -89,6 +80,8 @@ interface InternalJob extends BackgroundJob {
    * `cancelAll()`. Read by `markTerminal()` to attribute the trace event.
    */
   cancelSource?: 'explicit' | 'cascade';
+  /** Model cancellation metadata. Adjacent to cancelSource for trace-reader compatibility. */
+  modelCancelReason?: string;
   /**
    * Rolling tail of subagent output text — last ~4KB. Used by the
    * BackgroundSummarizer to feed Haiku without a transcript log. Trimmed
@@ -107,21 +100,6 @@ interface InternalJob extends BackgroundJob {
 
 /** Default TTL for evicting terminal jobs from the registry map. */
 const TERMINAL_EVICT_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Maximum byte length of the rolling transcript tail kept per job.
- * The BackgroundSummarizer reads this buffer to feed Haiku without
- * maintaining a separate log file.
- */
-export const MAX_TRANSCRIPT_TAIL_BYTES = 4096;
-
-/**
- * Best-effort routing-telemetry helper. Swallows errors so telemetry
- * failures never surface as registry errors.
- */
-function emitRoutingTelemetry(entry: Parameters<typeof appendRoutingDecision>[0]): void {
-  void appendRoutingDecision(entry).catch(() => {});
-}
 
 /**
  * Maximum time to wait for a single job's terminal callback to settle
@@ -146,6 +124,8 @@ export interface RegisterArgs {
   handle: SubagentHandle;
   prompt: string;
   model: string;
+  /** Creator of this job. Defaults to user so ambiguous callers fail safe. */
+  provenance?: BackgroundJobProvenance;
   /**
    * Optional parent session id. Forwarded to routing-telemetry events
    * (`subagent.completed` / `subagent.failed`) and persisted to the bg-job
@@ -158,21 +138,6 @@ export interface RegisterArgs {
    * Used by isolation:"worktree" to unlock + tear down the child's worktree.
    */
   onCleanup?: () => Promise<void>;
-}
-
-/**
- * Thrown by `register()` when the registry already has
- * `maxConcurrentJobs` running jobs. The caller should tear down the
- * orphaned handle and surface an error to the model.
- */
-export class BackgroundJobCapError extends Error {
-  constructor(running: number, cap: number) {
-    super(
-      `Background job cap reached (${running}/${cap} running). ` +
-        'Wait for existing jobs to finish or cancel them before spawning more.',
-    );
-    this.name = 'BackgroundJobCapError';
-  }
 }
 
 export interface BackgroundRegistryEvents {
@@ -199,7 +164,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   constructor(options: BackgroundRegistryOptions = {}) {
     super();
     this.traceWriter = options.traceWriter;
-    this.maxConcurrentJobs = options.maxConcurrentJobs ?? resolveMaxConcurrentBackgroundJobs();
+    this.maxConcurrentJobs = resolveBackgroundJobCap(options.maxConcurrentJobs);
 
     // 7-day eviction sweep: fire after 5 seconds so it doesn't block startup.
     // `.unref()` prevents the timer from keeping the Node process alive.
@@ -353,6 +318,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
 
     const job: InternalJob = {
       jobId,
+      provenance: args.provenance ?? 'user',
       subagentId: args.handle.id,
       label,
       model: args.model,
@@ -479,6 +445,16 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     return true;
   }
 
+  /** Cancel a running model-owned job and attribute its required reason in witness. */
+  async cancelModelJob(jobId: string, reason: string): Promise<boolean> {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== 'running' || job.provenance !== 'model') return false;
+    job.cancelSource = 'explicit';
+    job.modelCancelReason = reason;
+    await job.handle.cancel();
+    return true;
+  }
+
   /**
    * Cancel every still-running job. Called on parent-session teardown so
    * background work doesn't outlive the surface that spawned it. Resolves
@@ -526,13 +502,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   appendTranscript(jobId: string, chunk: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
-    const combined = job.transcriptTail + chunk;
-    if (combined.length <= MAX_TRANSCRIPT_TAIL_BYTES) {
-      job.transcriptTail = combined;
-    } else {
-      // Trim from the front, keeping the tail end.
-      job.transcriptTail = combined.slice(combined.length - MAX_TRANSCRIPT_TAIL_BYTES);
-    }
+    job.transcriptTail = appendTranscriptTail(job.transcriptTail, chunk);
   }
 
   /**
@@ -625,7 +595,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         durationMs,
         outputBytes: Buffer.byteLength(content, 'utf8'),
       });
-      emitRoutingTelemetry({
+      emitBackgroundRoutingTelemetry({
         event: 'subagent.completed',
         subagent_id: job.subagentId,
         parent_session_id: job.parentSessionId,
@@ -645,7 +615,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         errorClass: err?.name ?? 'Error',
         errorMessage: err?.message ?? 'unknown',
       });
-      emitRoutingTelemetry({
+      emitBackgroundRoutingTelemetry({
         event: 'subagent.failed',
         subagent_id: job.subagentId,
         parent_session_id: job.parentSessionId,
@@ -664,8 +634,11 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         jobId,
         subagentId: job.subagentId,
         source: job.cancelSource ?? 'explicit',
+        ...(job.modelCancelReason !== undefined
+          ? { cancelledBy: 'model' as const, reason: job.modelCancelReason }
+          : {}),
       });
-      emitRoutingTelemetry({
+      emitBackgroundRoutingTelemetry({
         event: 'subagent.failed',
         subagent_id: job.subagentId,
         parent_session_id: job.parentSessionId,
@@ -760,6 +733,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   private snapshot(job: InternalJob): BackgroundJob {
     const snap: BackgroundJob = {
       jobId: job.jobId,
+      provenance: job.provenance,
       subagentId: job.subagentId,
       label: job.label,
       model: job.model,
