@@ -243,6 +243,46 @@ describe('BackgroundAgentRegistry', () => {
     }
   });
 
+  it('records explicit provenance and defaults ambiguous callers to user', () => {
+    const model = registry.register({
+      handle: createStubHandle('model-owned'),
+      prompt: 'model work',
+      model: 'sonnet',
+      provenance: 'model',
+    });
+    const ambiguous = registry.register({
+      handle: createStubHandle('ambiguous'),
+      prompt: 'user-safe work',
+      model: 'sonnet',
+    });
+
+    expect(model.provenance).toBe('model');
+    expect(ambiguous.provenance).toBe('user');
+  });
+
+  it('cancelModelJob records source=model and the supplied reason in witness', async () => {
+    const handle = createStubHandle('model-cancel');
+    const job = registry.register({
+      handle,
+      prompt: 'obsolete implementation',
+      model: 'sonnet',
+      provenance: 'model',
+    });
+
+    expect(await registry.cancelModelJob(job.jobId, 'user ruled out plain mode')).toBe(true);
+    const event = writer.events.find(
+      (entry) => entry.kind === 'background_agent' && entry.payload.transition === 'cancelled',
+    );
+    expect(event).toBeDefined();
+    if (event?.kind === 'background_agent' && event.payload.transition === 'cancelled') {
+      expect(event.payload).toMatchObject({
+        source: 'explicit',
+        cancelledBy: 'model',
+        reason: 'user ruled out plain mode',
+      });
+    }
+  });
+
   it('cancelJob() calls handle.cancel() and transitions to cancelled', async () => {
     const handle = createStubHandle('sub-1');
     const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });

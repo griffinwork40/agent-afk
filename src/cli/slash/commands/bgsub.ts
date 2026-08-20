@@ -95,7 +95,7 @@ function formatJobLine(job: BackgroundJob): string {
   // Display-width truncation, not code-unit: `slice(0, 60) + '…'` measured 61
   // cells (and mis-measured every wide/emoji/combining grapheme it cut).
   const label = truncateDisplayWidth(job.label, 60);
-  const mainLine = `  ${glyph} ${palette.bold(job.jobId)}  ${label}  ${palette.dim(`(${job.status} · ${elapsed} · ${job.model})`)}`;
+  const mainLine = `  ${glyph} ${palette.bold(job.jobId)}  ${label}  ${palette.dim(`(${job.provenance} · ${job.status} · ${elapsed} · ${job.model})`)}`;
 
   if (!summarizerRef || job.status !== 'running') return mainLine;
 
@@ -120,6 +120,7 @@ function printJobDetail(ctx: Parameters<SlashCommand['handler']>[0], job: Backgr
   ctx.out.line(`  Status:    ${job.status} · ${elapsed}`);
   ctx.out.line(`  Subagent:  ${job.subagentId}`);
   ctx.out.line(`  Model:     ${job.model}`);
+  ctx.out.line(`  Owner:     ${job.provenance}`);
 
   const result = job.result;
   if (result?.message?.content) {

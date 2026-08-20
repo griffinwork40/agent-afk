@@ -55,6 +55,7 @@ import {
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
 import { runConcurrentBatch, runSequentialBatch } from './dispatcher.batch-process.js';
 import type { IndexedCall, BatchExecDeps } from './dispatcher.batch-process.js';
+import { executeSubagentProviderTool, isSubagentProviderTool } from './dispatcher.subagent-tools.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -546,10 +547,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
+    const available = this.subagentExecutor?.supportsBackgroundJobs?.()
+      ? this.schemas
+      : this.schemas.filter((schema) => schema.name !== 'cancel_background_job');
     const allowed = this.permissions?.allowedTools;
-    if (!allowed) return this.schemas;
+    if (!allowed) return available;
     const set = new Set(allowed);
-    return this.schemas.filter((s) => set.has(s.name));
+    return available.filter((s) => set.has(s.name));
   }
 
   /**
@@ -592,6 +596,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     return (
       this.handlers.has(toolName) ||
       (toolName === 'agent' && this.subagentExecutor !== undefined) ||
+      (toolName === 'cancel_background_job' && this.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
       (toolName === 'skill' && this.skillExecutor !== undefined) ||
       (toolName === 'compose' && this.composeExecutor !== undefined)
     );
@@ -1175,30 +1180,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * whatever result this returns.
    */
   private async executeCoreInner(call: ToolCall): Promise<ToolResult> {
-    // Agent tool — provider-level dispatch
-    if (call.name === 'agent') {
-      if (!this.subagentExecutor) {
-        return {
-          content: 'Agent tool is not available in this session configuration',
-          isError: true,
-        };
-      }
-      let result: ToolResult;
-      let agentThrew = false;
-      let agentErrMsg = '';
-      try {
-        result = await this.subagentExecutor.execute(call);
-      } catch (err) {
-        agentThrew = true;
-        agentErrMsg = err instanceof Error ? err.message : String(err);
-        result = { content: `Agent tool error: ${agentErrMsg}`, isError: true };
-      }
-      if (agentThrew) {
-        this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
+    // Agent dispatch and model cancellation share the provider-level executor.
+    if (isSubagentProviderTool(call.name)) {
+      const outcome = await executeSubagentProviderTool(this.subagentExecutor, call);
+      if (outcome.thrownMessage !== undefined) {
+        this.firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, call.input);
       } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input, result);
+        this.firePostToolUse(call.name, outcome.result.content, call.signal, call.input, outcome.result);
       }
-      return result;
+      return outcome.result;
     }
 
     // Skill tool — provider-level dispatch

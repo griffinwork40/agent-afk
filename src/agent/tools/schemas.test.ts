@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { builtinToolSchemas, BUILTIN_TOOL_NAMES, agentTool } from './schemas.js';
+import {
+  builtinToolSchemas,
+  BUILTIN_TOOL_NAMES,
+  agentTool,
+} from './schemas.js';
+import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 25 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(25);
+  it('contains exactly 26 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(26);
   });
 
   it('exports the expected tool names', () => {
@@ -21,6 +26,7 @@ describe('builtinToolSchemas', () => {
       'list_schedules',
       'get_schedule_history',
       'cancel_schedule',
+      'cancel_background_job',
       'read_witness',
       'search_witness',
       'worktree',
@@ -120,6 +126,14 @@ describe('builtinToolSchemas', () => {
   it('all tool names are unique', () => {
     const names = new Set(BUILTIN_TOOL_NAMES);
     expect(names.size).toBe(BUILTIN_TOOL_NAMES.length);
+  });
+});
+
+describe('cancelBackgroundJobTool', () => {
+  it('requires both jobId and reason and documents the provenance boundary', () => {
+    expect(cancelBackgroundJobTool.input_schema.required).toEqual(['jobId', 'reason']);
+    expect(cancelBackgroundJobTool.description).toMatch(/Ctrl\+B/);
+    expect(cancelBackgroundJobTool.description).toMatch(/\/bgsub:cancel/);
   });
 });
 
