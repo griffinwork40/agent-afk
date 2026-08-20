@@ -100,7 +100,7 @@ function stripBashCdPrefix(args: string): string {
 /**
  * Maximum readable width of the bracketed label produced by
  * {@link summarizeNestingArgs} for `agent` / `Task` / `skill` calls. Picked
- * to fit comfortably alongside the tool name + ` [subagent]` tag in a
+ * to fit comfortably alongside the tool name + ` [worker]` tag in a
  * standard 80-col terminal — `bracketPairAwareTruncate` clamps further on
  * narrower widths.
  */
@@ -318,7 +318,7 @@ export function bracketPairAwareTruncate(
  * Format a tool_use summary into `{glyph} {Name}{args} {[tag]}?`.
  *
  * Dispatch-class tools (subagent / skill / dag) get a dim trailing
- * bracketed type tag — `[subagent]`, `[skill]`, `[dag]` — so the class
+ * bracketed type tag — `[worker]`, `[skill]`, `[workflow]` — so the class
  * of work is legible as text even when colors or glyphs are hard to
  * distinguish. See `dispatchTagForCategory` in `tool-category.ts`.
  */

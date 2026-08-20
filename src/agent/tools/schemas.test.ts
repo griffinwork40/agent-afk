@@ -15,6 +15,7 @@ describe('builtinToolSchemas', () => {
     expect(BUILTIN_TOOL_NAMES).toEqual([
       'bash',
       'read_file',
+      'extract_document',
       'write_file',
       'edit_file',
       'glob',

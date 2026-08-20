@@ -112,14 +112,13 @@ export function updateGhost(self: AutocompleteHost): void {
     self.activeGhost = null;
   }
 
-  // The user has begun editing: retire the empty-prompt proposal for good.
-  // It is only ever readable at an empty buffer, so leaving it stored would
-  // make it RESURFACE the moment the buffer returns to empty — backspacing
-  // over a typed character, or Ctrl+U — long after the user implicitly
-  // declined it by typing something else.
-  if (buffer.length > 0) {
-    self.ghostEngine.clearPromptSuggestion?.();
-  }
+  // Contract: the empty-prompt proposal is NOT cleared when the user types.
+  // It is only visible at an empty buffer (the `buffer.length === 0` guard
+  // below suppresses it), so storing it while editing costs nothing — and
+  // lets it RESURFACE when the user backspaces/Ctrl+U back to empty, which
+  // is the desired UX. Permanent retirement happens only on explicit
+  // dismissal (ESC → dismissPromptGhost) or acceptance (Tab →
+  // applyGhostAccept), both of which call clearPromptSuggestion.
 
   // Tier 1: synchronous, always runs.
   const ctx = self.ghostGetContext();

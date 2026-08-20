@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.144.0] - 2026-08-20
+
+### Added
+- plain-language pass on user-facing chrome for non-technical readability (#1228) (877443d2)
+
 ## [5.143.0] - 2026-08-20
 
 ### Added

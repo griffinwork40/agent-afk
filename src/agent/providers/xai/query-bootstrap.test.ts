@@ -1,41 +1,22 @@
 /**
- * Tests for buildOAuthRefreshQuery — buffering and replay of setCwd/setSystemPrompt
- * that arrive before the inner query is lazily initialized.
+ * Tests for buildOAuthRefreshQuery — specifically the setCwd/setSystemPrompt
+ * buffer-and-replay behavior (GitHub issue #1062).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildOAuthRefreshQuery } from './query-bootstrap.js';
-import type { XaiQueryBootstrapArgs } from './query-bootstrap.js';
+import { buildOAuthRefreshQuery, type XaiQueryBootstrapArgs } from './query-bootstrap.js';
 import type { ProviderQuery, ProviderQueryArgs } from '../../provider.js';
 
 // ---------------------------------------------------------------------------
 // Minimal stubs
 // ---------------------------------------------------------------------------
 
-function makeInnerQuery(): ProviderQuery & {
-  setCwdCalls: string[];
-  setSystemPromptCalls: (string | undefined)[];
-} {
-  const setCwdCalls: string[] = [];
-  const setSystemPromptCalls: (string | undefined)[] = [];
-
-  const q: ProviderQuery & {
-    setCwdCalls: string[];
-    setSystemPromptCalls: (string | undefined)[];
-  } = {
-    setCwdCalls,
-    setSystemPromptCalls,
+function makeMinimalQuery(overrides: Partial<ProviderQuery> = {}): ProviderQuery {
+  return {
     async *[Symbol.asyncIterator]() {},
     async interrupt() {},
     async setModel() {},
     async setPermissionMode() {},
-    setCwd(cwd: string) {
-      setCwdCalls.push(cwd);
-    },
-    setSystemPrompt(p: string | undefined) {
-      setSystemPromptCalls.push(p);
-      return true;
-    },
     async supportedCommands() {
       return [];
     },
@@ -57,134 +38,147 @@ function makeInnerQuery(): ProviderQuery & {
     async rewindFiles() {
       return { canRewind: false };
     },
-    async compact() {
-      return {
-        compacted: false,
-        reason: 'not supported',
-        messagesBefore: 0,
-        messagesAfter: 0,
-      };
-    },
+    async close() {},
     listRewindTargets() {
       return [];
     },
     async rewindConversation() {
-      return {
-        rewound: false,
-        reason: 'not-supported' as const,
-        messagesBefore: 0,
-        messagesAfter: 0,
-      };
+      return { rewound: false, reason: 'not-supported', messagesBefore: 0, messagesAfter: 0 };
     },
-    async close() {},
-  };
-  return q;
+    ...overrides,
+  } as unknown as ProviderQuery;
 }
 
-function makeOpts(inner: ProviderQuery): XaiQueryBootstrapArgs {
+function makeArgs(): XaiQueryBootstrapArgs {
+  const delegate = vi.fn();
   return {
-    args: {
-      config: { apiKey: 'test-key' },
-    } as unknown as ProviderQueryArgs,
-    forceMode: 'apikey',
+    args: { config: { apiKey: undefined } } as unknown as ProviderQueryArgs,
+    forceMode: 'apikey', // skip OAuth refresh for simplicity
     authDeps: {
+      // Supply a fake key via readEnv so resolveXaiAuth succeeds in apikey mode.
+      readEnv: (k: string) => (k === 'XAI_API_KEY' ? 'test-fake-key-1234' : undefined),
       store: undefined,
-      readEnv: () => 'test-key',
-    },
+    } as unknown as XaiQueryBootstrapArgs['authDeps'],
     getLastMode: () => 'apikey',
-    delegate: vi.fn().mockReturnValue(inner),
+    delegate,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Drain one iteration to trigger ensureInner(). */
+async function drainOnce(query: ProviderQuery): Promise<void> {
+  const iter = query[Symbol.asyncIterator]();
+  await iter.next();
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('buildOAuthRefreshQuery — setCwd/setSystemPrompt buffering', () => {
-  let inner: ReturnType<typeof makeInnerQuery>;
+describe('buildOAuthRefreshQuery — setCwd/setSystemPrompt buffering (#1062)', () => {
+  let innerCwdSpy: ReturnType<typeof vi.fn>;
+  let innerSystemPromptSpy: ReturnType<typeof vi.fn>;
   let opts: XaiQueryBootstrapArgs;
 
   beforeEach(() => {
-    inner = makeInnerQuery();
-    opts = makeOpts(inner);
+    innerCwdSpy = vi.fn();
+    innerSystemPromptSpy = vi.fn().mockReturnValue(true);
+
+    opts = makeArgs();
+    (opts.delegate as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        makeMinimalQuery({
+          setCwd: innerCwdSpy,
+          setSystemPrompt: innerSystemPromptSpy,
+        }),
+    );
   });
 
-  it('replays setCwd buffered before init when query initializes', async () => {
-    const q = buildOAuthRefreshQuery(opts);
+  it('replays buffered setCwd onto innerQuery after init', async () => {
+    const query = buildOAuthRefreshQuery(opts);
 
-    // Call before the inner query exists.
-    q.setCwd?.('/some/path');
+    // Call before innerQuery exists — must not throw, must buffer.
+    query.setCwd?.('/buffered/path');
+    expect(innerCwdSpy).not.toHaveBeenCalled();
 
-    // Trigger init by consuming the iterator.
-    const iter = q[Symbol.asyncIterator]();
-    await iter.next();
+    // Trigger init.
+    await drainOnce(query);
 
-    expect(inner.setCwdCalls).toEqual(['/some/path']);
+    expect(innerCwdSpy).toHaveBeenCalledOnce();
+    expect(innerCwdSpy).toHaveBeenCalledWith('/buffered/path');
   });
 
-  it('replays setSystemPrompt (string) buffered before init', async () => {
-    const q = buildOAuthRefreshQuery(opts);
+  it('replays buffered setSystemPrompt (string) onto innerQuery after init', async () => {
+    const query = buildOAuthRefreshQuery(opts);
 
-    q.setSystemPrompt?.('custom prompt');
+    query.setSystemPrompt?.('my system prompt');
+    expect(innerSystemPromptSpy).not.toHaveBeenCalled();
 
-    const iter = q[Symbol.asyncIterator]();
-    await iter.next();
+    await drainOnce(query);
 
-    expect(inner.setSystemPromptCalls).toEqual(['custom prompt']);
+    expect(innerSystemPromptSpy).toHaveBeenCalledOnce();
+    expect(innerSystemPromptSpy).toHaveBeenCalledWith('my system prompt');
   });
 
-  it('replays setSystemPrompt (undefined) buffered before init', async () => {
-    const q = buildOAuthRefreshQuery(opts);
+  it('replays buffered setSystemPrompt (undefined) onto innerQuery after init', async () => {
+    const query = buildOAuthRefreshQuery(opts);
 
-    q.setSystemPrompt?.(undefined);
+    query.setSystemPrompt?.(undefined);
+    expect(innerSystemPromptSpy).not.toHaveBeenCalled();
 
-    const iter = q[Symbol.asyncIterator]();
-    await iter.next();
+    await drainOnce(query);
 
-    expect(inner.setSystemPromptCalls).toEqual([undefined]);
+    expect(innerSystemPromptSpy).toHaveBeenCalledOnce();
+    expect(innerSystemPromptSpy).toHaveBeenCalledWith(undefined);
   });
 
-  it('forwards setCwd directly when inner query already exists', async () => {
-    const q = buildOAuthRefreshQuery(opts);
+  it('replays both setCwd and setSystemPrompt when both are buffered', async () => {
+    const query = buildOAuthRefreshQuery(opts);
 
-    // Init first.
-    const iter = q[Symbol.asyncIterator]();
-    await iter.next();
+    query.setCwd?.('/workspace');
+    query.setSystemPrompt?.('combined prompt');
 
-    // Now call after init.
-    q.setCwd?.('/after/init');
+    await drainOnce(query);
 
-    expect(inner.setCwdCalls).toEqual(['/after/init']);
+    expect(innerCwdSpy).toHaveBeenCalledWith('/workspace');
+    expect(innerSystemPromptSpy).toHaveBeenCalledWith('combined prompt');
   });
 
-  it('forwards setSystemPrompt directly when inner query already exists', async () => {
-    const q = buildOAuthRefreshQuery(opts);
+  it('uses the most-recent buffered setCwd when called multiple times before init', async () => {
+    const query = buildOAuthRefreshQuery(opts);
 
-    const iter = q[Symbol.asyncIterator]();
-    await iter.next();
+    query.setCwd?.('/first');
+    query.setCwd?.('/second');
+    query.setCwd?.('/final');
 
-    q.setSystemPrompt?.('post-init prompt');
+    await drainOnce(query);
 
-    expect(inner.setSystemPromptCalls).toEqual(['post-init prompt']);
+    expect(innerCwdSpy).toHaveBeenCalledOnce();
+    expect(innerCwdSpy).toHaveBeenCalledWith('/final');
   });
 
-  it('does not replay buffered setCwd more than once if iterator is pulled twice', async () => {
-    const q = buildOAuthRefreshQuery(opts);
+  it('forwards setCwd directly to innerQuery when already initialized', async () => {
+    const query = buildOAuthRefreshQuery(opts);
+    await drainOnce(query); // init
 
-    q.setCwd?.('/only/once');
+    innerCwdSpy.mockClear();
+    query.setCwd?.('/post-init');
 
-    // Pull twice — init only runs once due to single-flight guard.
-    const iter1 = q[Symbol.asyncIterator]();
-    await iter1.next();
-    const iter2 = q[Symbol.asyncIterator]();
-    await iter2.next();
-
-    expect(inner.setCwdCalls).toEqual(['/only/once']);
+    expect(innerCwdSpy).toHaveBeenCalledWith('/post-init');
   });
 
-  it('returns false from setSystemPrompt before init (no inner query)', () => {
-    const q = buildOAuthRefreshQuery(opts);
-    const result = q.setSystemPrompt?.('early');
-    expect(result).toBe(false);
+  it('does not replay setCwd when it was never called before init', async () => {
+    const query = buildOAuthRefreshQuery(opts);
+    await drainOnce(query);
+    expect(innerCwdSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not replay setSystemPrompt when it was never called before init', async () => {
+    const query = buildOAuthRefreshQuery(opts);
+    await drainOnce(query);
+    expect(innerSystemPromptSpy).not.toHaveBeenCalled();
   });
 });

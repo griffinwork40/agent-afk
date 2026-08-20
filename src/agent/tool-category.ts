@@ -15,8 +15,9 @@
  *   - PascalCase Anthropic-SDK names: `Read`, `Write`, `Bash`, `Agent`, ...
  *   - snake_case agent-afk built-in tool names from src/agent/tools/schemas.ts
  *     and src/agent/memory/memory-tools.ts:
- *     `read_file`, `write_file`, `edit_file`, `bash`, `agent`, `skill`,
- *     `compose`, `send_telegram`, `web_scrape`, `glob`, `grep`, `list_directory`,
+ *     `read_file`, `extract_document`, `write_file`, `edit_file`, `bash`,
+ *     `agent`, `skill`, `compose`, `send_telegram`, `web_scrape`, `glob`,
+ *     `grep`, `list_directory`,
  *     `memory_search`, `memory_update`, `procedure_write`,
  *     `create_schedule`, `list_schedules`, `get_schedule_history`, `cancel_schedule`,
  *     `terminal_font_size`, `config_get`, `config_set`.
@@ -45,7 +46,7 @@ const READ_TOOLS = new Set([
   // Anthropic SDK PascalCase
   'Read', 'Glob', 'Grep', 'NotebookRead', 'LS',
   // agent-afk built-in snake_case (src/agent/tools/schemas.ts)
-  'read_file', 'glob', 'grep', 'list_directory',
+  'read_file', 'extract_document', 'glob', 'grep', 'list_directory',
   // config_get reads ~/.afk/config (afk.env / afk.config.json); secrets are
   // masked by the handler. Read-only by construction — no mutation surface.
   'config_get',
@@ -221,6 +222,7 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'LS',
   // agent-afk snake_case (src/agent/tools/schemas.ts)
   'read_file',
+  'extract_document',
   'glob',
   'grep',
   'list_directory',
@@ -289,15 +291,22 @@ export function categorizeTool(name: string): ToolCategory {
 /**
  * Categories that represent "this call dispatches more work" rather than a
  * direct tool invocation. The tool-lane renderer appends a dim bracketed
- * tag (`[subagent]`, `[skill]`, `[dag]`) to entries in these categories so
+ * tag (`[worker]`, `[skill]`, `[workflow]`) to entries in these categories so
  * the dispatch class is legible as text alongside the glyph + color cues —
  * survives monochrome terminals and makes the taxonomy self-documenting in
  * the stream.
+ *
+ * Invariant: tag values are plain-language words, not internal jargon. The
+ * scrollback transcript is routinely read by non-technical observers, so
+ * `subagent` renders as `worker` and `dag` as `workflow` — an everyday reader
+ * should never need to know what a DAG is to follow the activity feed. The
+ * category KEYS stay canonical (`subagent`/`skill`/`dag`); only the
+ * user-facing tag text is humanized here, at the single owning map.
  */
 const DISPATCH_CATEGORIES: Partial<Record<ToolCategory, string>> = {
-  subagent: 'subagent',
+  subagent: 'worker',
   skill: 'skill',
-  dag: 'dag',
+  dag: 'workflow',
 };
 
 export function dispatchTagForCategory(cat: ToolCategory): string | undefined {
