@@ -74,12 +74,17 @@ export function discoverEditors(): EditorTarget[] {
   if (process.platform === 'win32') {
     // Windows stores VS Code / Cursor settings under %APPDATA%.
     // expandHome only handles ~/; construct absolute paths directly.
-    const appData = env.APPDATA ?? join(env.USERPROFILE ?? '', 'AppData', 'Roaming');
-    candidates.push(
-      { name: 'VS Code', path: join(appData, 'Code', 'User', 'settings.json') },
-      { name: 'VS Code Insiders', path: join(appData, 'Code - Insiders', 'User', 'settings.json') },
-      { name: 'Cursor', path: join(appData, 'Cursor', 'User', 'settings.json') },
-    );
+    // Guard: only push candidates when at least one env var resolves to an
+    // absolute path — join('', 'AppData', 'Roaming') produces a relative path
+    // that matches nothing and pollutes the candidate list with false entries.
+    const appData = env.APPDATA ?? (env.USERPROFILE ? join(env.USERPROFILE, 'AppData', 'Roaming') : null);
+    if (appData) {
+      candidates.push(
+        { name: 'VS Code', path: join(appData, 'Code', 'User', 'settings.json') },
+        { name: 'VS Code Insiders', path: join(appData, 'Code - Insiders', 'User', 'settings.json') },
+        { name: 'Cursor', path: join(appData, 'Cursor', 'User', 'settings.json') },
+      );
+    }
   }
 
   // expandHome resolves ~/ to os.homedir(); Windows absolute paths pass through unchanged.

@@ -145,6 +145,23 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   `${homedir()}/Library/Application Support/Microsoft Edge`,
   `${homedir()}/Library/Application Support/Arc`,
   `${homedir()}/Library/Application Support/Firefox`,
+  // S4-win32: Windows credential/config trees. On POSIX, APPDATA/USERPROFILE
+  // resolve to undefined so the spreads are empty — no interference.
+  // Firefox profiles live under %APPDATA%\Mozilla\Firefox, NOT %LOCALAPPDATA%.
+  ...(env.USERPROFILE
+    ? [
+        `${env.USERPROFILE}\\.ssh`,
+        `${env.USERPROFILE}\\.aws`,
+        `${env.USERPROFILE}\\.gnupg`,
+      ]
+    : []),
+  ...(env.APPDATA
+    ? [
+        `${env.APPDATA}\\gcloud`,
+        `${env.APPDATA}\\Docker`,
+        `${env.APPDATA}\\Mozilla\\Firefox`,
+      ]
+    : []),
   // S4-win32: Windows browser credential trees. On POSIX, LOCALAPPDATA
   // resolves to undefined so the spread is empty — no interference.
   ...(env.LOCALAPPDATA
@@ -153,7 +170,6 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
         `${env.LOCALAPPDATA}\\Chromium`,
         `${env.LOCALAPPDATA}\\BraveSoftware`,
         `${env.LOCALAPPDATA}\\Microsoft\\Edge`,
-        `${env.LOCALAPPDATA}\\Mozilla\\Firefox`,
       ]
     : []),
 ];
@@ -282,7 +298,7 @@ export function parseReadDenylistEntries(raw: string | undefined): string[] {
     .split(listSep)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => (p === '~' || p.startsWith('~/') ? expandHome(p.replace(/^~\/+/, '~/')) : p))
+    .map((p) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? expandHome(p.replace(/^~[/\\]+/, '~/')) : p))
     .map((p) => resolve(p));
 }
 

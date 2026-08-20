@@ -522,6 +522,8 @@ export function startShell(opts: StartShellOptions): ShellHandle {
       // pid !== 0 guard: never let -pid resolve to -0 (this process's group).
       if (proc.pid === undefined || proc.pid === 0 || proc.killed) return;
       killedByCaller = true;
+      // Note: on Windows the `signal` argument is silently ignored — taskkill
+      // always force-kills the process tree regardless of which signal is passed.
       killProcessGroup(proc.pid, signal);
     },
   };

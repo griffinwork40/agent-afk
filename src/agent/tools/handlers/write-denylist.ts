@@ -131,9 +131,10 @@ let cached: { key: string; unresolved: readonly string[] } | undefined;
  * Return the effective denylist (builtin + any user-supplied extras).
  * Entries are returned as real (symlink-resolved) absolute paths.
  *
- * @note AFK_WRITE_DENYLIST is split on `:` — paths that themselves contain
- * a colon (unusual on POSIX, impossible on macOS HFS+) will be mis-split.
- * Use a different separator character if your paths require colons.
+ * @note AFK_WRITE_DENYLIST is split on `:` on POSIX and `;` on Windows
+ * (matching Windows PATH convention, since Windows paths contain colons).
+ * POSIX paths that themselves contain a colon (unusual, impossible on macOS
+ * HFS+) will be mis-split; use a different separator character in that case.
  */
 export function getWriteDenylist(): readonly string[] {
   const key = `${env.AFK_WRITE_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}\u0000${env.AFK_STATE_DIR ?? ''}`;
@@ -142,7 +143,21 @@ export function getWriteDenylist(): readonly string[] {
     // On Windows, paths contain colons (C:\…) so use ';' as the separator
     // (matching Windows PATH convention); on POSIX, use ':'.
     const listSep = process.platform === 'win32' ? ';' : ':';
-    const extras = extra ? extra.split(listSep).map((p) => resolve(p)).filter(Boolean) : [];
+    const extras = extra
+      ? extra
+          .split(listSep)
+          .map((p) => p.trim())
+          .filter(Boolean)
+          .map((p) => {
+            // Expand leading ~/ or ~\ (Windows backslash tilde) to homedir.
+            if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+              return join(homedir(), p.slice(2));
+            }
+            return p;
+          })
+          .map((p) => resolve(p))
+          .filter(Boolean)
+      : [];
     cached = {
       key,
       unresolved: [
