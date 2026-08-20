@@ -2,7 +2,7 @@ import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
 
 /**
- * Render the canonical `◆ thought for Xs · N tok` summary line. Shared by
+ * Render the canonical `◆ thought for Xs · N tokens` summary line. Shared by
  * {@link ThinkingLane.collapse} (turn-total, non-TTY/subagent) and the TTY
  * orchestrator's per-phase inline commit (see `commitThinkingPhase`) so both
  * read identically.
@@ -28,8 +28,8 @@ export function formatThoughtSummary(durationMs: number, charCount: number): str
  *   The "thought for Xs" line reports time spent ON THINKING, not wall-clock
  *   from first-thinking-byte to turn-end. Without {@link markEnded}, the
  *   duration would include text streaming and tool calls that happened after
- *   the thinking phase concluded — producing ~9 tok/s "duration" lines for a
- *   model that thinks at ~50–80 tok/s, which misleads the operator about
+ *   the thinking phase concluded — producing ~9 tokens/s "duration" lines for a
+ *   model that thinks at ~50–80 tokens/s, which misleads the operator about
  *   where the turn actually spent its budget.
  *
  *   Callers (orchestrator / subagent renderer) call {@link markEnded} on the
@@ -144,13 +144,13 @@ export class ThinkingLane {
     // Use the captured thinking→acting boundary when available; fall back to
     // wall-clock when the caller never signaled (e.g. pure-thinking turn with
     // no subsequent content or tool calls). formatThoughtSummary owns the 0-clamp
-    // (NTP step-back guard) and the shared "◆ thought for Xs · N tok" format.
+    // (NTP step-back guard) and the shared "◆ thought for Xs · N tokens" format.
     const end = this.endedAt ?? Date.now();
     return formatThoughtSummary(end - this.startedAt, this.buffer.length);
   }
 
   /**
-   * Compact inline form of the buffered thinking — "thought 1.5s · 320 tok"
+   * Compact inline form of the buffered thinking — "thought 1.5s · 320 tokens"
    * — for embedding into another summary line (e.g. a subagent's Done row).
    * Distinct from {@link collapse}: no leading whitespace, no glyph, no color,
    * and does NOT flip `hasEmitted` so the caller can still call collapse later
