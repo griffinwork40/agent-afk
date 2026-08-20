@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.143.0] - 2026-08-20
+
+### Added
+- live elapsed counters on in-flight tool/subagent overlay rows; fix stalled tick loop (#1225) (50000443)
+
 ## [5.142.0] - 2026-08-20
 
 ### Added
