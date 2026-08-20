@@ -29,7 +29,7 @@ import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from 
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
-import { runBackgroundBranch } from './subagent/background-branch.js';
+import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { QueuedNoteClaim } from './subagent/queued-note.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
@@ -457,9 +457,9 @@ export class SubagentExecutor implements SubagentControl {
     updateWaveUnit(waveId, callId, status, extra);
   }
 
-  hasPromotableForeground(): boolean {
-    return this.ctx.backgroundRegistry !== undefined && this.promotionTriggers.size > 0;
-  }
+  supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
+  hasPromotableForeground(): boolean { return this.supportsBackgroundJobs() && this.promotionTriggers.size > 0; }
+  async cancelBackgroundJob(call: ToolCall): Promise<ToolResult> { return executeBackgroundCancel(this.ctx.backgroundRegistry, call); }
 
   hasActiveForeground(): boolean {
     return this.activeForegroundHandles.size > 0;

@@ -79,6 +79,7 @@ function fakeRegistryWithEvents(
 function makeJob(overrides?: Partial<BackgroundJob>): BackgroundJob {
   return {
     jobId: 'bg-abc123',
+    provenance: 'model',
     subagentId: 'sub-1',
     label: 'deep investigation',
     model: 'sonnet',
@@ -237,6 +238,7 @@ describe('runBackgroundBranch', () => {
         handle,
         prompt: 'the prompt',
         model: 'opus',
+        provenance: 'model',
         parentSessionId: 'parent-42',
       });
     });

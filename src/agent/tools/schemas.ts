@@ -10,6 +10,7 @@
 
 import type { AnthropicToolDef } from './types.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
+import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -1302,7 +1303,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   createScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,
-  cancelScheduleTool,
+  cancelScheduleTool, cancelBackgroundJobTool,
   readWitnessTool,
   searchWitnessTool,
   worktreeTool,
