@@ -132,7 +132,8 @@ describe('SessionStream — a dropped stream still reconnects', () => {
     await settle();
     expect(calls).toHaveLength(1);
 
-    await vi.advanceTimersByTimeAsync(600);
+    // BASE_BACKOFF_MS (500) × max jitter (1.25) = 625ms ceiling.
+    await vi.advanceTimersByTimeAsync(700);
     await settle();
 
     expect(calls.length).toBeGreaterThanOrEqual(2);
@@ -144,7 +145,8 @@ describe('SessionStream — a dropped stream still reconnects', () => {
 
     stream.start();
     await settle();
-    await vi.advanceTimersByTimeAsync(600);
+    // BASE_BACKOFF_MS (500) × max jitter (1.25) = 625ms ceiling.
+    await vi.advanceTimersByTimeAsync(700);
     await settle();
 
     expect(calls[0]?.headers['last-event-id']).toBeUndefined();

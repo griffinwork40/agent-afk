@@ -10,6 +10,7 @@
 import type { ToolHandler } from '../types.js';
 import { bashHandler, createBashHandler } from './bash.js';
 import { readFileHandler, createReadFileHandler } from './read-file.js';
+import { extractDocumentHandler, createExtractDocumentHandler } from './extract-document.js';
 import { writeFileHandler, createWriteFileHandler } from './write-file.js';
 import { editFileHandler, createEditFileHandler } from './edit-file.js';
 import { globHandler, createGlobHandler } from './glob.js';
@@ -69,6 +70,7 @@ export function createBuiltinHandlers(
   // (issue #434) — parity with glob/grep. No-op on the dispatcher path, where
   // context.resolveBase already carries this same value.
   const readFile = cwd !== undefined ? createReadFileHandler(cwd) : readFileHandler;
+  const extractDocument = cwd !== undefined ? createExtractDocumentHandler(cwd) : extractDocumentHandler;
   const writeFile = cwd !== undefined ? createWriteFileHandler(cwd) : writeFileHandler;
   const editFile = cwd !== undefined ? createEditFileHandler(cwd) : editFileHandler;
   const listDirectory = cwd !== undefined ? createListDirectoryHandler(cwd) : listDirectoryHandler;
@@ -77,6 +79,7 @@ export function createBuiltinHandlers(
   return new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFile],
+    ['extract_document', extractDocument],
     ['write_file', writeFile],
     ['edit_file', editFile],
     ['glob', glob],
@@ -106,6 +109,7 @@ export function createBuiltinHandlers(
 export {
   bashHandler,
   readFileHandler,
+  extractDocumentHandler,
   writeFileHandler,
   editFileHandler,
   globHandler,

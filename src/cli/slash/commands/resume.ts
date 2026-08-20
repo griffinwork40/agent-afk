@@ -24,11 +24,31 @@ import type { SlashCommand, SlashContext } from '../types.js';
 
 type SessionEntry = ReturnType<typeof listSessions>[number];
 
+/**
+ * Human-friendly relative timestamp.
+ *
+ * Width is padded to 9 chars for column alignment:
+ *   "just now " (9), "59m ago  " (9 with trailing spaces accounted for by caller),
+ *   "23h ago  ", "29d ago  ", "Jul 15   " (6 + spaces).
+ *
+ * Caller pads with padEnd(9) so the format string here stays clean.
+ */
 function fmtWhen(ts: number): string {
-  if (typeof ts !== 'number' || !Number.isFinite(ts)) return '      —       ';
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return '—'.padEnd(9);
   const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '      —       ';
-  return d.toISOString().replace('T', ' ').slice(0, 16);
+  if (Number.isNaN(d.getTime())) return '—'.padEnd(9);
+  const diffMs = Date.now() - ts;
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return 'just now'.padEnd(9);
+  if (diffMin < 60) return `${diffMin}m ago`.padEnd(9);
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH}h ago`.padEnd(9);
+  const diffD = Math.floor(diffH / 24);
+  if (diffD < 30) return `${diffD}d ago`.padEnd(9);
+  // "Mon DD" — e.g. "Jul 15"
+  const mon = d.toLocaleString('en-US', { month: 'short' });
+  const day = d.getDate();
+  return `${mon} ${day}`.padEnd(9);
 }
 
 /** Convert a found session entry into a ResolvedResumeTarget. */
@@ -42,10 +62,12 @@ function resolveFromFound(found: NonNullable<ReturnType<typeof findSession>>): R
 
 /** Plain (un-coloured) one-line label for a session, used as a picker option. */
 function pickLabel(e: SessionEntry): string {
+  const when = fmtWhen(e.savedAt);
   const model = e.model.padEnd(7);
   const turns = `${e.totalTurns} turn${e.totalTurns === 1 ? '' : 's'}`.padEnd(9);
+  const cost = formatCost(e.totalCostUsd).padStart(8);
   const origin = e.source === 'telegram' ? 'tg' : '  ';
-  return `${fmtWhen(e.savedAt)}  ${model}  ${turns}  ${origin}  ${e.name ?? e.id}`;
+  return `${when}  ${model}  ${turns}  ${cost}  ${origin}  ${e.name ?? e.id}`;
 }
 
 /**
@@ -160,7 +182,8 @@ export const resumeCmd: SlashCommand = {
     // Interactive picker on a TTY: select a session to resume it directly.
     const compositor = ctx.getCompositor?.() ?? null;
     if (compositor) {
-      const shown = displayEntries.slice(0, 20);
+      // No cap — virtual scroll in the picker handles the viewport.
+      const shown = displayEntries;
       const options = uniquePickLabels(shown);
       const picked = await runPicker(compositor, {
         header: [
@@ -169,6 +192,7 @@ export const resumeCmd: SlashCommand = {
           '',
         ],
         options,
+        searchable: true,
       });
       const choice = picked?.[0];
       if (choice) {
@@ -190,7 +214,7 @@ export const resumeCmd: SlashCommand = {
     ctx.out.line();
     ctx.out.line(header);
     ctx.out.line(divider());
-    for (const e of displayEntries.slice(0, 20)) {
+    for (const e of displayEntries.slice(0, 50)) {
       const when = fmtWhen(e.savedAt);
       const model = palette.brand(e.model.padEnd(7));
       const turns = palette.meta(`${e.totalTurns} turn${e.totalTurns === 1 ? '' : 's'}`.padEnd(9));

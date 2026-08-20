@@ -129,7 +129,7 @@ function statusOf(t: AfkMdTarget): string {
 export function renderTargetRows(targets: AfkMdTarget[]): string[] {
   const lines: string[] = [];
   for (const t of targets) {
-    const size = contributes(t) ? `${formatBytes(t.bytes)}  ${formatTokens(t.tokens)} tok` : '';
+    const size = contributes(t) ? `${formatBytes(t.bytes)}  ${formatTokens(t.tokens)} tokens` : '';
     const precedence =
       t.scope === 'project' && contributes(t) ? palette.dim('  ← wins on conflict') : '';
     lines.push(`  ${t.label.padEnd(9)} ${palette.dim(t.path)}`);

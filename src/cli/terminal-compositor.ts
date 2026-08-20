@@ -743,6 +743,11 @@ export class TerminalCompositor {
     InputMode.repaintPicker(this);
   }
 
+  /** Current terminal height used to size transient picker overlays. */
+  terminalRows(): number {
+    return Math.max(1, this.stdout.rows ?? 24);
+  }
+
   /**
    * Transition input mode. Default is `'streaming'`; the persistent
    * InputSurface flips to `'idle'` between turns and back to

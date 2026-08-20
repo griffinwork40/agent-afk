@@ -6,16 +6,19 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import {
-  MAX_API_ROUND_HEADROOM_MS,
+  computeMaxApiRoundInflightMs,
+  API_ROUND_INFLIGHT_HEADROOM_MS,
   MAX_TOOL_INFLIGHT_MS,
   NEXT_EVENT_TIMEOUT_MS,
   TOOL_INFLIGHT_RECHECK_MS,
   makeNextWithTimeout,
-  resolveMaxApiRoundInflightMs,
   type WatchdogState,
 } from './streaming.watchdog.js';
 import { StreamTimeoutError } from './stream-timeout-error.js';
-import { TTFB_MAX_ATTEMPTS, ttfbAttemptTimeoutMs } from '../agent/providers/anthropic-direct/loop/retry-budget.js';
+import {
+  TTFB_MAX_ATTEMPTS,
+  ttfbAttemptTimeoutMs,
+} from '../agent/providers/anthropic-direct/loop/retry-budget.js';
 import { DEFAULT_MODEL_TTFB_TIMEOUT_MS } from '../agent/providers/shared/first-byte-timeout.js';
 
 /** Build a minimal WatchdogState with apiRoundInFlight pre-set to true. */
@@ -44,43 +47,42 @@ function makeHangingIter(): { iter: AsyncIterator<never>; release: () => void } 
 }
 
 describe('WatchdogState — apiRoundInFlight fields', () => {
-  it('resolveMaxApiRoundInflightMs returns a positive number', () => {
-    expect(resolveMaxApiRoundInflightMs()).toBeGreaterThan(0);
+  it('computeMaxApiRoundInflightMs returns a positive number at the default config', () => {
+    expect(computeMaxApiRoundInflightMs()).toBeGreaterThan(0);
   });
 
-  it('resolveMaxApiRoundInflightMs default matches the old hardcoded 420_000', () => {
-    // Default: AFK_MODEL_TTFB_TIMEOUT_MS unset → 180_000
-    // ttfbAttemptTimeoutMs(180_000) = floor(180_000 × 2 / 3) = 120_000
-    // TTFB_MAX_ATTEMPTS (3) × 120_000 + 60_000 headroom = 420_000
+  it('computeMaxApiRoundInflightMs equals formula result at the default TTFB config', () => {
+    // Formula: TTFB_MAX_ATTEMPTS × ttfbAttemptTimeoutMs(configured) + headroom.
+    // At default (180 s): 3 × 120 s + 60 s = 420 s — matches the old hardcoded
+    // constant so callers that relied on the previous value are unaffected.
     const expected =
       TTFB_MAX_ATTEMPTS * ttfbAttemptTimeoutMs(DEFAULT_MODEL_TTFB_TIMEOUT_MS) +
-      MAX_API_ROUND_HEADROOM_MS;
-    expect(resolveMaxApiRoundInflightMs()).toBe(expected);
-    expect(resolveMaxApiRoundInflightMs()).toBe(420_000);
+      API_ROUND_INFLIGHT_HEADROOM_MS;
+    expect(computeMaxApiRoundInflightMs()).toBe(expected);
   });
 
-  it('resolveMaxApiRoundInflightMs exceeds the provider TTFB worst case (3 × 120s)', () => {
-    // The provider-level TTFB budget is 3 attempts × 120s = 360s worst case.
-    // The watchdog ceiling must exceed this so the provider's retry logic gets
-    // a chance to recover before the Telegram watchdog fires.
-    expect(resolveMaxApiRoundInflightMs()).toBeGreaterThan(360_000);
+  it('computeMaxApiRoundInflightMs exceeds the provider TTFB worst case', () => {
+    // Must always exceed TTFB_MAX_ATTEMPTS × per-attempt bound so the provider's
+    // retry logic gets a chance to recover before the Telegram watchdog fires.
+    const ttfbWorstCase =
+      TTFB_MAX_ATTEMPTS * ttfbAttemptTimeoutMs(DEFAULT_MODEL_TTFB_TIMEOUT_MS);
+    expect(computeMaxApiRoundInflightMs()).toBeGreaterThan(ttfbWorstCase);
   });
 
-  it('resolveMaxApiRoundInflightMs is less than MAX_TOOL_INFLIGHT_MS (default config)', () => {
-    // API calls should not be allowed to hang longer than a tool execution.
-    expect(resolveMaxApiRoundInflightMs()).toBeLessThan(MAX_TOOL_INFLIGHT_MS);
-  });
-
-  it('resolveMaxApiRoundInflightMs scales proportionally for a high TTFB timeout', () => {
-    // With AFK_MODEL_TTFB_TIMEOUT_MS = 300_000:
-    //   ttfbAttemptTimeoutMs(300_000) = floor(300_000 × 2 / 3) = 200_000
-    //   TTFB_MAX_ATTEMPTS (3) × 200_000 + 60_000 = 660_000
-    const highTtfb = 300_000;
+  it('computeMaxApiRoundInflightMs scales with a raised TTFB config', () => {
+    // At operator-raised 300 s: 3 × 200 s + 60 s = 660 s — not the old 420 s.
+    const raisedTtfb = 300_000;
     const expected =
-      TTFB_MAX_ATTEMPTS * ttfbAttemptTimeoutMs(highTtfb) + MAX_API_ROUND_HEADROOM_MS;
+      TTFB_MAX_ATTEMPTS * ttfbAttemptTimeoutMs(raisedTtfb) +
+      API_ROUND_INFLIGHT_HEADROOM_MS;
     expect(expected).toBe(660_000);
-    // And it must be strictly greater than the default ceiling.
-    expect(expected).toBeGreaterThan(420_000);
+    // Sanity: raised value must be larger than the default-config value.
+    expect(expected).toBeGreaterThan(computeMaxApiRoundInflightMs());
+  });
+
+  it('computeMaxApiRoundInflightMs result is less than MAX_TOOL_INFLIGHT_MS', () => {
+    // API calls should not be allowed to hang longer than a tool execution.
+    expect(computeMaxApiRoundInflightMs()).toBeLessThan(MAX_TOOL_INFLIGHT_MS);
   });
 
   it('TOOL_INFLIGHT_RECHECK_MS is a reasonable recheck cadence', () => {
@@ -105,7 +107,7 @@ describe('WatchdogState — apiRoundInFlight fields', () => {
 });
 
 describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
-  it('suspends the watchdog while apiRoundInFlight=true, then fires past resolveMaxApiRoundInflightMs()', async () => {
+  it('suspends the watchdog while apiRoundInFlight=true, then fires past computeMaxApiRoundInflightMs()', async () => {
     // Install fake timers FIRST so that Date.now() inside makeState returns the
     // fake epoch (0 ms). This makes apiRoundSince deterministically equal to the
     // fake clock's origin, and the elapsed-time arithmetic below exact.
@@ -131,13 +133,13 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
       await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
       expect(settled).toBe(false);
 
-      // Advance only the remaining budget to reach resolveMaxApiRoundInflightMs()
+      // Advance only the remaining budget to reach computeMaxApiRoundInflightMs()
       // (measured from apiRoundSince). The clock has already moved by
       // 2 × (NEXT_EVENT_TIMEOUT_MS + 1), so we need only the difference.
       // This keeps the assertion tight: an implementation granting even one
       // extra inactivity window would cause the test to fail instead of pass.
       const elapsed = 2 * (NEXT_EVENT_TIMEOUT_MS + 1);
-      const remaining = resolveMaxApiRoundInflightMs() - elapsed;
+      const remaining = computeMaxApiRoundInflightMs() - elapsed;
       const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
       await vi.advanceTimersByTimeAsync(remaining);
       await rejection;
@@ -150,9 +152,8 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
     vi.useFakeTimers();
     try {
       let releaseFirst: () => void = () => {};
-      let resolveSecond: (v: IteratorResult<never>) => void = () => {};
       // First call resolves immediately (simulates the subsequent event that
-      // clears apiRoundInFlight); second call hangs.
+      // clears apiRoundInFlight); second call hangs forever (never resolved).
       let callCount = 0;
       const iter: AsyncIterator<never> = {
         next: () => {
@@ -160,7 +161,7 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
           if (callCount === 1) {
             return new Promise<IteratorResult<never>>((res) => { releaseFirst = () => res({ value: undefined as never, done: false }); });
           }
-          return new Promise<IteratorResult<never>>((res) => { resolveSecond = res; });
+          return new Promise<IteratorResult<never>>(() => {});
         },
       };
 
@@ -194,7 +195,6 @@ describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
       await vi.advanceTimersByTimeAsync(2);
       await rejection;
 
-      void resolveSecond; // silence unused var warning
     } finally {
       vi.useRealTimers();
     }

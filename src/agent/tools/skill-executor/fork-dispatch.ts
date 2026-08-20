@@ -50,6 +50,13 @@ import type { SkillExecutorInternals } from './types.js';
  * - Worktree isolation: cwd forwarding is what anchors the skill subagent's
  *   bash/grep/file tools to the worktree; without it every `/diagnose`, `/mint`,
  *   etc. runs its first-tier subagents against the host repo.
+ * - Workspace READ channel: `workspaceStore` must be threaded HERE, not just on
+ *   the root manager, because this path does NOT use the root manager — it
+ *   constructs its own. Every `context: 'fork'` skill (the bundled plugins:
+ *   `/diagnose`, `/review`, `/spec`, `/ground-state`) forks through this
+ *   function, so omitting the store left them able to publish but blind to
+ *   sibling findings, exactly the asymmetry the root-manager fix closed for the
+ *   `agent` tool. See SkillExecutorContext.workspaceStore.
  */
 function buildSkillForkManager(
   internals: SkillExecutorInternals,
@@ -73,6 +80,7 @@ function buildSkillForkManager(
     progressSink: getCurrentSink(),
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
+    ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
   });
 }
 

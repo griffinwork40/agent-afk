@@ -132,7 +132,7 @@ function formatDoneSummary(source: SourceState): string {
   if (source.stats.toolUses) {
     stats.push(formatToolCallStat(source.stats.toolUses));
   }
-  if (source.stats.tokens) stats.push(`${formatTokens(source.stats.tokens)} tok`);
+  if (source.stats.tokens) stats.push(`${formatTokens(source.stats.tokens)} tokens`);
   const durationMs = source.responseMetadata?.['durationMs'];
   const wallMs = Date.now() - source.startedAt;
   if (typeof durationMs === 'number') {

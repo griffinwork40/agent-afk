@@ -23,6 +23,7 @@ import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { WorkspaceStore } from '../workspace/index.js';
 import type { TraceSink } from '../trace/index.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
@@ -31,6 +32,7 @@ import type { SubagentExecutionError } from '../subagent/result.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { resolveMaxNestingDepth } from './nesting.js';
+import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import { getSessionsDir } from '../../paths.js';
 
@@ -84,6 +86,8 @@ export interface ComposeExecutorContext {
    * inherit the same Anthropic-compatible local endpoint as the parent.
    */
   baseUrl?: string;
+  /** OpenAI-compatible base URL for workspace-enabled compose node providers. */
+  openaiBaseUrl?: string;
   /**
    * The raw base system prompt (pre-assembly) forwarded to every compose
    * subagent. Intentionally the *base* prompt rather than the assembled one
@@ -154,6 +158,25 @@ export interface ComposeExecutorContext {
    * unset, nodes fall back to cwd-only derivation, unchanged.
    */
   getReadScopeInputs?: () => ReadScopeInputs;
+  /** Shared workspace store so compose DAG nodes can publish/receive findings. */
+  workspaceStore?: WorkspaceStore;
+  /**
+   * Callback wired to the per-call compose {@link SubagentManager} so every
+   * successfully-completed DAG node's token usage and USD cost rolls up into
+   * the parent session's `session_sealed` telemetry. Mirrors the wiring that
+   * `bootstrap.ts` applies to the root manager via
+   * `rootManager.setOnSubagentSucceeded()`.
+   *
+   * The compose manager is ephemeral (created and torn down per `execute()`
+   * call), so the callback must route to the parent session's accumulator —
+   * i.e. `(usage, costUsd) => session.recordSubagentCompletion(usage, costUsd)`
+   * — rather than a local one. Late-bound via {@link ComposeExecutor.setOnSubagentSucceeded}
+   * after the session is constructed to avoid a circular reference.
+   */
+  onSubagentSucceeded?: (
+    usage: import('../subagent/result.js').SubagentTrace['usage'],
+    costUsd: number | undefined,
+  ) => void;
 }
 
 interface ComposeNodeInput {
@@ -555,6 +578,23 @@ export class ComposeExecutor {
     this.ctx.traceWriter = writer;
   }
 
+  /**
+   * Wire the subagent-success rollup callback so every DAG node's token usage
+   * and USD cost accumulates into the parent session's `session_sealed`
+   * telemetry. Mirrors the late-binding that `bootstrap.ts` applies to the
+   * root manager: session must be constructed first, then this is called with
+   * a closure over `session.recordSubagentCompletion`. Calling this more than
+   * once replaces the prior callback (matches `SubagentManager` semantics).
+   */
+  setOnSubagentSucceeded(
+    cb: (
+      usage: import('../subagent/result.js').SubagentTrace['usage'],
+      costUsd: number | undefined,
+    ) => void,
+  ): void {
+    this.ctx.onSubagentSucceeded = cb;
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Compose tool call aborted', isError: true };
@@ -674,7 +714,20 @@ export class ComposeExecutor {
       // 'daemon', not 'unknown') via forkSubagent's parentSurface fill.
       // this.ctx.surface already drives routing telemetry (deriveOrigin).
       ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
+      ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
     });
+    // Subagent-success rollup: wire the per-call manager with the same
+    // callback that the root manager receives (see bootstrap.ts and the
+    // daemon/telegram surfaces) so every DAG node's token usage and USD cost
+    // accumulates into the parent session's `session_sealed` telemetry.
+    // The compose manager is ephemeral — created and torn down per execute()
+    // call — so the callback must route to the parent session's accumulators
+    // rather than a local one. `ctx.onSubagentSucceeded` is populated by
+    // `setOnSubagentSucceeded()` (called once per session, after the session
+    // is constructed, from the same surface-level code that wires rootManager).
+    if (this.ctx.onSubagentSucceeded !== undefined) {
+      manager.setOnSubagentSucceeded(this.ctx.onSubagentSucceeded);
+    }
 
     const startedAt = Date.now();
     void appendRoutingDecision({
@@ -716,11 +769,9 @@ export class ComposeExecutor {
         // receive no node-level apiKey so the openai-compatible provider reads
         // OPENAI_API_KEY from env directly (cross-provider credential anti-leak
         // invariant, defense-in-depth).
-        const resolvedNodeApiKey = nodeIsOpenAI
-          ? undefined
-          : preserveParentApiKey
-            ? this.ctx.apiKey
-            : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : this.ctx.apiKey);
+        const resolvedNodeApiKey = nodeIsOpenAI ? undefined
+          : preserveParentApiKey ? this.ctx.apiKey
+          : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : this.ctx.apiKey);
         return {
           id: n.id,
           agentType: `${n.id} [${i + 1}/${totalNodes}]`,
@@ -760,9 +811,9 @@ export class ComposeExecutor {
           // Budget enforcement: the provider loop caps tool-use rounds and
           // winds down gracefully. Omitted when unset so the fork keeps
           // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (subagent.ts).
-          ...(maxToolRoundsPerNode !== undefined
-            ? { maxToolUseIterations: maxToolRoundsPerNode }
-            : {}),
+          ...(maxToolRoundsPerNode !== undefined ? { maxToolUseIterations: maxToolRoundsPerNode } : {}),
+          // Workspace-enabled provider (see compose-node-provider.ts).
+          ...resolveComposeNodeProvider(nodeModel, this.ctx.workspaceStore, this.ctx.openaiBaseUrl),
         };
       });
 

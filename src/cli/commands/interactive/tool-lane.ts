@@ -4,6 +4,7 @@ import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.
 import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { truncateDisplayWidth, stripAnsi } from '../../display.js';
+import { formatElapsed, ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
 import {
   renderOverlayChildren,
   formatAgentSummary,
@@ -12,6 +13,7 @@ import {
   renderGroupedRootTools,
   getGlyphs,
   toolLaneWidth,
+  freshToolEntry,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -44,6 +46,13 @@ export class ToolLane {
   private entries = new Map<string, Entry>();
   private order: string[] = [];
   private agentIdStack: string[] = [];
+  /**
+   * Tracks the last displayed elapsed-second value per in-flight tool entry so
+   * {@link checkElapsedDisplayNeedsUpdate} can detect second-boundary crossings
+   * without repainting on every 80 ms tick. Keyed by `toolUseId`; entries are
+   * cleared lazily (on the next scan) once the tool resolves or is removed.
+   */
+  private lastElapsedSecond = new Map<string, number>();
 
   addStart(toolUseId: string, toolName: string, toolInput: string): void {
     // Strip ANSI from toolInput at storage time: it originates from LLM
@@ -54,14 +63,7 @@ export class ToolLane {
     const safeInput = stripAnsi(toolInput);
     const prefix = formatToolLine(toolName + safeInput);
     const agentContext = this.agentIdStack.at(-1) ?? undefined;
-    const entry: ToolEntry = {
-      kind: 'tool',
-      toolUseId,
-      toolName,
-      toolInput: safeInput,
-      prefix,
-      ...(agentContext !== undefined ? { agentContext } : {}),
-    };
+    const entry = freshToolEntry(toolUseId, toolName, safeInput, prefix, agentContext);
     this.entries.set(toolUseId, entry);
     this.order.push(toolUseId);
     if (SUBAGENT_TOOLS.has(toolName)) {
@@ -100,14 +102,7 @@ export class ToolLane {
       return;
     }
     const prefix = formatToolLine(toolName + safeInput, maxWidth);
-    const entry: ToolEntry = {
-      kind: 'tool',
-      toolUseId,
-      toolName,
-      toolInput: safeInput,
-      prefix,
-      ...(agentContext !== undefined ? { agentContext } : {}),
-    };
+    const entry = freshToolEntry(toolUseId, toolName, safeInput, prefix, agentContext);
     this.entries.set(toolUseId, entry);
     this.order.push(toolUseId);
   }
@@ -239,6 +234,46 @@ export class ToolLane {
       const removed = new Set(toRemove);
       this.order = this.order.filter((id) => !removed.has(id));
     }
+  }
+
+  /**
+   * Check whether any in-flight tool entry's displayed elapsed counter has
+   * advanced to a new second since the last call. Returns `true` when at
+   * least one entry's elapsed display has changed — the caller should mark
+   * the tool-lane overlay slot dirty to trigger a repaint.
+   *
+   * Called by `checkPauseAnnotations` on every 80 ms tick so silent tool
+   * commands (those that emit no events) still display a live elapsed counter.
+   * Tracks per-entry last-seen second in {@link lastElapsedSecond}; stale
+   * entries (completed or removed) are pruned on each scan.
+   *
+   * Intentionally does NOT count seconds below {@link ELAPSED_GRACE_MS}: the
+   * grace-period branch of `formatElapsed` emits an empty string, so there is
+   * nothing to repaint until the grace period expires.
+   */
+  checkElapsedDisplayNeedsUpdate(): boolean {
+    const now = Date.now();
+    let changed = false;
+    // Prune tracking entries for IDs that are no longer in-flight.
+    for (const id of this.lastElapsedSecond.keys()) {
+      const entry = this.entries.get(id);
+      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) {
+        this.lastElapsedSecond.delete(id);
+      }
+    }
+    for (const id of this.order) {
+      const entry = this.entries.get(id);
+      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) continue;
+      const elapsedMs = now - entry.startedAt;
+      if (elapsedMs < ELAPSED_GRACE_MS) continue; // within grace period — display is ''
+      const currentSec = Math.floor(elapsedMs / 1000);
+      const lastSec = this.lastElapsedSecond.get(id);
+      if (lastSec === undefined || currentSec !== lastSec) {
+        this.lastElapsedSecond.set(id, currentSec);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   hasPending(): boolean {
@@ -498,7 +533,10 @@ export class ToolLane {
         if (entry.result) {
           lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
         } else {
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …')));
+          // Live elapsed counter: computed at repaint time so the counter ticks
+          // on every overlay refresh without a dedicated timer. Grace period
+          // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
         }
         // Mirror the thinkingTail handling of the other two NESTING branches
         // (and the childless-leaf branch below): spine glyph (g.spine, │) at
@@ -518,7 +556,9 @@ export class ToolLane {
             }
           }
         } else {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …')));
+          // Live elapsed counter: same pattern as the NESTING branch above —
+          // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
           if (entry.thinkingTail) {
             // Childless Agent entries (a child just opened its thinking block
             // and hasn't yet emitted content or a tool_use) get the tail right

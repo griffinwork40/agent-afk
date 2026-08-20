@@ -22,7 +22,7 @@
   letter-spacing: 0.06em; color: var(--warning);
   border: 1px solid var(--warning); border-radius: 4px; padding: 1px 6px;
 }
-.approval-source { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.approval-source { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
 .approval-title { font-size: 13px; line-height: 1.5; color: var(--text); }
 .approval-desc { font-size: 12px; line-height: 1.5; color: var(--text-dim); margin-top: 4px; }
 .approval-input {

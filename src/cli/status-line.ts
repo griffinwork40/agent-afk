@@ -561,7 +561,7 @@ export class StatusLine {
     }
 
     if (f.tokens !== undefined) {
-      parts.push({ text: palette.chrome(`${formatTokens(f.tokens)} tok`), droppablePriority: 4 }); // drop 2nd
+      parts.push({ text: palette.chrome(`${formatTokens(f.tokens)} tokens`), droppablePriority: 4 }); // drop 2nd
     }
 
     // Invariant: every droppablePriority on this line must be UNIQUE. The shed

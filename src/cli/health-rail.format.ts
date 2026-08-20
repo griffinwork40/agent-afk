@@ -36,7 +36,7 @@ export interface HealthRailFields {
  * Uses concatenated units (no spaces) to keep it tight on a status row.
  * Examples: `5s`, `2m14s`, `1h3m`, `2d4h`.
  */
-function formatElapsed(ms: number): string {
+function formatDuration(ms: number): string {
   const totalSec = Math.max(0, Math.round(ms / 1000));
   if (totalSec < 60) return `${totalSec}s`;
   const totalMin = Math.floor(totalSec / 60);
@@ -66,7 +66,7 @@ export function formatHealthRail(fields: HealthRailFields, maxWidth: number): st
   const sep = palette.dim(' · ');
 
   const turnText = palette.brand(`T${totalTurns}`);
-  const elapsedText = palette.dim(formatElapsed(elapsedMs));
+  const elapsedText = palette.dim(formatDuration(elapsedMs));
   const callsText = palette.chrome(`${toolCalls} calls`);
 
   const subsText =

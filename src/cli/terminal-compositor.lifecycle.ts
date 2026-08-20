@@ -179,7 +179,18 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // Disabled in disarm() so a non-bracketed-paste-aware caller picking
   // up the TTY after us doesn't see literal `~`-bracketed sequences.
   try {
-    self.stdout.write('\x1b[?2004h');
+    // Enable bracketed paste + scroll-to-bottom-on-keypress in one write.
+    // \x1b[?2004h  = bracketed-paste mode (see above).
+    // \x1b[?1011h  = rxvt scrollKey — tells the terminal to snap the
+    //   viewport to the bottom of scrollback whenever the user presses a
+    //   key. Default-on in every major terminal (iTerm2, kitty, Terminal.app,
+    //   WezTerm, Alacritty, Ghostty, GNOME Terminal), so this is a no-op for
+    //   most users; it covers the edge case where the terminal or the user's
+    //   config has the mode off (xterm scrollKey resource, Ghostty
+    //   `scroll-to-bottom` setting). Without it, a user scrolled up into
+    //   history can type without the viewport snapping back to the input line.
+    //   Disabled in disarm() to restore the prior terminal state.
+    self.stdout.write('\x1b[?2004h\x1b[?1011h');
   } catch {
     /* best-effort — terminals that don't support DEC private modes
        silently drop unknown set/reset sequences, so a thrown write
@@ -394,15 +405,17 @@ export function disarm(self: LifecycleHost): void {
   }
 
   if (self.stdout.isTTY && self.stdin.isTTY) {
-    // External constraint (drain ordering): disable bracketed-paste BEFORE
-    // restoring raw mode. On rapid disarm/process-exit, the two writes
-    // can race against the kernel TTY flush — restoring raw mode first
-    // can cause the disable sequence to be dropped, leaving the terminal
-    // in bracketed-paste mode after the process exits (subsequent shell
-    // commands see literal `\x1b[200~`/`\x1b[201~` around clipboard
+    // External constraint (drain ordering): disable bracketed-paste and
+    // scroll-key BEFORE restoring raw mode. On rapid disarm/process-exit,
+    // the writes can race against the kernel TTY flush — restoring raw mode
+    // first can cause the disable sequences to be dropped, leaving the
+    // terminal in bracketed-paste mode after the process exits (subsequent
+    // shell commands see literal `\x1b[200~`/`\x1b[201~` around clipboard
     // pastes). Mirrors the single-drain ordering in raw-mode.ts.
+    // \x1b[?1011l restores the terminal's scroll-key mode to its prior
+    // state (see the enable in arm()).
     try {
-      self.stdout.write('\x1b[?2004l');
+      self.stdout.write('\x1b[?2004l\x1b[?1011l');
     } catch {
       /* stdout may have been closed */
     }

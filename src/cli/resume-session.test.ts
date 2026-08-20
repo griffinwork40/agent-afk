@@ -3,8 +3,9 @@ import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { saveSession } from './session-store.js';
-import { resolveResumeTarget, resumeConfigFor } from './resume-session.js';
+import { resolveResumeTarget, resumeConfigFor, type ResolvedResumeTarget } from './resume-session.js';
 import { createSessionStats, recordTurn } from './slash/session-stats.js';
+import type { StoredSession } from './session-store.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -57,5 +58,67 @@ describe('resume-session', () => {
       resume: 'raw-provider-session',
       sessionId: 'raw-provider-session',
     });
+  });
+
+  it('appends tool summaries to assistant text when toolEvents are present', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(
+      stats,
+      'run a command',
+      'done',
+      { sessionId: 'sdk-tools' },
+      [{ toolName: 'bash', toolUseId: 'tu_1', input: 'echo hi', isError: false }],
+    );
+    saveSession(stats, 'tools-session');
+
+    const target = resolveResumeTarget({ resume: 'tools-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.assistant).toBe('done\n[Tools used: bash(echo hi)✓]');
+  });
+
+  it('leaves assistant text unchanged when turn has no toolEvents', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'hi there', { sessionId: 'sdk-notools' });
+    saveSession(stats, 'notools-session');
+
+    const target = resolveResumeTarget({ resume: 'notools-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.assistant).toBe('hi there');
+  });
+
+  it('leaves assistant text unchanged when toolEvents is an empty array', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'hi there', { sessionId: 'sdk-emptytools' }, []);
+    saveSession(stats, 'emptytools-session');
+
+    const target = resolveResumeTarget({ resume: 'emptytools-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.assistant).toBe('hi there');
+  });
+
+  it('null-guards turn.assistant — corrupted sidecar with null assistant yields empty string prefix', () => {
+    // Simulate a corrupted sidecar where assistant is null at runtime
+    const corruptedStored = {
+      sessionId: 'sdk-corrupt',
+      model: 'sonnet',
+      turns: [
+        {
+          user: 'hello',
+          assistant: null as unknown as string, // corrupted field
+          timestamp: Date.now(),
+          toolEvents: [{ toolName: 'bash', toolUseId: 'tu_1', input: 'ls', isError: false }],
+        },
+      ],
+    } satisfies Partial<StoredSession> as StoredSession;
+
+    const target: ResolvedResumeTarget = {
+      id: 'corrupt',
+      resumeId: 'sdk-corrupt',
+      stored: corruptedStored,
+    };
+    const config = resumeConfigFor(target);
+    // Should produce '\n[Tools used: ...]' rather than 'null\n[Tools used: ...]'
+    expect(config.resumeHistory?.[0]?.assistant).toBe('\n[Tools used: bash(ls)✓]');
+    expect(config.resumeHistory?.[0]?.assistant).not.toContain('null');
   });
 });

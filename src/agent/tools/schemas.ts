@@ -10,6 +10,7 @@
 
 import type { AnthropicToolDef } from './types.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
+import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -53,7 +54,7 @@ export const readFileTool: AnthropicToolDef = {
     'Read a file from the filesystem. Returns the file content with line numbers. ' +
     'Use offset and limit to read specific sections of large files. ' +
     'When the read returns a partial view, the response ends with a `... (showing lines X-Y of Z [— pass offset=N to continue])` annotation indicating the full file size and how to continue. ' +
-    'Binary files are detected and rejected. Missing files return an error.',
+    'Binary files are detected and rejected — use extract_document for .docx, .pdf, .xlsx, .pptx, and .zip files. Missing files return an error.',
   input_schema: {
     type: 'object',
     properties: {
@@ -68,6 +69,31 @@ export const readFileTool: AnthropicToolDef = {
       limit: {
         type: 'number',
         description: 'Maximum number of lines to read. Defaults to 2000.',
+      },
+    },
+    required: ['file_path'],
+  },
+};
+
+export const extractDocumentTool: AnthropicToolDef = {
+  name: 'extract_document',
+  category: 'read',
+  concurrencySafe: true,
+  description:
+    'Extract text from binary document formats that read_file rejects. ' +
+    'Supports .docx, .xlsx, .pptx (Office/OOXML — zero external dependencies), ' +
+    '.pdf (requires pdftotext from poppler-utils; emits install instructions if missing), ' +
+    'and .zip (lists members and extracts text-file contents). ' +
+    'Use this when read_file reports "File appears to be binary" on a document you need to read. ' +
+    'Returns plain text extracted from the document. ' +
+    'Security: 4 MB decompression cap, zip-slip path containment, no shell execution. ' +
+    'Output is capped at 512 KB of text; larger documents are truncated with a marker.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Absolute path to the document file to extract text from.',
       },
     },
     required: ['file_path'],
@@ -1292,6 +1318,7 @@ export const browserCloseTool: AnthropicToolDef = {
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   bashTool,
   readFileTool,
+  extractDocumentTool,
   writeFileTool,
   editFileTool,
   globTool,
@@ -1302,7 +1329,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   createScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,
-  cancelScheduleTool,
+  cancelScheduleTool, cancelBackgroundJobTool,
   readWitnessTool,
   searchWitnessTool,
   worktreeTool,

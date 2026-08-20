@@ -59,6 +59,9 @@
  * @module agent/tools/readonly-bash
  */
 
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 /**
  * Denylist of mutating command patterns, each with a human-readable reason.
  * All regexes are case-insensitive and anchored on word boundaries where a bare
@@ -234,6 +237,42 @@ const ARITHMETIC_EXPANSION = /\$\(\(.*?\)\)/g;
 // redirects (`echo x>file`) while keeping arrow/comparison tokens (`=>`, `->`)
 // — high-frequency in TS/Rust recon — allowed.
 const REAL_REDIRECT = /(?<![=<>-])>>?(?!&)/;
+
+// Contract: match the redirect target token after `>` / `>>` in the RAW command
+// (after &> normalisation). Quote-pair is captured in group 1 for back-reference
+// stripping; the bare target word lands in group 2. `/dev/null` and fd-only
+// sinks (`&1`, `&2`) are excluded — they are already removed by ALLOWED_REDIRECTS
+// from the stripped view that triggers REAL_REDIRECT.
+const REDIRECT_TARGET_RE = /(?<![=<>-])>>?[ \t]*(['"]?)(\/?[^\s;|&'"]+)\1/g;
+
+/** Expand `$TMPDIR` / `${TMPDIR}` prefix. Only this variable is expanded; any
+ *  other `$VAR` in the target is opaque and must be blocked. */
+const TMPDIR_VAR_RE = /^\$\{?TMPDIR\}?\//;
+const OTHER_VAR_RE = /\$(?!\{?TMPDIR\}?[/}]|$)/;
+
+/**
+ * Returns true only when EVERY redirect target in `command` resolves to a path
+ * strictly inside `os.tmpdir()`. Uses `path.resolve` — prefix-match alone is
+ * insufficient (`> /tmp/../etc/hosts` must still be blocked). Unknown variables
+ * (`> $UNKNOWN_VAR`) return false so they remain blocked.
+ */
+function allRedirectsInTmpdir(command: string): boolean {
+  const tmpdir = os.tmpdir();
+  let found = false;
+  let match: RegExpExecArray | null;
+  REDIRECT_TARGET_RE.lastIndex = 0;
+  while ((match = REDIRECT_TARGET_RE.exec(command)) !== null) {
+    const raw = match[2]!;
+    if (/`/.test(raw)) return false; // backtick substitution — opaque, block
+    if (raw === '/dev/null' || /^&?\d+$/.test(raw)) continue; // already-allowed sinks
+    if (OTHER_VAR_RE.test(raw)) return false; // unknown variable — block
+    const expanded = TMPDIR_VAR_RE.test(raw) ? raw.replace(TMPDIR_VAR_RE, tmpdir + '/') : raw;
+    const resolved = path.resolve(expanded);
+    if (!resolved.startsWith(tmpdir + path.sep)) return false; // includes /tmp/../ bypass
+    found = true;
+  }
+  return found;
+}
 
 // Rules evaluated against the RAW command string (Pass 1). ONLY rules whose
 // mutation signal can be legitimately quoted belong here — quote-stripping them
@@ -755,7 +794,13 @@ export function classifyBashCommand(command: string): { mutating: boolean; reaso
     .replace(ARITHMETIC_EXPANSION, ' ')
     .replace(ALLOWED_REDIRECTS, ' ')
     .replace(/&(>>?)/g, '$1');  // normalize &> realfile → > realfile (ALLOWED_REDIRECTS already removed &>/dev/null)
-  if (REAL_REDIRECT.test(redirectView)) {
+  // Contract: REAL_REDIRECT tests the stripped redirectView (ALLOWED_REDIRECTS
+  // already removed), while allRedirectsInTmpdir receives the raw command
+  // (needs the original $TMPDIR tokens that stripping would destroy). The two
+  // views agree on well-formed shell; the raw view is strictly more conservative
+  // (it may see redirect-like tokens inside data strings that the stripped view
+  // would have removed).
+  if (REAL_REDIRECT.test(redirectView) && !allRedirectsInTmpdir(command)) {
     return { mutating: true, reason: 'output redirection to a file (`>`/`>>`)' };
   }
 
