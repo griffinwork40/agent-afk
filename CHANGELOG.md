@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.141.1] - 2026-08-20
+
+### Fixed
+- stop bgStatusBar and mascotBar during pager/editor handoffs (#1170) (#1193) (cf7c5edc)
+
 ## [5.141.0] - 2026-08-20
 
 ### Added
