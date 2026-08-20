@@ -119,7 +119,7 @@ export async function runReplLoop(
     };
     ctx.slashCtx.resumeFooter = () => {
       ctx.statusLine.start(); f.healthRail.start();
-      f.mascotBar.start(); f.bgStatusBar.start();
+      f.mascotBar.start(); f.bgStatusBar.start(); f.bgStatusBar.redraw();
     };
 
     await runInputLoop(
