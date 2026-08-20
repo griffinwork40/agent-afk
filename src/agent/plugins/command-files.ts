@@ -37,7 +37,7 @@
  * @module agent/plugins/command-files
  */
 
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
+import { existsSync, opendirSync, readFileSync, realpathSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseSkillMetadata, type PluginSkillMetadata } from './tool-injector.js';
 import { normalizeSkillSource, resolveContained } from './source-guard.js';
@@ -60,7 +60,8 @@ const MAX_DEPTH = 10;
 const MAX_ENTRIES = 1000;
 
 /**
- * Per-pluginPath memoization cache for `extractPluginCommands`.
+ * Memoization cache for `extractPluginCommands`, keyed by plugin path and the
+ * tool-name context used to normalize `allowedTools`.
  *
  * `extractPluginCommands` is called from BOTH `collectSkillEntries` AND
  * `discoverPluginSkillBodies`, so it runs twice per discovery pass. Caching by
@@ -72,6 +73,10 @@ const MAX_ENTRIES = 1000;
  */
 const commandCache = new Map<string, PluginSkillMetadata[]>();
 _registerScanCacheResetHook(() => commandCache.clear());
+
+function commandCacheKey(pluginPath: string, knownToolNames?: ReadonlySet<string>): string {
+  return JSON.stringify([pluginPath, knownToolNames === undefined ? null : [...knownToolNames].sort()]);
+}
 
 /**
  * Control bytes — C0, DEL, and C1 — in a path segment.
@@ -111,12 +116,13 @@ export function extractPluginCommands(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
-  const cached = commandCache.get(pluginPath);
+  const cacheKey = commandCacheKey(pluginPath, knownToolNames);
+  const cached = commandCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   const root = join(pluginPath, 'commands');
   if (!existsSync(root)) {
-    commandCache.set(pluginPath, []);
+    commandCache.set(cacheKey, []);
     return [];
   }
 
@@ -131,7 +137,7 @@ export function extractPluginCommands(
   try {
     realRoot = realpathSync(root);
   } catch {
-    commandCache.set(pluginPath, []);
+    commandCache.set(cacheKey, []);
     return [];
   }
 
@@ -141,13 +147,18 @@ export function extractPluginCommands(
   function walk(dir: string, segments: string[], depth: number): void {
     if (depth > MAX_DEPTH) return;
     if (totalEntries >= MAX_ENTRIES) return;
-    let entries: string[];
+    let directory;
     try {
-      entries = readdirSync(dir);
+      directory = opendirSync(dir);
     } catch {
       return;
     }
-    for (const entry of entries) {
+    try {
+      while (totalEntries < MAX_ENTRIES) {
+        const dirent = directory.readSync();
+        if (dirent === null) break;
+        totalEntries++;
+        const entry = dirent.name;
       if (entry.startsWith('.')) {
         if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping dotfile: ${sanitizeForDisplay(join(dir, entry))}\n`);
         continue;
@@ -191,13 +202,6 @@ export function extractPluginCommands(
         stat = statSync(full);
       } catch {
         continue;
-      }
-      totalEntries++;
-      if (totalEntries >= MAX_ENTRIES) {
-        if (env.AFK_DEBUG) {
-          process.stderr.write(`[afk] commands walk: MAX_ENTRIES (${MAX_ENTRIES}) reached in ${sanitizeForDisplay(root)}\n`);
-        }
-        return;
       }
       if (stat.isDirectory()) {
         walk(full, [...segments, entry], depth + 1);
@@ -248,6 +252,12 @@ export function extractPluginCommands(
         name,
         origin: 'command',
       });
+      }
+    } finally {
+      directory.closeSync();
+    }
+    if (totalEntries >= MAX_ENTRIES && env.AFK_DEBUG) {
+      process.stderr.write(`[afk] commands walk: MAX_ENTRIES (${MAX_ENTRIES}) reached in ${sanitizeForDisplay(root)}\n`);
     }
   }
 
@@ -255,6 +265,6 @@ export function extractPluginCommands(
   // Codepoint order, not localeCompare: ICU collation varies by locale and
   // build, and this ordering is what makes collision resolution reproducible.
   out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  commandCache.set(pluginPath, out);
+  commandCache.set(cacheKey, out);
   return out;
 }

@@ -9,7 +9,7 @@
  * @module agent/plugins/tool-injector
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, opendirSync, readFileSync, statSync } from 'fs';
 import { normalizeSkillSource } from './source-guard.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
@@ -22,12 +22,17 @@ const MAX_DEPTH = 10;
 const MAX_ENTRIES = 1000;
 
 /**
- * Per-pluginPath cache for `extractPluginSkills`. Called twice per discovery
- * pass (buildSkillManifest + discoverPluginSkillBodies); the second call is O(1).
- * Cleared by `_resetPluginScanCache` via the hook below (install/uninstall/reload).
+ * Cache for `extractPluginSkills`, keyed by plugin path and the tool-name
+ * context used to normalize `allowedTools`. Called twice per discovery pass
+ * (buildSkillManifest + discoverPluginSkillBodies); the second call is O(1).
+ * Cleared by `_resetPluginScanCache` via the hook below.
  */
 const skillCache = new Map<string, PluginSkillMetadata[]>();
 _registerScanCacheResetHook(() => skillCache.clear());
+
+function skillCacheKey(pluginPath: string, knownToolNames?: ReadonlySet<string>): string {
+  return JSON.stringify([pluginPath, knownToolNames === undefined ? null : [...knownToolNames].sort()]);
+}
 
 /**
  * Metadata extracted from a skill's SKILL.md frontmatter, plus the body.
@@ -224,7 +229,8 @@ export function extractPluginSkills(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
-  const cached = skillCache.get(pluginPath);
+  const cacheKey = skillCacheKey(pluginPath, knownToolNames);
+  const cached = skillCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   const skills: PluginSkillMetadata[] = [];
@@ -235,14 +241,19 @@ export function extractPluginSkills(
     if (totalEntries >= MAX_ENTRIES) return;
     if (!existsSync(dir)) return;
 
-    let entries: string[];
+    let directory;
     try {
-      entries = readdirSync(dir);
+      directory = opendirSync(dir);
     } catch {
       return;
     }
 
-    for (const name of entries) {
+    try {
+      while (totalEntries < MAX_ENTRIES) {
+        const dirent = directory.readSync();
+        if (dirent === null) break;
+        totalEntries++;
+        const name = dirent.name;
       if (name.startsWith('.')) continue;
       const fullPath = join(dir, name);
 
@@ -253,9 +264,6 @@ export function extractPluginSkills(
         continue;
       }
 
-      totalEntries++;
-      if (totalEntries >= MAX_ENTRIES) return;
-
       if (stat.isFile() && name === 'SKILL.md') {
         const metadata = parseSkillMetadata(fullPath, knownToolNames);
         if (metadata.name) {
@@ -264,11 +272,14 @@ export function extractPluginSkills(
       } else if (stat.isDirectory()) {
         walkDirectory(fullPath, depth + 1);
       }
+      }
+    } finally {
+      directory.closeSync();
     }
   }
 
   walkDirectory(pluginPath);
-  skillCache.set(pluginPath, skills);
+  skillCache.set(cacheKey, skills);
   return skills;
 }
 

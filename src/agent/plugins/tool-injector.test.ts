@@ -601,6 +601,15 @@ describe('extractPluginSkills — memoization', () => {
     expect(second).toBe(first);
   });
 
+  it('keeps cache entries separate for different known-tool contexts', () => {
+    writeSkill(tmpDir, '---\nname: test-skill\ndescription: A skill\ntools: Read, Bash\n---\nBody.\n');
+    const readOnly = extractPluginSkills(tmpDir, new Set(['read_file']));
+    const bashOnly = extractPluginSkills(tmpDir, new Set(['bash']));
+    expect(readOnly[0]?.allowedTools).toEqual(['read_file']);
+    expect(bashOnly[0]?.allowedTools).toEqual(['bash']);
+    expect(bashOnly).not.toBe(readOnly);
+  });
+
   it('returns a fresh walk after _resetPluginScanCache clears the cache', () => {
     writeSkill(tmpDir, '---\nname: test-skill\ndescription: A skill\n---\nBody.\n');
     const first = extractPluginSkills(tmpDir);

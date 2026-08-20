@@ -298,6 +298,15 @@ describe('extractPluginCommands — memoization', () => {
     expect(second).toBe(first);
   });
 
+  it('keeps cache entries separate for different known-tool contexts', () => {
+    writeCommand('deploy.md', '---\ndescription: Ship it\ntools: Read, Bash\n---\nDeploy.\n');
+    const readOnly = extractPluginCommands(pluginDir, new Set(['read_file']));
+    const bashOnly = extractPluginCommands(pluginDir, new Set(['bash']));
+    expect(readOnly[0]?.allowedTools).toEqual(['read_file']);
+    expect(bashOnly[0]?.allowedTools).toEqual(['bash']);
+    expect(bashOnly).not.toBe(readOnly);
+  });
+
   it('returns a fresh walk after _resetPluginScanCache clears the cache', () => {
     writeCommand('deploy.md', '---\ndescription: Ship it\n---\nDeploy.\n');
     const first = extractPluginCommands(pluginDir);
