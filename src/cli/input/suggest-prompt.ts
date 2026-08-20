@@ -21,7 +21,11 @@
  */
 
 import { redactSecrets } from '../../agent/redact-secrets.js';
+import { buildUserArc, extractOutcome } from './suggest-prompt.context.js';
 import type { CompleteRequest, SuggestContext } from './suggest-types.js';
+
+// Re-export so callers that imported extractOutcome from here still work.
+export { extractOutcome } from './suggest-prompt.context.js';
 
 /**
  * Hard ceiling on an accepted suggestion. Anything longer is treated as the
@@ -30,10 +34,18 @@ import type { CompleteRequest, SuggestContext } from './suggest-types.js';
  */
 const MAX_SUGGESTION_CHARS = 120;
 
-/** Transcript budget. Enough to see the last exchange; small enough to stay cheap. */
+/** Transcript budget. Fallback path only — enough to see the last exchange. */
 const TRANSCRIPT_BUDGET = 600;
 
-/** Recent commands considered when describing what the user has been doing. */
+/**
+ * Cap on the last-request field. A user who pastes a long log, document, or
+ * prompt into the REPL would otherwise send unbounded text to the suggestion
+ * model — exceeding its context window, timing out, or incurring unexpected
+ * cost. The first ~200 chars carry the intent; the rest is noise.
+ */
+const LAST_REQUEST_CAP = 200;
+
+/** Recent commands considered in the fallback path. */
 const RECENT_COMMAND_LIMIT = 5;
 
 /**
@@ -58,7 +70,10 @@ const REFUSAL_PREFIXES = [
 export function buildPromptSuggestionSystem(): string {
   return (
     'You suggest the single next thing a developer would type at their terminal ' +
-    'agent prompt, based on what just happened in their session. ' +
+    'agent prompt. You are given the session arc (what the user has been doing), ' +
+    'their last request, and the outcome (what the agent did). ' +
+    'Infer the most natural next step from the outcome — what would a developer ' +
+    'typically say or tell the agent to do in this situation? ' +
     'Reply with ONE short imperative instruction and nothing else. ' +
     'No quotes, no markdown, no preamble, no trailing punctuation. ' +
     `Keep it under ${MAX_SUGGESTION_CHARS} characters. ` +
@@ -72,22 +87,55 @@ export function buildPromptSuggestionSystem(): string {
  * Contract: this is a DATA-EGRESS boundary. The returned string is the only
  * session content sent to the suggestion model, which may be a cheaper model at
  * a DIFFERENT endpoint (`baseUrl` override) than the session itself. Everything
- * — cwd, recent commands, transcript tail — is passed through `redactSecrets`
- * before it leaves the process, mirroring the same chokepoint in
- * `suggest.ts`'s `buildUser`.
+ * — cwd, user arc, outcome — is passed through `redactSecrets` before it
+ * leaves the process, mirroring the same chokepoint in `suggest.ts`'s
+ * `buildUser`.
+ *
+ * The payload is structured in three layers:
+ * 1. **User arc** — all user messages this session, condensed. Shows the
+ *    workflow trajectory (what the user has been doing).
+ * 2. **Last request** — the user's most recent message in full.
+ * 3. **Outcome** — the agent's terminal-state block (Done/Blocked/Asking) or
+ *    final paragraph. Shows what actually happened, not the verbose narration.
+ *
+ * This gives the suggestion model: "the user has been doing X, just asked Y,
+ * and the agent finished with Z — what would they type next?"
  */
 export function buildPromptSuggestionUser(ctx: SuggestContext): string {
   const cwdBase = ctx.cwd.split('/').filter(Boolean).pop() ?? ctx.cwd;
-  const recent = ctx.getRecentCommands().slice(0, RECENT_COMMAND_LIMIT);
-  const transcript = ctx.getTranscriptTail();
-
   const parts: string[] = [`cwd: ${cwdBase}`];
-  if (recent.length > 0) parts.push(`recent commands: ${recent.join(' | ')}`);
-  if (transcript.length > 0) {
-    parts.push(`what just happened: ${transcript.slice(0, TRANSCRIPT_BUDGET)}`);
-  }
-  parts.push('Suggest the next thing to type:');
 
+  // Layer 1: user arc (workflow trajectory)
+  const arc = buildUserArc(ctx);
+  if (arc.length > 0) parts.push(`session so far: ${arc}`);
+
+  // Layer 2 + 3: last request and outcome (structured extraction)
+  const lastAssistant = ctx.getLastAssistantResponse?.();
+  if (lastAssistant !== undefined && lastAssistant.length > 0) {
+    // We have structured access — extract user arc's last entry as the
+    // request, and the terminal-state block as the outcome.
+    const userArc = ctx.getUserArc?.();
+    const lastRequest = userArc?.[userArc.length - 1];
+    if (lastRequest) {
+      const capped =
+        lastRequest.length > LAST_REQUEST_CAP
+          ? lastRequest.slice(0, LAST_REQUEST_CAP) + '…'
+          : lastRequest;
+      parts.push(`last request: ${capped}`);
+    }
+    const outcome = extractOutcome(lastAssistant);
+    if (outcome.length > 0) parts.push(`outcome: ${outcome}`);
+  } else {
+    // Fallback: no structured access, use raw transcript tail (legacy path).
+    const recent = ctx.getRecentCommands().slice(0, RECENT_COMMAND_LIMIT);
+    const transcript = ctx.getTranscriptTail();
+    if (recent.length > 0) parts.push(`recent commands: ${recent.join(' | ')}`);
+    if (transcript.length > 0) {
+      parts.push(`what just happened: ${transcript.slice(0, TRANSCRIPT_BUDGET)}`);
+    }
+  }
+
+  parts.push('Suggest the next thing to type:');
   return redactSecrets(parts.join('\n'));
 }
 

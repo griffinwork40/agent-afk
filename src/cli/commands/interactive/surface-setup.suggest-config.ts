@@ -83,6 +83,14 @@ export function buildSuggestConfig(opts: {
             .map((t: { user: string; assistant: string }) => `user: ${t.user}\nassistant: ${t.assistant}`)
             .join('\n');
         },
+        getUserArc: () => {
+          // All user messages this session, oldest first.
+          return stats.turns.map((t: { user: string }) => t.user);
+        },
+        getLastAssistantResponse: () => {
+          const last = stats.turns[stats.turns.length - 1];
+          return last?.assistant ?? '';
+        },
         getRecentCommands: () => {
           // Reuse the same ReplHistory ring as getHistory above
           // (getEntries() is newest-first); buildUser slices to 5.
