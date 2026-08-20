@@ -1,5 +1,6 @@
 import { palette } from '../../palette.js';
 import { NESTING_TOOLS } from '../../tool-category.js';
+import { formatElapsed } from '../../terminal-compositor.scrollback.js';
 import {
   MAX_VISIBLE_CHILDREN,
   inProgressVerb,
@@ -281,7 +282,10 @@ function renderOverlayChildren(
           }
         }
       } else {
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix, cols));
+        // Live elapsed counter appended to the prefix line (same row as the
+        // connector + tool name). Computed at repaint time from child.startedAt;
+        // suppressed under ELAPSED_GRACE_MS (2s) to avoid flicker on fast tools.
+        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' …') + formatElapsed(child.startedAt), cols));
         // In-progress / thinking continuation hangs under the prefix at the
         // same "past-connector" column the diff path uses.
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';

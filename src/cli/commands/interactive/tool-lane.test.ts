@@ -1320,6 +1320,7 @@ describe('assignConnectors — property tests', () => {
       toolName: 'Read',
       toolInput: `("file${i}.ts")`,
       prefix: `● Read("file${i}.ts")`,
+      startedAt: 0,
     };
   }
 
