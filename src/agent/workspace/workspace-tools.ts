@@ -1,9 +1,12 @@
 /**
  * Workspace tool schemas and handlers.
  *
- * Single tool: `workspace_publish` — lets sub-agents share structured findings
- * with sibling agents within the same session. No query tool in v1; agents
- * receive workspace context via the preamble injected into their system prompt.
+ * Two tools:
+ *   - `workspace_publish` — lets sub-agents share structured findings with
+ *     sibling agents within the same session.
+ *   - `workspace_query` — lets a running agent poll the shared workspace
+ *     mid-execution for findings published by siblings, without waiting for
+ *     the next fork-time preamble injection.
  *
  * Pattern mirrors `src/agent/memory/memory-tools.ts`.
  *
@@ -11,7 +14,7 @@
  */
 
 import type { AnthropicToolDef, ToolHandler } from '../tools/types.js';
-import type { WorkspacePublishInput, WorkspaceRelationType } from './workspace-store.js';
+import type { WorkspaceEntry, WorkspacePublishInput, WorkspaceRelationType } from './workspace-store.js';
 import { WorkspaceStore } from './workspace-store.js';
 
 /**
@@ -69,13 +72,53 @@ export const workspacePublishTool: AnthropicToolDef = {
   },
 };
 
-/** All workspace tool schemas (v1: publish only). */
-export const workspaceToolSchemas: AnthropicToolDef[] = [workspacePublishTool];
+/**
+ * workspace_query: Poll the shared workspace for findings from sibling agents.
+ * Unlike the fork-time preamble (cold-start), this runs mid-execution so a
+ * child can see entries published after it was forked.
+ */
+export const workspaceQueryTool: AnthropicToolDef = {
+  name: 'workspace_query',
+  category: 'read',
+  concurrencySafe: true,
+  description:
+    'Query the shared session workspace for findings published by sibling agents. ' +
+    'Returns entries matching the search keywords, ordered by recency. ' +
+    'Use this to check what siblings have already discovered before reading files ' +
+    'they may have already analyzed.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description:
+          'Search keywords to match against workspace entry subjects and content. ' +
+          'E.g. "provider streaming" or "auth error handling".',
+      },
+      type: {
+        type: 'string',
+        enum: ['finding', 'evidence', 'hypothesis', 'decision', 'artifact', 'status'],
+        description: 'Optional: filter results to a specific entry type.',
+      },
+      limit: {
+        type: 'number',
+        description: 'Max entries to return (default 20, max 50).',
+      },
+    },
+    required: ['query'],
+  },
+};
+
+/** All workspace tool schemas. */
+export const workspaceToolSchemas: AnthropicToolDef[] = [workspacePublishTool, workspaceQueryTool];
 
 /**
  * Create workspace tool handlers bound to a store + session.
  *
- * Returns a Map with one entry: `'workspace_publish'` → handler.
+ * Returns a Map with two entries:
+ *   - `'workspace_publish'` → write handler (publish a finding)
+ *   - `'workspace_query'`  → read handler (poll sibling findings mid-run)
+ *
  * The `agent_id` field is auto-filled from the optional `agentId` parameter.
  */
 export function createWorkspaceHandlers(
@@ -107,8 +150,42 @@ export function createWorkspaceHandlers(
     }
   };
 
+  const queryHandler: ToolHandler = async (input: unknown) => {
+    try {
+      const parsed = parseQueryInput(input);
+      // Invariant: pass `null` as sessionId — the store is scoped to one root
+      // session, and children publish under their own IDs (same rationale as
+      // the fork-child-config preamble injection path).
+      let entries = store.queryRelevant(null, parsed.query, parsed.limit);
+      if (parsed.type !== undefined) {
+        entries = entries.filter((e) => e.type === parsed.type);
+      }
+      return { content: JSON.stringify({ entries: entries.map(formatEntry), count: entries.length }) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { content: `workspace_query error: ${message}`, isError: true };
+    }
+  };
+
   handlers.set('workspace_publish', publishHandler);
+  handlers.set('workspace_query', queryHandler);
   return handlers;
+}
+
+/** Format a WorkspaceEntry for the query response — parse JSON fields back to arrays. */
+function formatEntry(entry: WorkspaceEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    type: entry.type,
+    subject: entry.subject,
+    content: entry.content,
+    evidence: entry.evidence !== null ? JSON.parse(entry.evidence) : null,
+    confidence: entry.confidence,
+    agent_id: entry.agent_id,
+    relates_to: entry.relates_to !== null ? JSON.parse(entry.relates_to) : null,
+    relation_type: entry.relation_type,
+    created_at: entry.created_at,
+  };
 }
 
 // ── Input parsing ─────────────────────────────────────────────────────────────
@@ -144,6 +221,45 @@ interface ParsedPublishInput {
   relates_to?: number[];
   relation_type?: WorkspaceRelationType;
 }
+
+// ── Query input parsing ──────────────────────────────────────────────────────
+
+const QUERY_MAX_LIMIT = 50;
+const QUERY_DEFAULT_LIMIT = 20;
+
+interface ParsedQueryInput {
+  query: string;
+  type?: WorkspacePublishInput['type'];
+  limit: number;
+}
+
+function parseQueryInput(input: unknown): ParsedQueryInput {
+  if (!input || typeof input !== 'object') {
+    throw new Error('workspace_query: input must be an object');
+  }
+  const raw = input as Record<string, unknown>;
+
+  const query = raw['query'];
+  if (typeof query !== 'string' || query.length === 0) {
+    throw new Error('workspace_query: query is required');
+  }
+
+  const typeRaw = raw['type'];
+  const type =
+    typeof typeRaw === 'string' && VALID_TYPES.has(typeRaw)
+      ? (typeRaw as WorkspacePublishInput['type'])
+      : undefined;
+
+  const limitRaw = raw['limit'];
+  const limit =
+    typeof limitRaw === 'number' && limitRaw > 0
+      ? Math.min(Math.floor(limitRaw), QUERY_MAX_LIMIT)
+      : QUERY_DEFAULT_LIMIT;
+
+  return { query, type, limit };
+}
+
+// ── Publish input parsing ────────────────────────────────────────────────────
 
 function parsePublishInput(input: unknown): ParsedPublishInput {
   if (!input || typeof input !== 'object') {

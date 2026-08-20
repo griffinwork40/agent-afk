@@ -19,10 +19,11 @@ describe('createWorkspaceHandlers', () => {
     store = new WorkspaceStore();
   });
 
-  it('returns a map with a workspace_publish entry', () => {
+  it('returns a map with workspace_publish and workspace_query entries', () => {
     const handlers = createWorkspaceHandlers(store, sessionId, agentId);
     expect(handlers.has('workspace_publish')).toBe(true);
-    expect(handlers.size).toBe(1);
+    expect(handlers.has('workspace_query')).toBe(true);
+    expect(handlers.size).toBe(2);
   });
 
   it('publish valid entry returns { published: true, id: <number> }', async () => {
@@ -154,5 +155,109 @@ describe('createWorkspaceHandlers', () => {
     expect(entries[0]!.id).toBe(parsed.id);
     expect(entries[0]!.content).toBe('Use Redis for caching.');
     expect(entries[0]!.type).toBe('decision');
+  });
+
+  // ── workspace_query handler ─────────────────────────────────────────────
+
+  it('query on empty store returns zero entries', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const handler = handlers.get('workspace_query')!;
+
+    const result = await handler({ query: 'auth' }, DUMMY_SIGNAL);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as { entries: unknown[]; count: number };
+    expect(parsed.count).toBe(0);
+    expect(parsed.entries).toHaveLength(0);
+  });
+
+  it('query returns published entries matching keywords', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const query = handlers.get('workspace_query')!;
+
+    await publish({ type: 'finding', content: 'Auth uses JWT tokens.', subject: 'auth' }, DUMMY_SIGNAL);
+    await publish({ type: 'finding', content: 'DB uses PostgreSQL.', subject: 'database' }, DUMMY_SIGNAL);
+
+    const result = await query({ query: 'auth tokens' }, DUMMY_SIGNAL);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as { entries: { subject: string }[]; count: number };
+    expect(parsed.count).toBeGreaterThan(0);
+    expect(parsed.entries.some((e) => e.subject === 'auth')).toBe(true);
+  });
+
+  it('query with type filter returns only matching types', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const query = handlers.get('workspace_query')!;
+
+    await publish({ type: 'finding', content: 'Found auth bug.', subject: 'auth' }, DUMMY_SIGNAL);
+    await publish({ type: 'decision', content: 'Fix auth with OAuth.', subject: 'auth' }, DUMMY_SIGNAL);
+
+    const result = await query({ query: 'auth', type: 'decision' }, DUMMY_SIGNAL);
+    const parsed = JSON.parse(result.content as string) as { entries: { type: string }[]; count: number };
+    expect(parsed.entries.every((e) => e.type === 'decision')).toBe(true);
+  });
+
+  it('query respects limit parameter', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const query = handlers.get('workspace_query')!;
+
+    for (let i = 0; i < 5; i++) {
+      await publish({ type: 'finding', content: `Finding ${i}`, subject: 'test' }, DUMMY_SIGNAL);
+    }
+
+    const result = await query({ query: 'test', limit: 2 }, DUMMY_SIGNAL);
+    const parsed = JSON.parse(result.content as string) as { entries: unknown[]; count: number };
+    expect(parsed.count).toBeLessThanOrEqual(2);
+  });
+
+  it('query with missing query string returns isError', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const handler = handlers.get('workspace_query')!;
+
+    const result = await handler({}, DUMMY_SIGNAL);
+    expect(result.isError).toBe(true);
+  });
+
+  it('query with empty query string returns isError', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const handler = handlers.get('workspace_query')!;
+
+    const result = await handler({ query: '' }, DUMMY_SIGNAL);
+    expect(result.isError).toBe(true);
+  });
+
+  it('query returns entries from sibling agents (cross-session)', async () => {
+    // Simulate two siblings publishing under different session IDs
+    const handlers1 = createWorkspaceHandlers(store, 'session-alpha', 'agent-1');
+    const handlers2 = createWorkspaceHandlers(store, 'session-beta', 'agent-2');
+    const queryFromAgent2 = handlers2.get('workspace_query')!;
+
+    await handlers1.get('workspace_publish')!(
+      { type: 'finding', content: 'Provider uses streaming.', subject: 'provider' },
+      DUMMY_SIGNAL,
+    );
+
+    // Agent 2 should see agent 1's entry via query (null sessionId scan)
+    const result = await queryFromAgent2({ query: 'provider' }, DUMMY_SIGNAL);
+    const parsed = JSON.parse(result.content as string) as { entries: { agent_id: string }[]; count: number };
+    expect(parsed.count).toBeGreaterThan(0);
+    expect(parsed.entries.some((e) => e.agent_id === 'agent-1')).toBe(true);
+  });
+
+  it('query parses evidence JSON back to arrays', async () => {
+    const handlers = createWorkspaceHandlers(store, sessionId, agentId);
+    const publish = handlers.get('workspace_publish')!;
+    const query = handlers.get('workspace_query')!;
+
+    await publish(
+      { type: 'evidence', content: 'Found it.', subject: 'test', evidence: ['src/foo.ts:42'] },
+      DUMMY_SIGNAL,
+    );
+
+    const result = await query({ query: 'test' }, DUMMY_SIGNAL);
+    const parsed = JSON.parse(result.content as string) as { entries: { evidence: string[] | null }[] };
+    expect(parsed.entries[0]!.evidence).toEqual(['src/foo.ts:42']);
   });
 });

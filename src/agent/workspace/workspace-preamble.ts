@@ -23,8 +23,8 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
     '# Workspace context (shared findings from sibling agents)',
     '',
     'The following findings were published by other agents working on this task.',
-    'Use them to avoid re-discovering known facts. If you discover something new',
-    'or contradictory, publish it with the workspace_publish tool.',
+    'Use them to avoid re-discovering known facts. Call `workspace_query` to poll',
+    'for newer entries mid-run. Publish new discoveries with `workspace_publish`.',
   ];
 
   for (const entry of entries) {
@@ -136,8 +136,9 @@ export function injectWorkspacePreamble(
 const COLD_START_HINT = [
   '# Workspace (shared agent scratchpad)',
   '',
-  'You have a `workspace_publish` tool. When you discover an important finding,',
-  'publish it so sibling agents working on the same task can skip re-deriving it.',
+  'You have `workspace_publish` and `workspace_query` tools. When you discover an',
+  'important finding, publish it so siblings can skip re-deriving it. Before reading',
+  'a file, query the workspace — a sibling may have already analyzed it.',
   'No entries have been published yet — you may be the first.',
 ].join('\n');
 
