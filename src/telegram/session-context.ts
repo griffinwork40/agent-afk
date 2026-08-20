@@ -51,6 +51,14 @@ export interface TelegramSessionBuildContext {
    */
   chatId?: number;
   /**
+   * Telegram topic thread id for the originating session. Threaded from
+   * `sessionConfig.telegramThreadId` so the `TelegramBgResultNotifier` passes
+   * `messageThreadId` to `pushIfConfigured` — ensuring background job
+   * notifications land in the correct topic thread rather than General.
+   * Undefined for General / topics-off sessions.
+   */
+  threadId?: number;
+  /**
    * Report the session the moment it is constructed.
    *
    * Invariant: the factory's catch block closes an already-constructed session

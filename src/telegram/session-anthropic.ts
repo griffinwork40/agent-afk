@@ -38,6 +38,7 @@ export async function buildAnthropicTelegramSession(
     memoryStore,
     workspaceStore,
     chatId,
+    threadId,
     reportSession,
   } = ctx;
 
@@ -64,7 +65,7 @@ export async function buildAnthropicTelegramSession(
   const backgroundRegistry = new BackgroundAgentRegistry(
     traceWriter ? { traceWriter } : {},
   );
-  const bgNotifier = new TelegramBgResultNotifier(backgroundRegistry, chatId);
+  const bgNotifier = new TelegramBgResultNotifier(backgroundRegistry, chatId, threadId);
 
   // Invariant: ONE root manager per session, shared by all three
   // executors. Inherit configured-or-host cwd so forked subagents stay
