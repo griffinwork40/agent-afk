@@ -15,8 +15,9 @@
  *   - PascalCase Anthropic-SDK names: `Read`, `Write`, `Bash`, `Agent`, ...
  *   - snake_case agent-afk built-in tool names from src/agent/tools/schemas.ts
  *     and src/agent/memory/memory-tools.ts:
- *     `read_file`, `write_file`, `edit_file`, `bash`, `agent`, `skill`,
- *     `compose`, `send_telegram`, `web_scrape`, `glob`, `grep`, `list_directory`,
+ *     `read_file`, `extract_document`, `write_file`, `edit_file`, `bash`,
+ *     `agent`, `skill`, `compose`, `send_telegram`, `web_scrape`, `glob`,
+ *     `grep`, `list_directory`,
  *     `memory_search`, `memory_update`, `procedure_write`,
  *     `create_schedule`, `list_schedules`, `get_schedule_history`, `cancel_schedule`,
  *     `terminal_font_size`, `config_get`, `config_set`.
@@ -45,7 +46,7 @@ const READ_TOOLS = new Set([
   // Anthropic SDK PascalCase
   'Read', 'Glob', 'Grep', 'NotebookRead', 'LS',
   // agent-afk built-in snake_case (src/agent/tools/schemas.ts)
-  'read_file', 'glob', 'grep', 'list_directory',
+  'read_file', 'extract_document', 'glob', 'grep', 'list_directory',
   // config_get reads ~/.afk/config (afk.env / afk.config.json); secrets are
   // masked by the handler. Read-only by construction — no mutation surface.
   'config_get',
@@ -221,6 +222,7 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'LS',
   // agent-afk snake_case (src/agent/tools/schemas.ts)
   'read_file',
+  'extract_document',
   'glob',
   'grep',
   'list_directory',
