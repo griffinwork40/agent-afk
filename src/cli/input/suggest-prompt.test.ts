@@ -91,6 +91,20 @@ describe('buildPromptSuggestionUser', () => {
     expect(user).not.toContain('/cmd5');
   });
 
+  it('caps a very long last request to prevent unbounded egress', () => {
+    const longInput = 'x'.repeat(500);
+    const user = buildPromptSuggestionUser(
+      makeCtx({
+        getUserArc: () => [longInput],
+        getLastAssistantResponse: () => 'Short response',
+        getTranscriptTail: () => `user: ${longInput}\nassistant: Short response`,
+      }),
+    );
+    // The raw input is 500 chars; it should be capped (200 + ellipsis).
+    expect(user).not.toContain('x'.repeat(300));
+    expect(user).toContain('…');
+  });
+
   it('re-exports extractOutcome from suggest-prompt.context', () => {
     // Verify the re-export works for backward compat.
     expect(typeof extractOutcome).toBe('function');

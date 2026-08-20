@@ -39,11 +39,16 @@ export function extractOutcome(assistantText: string): string {
   if (assistantText.trim().length === 0) return '';
 
   // Invariant: terminal-state headings are **bold markdown** at the END of
-  // the response. Search from the bottom for the heading + everything after.
-  const terminalPattern = /\n\*\*(?:Done|Blocked|Asking|Interrupted)\*\*\s*\n/i;
-  const match = terminalPattern.exec(assistantText);
-  if (match) {
-    const block = assistantText.slice(match.index).trim();
+  // the response. A response may contain an earlier corrected verdict followed
+  // by the real final verdict, so we must find the LAST match, not the first.
+  const terminalPattern = /\n\*\*(?:Done|Blocked|Asking|Interrupted)\*\*\s*\n/gi;
+  let match: RegExpExecArray | null;
+  let lastMatch: RegExpExecArray | null = null;
+  while ((match = terminalPattern.exec(assistantText)) !== null) {
+    lastMatch = match;
+  }
+  if (lastMatch) {
+    const block = assistantText.slice(lastMatch.index).trim();
     return block.slice(0, OUTCOME_BUDGET);
   }
 
@@ -62,16 +67,20 @@ export function buildUserArc(ctx: SuggestContext): string {
   const messages = ctx.getUserArc?.();
   if (!messages || messages.length === 0) return '';
 
-  // Take the most recent N messages, oldest first.
+  // Take the most recent N messages. Iterate newest-first so that when the
+  // budget is exhausted, the NEWEST messages survive (not the oldest). The
+  // retained entries are then reversed back to chronological order for display.
   const recent = messages.slice(-ARC_MAX_MESSAGES);
   let total = 0;
-  const lines: string[] = [];
-  for (const msg of recent) {
+  const kept: string[] = [];
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const msg = recent[i]!;
     const truncated =
       msg.length > ARC_PER_MESSAGE_CAP ? msg.slice(0, ARC_PER_MESSAGE_CAP) + '…' : msg;
     if (total + truncated.length > ARC_BUDGET) break;
-    lines.push(truncated);
+    kept.push(truncated);
     total += truncated.length;
   }
-  return lines.join(' → ');
+  kept.reverse();
+  return kept.join(' → ');
 }

@@ -37,6 +37,14 @@ const MAX_SUGGESTION_CHARS = 120;
 /** Transcript budget. Fallback path only — enough to see the last exchange. */
 const TRANSCRIPT_BUDGET = 600;
 
+/**
+ * Cap on the last-request field. A user who pastes a long log, document, or
+ * prompt into the REPL would otherwise send unbounded text to the suggestion
+ * model — exceeding its context window, timing out, or incurring unexpected
+ * cost. The first ~200 chars carry the intent; the rest is noise.
+ */
+const LAST_REQUEST_CAP = 200;
+
 /** Recent commands considered in the fallback path. */
 const RECENT_COMMAND_LIMIT = 5;
 
@@ -108,7 +116,13 @@ export function buildPromptSuggestionUser(ctx: SuggestContext): string {
     // request, and the terminal-state block as the outcome.
     const userArc = ctx.getUserArc?.();
     const lastRequest = userArc?.[userArc.length - 1];
-    if (lastRequest) parts.push(`last request: ${lastRequest}`);
+    if (lastRequest) {
+      const capped =
+        lastRequest.length > LAST_REQUEST_CAP
+          ? lastRequest.slice(0, LAST_REQUEST_CAP) + '…'
+          : lastRequest;
+      parts.push(`last request: ${capped}`);
+    }
     const outcome = extractOutcome(lastAssistant);
     if (outcome.length > 0) parts.push(`outcome: ${outcome}`);
   } else {

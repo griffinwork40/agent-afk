@@ -101,6 +101,25 @@ describe('extractOutcome', () => {
     expect(outcome.length).toBeLessThanOrEqual(600);
     expect(outcome).toContain('**Done**');
   });
+
+  it('selects the LAST terminal-state heading when multiple are present', () => {
+    const response = [
+      'First attempt failed.',
+      '',
+      '**Blocked**',
+      '- Missing credentials',
+      '',
+      'Retried with a different approach.',
+      '',
+      '**Done**',
+      '- Fixed the issue',
+      '- Tests pass',
+    ].join('\n');
+    const outcome = extractOutcome(response);
+    expect(outcome).toContain('**Done**');
+    expect(outcome).toContain('Fixed the issue');
+    expect(outcome).not.toContain('**Blocked**');
+  });
 });
 
 describe('buildUserArc', () => {
@@ -142,11 +161,16 @@ describe('buildUserArc', () => {
     expect(arc).toContain('step 11');
   });
 
-  it('respects the total arc budget and stops adding messages', () => {
-    // Each message ~75 chars, total budget 400 — should fit ~5.
+  it('respects the total arc budget and preserves NEWEST messages', () => {
+    // Each message ~75 chars, total budget 400 — should fit ~5 of 8.
+    // The NEWEST messages should survive, not the oldest.
     const messages = Array.from({ length: 8 }, (_, i) => `m${i} ` + 'x'.repeat(70));
     const ctx = makeCtx({ getUserArc: () => messages });
     const arc = buildUserArc(ctx);
     expect(arc.length).toBeLessThanOrEqual(500); // budget + separators
+    // Newest messages (m7, m6, m5) should be present; oldest (m0, m1) should not.
+    expect(arc).toContain('m7');
+    expect(arc).toContain('m6');
+    expect(arc).not.toContain('m0');
   });
 });
