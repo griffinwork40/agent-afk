@@ -893,6 +893,70 @@ describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
     expect(hook(ctx('cat ${HOME}/.afk/config/afk.env')).decision).toBe('block');
     expect(hook(ctx('cat ${HOME}/.ssh/id_rsa')).decision).toBe('block');
   });
+
+  // Issue #778 — SENSITIVE_PATH_SIGNAL misses a relocated AFK_HOME.
+  //
+  // Reachability: headless surface (no grant manager) + AFK_FORCE_BASH_INTERPRETER_GUARD=1
+  // + AFK_HOME relocated outside ~/.afk.
+  //
+  // On this path `restrictedSubstrings` is always `[]` (no grant manager wired),
+  // making `SENSITIVE_PATH_SIGNAL` the SOLE protection for the interpreter guard.
+  // But the signal has a hardcoded `.afk/config` fragment that only matches the
+  // default install.  A relocated config tree (`/opt/my-afk/config`) never
+  // contains the literal `.afk/` substring, so the signal returned false and the
+  // interpreter guard failed open — the command was not blocked.
+  //
+  // The fix adds a third check in `referencesSensitivePath`: test `scanned`
+  // against `relocatedAfkSensitiveRoots()` so the relocated tree is always covered.
+  describe('SENSITIVE_PATH_SIGNAL gap on headless + forceInterpreterGuard + relocated AFK_HOME (#778)', () => {
+    const headlessForced = createBashRestrictionHook({
+      getGrantManager: () => undefined, // headless — no grant manager
+      forceInterpreterGuard: true, // AFK_FORCE_BASH_INTERPRETER_GUARD=1
+    });
+
+    afterEach(() => {
+      delete process.env['AFK_HOME'];
+      _resetReadDenylistCacheForTests();
+    });
+
+    it('blocks a python -c that opens a file in the relocated config tree (#778)', () => {
+      // The relocated path contains no `.afk/` fragment — SENSITIVE_PATH_SIGNAL
+      // returns false. Before the fix, the interpreter guard therefore failed open.
+      const relocatedHome = '/opt/my-afk';
+      process.env['AFK_HOME'] = relocatedHome;
+
+      const cmd = `python -c "open('${relocatedHome}/config/afk.env').read()"`;
+      const decision = headlessForced(ctx(cmd));
+      expect(decision.decision).toBe('block');
+      expect(decision.reason).toContain('Interpreter');
+    });
+
+    it('blocks sh -c referencing the relocated config tree (#778)', () => {
+      const relocatedHome = '/opt/my-afk';
+      process.env['AFK_HOME'] = relocatedHome;
+
+      expect(headlessForced(ctx(`sh -c "cat ${relocatedHome}/config/afk.env"`)).decision).toBe(
+        'block',
+      );
+    });
+
+    it('does NOT block a pure-computation eval even with relocated AFK_HOME (#778)', () => {
+      // Pure computation: no sensitive path — must still pass through.
+      process.env['AFK_HOME'] = '/opt/my-afk';
+
+      expect(headlessForced(ctx('python -c "print(2**64)"')).decision).not.toBe('block');
+    });
+
+    it('does NOT block interpreter reads of relocatedHome non-config subdirs (#778)', () => {
+      // Only the config subtree is sensitive. state/, plugins/, logs/ must stay open.
+      const relocatedHome = '/opt/my-afk';
+      process.env['AFK_HOME'] = relocatedHome;
+
+      expect(
+        headlessForced(ctx(`python -c "open('${relocatedHome}/state/todos.json').read()"`)).decision,
+      ).not.toBe('block');
+    });
+  });
 });
 
 describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash surface', () => {

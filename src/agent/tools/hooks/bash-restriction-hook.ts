@@ -426,10 +426,25 @@ function scrubAllowlistedRefs(text: string, home: string, afkHome: string | unde
  * The lexical signal reads that same string rather than the raw command so the
  * exact-file carve-outs apply to both checks; normalization only ever expands
  * `~`/`$HOME` into the home path, which no signal fragment spans.
+ *
+ * Relocated-AFK_HOME gap: `SENSITIVE_PATH_SIGNAL` has a hardcoded `.afk/config`
+ * fragment that covers the default home install (`~/.afk/config`). When
+ * `AFK_HOME` is relocated (e.g. `/opt/my-afk`), the config tree becomes
+ * `/opt/my-afk/config` — a path that does NOT match `.afk/config`, so the
+ * signal returns false. On headless surfaces with `forceInterpreterGuard=1`,
+ * `restrictedSubstrings` is always `[]` (no grant manager), making the lexical
+ * signal the SOLE protection — which therefore misses the relocated tree. The
+ * third check below closes this gap by testing `scanned` against the runtime
+ * `relocatedAfkSensitiveRoots()` value whenever AFK_HOME is configured outside
+ * the default home directory.
  */
 function referencesSensitivePath(scanned: string, restrictedSubstrings: string[]): boolean {
   if (restrictedSubstrings.some((sub) => textMentionsPath(scanned, sub))) return true;
-  return SENSITIVE_PATH_SIGNAL.test(scanned);
+  if (SENSITIVE_PATH_SIGNAL.test(scanned)) return true;
+  // Relocated-AFK_HOME gap: when restrictedSubstrings is empty (headless, no
+  // grant manager) and the lexical signal misses a relocated config tree, fall
+  // back to a direct check against the runtime sensitive roots.
+  return relocatedAfkSensitiveRoots().some((root) => textMentionsPath(scanned, root));
 }
 
 /**
