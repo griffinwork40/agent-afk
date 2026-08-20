@@ -318,10 +318,19 @@ function answerApproval(id: string, answer: ApprovalAnswer): void {
 
 async function stopTurn(): Promise<void> {
   if (activeId === undefined) return;
-  await api(`/api/sessions/${encodeURIComponent(activeId)}/interrupt`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  });
+  const stopBtn = $('stop') as HTMLButtonElement;
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping…';
+  try {
+    await api(`/api/sessions/${encodeURIComponent(activeId)}/interrupt`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    stopBtn.disabled = false;
+    stopBtn.textContent = 'Stop';
+    throw err;
+  }
 }
 
 async function main(): Promise<void> {

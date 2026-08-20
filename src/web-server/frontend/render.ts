@@ -147,7 +147,7 @@ function renderTool(item: ToolCallItem): HTMLElement {
   summary.appendChild(el('span', `tool-dot tool-dot-${item.status}`, ''));
   summary.appendChild(el('span', 'tool-name', item.name));
   if (item.inputPreview) {
-    summary.appendChild(el('span', 'tool-target', truncate(item.inputPreview, 90)));
+    summary.appendChild(el('span', 'tool-target', summarizeToolInput(item.name, item.inputPreview)));
   }
   node.appendChild(summary);
 
@@ -191,7 +191,7 @@ function renderTool(item: ToolCallItem): HTMLElement {
 
   if (item.diff !== undefined) {
     body.appendChild(el('div', 'tool-label', 'diff'));
-    body.appendChild(el('pre', 'tool-pre', stripAnsi(String(item.diff))));
+    body.appendChild(renderDiff(stripAnsi(String(item.diff))));
   }
 
   node.appendChild(body);
@@ -201,6 +201,42 @@ function renderTool(item: ToolCallItem): HTMLElement {
 function truncate(s: string, n: number): string {
   const flat = s.replace(/\s+/g, ' ').trim();
   return flat.length <= n ? flat : `${flat.slice(0, n - 1)}…`;
+}
+
+/** Render a unified diff with per-line colour spans (no innerHTML). */
+function renderDiff(text: string): HTMLPreElement {
+  const pre = el('pre', 'tool-pre tool-diff');
+  for (const line of text.split('\n')) {
+    const span = document.createElement('span');
+    span.textContent = line;
+    span.className = line.startsWith('+++') || line.startsWith('---')
+      ? 'diff-ctx'
+      : line.startsWith('+')
+        ? 'diff-add'
+        : line.startsWith('-')
+          ? 'diff-del'
+          : line.startsWith('@@')
+            ? 'diff-hunk'
+            : 'diff-ctx';
+    pre.appendChild(span);
+  }
+  return pre;
+}
+
+/** Semantic one-liner for the tool summary row. */
+function summarizeToolInput(name: string, preview: string): string {
+  try {
+    const j = JSON.parse(preview) as Record<string, unknown>;
+    if ((name === 'bash' || name === 'shell') && typeof j['command'] === 'string')
+      return truncate(j['command'] as string, 80);
+    if ((name === 'edit_file' || name === 'write_file' || name === 'read_file') && typeof j['file_path'] === 'string')
+      return j['file_path'] as string;
+    if (name === 'agent' && typeof j['prompt'] === 'string')
+      return truncate(j['prompt'] as string, 60);
+    if ((name === 'grep' || name === 'glob') && typeof j['pattern'] === 'string')
+      return j['pattern'] as string;
+  } catch { /* fall through */ }
+  return truncate(preview, 90);
 }
 
 export function relativeTime(iso: string): string {
