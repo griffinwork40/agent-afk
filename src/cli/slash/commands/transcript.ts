@@ -31,7 +31,7 @@ function formatTurnMeta(turn: TurnRecord, index: number): string {
   if (turn.inputTokens !== undefined || turn.outputTokens !== undefined) {
     const inp = turn.inputTokens ?? 0;
     const out = turn.outputTokens ?? 0;
-    parts.push(palette.dim(`${Math.round((inp + out) / 1000)}k tok`));
+    parts.push(palette.dim(`${Math.round((inp + out) / 1000)}k tokens`));
   }
   return parts.join('  ');
 }

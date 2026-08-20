@@ -4,7 +4,7 @@ import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
-import { categorizeTool } from '../../tool-category.js';
+import { humanVerbForTool } from '../../tool-category.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
 
 // Re-export the split modules' public surface so external callers keep
@@ -76,14 +76,16 @@ export const MAX_VISIBLE_CHILDREN = 3;
 export const GROUP_THRESHOLD_DISPATCH = 2;
 export const GROUP_THRESHOLD_LEAF = 3;
 
+/**
+ * Plain-language in-flight verb for a tool row. Delegates to
+ * `humanVerbForTool` (cli/tool-category.ts) — the single owner of the
+ * human vocabulary — which checks tool-specific overrides before falling
+ * back to the per-category default, so tools whose action conflicts with
+ * their category verb (e.g. `cancel_background_job` in `subagent`) get
+ * an accurate phrase instead of the category's generic one.
+ */
 export function inProgressVerb(toolName: string): string {
-  switch (categorizeTool(toolName)) {
-    case 'read': return 'Reading…';
-    case 'write': return 'Writing…';
-    case 'web': return 'Fetching…';
-    case 'shell': return 'Running…';
-    default: return 'Running…';
-  }
+  return humanVerbForTool(toolName);
 }
 
 /**
