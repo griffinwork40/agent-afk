@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.141.0] - 2026-08-20
+
+### Added
+- model-facing background-job cancellation scoped by provenance (#1227) (6b46177a)
+
 ## [5.140.0] - 2026-08-20
 
 ### Added
