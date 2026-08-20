@@ -18,6 +18,7 @@ export type {
 
 export {
   workspacePublishTool,
+  workspaceQueryTool,
   workspaceToolSchemas,
   createWorkspaceHandlers,
 } from './workspace-tools.js';

@@ -616,8 +616,8 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_WORKSPACE_DISABLED',
     description:
-      'Disable the shared agent workspace (WorkspaceStore + workspace_publish tool + ' +
-      'preamble injection). When set to 1, subagents do not get a workspace_publish tool ' +
+      'Disable the shared agent workspace (WorkspaceStore + workspace_publish/workspace_query ' +
+      'tools + preamble injection). When set to 1, subagents do not get workspace tools ' +
       'and no workspace preamble is injected at fork time — each agent works in full ' +
       'isolation as before v5.133. Used as the control arm of the file-read deduplication ' +
       'A/B experiment. Default: workspace enabled (unset or 0).',
