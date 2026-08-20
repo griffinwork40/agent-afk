@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.145.0] - 2026-08-20
+
+### Added
+- add extract_document tool for cross-platform document text extraction (#660) (#1164) (1b2ce58a)
+
+### Fixed
+- bump builtin tool count 26 → 27 for extract_document (#1231) (b23016cf)
+- thread workspace-enabled provider to compose DAG nodes (#1229) (19c5d909)
+- restore prompt suggestion ghost after deleting back to empty (#1230) (1b9e20e1)
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1142) (#1173) (0db8055d)
+- buffer setCwd/setSystemPrompt before query init (#1062) (#1157) (81fa8b34)
+
+### Changed
+- harden portHasOwner — execFileSync, permission-denied, IPv6 guard (#1167) (#1181) (a63ebd20)
+- add Awesome Harness Engineering badge to README (d3391207)
+
 ## [5.144.0] - 2026-08-20
 
 ### Added
