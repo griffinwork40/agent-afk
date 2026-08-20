@@ -46,9 +46,32 @@ import { env } from '../../config/env.js';
 // third-party plugin tree. A directory named with a CSI/OSC sequence would
 // otherwise execute against the operator's terminal when AFK_DEBUG is set.
 import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
+import { _registerScanCacheResetHook } from '../plugins-scanner.js';
 
 /** Mirrors the depth cap in `extractPluginSkills` — cycle/runaway guard. */
 const MAX_DEPTH = 10;
+
+/**
+ * Total-entry cap across a single walk. Bounds breadth independently of depth
+ * so a plugin with a flat directory of thousands of files cannot block the
+ * event loop. When exceeded the walk returns whatever was collected up to
+ * that point — no partial entry is emitted.
+ */
+const MAX_ENTRIES = 1000;
+
+/**
+ * Per-pluginPath memoization cache for `extractPluginCommands`.
+ *
+ * `extractPluginCommands` is called from BOTH `collectSkillEntries` AND
+ * `discoverPluginSkillBodies`, so it runs twice per discovery pass. Caching by
+ * `pluginPath` drops the second walk to O(1).
+ *
+ * Invalidated by `_resetPluginScanCache` via the hook registered below, which
+ * is triggered on plugin install/uninstall/reload so stale results are never
+ * served after the filesystem changes.
+ */
+const commandCache = new Map<string, PluginSkillMetadata[]>();
+_registerScanCacheResetHook(() => commandCache.clear());
 
 /**
  * Control bytes — C0, DEL, and C1 — in a path segment.
@@ -88,8 +111,14 @@ export function extractPluginCommands(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
+  const cached = commandCache.get(pluginPath);
+  if (cached !== undefined) return cached;
+
   const root = join(pluginPath, 'commands');
-  if (!existsSync(root)) return [];
+  if (!existsSync(root)) {
+    commandCache.set(pluginPath, []);
+    return [];
+  }
 
   // Resolve the containment root's realpath ONCE, before the walk starts, and
   // thread it into every resolveContained call below instead of letting each
@@ -102,13 +131,16 @@ export function extractPluginCommands(
   try {
     realRoot = realpathSync(root);
   } catch {
+    commandCache.set(pluginPath, []);
     return [];
   }
 
   const out: DiscoveredCommand[] = [];
+  let totalEntries = 0;
 
   function walk(dir: string, segments: string[], depth: number): void {
     if (depth > MAX_DEPTH) return;
+    if (totalEntries >= MAX_ENTRIES) return;
     let entries: string[];
     try {
       entries = readdirSync(dir);
@@ -159,6 +191,13 @@ export function extractPluginCommands(
         stat = statSync(full);
       } catch {
         continue;
+      }
+      totalEntries++;
+      if (totalEntries >= MAX_ENTRIES) {
+        if (env.AFK_DEBUG) {
+          process.stderr.write(`[afk] commands walk: MAX_ENTRIES (${MAX_ENTRIES}) reached in ${sanitizeForDisplay(root)}\n`);
+        }
+        return;
       }
       if (stat.isDirectory()) {
         walk(full, [...segments, entry], depth + 1);
@@ -216,5 +255,6 @@ export function extractPluginCommands(
   // Codepoint order, not localeCompare: ICU collation varies by locale and
   // build, and this ordering is what makes collision resolution reproducible.
   out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  commandCache.set(pluginPath, out);
   return out;
 }

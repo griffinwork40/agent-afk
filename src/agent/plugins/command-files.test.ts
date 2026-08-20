@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { extractPluginCommands } from './command-files.js';
+import { _resetPluginScanCache } from '../plugins-scanner.js';
 import { normalizeSkillSource, MAX_SKILL_SOURCE_CHARS } from './source-guard.js';
 
 let pluginDir: string;
@@ -286,5 +287,36 @@ describe('normalizeSkillSource', () => {
     expect(() => normalizeSkillSource('\x00\x00\x00')).not.toThrow();
     expect(() => normalizeSkillSource('x'.repeat(MAX_SKILL_SOURCE_CHARS * 2))).not.toThrow();
     expect(normalizeSkillSource('a\x00')).toBe('a');
+  });
+});
+
+describe('extractPluginCommands — memoization', () => {
+  it('returns the same array reference on a second call to the same pluginPath', () => {
+    writeCommand('deploy.md', '---\ndescription: Ship it\n---\nDeploy.\n');
+    const first = extractPluginCommands(pluginDir);
+    const second = extractPluginCommands(pluginDir);
+    expect(second).toBe(first);
+  });
+
+  it('returns a fresh walk after _resetPluginScanCache clears the cache', () => {
+    writeCommand('deploy.md', '---\ndescription: Ship it\n---\nDeploy.\n');
+    const first = extractPluginCommands(pluginDir);
+    _resetPluginScanCache();
+    const second = extractPluginCommands(pluginDir);
+    expect(second).not.toBe(first);
+    expect(second).toEqual(first);
+  });
+
+  it('picks up a newly-added command after cache invalidation', () => {
+    writeCommand('deploy.md', '---\ndescription: Ship it\n---\nDeploy.\n');
+    const before = extractPluginCommands(pluginDir);
+    expect(before).toHaveLength(1);
+
+    writeCommand('rollback.md', 'Rollback the deployment.\n');
+    // Without reset, stale cache is served:
+    expect(extractPluginCommands(pluginDir)).toHaveLength(1);
+
+    _resetPluginScanCache();
+    expect(extractPluginCommands(pluginDir)).toHaveLength(2);
   });
 });

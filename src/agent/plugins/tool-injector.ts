@@ -14,6 +14,20 @@ import { normalizeSkillSource } from './source-guard.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
+import { _registerScanCacheResetHook } from '../plugins-scanner.js';
+
+/** Depth cap — cycle/runaway guard. Matches `command-files.ts`. */
+const MAX_DEPTH = 10;
+/** Total-entry breadth cap — prevents large flat dirs from blocking the event loop. */
+const MAX_ENTRIES = 1000;
+
+/**
+ * Per-pluginPath cache for `extractPluginSkills`. Called twice per discovery
+ * pass (buildSkillManifest + discoverPluginSkillBodies); the second call is O(1).
+ * Cleared by `_resetPluginScanCache` via the hook below (install/uninstall/reload).
+ */
+const skillCache = new Map<string, PluginSkillMetadata[]>();
+_registerScanCacheResetHook(() => skillCache.clear());
 
 /**
  * Metadata extracted from a skill's SKILL.md frontmatter, plus the body.
@@ -210,10 +224,15 @@ export function extractPluginSkills(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
+  const cached = skillCache.get(pluginPath);
+  if (cached !== undefined) return cached;
+
   const skills: PluginSkillMetadata[] = [];
+  let totalEntries = 0;
 
   function walkDirectory(dir: string, depth: number = 0): void {
-    if (depth > 10) return; // Prevent infinite recursion
+    if (depth > MAX_DEPTH) return;
+    if (totalEntries >= MAX_ENTRIES) return;
     if (!existsSync(dir)) return;
 
     let entries: string[];
@@ -234,6 +253,9 @@ export function extractPluginSkills(
         continue;
       }
 
+      totalEntries++;
+      if (totalEntries >= MAX_ENTRIES) return;
+
       if (stat.isFile() && name === 'SKILL.md') {
         const metadata = parseSkillMetadata(fullPath, knownToolNames);
         if (metadata.name) {
@@ -246,6 +268,7 @@ export function extractPluginSkills(
   }
 
   walkDirectory(pluginPath);
+  skillCache.set(pluginPath, skills);
   return skills;
 }
 
