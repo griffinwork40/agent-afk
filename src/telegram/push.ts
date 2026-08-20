@@ -188,6 +188,13 @@ export async function pushIfConfigured(
      * default routing (unchanged behavior).
      */
     target?: number | readonly number[];
+    /**
+     * Optional Telegram `message_thread_id` forwarded verbatim to `push()`.
+     * When set, the notification is delivered to the specified topic thread
+     * instead of General. Mirrors `PushOptions.messageThreadId` — see that
+     * field for Telegram's threading semantics. Omit for non-topic chats.
+     */
+    messageThreadId?: number;
   } = {},
 ): Promise<PushResult[] | null> {
   const token = env.TELEGRAM_BOT_TOKEN;
@@ -213,6 +220,7 @@ export async function pushIfConfigured(
         text: chunks[i] ?? '',
         ...(opts.replyMarkup !== undefined && i === 0 ? { replyMarkup: opts.replyMarkup } : {}),
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+        ...(opts.messageThreadId !== undefined ? { messageThreadId: opts.messageThreadId } : {}),
       };
       results.push(
         opts.markdown

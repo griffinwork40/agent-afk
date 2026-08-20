@@ -107,6 +107,7 @@ export function createTelegramSessionFactory(
       memoryStore,
       workspaceStore,
       ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
+      ...(sessionConfig.telegramThreadId !== undefined ? { threadId: sessionConfig.telegramThreadId } : {}),
       reportSession: (session) => { returnedSession = session; },
     };
 

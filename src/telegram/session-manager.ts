@@ -242,7 +242,9 @@ export class SessionManager {
       const config: AgentConfig = {
         model: data.model,
         apiKey: this.options.apiKey,
-        telegramChatId: route.chatId };
+        telegramChatId: route.chatId,
+        ...(route.threadId !== undefined ? { telegramThreadId: route.threadId } : {}),
+      };
       if (this.options.settingSources?.length) {
         config.settingSources = this.options.settingSources;
       }

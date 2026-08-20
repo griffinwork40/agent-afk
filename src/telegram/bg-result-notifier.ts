@@ -65,7 +65,10 @@ export class TelegramBgResultNotifier {
     // settled and its result is available via the registry. Log failures for
     // observability since push is the ONLY delivery path on Telegram (unlike
     // REPL which also injects results into the next turn).
-    void pushIfConfigured(text, { target: this.chatId }).catch((err: unknown) => {
+    void pushIfConfigured(text, {
+      target: this.chatId,
+      ...(this.threadId !== undefined ? { messageThreadId: this.threadId } : {}),
+    }).catch((err: unknown) => {
       // Non-fatal: the job result is still in the registry (join-able).
       console.error(`[bg-notifier] push failed for job ${job.jobId}:`, err);
     });
@@ -78,10 +81,13 @@ export class TelegramBgResultNotifier {
    * @param registry  The session's background agent registry.
    * @param chatId    Telegram chat id to push notifications to. When undefined,
    *                  pushIfConfigured uses the default notify targets.
+   * @param threadId  Telegram topic thread id. When set, notifications are
+   *                  delivered to this specific topic thread instead of General.
    */
   constructor(
     private readonly registry: BackgroundAgentRegistry,
     private readonly chatId?: number,
+    private readonly threadId?: number,
   ) {
     registry.on('settled', this.onSettled);
   }

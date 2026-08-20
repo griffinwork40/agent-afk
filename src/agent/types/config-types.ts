@@ -783,6 +783,16 @@ export interface AgentConfig {
   telegramChatId?: number;
 
   /**
+   * Telegram topic thread id for this session — set alongside `telegramChatId`
+   * when the originating message arrived in a non-General supergroup topic.
+   * Threaded to `TelegramBgResultNotifier` so background job push notifications
+   * land in the correct topic thread rather than falling through to General.
+   *
+   * Telegram-scoped only: never set on REPL, daemon, or one-shot sessions.
+   */
+  telegramThreadId?: number;
+
+  /**
    * In-process custom tools available to the session. Each entry is created
    * via the `tool()` helper and provides both a JSON-schema `AnthropicToolDef`
    * (so the model knows the tool exists) and a validated `ToolHandler`

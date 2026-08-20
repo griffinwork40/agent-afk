@@ -143,6 +143,24 @@ describe('TelegramBgResultNotifier', () => {
     expect(opts).toEqual({ target: 12345 });
   });
 
+  it('passes messageThreadId when threadId is provided', () => {
+    notifier.dispose();
+    notifier = new TelegramBgResultNotifier(registry, 12345, 77);
+
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({
+      handle,
+      prompt: 'topic task',
+      model: 'sonnet',
+    });
+
+    fireTerminal(succeed(job.jobId, 'done'));
+
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    const opts = pushMock.mock.calls[0]![1];
+    expect(opts).toEqual({ target: 12345, messageThreadId: 77 });
+  });
+
   it('uses default notify routing when no chatId is provided', () => {
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({
