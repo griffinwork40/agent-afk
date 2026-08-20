@@ -9,6 +9,8 @@ import {
   dispatchTagForCategory,
   styleForCategory,
   styleForToolName,
+  humanVerbForTool,
+  CATEGORY_HUMAN_VERB,
   SUBAGENT_TOOLS,
   DAG_TOOLS,
   SKILL_TOOLS,
@@ -272,6 +274,27 @@ describe('NESTING_TOOLS', () => {
     expect(NESTING_TOOLS.has('agent')).toBe(true);
     expect(NESTING_TOOLS.has('compose')).toBe(true);
     expect(NESTING_TOOLS.has('skill')).toBe(true);
+  });
+});
+
+describe('humanVerbForTool', () => {
+  it('returns the category verb for tools without an override', () => {
+    expect(humanVerbForTool('agent')).toBe('Delegating…');
+    expect(humanVerbForTool('read_file')).toBe('Reading…');
+    expect(humanVerbForTool('bash')).toBe('Running…');
+    expect(humanVerbForTool('compose')).toBe('Coordinating…');
+    expect(humanVerbForTool('create_schedule')).toBe('Scheduling…');
+  });
+
+  it('returns a tool-specific override when the action conflicts with the category', () => {
+    expect(humanVerbForTool('cancel_background_job')).toBe('Cancelling…');
+    expect(humanVerbForTool('list_schedules')).toBe('Reading…');
+    expect(humanVerbForTool('get_schedule_history')).toBe('Reading…');
+    expect(humanVerbForTool('cancel_schedule')).toBe('Cancelling…');
+  });
+
+  it('falls through to category for unknown tools', () => {
+    expect(humanVerbForTool('some_unknown_tool')).toBe(CATEGORY_HUMAN_VERB['other']);
   });
 });
 
