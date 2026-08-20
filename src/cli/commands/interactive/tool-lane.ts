@@ -12,6 +12,8 @@ import {
   renderGroupedRootTools,
   getGlyphs,
   toolLaneWidth,
+  freshToolEntry,
+  formatElapsed,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -54,14 +56,7 @@ export class ToolLane {
     const safeInput = stripAnsi(toolInput);
     const prefix = formatToolLine(toolName + safeInput);
     const agentContext = this.agentIdStack.at(-1) ?? undefined;
-    const entry: ToolEntry = {
-      kind: 'tool',
-      toolUseId,
-      toolName,
-      toolInput: safeInput,
-      prefix,
-      ...(agentContext !== undefined ? { agentContext } : {}),
-    };
+    const entry = freshToolEntry(toolUseId, toolName, safeInput, prefix, agentContext);
     this.entries.set(toolUseId, entry);
     this.order.push(toolUseId);
     if (SUBAGENT_TOOLS.has(toolName)) {
@@ -100,14 +95,7 @@ export class ToolLane {
       return;
     }
     const prefix = formatToolLine(toolName + safeInput, maxWidth);
-    const entry: ToolEntry = {
-      kind: 'tool',
-      toolUseId,
-      toolName,
-      toolInput: safeInput,
-      prefix,
-      ...(agentContext !== undefined ? { agentContext } : {}),
-    };
+    const entry = freshToolEntry(toolUseId, toolName, safeInput, prefix, agentContext);
     this.entries.set(toolUseId, entry);
     this.order.push(toolUseId);
   }
@@ -498,7 +486,10 @@ export class ToolLane {
         if (entry.result) {
           lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
         } else {
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …')));
+          // Live elapsed counter: computed at repaint time so the counter ticks
+          // on every overlay refresh without a dedicated timer. Grace period
+          // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
         }
         // Mirror the thinkingTail handling of the other two NESTING branches
         // (and the childless-leaf branch below): spine glyph (g.spine, │) at
@@ -518,7 +509,9 @@ export class ToolLane {
             }
           }
         } else {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …')));
+          // Live elapsed counter: same pattern as the NESTING branch above —
+          // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
           if (entry.thinkingTail) {
             // Childless Agent entries (a child just opened its thinking block
             // and hasn't yet emitted content or a tool_use) get the tail right

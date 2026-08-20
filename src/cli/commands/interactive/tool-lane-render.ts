@@ -7,6 +7,9 @@ import { wrapToWidth } from '../../wrap.js';
 import { truncateDisplayWidth } from '../../display.js';
 import { capToMeasure } from '../../render/measure.js';
 import { sanitizeTextParagraph } from './tool-lane-format.js';
+// Re-export so tool-lane.ts can reach formatElapsed via the already-imported
+// render module — avoids an extra import line in the ratchet-capped file.
+export { formatElapsed } from '../../terminal-compositor.scrollback.js';
 
 /**
  * Clamp a composed tree-render line to the terminal's current width.
@@ -105,9 +108,43 @@ interface ToolEntryFields {
    * this flag.
    */
   headerEmitted?: boolean;
+  /**
+   * Timestamp (Date.now()) when this entry was created — i.e. when the
+   * tool_use_detail arrived. Set once at {@link ToolLane.addStart} /
+   * {@link ToolLane.addStartWithAgentContext} and never mutated so the
+   * elapsed counter ticks forward on every overlay repaint without
+   * requiring a separate timer. Only read in the live overlay path
+   * ({@link ToolLane.getOverlay}); never consulted during flush().
+   */
+  startedAt: number;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };
+
+/**
+ * Construct a fresh `ToolEntry` with `startedAt` stamped at call time.
+ * Extracted from {@link ToolLane.addStart} / {@link ToolLane.addStartWithAgentContext}
+ * so tool-lane.ts can call a single function rather than repeating the full
+ * object literal (keeping tool-lane.ts under the 350-code-line ratchet).
+ */
+export function freshToolEntry(
+  toolUseId: string,
+  toolName: string,
+  toolInput: string,
+  prefix: string,
+  agentContext?: string,
+): ToolEntry {
+  const entry: ToolEntry = {
+    kind: 'tool',
+    toolUseId,
+    toolName,
+    toolInput,
+    prefix,
+    startedAt: Date.now(),
+  };
+  if (agentContext !== undefined) entry.agentContext = agentContext;
+  return entry;
+}
 
 export interface TextEntry {
   kind: 'text';
