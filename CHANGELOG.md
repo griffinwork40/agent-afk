@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.145.2] - 2026-08-20
+
+### Fixed
+- extract shared credential-floor marker constants (#861) (#1235) (3375608d)
+- thread threadId through to background job notifications (#1220) (#1232) (0597515a)
+- surface hint when notify routing silently prefers DM over group (#1221) (#1236) (c70562d0)
+
 ## [5.145.1] - 2026-08-20
 
 ### Fixed
