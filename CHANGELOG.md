@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.140.0] - 2026-08-20
+
+### Added
+- add per-turn tool-action summaries to resume replay (#1188) (cd503def)
+- add workspace_query tool for mid-run polling (#1227) (#1224) (49dd727d)
+
 ## [5.139.0] - 2026-08-20
 
 ### Added
