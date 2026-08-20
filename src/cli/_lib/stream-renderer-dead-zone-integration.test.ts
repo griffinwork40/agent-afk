@@ -41,7 +41,7 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
       thinkingMode: 'summary',
       thinkingLane: new ThinkingLane(),
       streamingMarkdownRef: { current: null },
-      toolLane: { hasPending: () => false, getOverlay: () => '' },
+      toolLane: { hasPending: () => false, getOverlay: () => '', checkElapsedDisplayNeedsUpdate: () => false },
       lastProgressByTask: new Map(),
       getInterrupting: () => false,
       getSoftStopping: () => false,
@@ -63,6 +63,7 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
       toolLane: {
         hasPending: () => false,
         getOverlay: () => '',
+        checkElapsedDisplayNeedsUpdate: () => false,
         addStartWithAgentContext: (_id: string, _kind: string, label: string) =>
           laneCalls.push(label),
         addResult: () => {},

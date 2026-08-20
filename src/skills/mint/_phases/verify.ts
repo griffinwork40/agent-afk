@@ -12,6 +12,7 @@ import { emitCard } from '../../_lib/emit-card.js';
 import type { BuildResult } from './build.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
+import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 
 const VerifyModeOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -45,6 +46,13 @@ async function forkVerifyMode(
   // Witness layer: parent trace writer, forwarded to the fork manager so this
   // verify-mode subagent emits subagent_lifecycle events. Mirrors research.ts.
   traceWriter?: TraceSink,
+  // Shared workspace (ctx.workspaceStore), forwarded to the fork manager so
+  // this verify-mode subagent receives the sibling-findings preamble
+  // (injectWorkspacePreamble) — the workspace READ channel. Load-bearing here
+  // in particular: the three verify modes run CONCURRENTLY, so the store is how
+  // test/lint/design-review see each other's findings at all. See spec.ts /
+  // skills/index.ts SkillExecutionContext.workspaceStore.
+  workspaceStore?: WorkspaceStore,
 ): Promise<{ passed: boolean; issues?: string[] }> {
   // Propagate parent worktree — verify subagents run tests/lint/grep in
   // the right working tree.
@@ -52,6 +60,7 @@ async function forkVerifyMode(
     ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     ...(traceWriter !== undefined ? { traceWriter } : {}),
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
   });
   const verifyHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
@@ -114,6 +123,10 @@ export async function runVerifyPhase(
   // Witness layer: forwarded to each parallel forkVerifyMode so every verify
   // subagent's fork emits subagent_lifecycle events. Mirrors research.ts.
   traceWriter?: TraceSink,
+  // Shared workspace: forwarded to each parallel forkVerifyMode so all three
+  // concurrent verify subagents read/publish against the SAME store and see one
+  // another's findings. See forkVerifyMode's parameter for the full rationale.
+  workspaceStore?: WorkspaceStore,
 ): Promise<VerifyResult> {
   const prompts = loadSkillPrompts('mint');
   const verifyPrompt = prompts['verify.md'];
@@ -124,9 +137,9 @@ export async function runVerifyPhase(
 
   // Run test, lint, and design-review in parallel
   const [testResult, lintResult, designResult] = await Promise.all([
-    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter),
-    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter),
-    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter),
+    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore),
+    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore),
+    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore),
   ]);
 
   const allIssues: string[] = [];

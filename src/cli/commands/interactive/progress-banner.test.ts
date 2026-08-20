@@ -165,7 +165,7 @@ describe('progress-banner — terminal width clamping', () => {
       const joined = stripAnsi(lines.join('\n'));
       expect(joined).not.toContain('stopping…');
       // Normal streaming keeps the interrupt hint.
-      expect(joined).toContain('esc to interrupt · ctrl+b background');
+      expect(joined).toContain('esc to interrupt · ctrl+b to run in background');
     });
 
     it('does NOT show the stopping indicator when the flag is explicitly false', () => {

@@ -138,9 +138,10 @@ export function buildForkedChildConfig(
     // subagent-executor.ts:294.
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     // Read-scope inheritance (#547): see childInheritedReadRoots above.
+    // 2nd spread = workspace READ channel for grandchild `agent` forks.
     ...(childInheritedReadRoots !== undefined
       ? { parentReadRoots: childInheritedReadRoots }
-      : {}),
+      : {}), ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
   });
   const childExecutor = new SubagentExecutor({
     subagentManager: childManager,
@@ -186,6 +187,11 @@ export function buildForkedChildConfig(
     // own childManager (depth-2+ `agent` forks under this skill child) emits
     // subagent_lifecycle events into the session trace. Mirrors cwd above.
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    // Workspace READ channel: forward the store so the grandchild executor's
+    // own childManager carries the sibling-findings preamble at depth ≥ 3.
+    // Without this the fork-skill path broke the chain one depth earlier than
+    // the agent-tool path (child-config.ts), which threads it at :424.
+    ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     // Invariant: background dispatch requires the registry to be present
     // in every SubagentExecutor in the chain — root → skill-forked child →
     // skill-forked grandchild. Without forwarding, a plugin skill's

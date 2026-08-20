@@ -18,6 +18,9 @@
 
 import { z } from 'zod';
 import { TOOL_FAILURE_CLASSES } from './types.js';
+import { BackgroundAgentCancelledPayloadSchema } from './background-agent-schema.js';
+
+export { BackgroundAgentCancelledPayloadSchema } from './background-agent-schema.js';
 
 // ---------------------------------------------------------------------------
 // tool_call
@@ -28,6 +31,9 @@ export const ToolCallStartedPayloadSchema = z.object({
   toolUseId: z.string(),
   name: z.string(),
   inputBytes: z.number().int().nonnegative(),
+  /** Optional for backward compat: traces recorded before this field was
+   *  added lack it. New traces always produce it (SHA-256 hex = 64 chars). */
+  argsFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   subagentId: z.string().optional(),
 });
 
@@ -179,13 +185,6 @@ export const BackgroundAgentFailedPayloadSchema = z.object({
   durationMs: z.number().nonnegative(),
   errorClass: z.string(),
   errorMessage: z.string(),
-});
-
-export const BackgroundAgentCancelledPayloadSchema = z.object({
-  transition: z.literal('cancelled'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  source: z.enum(['explicit', 'cascade']),
 });
 
 export const BackgroundAgentJoinedPayloadSchema = z.object({

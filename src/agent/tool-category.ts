@@ -15,8 +15,9 @@
  *   - PascalCase Anthropic-SDK names: `Read`, `Write`, `Bash`, `Agent`, ...
  *   - snake_case agent-afk built-in tool names from src/agent/tools/schemas.ts
  *     and src/agent/memory/memory-tools.ts:
- *     `read_file`, `write_file`, `edit_file`, `bash`, `agent`, `skill`,
- *     `compose`, `send_telegram`, `web_scrape`, `glob`, `grep`, `list_directory`,
+ *     `read_file`, `extract_document`, `write_file`, `edit_file`, `bash`,
+ *     `agent`, `skill`, `compose`, `send_telegram`, `web_scrape`, `glob`,
+ *     `grep`, `list_directory`,
  *     `memory_search`, `memory_update`, `procedure_write`,
  *     `create_schedule`, `list_schedules`, `get_schedule_history`, `cancel_schedule`,
  *     `terminal_font_size`, `config_get`, `config_set`.
@@ -45,7 +46,7 @@ const READ_TOOLS = new Set([
   // Anthropic SDK PascalCase
   'Read', 'Glob', 'Grep', 'NotebookRead', 'LS',
   // agent-afk built-in snake_case (src/agent/tools/schemas.ts)
-  'read_file', 'glob', 'grep', 'list_directory',
+  'read_file', 'extract_document', 'glob', 'grep', 'list_directory',
   // config_get reads ~/.afk/config (afk.env / afk.config.json); secrets are
   // masked by the handler. Read-only by construction — no mutation surface.
   'config_get',
@@ -53,6 +54,9 @@ const READ_TOOLS = new Set([
   // Also classed read-only in the dispatcher's SAFE_TOOLS concurrency set
   // (src/agent/tools/dispatcher.ts:31).
   'memory_search',
+  // workspace-tools.ts — read-only query against the ephemeral per-session
+  // workspace. Mirrors memory_search in classification.
+  'workspace_query',
   // witness-layer search: read-only scan of trace.jsonl files.
   'read_witness', 'search_witness',
 ]);
@@ -69,6 +73,9 @@ const WRITE_TOOLS = new Set([
   // load-bearing: it makes config_set plan-mode-blocked (excluded from
   // READ_ONLY_PHASE_TOOLS) and sequential (not concurrency-safe).
   'config_set',
+  // workspace-tools.ts — workspace_publish mutates ephemeral per-session
+  // state that influences sibling-agent system prompts.
+  'workspace_publish',
 ]);
 // These categorization sets intentionally list BOTH the Claude Code / SDK
 // PascalCase tool names (Bash, Agent, Task, Skill, Compose) and AFK's lowercase
@@ -82,7 +89,7 @@ const SHELL_TOOLS = new Set([
 ]);
 export const SUBAGENT_TOOLS = new Set([
   'Agent', 'Task',
-  'agent',
+  'agent', 'cancel_background_job',
 ]);
 export const SKILL_TOOLS = new Set([
   'Skill',
@@ -171,12 +178,23 @@ function hasCI(set: Set<string>, name: string): boolean {
 // Membership rule: any tool whose handler MUST NOT mutate the repo, spawn
 // subagents, send outbound network traffic, or otherwise produce a
 // side-effect that survives the phase. This is the `READ_TOOLS` set plus the
-// always-on awareness introspection tools (AWARENESS_TOOL_NAMES) — kept narrow
-// because the post-spec approval gate is the user's chance to stop wrong work
-// BEFORE writes happen. Awareness qualifies: get_runtime_state is a pure
-// in-memory read with zero side-effects, and excluding it left phase-restricted
-// forks (mint spec/research/plan) staring at a tool the schema offered but the
-// allowlist rejected.
+// always-on awareness introspection tools (AWARENESS_TOOL_NAMES) and
+// `workspace_publish` — kept narrow because the post-spec approval gate is the
+// user's chance to stop wrong work BEFORE writes happen. Awareness qualifies:
+// get_runtime_state is a pure in-memory read with zero side-effects, and
+// excluding it left phase-restricted forks (mint spec/research/plan) staring at
+// a tool the schema offered but the allowlist rejected.
+//
+// `workspace_publish` qualifies for the SAME reason, despite being categorized
+// WRITE above: the two classifications answer different questions. The
+// READ/WRITE buckets ask "does this mutate state?" (yes — the shared workspace),
+// while this list asks "may this run before the approval gate?". Nothing the
+// workspace holds survives the phase: the store is per-root-session and
+// in-memory, closed when the session ends (provider-runtime.ts:238), so a
+// publish cannot touch the repo, the fact archive, or any file on disk. It is
+// admitted so mint's read-only spec/research/plan phases can seed findings for
+// their siblings instead of seeing the tool in their schema (provider-schemas.ts
+// registers it for every session) and being denied at the permission gate.
 //
 // Explicitly NOT included (and the failure mode if they were):
 //   - `write_file`, `edit_file` — file mutation before approval
@@ -204,6 +222,7 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'LS',
   // agent-afk snake_case (src/agent/tools/schemas.ts)
   'read_file',
+  'extract_document',
   'glob',
   'grep',
   'list_directory',
@@ -213,6 +232,15 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'memory_search',
   // Witness-layer search — read-only NDJSON scan of trace.jsonl files.
   'read_witness', 'search_witness',
+  // Shared workspace publish — EPHEMERAL per-root-session state, not persistent
+  // like memory. Deliberately admitted despite its WRITE categorization above;
+  // see the membership-rule note in this block's header for why the two
+  // classifications diverge here. Mirrors CHILD_ALLOWED_TOOLS /
+  // RECON_ALLOWED_TOOLS (nesting.ts), which admit it for the same reason.
+  'workspace_publish',
+  // Shared workspace query — read-only poll of the ephemeral workspace.
+  // Trivially qualifies: pure read, no mutation, no side-effects.
+  'workspace_query',
   // Awareness introspection (get_runtime_state) — read-only, in-memory, zero
   // side-effects. Mirrors CHILD_ALLOWED_TOOLS (nesting.ts), which already appends
   // these. Single source of truth: AWARENESS_TOOL_NAMES (awareness/tool.ts).
@@ -263,15 +291,22 @@ export function categorizeTool(name: string): ToolCategory {
 /**
  * Categories that represent "this call dispatches more work" rather than a
  * direct tool invocation. The tool-lane renderer appends a dim bracketed
- * tag (`[subagent]`, `[skill]`, `[dag]`) to entries in these categories so
+ * tag (`[worker]`, `[skill]`, `[workflow]`) to entries in these categories so
  * the dispatch class is legible as text alongside the glyph + color cues —
  * survives monochrome terminals and makes the taxonomy self-documenting in
  * the stream.
+ *
+ * Invariant: tag values are plain-language words, not internal jargon. The
+ * scrollback transcript is routinely read by non-technical observers, so
+ * `subagent` renders as `worker` and `dag` as `workflow` — an everyday reader
+ * should never need to know what a DAG is to follow the activity feed. The
+ * category KEYS stay canonical (`subagent`/`skill`/`dag`); only the
+ * user-facing tag text is humanized here, at the single owning map.
  */
 const DISPATCH_CATEGORIES: Partial<Record<ToolCategory, string>> = {
-  subagent: 'subagent',
+  subagent: 'worker',
   skill: 'skill',
-  dag: 'dag',
+  dag: 'workflow',
 };
 
 export function dispatchTagForCategory(cat: ToolCategory): string | undefined {

@@ -16,6 +16,7 @@ import type { Surface } from '../awareness/types.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { providerForModel } from '../providers/index.js';
 import { BUILTIN_TOOL_NAMES } from './schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
@@ -129,7 +130,7 @@ export function createStubParentSession(
 // sub-agent writes. If specific skills need memory write access, do it per-skill via a
 // buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
 // extending this global default.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill'];
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'workspace_publish', 'workspace_query', 'agent', 'skill'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's
@@ -149,6 +150,16 @@ export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAM
 // mutation of daemon state). `bash` IS included (read-only recon needs it) and
 // is gated by classifyBashCommand in the dispatcher. `agent`/`skill` ARE
 // included so the surveyor fan-out the SKILL.md prescribes still works.
+//
+// `workspace_publish` IS included for the same reason READ_ONLY_PHASE_TOOLS
+// (tool-category.ts) admits it: the shared workspace is EPHEMERAL per-root-session
+// in-memory state, closed with the session — unlike memory_update, nothing it
+// records survives the run or reaches disk. A recon skill's whole job is
+// gathering findings for the surveyors it fans out, so denying the publish would
+// leave its `agent`/`skill` children unable to see what it already discovered
+// while the tool still appeared in their schema (provider-schemas.ts registers it
+// for every session). Read-only means "does not mutate the repo", not "cannot
+// talk to its own siblings".
 export const RECON_ALLOWED_TOOLS: readonly string[] = [
   'read_file',
   'glob',
@@ -161,6 +172,9 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   'web_scrape',
   ...AWARENESS_TOOL_NAMES,
   'memory_search',
+  // Ephemeral per-session workspace publish + query — see this block's header note.
+  'workspace_publish',
+  'workspace_query',
   'agent',
   'skill',
 ];
@@ -192,6 +206,12 @@ export interface CreateChildProviderFactoryOptions {
    * api.openai.com.
    */
   openaiBaseUrl?: string;
+  /**
+   * Shared workspace store forwarded to child providers so every child
+   * session registers the `workspace_publish` tool against the same
+   * in-memory store as the parent.
+   */
+  workspaceStore?: WorkspaceStore;
 }
 
 /**
@@ -228,6 +248,7 @@ export function createChildProviderFactory(
       return new OpenAICompatibleProvider({
         ...providerOpts,
         ...(opts.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
+        ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
         readOnlyMemory: true,
       });
     }
@@ -235,7 +256,11 @@ export function createChildProviderFactory(
     // to recall prior facts but cannot persist new memory (no `memory_update` /
     // `procedure_write`). The parent session is the only writer; allowing writes
     // from subagents would cause uncoordinated fan-out into the shared store.
-    return new AnthropicDirectProvider({ ...providerOpts, readOnlyMemory: true });
+    return new AnthropicDirectProvider({
+      ...providerOpts,
+      ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+      readOnlyMemory: true,
+    });
   };
 }
 
@@ -294,6 +319,57 @@ export function buildReadOnlyReconProvider(
 }
 
 /**
+ * Build a provider for a compose DAG node that carries the workspace store
+ * (so nodes can call `workspace_publish` / `workspace_query`) but deliberately
+ * omits `subagentExecutor` and `skillExecutor`.
+ *
+ * Safety invariant: compose nodes are task-worker leaves. Granting them
+ * `subagentExecutor` / `skillExecutor` would let them spawn nested DAGs or
+ * invoke skills, leading to unbounded recursive fan-out. This function is the
+ * ONLY approved path for seeding a workspace-aware provider onto compose nodes;
+ * `childProviderFactory` (which bundles both executors) must never be used for
+ * this purpose.
+ *
+ * Tool surface: `CHILD_ALLOWED_TOOLS` (same as normal children) — `compose` is
+ * already absent from that set, so no additional stripping is needed.
+ *
+ * @param model      Effective model for this node. Drives provider routing so
+ *                   OpenAI-routed nodes get `OpenAICompatibleProvider` and
+ *                   Anthropic-routed nodes get `AnthropicDirectProvider`.
+ * @param workspaceStore  Parent session's workspace store, shared with every node.
+ * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
+ *                        `baseURL` when the node routes to `openai-compatible`.
+ * @param readOnlyBash    When true, the node's dispatcher blocks mutating bash
+ *                        commands. Forwarded for read-only skill leaf nodes.
+ */
+export function buildComposeNodeProvider(
+  model: AgentModelInput | undefined,
+  workspaceStore: WorkspaceStore,
+  openaiBaseUrl?: string,
+  readOnlyBash?: boolean,
+): ModelProvider {
+  // Materialize the allowlist per call so runtime array mutations don't bleed
+  // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
+  const permissions = { allowedTools: [...CHILD_ALLOWED_TOOLS] };
+  const route = providerForModel(typeof model === 'string' ? model : undefined);
+  if (route === 'openai-compatible') {
+    return new OpenAICompatibleProvider({
+      permissions,
+      workspaceStore,
+      readOnlyMemory: true,
+      ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+      ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+    });
+  }
+  return new AnthropicDirectProvider({
+    permissions,
+    workspaceStore,
+    readOnlyMemory: true,
+    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+  });
+}
+
+/**
  * Build a depth-aware factory that produces a {@link SkillExecutor} for a
  * grandchild session at the given `depth`. Closes over `childProviderFactory`
  * so the grandchild itself can fan out further. The factory references itself
@@ -334,6 +410,14 @@ export function createChildSkillExecutorFactory(
   openaiBaseUrl?: string,
   // xAI endpoint propagated to skill-forked agent descendants.
   xaiBaseUrl?: string,
+  // Shared workspace store, propagated to every depth so a nested SkillExecutor's
+  // own fork managers (fork-dispatch.ts / fork-child-config.ts) carry it too.
+  // Without it the workspace READ channel stopped at depth 1: a skill dispatched
+  // BY a skill got a store-less executor, so its forks lost the sibling-findings
+  // preamble even though the depth-0 wiring was correct — the same shape as the
+  // cwd / traceWriter / defaultSubagentModel propagation leaks documented above.
+  // Trailing optional so legacy positional callers stay valid.
+  workspaceStore?: WorkspaceStore,
 ): (
   depth: number,
   maxDepth: number,
@@ -429,6 +513,10 @@ export function createChildSkillExecutorFactory(
       ...(inheritedReadScope !== undefined
         ? { getReadScopeInputs: () => inheritedReadScope }
         : {}),
+      // Workspace READ channel: propagates through every depth so this nested
+      // executor's own fork managers seed the sibling-findings preamble. Mirrors
+      // the traceWriter / cwd propagation above; see this factory's parameter.
+      ...(workspaceStore !== undefined ? { workspaceStore } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });

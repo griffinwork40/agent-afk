@@ -26,6 +26,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { HookRegistry } from '../../hooks.js';
 import type { MemoryStore } from '../../memory/index.js';
+import type { WorkspaceStore } from '../../workspace/workspace-store.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
@@ -94,6 +95,8 @@ export interface AnthropicDirectProviderOptions {
   composeExecutor?: ComposeExecutor;
   /** Shared MemoryStore instance. When set, avoids creating a second store. */
   memoryStore?: MemoryStore;
+  /** Shared WorkspaceStore instance. When set, children share the parent's ephemeral workspace. */
+  workspaceStore?: WorkspaceStore;
   /** Surface identifier for fact metadata (e.g. 'cli', 'daemon', 'telegram'). */
   surface?: string;
   /**

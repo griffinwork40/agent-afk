@@ -57,7 +57,7 @@ function loopContent(n: number, toolName = 'get_runtime_state'): string {
         ts: '2026-06-20T10:00:00.000Z',
         seq: i * 2,
         kind: 'tool_call',
-        payload: { phase: 'started', toolUseId: id, name: toolName, inputBytes: 120 },
+        payload: { phase: 'started', toolUseId: id, name: toolName, inputBytes: 120, argsFingerprint: 'abcd1234'.repeat(8) },
       }),
     );
     lines.push(
@@ -270,7 +270,7 @@ function closureContent(reason: string, seq = 2): string {
       ts: '2026-06-20T10:00:00.000Z',
       seq: 0,
       kind: 'tool_call',
-      payload: { phase: 'started', toolUseId: 'tu-1', name: 'bash', inputBytes: 80 },
+      payload: { phase: 'started', toolUseId: 'tu-1', name: 'bash', inputBytes: 80, argsFingerprint: 'abcd1234'.repeat(8) },
     }),
     JSON.stringify({
       ts: '2026-06-20T10:00:00.050Z',

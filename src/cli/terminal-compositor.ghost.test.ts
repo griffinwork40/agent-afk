@@ -718,14 +718,14 @@ describe('empty-prompt suggestion', () => {
     c.disarm();
   });
 
-  // ── Suggestion does not resurrect after the user moves on ────────────────
+  // ── Suggestion resurfaces when the user deletes back to empty ─────────────
   //
-  // The proposal lives in the ENGINE, and `updateGhost` re-reads it on every
-  // edit that lands back at an empty buffer. Clearing only `activeGhost`
-  // therefore looks correct for one frame and then re-offers the same ghost on
-  // the next backspace/Ctrl+U. These pin the engine-level clear.
+  // The proposal lives in the ENGINE. Typing hides it (the buffer is non-empty
+  // so the `buffer.length === 0` guard suppresses display), but does NOT clear
+  // it — so backspacing/Ctrl+U back to empty re-shows the same suggestion.
+  // Only ESC (dismissPromptGhost) and Tab (applyGhostAccept) clear permanently.
 
-  it('does not resurrect the suggestion when the user backspaces back to empty', async () => {
+  it('resurfaces the suggestion when the user backspaces back to empty', async () => {
     const engine = makeEngine({ promptSuggestion: 'run the tests' });
     const c = new TerminalCompositor({
       stdout, stdin,
@@ -736,7 +736,7 @@ describe('empty-prompt suggestion', () => {
     c.updateGhost();
     expect(c.activeGhost).toBe('run the tests');
 
-    // User starts typing — the proposal is implicitly declined.
+    // User starts typing — suggestion is hidden (not cleared).
     stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
     expect(c.activeGhost).toBeNull();
 
@@ -744,12 +744,13 @@ describe('empty-prompt suggestion', () => {
     stdin.emit('keypress', undefined, { name: 'backspace' });
     expect(c.getBuffer().text).toBe('');
 
-    expect(engine.peekPromptSuggestion()).toBeNull();
-    expect(c.activeGhost).toBeNull();
+    // The suggestion reappears.
+    expect(engine.peekPromptSuggestion()).toBe('run the tests');
+    expect(c.activeGhost).toBe('run the tests');
     c.disarm();
   });
 
-  it('does not resurrect the suggestion after Ctrl+U clears a typed line', async () => {
+  it('resurfaces the suggestion after Ctrl+U clears a typed line', async () => {
     const engine = makeEngine({ promptSuggestion: 'run the tests' });
     const c = new TerminalCompositor({
       stdout, stdin,
@@ -765,8 +766,9 @@ describe('empty-prompt suggestion', () => {
     stdin.emit('keypress', 'u', { name: 'u', sequence: '\u0015', ctrl: true });
     expect(c.getBuffer().text).toBe('');
 
-    expect(engine.peekPromptSuggestion()).toBeNull();
-    expect(c.activeGhost).toBeNull();
+    // The suggestion reappears.
+    expect(engine.peekPromptSuggestion()).toBe('run the tests');
+    expect(c.activeGhost).toBe('run the tests');
     c.disarm();
   });
 

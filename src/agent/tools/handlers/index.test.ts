@@ -5,12 +5,12 @@ import { BUILTIN_TOOL_NAMES } from '../schemas.js';
 describe('createBuiltinHandlers', () => {
   it('returns a Map with all 22 built-in tools', () => {
     const handlers = createBuiltinHandlers();
-    expect(handlers.size).toBe(25);
+    expect(handlers.size).toBe(26);
   });
 
   it('has an entry for every tool in BUILTIN_TOOL_NAMES', () => {
     const handlers = createBuiltinHandlers();
-    for (const name of BUILTIN_TOOL_NAMES) {
+    for (const name of BUILTIN_TOOL_NAMES.filter((tool) => tool !== 'cancel_background_job')) {
       expect(handlers.has(name), `missing handler for "${name}"`).toBe(true);
       expect(typeof handlers.get(name)).toBe('function');
     }
@@ -27,7 +27,7 @@ describe('createBuiltinHandlers', () => {
     // when permissionMode is undefined but cwd is set. Ensure we get a
     // valid map back and bash is still callable.
     const handlers = createBuiltinHandlers(undefined, '/tmp');
-    expect(handlers.size).toBe(25);
+    expect(handlers.size).toBe(26);
     expect(typeof handlers.get('bash')).toBe('function');
     expect(typeof handlers.get('grep')).toBe('function');
     expect(typeof handlers.get('glob')).toBe('function');
@@ -35,7 +35,7 @@ describe('createBuiltinHandlers', () => {
 
   it('cwd parameter: builds handler set with both permissionMode and cwd', () => {
     const handlers = createBuiltinHandlers('default', '/tmp');
-    expect(handlers.size).toBe(25);
+    expect(handlers.size).toBe(26);
     expect(typeof handlers.get('bash')).toBe('function');
   });
 

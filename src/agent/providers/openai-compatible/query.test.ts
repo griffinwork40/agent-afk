@@ -322,6 +322,25 @@ describe('OpenAICompatibleProvider — readOnlyMemory option', () => {
   });
 });
 
+describe('OpenAICompatibleProvider — disabled workspace', () => {
+  it('does not advertise workspace_publish when no workspace store is provided', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const provider = new OpenAICompatibleProvider();
+    await collect(provider.query({
+      prompt: singleInput('hi'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test-key' } as AgentConfig,
+    }));
+
+    const toolNames = openAIToolNames((createCalls[0]!.args as { tools?: unknown }).tools);
+    expect(toolNames).not.toContain('workspace_publish');
+  });
+});
+
 describe('OpenAICompatibleProvider — system-prompt assembly order', () => {
   // Mirrors the anthropic-direct assembler: the # Agent AFK doctrine
   // (config.systemPrompt) is placed EARLY — after the tool conventions and

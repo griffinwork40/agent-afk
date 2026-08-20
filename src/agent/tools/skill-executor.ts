@@ -354,6 +354,15 @@ export class SkillExecutor {
           ...(this.ctx.getReadScopeInputs !== undefined
             ? { getReadScopeInputs: this.ctx.getReadScopeInputs }
             : {}),
+          // Forward the shared workspace store for the same reason as the two
+          // above: an inline handler forks through its OWN SubagentManager, so
+          // it bypasses the root manager that carries the store. Without it
+          // those forks can publish (the provider wires the handler) but never
+          // receive the sibling-findings preamble — see
+          // SkillExecutionContext.workspaceStore.
+          ...(this.ctx.workspaceStore !== undefined
+            ? { workspaceStore: this.ctx.workspaceStore }
+            : {}),
         },
       );
     } catch (err) {

@@ -1,4 +1,6 @@
 import { MemoryStore } from '../../../agent/memory/index.js';
+import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
+import { env } from '../../../config/env.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
@@ -73,14 +75,16 @@ export async function bootstrapSession(
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
+  const sharedWorkspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+  const sharedMemoryStore = new MemoryStore();
+
   const {
     trace, apiKey, backgroundRegistry, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
+    workspaceStore: sharedWorkspaceStore,
   });
-
-  const sharedMemoryStore = new MemoryStore();
   const { FastModeController } = await import('../../../agent/fast-mode.js');
   const fastModeController = new FastModeController();
 
@@ -101,7 +105,7 @@ export async function bootstrapSession(
   // builder closes over `mcpManager`.
   const { providerFactory, startupProvider } = createReplProviders({
     options, cliConfig, sessionModel, subagentExecutor, skillExecutor, composeExecutor,
-    memoryStore: sharedMemoryStore, mcpManager, fastModeController,
+    memoryStore: sharedMemoryStore, workspaceStore: sharedWorkspaceStore, mcpManager, fastModeController,
   });
 
   // Stats, permission/thinking-UI seeding, startup banners (`trace:` /
@@ -169,9 +173,16 @@ export async function bootstrapSession(
   // subagent completions into the live session's accumulators. Closing over
   // `session` would silently strand post-resume rollups on the old, discarded
   // session, dropping them from the active session's session_sealed payload.
-  rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+  const onSubagentSucceeded = (usage: import('../../../agent/subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined): void => {
     sessionRef.current?.recordSubagentCompletion(usage, costUsd);
-  });
+  };
+  rootManager.setOnSubagentSucceeded(onSubagentSucceeded);
+  // Wire the same rollup for compose DAG nodes. The compose executor creates
+  // a fresh SubagentManager per execute() call, so setOnSubagentSucceeded on
+  // rootManager does not reach compose node costs — they require their own
+  // wiring here. Without this, compose node token/cost data is silently
+  // dropped from session_sealed telemetry.
+  composeExecutor.setOnSubagentSucceeded(onSubagentSucceeded);
 
   // ContextSampler constructor assigns `session` as the source.  attach() is
   // called by performResumeSwap (resume-swap.ts step 8) on every mid-session

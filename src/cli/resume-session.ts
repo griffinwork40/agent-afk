@@ -1,5 +1,6 @@
 import type { AgentConfig } from '../agent/types.js';
 import { findSession, listSessions, loadSession, type StoredSession } from './session-store.js';
+import { summarizeToolEvents } from './summarize-tool-events.js';
 
 export interface ResumeCliOptions {
   resume?: string;
@@ -57,7 +58,7 @@ export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Parti
       ? {
           resumeHistory: target.stored.turns.map((turn) => ({
             user: turn.user,
-            assistant: turn.assistant,
+            assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
           })),
         }
       : {}),

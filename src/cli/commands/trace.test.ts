@@ -42,7 +42,7 @@ function toJsonl(objs: EventObj[]): string {
 /** A representative session covering the kinds the formatter renders. */
 function sampleEvents(): EventObj[] {
   return [
-    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu1', name: 'read_file', inputBytes: 50 } },
+    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu1', name: 'read_file', inputBytes: 50, argsFingerprint: 'abcd1234'.repeat(8) } },
     { ts: '2026-06-05T12:30:01.000Z', seq: 1, kind: 'tool_call', payload: { phase: 'completed', toolUseId: 'tu1', name: 'read_file', resultBytes: 1200, isError: false, truncated: false, durationMs: 45 } },
     { ts: '2026-06-05T12:30:02.000Z', seq: 2, kind: 'tool_call', payload: { phase: 'completed', toolUseId: 'tu2', name: 'bash', resultBytes: 8000, isError: true, truncated: true, durationMs: 1300 } },
     { ts: '2026-06-05T12:30:05.000Z', seq: 3, kind: 'hook_decision', payload: { hookEvent: 'PreToolUse', decision: 'block', reason: 'plan mode: writes disabled', blockedTool: 'write_file' } },
@@ -220,7 +220,7 @@ describe('formatTrace — subagentId attribution on tool_call (issue #612)', () 
     // An orphaned `started` (no matching completed) is shown by default — the
     // exact "child crashed/timed out mid-tool" case issue #612 is about.
     const events: EventObj[] = [
-      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu-orphan', name: 'bash', inputBytes: 30, subagentId: 'research-agent-1700000000000-3' } },
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu-orphan', name: 'bash', inputBytes: 30, subagentId: 'research-agent-1700000000000-3', argsFingerprint: 'abcd1234'.repeat(8) } },
     ];
     const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
     expect(out).toContain('started (no completion recorded)');
@@ -525,7 +525,7 @@ describe('formatTrace — flags and edge cases', () => {
 
   it('surfaces an orphaned tool start (no completion) even by default', () => {
     const orphan: EventObj[] = [
-      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'orphan1', name: 'bash', inputBytes: 5 } },
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'orphan1', name: 'bash', inputBytes: 5, argsFingerprint: 'abcd1234'.repeat(8) } },
     ];
     const out = formatTrace('s', '/p', parseTrace(toJsonl(orphan)));
     expect(out).toContain('started (no completion recorded)');

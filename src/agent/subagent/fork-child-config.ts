@@ -28,6 +28,8 @@ import { buildPhaseRestrictedProvider } from '../tools/nesting.js';
 import { MODEL_CAP_BYTES } from '../tools/handlers/_output-cap.js';
 import { applyManagerApiKeyFallback } from '../tools/child-credential.js';
 import { injectToolBudgetPreamble } from './budget-preamble.js';
+import { injectWorkspacePreamble } from '../workspace/index.js';
+import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
 
@@ -42,6 +44,7 @@ export interface AssembleChildConfigArgs<T> {
   inheritedReadRoots: string[] | undefined;
   composedWriteRoots: string[] | undefined;
   childController: AbortController;
+  workspaceStore?: WorkspaceStore;
   // Manager-level inherited values
   parentCwd: string | undefined;
   parentApiKey: string | undefined;
@@ -91,7 +94,21 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     parentCanUseTool,
   } = args;
 
-  return injectToolBudgetPreamble({
+  // Query the shared workspace for entries relevant to this child's task
+  // and inject them as a system-prompt preamble so the child sees sibling
+  // agents' findings without needing a workspace_query tool.
+  //
+  // Invariant: pass `null` as sessionId — the store is already scoped to one
+  // root session, and children publish under their own IDs, so a session-
+  // filtered query would miss sibling findings (the partition mismatch bug).
+  const taskPrompt = resume ?? (typeof options.config.systemPrompt === 'string'
+    ? options.config.systemPrompt
+    : '');
+  const workspaceEntries = args.workspaceStore
+    ? args.workspaceStore.queryRelevant(null, taskPrompt)
+    : [];
+
+  const assembled = injectToolBudgetPreamble({
     ...options.config,
     // Invariant (trace seal ownership): mark this session as a fork so it
     // never seals the SHARED witness trace. The whole tree shares ONE
@@ -284,4 +301,8 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
       : {}),
   });
+
+  return args.workspaceStore
+    ? injectWorkspacePreamble(assembled, workspaceEntries)
+    : assembled;
 }

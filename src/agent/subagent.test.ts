@@ -106,6 +106,7 @@ import {
 import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { ENV_REGISTRY } from '../config/env.js';
 import { IdleWatchdogError } from '../utils/errors.js';
+import { WorkspaceStore } from './workspace/workspace-store.js';
 
 /**
  * Abort-aware sleep for the mock stream helpers. Rejects with the signal reason
@@ -397,14 +398,23 @@ describe('SubagentManager', () => {
 
   it('discloses no budget to an explicitly unbounded child', async () => {
     shared.lastConfig = null;
-    const mgr = new SubagentManager();
+    // Supply an in-memory WorkspaceStore so the cold-start hint is injected.
+    // Without a store the workspace feature is considered disabled (the
+    // AFK_WORKSPACE_DISABLED toggle removes the store from the manager), and
+    // injectWorkspacePreamble is never called — so workspace_publish would not
+    // appear in the system prompt.
+    const mgr = new SubagentManager({ workspaceStore: new WorkspaceStore() });
     await mgr.forkSubagent({
       parent: { sessionId: 'p' },
       config: { model: 'sonnet', systemPrompt: 'untouched', maxToolUseIterations: 0 },
     });
-    expect((shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt']).toBe(
-      'untouched',
-    );
+    const sp = (shared.lastConfig as unknown as Record<string, unknown>)['systemPrompt'] as string;
+    // Budget preamble invariant: system prompt starts with the original value.
+    expect(sp).toMatch(/^untouched/);
+    // Cold-start hint is appended: workspace_publish tool must be mentioned.
+    expect(sp).toContain('workspace_publish');
+    // No budget disclosure was injected (maxToolUseIterations: 0).
+    expect(sp).not.toContain('tool-use rounds');
   });
 
   // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth

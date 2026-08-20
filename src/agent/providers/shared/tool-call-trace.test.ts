@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { describe, it, expect } from 'vitest';
 import {
   buildToolCallStartedPayload,
@@ -58,6 +59,127 @@ describe('buildToolCallStartedPayload', () => {
       input: {},
     });
     expect(payload.inputBytes).toBe(Buffer.byteLength(JSON.stringify({}), 'utf8'));
+  });
+
+  it('computes argsFingerprint as SHA-256 hex of JSON.stringify(input)', () => {
+    const input = { file_path: '/src/agent/session.ts', offset: 1, limit: 50 };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_fp1',
+      name: 'read_file',
+      input,
+    });
+    const expected = createHash('sha256')
+      .update(JSON.stringify(input))
+      .digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+    expect(payload.argsFingerprint).toHaveLength(64); // SHA-256 hex = 64 chars
+  });
+
+  it('produces identical argsFingerprint for identical inputs', () => {
+    const input = { file_path: '/src/foo.ts' };
+    const a = buildToolCallStartedPayload({ toolUseId: 'a', name: 'read_file', input });
+    const b = buildToolCallStartedPayload({ toolUseId: 'b', name: 'read_file', input });
+    expect(a.argsFingerprint).toBe(b.argsFingerprint);
+  });
+
+  it('produces different argsFingerprint for different inputs', () => {
+    const a = buildToolCallStartedPayload({
+      toolUseId: 'a', name: 'read_file', input: { file_path: '/src/a.ts' },
+    });
+    const b = buildToolCallStartedPayload({
+      toolUseId: 'b', name: 'read_file', input: { file_path: '/src/b.ts' },
+    });
+    expect(a.argsFingerprint).not.toBe(b.argsFingerprint);
+  });
+
+  it('argsFingerprint for undefined input matches empty-object hash', () => {
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_und',
+      name: 'noop',
+      input: undefined,
+    });
+    const expected = createHash('sha256').update(JSON.stringify({})).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
+
+  it('redacts browser_act fill value from argsFingerprint (security)', () => {
+    const secret = 'my-super-secret-password-123';
+    const input = { action: 'fill', target: { kind: 'selector', selector: '#pw' }, value: secret };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_sec',
+      name: 'browser_act',
+      input,
+    });
+    // The hash must NOT be derivable from the secret — it should match the
+    // redacted version instead.
+    const redacted = { ...input, value: '[REDACTED]' };
+    const expectedHash = createHash('sha256').update(JSON.stringify(redacted)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expectedHash);
+
+    // And must NOT match a hash of the raw input.
+    const rawHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).not.toBe(rawHash);
+  });
+
+  it('does not redact browser_act non-fill actions', () => {
+    const input = { action: 'click', target: { kind: 'selector', selector: '#btn' } };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_click',
+      name: 'browser_act',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
+
+  it('does not redact non-browser_act tools', () => {
+    const input = { command: 'echo secret', value: 'should-not-be-touched' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_bash',
+      name: 'bash',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
+
+  it('redacts config_set value when target=env (security)', () => {
+    const input = { target: 'env', key: 'SOME_SECRET', value: 'sk-live-abc123', action: 'set' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_cfg1',
+      name: 'config_set',
+      input,
+    });
+    // inputBytes uses RAW input — must include the real value length.
+    expect(payload.inputBytes).toBe(Buffer.byteLength(JSON.stringify(input), 'utf8'));
+    // Fingerprint must NOT match a hash of the raw input (secret is redacted).
+    const rawHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).not.toBe(rawHash);
+    // Stable: two calls with the same input produce the same fingerprint.
+    const p2 = buildToolCallStartedPayload({ toolUseId: 'tu_cfg2', name: 'config_set', input });
+    expect(payload.argsFingerprint).toBe(p2.argsFingerprint);
+  });
+
+  it('does not redact config_set with target=config (non-secret keys)', () => {
+    const input = { target: 'config', key: 'temperature', value: 0.7, action: 'set' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_cfg3',
+      name: 'config_set',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
+  });
+
+  it('does not redact config_set unset action (no value field)', () => {
+    const input = { target: 'env', key: 'SOME_VAR', action: 'unset' };
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'tu_cfg4',
+      name: 'config_set',
+      input,
+    });
+    const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    expect(payload.argsFingerprint).toBe(expected);
   });
 });
 
