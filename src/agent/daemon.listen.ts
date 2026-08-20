@@ -150,7 +150,7 @@ function portHasOwner(port: number): boolean | null {
           'stderr' in err && typeof (err as { stderr: unknown }).stderr === 'string'
             ? (err as { stderr: string }).stderr
             : '';
-        if (stderr.includes('Permission denied')) return null;
+        if (stderr.includes('Permission denied') || stderr.includes('WARNING:')) return null;
         return false; // lsof ran cleanly, no listener → ghost
       }
     }
