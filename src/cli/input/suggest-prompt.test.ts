@@ -11,6 +11,7 @@ import {
   isEchoOfLastInput,
   isValidPromptSuggestion,
   normalizePromptSuggestion,
+  extractOutcome,
 } from './suggest-prompt.js';
 import { createSuggestEngine } from './suggest.js';
 import type { SuggestContext } from './suggest.js';
@@ -35,6 +36,12 @@ describe('buildPromptSuggestionSystem', () => {
     expect(sys).toMatch(/ONE short imperative/);
     expect(sys).toMatch(/empty string/);
   });
+
+  it('references session arc and outcome in the system prompt', () => {
+    const sys = buildPromptSuggestionSystem();
+    expect(sys).toMatch(/session arc/);
+    expect(sys).toMatch(/outcome/);
+  });
 });
 
 describe('buildPromptSuggestionUser', () => {
@@ -44,7 +51,21 @@ describe('buildPromptSuggestionUser', () => {
     expect(user).not.toContain('/home/user');
   });
 
-  it('includes recent commands and the transcript tail', () => {
+  it('includes user arc and outcome when structured access is available', () => {
+    const user = buildPromptSuggestionUser(
+      makeCtx({
+        getUserArc: () => ['fix the parser', 'run the tests'],
+        getLastAssistantResponse: () => 'I fixed it.\n\n**Done**\n- Parser fixed\n- Tests pass',
+        getTranscriptTail: () => 'user: run the tests\nassistant: done',
+      }),
+    );
+    expect(user).toContain('session so far:');
+    expect(user).toContain('fix the parser');
+    expect(user).toContain('last request: run the tests');
+    expect(user).toContain('**Done**');
+  });
+
+  it('falls back to transcript tail when structured access is absent', () => {
     const user = buildPromptSuggestionUser(
       makeCtx({
         getRecentCommands: () => ['/review', '/ship'],
@@ -59,13 +80,20 @@ describe('buildPromptSuggestionUser', () => {
     const user = buildPromptSuggestionUser(makeCtx());
     expect(user).not.toContain('recent commands:');
     expect(user).not.toContain('what just happened:');
+    expect(user).not.toContain('session so far:');
+    expect(user).not.toContain('outcome:');
   });
 
-  it('caps how many recent commands are sent', () => {
+  it('caps how many recent commands are sent in fallback path', () => {
     const many = Array.from({ length: 20 }, (_, i) => `/cmd${i}`);
     const user = buildPromptSuggestionUser(makeCtx({ getRecentCommands: () => many }));
     expect(user).toContain('/cmd4');
     expect(user).not.toContain('/cmd5');
+  });
+
+  it('re-exports extractOutcome from suggest-prompt.context', () => {
+    // Verify the re-export works for backward compat.
+    expect(typeof extractOutcome).toBe('function');
   });
 
   it('redacts secrets before egress', () => {

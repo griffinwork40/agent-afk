@@ -45,6 +45,23 @@ export interface SuggestContext {
    */
   getTranscriptTail(): string;
   /**
+   * Return all user messages from this session, oldest first.
+   * Used by the empty-prompt suggestion to build a workflow-arc summary
+   * that lets the model infer the next step from the full session trajectory,
+   * not just the last turn. Optional so existing test doubles stay valid;
+   * an absent implementation falls back to extracting user lines from
+   * `getTranscriptTail()`.
+   */
+  getUserArc?(): string[];
+  /**
+   * Return the assistant's last response text, or empty string.
+   * Used by the empty-prompt suggestion to extract the terminal-state block
+   * (Done/Blocked/Asking/Interrupted) so the model sees the outcome, not
+   * the verbose narration. Optional so existing test doubles stay valid;
+   * an absent implementation falls back to `getTranscriptTail()`.
+   */
+  getLastAssistantResponse?(): string;
+  /**
    * The most-recently submitted user input (the entry at the top of the
    * history ring, pushed at the start of the previous turn). Used by
    * `getDeterministicGhost` to skip echoing the last submission as a
