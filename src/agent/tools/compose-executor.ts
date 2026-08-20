@@ -32,6 +32,7 @@ import type { SubagentExecutionError } from '../subagent/result.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { resolveMaxNestingDepth } from './nesting.js';
+import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import { getSessionsDir } from '../../paths.js';
 
@@ -85,6 +86,8 @@ export interface ComposeExecutorContext {
    * inherit the same Anthropic-compatible local endpoint as the parent.
    */
   baseUrl?: string;
+  /** OpenAI-compatible base URL for workspace-enabled compose node providers. */
+  openaiBaseUrl?: string;
   /**
    * The raw base system prompt (pre-assembly) forwarded to every compose
    * subagent. Intentionally the *base* prompt rather than the assembled one
@@ -766,11 +769,9 @@ export class ComposeExecutor {
         // receive no node-level apiKey so the openai-compatible provider reads
         // OPENAI_API_KEY from env directly (cross-provider credential anti-leak
         // invariant, defense-in-depth).
-        const resolvedNodeApiKey = nodeIsOpenAI
-          ? undefined
-          : preserveParentApiKey
-            ? this.ctx.apiKey
-            : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : this.ctx.apiKey);
+        const resolvedNodeApiKey = nodeIsOpenAI ? undefined
+          : preserveParentApiKey ? this.ctx.apiKey
+          : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : this.ctx.apiKey);
         return {
           id: n.id,
           agentType: `${n.id} [${i + 1}/${totalNodes}]`,
@@ -810,9 +811,9 @@ export class ComposeExecutor {
           // Budget enforcement: the provider loop caps tool-use rounds and
           // winds down gracefully. Omitted when unset so the fork keeps
           // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (subagent.ts).
-          ...(maxToolRoundsPerNode !== undefined
-            ? { maxToolUseIterations: maxToolRoundsPerNode }
-            : {}),
+          ...(maxToolRoundsPerNode !== undefined ? { maxToolUseIterations: maxToolRoundsPerNode } : {}),
+          // Workspace-enabled provider (see compose-node-provider.ts).
+          ...resolveComposeNodeProvider(nodeModel, this.ctx.workspaceStore, this.ctx.openaiBaseUrl),
         };
       });
 
