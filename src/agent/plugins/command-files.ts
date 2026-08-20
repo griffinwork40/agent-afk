@@ -50,6 +50,24 @@ import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 /** Mirrors the depth cap in `extractPluginSkills` — cycle/runaway guard. */
 const MAX_DEPTH = 10;
 
+/** Breadth cap: bail out of a single plugin walk after this many entries. */
+const MAX_ENTRIES = 500;
+
+/**
+ * Process-lifetime memoization cache for `extractPluginCommands`, keyed by
+ * `pluginPath`. Invalidated by `_resetCommandFilesCache()`, which is called
+ * from `_resetPluginScanCache()` on install, uninstall, and `/reload-plugins`.
+ */
+const commandCache = new Map<string, PluginSkillMetadata[]>();
+
+/**
+ * Clear the in-memory command-files cache. Called from `_resetPluginScanCache`
+ * so that install/uninstall/reload also invalidates this walker's results.
+ */
+export function _resetCommandFilesCache(): void {
+  commandCache.clear();
+}
+
 /**
  * Control bytes — C0, DEL, and C1 — in a path segment.
  *
@@ -88,8 +106,17 @@ export function extractPluginCommands(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
+  // Memoize per pluginPath. knownToolNames is caller-supplied context that
+  // doesn't change between the two call-sites within a single discovery pass,
+  // so keying only on pluginPath is correct. Cache is cleared on install/reload.
+  const cached = commandCache.get(pluginPath);
+  if (cached !== undefined) return cached;
+
   const root = join(pluginPath, 'commands');
-  if (!existsSync(root)) return [];
+  if (!existsSync(root)) {
+    commandCache.set(pluginPath, []);
+    return [];
+  }
 
   // Resolve the containment root's realpath ONCE, before the walk starts, and
   // thread it into every resolveContained call below instead of letting each
@@ -102,10 +129,12 @@ export function extractPluginCommands(
   try {
     realRoot = realpathSync(root);
   } catch {
+    commandCache.set(pluginPath, []);
     return [];
   }
 
   const out: DiscoveredCommand[] = [];
+  let entryCount = 0;
 
   function walk(dir: string, segments: string[], depth: number): void {
     if (depth > MAX_DEPTH) return;
@@ -116,6 +145,7 @@ export function extractPluginCommands(
       return;
     }
     for (const entry of entries) {
+      if (++entryCount > MAX_ENTRIES) return;
       if (entry.startsWith('.')) {
         if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping dotfile: ${sanitizeForDisplay(join(dir, entry))}\n`);
         continue;
@@ -216,5 +246,6 @@ export function extractPluginCommands(
   // Codepoint order, not localeCompare: ICU collation varies by locale and
   // build, and this ordering is what makes collision resolution reproducible.
   out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  commandCache.set(pluginPath, out);
   return out;
 }

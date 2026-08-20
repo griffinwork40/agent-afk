@@ -77,6 +77,24 @@ export interface PluginSkillMetadata {
   audience?: 'public' | 'internal';
 }
 
+/** Breadth cap: bail out of a single plugin walk after this many entries. */
+const MAX_ENTRIES = 500;
+
+/**
+ * Process-lifetime memoization cache for `extractPluginSkills`, keyed by
+ * `pluginPath`. Invalidated by `_resetToolInjectorCache()`, which is called
+ * from `_resetPluginScanCache()` on install, uninstall, and `/reload-plugins`.
+ */
+const skillCache = new Map<string, PluginSkillMetadata[]>();
+
+/**
+ * Clear the in-memory skill-walker cache. Called from `_resetPluginScanCache`
+ * so that install/uninstall/reload also invalidates this walker's results.
+ */
+export function _resetToolInjectorCache(): void {
+  skillCache.clear();
+}
+
 /**
  * Canonical mapping from legacy Claude Code tool aliases (case-insensitive)
  * to AFK tool names.
@@ -210,7 +228,14 @@ export function extractPluginSkills(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
+  // Memoize per pluginPath. knownToolNames is caller-supplied context that
+  // doesn't change between call-sites within a single discovery pass, so
+  // keying only on pluginPath is correct. Cache is cleared on install/reload.
+  const cached = skillCache.get(pluginPath);
+  if (cached !== undefined) return cached;
+
   const skills: PluginSkillMetadata[] = [];
+  let entryCount = 0;
 
   function walkDirectory(dir: string, depth: number = 0): void {
     if (depth > 10) return; // Prevent infinite recursion
@@ -224,6 +249,7 @@ export function extractPluginSkills(
     }
 
     for (const name of entries) {
+      if (++entryCount > MAX_ENTRIES) return;
       if (name.startsWith('.')) continue;
       const fullPath = join(dir, name);
 
@@ -246,6 +272,7 @@ export function extractPluginSkills(
   }
 
   walkDirectory(pluginPath);
+  skillCache.set(pluginPath, skills);
   return skills;
 }
 

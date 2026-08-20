@@ -22,6 +22,8 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'f
 import { join, resolve as resolvePath } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
+import { _resetCommandFilesCache } from './plugins/command-files.js';
+import { _resetToolInjectorCache } from './plugins/tool-injector.js';
 
 const MAX_SCAN_DEPTH = 5;
 const MARKETPLACE_CACHE_SEGMENT = 'cache';
@@ -48,6 +50,8 @@ let scanCache: Map<string, readonly SdkPluginConfig[]> | undefined;
  */
 export function _resetPluginScanCache(): void {
   scanCache = undefined;
+  _resetCommandFilesCache();
+  _resetToolInjectorCache();
 }
 
 /**
