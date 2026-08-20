@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.142.0] - 2026-08-20
+
+### Added
+- plain-output progress parity — tool/subagent lines + TTFB cleanup (#1226) (fa349e16)
+
 ## [5.141.1] - 2026-08-20
 
 ### Fixed
