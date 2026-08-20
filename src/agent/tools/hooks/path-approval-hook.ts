@@ -58,7 +58,11 @@ import path from 'path';
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import { wouldBeRestricted, realpathSafe } from '../handlers/_cwd-utils.js';
-import { isReadDenied } from '../handlers/read-denylist.js';
+import {
+  isReadDenied,
+  READ_DENYLIST_ENTRY_MARKER,
+  PROTECTED_CREDENTIAL_PATH_MARKER,
+} from '../handlers/read-denylist.js';
 import { appendGrant } from '../../permissions-store.js';
 import { buildForkPathDenialReason } from './fork-denial-remedy.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
@@ -231,8 +235,8 @@ async function preToolUseImpl(
       return {
         decision: 'block',
         reason:
-          `Access denied: ${resolvedAbs} is a protected credential/secret path ` +
-          `(read-denylist entry: ${denied.matched}). This path is never readable — ` +
+          `Access denied: ${resolvedAbs} ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+          `(${READ_DENYLIST_ENTRY_MARKER} ${denied.matched}). This path is never readable — ` +
           `it holds credentials, not task data; do not retry.`,
       };
     }
