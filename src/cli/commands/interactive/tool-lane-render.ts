@@ -7,9 +7,6 @@ import { wrapToWidth } from '../../wrap.js';
 import { truncateDisplayWidth } from '../../display.js';
 import { capToMeasure } from '../../render/measure.js';
 import { sanitizeTextParagraph } from './tool-lane-format.js';
-// Re-export so tool-lane.ts can reach formatElapsed via the already-imported
-// render module — avoids an extra import line in the ratchet-capped file.
-export { formatElapsed } from '../../terminal-compositor.scrollback.js';
 
 /**
  * Clamp a composed tree-render line to the terminal's current width.

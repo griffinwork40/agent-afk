@@ -147,6 +147,7 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
     toolName: 'bash',
     toolInput: JSON.stringify({ command: LONG }),
     prefix: `bash(${LONG})`,
+    startedAt: 0,
   });
 
   for (const cols of [120, 200]) {

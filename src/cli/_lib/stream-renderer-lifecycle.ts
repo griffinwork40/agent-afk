@@ -330,6 +330,19 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
       }
     }
   }
+  // Elapsed-counter invalidation: mark the tool-lane dirty whenever any
+  // in-flight entry's displayed second has advanced. Silent commands (those
+  // that emit no further events) never trigger a repaint otherwise, leaving
+  // the elapsed counter frozen. checkElapsedDisplayNeedsUpdate() detects
+  // second-boundary crossings using per-entry last-seen state, so the slot is
+  // only dirtied at most once per second per in-flight entry — not on every
+  // 80 ms tick. Runs unconditionally (does not gate on PAUSE_THRESHOLD_MS)
+  // because the counter should tick from the moment grace expires (2 s), not
+  // only once the stall detector kicks in (30 s).
+  if (ctx.toolLane.checkElapsedDisplayNeedsUpdate()) {
+    changed = true;
+  }
+
   if (changed && ctx.isTTY && ctx.overlayComposer) {
     ctx.overlayComposer.markDirty('tool-lane');
     ctx.overlayComposer.flush();

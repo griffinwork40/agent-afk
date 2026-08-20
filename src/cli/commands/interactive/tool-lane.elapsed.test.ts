@@ -148,10 +148,40 @@ describe('in-flight child row — elapsed counter', () => {
     const lane = new ToolLane();
     const agentId = '__synth_parent_fast';
     lane.addStartWithAgentContext(agentId, 'Agent', '(fast)', undefined);
-    lane.addStartWithAgentContext('child_fast', 'bash', '("ls")'), agentId;
+    lane.addStartWithAgentContext('child_fast', 'bash', '("ls")', agentId);
     // No time advance.
     const overlay = rawOverlay(lane);
     expect(overlay).not.toMatch(/… \d/);
+  });
+});
+
+// ─── E-pre. NESTING+children parent row intentionally omits elapsed counter ───
+
+describe('NESTING parent row with in-flight children — no elapsed counter', () => {
+  /**
+   * Pins the intentional design: when a NESTING dispatch head (Agent/skill/
+   * compose) owns at least one in-flight child, `getOverlay()` renders the
+   * parent row WITHOUT an elapsed counter. The counter appears on the child
+   * rows instead (tested in section D). `formatElapsed` has exactly two call
+   * sites in tool-lane.ts — the childless NESTING branch and the flat-leaf
+   * branch — and the NESTING-with-children branch is intentionally excluded.
+   */
+  it('parent Agent row does NOT show trailing seconds counter when it has an in-flight child', () => {
+    const lane = new ToolLane();
+    const agentId = '__synth_nesting_parent';
+    lane.addStartWithAgentContext(agentId, 'Agent', '(refactor)', undefined);
+    // Add an in-flight child so the parent enters the NESTING+children branch.
+    lane.addStartWithAgentContext('child_nested', 'bash', '("pnpm build")', agentId);
+    // Advance well past the grace period.
+    vi.setSystemTime(BASE_TIME + 12_000);
+    const overlay = rawOverlay(lane);
+    // The parent row (prefix "Agent(refactor)") must NOT carry a seconds counter.
+    // It renders as `◉ Agent(refactor)` with no "… Xs" suffix.
+    // The child row carries "… 12s" instead (pinned by section D).
+    const lines = overlay.split('\n');
+    const parentLine = lines.find((l) => l.includes('Agent(refactor)'));
+    expect(parentLine).toBeDefined();
+    expect(parentLine).not.toMatch(/… \d/);
   });
 });
 
