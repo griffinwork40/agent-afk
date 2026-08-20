@@ -5,22 +5,25 @@ import { extractLatestThinkingClause } from '../../_lib/stream-renderer-subagent
 import { truncateDisplayWidth } from '../../display.js';
 import { formatDuration, formatTokens, formatToolCallStat } from '../../format-utils.js';
 import { palette } from '../../palette.js';
+import { capToMeasure } from '../../render/measure.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
 import { shortenPaths } from './tool-lane-format-args.js';
 import { sanitizeLabel } from './tool-lane-format-sanitize.js';
 
 /**
- * Clamp a fully-styled ANSI string to the current terminal width (or the
+ * Clamp a fully-styled ANSI string to the active text measure (or the
  * provided `columns` override used in tests).  Leaves ANSI reset codes intact
  * so the caller's `palette.dim(…)` wrapper still closes correctly.
  *
- * Terminal width is read through `getTerminalWidth()` — never via raw
- * `process.stdout.columns` — so the 80-column fallback for non-TTY pipes is
- * centralised in `src/cli/terminal-size.ts`.
+ * Width is `capToMeasure(getTerminalWidth())` — the same ceiling the tool-lane
+ * applies via `toolLaneWidth()` — so the banner never extends past the
+ * tool-lane rows above it on wide terminals. When the measure is disabled
+ * (`AFK_TEXT_MEASURE=full`), `capToMeasure` returns the raw terminal width
+ * unchanged.
  */
 function clampToTerminal(line: string, columns?: number): string {
-  const cols = columns ?? getTerminalWidth();
+  const cols = columns ?? capToMeasure(getTerminalWidth());
   if (!Number.isFinite(cols) || cols <= 0) return line;
   return truncateDisplayWidth(line, cols);
 }
@@ -47,7 +50,7 @@ export function deriveProgressActivity(
   columns?: number,
 ): string | undefined {
   if (!thinkingBuffer) return undefined;
-  const cols = columns ?? getTerminalWidth();
+  const cols = columns ?? capToMeasure(getTerminalWidth());
   const clause = extractLatestThinkingClause(thinkingBuffer, Math.max(20, cols - 10));
   return clause || undefined;
 }
