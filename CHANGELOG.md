@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.145.3] - 2026-08-20
+
+### Fixed
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1142) (#1239) (1ef8955d)
+
+### Changed
+- extract helpers from executeBatch to reduce nesting (#1074) (#1241) (65cf4e63)
+
 ## [5.145.2] - 2026-08-20
 
 ### Fixed
