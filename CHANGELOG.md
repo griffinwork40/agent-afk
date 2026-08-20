@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.145.1] - 2026-08-20
+
+### Fixed
+- visual affordances — chevron, diff colors, pulse dot, stop feedback, tool digest (#9,#10,#11,#13,#16) (#1198) (34abf523)
+
 ## [5.145.0] - 2026-08-20
 
 ### Added
