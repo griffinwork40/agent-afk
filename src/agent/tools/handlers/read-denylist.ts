@@ -485,13 +485,19 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
  * @param filePath    - The raw path as supplied by the model.
  * @param handlerName - Tool name for the error message.
  */
+/** Marker phrase embedded in every read-denylist denial message. */
+export const READ_DENYLIST_ENTRY_MARKER = 'read-denylist entry:';
+
+/** Marker phrase embedded in every protected-credential-path denial message. */
+export const PROTECTED_CREDENTIAL_PATH_MARKER = 'is a protected credential/secret path';
+
 export function assertNotReadDenied(filePath: string, handlerName = 'read_file'): void {
   const { denied, matched } = isReadDenied(filePath);
   if (denied) {
     const real = safeRealpath(resolve(filePath));
     throw new Error(
       `${handlerName}: refusing to read protected path: ${real}` +
-        ` (matches read-denylist entry: ${matched})`,
+        ` (matches ${READ_DENYLIST_ENTRY_MARKER} ${matched})`,
     );
   }
 }

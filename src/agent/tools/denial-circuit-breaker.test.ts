@@ -13,14 +13,18 @@ import {
   extractDeniedReadPath,
   buildDenialBreakerMessage,
 } from './denial-circuit-breaker.js';
+import {
+  READ_DENYLIST_ENTRY_MARKER,
+  PROTECTED_CREDENTIAL_PATH_MARKER,
+} from './handlers/read-denylist.js';
 
 // Representative non-containment hook-block reasons the breaker must IGNORE.
 // Byte-for-byte prefixes of the real producers (path-approval-hook.ts's
 // credential floor; an arbitrary user-defined PreToolUse hook).
 const CREDENTIAL_DENYLIST_REASON =
-  'Access denied: /home/u/.ssh/id_rsa is a protected credential/secret path ' +
-  '(read-denylist entry: ~/.ssh). This path is never readable — it holds ' +
-  'credentials, not task data; do not retry.';
+  `Access denied: /home/u/.ssh/id_rsa ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+  `(${READ_DENYLIST_ENTRY_MARKER} ~/.ssh). This path is never readable — it holds ` +
+  `credentials, not task data; do not retry.`;
 const USER_HOOK_REASON = 'Blocked by org policy: reads of /vault/** are not allowed here.';
 
 // ---- Pure helpers ---------------------------------------------------------
