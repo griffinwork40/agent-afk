@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.139.0] - 2026-08-20
+
+### Added
+- restructure empty-prompt context for outcome-aware suggestions (#1218) (273018dd)
+- add AFK_WORKSPACE_DISABLED env toggle for A/B experiment (#1216) (35822fc2)
+
+### Changed
+- supply WorkspaceStore to fix cold-start hint assertion (e0ca17f8)
+- add Responses-wire truncation coverage for query.ts (#1223) (5d241ea5)
+
 ## [5.138.4] - 2026-08-19
 
 ### Fixed
