@@ -319,6 +319,57 @@ export function buildReadOnlyReconProvider(
 }
 
 /**
+ * Build a provider for a compose DAG node that carries the workspace store
+ * (so nodes can call `workspace_publish` / `workspace_query`) but deliberately
+ * omits `subagentExecutor` and `skillExecutor`.
+ *
+ * Safety invariant: compose nodes are task-worker leaves. Granting them
+ * `subagentExecutor` / `skillExecutor` would let them spawn nested DAGs or
+ * invoke skills, leading to unbounded recursive fan-out. This function is the
+ * ONLY approved path for seeding a workspace-aware provider onto compose nodes;
+ * `childProviderFactory` (which bundles both executors) must never be used for
+ * this purpose.
+ *
+ * Tool surface: `CHILD_ALLOWED_TOOLS` (same as normal children) — `compose` is
+ * already absent from that set, so no additional stripping is needed.
+ *
+ * @param model      Effective model for this node. Drives provider routing so
+ *                   OpenAI-routed nodes get `OpenAICompatibleProvider` and
+ *                   Anthropic-routed nodes get `AnthropicDirectProvider`.
+ * @param workspaceStore  Parent session's workspace store, shared with every node.
+ * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
+ *                        `baseURL` when the node routes to `openai-compatible`.
+ * @param readOnlyBash    When true, the node's dispatcher blocks mutating bash
+ *                        commands. Forwarded for read-only skill leaf nodes.
+ */
+export function buildComposeNodeProvider(
+  model: AgentModelInput | undefined,
+  workspaceStore: WorkspaceStore,
+  openaiBaseUrl?: string,
+  readOnlyBash?: boolean,
+): ModelProvider {
+  // Materialize the allowlist per call so runtime array mutations don't bleed
+  // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
+  const permissions = { allowedTools: [...CHILD_ALLOWED_TOOLS] };
+  const route = providerForModel(typeof model === 'string' ? model : undefined);
+  if (route === 'openai-compatible') {
+    return new OpenAICompatibleProvider({
+      permissions,
+      workspaceStore,
+      readOnlyMemory: true,
+      ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+      ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+    });
+  }
+  return new AnthropicDirectProvider({
+    permissions,
+    workspaceStore,
+    readOnlyMemory: true,
+    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+  });
+}
+
+/**
  * Build a depth-aware factory that produces a {@link SkillExecutor} for a
  * grandchild session at the given `depth`. Closes over `childProviderFactory`
  * so the grandchild itself can fan out further. The factory references itself

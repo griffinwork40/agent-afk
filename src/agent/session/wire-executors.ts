@@ -330,6 +330,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     resolveApiKeyForModel,
     getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     ...baseUrlOpt,
+    ...openaiBaseUrlOpt,
     ...cwdOpt,
     systemPrompt: systemPrompt ?? '',
     surface,
