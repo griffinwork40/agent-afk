@@ -218,10 +218,10 @@ describe('styleForCategory', () => {
 });
 
 describe('dispatchTagForCategory', () => {
-  it('returns the dispatch-class tag for subagent/skill/dag', () => {
-    expect(dispatchTagForCategory('subagent')).toBe('subagent');
+  it('returns the plain-language dispatch tag for subagent/skill/dag', () => {
+    expect(dispatchTagForCategory('subagent')).toBe('helper');
     expect(dispatchTagForCategory('skill')).toBe('skill');
-    expect(dispatchTagForCategory('dag')).toBe('dag');
+    expect(dispatchTagForCategory('dag')).toBe('workflow');
   });
 
   it('returns undefined for direct-action categories', () => {

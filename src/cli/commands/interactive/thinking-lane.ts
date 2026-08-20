@@ -18,7 +18,7 @@ export function formatThoughtSummary(durationMs: number, charCount: number): str
     : `${(duration / 1000).toFixed(1)}s`;
   // Rough token estimate: 1 token ~= 4 chars
   const tokenCount = Math.ceil(charCount / 4);
-  return `  ${palette.thinking('◆ thought for ' + durationStr + ' · ' + tokenCount + ' tok')}`;
+  return `  ${palette.thinking('◆ thought for ' + durationStr + ' · ' + tokenCount + ' tokens')}`;
 }
 
 /**
@@ -167,6 +167,6 @@ export class ThinkingLane {
       ? `${duration}ms`
       : `${(duration / 1000).toFixed(1)}s`;
     const tokenCount = Math.ceil(this.buffer.length / 4);
-    return `thought ${durationStr} · ${tokenCount} tok`;
+    return `thought ${durationStr} · ${tokenCount} tokens`;
   }
 }

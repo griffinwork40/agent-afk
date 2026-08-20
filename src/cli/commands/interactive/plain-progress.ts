@@ -120,7 +120,7 @@ export function observePlainSubagentEvent(
   if (!state.subagentStartTimes.has(subagentId)) {
     state.subagentStartTimes.set(subagentId, Date.now());
     state.subagentLabels.set(subagentId, label);
-    writer.fn(palette.dim(`  ◦ agent ${label} started`));
+    writer.fn(palette.dim(`  ◦ helper ${label} started`));
   }
   const isTerminal = event.type === 'done' || event.type === 'error';
   if (isTerminal) {
@@ -130,6 +130,6 @@ export function observePlainSubagentEvent(
     state.subagentLabels.delete(subagentId);
     const durationStr = durationMs !== undefined ? ` · ${formatDuration(durationMs)}` : '';
     const statusStr = event.type === 'error' ? palette.error('failed') : palette.success('done');
-    writer.fn(palette.dim(`  ◦ agent ${label}${durationStr} · `) + statusStr);
+    writer.fn(palette.dim(`  ◦ helper ${label}${durationStr} · `) + statusStr);
   }
 }

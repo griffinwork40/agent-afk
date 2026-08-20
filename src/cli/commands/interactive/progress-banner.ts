@@ -135,7 +135,7 @@ export function formatProgressBanner(
     stats.push(`via ${color(`${glyph} ${sanitizeLabel(lastToolName)}`)}`);
   }
   if (toolUses) stats.push(formatToolCallStat(toolUses));
-  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
+  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tokens`);
   if (durationMs) stats.push(formatDuration(durationMs));
   // Parallel fan-out indicator: when more than one child is concurrently active
   // show "N running" so the operator knows a wide parallel batch is in flight
@@ -148,7 +148,7 @@ export function formatProgressBanner(
   }
   // Drop the interrupt hint once a stop is already in flight — the ESC has been
   // accepted, so "esc to interrupt" would misrepresent the current state.
-  if (!stopping) stats.push('esc to interrupt · ctrl+b background');
+  if (!stopping) stats.push('esc to interrupt · ctrl+b to run in background');
 
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';
 
@@ -185,7 +185,7 @@ export function formatProgressSummary(event: ProgressEvent, columns?: number): s
   const { description, totalTokens, toolUses, durationMs } = event;
   const stats: string[] = [];
   if (toolUses) stats.push(formatToolCallStat(toolUses));
-  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
+  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tokens`);
   if (durationMs) stats.push(formatDuration(durationMs));
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';
   return clampToTerminal(palette.dim(`  ◦ ${sanitizeLabel(description)}${statsStr}`), columns);

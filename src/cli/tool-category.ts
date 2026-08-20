@@ -117,6 +117,31 @@ const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   other: '●',
 };
 
+/**
+ * Plain-language in-progress phrase per category, used for in-flight rows
+ * (`inProgressVerb` in tool-lane-format.ts delegates here).
+ *
+ * Invariant: every phrase is an everyday-English present-progressive verb a
+ * non-technical observer can parse — never an internal term (`forking`,
+ * `dispatching a DAG`). The scrollback transcript doubles as the record shown
+ * to non-engineers, so this map is the single owner of the human vocabulary;
+ * add new categories here rather than hardcoding verbs at render sites.
+ */
+export const CATEGORY_HUMAN_VERB: Record<ToolCategory, string> = {
+  read: 'Reading…',
+  write: 'Writing…',
+  shell: 'Running…',
+  subagent: 'Delegating…',
+  skill: 'Running skill…',
+  dag: 'Coordinating…',
+  mcp: 'Calling plugin…',
+  web: 'Fetching…',
+  browser: 'Browsing…',
+  planning: 'Planning…',
+  schedule: 'Scheduling…',
+  other: 'Working…',
+};
+
 export interface CategoryStyle {
   color: ChalkInstance;
   glyph: string;

@@ -182,7 +182,7 @@ describe('plain-mode subagent lifecycle', () => {
     );
 
     expect(lines).toHaveLength(1);
-    expect(stripAnsi(lines[0]!)).toMatch(/agent research-agent started/);
+    expect(stripAnsi(lines[0]!)).toMatch(/helper research-agent started/);
   });
 
   it('emits a finish line on the done event', () => {
