@@ -289,20 +289,20 @@ export function categorizeTool(name: string): ToolCategory {
 /**
  * Categories that represent "this call dispatches more work" rather than a
  * direct tool invocation. The tool-lane renderer appends a dim bracketed
- * tag (`[helper]`, `[skill]`, `[workflow]`) to entries in these categories so
+ * tag (`[worker]`, `[skill]`, `[workflow]`) to entries in these categories so
  * the dispatch class is legible as text alongside the glyph + color cues —
  * survives monochrome terminals and makes the taxonomy self-documenting in
  * the stream.
  *
  * Invariant: tag values are plain-language words, not internal jargon. The
  * scrollback transcript is routinely read by non-technical observers, so
- * `subagent` renders as `helper` and `dag` as `workflow` — an everyday reader
+ * `subagent` renders as `worker` and `dag` as `workflow` — an everyday reader
  * should never need to know what a DAG is to follow the activity feed. The
  * category KEYS stay canonical (`subagent`/`skill`/`dag`); only the
  * user-facing tag text is humanized here, at the single owning map.
  */
 const DISPATCH_CATEGORIES: Partial<Record<ToolCategory, string>> = {
-  subagent: 'helper',
+  subagent: 'worker',
   skill: 'skill',
   dag: 'workflow',
 };

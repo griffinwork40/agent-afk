@@ -1242,7 +1242,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // as a visible inline-snapshot diff instead of slipping past a
     // single-glyph toContain. Populated by `pnpm test -u` on first run.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(overflow-tester) [helper] — 4 tool calls
+      "◉ → Agent(overflow-tester) [worker] — 4 tool calls
       │ ├─ … +1 (1 Read)
       │ ├─ $ Bash("file1.ts") — ✓ result1
       │ ├─ ● Grep("file2.ts") — ✓ result2
@@ -1283,7 +1283,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
 
     // Full-topology snapshot — locks the 1-child-plus-summary shape.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(connector-tester) [helper]
+      "◉ → Agent(connector-tester) [worker]
       │ ├─ ● Read("data.ts") — ✓ ok
       │ ╰─ Done (1 tool · 0.8s)"
     `);

@@ -58,9 +58,9 @@ describe('formatToolLine', () => {
   });
 
   it.each([
-    { content: 'Agent(research)', tag: '[helper]' },
-    { content: 'agent(research)', tag: '[helper]' },
-    { content: 'Task(verify)', tag: '[helper]' },
+    { content: 'Agent(research)', tag: '[worker]' },
+    { content: 'agent(research)', tag: '[worker]' },
+    { content: 'Task(verify)', tag: '[worker]' },
     { content: 'Skill(/spec)', tag: '[skill]' },
     { content: 'skill(/spec)', tag: '[skill]' },
     { content: 'compose(3 nodes)', tag: '[workflow]' },

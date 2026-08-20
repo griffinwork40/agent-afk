@@ -11,14 +11,14 @@ exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 3 — tool entry with error result 1`] = `"  $ Bash("npm test") — ✗ Error: 3 tests failed"`;
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 4 — subagent Agent entry with children, completed 1`] = `
-"◉ → Agent(snap-researcher) [helper]
+"◉ → Agent(snap-researcher) [worker]
 │ ├─ ● Read("src/main.ts") — ✓ 88 lines
 │ ├─ ● Grep("TODO") — ✓ 7 matches
 │ ╰─ Done (2 tools · 3.1s)"
 `;
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 5 — subagent Agent entry with overflow (4 children, MAX=3) 1`] = `
-"◉ → Agent(snap-overflower) [helper] — 4 tool calls
+"◉ → Agent(snap-overflower) [worker] — 4 tool calls
 │ ├─ … +1 (1 Read)
 │ ├─ $ Bash("snap1.ts") — ✓ snap-result-1
 │ ├─ ● Grep("snap2.ts") — ✓ snap-result-2

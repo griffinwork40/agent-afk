@@ -219,7 +219,7 @@ describe('styleForCategory', () => {
 
 describe('dispatchTagForCategory', () => {
   it('returns the plain-language dispatch tag for subagent/skill/dag', () => {
-    expect(dispatchTagForCategory('subagent')).toBe('helper');
+    expect(dispatchTagForCategory('subagent')).toBe('worker');
     expect(dispatchTagForCategory('skill')).toBe('skill');
     expect(dispatchTagForCategory('dag')).toBe('workflow');
   });
