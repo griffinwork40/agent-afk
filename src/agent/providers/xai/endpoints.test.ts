@@ -38,6 +38,7 @@ describe('resolveXaiEndpoint', () => {
     expect(r.defaultHeaders['x-grok-client-version']).toBe('9.9.9');
     expect(r.defaultHeaders['x-grok-client-identifier']).toBe('grok-shell');
     expect(r.defaultHeaders['User-Agent']).toContain('9.9.9');
+    expect(r.defaultHeaders['x-grok-client-version']).not.toBe('agent-afk');
   });
 
   it('honors AFK_XAI_OAUTH_BASE_URL and skips proxy headers on api.x.ai', () => {

@@ -712,6 +712,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_XAI_GROK_CLIENT_VERSION',
+    description: 'Override the semver sent as x-grok-client-version to the xAI OAuth CLI chat proxy. Use only if the proxy raises its required Grok CLI version before agent-afk is updated; invalid values fall back to the official Grok Build version file or built-in compatible default.',
+    type: 'string',
+    required: false,
+    example: '1.0.6',
+    category: 'model',
+  },
+  {
     name: 'AFK_LOCAL_API_KEY',
     description: 'Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured.',
     type: 'string',
@@ -1764,6 +1772,7 @@ export const env = {
   get CODEX_API_KEY(): string | undefined { return process.env['CODEX_API_KEY']; },
   get XAI_API_KEY(): string | undefined { return process.env['XAI_API_KEY']; },
   get AFK_XAI_BASE_URL(): string | undefined { return process.env['AFK_XAI_BASE_URL']; },
+  get AFK_XAI_GROK_CLIENT_VERSION(): string | undefined { return process.env['AFK_XAI_GROK_CLIENT_VERSION']; },
   get AFK_XAI_OAUTH_BASE_URL(): string | undefined { return process.env['AFK_XAI_OAUTH_BASE_URL']; },
   get AFK_LOCAL_API_KEY(): string | undefined { return process.env['AFK_LOCAL_API_KEY']; },
   get AFK_LOCAL_BASE_URL(): string | undefined { return process.env['AFK_LOCAL_BASE_URL']; },

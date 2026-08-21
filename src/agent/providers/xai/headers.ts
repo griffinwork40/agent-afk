@@ -6,19 +6,80 @@
  * Exact values are encapsulated here so they stay one-file tunable if the
  * proxy tightens checks.
  *
+ * Invariant: `x-grok-client-version` MUST be a semver the proxy can parse.
+ * The proxy was observed to reject versions below 0.1.202; sending the product
+ * name `agent-afk` yields HTTP 426 ("Your Grok CLI version (agent-afk) is
+ * outdated").
+ *
  * Safety: never put access tokens into these headers.
  *
  * @module agent/providers/xai/headers
  */
 
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { env } from '../../../config/env.js';
+
 /** Hostname of the subscription CLI chat proxy. */
 export const CLI_CHAT_PROXY_HOST = 'cli-chat-proxy.grok.com';
 
+/** Last-resort version when no operator or official-client version is usable. */
+export const DEFAULT_GROK_CLI_COMPAT_VERSION = '1.0.5';
+
+const GROK_CLI_VERSION_ENV = 'AFK_XAI_GROK_CLIENT_VERSION';
+
+// SemVer 2.0.0, including optional prerelease and build metadata.
+const SEMVER_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
 export interface GrokCliHeaderOptions {
-  /** agent-afk / Grok-CLI-compat version string. */
+  /** Internal compatibility seam; production resolution uses the sources below. */
   clientVersion?: string;
   /** Client identifier the proxy expects. */
   clientIdentifier?: string;
+}
+
+/** Injectable sources keep header resolution deterministic in unit tests. */
+export interface GrokCliHeaderDeps {
+  readEnv?: (key: typeof GROK_CLI_VERSION_ENV) => string | undefined;
+  readFile?: (filePath: string) => string;
+  homeDir?: () => string;
+}
+
+function validSemver(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && SEMVER_RE.test(trimmed) ? trimmed : undefined;
+}
+
+/** Read `~/.grok/version.json` written by the official Grok Build CLI. */
+export function readOfficialGrokCliVersion(deps: GrokCliHeaderDeps = {}): string | undefined {
+  const readFile = deps.readFile ?? ((filePath: string) => readFileSync(filePath, 'utf-8'));
+  const homeDir = deps.homeDir ?? homedir;
+  try {
+    const raw = readFile(join(homeDir(), '.grok', 'version.json'));
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const version = (parsed as Record<string, unknown>)['version'];
+    if (typeof version !== 'string') return undefined;
+    return validSemver(version);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveGrokCliVersion(
+  clientVersion: string | undefined,
+  deps: GrokCliHeaderDeps,
+): string {
+  const readEnv = deps.readEnv ?? ((key: typeof GROK_CLI_VERSION_ENV) => env[key]);
+  // This is the operator-facing precedence contract. clientVersion is an
+  // internal compatibility seam only; production callers do not supply it.
+  return (
+    validSemver(readEnv(GROK_CLI_VERSION_ENV))
+    ?? validSemver(clientVersion)
+    ?? readOfficialGrokCliVersion(deps)
+    ?? DEFAULT_GROK_CLI_COMPAT_VERSION
+  );
 }
 
 /**
@@ -43,13 +104,15 @@ export function isCliChatProxyBaseUrl(baseURL: string): boolean {
  */
 export function resolveGrokCliIdentityHeaders(
   opts: GrokCliHeaderOptions = {},
+  deps: GrokCliHeaderDeps = {},
 ): Record<string, string> {
-  const version = opts.clientVersion?.trim() || 'agent-afk';
+  const version = resolveGrokCliVersion(opts.clientVersion, deps);
   const identifier = opts.clientIdentifier?.trim() || 'grok-shell';
   return {
     'X-XAI-Token-Auth': 'xai-grok-cli',
     'x-grok-client-version': version,
     'x-grok-client-identifier': identifier,
-    'User-Agent': `agent-afk/${version} (grok-cli-compat)`,
+    // User-Agent is diagnostic; the proxy gates on x-grok-client-version.
+    'User-Agent': `agent-afk (grok-cli-compat/${version})`,
   };
 }
