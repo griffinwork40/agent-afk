@@ -261,7 +261,13 @@ export function subscribeToResize(
   return ResizeBus.subscribe(() => {
     if (disposed || !overlayComposer) return;
     overlayComposer.invalidate();
-    overlayComposer.flush();
+    // Deferred flush — same double-setOverlay race as setInterrupting /
+    // setSoftStopping: an eager flush() here can collide with
+    // checkPauseAnnotations' batched flush in the same event-loop turn.
+    // Resize repaints are latency-insensitive; deferring is harmless.
+    setTimeout(() => {
+      if (!disposed) overlayComposer.flush();
+    }, 0);
   });
 }
 

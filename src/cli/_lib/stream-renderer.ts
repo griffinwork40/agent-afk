@@ -376,7 +376,15 @@ export class StreamRenderer {
     this.interrupting = active;
     if (this.overlayComposer) {
       this.overlayComposer.markDirty('interrupt');
-      this.overlayComposer.flush();
+      // Deferred flush: an eager flush() here fires a setOverlay() call that
+      // can collide with checkPauseAnnotations' batched flush in the same
+      // event-loop turn, producing the same double-setOverlay compositor desync
+      // fixed in applyFirstContent / checkTtfbAnnotation. Deferring to the
+      // next microtask preserves sub-millisecond visual feedback while
+      // eliminating the two-flush race window.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
     }
   }
 
@@ -389,7 +397,10 @@ export class StreamRenderer {
     this.softStopping = active;
     if (this.overlayComposer) {
       this.overlayComposer.markDirty('progress-banner');
-      this.overlayComposer.flush();
+      // Deferred flush — same double-setOverlay race as setInterrupting above.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
     }
   }
 
