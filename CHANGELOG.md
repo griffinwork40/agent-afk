@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.146.0] - 2026-08-21
+
+### Added
+- mechanical Windows compatibility pass (#703) (#1215) (0e131e2d)
+
 ## [5.145.5] - 2026-08-21
 
 ### Fixed
