@@ -14,7 +14,7 @@
 [![Awesome Harness Engineering](https://img.shields.io/badge/awesome-harness--engineering-fc60a8?logo=awesomelists&logoColor=white)](https://github.com/walkinglabs/awesome-harness-engineering#coding-agent-harnesses)
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/a2d8678b-85c6-46b2-b0ff-7b460cbeb5b1" width="820" autoplay loop muted playsinline>
+  <video src="https://github.com/user-attachments/assets/4a84f6e4-2494-4065-a01f-54a1c557f7f3" width="820" autoplay loop muted playsinline>
     Your browser does not support the video tag.
   </video>
 </p>
