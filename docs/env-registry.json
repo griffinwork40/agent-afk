@@ -1150,6 +1150,13 @@
       "secret": true
     },
     {
+      "name": "APPDATA",
+      "description": "Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "ASCIINEMA_REC",
       "description": "Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode.",
       "type": "boolean",
@@ -1239,6 +1246,13 @@
     {
       "name": "HOME",
       "description": "Standard Unix home directory. Used as the fallback when AFK_HOME is unset.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
+      "name": "LOCALAPPDATA",
+      "description": "Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.).",
       "type": "string",
       "required": false,
       "category": "process"
@@ -1334,6 +1348,13 @@
       "type": "string",
       "required": false,
       "example": "/tmp/tmux-501/default,12345,0",
+      "category": "process"
+    },
+    {
+      "name": "USERPROFILE",
+      "description": "Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.",
+      "type": "string",
+      "required": false,
       "category": "process"
     },
     {

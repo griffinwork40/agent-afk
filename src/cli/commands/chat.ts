@@ -786,7 +786,7 @@ export function registerChatCommand(program: Command): void {
           try {
             const savedPath = saveSession(stats, persistId);
             // Derive the resume id from the saved path's basename.
-            const savedId = savedPath.replace(/\.json$/, '').split('/').pop() ?? persistId ?? stats.sessionId ?? 'unknown';
+            const savedId = path.basename(savedPath, '.json') || persistId || stats.sessionId || 'unknown';
             process.stderr.write(`Continue with: afk chat <msg> --resume ${savedId}\n`);
           } catch { /* best-effort — don't mask the main error */ }
         }
@@ -809,7 +809,8 @@ export function registerChatCommand(program: Command): void {
         if (mcpManager) {
           await mcpManager.disconnectAll();
         }
-        sharedMemoryStore?.close(); workspaceStore?.close();
+        try { sharedMemoryStore?.close(); } catch {}
+        try { workspaceStore?.close(); } catch {}
         // Worktree cleanup: session close must finish before
         // `git worktree remove --force` so any active SQLite WAL / trace
         // writer file handles on the worktree are flushed first.

@@ -116,3 +116,53 @@ describe('isCaseInsensitiveFs', () => {
     expect(pathIsWithin('/home/u/.SSH/id_rsa', '/home/u/.ssh')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Windows backslash separator — PR #1215 review fixes
+// ---------------------------------------------------------------------------
+
+describe('pathIsWithin — Windows backslash separator (PR #1215)', () => {
+  it('matches a descendant joined with a backslash separator (case-sensitive volume)', () => {
+    _resetFsCaseCacheForTests(false);
+    expect(
+      pathIsWithin('C:\\Users\\bob\\.ssh\\id_rsa', 'C:\\Users\\bob\\.ssh'),
+    ).toBe(true);
+  });
+
+  it('matches an exact path with backslash style on either volume kind', () => {
+    for (const insensitive of [true, false]) {
+      _resetFsCaseCacheForTests(insensitive);
+      expect(
+        pathIsWithin('C:\\Users\\bob\\.ssh', 'C:\\Users\\bob\\.ssh'),
+      ).toBe(true);
+    }
+  });
+
+  it('rejects a sibling that shares a prefix when separated by backslash', () => {
+    _resetFsCaseCacheForTests(false);
+    expect(
+      pathIsWithin('C:\\Users\\bob\\.sshx\\key', 'C:\\Users\\bob\\.ssh'),
+    ).toBe(false);
+  });
+
+  it('matches case-variant backslash path on a case-insensitive volume', () => {
+    _resetFsCaseCacheForTests(true);
+    expect(
+      pathIsWithin('C:\\Users\\BOB\\.SSH\\id_rsa', 'C:\\Users\\bob\\.ssh'),
+    ).toBe(true);
+  });
+
+  it('does NOT conflate case-variant backslash paths on a case-sensitive volume', () => {
+    _resetFsCaseCacheForTests(false);
+    expect(
+      pathIsWithin('C:\\Users\\BOB\\.SSH\\id_rsa', 'C:\\Users\\bob\\.ssh'),
+    ).toBe(false);
+  });
+
+  it('still rejects a sibling after case-folding on a case-insensitive volume', () => {
+    _resetFsCaseCacheForTests(true);
+    expect(
+      pathIsWithin('C:\\Users\\bob\\.SSHX\\key', 'C:\\Users\\bob\\.ssh'),
+    ).toBe(false);
+  });
+});

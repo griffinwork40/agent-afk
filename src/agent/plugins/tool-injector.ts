@@ -418,7 +418,7 @@ export function resolveKnownToolNames(
  * @returns Plugin name derived from the path
  */
 export function extractPluginName(pluginPath: string): string {
-  const parts = pluginPath.split('/').filter(Boolean);
+  const parts = pluginPath.split(/[/\\]/).filter(Boolean);
   if (parts.length === 0) return 'unknown';
 
   // Marketplace cache layout: ~/.afk/plugins/cache/<marketplace>/<plugin>/<version>
