@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.145.4] - 2026-08-21
+
+### Fixed
+- eliminate phantom blank rows from double-setOverlay race (#1243) (f35793c6)
+
+### Changed
+- replace demo placeholder with live video (80464c95)
+
 ## [5.145.3] - 2026-08-20
 
 ### Fixed

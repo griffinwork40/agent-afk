@@ -659,9 +659,10 @@ export async function runTurn(
 
         if (isFirstContentEvent) {
           turnTtfb.plainHooks?.onFirstContent(process.stdout);
-          // Deliberately follows process():
-          // notifyFirstContent flushes the overlay, so the markdown renderer
-          // must see the content event before the waiting slot is removed.
+          // Deliberately follows process(): notifyFirstContent marks the
+          // progress-banner slot dirty so the TTFB waiting line disappears
+          // on the next overlay repaint (triggered by the content event's
+          // own markdown-pending / tool-lane flush — no eager flush here).
           renderer.notifyFirstContent();
         }
 
