@@ -13,10 +13,10 @@
 [![GitHub stars](https://img.shields.io/github/stars/griffinwork40/agent-afk?style=social)](https://github.com/griffinwork40/agent-afk/stargazers)
 [![Awesome Harness Engineering](https://img.shields.io/badge/awesome-harness--engineering-fc60a8?logo=awesomelists&logoColor=white)](https://github.com/walkinglabs/awesome-harness-engineering#coding-agent-harnesses)
 
-<!-- DEMO PLACEHOLDER ▸ the image below is a static stand-in. Replace it with a 20–30s screen recording of one autonomous AFK run (e.g. kick off `afk daemon` / `afk mint "..."`, walk away, get the Telegram ping, come back done). Drag-and-drop the recording into a GitHub issue/PR to host it on GitHub's CDN, then swap the URL below. This is the single biggest star-conversion lever — keep it above the fold. -->
-
 <p align="center">
-  <img src="assets/demo-placeholder.png" alt="Agent AFK interactive mode" width="820">
+  <video src="https://github.com/user-attachments/assets/a2d8678b-85c6-46b2-b0ff-7b460cbeb5b1" width="820" autoplay loop muted playsinline>
+    Your browser does not support the video tag.
+  </video>
 </p>
 
 > ⭐ **Like the idea of an agent loop you fully own? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the fastest way to help other people find it.
