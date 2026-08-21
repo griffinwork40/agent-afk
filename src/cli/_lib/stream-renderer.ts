@@ -396,7 +396,20 @@ export class StreamRenderer {
   /** Signal first streaming content — clears the TTFB waiting indicator. Idempotent. */
   notifyFirstContent(): void {
     if (this.disposed) return;
-    applyFirstContent(this.ttfbDone, () => { this.ttfbDone = true; }, this.overlayComposer);
+    const dirtied = applyFirstContent(
+      this.ttfbDone,
+      () => { this.ttfbDone = true; },
+      this.overlayComposer,
+    );
+    if (dirtied) {
+      // A block-boundary chunk can synchronously drain markdown before this
+      // notification marks the banner dirty. Guarantee a later repaint, but
+      // put it in a new event-loop turn so it cannot recreate the two-flush
+      // race that originally corrupted committed-band geometry.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
+    }
   }
 
   /**

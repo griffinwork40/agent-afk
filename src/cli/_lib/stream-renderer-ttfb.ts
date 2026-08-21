@@ -104,11 +104,10 @@ export function checkTtfbAnnotation(ctx: TtfbTickCtx, now: number): boolean {
  * `setOverlay()` calls with different overlay heights desynced the compositor's
  * committed-band geometry and produced phantom blank rows in scrollback — the
  * "random large gap" bug. Fixed by removing the eager flush: the dirty mark is
- * picked up by the very next overlay repaint, which the content event itself
- * triggers almost immediately through the markdown-pending slot (the content
- * chunk that fires `notifyFirstContent` also feeds `renderer.process()`, which
- * appends to the streaming markdown renderer and causes a repaint). The 80ms
- * tick is the outer bound for visibility — imperceptible.
+ * picked up by the content event's next overlay repaint. The caller also
+ * schedules a zero-delay, post-notification flush: this is required when a
+ * block-boundary chunk has already drained the markdown buffer (and therefore
+ * its synchronous repaint) before first-content notification runs.
  */
 export function applyFirstContent(
   isDone: boolean,
@@ -119,11 +118,10 @@ export function applyFirstContent(
   setDone();
   if (overlayComposer) {
     overlayComposer.markDirty('progress-banner');
-    // No flush() here — the content event that triggered notifyFirstContent
-    // also feeds renderer.process(), which repaints the overlay through the
-    // markdown-pending or tool-lane slot. Flushing eagerly here would fire a
-    // second setOverlay() with a different height in the same event-loop turn,
-    // desyncing the compositor's committed-band geometry (phantom blank rows).
+    // No synchronous flush() here. notifyFirstContent queues one in a new
+    // event-loop turn, after any repaint triggered by the content chunk. An
+    // eager flush could issue a second setOverlay() with a different height in
+    // this turn and desync committed-band geometry (phantom blank rows).
     return true;
   }
   return false;

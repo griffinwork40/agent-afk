@@ -191,6 +191,9 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
         ctx.compositorRef.current.commitAbove('');
       }
       if (ctx.overlayComposerRef.current) {
+        // Repaint the overlay even when there were no completed roots: an
+        // in-flight ancestor remains live and its overlay must survive dispose.
+        // Unlike the guarded block above, this does not emit scrollback rows.
         ctx.overlayComposerRef.current.markDirty('tool-lane');
         ctx.overlayComposerRef.current.flush();
       } else {
