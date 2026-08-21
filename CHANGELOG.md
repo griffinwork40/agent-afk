@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.145.5] - 2026-08-21
+
+### Fixed
+- send valid Grok CLI version to proxy (#1242) (0c821d26)
+
 ## [5.145.4] - 2026-08-21
 
 ### Fixed
