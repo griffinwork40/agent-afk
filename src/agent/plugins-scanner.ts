@@ -19,7 +19,7 @@
 import type { SdkPluginConfig } from './types/sdk-types.js';
 import type { SourceEnabledMap } from '../config/import-sources.js';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
-import { join, resolve as resolvePath, sep } from 'path';
+import { join, resolve as resolvePath } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
 
@@ -260,7 +260,7 @@ export function indexKeyForPath(
   if (!leaf.startsWith(root)) return null;
   const rel = leaf.slice(root.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
-  const segments = rel.split(sep).filter((s) => s.length > 0);
+  const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);
   if (segments.length === 0) return null;
 
   if (segments[0] === MARKETPLACE_CACHE_SEGMENT && segments.length >= 3) {

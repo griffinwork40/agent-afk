@@ -786,7 +786,7 @@ export function registerChatCommand(program: Command): void {
           try {
             const savedPath = saveSession(stats, persistId);
             // Derive the resume id from the saved path's basename.
-            const savedId = path.basename(savedPath, '.json') ?? persistId ?? stats.sessionId ?? 'unknown';
+            const savedId = path.basename(savedPath, '.json') || persistId || stats.sessionId || 'unknown';
             process.stderr.write(`Continue with: afk chat <msg> --resume ${savedId}\n`);
           } catch { /* best-effort — don't mask the main error */ }
         }

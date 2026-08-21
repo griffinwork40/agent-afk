@@ -145,26 +145,28 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   `${homedir()}/Library/Application Support/Microsoft Edge`,
   `${homedir()}/Library/Application Support/Arc`,
   `${homedir()}/Library/Application Support/Firefox`,
-  // S4-win32: Windows credential/config trees. On POSIX, APPDATA/USERPROFILE
-  // resolve to undefined so the spreads are empty — no interference.
+  // S4-win32: Windows credential/config trees. Gated on both process.platform
+  // and the env var: on POSIX, USERPROFILE/APPDATA/LOCALAPPDATA may be set in
+  // CI/Docker but the backslash paths would resolve incorrectly — the platform
+  // guard prevents those entries from being added on non-Windows systems.
   // Firefox profiles live under %APPDATA%\Mozilla\Firefox, NOT %LOCALAPPDATA%.
-  ...(env.USERPROFILE
+  ...(process.platform === 'win32' && env.USERPROFILE
     ? [
         `${env.USERPROFILE}\\.ssh`,
         `${env.USERPROFILE}\\.aws`,
         `${env.USERPROFILE}\\.gnupg`,
       ]
     : []),
-  ...(env.APPDATA
+  ...(process.platform === 'win32' && env.APPDATA
     ? [
         `${env.APPDATA}\\gcloud`,
         `${env.APPDATA}\\Docker`,
         `${env.APPDATA}\\Mozilla\\Firefox`,
       ]
     : []),
-  // S4-win32: Windows browser credential trees. On POSIX, LOCALAPPDATA
-  // resolves to undefined so the spread is empty — no interference.
-  ...(env.LOCALAPPDATA
+  // S4-win32: Windows browser credential trees. Gated on both process.platform
+  // and the env var for the same reason as above.
+  ...(process.platform === 'win32' && env.LOCALAPPDATA
     ? [
         `${env.LOCALAPPDATA}\\Google\\Chrome`,
         `${env.LOCALAPPDATA}\\Chromium`,

@@ -47,12 +47,14 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
   // S4: npm publish tokens and Docker registry credentials.
   `${homedir()}/.npmrc`,
   `${homedir()}/.docker/config.json`,
-  // S4-win32: Windows credential/config trees. On POSIX, APPDATA/USERPROFILE
-  // resolve to undefined so the spread is empty — no interference.
-  ...(env.APPDATA
+  // S4-win32: Windows credential/config trees. Gated on both process.platform
+  // and the env var: on POSIX, USERPROFILE/APPDATA may be set in CI/Docker
+  // but the backslash paths would resolve incorrectly — the platform guard
+  // prevents those entries from being added on non-Windows systems.
+  ...(process.platform === 'win32' && env.APPDATA
     ? [`${env.APPDATA}\\gcloud`, `${env.APPDATA}\\Docker`]
     : []),
-  ...(env.USERPROFILE
+  ...(process.platform === 'win32' && env.USERPROFILE
     ? [
         `${env.USERPROFILE}\\.ssh`,
         `${env.USERPROFILE}\\.aws`,
