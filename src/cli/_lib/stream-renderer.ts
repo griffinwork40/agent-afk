@@ -376,7 +376,15 @@ export class StreamRenderer {
     this.interrupting = active;
     if (this.overlayComposer) {
       this.overlayComposer.markDirty('interrupt');
-      this.overlayComposer.flush();
+      // Deferred flush: an eager flush() here fires a setOverlay() call that
+      // can collide with checkPauseAnnotations' batched flush in the same
+      // event-loop turn, producing the same double-setOverlay compositor desync
+      // fixed in applyFirstContent / checkTtfbAnnotation. Deferring to the
+      // next microtask preserves sub-millisecond visual feedback while
+      // eliminating the two-flush race window.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
     }
   }
 
@@ -389,14 +397,30 @@ export class StreamRenderer {
     this.softStopping = active;
     if (this.overlayComposer) {
       this.overlayComposer.markDirty('progress-banner');
-      this.overlayComposer.flush();
+      // Deferred flush — same double-setOverlay race as setInterrupting above.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
     }
   }
 
   /** Signal first streaming content — clears the TTFB waiting indicator. Idempotent. */
   notifyFirstContent(): void {
     if (this.disposed) return;
-    applyFirstContent(this.ttfbDone, () => { this.ttfbDone = true; }, this.overlayComposer);
+    const dirtied = applyFirstContent(
+      this.ttfbDone,
+      () => { this.ttfbDone = true; },
+      this.overlayComposer,
+    );
+    if (dirtied) {
+      // A block-boundary chunk can synchronously drain markdown before this
+      // notification marks the banner dirty. Guarantee a later repaint, but
+      // put it in a new event-loop turn so it cannot recreate the two-flush
+      // race that originally corrupted committed-band geometry.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
+    }
   }
 
   /**

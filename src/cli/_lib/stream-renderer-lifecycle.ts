@@ -261,7 +261,11 @@ export function subscribeToResize(
   return ResizeBus.subscribe(() => {
     if (disposed || !overlayComposer) return;
     overlayComposer.invalidate();
-    overlayComposer.flush();
+    // No flush here — invalidate() marks the overlay dirty so the existing
+    // 80ms pause tick picks up the resize on its next cycle. An eager or
+    // deferred flush() risks the double-setOverlay race fixed in c862d2b3,
+    // and this module is structurally guarded as timer-free (see
+    // live-progress-no-timer.test.ts).
   });
 }
 
@@ -343,16 +347,19 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
     changed = true;
   }
 
-  if (changed && ctx.isTTY && ctx.overlayComposer) {
-    ctx.overlayComposer.markDirty('tool-lane');
+  // TTFB elapsed counter: mark dirty now so it is batched with any tool-lane
+  // dirty below — a single flush() per tick prevents two sequential setOverlay()
+  // calls with different heights (which desync the compositor's committed-band
+  // geometry and produce phantom blank rows in scrollback). Does NOT call
+  // flush() itself; the block below owns the single flush. Mutates
+  // ctx.lastTtfbAnnotation in place when the displayed second advances.
+  const ttfbDirtied = checkTtfbAnnotation(ctx, now);
+
+  if ((changed || ttfbDirtied) && ctx.isTTY && ctx.overlayComposer) {
+    if (changed) ctx.overlayComposer.markDirty('tool-lane');
+    // progress-banner already marked dirty by checkTtfbAnnotation when ttfbDirtied.
     ctx.overlayComposer.flush();
   }
-
-  // TTFB elapsed counter: delegates to checkTtfbAnnotation (stream-renderer-ttfb.ts)
-  // which fires a progress-banner flush at most once per second while waiting for
-  // the first content token. Mutates ctx.lastTtfbAnnotation in place; the caller
-  // (stream-renderer.ts) writes back the updated annotation on every tick.
-  checkTtfbAnnotation(ctx, now);
 
   return changed;
 }
