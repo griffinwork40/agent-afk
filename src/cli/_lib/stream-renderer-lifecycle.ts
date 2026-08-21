@@ -261,13 +261,11 @@ export function subscribeToResize(
   return ResizeBus.subscribe(() => {
     if (disposed || !overlayComposer) return;
     overlayComposer.invalidate();
-    // Deferred flush — same double-setOverlay race as setInterrupting /
-    // setSoftStopping: an eager flush() here can collide with
-    // checkPauseAnnotations' batched flush in the same event-loop turn.
-    // Resize repaints are latency-insensitive; deferring is harmless.
-    setTimeout(() => {
-      if (!disposed) overlayComposer.flush();
-    }, 0);
+    // No flush here — invalidate() marks the overlay dirty so the existing
+    // 80ms pause tick picks up the resize on its next cycle. An eager or
+    // deferred flush() risks the double-setOverlay race fixed in c862d2b3,
+    // and this module is structurally guarded as timer-free (see
+    // live-progress-no-timer.test.ts).
   });
 }
 
