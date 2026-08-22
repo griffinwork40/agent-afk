@@ -120,7 +120,21 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
   }
 
   function renderTokens(tokens: Token[]): string {
-    return tokens.map((token) => {
+    // Track previous/next non-space block type so consecutive tables can
+    // suppress chrome (borders + header), rendering a seamless continuation
+    // instead of a duplicated header seam. Space tokens are transparent —
+    // they don't break table-to-table adjacency.
+    let prevBlockType: string | undefined;
+    // Precompute: for each table token, is the next non-space token also a table?
+    const nextNonSpaceIsTable = (idx: number): boolean => {
+      for (let j = idx + 1; j < tokens.length; j++) {
+        if (tokens[j]!.type === 'space') continue;
+        return tokens[j]!.type === 'table';
+      }
+      return false;
+    };
+    return tokens.map((token, idx) => {
+      let result: string;
       switch (token.type) {
         case 'heading': {
           const heading = token as Tokens.Heading;
@@ -136,9 +150,10 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // predecessor block's separation into a double blank — and in the
           // streaming commit path it survives `formatBlockForCommit` (which
           // strips trailing newlines) as a leading blank before the heading.
-          if (heading.depth === 1) return palette.brand.bold(headingText) + '\n';
-          if (heading.depth === 2) return palette.heading(headingText) + '\n';
-          return palette.bold(headingText) + '\n';
+          if (heading.depth === 1) result = palette.brand.bold(headingText) + '\n';
+          else if (heading.depth === 2) result = palette.heading(headingText) + '\n';
+          else result = palette.bold(headingText) + '\n';
+          break;
         }
         case 'paragraph': {
           // One trailing '\n' (line terminator), not '\n\n'. marked already
@@ -146,32 +161,41 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // paragraph; adding a second '\n' here double-spaced every block
           // boundary in non-streamed rendering. See the heading invariant above.
           const para = token as Tokens.Paragraph;
-          return renderInline(para.tokens as Tokens.Generic[]) + '\n';
+          result = renderInline(para.tokens as Tokens.Generic[]) + '\n';
+          break;
         }
         case 'code':
-          return renderCodeBlock(token as Tokens.Code, maxTableWidth);
+          result = renderCodeBlock(token as Tokens.Code, maxTableWidth);
+          break;
         case 'codespan': {
           const raw = (token as Tokens.Codespan).text;
-          return SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.tool(raw);
+          result = SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.tool(raw);
+          break;
         }
         case 'strong': {
           const strong = token as Tokens.Strong;
-          return palette.bold(strong.tokens ? renderInline(strong.tokens as Tokens.Generic[]) : strong.text);
+          result = palette.bold(strong.tokens ? renderInline(strong.tokens as Tokens.Generic[]) : strong.text);
+          break;
         }
         case 'em': {
           const em = token as Tokens.Em;
-          return palette.italic(em.tokens ? renderInline(em.tokens as Tokens.Generic[]) : em.text);
+          result = palette.italic(em.tokens ? renderInline(em.tokens as Tokens.Generic[]) : em.text);
+          break;
         }
         case 'text': {
           // Marked emits block-level 'text' tokens inside tight list items.
           // Its `.tokens` holds inline children (strong, em, codespan, …) —
           // render them through renderInline so bold/italic don't leak.
           const t = token as Tokens.Text;
-          return t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          result = t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          break;
         }
         case 'list':
-          return renderList(token as Tokens.List, maxTableWidth, renderTokens);
+          result = renderList(token as Tokens.List, maxTableWidth, renderTokens);
+          break;
         case 'space':
+          // Space tokens are transparent to prevBlockType — they don't break
+          // table-to-table adjacency. Return early without updating tracker.
           return '\n';
         case 'hr': {
           // Use the configured maxTableWidth so the rule tracks the wrap width
@@ -179,15 +203,27 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // compositor's row budget, so no separate capping is needed. Fall
           // back to 40 when no width is set (e.g. direct callers that omit opts).
           const hrWidth = maxTableWidth ?? 40;
-          return palette.dim('─'.repeat(hrWidth)) + '\n';
+          result = palette.dim('─'.repeat(hrWidth)) + '\n';
+          break;
         }
         case 'blockquote':
-          return renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
-        case 'table':
-          return renderTable(token as Tokens.Table, maxTableWidth, renderInline);
+          result = renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
+          break;
+        case 'table': {
+          const isContinuation = prevBlockType === 'table';
+          const hasContinuation = nextNonSpaceIsTable(idx);
+          result = renderTable(token as Tokens.Table, maxTableWidth, renderInline,
+            (isContinuation || hasContinuation)
+              ? { suppressTopChrome: isContinuation, suppressBottomBorder: hasContinuation }
+              : undefined);
+          break;
+        }
         default:
-          return token.raw;
+          result = token.raw;
+          break;
       }
+      prevBlockType = token.type;
+      return result;
     }).join('');
   }
 

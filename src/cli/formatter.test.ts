@@ -265,6 +265,80 @@ describe('renderMarkdownToTerminal', () => {
       // Only the header to data separator. No inter-row separator.
       expect(separators).toHaveLength(1);
     });
+
+    it('suppresses top chrome when consecutive tables have same structure', () => {
+      // LLMs sometimes repeat the header mid-table, splitting one logical
+      // table into two marked tokens. The renderer should suppress the
+      // second table's top border + header + separator, rendering a
+      // seamless continuation instead of a duplicated header seam.
+      const twoTables = [
+        '| Layer | What |',
+        '|-------|------|',
+        '| Core  | A    |',
+        '',
+        '| Layer | What |',
+        '|-------|------|',
+        '| Click | B    |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(twoTables));
+      const topBorders = out.split('\n').filter((l) => l.startsWith('┌'));
+      const bottomBorders = out.split('\n').filter((l) => l.startsWith('└'));
+      // Only one top border and one bottom border — visually one table.
+      expect(topBorders).toHaveLength(1);
+      expect(bottomBorders).toHaveLength(1);
+      // Both data rows present.
+      expect(out).toContain('Core');
+      expect(out).toContain('Click');
+      // Header text appears only once.
+      const headerMatches = out.split('\n').filter((l) => l.includes('Layer') && l.includes('What'));
+      expect(headerMatches).toHaveLength(1);
+    });
+
+    it('does not suppress top chrome when a non-table block intervenes', () => {
+      // Table → paragraph → table should render as two separate tables.
+      const separated = [
+        '| A | B |',
+        '|---|---|',
+        '| 1 | 2 |',
+        '',
+        'Some text between tables.',
+        '',
+        '| A | B |',
+        '|---|---|',
+        '| 3 | 4 |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(separated));
+      const topBorders = out.split('\n').filter((l) => l.startsWith('┌'));
+      // Two separate tables → two top borders.
+      expect(topBorders).toHaveLength(2);
+    });
+
+    it('suppresses top chrome for three consecutive tables', () => {
+      const threeTables = [
+        '| X |',
+        '|---|',
+        '| a |',
+        '',
+        '| X |',
+        '|---|',
+        '| b |',
+        '',
+        '| X |',
+        '|---|',
+        '| c |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(threeTables));
+      const topBorders = out.split('\n').filter((l) => l.startsWith('┌'));
+      const bottomBorders = out.split('\n').filter((l) => l.startsWith('└'));
+      expect(topBorders).toHaveLength(1);
+      expect(bottomBorders).toHaveLength(1);
+      expect(out).toContain('a');
+      expect(out).toContain('b');
+      expect(out).toContain('c');
+    });
   });
 
   describe('ordered lists', () => {

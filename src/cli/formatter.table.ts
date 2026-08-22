@@ -27,10 +27,19 @@ function padCell(
  * narrow single-word columns to an ellipsis.  See the inline comments for the
  * full invariant.
  */
+interface TableRenderOptions {
+  /** Suppress top border + header + header separator — used when this table
+   *  continues an immediately-preceding table to avoid a visual seam. */
+  suppressTopChrome?: boolean;
+  /** Suppress bottom border — used when the next table will continue this one. */
+  suppressBottomBorder?: boolean;
+}
+
 export function renderTable(
   table: Tokens.Table,
   maxTableWidth: number | undefined,
   renderInline: (tokens?: Tokens.Generic[]) => string,
+  options?: TableRenderOptions,
 ): string {
   const renderCell = (cell: Tokens.TableCell) =>
     cell.tokens ? renderInline(cell.tokens as Tokens.Generic[]) : cell.text;
@@ -190,9 +199,16 @@ export function renderTable(
     }
     return lines;
   };
-  const lines: string[] = [borderLine('┌', '┬', '┐')];
-  lines.push(...dataLines(headerCells, true));
-  lines.push(borderLine('├', '┼', '┤'));
+  const lines: string[] = [];
+  if (options?.suppressTopChrome) {
+    // Continuation of a preceding table — emit a mid-row separator instead
+    // of repeating the top border + header block.
+    lines.push(borderLine('├', '┼', '┤'));
+  } else {
+    lines.push(borderLine('┌', '┬', '┐'));
+    lines.push(...dataLines(headerCells, true));
+    lines.push(borderLine('├', '┼', '┤'));
+  }
 
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
     lines.push(...dataLines(dataRows[rowIdx]!));
@@ -202,7 +218,9 @@ export function renderTable(
     }
   }
 
-  lines.push(borderLine('└', '┴', '┘'));
+  if (!options?.suppressBottomBorder) {
+    lines.push(borderLine('└', '┴', '┘'));
+  }
   // Safety net: hard-cap every emitted line to the budget. In the normal
   // and degenerate squeeze paths the rows already fit, so this is a no-op;
   // it only bites in pathological cases (e.g. chromeWidth alone exceeds
