@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmdirSync } from 'fs';
 import { join } from 'path';
 import {
   extractPluginSkills,
@@ -20,6 +20,7 @@ import {
   normalizeToolToken,
   parseToolsField,
 } from './tool-injector.js';
+import { _resetPluginScanCache } from '../plugins-scanner.js';
 
 describe('plugin tool injector', () => {
   let tmpDir: string;
@@ -571,5 +572,65 @@ description: No body
       // silently falling through to the full CHILD_ALLOWED_TOOLS surface.
       expect(skills[0]!.allowedTools).toEqual([]);
     });
+  });
+});
+
+describe('extractPluginSkills — memoization', () => {
+  let tmpDir: string;
+
+  function writeSkill(dir: string, content: string): void {
+    const skillDir = join(dir, 'skills', 'test-skill');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), content);
+  }
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync('/tmp/plugin-skills-memo-');
+    _resetPluginScanCache();
+  });
+
+  afterEach(() => {
+    _resetPluginScanCache();
+    try { rmdirSync(tmpDir, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  it('returns the same array reference on a second call to the same pluginPath', () => {
+    writeSkill(tmpDir, '---\nname: test-skill\ndescription: A skill\n---\nBody.\n');
+    const first = extractPluginSkills(tmpDir);
+    const second = extractPluginSkills(tmpDir);
+    expect(second).toBe(first);
+  });
+
+  it('keeps cache entries separate for different known-tool contexts', () => {
+    writeSkill(tmpDir, '---\nname: test-skill\ndescription: A skill\ntools: Read, Bash\n---\nBody.\n');
+    const readOnly = extractPluginSkills(tmpDir, new Set(['read_file']));
+    const bashOnly = extractPluginSkills(tmpDir, new Set(['bash']));
+    expect(readOnly[0]?.allowedTools).toEqual(['read_file']);
+    expect(bashOnly[0]?.allowedTools).toEqual(['bash']);
+    expect(bashOnly).not.toBe(readOnly);
+  });
+
+  it('returns a fresh walk after _resetPluginScanCache clears the cache', () => {
+    writeSkill(tmpDir, '---\nname: test-skill\ndescription: A skill\n---\nBody.\n');
+    const first = extractPluginSkills(tmpDir);
+    _resetPluginScanCache();
+    const second = extractPluginSkills(tmpDir);
+    expect(second).not.toBe(first);
+    expect(second).toEqual(first);
+  });
+
+  it('picks up a newly-added skill after cache invalidation', () => {
+    writeSkill(tmpDir, '---\nname: test-skill\ndescription: A skill\n---\nBody.\n');
+    expect(extractPluginSkills(tmpDir)).toHaveLength(1);
+
+    const skillDir2 = join(tmpDir, 'skills', 'another-skill');
+    mkdirSync(skillDir2, { recursive: true });
+    writeFileSync(join(skillDir2, 'SKILL.md'), '---\nname: another-skill\ndescription: Another\n---\nBody.\n');
+
+    // Without reset, stale cache is served:
+    expect(extractPluginSkills(tmpDir)).toHaveLength(1);
+
+    _resetPluginScanCache();
+    expect(extractPluginSkills(tmpDir)).toHaveLength(2);
   });
 });

@@ -37,7 +37,7 @@
  * @module agent/plugins/command-files
  */
 
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
+import { existsSync, opendirSync, readFileSync, realpathSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseSkillMetadata, type PluginSkillMetadata } from './tool-injector.js';
 import { normalizeSkillSource, resolveContained } from './source-guard.js';
@@ -46,9 +46,37 @@ import { env } from '../../config/env.js';
 // third-party plugin tree. A directory named with a CSI/OSC sequence would
 // otherwise execute against the operator's terminal when AFK_DEBUG is set.
 import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
+import { _registerScanCacheResetHook } from '../plugins-scanner.js';
 
 /** Mirrors the depth cap in `extractPluginSkills` — cycle/runaway guard. */
 const MAX_DEPTH = 10;
+
+/**
+ * Total-entry cap across a single walk. Bounds breadth independently of depth
+ * so a plugin with a flat directory of thousands of files cannot block the
+ * event loop. When exceeded the walk returns whatever was collected up to
+ * that point — no partial entry is emitted.
+ */
+const MAX_ENTRIES = 1000;
+
+/**
+ * Memoization cache for `extractPluginCommands`, keyed by plugin path and the
+ * tool-name context used to normalize `allowedTools`.
+ *
+ * `extractPluginCommands` is called from BOTH `collectSkillEntries` AND
+ * `discoverPluginSkillBodies`, so it runs twice per discovery pass. Caching by
+ * `pluginPath` drops the second walk to O(1).
+ *
+ * Invalidated by `_resetPluginScanCache` via the hook registered below, which
+ * is triggered on plugin install/uninstall/reload so stale results are never
+ * served after the filesystem changes.
+ */
+const commandCache = new Map<string, PluginSkillMetadata[]>();
+_registerScanCacheResetHook(() => commandCache.clear());
+
+function commandCacheKey(pluginPath: string, knownToolNames?: ReadonlySet<string>): string {
+  return JSON.stringify([pluginPath, knownToolNames === undefined ? null : [...knownToolNames].sort()]);
+}
 
 /**
  * Control bytes — C0, DEL, and C1 — in a path segment.
@@ -88,8 +116,15 @@ export function extractPluginCommands(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
+  const cacheKey = commandCacheKey(pluginPath, knownToolNames);
+  const cached = commandCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const root = join(pluginPath, 'commands');
-  if (!existsSync(root)) return [];
+  if (!existsSync(root)) {
+    commandCache.set(cacheKey, []);
+    return [];
+  }
 
   // Resolve the containment root's realpath ONCE, before the walk starts, and
   // thread it into every resolveContained call below instead of letting each
@@ -102,20 +137,28 @@ export function extractPluginCommands(
   try {
     realRoot = realpathSync(root);
   } catch {
+    commandCache.set(cacheKey, []);
     return [];
   }
 
   const out: DiscoveredCommand[] = [];
+  let totalEntries = 0;
 
   function walk(dir: string, segments: string[], depth: number): void {
     if (depth > MAX_DEPTH) return;
-    let entries: string[];
+    if (totalEntries >= MAX_ENTRIES) return;
+    let directory;
     try {
-      entries = readdirSync(dir);
+      directory = opendirSync(dir);
     } catch {
       return;
     }
-    for (const entry of entries) {
+    try {
+      while (totalEntries < MAX_ENTRIES) {
+        const dirent = directory.readSync();
+        if (dirent === null) break;
+        totalEntries++;
+        const entry = dirent.name;
       if (entry.startsWith('.')) {
         if (env.AFK_DEBUG) process.stderr.write(`[afk] skipping dotfile: ${sanitizeForDisplay(join(dir, entry))}\n`);
         continue;
@@ -209,6 +252,12 @@ export function extractPluginCommands(
         name,
         origin: 'command',
       });
+      }
+    } finally {
+      directory.closeSync();
+    }
+    if (totalEntries >= MAX_ENTRIES && env.AFK_DEBUG) {
+      process.stderr.write(`[afk] commands walk: MAX_ENTRIES (${MAX_ENTRIES}) reached in ${sanitizeForDisplay(root)}\n`);
     }
   }
 
@@ -216,5 +265,6 @@ export function extractPluginCommands(
   // Codepoint order, not localeCompare: ICU collation varies by locale and
   // build, and this ordering is what makes collision resolution reproducible.
   out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  commandCache.set(cacheKey, out);
   return out;
 }

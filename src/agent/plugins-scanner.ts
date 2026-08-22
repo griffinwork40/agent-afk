@@ -42,12 +42,38 @@ const MARKETPLACE_CACHE_SEGMENT = 'cache';
 let scanCache: Map<string, readonly SdkPluginConfig[]> | undefined;
 
 /**
+ * Additional reset hooks registered by sibling modules (e.g. command-files,
+ * tool-injector) so their per-pluginPath caches are invalidated in lock-step
+ * with the top-level scan cache. Each hook is a zero-argument function that
+ * clears the module's own cache map.
+ *
+ * Hooks register at module-load time via `_registerScanCacheResetHook`. The
+ * registry itself is never cleared — hooks are permanent for the lifetime of
+ * the process, which is correct because the modules themselves are permanent.
+ */
+const resetHooks: Array<() => void> = [];
+
+/**
+ * Register a callback to be invoked whenever `_resetPluginScanCache` fires.
+ * Sibling modules that maintain their own per-pluginPath caches call this once
+ * at module-load time so their caches are invalidated in lock-step.
+ */
+export function _registerScanCacheResetHook(hook: () => void): void {
+  resetHooks.push(hook);
+}
+
+/**
  * Clear the in-memory plugin scan cache. Call this after any operation that
  * mutates a scanned plugin directory (install, uninstall, /reload-plugins,
  * test fixture setup).
+ *
+ * Also fires any hooks registered via `_registerScanCacheResetHook`, so
+ * per-pluginPath caches in sibling modules (command-files, tool-injector)
+ * are invalidated in the same call.
  */
 export function _resetPluginScanCache(): void {
   scanCache = undefined;
+  for (const hook of resetHooks) hook();
 }
 
 /**
