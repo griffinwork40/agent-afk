@@ -107,14 +107,15 @@ export function handleReturnKey(
 /**
  * Handle the Tab key (dropdown accept / ghost-accept for slash tokens).
  *
- * Returns `true` when the key was consumed (caller should `return`).
+ * Tab is always terminal in the keypress dispatcher, so this handler does not
+ * need to return a consumed discriminant.
  */
 export function handleTabKey(
   st: ReaderState,
   repaintFn: typeof _repaint,
   applySelectionFn: typeof _applySelection,
   repaintCtx: RepaintCtx,
-): boolean {
+): void {
   if (st.ac.dropdownOpen) {
     applySelectionFn(st, repaintCtx, repaintFn);
   } else {
@@ -143,5 +144,4 @@ export function handleTabKey(
       }
     }
   }
-  return true;
 }
