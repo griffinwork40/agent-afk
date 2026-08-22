@@ -60,6 +60,8 @@ import type {
   ElicitationResult,
 } from '../agent/types/sdk-types.js';
 import { escapeRegExp } from '../utils/regexp.js';
+import { sendOptions } from './route.js';
+import { getElicitationRoute } from './elicitation-route-registry.js';
 
 /**
  * Prefix for path-approval / MCP elicitation callbacks. DISTINCT from the
@@ -113,6 +115,15 @@ export function createTelegramElicitationHandler(
     if (options.signal.aborted) {
       return { action: 'decline' };
     }
+    // Resolve the per-session route so the keyboard lands in the correct topic
+    // thread on a supergroup with topics. Falls back to bare chatId (General)
+    // when no mapping exists — same pattern as makeTelegramElicitationHandler.
+    const resolvedRoute =
+      options.sessionId !== undefined
+        ? getElicitationRoute(options.sessionId)
+        : undefined;
+    const threadOpts = resolvedRoute !== undefined ? sendOptions(resolvedRoute) : {};
+
     return new Promise<ElicitationResult>((resolve) => {
       const ulid = generateUlid();
       const enumValues = extractEnumValues(request);
@@ -130,6 +141,7 @@ export function createTelegramElicitationHandler(
         try {
           await bot.telegram.sendMessage(chatId, text, {
             reply_markup: keyboard,
+            ...threadOpts,
           });
         } catch (err) {
           log('[elicitation] sendMessage failed:', err);
