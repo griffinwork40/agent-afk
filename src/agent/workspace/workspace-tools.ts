@@ -27,9 +27,10 @@ export const workspacePublishTool: AnthropicToolDef = {
   concurrencySafe: false,
   description:
     'Publish a structured finding to the shared session workspace so sibling agents can see it. ' +
-    'Use this to surface discoveries, evidence, hypotheses, decisions, artifacts, or status updates ' +
-    'that other agents working on the same task should know about. ' +
-    'Entries appear in the workspace context preamble injected into sibling agent system prompts.',
+    'Call after: confirming a module\'s key exports or invariants, ruling out a hypothesis, ' +
+    'or reading a file another sibling will likely need (publish the insight, not raw content). ' +
+    'Entries are visible immediately to siblings via workspace_query and injected into ' +
+    'new siblings\' system prompts at fork time. Free to batch with other tools.',
   input_schema: {
     type: 'object',
     properties: {
@@ -83,9 +84,9 @@ export const workspaceQueryTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'Query the shared session workspace for findings published by sibling agents. ' +
-    'Returns entries matching the search keywords, ordered by recency. ' +
-    'Use this to check what siblings have already discovered before reading files ' +
-    'they may have already analyzed.',
+    'Call before reading a file or grepping a module — a sibling may have already ' +
+    'analyzed it. Returns entries matching the search keywords, ordered by recency. ' +
+    'A workspace hit saves a tool round by avoiding redundant file reads.',
   input_schema: {
     type: 'object',
     properties: {

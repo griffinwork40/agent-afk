@@ -173,6 +173,7 @@ export function setUpQuerySession(
     cwd,
     surface: ctx.surface,
     readOnlyMemory: ctx.readOnlyMemory,
+    workspaceEnabled: ctx.workspaceStore !== undefined,
     // Truthiness, NOT `!== undefined`: this must stay in lockstep with the
     // constructor's `if (opts.skillExecutor) schemas.push(skillTool)` gate.
     // Splitting them would let a falsy-but-defined executor inject a skill
