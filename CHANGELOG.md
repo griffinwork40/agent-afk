@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.146.1] - 2026-08-22
+
+### Fixed
+- bash guard SENSITIVE_PATH_SIGNAL covers relocated AFK_HOME (#778) (#1237) (f892f1a0)
+
+### Changed
+- swap demo video with polished 43s cut (b6b4460f)
+
 ## [5.146.0] - 2026-08-21
 
 ### Added
