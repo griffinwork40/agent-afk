@@ -17,6 +17,7 @@ import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import {
   mkdirSync,
   rmSync,
+  unlinkSync,
   symlinkSync,
   existsSync,
   writeFileSync,
@@ -31,6 +32,7 @@ import {
   safeRealpath,
   BUILTIN_WRITE_DENYLIST,
   getWriteDenylist,
+  _resetWriteDenylistCacheForTests,
 } from './write-denylist.js';
 import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 
@@ -651,7 +653,10 @@ describe('write-denylist — memoization cache-key regression guard (#781)', () 
       assertNotDenylisted(join(link, 'secret.txt'), 'write_file'),
     ).toThrow(/refusing to write to protected path/);
 
-    rmSync(link);
+    // Use unlinkSync to remove the symlink itself (not its target directory).
+    // rmSync fails on a symlink-to-directory on macOS; unlinkSync removes the
+    // symlink entry regardless of what it points to.
+    unlinkSync(link);
     symlinkSync(secondTarget, link);
 
     // The environment key did not change, so this only remains protected if
@@ -679,5 +684,73 @@ describe('assertNotDenylisted — case-variant spellings (#736)', () => {
     expect(() =>
       assertNotDenylisted(join(homedir(), '.SSH', 'id_rsa'), 'write_file'),
     ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #1215 review — Windows denylist entries and semicolon separator
+// ---------------------------------------------------------------------------
+
+describe('write-denylist — Windows credential entries in BUILTIN_WRITE_DENYLIST (PR #1215)', () => {
+  // BUILTIN_WRITE_DENYLIST is a module-scope constant evaluated at import time,
+  // so env-var stubs set AFTER import do not rebuild it. These tests verify the
+  // structure of the conditional spreads: when USERPROFILE/APPDATA are set at
+  // process start (as they are on a real Windows machine), entries are added;
+  // on POSIX (where these vars are typically absent) the spreads are empty.
+
+  it('BUILTIN_WRITE_DENYLIST has no USERPROFILE entries when USERPROFILE is unset at import', () => {
+    // On macOS/Linux CI, USERPROFILE is not set → the spread is empty.
+    if (process.env['USERPROFILE']) {
+      // On Windows or a shell that sets USERPROFILE: verify entries ARE present.
+      const up = process.env['USERPROFILE'];
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('.ssh') && p.startsWith(up))).toBe(true);
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('.aws') && p.startsWith(up))).toBe(true);
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('.gnupg') && p.startsWith(up))).toBe(true);
+    } else {
+      // POSIX with no USERPROFILE: the spread is absent — no spurious entries.
+      // Verify no path in the list contains a Windows-style USERPROFILE prefix.
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => /\\\.ssh$/.test(p))).toBe(false);
+    }
+  });
+
+  it('BUILTIN_WRITE_DENYLIST has no APPDATA entries when APPDATA is unset at import', () => {
+    if (process.env['APPDATA']) {
+      const appData = process.env['APPDATA'];
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('gcloud') && p.startsWith(appData))).toBe(true);
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('Docker') && p.startsWith(appData))).toBe(true);
+    } else {
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => /\\gcloud$/.test(p))).toBe(false);
+    }
+  });
+});
+
+describe('write-denylist — tilde backslash expansion in AFK_WRITE_DENYLIST (PR #1215)', () => {
+  beforeEach(() => {
+    _resetWriteDenylistCacheForTests();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetWriteDenylistCacheForTests();
+  });
+
+  it('expands ~\\ in AFK_WRITE_DENYLIST to an absolute path rooted at homedir', () => {
+    // A Windows-style tilde entry: ~\.mysecrets. The expansion must produce
+    // an absolute path rooted at homedir rather than a relative one.
+    const tildeEntry = '~\\.mysecrets';
+    vi.stubEnv('AFK_WRITE_DENYLIST', tildeEntry);
+    _resetWriteDenylistCacheForTests();
+    const list = getWriteDenylist();
+    const expanded = list.find((p) => p.endsWith('.mysecrets'));
+    expect(expanded).toBeDefined();
+    expect(expanded?.startsWith(homedir())).toBe(true);
+  });
+
+  it('expands ~/ in AFK_WRITE_DENYLIST to an absolute path rooted at homedir', () => {
+    vi.stubEnv('AFK_WRITE_DENYLIST', '~/.mysecrets2');
+    _resetWriteDenylistCacheForTests();
+    const list = getWriteDenylist();
+    const expanded = list.find((p) => p.endsWith('.mysecrets2'));
+    expect(expanded).toBeDefined();
+    expect(expanded?.startsWith(homedir())).toBe(true);
   });
 });

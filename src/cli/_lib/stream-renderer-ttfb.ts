@@ -67,7 +67,7 @@ export interface TtfbTickCtx {
  * and the write-back — the snapshot is rebuilt from instance fields on every
  * tick, so writing to the snapshot's field propagates on write-back.
  *
- * Returns true when a flush was triggered (the caller may discard this).
+ * Returns true when the progress-banner was marked dirty (caller must flush).
  */
 export function checkTtfbAnnotation(ctx: TtfbTickCtx, now: number): boolean {
   if (
@@ -88,14 +88,26 @@ export function checkTtfbAnnotation(ctx: TtfbTickCtx, now: number): boolean {
 
   ctx.lastTtfbAnnotation = annotation;
   ctx.overlayComposer.markDirty('progress-banner');
-  ctx.overlayComposer.flush();
+  // No flush() here — checkPauseAnnotations batches all dirty marks and
+  // issues one flush per tick to prevent double-setOverlay compositor desyncs.
   return true;
 }
 
 /**
  * Clears the TTFB waiting indicator when the first streaming content arrives.
  * Idempotent — repeated calls after the first flip are no-ops.
- * Returns true if a flush was triggered (caller may discard).
+ * Returns true if the progress-banner was marked dirty (caller may discard).
+ *
+ * History: this used to call `overlayComposer.flush()` eagerly, which fired a
+ * `setOverlay()` call OUTSIDE the batched 80ms `checkPauseAnnotations` tick.
+ * When the tick's own flush landed in the same JS event-loop turn, two
+ * `setOverlay()` calls with different overlay heights desynced the compositor's
+ * committed-band geometry and produced phantom blank rows in scrollback — the
+ * "random large gap" bug. Fixed by removing the eager flush: the dirty mark is
+ * picked up by the content event's next overlay repaint. The caller also
+ * schedules a zero-delay, post-notification flush: this is required when a
+ * block-boundary chunk has already drained the markdown buffer (and therefore
+ * its synchronous repaint) before first-content notification runs.
  */
 export function applyFirstContent(
   isDone: boolean,
@@ -106,7 +118,10 @@ export function applyFirstContent(
   setDone();
   if (overlayComposer) {
     overlayComposer.markDirty('progress-banner');
-    overlayComposer.flush();
+    // No synchronous flush() here. notifyFirstContent queues one in a new
+    // event-loop turn, after any repaint triggered by the content chunk. An
+    // eager flush could issue a second setOverlay() with a different height in
+    // this turn and desync committed-band geometry (phantom blank rows).
     return true;
   }
   return false;

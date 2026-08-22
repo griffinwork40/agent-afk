@@ -21,6 +21,7 @@ import { isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
+import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 
 export type ParallelizeDispatchResult =
   | { kind: 'skipped'; reason: 'too-few-files' | 'skill-body-missing' }
@@ -67,6 +68,12 @@ export async function runParallelizeDispatch(
   // Witness layer: parent trace writer (ctx.traceWriter) so each dispatched
   // wave subagent emits subagent_lifecycle events. Mirrors research.ts.
   traceWriter?: TraceSink,
+  // Shared workspace (ctx.workspaceStore). Forwarded on BOTH dispatch paths —
+  // onto the handler context for a registry hit, and onto the fork manager for
+  // the plugin-body fallback — so the parallelize subagent receives the
+  // sibling-findings preamble (injectWorkspacePreamble), the workspace READ
+  // channel. See spec.ts / skills/index.ts SkillExecutionContext.workspaceStore.
+  workspaceStore?: WorkspaceStore,
 ): Promise<ParallelizeDispatchResult> {
   const fileCount = countFileReferences(plan);
 
@@ -87,6 +94,10 @@ export async function runParallelizeDispatch(
       defaultSubagentModel,
       ...(skillCallId !== undefined ? { callId: skillCallId } : {}),
       ...(traceWriter !== undefined ? { traceWriter } : {}),
+      // A registry override for `parallelize` is itself an inline handler that
+      // forks its own manager, so it needs the store as context data exactly
+      // like the mint handler did — see SkillExecutionContext.workspaceStore.
+      ...(workspaceStore !== undefined ? { workspaceStore } : {}),
     };
     const waveOrchestration = await parallelize.handler(
       { plan },
@@ -123,6 +134,7 @@ export async function runParallelizeDispatch(
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
       ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
       ...(traceWriter !== undefined ? { traceWriter } : {}),
+      ...(workspaceStore !== undefined ? { workspaceStore } : {}),
     });
     try {
       // PLUGIN_ROOT injection mirrors `executePluginSkill` — see

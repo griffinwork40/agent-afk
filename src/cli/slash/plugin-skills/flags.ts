@@ -7,7 +7,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, basename, dirname } from 'path';
 import { getMarketplaceCacheDir, getBundledPluginsDir } from '../../../paths.js';
 import { harvestFlagsFromSkillMd } from '../_lib/flag-harvest.js';
 
@@ -69,8 +69,7 @@ export function harvestPluginSkillFlags(cacheRoot?: string): Map<string, string[
         continue;
       }
 
-      const pathParts = fullPath.split('/');
-      const skillName = pathParts[pathParts.length - 2];
+      const skillName = basename(dirname(fullPath));
       if (!skillName) continue;
 
       const flags = harvestFlagsFromSkillMd(content);

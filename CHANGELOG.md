@@ -11,6 +11,186 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.146.1] - 2026-08-22
+
+### Fixed
+- bash guard SENSITIVE_PATH_SIGNAL covers relocated AFK_HOME (#778) (#1237) (f892f1a0)
+
+### Changed
+- swap demo video with polished 43s cut (b6b4460f)
+
+## [5.146.0] - 2026-08-21
+
+### Added
+- mechanical Windows compatibility pass (#703) (#1215) (0e131e2d)
+
+## [5.145.5] - 2026-08-21
+
+### Fixed
+- send valid Grok CLI version to proxy (#1242) (0c821d26)
+
+## [5.145.4] - 2026-08-21
+
+### Fixed
+- eliminate phantom blank rows from double-setOverlay race (#1243) (f35793c6)
+
+### Changed
+- replace demo placeholder with live video (80464c95)
+
+## [5.145.3] - 2026-08-20
+
+### Fixed
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1142) (#1239) (1ef8955d)
+
+### Changed
+- extract helpers from executeBatch to reduce nesting (#1074) (#1241) (65cf4e63)
+
+## [5.145.2] - 2026-08-20
+
+### Fixed
+- extract shared credential-floor marker constants (#861) (#1235) (3375608d)
+- thread threadId through to background job notifications (#1220) (#1232) (0597515a)
+- surface hint when notify routing silently prefers DM over group (#1221) (#1236) (c70562d0)
+
+## [5.145.1] - 2026-08-20
+
+### Fixed
+- visual affordances — chevron, diff colors, pulse dot, stop feedback, tool digest (#9,#10,#11,#13,#16) (#1198) (34abf523)
+
+## [5.145.0] - 2026-08-20
+
+### Added
+- add extract_document tool for cross-platform document text extraction (#660) (#1164) (1b2ce58a)
+
+### Fixed
+- bump builtin tool count 26 → 27 for extract_document (#1231) (b23016cf)
+- thread workspace-enabled provider to compose DAG nodes (#1229) (19c5d909)
+- restore prompt suggestion ghost after deleting back to empty (#1230) (1b9e20e1)
+- derive MAX_API_ROUND_INFLIGHT_MS from live TTFB config (#1142) (#1173) (0db8055d)
+- buffer setCwd/setSystemPrompt before query init (#1062) (#1157) (81fa8b34)
+
+### Changed
+- harden portHasOwner — execFileSync, permission-denied, IPv6 guard (#1167) (#1181) (a63ebd20)
+- add Awesome Harness Engineering badge to README (d3391207)
+
+## [5.144.0] - 2026-08-20
+
+### Added
+- plain-language pass on user-facing chrome for non-technical readability (#1228) (877443d2)
+
+## [5.143.0] - 2026-08-20
+
+### Added
+- live elapsed counters on in-flight tool/subagent overlay rows; fix stalled tick loop (#1225) (50000443)
+
+## [5.142.0] - 2026-08-20
+
+### Added
+- plain-output progress parity — tool/subagent lines + TTFB cleanup (#1226) (fa349e16)
+
+## [5.141.1] - 2026-08-20
+
+### Fixed
+- stop bgStatusBar and mascotBar during pager/editor handoffs (#1170) (#1193) (cf7c5edc)
+
+## [5.141.0] - 2026-08-20
+
+### Added
+- model-facing background-job cancellation scoped by provenance (#1227) (6b46177a)
+
+## [5.140.0] - 2026-08-20
+
+### Added
+- add per-turn tool-action summaries to resume replay (#1188) (cd503def)
+- add workspace_query tool for mid-run polling (#1227) (#1224) (49dd727d)
+
+## [5.139.0] - 2026-08-20
+
+### Added
+- restructure empty-prompt context for outcome-aware suggestions (#1218) (273018dd)
+- add AFK_WORKSPACE_DISABLED env toggle for A/B experiment (#1216) (35822fc2)
+
+### Changed
+- supply WorkspaceStore to fix cold-start hint assertion (e0ca17f8)
+- add Responses-wire truncation coverage for query.ts (#1223) (5d241ea5)
+
+## [5.138.4] - 2026-08-19
+
+### Fixed
+- wire compose executor's missing onSubagentSucceeded cost rollup (#1211) (31d04365)
+
+### Changed
+- harden portHasOwner — execFileSync, permission-denied, IPv6 guard (#1167) (#1175) (2d12806c)
+
+## [5.138.3] - 2026-08-19
+
+### Fixed
+- thread workspaceStore through root manager, skill phases, and permission gates (#1213) (ed7cd385)
+
+## [5.138.2] - 2026-08-19
+
+### Fixed
+- resolve cold-start chicken-and-egg in workspace preamble (#1209) (9622916b)
+
+## [5.138.1] - 2026-08-19
+
+### Fixed
+- cold-start hint + compose executor wiring gap (#1214) (3a16ca51)
+
+## [5.138.0] - 2026-08-19
+
+### Added
+- enable background subagent dispatch + improve bg/fg guidance (#1212) (9e1b81ce)
+
+## [5.137.1] - 2026-08-19
+
+### Fixed
+- preserve newlines when splitting long messages at 4096-char boundary (#1206) (ca27a31f)
+
+## [5.137.0] - 2026-08-19
+
+### Added
+- virtual-scroll picker with fuzzy search and relative timestamps (#1189) (a0e2d8f6)
+
+## [5.136.0] - 2026-08-19
+
+### Added
+- auto-scroll to bottom on keypress when scrolled up (#1208) (#1208) (f8d45484)
+
+## [5.135.0] - 2026-08-19
+
+### Added
+- add argsFingerprint to tool_call events + dedup measurement harness (#1205) (bc5e7678)
+
+## [5.134.0] - 2026-08-19
+
+### Added
+- shared agent workspace v1 — publish tool + harness-injected retrieval (#1195) (8e6badd1)
+
+### Fixed
+- unbreak CI — remove dead variable + fix jitter-sensitive timer (#1207) (317b1891)
+- accessibility — focus-visible ring & WCAG AA contrast (#1197) (96d8eca8)
+- clear apiRoundInFlight in streamResponse finally block (#1143) (#1172) (1dd68bc8)
+- disclose cost-headline vs breakdown data-source divergence (#934) (#1151) (960cf6fe)
+
+### Changed
+- remove dead resolveSecond variable in watchdog test (#1163) (bed80a9f)
+
+## [5.133.0] - 2026-08-19
+
+### Added
+- allow read-only bash redirection to $TMPDIR (#881) (#1158) (3d403d3d)
+
+## [5.132.3] - 2026-08-19
+
+### Fixed
+- SSE resilience — permanent error handling, composer disable, jitter (#8,#12,#27) (#1199) (ff24db4b)
+
+## [5.132.2] - 2026-08-19
+
+### Fixed
+- use authoritative contextLimitFor instead of stale heuristic (#1194) (768c7e2b)
+
 ## [5.132.1] - 2026-08-19
 
 ### Fixed

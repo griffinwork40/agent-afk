@@ -32,7 +32,7 @@ export interface XaiEndpointResolution {
 export interface XaiEndpointDeps {
   /** Returns env value for key, or undefined. Defaults go through `env` (audit-env). */
   readEnv?: (key: string) => string | undefined;
-  /** Client version string for proxy identity headers. */
+  /** Internal compatibility/test seam for proxy identity headers. */
   clientVersion?: string;
   /**
    * Intentional xAI endpoint override (per-slot `baseUrl` only). Must NOT be

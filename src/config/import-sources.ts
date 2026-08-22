@@ -20,7 +20,7 @@
 
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { getJsonConfigPath, getLegacyJsonConfigPath } from '../paths.js';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ function walkPlugins(dir: string, depth: number, out: DetectedAsset[], seen: Set
   if (depth > MAX_PLUGIN_SCAN_DEPTH || seen.has(canonical)) return;
   seen.add(canonical);
   if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
-    const name = manifestName(dir) ?? dir.split('/').filter(Boolean).pop() ?? dir;
+    const name = manifestName(dir) ?? basename(dir) ?? dir;
     out.push({ name, path: dir });
     return; // plugins do not nest
   }

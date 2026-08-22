@@ -258,9 +258,9 @@ export function indexKeyForPath(
   leaf: string,
 ): { layout: 'flat' | 'cache'; key: string } | null {
   if (!leaf.startsWith(root)) return null;
-  const rel = leaf.slice(root.length).replace(/^\/+/, '');
+  const rel = leaf.slice(root.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
-  const segments = rel.split('/').filter((s) => s.length > 0);
+  const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);
   if (segments.length === 0) return null;
 
   if (segments[0] === MARKETPLACE_CACHE_SEGMENT && segments.length >= 3) {

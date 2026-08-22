@@ -341,25 +341,25 @@ async function handler(
     byType[a.type].push(a);
   }
 
-  // Forward the parent's witness writer (when ctx supplies one) so the
-  // inspector forks below inherit it and their `canUseTool` permission-denials
-  // land in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
+  // Forward the parent's witness writer AND workspace store (when ctx supplies
+  // them): the writer lands the inspectors' `canUseTool` denials in the parent
+  // trace, the store gives them the sibling-findings preamble so the four
+  // parallel inspectors READ each other's findings, not just publish. Both
+  // spreads share ONE line — this file is grandfathered in
+  // .filesize-baseline.json, where code lines may only shrink.
   //
-  // Read-scope note (#547): this manager DELIBERATELY passes no `cwd` and no
-  // `parentReadRoots`. Its inspectors roam `~/.afk` user/plugin artifacts that
-  // live OUTSIDE any repo, so a cwd-less manager (→ read-open forks) is
-  // required. Read-open already satisfies the child ⊇ parent read-scope
-  // invariant (#544/#547) for ANY parent, so this is compliant, not a gap:
-  // seeding parentReadRoots from a CONFINED session (e.g. `afk -w`) would
-  // narrow inspectors to the worktree and break `~/.afk` discovery. Do not add
-  // it here — the omission is correct.
+  // Read-scope note (#547): NO `cwd`/`parentReadRoots` on purpose. Inspectors
+  // roam `~/.afk` artifacts OUTSIDE any repo, so a cwd-less (read-open) manager
+  // is required and already satisfies child ⊇ parent (#544/#547) for ANY parent;
+  // seeding roots from a CONFINED session (`afk -w`) would break discovery. The
+  // store is exempt — ephemeral, no path semantics. See skills/index.ts.
   const manager = new SubagentManager({
     apiKey,
     // `apiKey` is `ctx.apiKey` — resolved by the parent session for
     // `ctx.defaultModel` — so that model is the provider source of truth for
     // the fork-time credential fallback (see SubagentManager.parentProvider).
     ...(ctx?.defaultModel !== undefined ? { parentModel: ctx.defaultModel } : {}),
-    ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}), ...(ctx?.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
   });
   // Invariant: the gate receives AFK snake_case runtime tool names (read_file,
   // grep, …), but researchAgent.allowedTools is upstream PascalCase (Read,

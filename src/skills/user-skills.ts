@@ -171,6 +171,14 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
       // `~/.afk/skills/<name>` dir), so it is intentionally omitted. Worktree
       // isolation for user skills (passing cwd) is a separate, pre-existing gap.
       ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+      // Workspace READ channel: threaded for the same reason as traceWriter, and
+      // unaffected by the read-scope note above — the store is ephemeral
+      // per-session state with no path semantics, so it cannot narrow this
+      // read-open fork. It gives the user skill's sub-agent the
+      // sibling-findings preamble (injectWorkspacePreamble) instead of only the
+      // ability to publish into a store it cannot read. See skills/index.ts
+      // SkillExecutionContext.workspaceStore.
+      ...(ctx?.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     });
 
     // `parentId: ctx.callId` (when present) anchors the synthesized

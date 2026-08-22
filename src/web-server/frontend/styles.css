@@ -21,6 +21,8 @@
 }
 
 * { box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#prompt:focus-visible, .approval-input:focus-visible { outline: none; }
 
 html, body {
   margin: 0;
@@ -74,7 +76,7 @@ html, body {
 }
 .sidebar-head {
   padding: 12px 16px 8px; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.08em; color: var(--text-faint);
+  letter-spacing: 0.08em; color: var(--text-dim);
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .new-session {
@@ -120,14 +122,15 @@ html, body {
 .msg { margin-bottom: 18px; max-width: 900px; }
 .msg-role {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--text-faint); margin-bottom: 5px;
+  color: var(--text-dim); margin-bottom: 5px;
 }
 .msg-body { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .msg-user .msg-body {
   background: var(--bg-raised); border-left: 2px solid var(--accent);
   padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0;
 }
-.msg-thinking { opacity: 0.75; font-style: italic; }
+.msg-thinking { font-style: italic; }
+.msg-thinking .msg-body { opacity: 0.75; }
 .msg-thinking summary { cursor: pointer; }
 .msg-error .msg-body { color: var(--error); }
 
@@ -206,8 +209,22 @@ html, body {
   cursor: pointer; font-family: var(--mono); font-size: 12px; list-style: none;
 }
 .tool-summary::-webkit-details-marker { display: none; }
+.tool-summary::before {
+  content: '›';
+  display: inline-block;
+  font-size: 14px;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+  margin-right: 4px;
+  flex: 0 0 auto;
+}
+details[open] > .tool-summary::before { transform: rotate(90deg); }
 .tool-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
-.tool-dot-running { background: var(--warning); }
+@keyframes afk-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+.tool-dot-running { background: var(--warning); animation: afk-pulse 1.4s ease-in-out infinite; }
 .tool-dot-ok { background: var(--success); }
 .tool-dot-error { background: var(--error); }
 .tool-name { color: var(--accent); }
@@ -215,7 +232,7 @@ html, body {
 .tool-body { padding: 0 12px 12px; border-top: 1px solid var(--border); }
 .tool-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--text-faint); margin: 10px 0 4px;
+  color: var(--text-dim); margin: 10px 0 4px;
 }
 .tool-pre {
   margin: 0; padding: 10px; background: var(--bg-sunken); border-radius: 6px;
@@ -237,6 +254,10 @@ html, body {
   cursor: pointer; font-family: var(--mono); font-size: 11px;
 }
 .tool-more:hover { color: var(--text); border-color: var(--accent); }
+.diff-add  { color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); display: block; }
+.diff-del  { color: var(--error);   background: color-mix(in srgb, var(--error)   8%, transparent); display: block; }
+.diff-hunk { color: var(--accent);  opacity: 0.75; display: block; }
+.diff-ctx  { color: var(--text-dim); display: block; }
 
 /* ── composer ────────────────────────────────────────────────────────────── */
 .composer { border-top: 1px solid var(--border); background: var(--bg-raised); padding: 12px 20px; position: relative; }

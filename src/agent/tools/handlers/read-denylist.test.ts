@@ -689,3 +689,75 @@ describe('isReadDenied — case-variant spellings (#736)', () => {
     expect(getReadDenylistDescendants(join(tmpDir, '\u0130READABLE'))).toContain('.sec');
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR #1215 review — Windows denylist entries and tilde backslash expansion
+// ---------------------------------------------------------------------------
+
+describe('read-denylist — Windows credential entries in BUILTIN_READ_DENYLIST (PR #1215)', () => {
+  // BUILTIN_READ_DENYLIST is a module-scope constant evaluated at import time.
+  // These tests verify the conditional spread structure: on POSIX (where
+  // USERPROFILE/APPDATA are absent) no spurious Windows entries appear, and on
+  // Windows (where they are set at process start) credential dirs ARE covered.
+
+  it('BUILTIN_READ_DENYLIST has no USERPROFILE entries when USERPROFILE is unset at import', () => {
+    if (process.env['USERPROFILE']) {
+      const up = process.env['USERPROFILE'];
+      expect(BUILTIN_READ_DENYLIST.some((p) => p.includes('.ssh') && p.startsWith(up))).toBe(true);
+      expect(BUILTIN_READ_DENYLIST.some((p) => p.includes('.aws') && p.startsWith(up))).toBe(true);
+      expect(BUILTIN_READ_DENYLIST.some((p) => p.includes('.gnupg') && p.startsWith(up))).toBe(true);
+    } else {
+      // POSIX with no USERPROFILE → no backslash-ssh entries.
+      expect(BUILTIN_READ_DENYLIST.some((p) => /\\\.ssh$/.test(p))).toBe(false);
+    }
+  });
+
+  it('Firefox is listed under APPDATA, not LOCALAPPDATA (PR #1215 fix #3)', () => {
+    // Verify the structural invariant: BUILTIN_READ_DENYLIST must NEVER
+    // contain a Firefox entry under the LOCALAPPDATA block. This holds on POSIX
+    // (where neither var is set) and on Windows (where Firefox lives under APPDATA).
+    const localAppData = process.env['LOCALAPPDATA'];
+    if (localAppData) {
+      // On a real Windows machine: Firefox must NOT appear under LOCALAPPDATA.
+      expect(
+        BUILTIN_READ_DENYLIST.some(
+          (p) => p.includes('Firefox') && p.startsWith(localAppData),
+        ),
+      ).toBe(false);
+    } else {
+      // On POSIX: no LOCALAPPDATA entries at all.
+      expect(BUILTIN_READ_DENYLIST.some((p) => /\\Mozilla\\Firefox$/.test(p) && /Local/.test(p))).toBe(false);
+    }
+  });
+
+  it('BUILTIN_READ_DENYLIST has no APPDATA entries when APPDATA is unset at import', () => {
+    if (process.env['APPDATA']) {
+      const appData = process.env['APPDATA'];
+      expect(BUILTIN_READ_DENYLIST.some((p) => p.includes('Firefox') && p.startsWith(appData))).toBe(true);
+      expect(BUILTIN_READ_DENYLIST.some((p) => p.includes('gcloud') && p.startsWith(appData))).toBe(true);
+    } else {
+      // POSIX with no APPDATA: no Windows-style credential entries.
+      expect(BUILTIN_READ_DENYLIST.some((p) => /\\gcloud$/.test(p))).toBe(false);
+    }
+  });
+});
+
+describe('parseReadDenylistEntries — tilde backslash expansion (PR #1215)', () => {
+  it('expands ~\\ to homedir (Windows backslash tilde)', () => {
+    const result = parseReadDenylistEntries('~\\.mysecrets');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(join(homedir(), '.mysecrets'));
+  });
+
+  it('expands ~\\ with multiple slashes collapsed', () => {
+    const result = parseReadDenylistEntries('~\\\\.mysecrets');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(join(homedir(), '.mysecrets'));
+  });
+
+  it('does not disturb normal ~/ expansion', () => {
+    const result = parseReadDenylistEntries('~/.mysecrets');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(join(homedir(), '.mysecrets'));
+  });
+});

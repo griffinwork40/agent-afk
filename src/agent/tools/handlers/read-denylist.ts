@@ -145,6 +145,35 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   `${homedir()}/Library/Application Support/Microsoft Edge`,
   `${homedir()}/Library/Application Support/Arc`,
   `${homedir()}/Library/Application Support/Firefox`,
+  // S4-win32: Windows credential/config trees. Gated on both process.platform
+  // and the env var: on POSIX, USERPROFILE/APPDATA/LOCALAPPDATA may be set in
+  // CI/Docker but the backslash paths would resolve incorrectly — the platform
+  // guard prevents those entries from being added on non-Windows systems.
+  // Firefox profiles live under %APPDATA%\Mozilla\Firefox, NOT %LOCALAPPDATA%.
+  ...(process.platform === 'win32' && env.USERPROFILE
+    ? [
+        `${env.USERPROFILE}\\.ssh`,
+        `${env.USERPROFILE}\\.aws`,
+        `${env.USERPROFILE}\\.gnupg`,
+      ]
+    : []),
+  ...(process.platform === 'win32' && env.APPDATA
+    ? [
+        `${env.APPDATA}\\gcloud`,
+        `${env.APPDATA}\\Docker`,
+        `${env.APPDATA}\\Mozilla\\Firefox`,
+      ]
+    : []),
+  // S4-win32: Windows browser credential trees. Gated on both process.platform
+  // and the env var for the same reason as above.
+  ...(process.platform === 'win32' && env.LOCALAPPDATA
+    ? [
+        `${env.LOCALAPPDATA}\\Google\\Chrome`,
+        `${env.LOCALAPPDATA}\\Chromium`,
+        `${env.LOCALAPPDATA}\\BraveSoftware`,
+        `${env.LOCALAPPDATA}\\Microsoft\\Edge`,
+      ]
+    : []),
 ];
 
 /**
@@ -190,7 +219,7 @@ const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
-  (rel) => `${homedir()}/${rel}`,
+  (rel) => join(homedir(), rel),
 );
 
 /**
@@ -264,11 +293,14 @@ let cached:
  */
 export function parseReadDenylistEntries(raw: string | undefined): string[] {
   if (!raw) return [];
+  // On Windows, paths contain colons (C:\…) so use ';' as the separator
+  // (matching Windows PATH convention); on POSIX, use ':'.
+  const listSep = process.platform === 'win32' ? ';' : ':';
   return raw
-    .split(':')
+    .split(listSep)
     .map((p) => p.trim())
     .filter(Boolean)
-    .map((p) => (p === '~' || p.startsWith('~/') ? expandHome(p.replace(/^~\/+/, '~/')) : p))
+    .map((p) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? expandHome(p.replace(/^~[/\\]+/, '~/')) : p))
     .map((p) => resolve(p));
 }
 
@@ -485,13 +517,19 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
  * @param filePath    - The raw path as supplied by the model.
  * @param handlerName - Tool name for the error message.
  */
+/** Marker phrase embedded in every read-denylist denial message. */
+export const READ_DENYLIST_ENTRY_MARKER = 'read-denylist entry:';
+
+/** Marker phrase embedded in every protected-credential-path denial message. */
+export const PROTECTED_CREDENTIAL_PATH_MARKER = 'is a protected credential/secret path';
+
 export function assertNotReadDenied(filePath: string, handlerName = 'read_file'): void {
   const { denied, matched } = isReadDenied(filePath);
   if (denied) {
     const real = safeRealpath(resolve(filePath));
     throw new Error(
       `${handlerName}: refusing to read protected path: ${real}` +
-        ` (matches read-denylist entry: ${matched})`,
+        ` (matches ${READ_DENYLIST_ENTRY_MARKER} ${matched})`,
     );
   }
 }

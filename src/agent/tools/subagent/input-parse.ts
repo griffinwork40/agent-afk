@@ -9,7 +9,7 @@
  */
 
 import { isAbsolute, resolve as resolvePath } from 'node:path';
-import { isReadDenied } from '../handlers/read-denylist.js';
+import { isReadDenied, READ_DENYLIST_ENTRY_MARKER } from '../handlers/read-denylist.js';
 import { realpathSafe } from '../handlers/_cwd-utils.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './root-validation.js';
 import {
@@ -444,7 +444,7 @@ export function parseAgentInput(input: unknown): AgentInput {
       if (denied.denied) {
         throw new Error(
           `Agent tool readRoots entries must not target a protected/credential path ` +
-            `(matches read-denylist entry: ${denied.matched}), got: ${JSON.stringify(entry)}`,
+            `(matches ${READ_DENYLIST_ENTRY_MARKER} ${denied.matched}), got: ${JSON.stringify(entry)}`,
         );
       }
       // (c) ANCESTOR-OF-CREDENTIAL rejection (#852). Distinct from (b): the

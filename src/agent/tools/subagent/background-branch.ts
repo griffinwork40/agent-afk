@@ -92,6 +92,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       handle,
       prompt,
       model: model ?? 'sonnet',
+      provenance: 'model',
       parentSessionId,
       onCleanup,
     });

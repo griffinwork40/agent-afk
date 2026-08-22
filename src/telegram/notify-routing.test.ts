@@ -15,6 +15,8 @@ import {
   resolveConfiguredNotifyTargets,
   resolveChatTarget,
   loadChatAliases,
+  emitMixedAllowlistHintIfNeeded,
+  _resetMixedAllowlistHintForTest,
   type TelegramNotifyConfig,
 } from './notify-routing.js';
 import { isChatAllowed, parseAllowedChatIds } from './allowlist.js';
@@ -113,6 +115,72 @@ describe('resolvePrimaryChatId (pure)', () => {
   });
   it('returns undefined for an empty list', () => {
     expect(resolvePrimaryChatId([])).toBeUndefined();
+  });
+});
+
+describe('emitMixedAllowlistHintIfNeeded (one-time hint)', () => {
+  beforeEach(() => {
+    _resetMixedAllowlistHintForTest();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetMixedAllowlistHintForTest();
+  });
+
+  it('emits a console.warn when DM and group are both present and no explicit primary', () => {
+    emitMixedAllowlistHintIfNeeded([123, -100200], undefined);
+    expect(console.warn).toHaveBeenCalledOnce();
+    expect(vi.mocked(console.warn).mock.calls[0]![0]).toMatch(
+      /AFK_TELEGRAM_PRIMARY_CHAT_ID/,
+    );
+  });
+
+  it('emits the hint only once per process even when called multiple times', () => {
+    emitMixedAllowlistHintIfNeeded([123, -100200], undefined);
+    emitMixedAllowlistHintIfNeeded([456, -100300], undefined);
+    expect(console.warn).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT emit when all allowed IDs are DMs (positive only)', () => {
+    emitMixedAllowlistHintIfNeeded([111, 222], undefined);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit when all allowed IDs are groups (negative only)', () => {
+    emitMixedAllowlistHintIfNeeded([-100200, -100300], undefined);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit when an explicit primary is set', () => {
+    emitMixedAllowlistHintIfNeeded([123, -100200], 123);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit for an empty allowlist', () => {
+    emitMixedAllowlistHintIfNeeded([], undefined);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('resolveNotifyTargets emits the hint on mixed allowlist without explicit primary', () => {
+    resolveNotifyTargets(new Set([123, -100200]));
+    expect(console.warn).toHaveBeenCalledOnce();
+  });
+
+  it('resolveNotifyTargets does NOT emit the hint when explicit primaryChatId is set', () => {
+    resolveNotifyTargets(new Set([123, -100200]), { primaryChatId: 123 });
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('resolveNotifyTargets does NOT emit the hint in broadcast mode (no primary resolution)', () => {
+    resolveNotifyTargets(new Set([123, -100200]), { mode: 'broadcast' });
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('resolveNotifyTargets still returns the correct DM target even when hint fires', () => {
+    const targets = resolveNotifyTargets(new Set([123, -100200]));
+    expect(targets).toEqual([123]);
   });
 });
 

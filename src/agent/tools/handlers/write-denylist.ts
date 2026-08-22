@@ -47,6 +47,20 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
   // S4: npm publish tokens and Docker registry credentials.
   `${homedir()}/.npmrc`,
   `${homedir()}/.docker/config.json`,
+  // S4-win32: Windows credential/config trees. Gated on both process.platform
+  // and the env var: on POSIX, USERPROFILE/APPDATA may be set in CI/Docker
+  // but the backslash paths would resolve incorrectly — the platform guard
+  // prevents those entries from being added on non-Windows systems.
+  ...(process.platform === 'win32' && env.APPDATA
+    ? [`${env.APPDATA}\\gcloud`, `${env.APPDATA}\\Docker`]
+    : []),
+  ...(process.platform === 'win32' && env.USERPROFILE
+    ? [
+        `${env.USERPROFILE}\\.ssh`,
+        `${env.USERPROFILE}\\.aws`,
+        `${env.USERPROFILE}\\.gnupg`,
+      ]
+    : []),
 ];
 
 /**
@@ -119,15 +133,33 @@ let cached: { key: string; unresolved: readonly string[] } | undefined;
  * Return the effective denylist (builtin + any user-supplied extras).
  * Entries are returned as real (symlink-resolved) absolute paths.
  *
- * @note AFK_WRITE_DENYLIST is split on `:` — paths that themselves contain
- * a colon (unusual on POSIX, impossible on macOS HFS+) will be mis-split.
- * Use a different separator character if your paths require colons.
+ * @note AFK_WRITE_DENYLIST is split on `:` on POSIX and `;` on Windows
+ * (matching Windows PATH convention, since Windows paths contain colons).
+ * POSIX paths that themselves contain a colon (unusual, impossible on macOS
+ * HFS+) will be mis-split; use a different separator character in that case.
  */
 export function getWriteDenylist(): readonly string[] {
   const key = `${env.AFK_WRITE_DENYLIST ?? ''}\u0000${env.AFK_HOME ?? ''}\u0000${env.AFK_STATE_DIR ?? ''}`;
   if (!cached || cached.key !== key) {
     const extra = env.AFK_WRITE_DENYLIST;
-    const extras = extra ? extra.split(':').map((p) => resolve(p)).filter(Boolean) : [];
+    // On Windows, paths contain colons (C:\…) so use ';' as the separator
+    // (matching Windows PATH convention); on POSIX, use ':'.
+    const listSep = process.platform === 'win32' ? ';' : ':';
+    const extras = extra
+      ? extra
+          .split(listSep)
+          .map((p) => p.trim())
+          .filter(Boolean)
+          .map((p) => {
+            // Expand leading ~/ or ~\ (Windows backslash tilde) to homedir.
+            if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+              return join(homedir(), p.slice(2));
+            }
+            return p;
+          })
+          .map((p) => resolve(p))
+          .filter(Boolean)
+      : [];
     cached = {
       key,
       unresolved: [

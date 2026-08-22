@@ -610,6 +610,49 @@ describe('buildChildConfig', () => {
       expect(capturedCtx!.surface).toBeUndefined();
     });
 
+    it('forwards workspaceStore to the child manager and the recursive executor ctx', () => {
+      // Regression (PR #1213): workspaceStore must chain like traceWriter/cwd
+      // so depth-2+ `agent` forks receive the sibling-findings preamble from
+      // injectWorkspacePreamble. Without threading it into both the nested
+      // manager AND the recursive executor ctx, grandchild forks bypass the
+      // store and never see workspace findings in their system prompt.
+      const workspaceStore = { entries: [] } as unknown as import('../../../workspace/index.js').WorkspaceStore;
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({
+          depth: 0,
+          maxDepth: 3,
+          workspaceStore,
+          childProviderFactory,
+          createChildExecutor,
+        }),
+      );
+      const mgr = childManager as unknown as { workspaceStore: unknown };
+      expect(mgr.workspaceStore).toBe(workspaceStore);
+      expect(capturedCtx).toBeDefined();
+      expect(capturedCtx!.workspaceStore).toBe(workspaceStore);
+    });
+
+    it('omits workspaceStore from the child manager and executor ctx when unset', () => {
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({ depth: 0, maxDepth: 3, childProviderFactory, createChildExecutor }),
+      );
+      const mgr = childManager as unknown as { workspaceStore: unknown };
+      expect(mgr.workspaceStore).toBeUndefined();
+      expect(capturedCtx!.workspaceStore).toBeUndefined();
+    });
+
     it('skips nesting (no child manager, no provider) at the depth cap', () => {
       const childProviderFactory = vi.fn(() => mockProvider());
       const { childConfig, childManager, childParentSession } = buildChildConfig(

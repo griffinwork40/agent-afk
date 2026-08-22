@@ -5,22 +5,25 @@ import { extractLatestThinkingClause } from '../../_lib/stream-renderer-subagent
 import { truncateDisplayWidth } from '../../display.js';
 import { formatDuration, formatTokens, formatToolCallStat } from '../../format-utils.js';
 import { palette } from '../../palette.js';
+import { capToMeasure } from '../../render/measure.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
 import { shortenPaths } from './tool-lane-format-args.js';
 import { sanitizeLabel } from './tool-lane-format-sanitize.js';
 
 /**
- * Clamp a fully-styled ANSI string to the current terminal width (or the
+ * Clamp a fully-styled ANSI string to the active text measure (or the
  * provided `columns` override used in tests).  Leaves ANSI reset codes intact
  * so the caller's `palette.dim(…)` wrapper still closes correctly.
  *
- * Terminal width is read through `getTerminalWidth()` — never via raw
- * `process.stdout.columns` — so the 80-column fallback for non-TTY pipes is
- * centralised in `src/cli/terminal-size.ts`.
+ * Width is `capToMeasure(getTerminalWidth())` — the same ceiling the tool-lane
+ * applies via `toolLaneWidth()` — so the banner never extends past the
+ * tool-lane rows above it on wide terminals. When the measure is disabled
+ * (`AFK_TEXT_MEASURE=full`), `capToMeasure` returns the raw terminal width
+ * unchanged.
  */
 function clampToTerminal(line: string, columns?: number): string {
-  const cols = columns ?? getTerminalWidth();
+  const cols = columns ?? capToMeasure(getTerminalWidth());
   if (!Number.isFinite(cols) || cols <= 0) return line;
   return truncateDisplayWidth(line, cols);
 }
@@ -47,7 +50,7 @@ export function deriveProgressActivity(
   columns?: number,
 ): string | undefined {
   if (!thinkingBuffer) return undefined;
-  const cols = columns ?? getTerminalWidth();
+  const cols = columns ?? capToMeasure(getTerminalWidth());
   const clause = extractLatestThinkingClause(thinkingBuffer, Math.max(20, cols - 10));
   return clause || undefined;
 }
@@ -135,7 +138,7 @@ export function formatProgressBanner(
     stats.push(`via ${color(`${glyph} ${sanitizeLabel(lastToolName)}`)}`);
   }
   if (toolUses) stats.push(formatToolCallStat(toolUses));
-  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
+  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tokens`);
   if (durationMs) stats.push(formatDuration(durationMs));
   // Parallel fan-out indicator: when more than one child is concurrently active
   // show "N running" so the operator knows a wide parallel batch is in flight
@@ -148,7 +151,7 @@ export function formatProgressBanner(
   }
   // Drop the interrupt hint once a stop is already in flight — the ESC has been
   // accepted, so "esc to interrupt" would misrepresent the current state.
-  if (!stopping) stats.push('esc to interrupt · ctrl+b background');
+  if (!stopping) stats.push('esc to interrupt · ctrl+b to run in background');
 
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';
 
@@ -185,7 +188,7 @@ export function formatProgressSummary(event: ProgressEvent, columns?: number): s
   const { description, totalTokens, toolUses, durationMs } = event;
   const stats: string[] = [];
   if (toolUses) stats.push(formatToolCallStat(toolUses));
-  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
+  if (totalTokens) stats.push(`${formatTokens(totalTokens)} tokens`);
   if (durationMs) stats.push(formatDuration(durationMs));
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';
   return clampToTerminal(palette.dim(`  ◦ ${sanitizeLabel(description)}${statsStr}`), columns);

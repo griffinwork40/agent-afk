@@ -9,6 +9,8 @@ import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
+import { env } from '../../config/env.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
@@ -261,7 +263,7 @@ export function registerChatCommand(program: Command): void {
       const spinner = ora('Initializing agent...').start();
 
       let session: AgentSession | null = null;
-      let sharedMemoryStore: MemoryStore | undefined;
+      let sharedMemoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
       let worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined;
       let worktreeCwd: string | undefined;
       let mcpManager: McpManager | undefined;
@@ -487,6 +489,7 @@ export function registerChatCommand(program: Command): void {
             : {}),
           // No backgroundRegistry on the one-shot chat path — background
           // dispatch is interactive-only by contract.
+          ...(env.AFK_WORKSPACE_DISABLED !== '1' ? { workspaceStore: (workspaceStore = new WorkspaceStore()) } : {}),
         });
 
         sharedMemoryStore = new MemoryStore();
@@ -622,6 +625,19 @@ export function registerChatCommand(program: Command): void {
         })), trace?.writer);
 
         boundSession = session;
+        // Subagent-success rollup: wire both the root manager and the compose
+        // executor so all subagent token/cost data (including compose DAG nodes)
+        // accumulates into this session's session_sealed telemetry. Late-bound
+        // here because the session is constructed after the executors.
+        // Use a local const to give the TypeScript narrowing a stable reference
+        // (the outer `session` variable is `AgentSession | null`).
+        const wiredSession = session;
+        rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+          wiredSession.recordSubagentCompletion(usage, costUsd);
+        });
+        composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+          wiredSession.recordSubagentCompletion(usage, costUsd);
+        });
 
         spinner.text = 'Sending message...';
 
@@ -770,7 +786,7 @@ export function registerChatCommand(program: Command): void {
           try {
             const savedPath = saveSession(stats, persistId);
             // Derive the resume id from the saved path's basename.
-            const savedId = savedPath.replace(/\.json$/, '').split('/').pop() ?? persistId ?? stats.sessionId ?? 'unknown';
+            const savedId = path.basename(savedPath, '.json') || persistId || stats.sessionId || 'unknown';
             process.stderr.write(`Continue with: afk chat <msg> --resume ${savedId}\n`);
           } catch { /* best-effort — don't mask the main error */ }
         }
@@ -793,7 +809,8 @@ export function registerChatCommand(program: Command): void {
         if (mcpManager) {
           await mcpManager.disconnectAll();
         }
-        sharedMemoryStore?.close();
+        try { sharedMemoryStore?.close(); } catch {}
+        try { workspaceStore?.close(); } catch {}
         // Worktree cleanup: session close must finish before
         // `git worktree remove --force` so any active SQLite WAL / trace
         // writer file handles on the worktree are flushed first.

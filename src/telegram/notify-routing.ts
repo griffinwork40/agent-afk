@@ -19,6 +19,14 @@ import { parseAllowedChatIds } from './allowlist.js';
 import { loadTelegramConfig } from '../cli/config.js';
 import { env } from '../config/env.js';
 
+/** Guard so the mixed-allowlist hint fires at most once per process. */
+let _mixedAllowlistHintEmitted = false;
+
+/** Reset the one-time hint guard — for use in tests only. */
+export function _resetMixedAllowlistHintForTest(): void {
+  _mixedAllowlistHintEmitted = false;
+}
+
 /** How notifications fan out across the allowed chats. */
 export type NotifyMode = 'primary' | 'broadcast' | 'custom';
 
@@ -56,6 +64,33 @@ export function resolvePrimaryChatId(
 }
 
 /**
+ * Emit a one-time hint when the allowlist contains both DM and group chats but
+ * no explicit primary is configured — so the user knows notifications are going
+ * to the DM and can set `AFK_TELEGRAM_PRIMARY_CHAT_ID` to change it.
+ *
+ * @internal Exported only for testing.
+ */
+export function emitMixedAllowlistHintIfNeeded(
+  allowed: readonly number[],
+  explicitPrimary: number | undefined,
+): void {
+  if (_mixedAllowlistHintEmitted) return;
+  if (explicitPrimary !== undefined && Number.isFinite(explicitPrimary) && explicitPrimary !== 0) {
+    return;
+  }
+  const hasDm = allowed.some((id) => id > 0);
+  const hasGroup = allowed.some((id) => id < 0);
+  if (hasDm && hasGroup) {
+    _mixedAllowlistHintEmitted = true;
+    console.warn(
+      '[telegram] AFK_TELEGRAM_ALLOWED_CHAT_IDS contains both a DM and a group chat. ' +
+        'Notifications will go to the DM (positive-id chat) by default. ' +
+        'Set AFK_TELEGRAM_PRIMARY_CHAT_ID to route notifications to a different chat.',
+    );
+  }
+}
+
+/**
  * Pure routing decision. Given the inbound allowlist and the notify config,
  * return the ordered, de-duplicated list of chat ids that should receive an
  * out-of-band notification. Never reads env or files.
@@ -82,6 +117,7 @@ export function resolveNotifyTargets(
     // misconfigured `custom` block still delivers somewhere sensible.
   }
 
+  emitMixedAllowlistHintIfNeeded(allowed, config.primaryChatId);
   const primary = resolvePrimaryChatId(allowed, config.primaryChatId);
   return primary !== undefined ? [primary] : [];
 }

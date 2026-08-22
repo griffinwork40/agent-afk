@@ -41,6 +41,7 @@
 
 import { palette } from '../palette.js';
 import type { PickerController } from '../terminal-compositor.js';
+import { filterOptions } from './picker-filter.js';
 
 /**
  * Minimal surface area the picker needs from a `TerminalCompositor`.
@@ -63,6 +64,8 @@ export interface PickerHost {
   enterPickerMode(controller: PickerController): void;
   exitPickerMode(): void;
   repaintPicker(): void;
+  /** Current terminal height, when the host can report it. */
+  terminalRows?(): number | undefined;
 }
 
 export interface RunPickerOptions {
@@ -108,6 +111,16 @@ export interface RunPickerOptions {
    * the picker still cleans up normally.
    */
   onCtrlC?: () => void;
+  /**
+   * Enable fuzzy search overlay. When `true`, printable characters append
+   * to a filter query that narrows the visible options. Esc with a
+   * non-empty query clears the filter; Esc with an empty query cancels the
+   * picker. Backspace removes the last filter character.
+   *
+   * Only the `/resume` caller passes `searchable: true`. The elicitation
+   * picker and config-menu do NOT pass it and get the unchanged behaviour.
+   */
+  searchable?: boolean;
 }
 
 const GLYPH_CURSOR = '▸';
@@ -117,6 +130,10 @@ const GLYPH_BOX_UNCHECKED = '◯';
 
 const HELP_SINGLE = '↑/↓ navigate · enter select · esc cancel';
 const HELP_MULTI = '↑/↓ navigate · space toggle · enter confirm · esc cancel';
+const HELP_SEARCH = '↑/↓ navigate · enter select · esc clear/cancel · type to filter';
+
+/** Number of option rows shown in the viewport at once. */
+const WINDOW_SIZE = 20;
 
 /**
  * Run an arrow-key picker against a `PickerHost` (typically a
@@ -152,7 +169,15 @@ export function runPicker(
   opts: RunPickerOptions,
 ): Promise<readonly string[] | null> {
   return new Promise((resolve) => {
-    const { header, options, multi = false, signal, initialIndex = 0, onCtrlC } = opts;
+    const {
+      header,
+      options,
+      multi = false,
+      signal,
+      initialIndex = 0,
+      onCtrlC,
+      searchable = false,
+    } = opts;
 
     if (options.length === 0) {
       resolve(null);
@@ -163,7 +188,49 @@ export function runPicker(
       return;
     }
 
+    // --- filter / search state (searchable mode only) ---
+    let filterQuery = '';
+    // filteredResults mirrors filterOptions() output; rebuilt on every query change.
+    let filteredResults = filterOptions(options, filterQuery);
+
+    /** The live option set (filtered when searchable, full list otherwise). */
+    const activeOptions = (): readonly string[] =>
+      searchable
+        ? filteredResults.map((r) => options[r.originalIndex] ?? '')
+        : options;
+
+    // --- virtual-scroll state ---
     let cursor = clamp(initialIndex, 0, options.length - 1);
+    let scrollOffset = 0;
+
+    /** Option rows that fit without crossing the compositor's bottom margin. */
+    const viewportSize = (optionCount: number): number => {
+      const terminalRows = host.terminalRows?.();
+      if (terminalRows === undefined) return WINDOW_SIZE;
+      const fixedRows = header.length + (searchable ? 1 : 0) + 1;
+      const withoutIndicator = Math.max(0, terminalRows - 1 - fixedRows);
+      const indicatorRows = optionCount > Math.min(WINDOW_SIZE, withoutIndicator) ? 1 : 0;
+      return Math.min(WINDOW_SIZE, Math.max(0, withoutIndicator - indicatorRows));
+    };
+
+    /** Clamp cursor to the current active-option range and adjust scroll. */
+    const clampCursorAndScroll = (): void => {
+      const len = activeOptions().length;
+      if (len === 0) {
+        cursor = 0;
+        scrollOffset = 0;
+        return;
+      }
+      const windowSize = viewportSize(len);
+      cursor = clamp(cursor, 0, len - 1);
+      // Keep cursor in the visible window.
+      if (cursor < scrollOffset) scrollOffset = cursor;
+      if (windowSize > 0 && cursor >= scrollOffset + windowSize) {
+        scrollOffset = cursor - windowSize + 1;
+      }
+      scrollOffset = clamp(scrollOffset, 0, Math.max(0, len - windowSize));
+    };
+
     const selected = new Set<number>(opts.initialSelected ?? []);
     let resolved = false;
 
@@ -181,19 +248,37 @@ export function runPicker(
     const renderRows = (): readonly string[] => {
       const lines: string[] = [];
       for (const h of header) lines.push(h);
-      for (let i = 0; i < options.length; i++) {
-        const label = options[i] ?? '';
-        const isCursor = i === cursor;
+
+      // Filter input row (searchable mode).
+      if (searchable) {
+        lines.push(palette.dim('  Filter: ') + filterQuery + '█');
+      }
+
+      const ao = activeOptions();
+      const len = ao.length;
+      const windowSize = viewportSize(len);
+      clampCursorAndScroll();
+
+      // Virtual-scroll window.
+      const visStart = scrollOffset;
+      const visEnd = Math.min(scrollOffset + windowSize, len);
+
+      for (let vi = visStart; vi < visEnd; vi++) {
+        const label = ao[vi] ?? '';
+        const isCursor = vi === cursor;
         const cursorGlyph = isCursor ? palette.brand(GLYPH_CURSOR) : GLYPH_GUTTER;
         let row: string;
         if (multi) {
-          const isChecked = selected.has(i);
-          const box = isChecked ? palette.success(GLYPH_BOX_CHECKED) : palette.dim(GLYPH_BOX_UNCHECKED);
-          // Highlight the row label only when the cursor is on it AND
-          // it's unchecked — checked items get green; cursor-on-checked
-          // would over-stack styles. Cursor-on-unchecked: bold the label
-          // for distinctness from the dim un-cursored rows.
-          const labelStyled = isCursor && !isChecked ? palette.bold(label) : label;
+          // In searchable+multi we track selection by originalIndex.
+          const origIdx = searchable
+            ? (filteredResults[vi]?.originalIndex ?? vi)
+            : vi;
+          const isChecked = selected.has(origIdx);
+          const box = isChecked
+            ? palette.success(GLYPH_BOX_CHECKED)
+            : palette.dim(GLYPH_BOX_UNCHECKED);
+          const labelStyled =
+            isCursor && !isChecked ? palette.bold(label) : label;
           row = `  ${cursorGlyph} ${box} ${labelStyled}`;
         } else {
           const labelStyled = isCursor ? palette.bold(label) : palette.dim(label);
@@ -201,7 +286,16 @@ export function runPicker(
         }
         lines.push(row);
       }
-      lines.push(palette.dim('  ' + (multi ? HELP_MULTI : HELP_SINGLE)));
+
+      // Scroll indicator — shown when the list is longer than the window.
+      if (len > windowSize) {
+        const lo = visStart + 1;
+        const hi = visEnd;
+        lines.push(palette.dim(`  (${lo}–${hi} of ${len}  ↑/↓ scroll)`));
+      }
+
+      const helpText = searchable ? HELP_SEARCH : multi ? HELP_MULTI : HELP_SINGLE;
+      lines.push(palette.dim('  ' + helpText));
       return lines;
     };
 
@@ -210,36 +304,59 @@ export function runPicker(
       key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string },
     ): void => {
       if (resolved) return;
-      // Esc: dismiss the picker without taking any action.
+
+      // Esc: clear filter if non-empty (searchable); otherwise dismiss.
       if (key.name === 'escape') {
+        if (searchable && filterQuery.length > 0) {
+          filterQuery = '';
+          filteredResults = filterOptions(options, filterQuery);
+          cursor = 0;
+          scrollOffset = 0;
+          host.repaintPicker();
+          return;
+        }
         finish(null);
         return;
       }
-      // Ctrl+C: hard-cancel safety hatch. Fire `onCtrlC` (if provided) BEFORE
-      // resolving so callers can trigger an immediate abort (e.g. hard-cancel)
-      // without waiting for the picker promise to settle. The picker still
-      // cleans up normally via finish(null).
+
+      // Ctrl+C: hard-cancel safety hatch.
       if (key.ctrl && key.name === 'c') {
         onCtrlC?.();
         finish(null);
         return;
       }
+
+      // Backspace in searchable mode removes last filter char.
+      if (searchable && (key.name === 'backspace' || key.name === 'delete')) {
+        if (filterQuery.length > 0) {
+          filterQuery = filterQuery.slice(0, -1);
+          filteredResults = filterOptions(options, filterQuery);
+          cursor = 0;
+          scrollOffset = 0;
+          host.repaintPicker();
+        }
+        return;
+      }
+
       if (key.name === 'up' || (key.ctrl && key.name === 'p')) {
-        cursor = cursor === 0 ? options.length - 1 : cursor - 1;
+        const len = activeOptions().length;
+        cursor = cursor === 0 ? len - 1 : cursor - 1;
+        clampCursorAndScroll();
         host.repaintPicker();
         return;
       }
       if (key.name === 'down' || (key.ctrl && key.name === 'n')) {
-        cursor = cursor === options.length - 1 ? 0 : cursor + 1;
+        const len = activeOptions().length;
+        cursor = cursor === len - 1 ? 0 : cursor + 1;
+        clampCursorAndScroll();
         host.repaintPicker();
         return;
       }
+
       if (key.name === 'return') {
+        // An empty filtered view has no highlighted option to confirm.
+        if (searchable && filteredResults.length === 0) return;
         if (multi) {
-          // Empty multi-select selection is allowed — callers can decide
-          // whether to treat it as "skip" downstream. Returning the
-          // (possibly empty) selection lets the caller distinguish
-          // "confirmed with no items" from "cancelled".
           const out: string[] = [];
           for (let i = 0; i < options.length; i++) {
             if (selected.has(i)) {
@@ -249,34 +366,61 @@ export function runPicker(
           }
           finish(out);
         } else {
-          const v = options[cursor];
+          // Resolve with the ORIGINAL option label (not the filtered view label)
+          // so that resume.ts's `options.indexOf(choice)` lookup still works.
+          const origIdx = searchable
+            ? (filteredResults[cursor]?.originalIndex ?? cursor)
+            : cursor;
+          const v = options[origIdx];
           finish(v !== undefined ? [v] : []);
         }
         return;
       }
+
       if (multi && (key.name === 'space' || _char === ' ')) {
-        if (selected.has(cursor)) selected.delete(cursor);
-        else selected.add(cursor);
+        const origIdx = searchable
+          ? (filteredResults[cursor]?.originalIndex ?? cursor)
+          : cursor;
+        if (selected.has(origIdx)) selected.delete(origIdx);
+        else selected.add(origIdx);
         host.repaintPicker();
         return;
       }
-      // Home/End jumps — quality-of-life additions; cheap to implement
-      // and standard in inquirer-style pickers.
+
       if (key.name === 'home') {
         cursor = 0;
+        scrollOffset = 0;
         host.repaintPicker();
         return;
       }
       if (key.name === 'end') {
-        cursor = options.length - 1;
+        cursor = activeOptions().length - 1;
+        clampCursorAndScroll();
         host.repaintPicker();
         return;
       }
-      // All other keys are swallowed (printable chars, Tab, etc.) so
-      // they don't leak into a buried input buffer. The compositor's
-      // picker-mode short-circuit (terminal-compositor.ts:dispatchKey)
-      // already ensures this, but ignoring here is defence-in-depth.
+
+      // Printable char in searchable mode: append to filter query.
+      if (searchable && _char !== undefined && _char.length === 1 && !key.ctrl && !key.meta) {
+        const code = _char.codePointAt(0) ?? 0;
+        if (code >= 0x20) {
+          filterQuery += _char;
+          filteredResults = filterOptions(options, filterQuery);
+          cursor = 0;
+          scrollOffset = 0;
+          host.repaintPicker();
+          return;
+        }
+      }
+
+      // All other keys are swallowed (printable chars when not searchable, Tab,
+      // etc.) so they don't leak into a buried input buffer. The compositor's
+      // picker-mode short-circuit (terminal-compositor.ts:dispatchKey) already
+      // ensures this, but ignoring here is defence-in-depth.
     };
+
+    // Initialise scroll after cursor is set.
+    clampCursorAndScroll();
 
     const controller: PickerController = { renderRows, onKey };
     host.enterPickerMode(controller);

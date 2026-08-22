@@ -1869,6 +1869,7 @@ describe('SubagentExecutor', () => {
       // Sanity: the job is observable via the registry; status still running.
       const observed = registry.get(payload.jobId);
       expect(observed?.status).toBe('running');
+      expect(observed?.provenance).toBe('model');
 
       // Terminal callback was wired correctly: firing it transitions the
       // registry without touching the executor.
@@ -1904,6 +1905,81 @@ describe('SubagentExecutor', () => {
       ac.abort('end of turn');
       await new Promise((r) => setImmediate(r));
       expect(cancelMock).not.toHaveBeenCalled();
+    });
+
+    it('cancel_background_job cancels only a running model-owned job and records its reason', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const modelHandle = bgHandle('model-job');
+      const userHandle = bgHandle('user-job');
+      const modelJob = registry.register({
+        handle: modelHandle.handle,
+        prompt: 'obsolete work',
+        model: 'sonnet',
+        provenance: 'model',
+      });
+      const userJob = registry.register({
+        handle: userHandle.handle,
+        prompt: 'human work',
+        model: 'sonnet',
+        provenance: 'user',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const refused = await bgExecutor.cancelBackgroundJob(makeCall({
+        name: 'cancel_background_job',
+        input: { jobId: userJob.jobId, reason: 'obsolete' },
+      }));
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toMatch(/backgrounded by the user/);
+      expect(userHandle.cancelMock).not.toHaveBeenCalled();
+      expect(registry.get(userJob.jobId)?.status).toBe('running');
+
+      const cancelled = await bgExecutor.cancelBackgroundJob(makeCall({
+        name: 'cancel_background_job',
+        input: { jobId: modelJob.jobId, reason: 'user corrected the requirement' },
+      }));
+      expect(cancelled.isError).toBeUndefined();
+      expect(cancelled.content).toContain(modelJob.label);
+      expect(modelHandle.cancelMock).toHaveBeenCalledOnce();
+    });
+
+    it('cancel_background_job reports unknown ids with known ids and treats terminal jobs as non-errors', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const terminalHandle = bgHandle('terminal-job');
+      const job = registry.register({
+        handle: terminalHandle.handle,
+        prompt: 'known job',
+        model: 'sonnet',
+        provenance: 'model',
+      });
+      terminalHandle.fireTerminal({ id: 'terminal-job', status: 'succeeded' } as SubagentResult);
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const unknown = await bgExecutor.cancelBackgroundJob(makeCall({
+        name: 'cancel_background_job',
+        input: { jobId: 'bg-missing', reason: 'obsolete' },
+      }));
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content).toContain(job.jobId);
+
+      const terminal = await bgExecutor.cancelBackgroundJob(makeCall({
+        name: 'cancel_background_job',
+        input: { jobId: job.jobId, reason: 'obsolete' },
+      }));
+      expect(terminal.isError).toBeUndefined();
+      expect(terminal.content).toMatch(/already completed/);
     });
 
     it('mode default is foreground — omitting mode preserves existing behavior', async () => {
@@ -2149,6 +2225,7 @@ describe('SubagentExecutor', () => {
 
       // Observable as a running registry job; the trigger is cleared.
       expect(registry.get(payload.jobId)?.status).toBe('running');
+      expect(registry.get(payload.jobId)?.provenance).toBe('user');
       expect(exec.hasPromotableForeground()).toBe(false);
 
       // Resolving the in-flight run drives the adopted job to terminal.

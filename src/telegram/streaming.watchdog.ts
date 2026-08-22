@@ -10,8 +10,11 @@
 
 import { StreamTimeoutError } from './stream-timeout-error.js';
 import type { OutputEvent } from '../agent/types.js';
+import {
+  TTFB_MAX_ATTEMPTS,
+  ttfbAttemptTimeoutMs,
+} from '../agent/providers/anthropic-direct/loop/retry-budget.js';
 import { resolveTtfbTimeoutMs } from '../agent/providers/shared/first-byte-timeout.js';
-import { TTFB_MAX_ATTEMPTS, ttfbAttemptTimeoutMs } from '../agent/providers/anthropic-direct/loop/retry-budget.js';
 
 /** Max wait for first stream event (e.g. SDK/API cold start) */
 export const FIRST_EVENT_TIMEOUT_MS = 90_000;
@@ -53,7 +56,7 @@ export const TOOL_INFLIGHT_RECHECK_MS = 15_000;
 export const MAX_API_ROUND_HEADROOM_MS = 60_000;
 
 /**
- * Derive the ceiling on how long the watchdog stays SUSPENDED while the
+ * Resolve the ceiling on how long the watchdog stays SUSPENDED while the
  * provider is making a new `messages.create` API call between tool rounds.
  *
  * After the last tool result arrives and before the first SSE byte of the
@@ -64,10 +67,10 @@ export const MAX_API_ROUND_HEADROOM_MS = 60_000;
  * retry logic gets a chance to recover before the Telegram watchdog fires a
  * user-visible timeout.
  *
- * Computed at call time from live env so operators who raise
+ * Resolved at call time from live env so operators who raise
  * `AFK_MODEL_TTFB_TIMEOUT_MS` above the default automatically get a
  * proportionally higher watchdog ceiling — preventing the watchdog from firing
- * BEFORE the provider's own retry budget exhausts.
+ * BEFORE the provider's own retry budget exhausts (issue #1142).
  *
  * Default (AFK_MODEL_TTFB_TIMEOUT_MS unset → 180 000 ms):
  *   ttfbAttemptTimeoutMs(180 000) = 120 000
@@ -165,7 +168,7 @@ export function makeNextWithTimeout(
       // next round), the effective worst-case tolerance is:
       //
       //   pause_window + PAUSE_SLACK_MS + resolveMaxApiRoundInflightMs()
-      //   ≈ (pause_window) + 90 s + resolveMaxApiRoundInflightMs() (default 420 s)
+      //   ≈ (pause_window) + 90 s + resolveMaxApiRoundInflightMs()
       //
       // where pause_window is provider-governed (typically 60–600 s for
       // Anthropic overload responses). There is no single cap combining

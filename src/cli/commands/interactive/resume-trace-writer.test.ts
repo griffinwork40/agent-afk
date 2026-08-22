@@ -53,6 +53,7 @@ function sampleEvent() {
       toolUseId: 'tu-1',
       name: 'bash',
       inputBytes: 12,
+      argsFingerprint: 'a'.repeat(64),
     },
   };
 }

@@ -68,7 +68,7 @@ function toolPair(toolUseId: string, name: string): string[] {
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
     kind: 'tool_call',
-    payload: { phase: 'started', toolUseId, name, inputBytes: 100 },
+    payload: { phase: 'started', toolUseId, name, inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) },
   });
   const completed = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
@@ -162,7 +162,7 @@ function toolPairWithError(toolUseId: string, name: string): string[] {
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
     kind: 'tool_call',
-    payload: { phase: 'started', toolUseId, name, inputBytes: 100 },
+    payload: { phase: 'started', toolUseId, name, inputBytes: 100, argsFingerprint: 'abcd1234'.repeat(8) },
   });
   const completed = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),

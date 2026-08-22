@@ -198,6 +198,24 @@ export interface SkillExecutorContext {
    * those grandchildren inherit this name so the guard holds at all depths.
    */
   skillDispatchName?: string;
+  /**
+   * The session's shared workspace store, forwarded to INLINE registry-skill
+   * handlers as {@link SkillExecutionContext.workspaceStore} so the sub-agents
+   * they fork through their own `new SubagentManager(...)` (`/mint` phases,
+   * `/audit-fit`, user skills) inherit the workspace READ channel — the
+   * system-prompt preamble of sibling findings built by
+   * `injectWorkspacePreamble`.
+   *
+   * Scope note: this covers the INLINE handler path only. Skill children on the
+   * FORK path already inherit the store through `childProviderFactory` (WRITE)
+   * and the root manager (READ), because both are wired with it at the surface;
+   * an inline handler bypasses both by constructing its own manager, which is
+   * why the store has to travel as data on the context.
+   *
+   * Optional: surfaces without a workspace leave it unset and inline forks then
+   * carry no preamble, as before.
+   */
+  workspaceStore?: import('../../workspace/index.js').WorkspaceStore;
 }
 
 export interface SkillInput {

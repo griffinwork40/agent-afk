@@ -87,7 +87,7 @@ describe('ThinkingLane — duration semantics', () => {
   });
 
   it('inlineSummary() honors the markEnded() cap', () => {
-    // Subagent Done rows surface `· thought Xs · N tok` via inlineSummary —
+    // Subagent Done rows surface `· thought Xs · N tokens` via inlineSummary —
     // the same fix must apply or the subagent annotation goes back to
     // reporting turn-end wall-clock.
     const lane = new ThinkingLane();
@@ -175,8 +175,8 @@ describe('ThinkingLane — per-phase interleaving (peekPhase / drainPhase)', () 
 
     // Cumulative methods (subagent / non-TTY paths) are unaffected by draining.
     expect(lane.peek()).toBe('alpha beta');
-    // 'alpha beta' = 10 chars → ceil(10/4) = 3 tok
-    expect(stripAnsi(lane.collapse() ?? '')).toContain('3 tok');
+    // 'alpha beta' = 10 chars → ceil(10/4) = 3 tokens
+    expect(stripAnsi(lane.collapse() ?? '')).toContain('3 tokens');
   });
 
   it('peekPhase()/drainPhase() are empty before any push', () => {
@@ -188,8 +188,8 @@ describe('ThinkingLane — per-phase interleaving (peekPhase / drainPhase)', () 
 
 describe('formatThoughtSummary', () => {
   it('renders sub-second durations in ms and ≥1s in s, with a token estimate', () => {
-    expect(stripAnsi(formatThoughtSummary(420, 320))).toContain('thought for 420ms · 80 tok');
-    expect(stripAnsi(formatThoughtSummary(1500, 320))).toContain('thought for 1.5s · 80 tok');
+    expect(stripAnsi(formatThoughtSummary(420, 320))).toContain('thought for 420ms · 80 tokens');
+    expect(stripAnsi(formatThoughtSummary(1500, 320))).toContain('thought for 1.5s · 80 tokens');
   });
 
   it('clamps negative durations (NTP step-back) to 0ms', () => {

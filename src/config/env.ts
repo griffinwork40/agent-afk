@@ -614,6 +614,20 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_WORKSPACE_DISABLED',
+    description:
+      'Disable the shared agent workspace (WorkspaceStore + workspace_publish/workspace_query ' +
+      'tools + preamble injection). When set to 1, subagents do not get workspace tools ' +
+      'and no workspace preamble is injected at fork time — each agent works in full ' +
+      'isolation as before v5.133. Used as the control arm of the file-read deduplication ' +
+      'A/B experiment. Default: workspace enabled (unset or 0).',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'model',
+  },
+  {
     name: 'CLAUDE_MODEL',
     description: 'Legacy alias for AFK_MODEL — supported for back-compat with pre-AFK_* deployments.',
     type: 'string',
@@ -695,6 +709,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     type: 'string',
     required: false,
     example: 'https://cli-chat-proxy.grok.com/v1',
+    category: 'model',
+  },
+  {
+    name: 'AFK_XAI_GROK_CLIENT_VERSION',
+    description: 'Override the semver sent as x-grok-client-version to the xAI OAuth CLI chat proxy. Use only if the proxy raises its required Grok CLI version before agent-afk is updated; invalid values fall back to the official Grok Build version file or built-in compatible default.',
+    type: 'string',
+    required: false,
+    example: '1.0.6',
     category: 'model',
   },
   {
@@ -888,6 +910,27 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'PATH',
     description: 'System PATH. Read for executable resolution (git, gh, etc.) in tool handlers.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'APPDATA',
+    description: 'Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'LOCALAPPDATA',
+    description: 'Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.).',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USERPROFILE',
+    description: 'Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.',
     type: 'string',
     required: false,
     category: 'process',
@@ -1736,6 +1779,7 @@ export const env = {
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
   get AFK_THINKING_UI(): string | undefined { return process.env['AFK_THINKING_UI']; },
   get AFK_TIMEOUT_MS(): string | undefined { return process.env['AFK_TIMEOUT_MS']; },
+  get AFK_WORKSPACE_DISABLED(): string | undefined { return process.env['AFK_WORKSPACE_DISABLED']; },
   get CLAUDE_MODEL(): string | undefined { return process.env['CLAUDE_MODEL']; },
 
   // System prompt
@@ -1749,6 +1793,7 @@ export const env = {
   get CODEX_API_KEY(): string | undefined { return process.env['CODEX_API_KEY']; },
   get XAI_API_KEY(): string | undefined { return process.env['XAI_API_KEY']; },
   get AFK_XAI_BASE_URL(): string | undefined { return process.env['AFK_XAI_BASE_URL']; },
+  get AFK_XAI_GROK_CLIENT_VERSION(): string | undefined { return process.env['AFK_XAI_GROK_CLIENT_VERSION']; },
   get AFK_XAI_OAUTH_BASE_URL(): string | undefined { return process.env['AFK_XAI_OAUTH_BASE_URL']; },
   get AFK_LOCAL_API_KEY(): string | undefined { return process.env['AFK_LOCAL_API_KEY']; },
   get AFK_LOCAL_BASE_URL(): string | undefined { return process.env['AFK_LOCAL_BASE_URL']; },
@@ -1778,6 +1823,9 @@ export const env = {
 
   get HOME(): string | undefined { return process.env['HOME']; },
   get PATH(): string | undefined { return process.env['PATH']; },
+  get APPDATA(): string | undefined { return process.env['APPDATA']; },
+  get LOCALAPPDATA(): string | undefined { return process.env['LOCALAPPDATA']; },
+  get USERPROFILE(): string | undefined { return process.env['USERPROFILE']; },
 
   // Daemon
   get AFK_DAEMON_CWD(): string | undefined { return process.env['AFK_DAEMON_CWD']; },

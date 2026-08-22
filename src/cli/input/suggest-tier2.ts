@@ -10,6 +10,7 @@
  * @module cli/input/suggest-tier2
  */
 
+import { basename } from 'node:path';
 import { redactSecrets } from '../../agent/redact-secrets.js';
 import { stripGhostControlChars } from './suggest-sanitize.js';
 import type { CompleteFn } from './suggest-types.js';
@@ -41,7 +42,7 @@ export function buildSystem(): string {
 }
 
 export function buildUser(buffer: string, ctx: SuggestContext): string {
-  const cwdBase = ctx.cwd.split('/').filter(Boolean).pop() ?? ctx.cwd;
+  const cwdBase = basename(ctx.cwd) || ctx.cwd;
   const recentCmds = ctx.getRecentCommands().slice(0, 5);
   const transcript = ctx.getTranscriptTail();
   const parts: string[] = [];

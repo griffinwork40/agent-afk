@@ -354,7 +354,7 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
     case 'compaction': {
       const p = event.payload;
       const saved =
-        p.tokensSavedEstimate !== undefined ? `  ~${p.tokensSavedEstimate} tok saved` : '';
+        p.tokensSavedEstimate !== undefined ? `  ~${p.tokensSavedEstimate} tokens saved` : '';
       return line('compact', `${p.trigger}  ${p.messagesBefore}→${p.messagesAfter} msgs${saved}`);
     }
 
