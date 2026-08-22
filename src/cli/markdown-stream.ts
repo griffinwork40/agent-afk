@@ -2,6 +2,7 @@ import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { findBlockBoundary, calculateContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, routeOverlayOutput, accumulateCommitted, scheduleWithThrottle } from './markdown-stream-format.js';
+import { Lexer } from 'marked';
 
 /**
  * Block boundary detection patterns.
@@ -243,6 +244,23 @@ export class StreamingMarkdownRenderer {
     let boundary = findBlockBoundary(this.buffer);
 
     while (boundary !== -1) {
+      // A completed table may be followed by a repeated-header continuation.
+      // Keep it pending until the next complete block reveals whether it is a
+      // continuation; formatter.ts can then merge all compatible table tokens
+      // before computing widths. This also avoids carrying fragile rendering
+      // state across separate commit calls.
+      while (boundary !== -1) {
+        const complete = Lexer.lex(this.buffer.slice(0, boundary))
+          .filter((token) => token.type !== 'space');
+        if (complete.at(-1)?.type !== 'table') break;
+        const nextBoundary = findBlockBoundary(this.buffer.slice(boundary));
+        if (nextBoundary === -1) {
+          boundary = -1;
+          break;
+        }
+        boundary += nextBoundary;
+      }
+      if (boundary === -1) break;
       const blockText = this.buffer.slice(0, boundary);
       // Slice buffer BEFORE commitBlock so any synchronous repaint
       // triggered by compositor.commitAbove() sees only the remaining

@@ -190,7 +190,8 @@ export function renderTable(
     }
     return lines;
   };
-  const lines: string[] = [borderLine('┌', '┬', '┐')];
+  const lines: string[] = [];
+  lines.push(borderLine('┌', '┬', '┐'));
   lines.push(...dataLines(headerCells, true));
   lines.push(borderLine('├', '┼', '┤'));
 
