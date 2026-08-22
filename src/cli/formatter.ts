@@ -120,20 +120,34 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
   }
 
   function renderTokens(tokens: Token[]): string {
-    // Track previous/next non-space block type so consecutive tables can
-    // suppress chrome (borders + header), rendering a seamless continuation
-    // instead of a duplicated header seam. Space tokens are transparent —
-    // they don't break table-to-table adjacency.
-    let prevBlockType: string | undefined;
-    // Precompute: for each table token, is the next non-space token also a table?
-    const nextNonSpaceIsTable = (idx: number): boolean => {
-      for (let j = idx + 1; j < tokens.length; j++) {
-        if (tokens[j]!.type === 'space') continue;
-        return tokens[j]!.type === 'table';
-      }
-      return false;
-    };
     return tokens.map((token, idx) => {
+      // Repeated, compatible headers represent one logical table. Merge the
+      // rows before rendering so the group shares column widths and emits no
+      // blank-line seam. Schema comparison prevents unrelated adjacent tables
+      // from losing their headers.
+      if (token.type === 'table') {
+        const table = token as Tokens.Table;
+        const header = table.header.map((cell) => renderInline(cell.tokens as Tokens.Generic[]));
+        let end = idx + 1;
+        const rows = [...table.rows];
+        while (tokens[end]?.type === 'table' ||
+          (tokens[end]?.type === 'space' && tokens[end + 1]?.type === 'table')) {
+          const nextIndex = tokens[end]?.type === 'table' ? end : end + 1;
+          const next = tokens[nextIndex] as Tokens.Table;
+          const nextHeader = next.header.map((cell) => renderInline(cell.tokens as Tokens.Generic[]));
+          const sameSchema = nextHeader.length === header.length &&
+            nextHeader.every((cell, i) => cell === header[i]) &&
+            next.align.every((align, i) => align === table.align[i]);
+          if (!sameSchema) break;
+          rows.push(...next.rows);
+          // The map callback cannot skip entries, so mark the consumed space
+          // and table as inert tokens local to this render invocation.
+          if (nextIndex !== end) tokens[end] = { type: 'space', raw: '' } as Token;
+          tokens[nextIndex] = { type: 'space', raw: '' } as Token;
+          end = nextIndex + 1;
+        }
+        return renderTable({ ...table, rows }, maxTableWidth, renderInline);
+      }
       let result: string;
       switch (token.type) {
         case 'heading': {
@@ -194,9 +208,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           result = renderList(token as Tokens.List, maxTableWidth, renderTokens);
           break;
         case 'space':
-          // Space tokens are transparent to prevBlockType — they don't break
-          // table-to-table adjacency. Return early without updating tracker.
-          return '\n';
+          return token.raw ? '\n' : '';
         case 'hr': {
           // Use the configured maxTableWidth so the rule tracks the wrap width
           // instead of overflowing or falling short — it is already the
@@ -209,20 +221,10 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
         case 'blockquote':
           result = renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
           break;
-        case 'table': {
-          const isContinuation = prevBlockType === 'table';
-          const hasContinuation = nextNonSpaceIsTable(idx);
-          result = renderTable(token as Tokens.Table, maxTableWidth, renderInline,
-            (isContinuation || hasContinuation)
-              ? { suppressTopChrome: isContinuation, suppressBottomBorder: hasContinuation }
-              : undefined);
-          break;
-        }
         default:
           result = token.raw;
           break;
       }
-      prevBlockType = token.type;
       return result;
     }).join('');
   }

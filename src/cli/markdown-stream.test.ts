@@ -5,6 +5,8 @@ import { hasMarkdownContent } from './markdown-stream-format.js';
 import { wrapToWidth } from './wrap.js';
 import { PassThrough } from 'node:stream';
 
+const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '');
+
 /**
  * Tests for StreamingMarkdownRenderer
  *
@@ -748,6 +750,20 @@ describe('StreamingMarkdownRenderer', () => {
         vi.useRealTimers();
         Object.defineProperty(process.stdout, 'columns', { value: prevCols, configurable: true });
       }
+    });
+
+    it('keeps repeated-header tables together across streaming block boundaries', async () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, indent: '' });
+      renderer.push('| Key | Value |\n|---|---|\n| a | short |\n\n');
+      expect(renderer.getCommittedOutput()).toBe('');
+      renderer.push('| Key | Value |\n|---|---|\n| b | a much longer value |\n\n');
+      expect(renderer.getCommittedOutput()).toBe('');
+      await renderer.flush();
+
+      const out = stripAnsi(renderer.getCommittedOutput());
+      expect(out.split('\n').filter((line) => line.startsWith('┌'))).toHaveLength(1);
+      expect(out.split('\n').filter((line) => line.includes('Key') && line.includes('Value'))).toHaveLength(1);
+      expect(out).not.toContain('\n\n');
     });
   });
 

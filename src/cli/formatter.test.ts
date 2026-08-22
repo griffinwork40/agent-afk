@@ -293,6 +293,27 @@ describe('renderMarkdownToTerminal', () => {
       // Header text appears only once.
       const headerMatches = out.split('\n').filter((l) => l.includes('Layer') && l.includes('What'));
       expect(headerMatches).toHaveLength(1);
+      expect(out).not.toContain('\n\n');
+    });
+
+    it('keeps adjacent tables separate when their schemas differ', () => {
+      const out = stripAnsi(renderMarkdownToTerminal([
+        '| Summary | Value |', '|---|---|', '| Total | 2 |', '',
+        '| Name | Kind | Path |', '|---|---|---|', '| api | service | src/api |', '',
+      ].join('\n')));
+      expect(out.split('\n').filter((line) => line.startsWith('┌'))).toHaveLength(2);
+      expect(out).toContain('Summary');
+      expect(out).toContain('Name');
+    });
+
+    it('computes one shared layout across continued table rows', () => {
+      const out = stripAnsi(renderMarkdownToTerminal([
+        '| Key | Value |', '|---|---|', '| a | short |', '',
+        '| Key | Value |', '|---|---|', '| b | substantially longer value |', '',
+      ].join('\n')));
+      const structuralLines = out.split('\n').filter((line) => /^[┌├└│]/.test(line));
+      expect(new Set(structuralLines.map((line) => line.length))).toHaveLength(1);
+      expect(out.split('\n').filter((line) => line.startsWith('┌'))).toHaveLength(1);
     });
 
     it('does not suppress top chrome when a non-table block intervenes', () => {
