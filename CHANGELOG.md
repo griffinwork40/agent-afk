@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.146.3] - 2026-08-22
+
+### Fixed
+- suppress duplicate header seam between consecutive tables (#1246) (ff9e8f31)
+
 ## [5.146.2] - 2026-08-22
 
 ### Fixed
