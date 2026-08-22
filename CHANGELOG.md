@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.146.2] - 2026-08-22
+
+### Fixed
+- approval UX overhaul — multi_choice, title alert, context, tiers (#3,#4,#6,#7,#21) (#1200) (e35c65ef)
+
+### Changed
+- incremental DOM render and input preview cap (#1, #22) (#1202) (3e9bf5a3)
+
 ## [5.146.1] - 2026-08-22
 
 ### Fixed
