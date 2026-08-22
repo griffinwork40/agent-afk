@@ -15,9 +15,12 @@
 import { stripAnsi } from './ansi-strip.js';
 import { renderMarkdown } from './markdown-dom.js';
 import type { TranscriptItem, ToolCallItem } from './view-model.js';
+import { applyIncrementalUpdate } from './render-incremental.js';
 
 /** Beyond this, tool output is collapsed behind a "show full" control. */
 const OUTPUT_PREVIEW_CHARS = 2_000;
+/** Beyond this, tool input is collapsed behind a "show full input" control. */
+const INPUT_PREVIEW_CHARS = 2_000;
 
 export interface SessionSummary {
   id: string;
@@ -101,9 +104,15 @@ export function renderSidebar(
   }
 }
 
+/**
+ * Incrementally update the transcript container.
+ *
+ * Delegates to `applyIncrementalUpdate` in render-incremental.ts.
+ * Steady-state cost: O(new items). Full rebuild only on session switch/reset.
+ * Scroll-pinning: caller samples `isPinnedToBottom` before and scrolls after.
+ */
 export function renderTranscript(container: HTMLElement, items: TranscriptItem[]): void {
-  container.textContent = '';
-  for (const item of items) container.appendChild(renderItem(item));
+  applyIncrementalUpdate(container, items, renderItem);
 }
 
 function renderItem(item: TranscriptItem): HTMLElement {
@@ -155,7 +164,23 @@ function renderTool(item: ToolCallItem): HTMLElement {
 
   if (item.inputPreview) {
     body.appendChild(el('div', 'tool-label', 'input'));
-    body.appendChild(el('pre', 'tool-pre', stripAnsi(item.inputPreview)));
+    const cleanInput = stripAnsi(item.inputPreview);
+    if (cleanInput.length > INPUT_PREVIEW_CHARS) {
+      const inputPre = el('pre', 'tool-pre', cleanInput.slice(0, INPUT_PREVIEW_CHARS));
+      body.appendChild(inputPre);
+      const moreInput = el(
+        'button',
+        'tool-more',
+        `Show full input (${cleanInput.length.toLocaleString()} chars)`,
+      );
+      moreInput.addEventListener('click', () => {
+        inputPre.textContent = cleanInput;
+        moreInput.remove();
+      });
+      body.appendChild(moreInput);
+    } else {
+      body.appendChild(el('pre', 'tool-pre', cleanInput));
+    }
   }
 
   // The honesty branch: "no output recorded" and "output produced nothing" are
