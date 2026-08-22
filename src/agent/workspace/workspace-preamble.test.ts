@@ -141,7 +141,7 @@ describe('injectWorkspacePreamble', () => {
     expect(result).not.toBe(baseConfig);
     expect(result.model).toBe('sonnet');
     expect(result.systemPrompt).toContain('workspace_publish');
-    expect(result.systemPrompt).toContain('No entries have been published yet');
+    expect(result.systemPrompt).toContain('No entries published yet');
   });
 
   it('does not mutate the input config', () => {

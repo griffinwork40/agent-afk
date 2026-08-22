@@ -80,6 +80,24 @@ export const QUEUED_USER_MESSAGE_PROMPT = `When the harness appends a user text 
  */
 export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}\n\n${BG_SUBAGENT_RESULT_PROMPT}\n\n${QUEUED_USER_MESSAGE_PROMPT}`;
 
+/**
+ * Workspace usage instructions — teaches the model when and why to use
+ * workspace_publish / workspace_query. Parallel to MEMORY_SYSTEM_PROMPT.
+ *
+ * Invariant: this block must reach BOTH the top-level REPL session (the
+ * coordinator) AND forked children. The coordinator seeds the workspace for
+ * its children; children query and publish for siblings. Without this block
+ * in the top-level prompt, the coordinator never learns the tools exist and
+ * the workspace stays perpetually cold-started.
+ */
+export const WORKSPACE_SYSTEM_PROMPT = `# Shared Workspace
+
+When dispatching or running as sibling sub-agents, use \`workspace_publish\` and \`workspace_query\` to share findings:
+
+- **Publish** after confirming an architectural invariant, ruling out a hypothesis, or reading a file another sibling will likely need. Publish the insight, not the raw file — subject + one-paragraph content + file:line evidence.
+- **Query** before reading a file or grep-searching a module a sibling may have already analyzed. A workspace hit saves a tool round.
+- Publishing is free to batch — call \`workspace_publish\` alongside other tools in the same reply at zero additional round cost.`;
+
 export const MEMORY_SYSTEM_PROMPT = `# Cross-Session Memory
 
 You have three tools for persisting knowledge across sessions: memory_search, memory_update, and procedure_write.
@@ -159,4 +177,14 @@ export function resolveToolSystemPrompt(isSkillDispatch: boolean | undefined): s
  */
 export function resolveMemorySystemPrompt(readOnly: boolean | undefined): string {
   return readOnly ? MEMORY_SYSTEM_PROMPT_READONLY : MEMORY_SYSTEM_PROMPT;
+}
+
+/**
+ * Resolve the workspace system prompt for a session. Only included when
+ * workspace tools are enabled (the caller passes the gate result from
+ * `AFK_WORKSPACE_DISABLED`). Returns an empty string when disabled so the
+ * assembly path can treat it as an optional fragment.
+ */
+export function resolveWorkspaceSystemPrompt(workspaceEnabled: boolean | undefined): string {
+  return workspaceEnabled ? WORKSPACE_SYSTEM_PROMPT : '';
 }

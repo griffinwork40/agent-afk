@@ -44,7 +44,7 @@ import {
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { WorkspaceStore, createWorkspaceHandlers, workspaceToolSchemas } from '../../workspace/index.js';
-import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
+import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { buildQueryFromConfig } from './query.js';
@@ -390,12 +390,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
     const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
-    // Invariant: kept in lockstep with anthropic-direct's call site. Two
-    // deltas vs. the previous bare call: (1) `excludeName` omits the executing
-    // skill's own entry for a skill-dispatch fork (AgentConfig.skillDispatchName),
-    // and (2) `cwd` is now forwarded — its omission here was a silent parity gap
-    // that resolved `<cwd>/.afk/skills/` against the HOST process dir instead of
-    // the session's, which diverge on long-lived hosts (daemon, Telegram bot).
+    // Invariant: kept in lockstep with anthropic-direct's call site.
+    // `excludeName` omits the executing skill's own entry for a skill-dispatch
+    // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
+    // resolve against the session's dir, not the host process's (#876).
     const manifest = this.providerOpts.skillExecutor
       ? buildSkillManifest(undefined, {
           ...(typeof config.cwd === 'string' && config.cwd.length > 0
@@ -408,8 +406,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         })
       : '';
     const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
-    const existingSys =
-      typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+    const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
 
     // Contract: given the cwd-dependent `# Environment` fragment, return the
     // full joined system prompt over the STABLE fragments captured above.
@@ -419,6 +416,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const parts = [toolBase];
       if (existingSys !== undefined && existingSys.length > 0) parts.push(existingSys);
       parts.push(memoryPrompt);
+      { const ws = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined); if (ws) parts.push(ws); }
       if (hotMemory.length > 0) parts.push(hotMemory);
       parts.push(envFragment);
       if (manifest.length > 0) parts.push(manifest);

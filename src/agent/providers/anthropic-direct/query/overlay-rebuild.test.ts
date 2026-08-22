@@ -19,6 +19,7 @@ function makeParts(userSystem: string | null): ReturnType<typeof buildStableSyst
   return buildStableSystemPrefix({
     toolBase: 'TOOL-BASE',
     memoryPrompt: 'MEMORY',
+    workspacePrompt: '',
     hotMemory: '',
     manifest: '',
     userSystem,

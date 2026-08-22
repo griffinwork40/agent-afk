@@ -74,6 +74,7 @@ function setup() {
     stableSystemPrefix: buildStableSystemPrefix({
       toolBase: 'TOOLBASE',
       memoryPrompt: 'MEMORY',
+      workspacePrompt: '',
       hotMemory: '',
       manifest: '',
       userSystem: null,
