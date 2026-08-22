@@ -287,6 +287,7 @@ async function pollPending(): Promise<void> {
     next.pending.some((p, i) => p.id !== pending[i]?.id);
   pending = next.pending;
   if (changed) renderApprovals($('approvals'), pending, answerApproval);
+  document.title = pending.length > 0 ? `(${pending.length}) afk web` : 'afk web';
 }
 
 /**

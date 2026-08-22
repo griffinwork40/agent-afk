@@ -271,6 +271,16 @@ export type ApprovalAnswer =
   | { action: 'accept'; content?: Record<string, unknown> }
   | { action: 'decline' };
 
+/** Heuristic: titles or tool names that suggest irreversible side-effects. */
+const DESTRUCTIVE_RE = /bash|delete|remove|overwrite|rm |drop/i;
+
+/** Returns a short wait-time string like "waiting 2m", or "" if unknown. */
+function waitingLabel(createdAt: string | undefined): string {
+  if (!createdAt) return '';
+  const mins = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60_000);
+  return mins >= 1 ? `waiting ${mins}m` : '';
+}
+
 /**
  * Render pending approvals as actionable cards.
  *
@@ -290,16 +300,20 @@ export function renderApprovals(
 
   for (const item of pending) {
     const req = item.request ?? {};
-    const card = el('div', 'approval-card');
+    const title = req.title ?? req.message ?? 'The agent is waiting for a response.';
+
+    const isDestructive = DESTRUCTIVE_RE.test(title) || DESTRUCTIVE_RE.test(req.serverName ?? '');
+    const card = el('div', isDestructive ? 'approval-card approval-card--destructive' : 'approval-card');
 
     const head = el('div', 'approval-head');
     head.appendChild(el('span', 'approval-badge', req.origin === 'agent' ? 'question' : 'approval'));
     if (req.serverName) head.appendChild(el('span', 'approval-source', req.serverName));
+    const wait = waitingLabel(item.createdAt);
+    if (wait) head.appendChild(el('span', 'approval-time', wait));
     card.appendChild(head);
 
-    const title = req.title ?? req.message ?? 'The agent is waiting for a response.';
     card.appendChild(el('div', 'approval-title', title));
-    if (req.description && req.description !== title) {
+    if (req.description) {
       card.appendChild(el('div', 'approval-desc', req.description));
     }
 
@@ -313,6 +327,25 @@ export function renderApprovals(
         );
         actions.appendChild(btn);
       }
+    } else if (req.type === 'multi_choice' && Array.isArray(req.choices) && req.choices.length > 0) {
+      const checkboxes = el('div', 'approval-checkboxes');
+      const inputs: HTMLInputElement[] = [];
+      for (const choice of req.choices) {
+        const label = el('label', 'approval-checkbox-row');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = choice;
+        inputs.push(cb);
+        label.appendChild(cb);
+        label.appendChild(el('span', undefined, choice));
+        checkboxes.appendChild(label);
+      }
+      card.appendChild(checkboxes);
+      const send = el('button', 'approval-btn approval-primary', 'Submit');
+      send.addEventListener('click', () =>
+        onAnswer(item.id, { action: 'accept', content: { value: inputs.filter((c) => c.checked).map((c) => c.value) } }),
+      );
+      actions.appendChild(send);
     } else if (req.type === 'text' || req.type === 'number') {
       const input = document.createElement('input');
       input.className = 'approval-input';
