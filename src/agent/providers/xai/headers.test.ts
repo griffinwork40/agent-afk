@@ -97,6 +97,42 @@ describe('resolveGrokCliIdentityHeaders', () => {
     expect(h['x-grok-client-version']).toBe(DEFAULT_GROK_CLI_COMPAT_VERSION);
     expect(h['x-grok-client-version']).not.toBe('agent-afk');
   });
+
+  it('falls through to DEFAULT when version file is below the floor (stale install)', () => {
+    // 0.1.200 is below the floor of 1.0.5 — must fall through to DEFAULT
+    const h = resolveGrokCliIdentityHeaders(
+      {},
+      deps({ readFile: () => JSON.stringify({ version: '0.1.200' }) }),
+    );
+    expect(h['x-grok-client-version']).toBe(DEFAULT_GROK_CLI_COMPAT_VERSION);
+  });
+
+  it('accepts a version file exactly at the floor', () => {
+    // 1.0.5 is exactly at floor — must be accepted as-is
+    const h = resolveGrokCliIdentityHeaders(
+      {},
+      deps({ readFile: () => JSON.stringify({ version: '1.0.5' }) }),
+    );
+    expect(h['x-grok-client-version']).toBe('1.0.5');
+  });
+
+  it('accepts a version file above the floor', () => {
+    // 2.3.1 is clearly above the floor — must be accepted
+    const h = resolveGrokCliIdentityHeaders(
+      {},
+      deps({ readFile: () => JSON.stringify({ version: '2.3.1' }) }),
+    );
+    expect(h['x-grok-client-version']).toBe('2.3.1');
+  });
+
+  it('does not floor the environment override (operator precedence contract)', () => {
+    // AFK_XAI_GROK_CLIENT_VERSION below the floor must still be honoured when set
+    const h = resolveGrokCliIdentityHeaders(
+      {},
+      deps({ readEnv: () => '0.1.200' }),
+    );
+    expect(h['x-grok-client-version']).toBe('0.1.200');
+  });
 });
 
 describe('readOfficialGrokCliVersion', () => {

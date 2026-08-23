@@ -51,6 +51,17 @@ function validSemver(value: string | undefined): string | undefined {
   return trimmed && SEMVER_RE.test(trimmed) ? trimmed : undefined;
 }
 
+/** Returns `version` if it is ≥ `floor`, otherwise `undefined`. */
+function aboveFloor(version: string | undefined, floor: string): string | undefined {
+  if (!version) return undefined;
+  const parse = (s: string): number[] => s.split('.').map(Number);
+  const [vMaj = 0, vMin = 0, vPat = 0] = parse(version);
+  const [fMaj = 0, fMin = 0, fPat = 0] = parse(floor);
+  if (vMaj !== fMaj) return vMaj > fMaj ? version : undefined;
+  if (vMin !== fMin) return vMin > fMin ? version : undefined;
+  return vPat >= fPat ? version : undefined;
+}
+
 /** Read `~/.grok/version.json` written by the official Grok Build CLI. */
 export function readOfficialGrokCliVersion(deps: GrokCliHeaderDeps = {}): string | undefined {
   const readFile = deps.readFile ?? ((filePath: string) => readFileSync(filePath, 'utf-8'));
@@ -77,7 +88,7 @@ function resolveGrokCliVersion(
   return (
     validSemver(readEnv(GROK_CLI_VERSION_ENV))
     ?? validSemver(clientVersion)
-    ?? readOfficialGrokCliVersion(deps)
+    ?? aboveFloor(readOfficialGrokCliVersion(deps), DEFAULT_GROK_CLI_COMPAT_VERSION)
     ?? DEFAULT_GROK_CLI_COMPAT_VERSION
   );
 }
