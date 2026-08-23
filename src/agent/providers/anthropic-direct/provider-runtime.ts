@@ -315,6 +315,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       get surface() { return provider.surface; },
       get declaredSurface() { return provider.declaredSurface; },
       get readOnlyMemory() { return provider.readOnlyMemory; },
+      get workspaceStore() { return provider.workspaceStore; },
       get mcpManager() { return provider.mcpManager; },
       get fastModeController() { return provider.fastModeController; },
       getSharedReadRoots: () => provider.grants.readRoots,

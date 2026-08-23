@@ -29,6 +29,7 @@ import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, get
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory } from '../../agent/memory/index.js';
+import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
@@ -132,7 +133,16 @@ export function buildDaemonSessionFactory(
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
       permissions: {
-        allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose', ...mcpToolWireNames],
+        allowedTools: [
+          ...BUILTIN_TOOL_NAMES,
+          ...MEMORY_TOOL_NAMES,
+          ...AWARENESS_TOOL_NAMES,
+          ...WORKSPACE_TOOL_NAMES,
+          'agent',
+          'skill',
+          'compose',
+          ...mcpToolWireNames,
+        ],
       },
       subagentExecutor,
       skillExecutor,

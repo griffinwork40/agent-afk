@@ -21,6 +21,7 @@ export {
   workspaceQueryTool,
   workspaceToolSchemas,
   createWorkspaceHandlers,
+  WORKSPACE_TOOL_NAMES,
 } from './workspace-tools.js';
 
 export {

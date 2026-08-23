@@ -31,6 +31,7 @@ const IDENTITY: EnvironmentIdentity = {
 const FULL = {
   toolBase: 'TOOL',
   memoryPrompt: 'MEM',
+  workspacePrompt: 'WORKSPACE',
   hotMemory: 'HOT',
   manifest: 'MANIFEST',
   userSystem: 'DOCTRINE',
@@ -43,16 +44,17 @@ describe('buildStableSystemPrefix', () => {
 });
 
 describe('assembleSystemPrompt — top-level order', () => {
-  it('orders: toolBase, userSystem (doctrine), memoryPrompt, hotMemory, # Environment, manifest', () => {
+  it('orders: toolBase, userSystem (doctrine), memoryPrompt, workspacePrompt, hotMemory, # Environment, manifest', () => {
     const out = assembleSystemPrompt(buildStableSystemPrefix(FULL), '/tmp/work', IDENTITY);
     const sections = out.split('\n\n');
     expect(sections[0]).toBe('TOOL');
     expect(sections[1]).toBe('DOCTRINE');
     expect(sections[2]).toBe('MEM');
-    expect(sections[3]).toBe('HOT');
+    expect(sections[3]).toBe('WORKSPACE');
+    expect(sections[4]).toBe('HOT');
     // formatEnvironmentFragment always emits the working-directory line.
-    expect(sections[4]).toContain('Working directory: /tmp/work');
-    expect(sections[5]).toBe('MANIFEST');
+    expect(sections[5]).toContain('Working directory: /tmp/work');
+    expect(sections[6]).toBe('MANIFEST');
   });
 
   it('places the doctrine after tool conventions but before cross-session memory and the skill manifest', () => {
@@ -60,6 +62,7 @@ describe('assembleSystemPrompt — top-level order', () => {
     const iTool = out.indexOf('TOOL');
     const iDoctrine = out.indexOf('DOCTRINE');
     const iMemInstructions = out.indexOf('MEM');
+    const iWorkspace = out.indexOf('WORKSPACE');
     const iHotMemory = out.indexOf('HOT');
     const iManifest = out.indexOf('MANIFEST');
     // after essential runtime/tool conventions
@@ -67,6 +70,9 @@ describe('assembleSystemPrompt — top-level order', () => {
     expect(iTool).toBeLessThan(iDoctrine);
     // before cross-session memory (instructions AND hot-memory project context)
     expect(iDoctrine).toBeLessThan(iMemInstructions);
+    // workspace after memory instructions, before hot memory
+    expect(iMemInstructions).toBeLessThan(iWorkspace);
+    expect(iWorkspace).toBeLessThan(iHotMemory);
     expect(iDoctrine).toBeLessThan(iHotMemory);
     // before the skills catalog
     expect(iDoctrine).toBeLessThan(iManifest);
@@ -77,6 +83,7 @@ describe('assembleSystemPrompt — top-level order', () => {
       buildStableSystemPrefix({
         toolBase: 'TOOL',
         memoryPrompt: 'MEM',
+        workspacePrompt: '',
         hotMemory: '',
         manifest: 'MANIFEST',
         userSystem: null,
@@ -96,6 +103,7 @@ describe('assembleSystemPrompt — top-level order', () => {
       buildStableSystemPrefix({
         toolBase: 'TOOL',
         memoryPrompt: 'MEM',
+        workspacePrompt: '',
         hotMemory: '',
         manifest: '',
         userSystem: null,
@@ -114,6 +122,7 @@ describe('assembleSystemPrompt — top-level order', () => {
     const parts = buildStableSystemPrefix({
       toolBase: 'TOOL',
       memoryPrompt: 'MEM',
+      workspacePrompt: '',
       hotMemory: '',
       manifest: '',
       userSystem: null,
@@ -133,6 +142,7 @@ describe('assembleSystemPrompt — top-level order', () => {
       buildStableSystemPrefix({
         toolBase: 'T',
         memoryPrompt: 'M',
+        workspacePrompt: '',
         hotMemory: '',
         manifest: '',
         userSystem: null,

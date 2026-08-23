@@ -132,14 +132,18 @@ export function injectWorkspacePreamble(
  * Injected when the workspace is empty so the first agent knows the tool exists.
  * Breaks the chicken-and-egg: agents can't discover workspace_publish from an
  * empty preamble, so nobody ever publishes, so the preamble stays empty.
+ * See also WORKSPACE_SYSTEM_PROMPT in tools/system-prompt.ts.
  */
 const COLD_START_HINT = [
   '# Workspace (shared agent scratchpad)',
   '',
-  'You have `workspace_publish` and `workspace_query` tools. When you discover an',
-  'important finding, publish it so siblings can skip re-deriving it. Before reading',
-  'a file, query the workspace — a sibling may have already analyzed it.',
-  'No entries have been published yet — you may be the first.',
+  'No entries published yet — you may be the first. Call `workspace_publish` when you:',
+  '- confirm an architectural invariant or key export surface of a module,',
+  '- rule out a hypothesis (so siblings skip the same dead end),',
+  '- read a file another sibling will likely need (publish the insight, not the raw content).',
+  '',
+  'Call `workspace_query` before reading a file or grepping a module — a sibling may have',
+  'already analyzed it. Publishing is free to batch alongside other tools in the same reply.',
 ].join('\n');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
