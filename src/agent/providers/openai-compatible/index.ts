@@ -416,7 +416,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const parts = [toolBase];
       if (existingSys !== undefined && existingSys.length > 0) parts.push(existingSys);
       parts.push(memoryPrompt);
-      { const ws = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined); if (ws) parts.push(ws); }
+      const workspacePrompt = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined);
+      if (workspacePrompt) parts.push(workspacePrompt);
       if (hotMemory.length > 0) parts.push(hotMemory);
       parts.push(envFragment);
       if (manifest.length > 0) parts.push(manifest);

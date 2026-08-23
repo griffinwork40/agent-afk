@@ -132,6 +132,7 @@ export function injectWorkspacePreamble(
  * Injected when the workspace is empty so the first agent knows the tool exists.
  * Breaks the chicken-and-egg: agents can't discover workspace_publish from an
  * empty preamble, so nobody ever publishes, so the preamble stays empty.
+ * See also WORKSPACE_SYSTEM_PROMPT in tools/system-prompt.ts.
  */
 const COLD_START_HINT = [
   '# Workspace (shared agent scratchpad)',

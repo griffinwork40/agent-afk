@@ -17,6 +17,9 @@ import type { AnthropicToolDef, ToolHandler } from '../tools/types.js';
 import type { WorkspaceEntry, WorkspacePublishInput, WorkspaceRelationType } from './workspace-store.js';
 import { WorkspaceStore } from './workspace-store.js';
 
+/** Tool names that must be permitted whenever a provider wires a workspace store. */
+export const WORKSPACE_TOOL_NAMES = ['workspace_publish', 'workspace_query'] as const;
+
 /**
  * workspace_publish: Publish a structured finding to the shared session workspace.
  * Sibling agents will see this entry in their workspace context preamble.

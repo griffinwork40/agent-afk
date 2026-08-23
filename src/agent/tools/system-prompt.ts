@@ -83,6 +83,7 @@ export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND
 /**
  * Workspace usage instructions — teaches the model when and why to use
  * workspace_publish / workspace_query. Parallel to MEMORY_SYSTEM_PROMPT.
+ * See also COLD_START_HINT in workspace/workspace-preamble.ts.
  *
  * Invariant: this block must reach BOTH the top-level REPL session (the
  * coordinator) AND forked children. The coordinator seeds the workspace for

@@ -18,8 +18,10 @@ import {
   QUEUED_USER_MESSAGE_PROMPT,
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
+  WORKSPACE_SYSTEM_PROMPT,
   resolveToolSystemPrompt,
   resolveMemorySystemPrompt,
+  resolveWorkspaceSystemPrompt,
 } from './system-prompt.js';
 
 describe('resolveToolSystemPrompt', () => {
@@ -52,6 +54,14 @@ describe('resolveToolSystemPrompt', () => {
     expect(base).not.toContain('<bash-passthrough>');
     expect(base).not.toContain('<background-subagent-result>');
     expect(base).not.toContain('queuedUserMessage');
+  });
+});
+
+describe('resolveWorkspaceSystemPrompt', () => {
+  it('returns workspace guidance only when workspace tools are enabled', () => {
+    expect(resolveWorkspaceSystemPrompt(true)).toBe(WORKSPACE_SYSTEM_PROMPT);
+    expect(resolveWorkspaceSystemPrompt(false)).toBe('');
+    expect(resolveWorkspaceSystemPrompt(undefined)).toBe('');
   });
 });
 

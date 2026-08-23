@@ -2,6 +2,7 @@ import { BUILTIN_TOOL_NAMES } from './schemas.js';
 import { MEMORY_TOOL_NAMES } from '../memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from './handlers/exit-plan-mode.js';
+import { WORKSPACE_TOOL_NAMES } from '../workspace/index.js';
 
 /**
  * Contract: the canonical tool allowlist for a top-level, human-facing surface
@@ -26,6 +27,7 @@ export function topLevelSurfaceAllowedTools(mcpToolWireNames: readonly string[] 
     ...BUILTIN_TOOL_NAMES,
     ...MEMORY_TOOL_NAMES,
     ...AWARENESS_TOOL_NAMES,
+    ...WORKSPACE_TOOL_NAMES,
     EXIT_PLAN_MODE_TOOL_NAME,
     'agent',
     'skill',
