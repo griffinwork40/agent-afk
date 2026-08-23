@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.146.4] - 2026-08-23
+
+### Changed
+- extract Enter/Tab handlers from handleKeypress (#1072) (#1247) (24890ad6)
+
 ## [5.146.3] - 2026-08-22
 
 ### Fixed
