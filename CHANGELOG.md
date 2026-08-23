@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.147.0] - 2026-08-23
+
+### Added
+- add system prompt instructions for workspace tools (#1248) (467e616f)
+
 ## [5.146.4] - 2026-08-23
 
 ### Changed
