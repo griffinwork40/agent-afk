@@ -67,6 +67,16 @@ export interface CliConfig {
    */
   systemPromptSource?: string;
   /**
+   * AFK.md paths that exist and are non-empty but were NOT loaded, because a
+   * higher-precedence tier (`AFK_SYSTEM_PROMPT` or `afk.config.json`) supplied
+   * the overlay instead.
+   *
+   * Diagnostic only — never affects which prompt is used. Absent when nothing
+   * was shadowed. Surfaces render it (e.g. `/config view`) so a stray env var
+   * silently masking a populated AFK.md is visible instead of invisible.
+   */
+  shadowedAfkMdPaths?: string[];
+  /**
    * Session permission mode. Sourced from afk.config.json `permissionMode`.
    * `'bypassPermissions'` disables path containment + the path-approval prompt
    * (the agent reads/writes anywhere). Defaults to `'default'` at the session

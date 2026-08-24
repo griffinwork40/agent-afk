@@ -141,10 +141,23 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
   // Tier 2: JSON config file
   // Tier 3: AFK.md auto-discovery (lowest precedence; fills gap when tiers 1+2 unset)
   let systemPromptSource: string | undefined;
+  // Contract: diagnostic only. When tier 1 or 2 wins, tier 3 is never
+  // consulted for the prompt itself — that exclusivity is unchanged and
+  // deliberate. But the shadowing used to be completely silent: an operator
+  // with a populated AFK.md and a stray AFK_SYSTEM_PROMPT saw no indication
+  // their file was being ignored. We probe tier 3 purely to report which
+  // paths lost, never to alter what governs the prompt.
+  let shadowedAfkMdPaths: string[] | undefined;
+  const reportShadowedAfkMd = (): void => {
+    const shadowed = loadAfkMd(cwd);
+    if (shadowed !== null && shadowed.paths.length > 0) shadowedAfkMdPaths = shadowed.paths;
+  };
   if (envConfig.systemPrompt !== undefined) {
     systemPromptSource = 'env:AFK_SYSTEM_PROMPT';
+    reportShadowedAfkMd();
   } else if (jsonConfig.systemPrompt !== undefined && jsonSourcePath !== undefined) {
     systemPromptSource = `file:${jsonSourcePath}`;
+    reportShadowedAfkMd();
   } else if (merged.systemPrompt === undefined) {
     // Neither env nor JSON set systemPrompt — try AFK.md.
     // Strict `=== undefined`: an explicit empty-string override (`systemPrompt: ""`)
@@ -171,6 +184,7 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
     ...(merged.openaiBaseUrl !== undefined ? { openaiBaseUrl: merged.openaiBaseUrl } : {}),
     ...(merged.systemPrompt !== undefined ? { systemPrompt: merged.systemPrompt } : {}),
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
+    ...(shadowedAfkMdPaths !== undefined ? { shadowedAfkMdPaths } : {}),
     // New-install default is bypass (DEFAULT_CLI_PERMISSION_MODE); an explicit
     // afk.config.json / env / override `permissionMode` still wins.
     permissionMode: merged.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE,
