@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.0] - 2026-08-24
+
+### Added
+- add stats line and context-specific affordances (#1257) (f9bd4c2d)
+
+### Changed
+- add endpoint-layer tests for GrokCliHeaderDeps forwarding (#1244) (#1261) (773624fa)
+- upgrade better-sqlite3 to v13 (#1259) (#1260) (bb4d1461)
+
 ## [5.148.0] - 2026-08-24
 
 ### Added
