@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.5] - 2026-08-24
+
+### Fixed
+- route auto-subscribe watch output to active topic thread (#1222) (#1267) (9f6c0ba3)
+
+### Changed
+- add unit tests for resolveForkInputs precedence paths (#1269) (#1272) (8cd25c7a)
+
 ## [5.149.4] - 2026-08-24
 
 ### Fixed
