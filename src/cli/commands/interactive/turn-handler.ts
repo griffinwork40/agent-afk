@@ -794,7 +794,11 @@ export async function runTurn(
       // quo (just the prose).
       const verdict: TerminalState | null = parseTerminalState(responseText);
       if (verdict) {
-        writeAbove(renderVerdictCard(verdict));
+        writeAbove(renderVerdictCard(verdict, {
+          durationMs: doneMeta?.durationMs,
+          totalCostUsd: doneMeta?.totalCostUsd,
+          toolCount: toolEvents?.length,
+        }));
         writeAbove('');
         // One evidence check, two consumers: (1) the onTerminalState callback
         // forwards it onto the post-turn `Stop` hook's StopContext so the
