@@ -370,11 +370,11 @@ describe('TelegramBot', () => {
       // with no options, so watch output always landed in General regardless of
       // the watched session's topic. The fix threads sendOptions(route) through.
       //
-      // For auto-subscribe the route is always General (bare chatId) because
-      // there is no inbound context to derive a thread from. General produces
-      // sendOptions = {}, so the third argument is {} (not undefined/absent) —
-      // non-topic chats receive byte-identical sends; the option is present but
-      // has no thread id key.
+      // When no session data exists for the chat (getActiveRouteForChat returns
+      // undefined), the fallback { chatId } is used. General produces sendOptions
+      // = {}, so the third argument is {} (not undefined/absent) — non-topic
+      // chats receive byte-identical sends; the option is present but has no
+      // thread id key.
       const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
       (bot as any).bot.telegram.sendMessage = sendMessageMock;
 
@@ -448,24 +448,26 @@ describe('TelegramBot', () => {
       }
     });
 
-    test('auto-subscribe routes to active topic thread when sessionManager reports one (#1222)', async () => {
-      // Regression for #1222: auto-subscribe always used sendOptions({ chatId })
-      // which routes to General, ignoring the chat's active topic. The fix calls
-      // sessionManager.getActiveThreadId(chatId) and threads the result through
-      // sendOptions so output lands in the correct topic.
+    test('auto-subscribe send callback routes to active topic thread when session data exists (#1222)', async () => {
+      // Regression for #1222: auto-subscribe always used General even when the
+      // operator had an active topic session. The fix calls
+      // sessionManager.getActiveRouteForChat(chatId) to find the most recently
+      // active route, and sendOptions pins the message to that topic thread.
       const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
       (bot as any).bot.telegram.sendMessage = sendMessageMock;
-
-      // Simulate: the chat has an active topic thread (threadId = 42).
-      vi.spyOn((bot as any).sessionManager, 'getActiveThreadId').mockReturnValue(42);
 
       const presence = await import('../agent/awareness/presence.js');
       const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([
         { surface: 'cli', afk: true, sessionId: 'session-topic', cwd: '/tmp', model: 'claude', pid: 3, startedAt: '' },
       ] as Awaited<ReturnType<typeof presence.readLivePresenceFiles>>);
 
+      // Stub sessionManager to return a topic route (threadId 42) for this chat.
+      const activeRouteSpy = vi.spyOn((bot as any).sessionManager, 'getActiveRouteForChat').mockReturnValue(
+        { chatId: 12345, threadId: 42 },
+      );
+
       let capturedSend: ((msg: string) => Promise<void>) | undefined;
-      vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
+      const watchManagerSpy = vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
         (_chatId: number, _sessionId: string, send: (msg: string) => Promise<void>) => {
           capturedSend = send;
         },
@@ -475,56 +477,21 @@ describe('TelegramBot', () => {
 
       try {
         await (bot as any).runAutoSubscribeTick();
-
+        expect(watchManagerSpy).toHaveBeenCalledTimes(1);
         expect(capturedSend).toBeDefined();
-        await capturedSend!('watch output');
+
+        await capturedSend!('hello from CLI in topic');
 
         expect(sendMessageMock).toHaveBeenCalledTimes(1);
-        const [calledChatId, calledText, calledOpts] = sendMessageMock.mock.calls[0] as [number, string, unknown];
+        const [calledChatId, calledText, calledOpts] = sendMessageMock.mock.calls[0] as [number, string, Record<string, unknown>];
         expect(calledChatId).toBe(12345);
-        expect(calledText).toBe('watch output');
-        // Topic thread → sendOptions must carry message_thread_id = 42.
-        expect(calledOpts).toEqual({ message_thread_id: 42 });
+        expect(calledText).toBe('hello from CLI in topic');
+        // Topic route → sendOptions returns { message_thread_id: 42 }.
+        expect(calledOpts).toHaveProperty('message_thread_id', 42);
       } finally {
         presenceSpy.mockRestore();
-        vi.restoreAllMocks();
-      }
-    });
-
-    test('auto-subscribe falls back to General when no active topic thread exists (#1222 backward-compat)', async () => {
-      // Non-topic chats (getActiveThreadId returns undefined) must be unaffected:
-      // sendOptions receives a bare { chatId } route and returns {} (no thread id).
-      const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
-      (bot as any).bot.telegram.sendMessage = sendMessageMock;
-
-      vi.spyOn((bot as any).sessionManager, 'getActiveThreadId').mockReturnValue(undefined);
-
-      const presence = await import('../agent/awareness/presence.js');
-      const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([
-        { surface: 'cli', afk: true, sessionId: 'session-no-topic', cwd: '/tmp', model: 'claude', pid: 4, startedAt: '' },
-      ] as Awaited<ReturnType<typeof presence.readLivePresenceFiles>>);
-
-      let capturedSend: ((msg: string) => Promise<void>) | undefined;
-      vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
-        (_chatId: number, _sessionId: string, send: (msg: string) => Promise<void>) => {
-          capturedSend = send;
-        },
-      );
-      vi.spyOn((bot as any).watchManager, 'watching').mockReturnValue(undefined);
-      vi.spyOn((bot as any).watchManager, 'getWatched').mockReturnValue(undefined);
-
-      try {
-        await (bot as any).runAutoSubscribeTick();
-
-        expect(capturedSend).toBeDefined();
-        await capturedSend!('general watch');
-
-        const [, , calledOpts] = sendMessageMock.mock.calls[0] as [number, string, unknown];
-        // General → sendOptions returns {} (no message_thread_id).
-        expect(calledOpts).toEqual({});
-        expect(calledOpts).not.toHaveProperty('message_thread_id');
-      } finally {
-        presenceSpy.mockRestore();
+        activeRouteSpy.mockRestore();
+        watchManagerSpy.mockRestore();
         vi.restoreAllMocks();
       }
     });

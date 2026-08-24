@@ -614,18 +614,15 @@ export class TelegramBot {
       // one REPL session per operator).
       for (const sessionId of afkSessionIds) {
         if (this.watchManager.watching(chatId) === sessionId) continue; // already watching
-        // Fix #1222: look up the most recently active topic thread for this
-        // chat so watch output routes to the correct topic instead of always
-        // falling through to General. getActiveThreadId returns undefined for
-        // non-topic chats (or chats with no topic sessions), making sendOptions
-        // return {} — byte-identical to the pre-fix General-only behaviour and
-        // fully backward-compatible with all non-topic chats. (#1023 introduced
-        // sendOptions; #1222 threads the chatId's active topic through it.)
-        const threadId = this.sessionManager.getActiveThreadId(chatId);
-        const autoRoute = threadId !== undefined ? { chatId, threadId } : { chatId };
+        // Route watch output to the most recently active topic for this chat.
+        // Resolve the route when output is sent (rather than when the watch is
+        // created), so a topic change during a long-running watch takes effect.
+        // When no session data exists, fall back to General ({ chatId }); this
+        // remains byte-identical to the pre-fix behavior for non-topic chats.
         const send = async (msg: string): Promise<void> => {
+          const route = this.sessionManager.getActiveRouteForChat(chatId) ?? { chatId };
           for (const part of splitLongMessage(msg)) {
-            await this.bot.telegram.sendMessage(chatId, part, sendOptions(autoRoute));
+            await this.bot.telegram.sendMessage(chatId, part, sendOptions(route)); // #1023, #1222
           }
         };
         this.watchManager.start(chatId, sessionId, send);
