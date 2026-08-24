@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.1] - 2026-08-24
+
+### Fixed
+- add xAI/Grok models to /model picker and docs (#1105) (#1263) (77717022)
+
 ## [5.149.0] - 2026-08-24
 
 ### Added
