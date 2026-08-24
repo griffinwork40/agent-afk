@@ -67,14 +67,14 @@ export function routeFromCtx(ctx: Context): TelegramRoute | undefined {
   const { threadId, isTopic } = readThread(source);
 
   const route: TelegramRoute = { chatId };
-  if (threadId !== undefined) route.threadId = threadId;
+  if (threadId !== undefined && threadId !== 0) route.threadId = threadId;
   if (isTopic) route.isTopicMessage = true;
   return route;
 }
 
 /** True when the route addresses the General topic (or topics are off). */
 export function isGeneral(route: TelegramRoute): boolean {
-  return route.threadId === undefined || route.threadId === GENERAL_TOPIC_ID;
+  return route.threadId === undefined || route.threadId === 0 || route.threadId === GENERAL_TOPIC_ID;
 }
 
 /**
