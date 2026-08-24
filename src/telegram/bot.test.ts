@@ -533,6 +533,98 @@ describe('TelegramBot', () => {
         vi.restoreAllMocks();
       }
     });
+
+    test('auto-subscribe send uses live thread id resolved at send time, not tick time (#1271 F3)', async () => {
+      // Regression for #1271 F3: previously autoRoute was captured once when
+      // the watch was registered (tick time). If the active thread changed
+      // between the tick and the next send, the stale value was used. The fix
+      // resolves getActiveRouteForChat lazily inside `send` via a closure.
+      //
+      // This test verifies live resolution: getActiveRouteForChat returns route
+      // with threadId 42 on the first send and threadId 99 on the second. Each
+      // `send` invocation must observe the CURRENT return value — not a snapshot
+      // from tick time.
+      const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
+      (bot as any).bot.telegram.sendMessage = sendMessageMock;
+
+      // Returns different routes on successive calls to prove lazy resolution.
+      let callCount = 0;
+      vi.spyOn((bot as any).sessionManager, 'getActiveRouteForChat').mockImplementation(() => {
+        callCount += 1;
+        return callCount === 1 ? { chatId: 12345, threadId: 42 } : { chatId: 12345, threadId: 99 };
+      });
+
+      const presence = await import('../agent/awareness/presence.js');
+      const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([
+        { surface: 'cli', afk: true, sessionId: 'session-live-route', cwd: '/tmp', model: 'claude', pid: 5, startedAt: '' },
+      ] as Awaited<ReturnType<typeof presence.readLivePresenceFiles>>);
+
+      let capturedSend: ((msg: string) => Promise<void>) | undefined;
+      vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
+        (_chatId: number, _sessionId: string, send: (msg: string) => Promise<void>) => {
+          capturedSend = send;
+        },
+      );
+      vi.spyOn((bot as any).watchManager, 'watching').mockReturnValue(undefined);
+      vi.spyOn((bot as any).watchManager, 'getWatched').mockReturnValue(undefined);
+
+      try {
+        await (bot as any).runAutoSubscribeTick();
+        expect(capturedSend).toBeDefined();
+
+        // First send — callCount becomes 1 → thread 42.
+        await capturedSend!('first message');
+        expect(sendMessageMock.mock.calls[0]![2]).toEqual({ message_thread_id: 42 });
+
+        // Second send — callCount becomes 2 → thread 99 (simulates thread change).
+        await capturedSend!('second message');
+        expect(sendMessageMock.mock.calls[1]![2]).toEqual({ message_thread_id: 99 });
+      } finally {
+        presenceSpy.mockRestore();
+        vi.restoreAllMocks();
+      }
+    });
+
+    test('auto-subscribe treats threadId === 0 as General (#1271 F4)', async () => {
+      // Regression for #1271 F4: threadId === 0 is not a valid Telegram topic id.
+      // getActiveRouteForChat returning a route with threadId 0 must fall through
+      // to General (no thread id in sendOptions) rather than emitting
+      // { message_thread_id: 0 } which Telegram rejects.
+      const sendMessageMock = vi.fn(async () => ({ message_id: 1, text: '', date: 0, chat: { id: 12345 } }));
+      (bot as any).bot.telegram.sendMessage = sendMessageMock;
+
+      vi.spyOn((bot as any).sessionManager, 'getActiveRouteForChat').mockReturnValue({ chatId: 12345, threadId: 0 });
+
+      const presence = await import('../agent/awareness/presence.js');
+      const presenceSpy = vi.spyOn(presence, 'readLivePresenceFiles').mockResolvedValue([
+        { surface: 'cli', afk: true, sessionId: 'session-zero-thread', cwd: '/tmp', model: 'claude', pid: 6, startedAt: '' },
+      ] as Awaited<ReturnType<typeof presence.readLivePresenceFiles>>);
+
+      let capturedSend: ((msg: string) => Promise<void>) | undefined;
+      vi.spyOn((bot as any).watchManager, 'start').mockImplementation(
+        (_chatId: number, _sessionId: string, send: (msg: string) => Promise<void>) => {
+          capturedSend = send;
+        },
+      );
+      vi.spyOn((bot as any).watchManager, 'watching').mockReturnValue(undefined);
+      vi.spyOn((bot as any).watchManager, 'getWatched').mockReturnValue(undefined);
+
+      try {
+        await (bot as any).runAutoSubscribeTick();
+        expect(capturedSend).toBeDefined();
+
+        await capturedSend!('zero-thread message');
+
+        expect(sendMessageMock).toHaveBeenCalledTimes(1);
+        const [, , calledOpts] = sendMessageMock.mock.calls[0] as [number, string, unknown];
+        // threadId 0 → General → sendOptions must return {} (no message_thread_id).
+        expect(calledOpts).toEqual({});
+        expect(calledOpts).not.toHaveProperty('message_thread_id');
+      } finally {
+        presenceSpy.mockRestore();
+        vi.restoreAllMocks();
+      }
+    });
   });
 
   describe('wave resumption offer routing', () => {

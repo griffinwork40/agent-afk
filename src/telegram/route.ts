@@ -72,7 +72,13 @@ export function routeFromCtx(ctx: Context): TelegramRoute | undefined {
   return route;
 }
 
-/** True when the route addresses the General topic (or topics are off). */
+/** True when the route addresses the General topic (or topics are off).
+ *
+ * Fix #1271 (F4): widen the absent-thread check to `threadId == null || threadId === 0`.
+ * `threadId === 0` is not a valid Telegram topic id (topics start at 1) and passes the
+ * `=== undefined` guard when present, causing `sendOptions` to emit `{ message_thread_id: 0 }`
+ * which Telegram rejects. Treating 0 as General is safe and backward-compatible.
+ */
 export function isGeneral(route: TelegramRoute): boolean {
   return route.threadId === undefined || route.threadId === 0 || route.threadId === GENERAL_TOPIC_ID;
 }
