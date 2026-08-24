@@ -2,7 +2,8 @@
  * Tool-overflow telemetry tests.
  *
  * Asserts that the `tool.overflow_kill` event is emitted to
- * routing-decisions.jsonl when bash or grep cross the 8MB hard cap and SIGKILL
+ * routing-decisions.jsonl when bash crosses the 8MB hard cap, or grep crosses its
+ * 256MB scan ceiling, and SIGKILL
  * the child process. Mocks `routing-telemetry` to capture calls without
  * touching the real ~/.afk file.
  *
@@ -30,7 +31,7 @@ vi.mock('../../routing-telemetry.js', () => ({
   appendRoutingDecision,
 }));
 
-import { grepHandler } from './grep.js';
+import { grepHandler, createGrepHandler } from './grep.js';
 import { bashHandler } from './bash.js';
 
 function createSignal(): AbortSignal {
@@ -53,14 +54,17 @@ describe('tool.overflow_kill telemetry — grep', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'grep-overflow-tel-'));
   });
 
-  it('emits tool.overflow_kill with operational fields when grep crosses 100KB', async () => {
-    // ~10MB of matching content guarantees the mid-stream cap fires.
-    // (Same shape as grep.test.ts:199 — V8 overflow guard.)
-    const largeLine = 'palette ' + 'x'.repeat(1000);
-    const lines = Array(10_000).fill(largeLine).join('\n');
+  it('emits tool.overflow_kill with operational fields when grep crosses the scan ceiling', async () => {
+    // grep no longer dies at 8MB — output streams through a bounded
+    // collector — so only a genuine runaway past the scan ceiling reaches the
+    // kill path that emits this telemetry. Inject a small ceiling rather than
+    // writing a multi-hundred-MB fixture.
+    const largeLine = 'palette ' + 'x'.repeat(100);
+    const lines = Array(5_000).fill(largeLine).join('\n');
     writeFileSync(join(tempDir, 'huge.txt'), lines);
 
-    const result = await grepHandler(
+    const handler = createGrepHandler(tempDir, { scanCapBytes: 100_000 });
+    const result = await handler(
       { pattern: 'palette', path: tempDir },
       createSignal(),
     );
@@ -83,11 +87,12 @@ describe('tool.overflow_kill telemetry — grep', () => {
     // Use a distinctive pattern + path so any leak is visually obvious in
     // the JSON-serialized mock-call payload.
     const secretPattern = 'SECRET-PATTERN-MARKER-42';
-    const largeLine = `${secretPattern} ` + 'x'.repeat(1000);
-    const lines = Array(10_000).fill(largeLine).join('\n');
+    const largeLine = `${secretPattern} ` + 'x'.repeat(100);
+    const lines = Array(5_000).fill(largeLine).join('\n');
     writeFileSync(join(tempDir, 'huge.txt'), lines);
 
-    const result = await grepHandler(
+    const handler = createGrepHandler(tempDir, { scanCapBytes: 100_000 });
+    const result = await handler(
       { pattern: secretPattern, path: tempDir },
       createSignal(),
     );
@@ -102,7 +107,7 @@ describe('tool.overflow_kill telemetry — grep', () => {
     rmSync(tempDir, { recursive: true, force: true });
   }, 30_000);
 
-  it('does NOT emit tool.overflow_kill on a small grep that stays under 100KB', async () => {
+  it('does NOT emit tool.overflow_kill on a small grep that stays under the scan ceiling', async () => {
     const content = Array(50).fill('hello world').join('\n');
     writeFileSync(join(tempDir, 'small.txt'), content);
 
