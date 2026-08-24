@@ -23,7 +23,7 @@ import {
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
-import { harvestAllPluginSkillFlags, extractHintFromDescription } from './flags.js';
+import { harvestPluginSkillMetadata, extractHintFromDescription } from './flags.js';
 import { makeDynamicSkillsCmd } from './listing.js';
 import {
   state,
@@ -215,14 +215,32 @@ export async function registerPluginSkills(
     return null;
   }
 
-  const discovered: DiscoveredSkill[] = commands.map((c) => ({
-    name: c.name,
-    description: c.description,
-    ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
-    ...(c.source ? { source: c.source } : {}),
-  }));
+  // Harvest both flags and categories in a single unified pass.
+  const { flags: harvestedFlags, categories: harvestedCategories } = harvestPluginSkillMetadata();
+  // Also walk the bundled-plugins dir (harvestAllPluginSkillFlags already
+  // merges both dirs — replicate for the combined metadata walk).
+  const bundled = harvestPluginSkillMetadata(
+    await import('../../../paths.js').then((m) => m.getBundledPluginsDir()),
+  );
+  for (const [name, flags] of bundled.flags) {
+    const existing = harvestedFlags.get(name) ?? [];
+    harvestedFlags.set(name, Array.from(new Set([...existing, ...flags])).sort());
+  }
+  for (const [name, cat] of bundled.categories) {
+    if (!harvestedCategories.has(name)) harvestedCategories.set(name, cat);
+  }
 
-  const harvestedFlags = harvestAllPluginSkillFlags();
+  const discovered: DiscoveredSkill[] = commands.map((c) => {
+    const bare = bareName(c.name);
+    const cat = harvestedCategories.get(bare);
+    return {
+      name: c.name,
+      description: c.description,
+      ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
+      ...(c.source ? { source: c.source } : {}),
+      ...(cat ? { category: cat } : {}),
+    };
+  });
   // Reserved names = registry skills that are ACTUALLY VISIBLE at the
   // current tier. Internal-tier skills (forge, audit-fit) that are hidden
   // by the audience gate don't reserve their slash — otherwise a plugin

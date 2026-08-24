@@ -57,6 +57,8 @@ interface ParsedSkillMd {
    * `undefined` and treated as the default (load) by the registrant.
    */
   context?: 'inline' | 'fork' | 'load';
+  /** Job-to-be-done category authored in frontmatter. Passed through verbatim. */
+  category?: string;
 }
 
 /**
@@ -136,6 +138,9 @@ function parseUserSkillMd(content: string, dirname: string): ParsedSkillMd | nul
   if (rawContext === 'inline' || rawContext === 'fork' || rawContext === 'load') {
     out.context = rawContext;
   }
+  // category is passed through verbatim — no validation, no inference.
+  const rawCategory = parsed.frontmatter['category'];
+  if (rawCategory && rawCategory.length > 0) out.category = rawCategory;
   return out;
 }
 
@@ -327,6 +332,7 @@ export function scanSkillsFromDir(
     };
     if (parsed.argumentHint) meta.argumentHint = parsed.argumentHint;
     if (parsed.flags && parsed.flags.length > 0) meta.flags = parsed.flags;
+    if (parsed.category) meta.category = parsed.category;
     // Default to in-context LOAD; fork only when `context: fork` is explicit
     // (symmetric with the plugin-skill default in skill-executor.ts). In load
     // mode we set `context: 'load'` + `loadBody` so the executor's load path

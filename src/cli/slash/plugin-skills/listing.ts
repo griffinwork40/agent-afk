@@ -10,7 +10,7 @@
  * in `search-render.ts` — both are split siblings kept under 350 lines.
  */
 
-import { getSkill, listVisibleSkills } from '../../../skills/index.js';
+import { getSkill, listVisibleSkills, SKILL_CATEGORIES, UNCATEGORIZED_LABEL } from '../../../skills/index.js';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { wrapToWidth } from '../../wrap.js';
@@ -62,18 +62,22 @@ interface ListingRow {
 interface ListingGroup {
   main: ListingRow;
   alts: ListingRow[];
+  /** Authored category (from SkillMetadata or DiscoveredSkill). Absent = uncategorised. */
+  category?: string;
 }
 
 function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolean): Map<string, ListingGroup> {
   const groups = new Map<string, ListingGroup>();
 
-  const addRow = (row: ListingRow): void => {
+  const addRow = (row: ListingRow, category?: string): void => {
     const key = bareName(row.slashName.replace(/^\//, ''));
     const existing = groups.get(key);
     if (!existing) {
-      groups.set(key, { main: row, alts: [] });
+      groups.set(key, { main: row, alts: [], ...(category ? { category } : {}) });
     } else {
       existing.alts.push(row);
+      // If the group had no category yet, adopt the alt's category.
+      if (!existing.category && category) existing.category = category;
     }
   };
 
@@ -85,7 +89,10 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
     const skill = getSkill(name);
     const slashName = `/${name}`;
     const display = skill.argumentHint ? `${slashName} ${skill.argumentHint}` : slashName;
-    addRow({ slashName, display, description: skill.description, source: registryOriginToSource(skill.origin) });
+    addRow(
+      { slashName, display, description: skill.description, source: registryOriginToSource(skill.origin) },
+      skill.category,
+    );
   }
 
   // Pass 2: plugin skills. Group by bare name so a colliding plugin entry
@@ -100,7 +107,10 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
     const altSlash = altSlashByBare.get(bare);
     const slashName = altSlash ?? `/${skill.name}`;
     const display = skill.argumentHint ? `${slashName} ${skill.argumentHint}` : slashName;
-    addRow({ slashName, display, description: skill.description, source: skill.source ?? 'plugin' });
+    addRow(
+      { slashName, display, description: skill.description, source: skill.source ?? 'plugin' },
+      skill.category,
+    );
   }
 
   return groups;
@@ -164,12 +174,6 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
   const allGroups = Array.from(groups.values());
   const altCount = allGroups.reduce((n, g) => n + g.alts.length, 0);
 
-  // Built-in skills carry the richest metadata and are the modal starting
-  // point, so they get their own block at the top. Everything else (user,
-  // project, plugin) follows in a second block. Within each, alphabetical.
-  const builtinGroups = allGroups.filter((g) => g.main.source === 'builtin').sort(byBareName);
-  const otherGroups = allGroups.filter((g) => g.main.source !== 'builtin').sort(byBareName);
-
   // Column widths mirror the help-table layout: name column capped at ~45% of
   // the terminal, the rest for the wrapped description. Width-aware so narrow
   // terminals stay readable.
@@ -184,15 +188,51 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
   const legend = LEGEND_ORDER.filter((s) => present.has(s)).map(friendlySource).join(' · ');
   ctx.out.line(palette.dim(`  ${legend} — /skills <name> for details`));
 
-  if (builtinGroups.length > 0) {
-    ctx.out.line();
-    ctx.out.line(divider('Built-in'));
-    for (const g of builtinGroups) renderGroupRows(ctx, g, nameW, descW);
-  }
-  if (otherGroups.length > 0) {
-    ctx.out.line();
-    ctx.out.line(builtinGroups.length > 0 ? divider('Plugins & user skills') : divider());
-    for (const g of otherGroups) renderGroupRows(ctx, g, nameW, descW);
+  // Determine whether any skill carries a category. When none do, fall back
+  // to the legacy two-block layout (Built-in / Plugins & user skills) so the
+  // listing is unchanged for sessions with no authored categories.
+  const hasCategoryAnnotations = allGroups.some((g) => g.category);
+
+  if (!hasCategoryAnnotations) {
+    // Legacy layout: built-in block + other block.
+    const builtinGroups = allGroups.filter((g) => g.main.source === 'builtin').sort(byBareName);
+    const otherGroups = allGroups.filter((g) => g.main.source !== 'builtin').sort(byBareName);
+
+    if (builtinGroups.length > 0) {
+      ctx.out.line();
+      ctx.out.line(divider('Built-in'));
+      for (const g of builtinGroups) renderGroupRows(ctx, g, nameW, descW);
+    }
+    if (otherGroups.length > 0) {
+      ctx.out.line();
+      ctx.out.line(builtinGroups.length > 0 ? divider('Plugins & user skills') : divider());
+      for (const g of otherGroups) renderGroupRows(ctx, g, nameW, descW);
+    }
+  } else {
+    // Category layout: skills grouped by job-to-be-done in canonical order;
+    // skills without a category land in "More skills" at the end.
+    // Preserve canonical render order from SKILL_CATEGORIES, skip empties.
+    const byCategory = new Map<string, ListingGroup[]>();
+    for (const g of allGroups) {
+      const bucket = g.category ?? UNCATEGORIZED_LABEL;
+      const existing = byCategory.get(bucket) ?? [];
+      existing.push(g);
+      byCategory.set(bucket, existing);
+    }
+
+    // Emit in canonical order, then "More skills" last.
+    const renderOrder: string[] = [
+      ...SKILL_CATEGORIES.filter((c) => byCategory.has(c)),
+      ...(byCategory.has(UNCATEGORIZED_LABEL) ? [UNCATEGORIZED_LABEL] : []),
+    ];
+
+    for (const cat of renderOrder) {
+      const catGroups = (byCategory.get(cat) ?? []).sort(byBareName);
+      if (catGroups.length === 0) continue;
+      ctx.out.line();
+      ctx.out.line(divider(cat));
+      for (const g of catGroups) renderGroupRows(ctx, g, nameW, descW);
+    }
   }
 
   ctx.out.line();
