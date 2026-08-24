@@ -43,7 +43,7 @@ import {
   SubagentHandleImpl,
   type SubagentHandle,
 } from './subagent/handle.js';
-import { coerceCrossProviderChildModel } from './subagent/child-model-fallback.js';
+import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 
 // Re-export types for public API
@@ -294,31 +294,17 @@ export class SubagentManager {
     // with config.provider. See ./subagent/fork-validation.ts.
     validatePhaseRole(options);
 
-    const id = `${options.idPrefix ?? 'subagent'}-${Date.now()}-${++this.counter}`;
-    const resume = options.parent.sessionId;
-
-    // Registry resolution (highest → lowest precedence):
-    //   1. explicit per-fork override (config.hookRegistry)
-    //   2. manager-level registry (this.hookRegistry)
-    //   3. the forking parent session's registry (options.parent.hookRegistry)
-    // Production almost always lands on (3): entry points build the registry
-    // AFTER the manager/executors, so neither (1) nor (2) is set — but the
-    // parent session exposes it at fork time. Without (3), SubagentStart/Stop
-    // (incl. the shadow-verify nudge) would silently never fire.
-    const registry =
-      options.config.hookRegistry ?? this.hookRegistry ?? options.parent.hookRegistry;
-
-    // Witness-writer resolution: explicit per-fork config wins, then the
-    // manager-level writer (constructed at the surface bootstrap). This is
-    // the SINGLE resolved value used by every witness touchpoint in this
-    // fork path — SubagentStart dispatch, the child handle, and the
-    // subagent_lifecycle 'started' emit below. Before this, those three
-    // read `options.config.traceWriter` directly, so a fork relying on
-    // manager-level inheritance (the `agent`-tool path — its executors
-    // never set config.traceWriter) produced a child whose entire lifetime
-    // was invisible in `afk trace show` even though childConfig inherited
-    // the writer for the session's own events.
-    const effectiveTraceWriter = options.config.traceWriter ?? this.parentTraceWriter;
+    // Pure resolution chain: ID, registry, trace writer, model coercion,
+    // timeout. See ./subagent/fork-resolution.ts for precedence comments.
+    const {
+      id, resume, registry, effectiveTraceWriter, effectiveChildModel, coercedFrom, effectiveTimeoutMs,
+    } = resolveForkInputs({
+      options,
+      counter: ++this.counter,
+      managerHookRegistry: this.hookRegistry,
+      parentTraceWriter: this.parentTraceWriter,
+      parentModel: this.parentModel,
+    });
 
     // SubagentStart fires BEFORE session creation so a block truly prevents
     // the child from existing. Abort precedence is honored via rootController.
@@ -334,6 +320,18 @@ export class SubagentManager {
           signal: this.rootController.signal,
           ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
         },
+      );
+    }
+
+    // Ordering constraint: the coercion warning fires AFTER hook dispatch so a
+    // blocked fork never tells the operator it is "running" under a substituted
+    // model. Before this extraction the warning was inline after the hook; the
+    // resolution chain defers it via `coercedFrom` to preserve that ordering.
+    if (coercedFrom !== undefined) {
+      process.stderr.write(
+        `[afk] subagent: child model "${coercedFrom}" cannot run on this ` +
+          `session's OpenAI/ChatGPT backend — running it as "${effectiveChildModel ?? ''}" instead ` +
+          `(set AFK_DEFAULT_SUBAGENT_MODEL to choose a different one).\n`,
       );
     }
 
@@ -360,31 +358,6 @@ export class SubagentManager {
 
     // Write-root composition (#435): see ./subagent/resolve-fork-scope.
     const composedWriteRoots = composeWriteRoots(options.config.writeRoots, effectiveChildCwd);
-
-    // #652: coerce a Claude-family child that would be mis-routed to the
-    // openai-compatible provider onto the parent's model. Logged to stderr
-    // when coercion fires. See ./subagent/child-model-fallback.ts.
-    const childModelCoercion = coerceCrossProviderChildModel(
-      options.config.model,
-      this.parentModel,
-    );
-    // `?? options.config.model` keeps the type as the required AgentModelInput:
-    // the helper only returns undefined when given an undefined model, and
-    // options.config.model is always defined here.
-    const effectiveChildModel = childModelCoercion.model ?? options.config.model;
-    if (childModelCoercion.coercedFrom !== undefined) {
-      process.stderr.write(
-        `[afk] subagent: child model "${childModelCoercion.coercedFrom}" cannot run on this ` +
-          `session's OpenAI/ChatGPT backend — running it as "${effectiveChildModel ?? ''}" instead ` +
-          `(set AFK_DEFAULT_SUBAGENT_MODEL to choose a different one).\n`,
-      );
-    }
-
-    // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS).
-    // Settled HERE (not inline at handle construction) because it feeds TWO
-    // consumers that must agree: the handle's hard `withTimeout` abort, and the
-    // child config's soft deadline. Reading it twice would let them drift.
-    const effectiveTimeoutMs = options.config.timeoutMs ?? resolveSubagentTimeoutMs();
 
     // Assemble the child AgentConfig. All fork-time invariants (seal ownership,
     // output cap, credential gating, anti-hang constraints, scope inheritance,
