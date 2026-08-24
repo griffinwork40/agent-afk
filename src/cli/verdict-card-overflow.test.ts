@@ -142,7 +142,7 @@ describe('verdict card bottom border survives a tight frame (regression)', () =>
     // reported "cut off on the bottom" bug.
     expect(hasBottom, `bottom border ╰──╯ missing from rendered grid:\n${grid}`).toBe(true);
     // The affordance (the actionable end-of-turn line) must remain visible.
-    expect(lines.some((l) => l.includes('Objective satisfied')), `affordance missing:\n${grid}`).toBe(true);
+    expect(lines.some((l) => l.includes('Review:')), `affordance missing:\n${grid}`).toBe(true);
     // The card's top border must remain ACCESSIBLE — on screen or scrolled into
     // scrollback (band-hold archives the genuine overflow as real content). Its
     // total absence is the failure: top rows stranded in the pending band model,
