@@ -687,6 +687,32 @@ export function registerInteractiveCommand(program: Command): void {
               turnState,
               onStop: doStop,
               onCancel: () => { ctx.session.current?.abort('sigint'); ctx.rl.close(); },
+              onSteer: () => {
+                // Fire-and-forget: async readline work begins here; handleSigint
+                // must return synchronously so we void-dispatch the async chain.
+                void (async () => {
+                  const steerFn = turnState.steerReadLine;
+                  if (!steerFn) {
+                    // steerReadLine not yet published (surface not fully up) —
+                    // degrade to Stop behavior. The turn was already soft-stopped
+                    // by onStop() firing before onSteer() in showInterruptPicker.
+                    turnState.interruptPickerAbort = null;
+                    return;
+                  }
+
+                  const text = await steerFn();
+
+                  if (text.trim().length > 0) {
+                    // Non-empty steer message: deliver it to the next turn iteration
+                    // via the pendingSteerText drain at the top of the while-body.
+                    turnState.pendingSteerText = text;
+                  }
+                  // Clear the abort controller now that the readline has settled —
+                  // the steer path is complete. onSteer owns this clear for the
+                  // 'steer' branch (launchInterruptPicker's .then() defers it).
+                  turnState.interruptPickerAbort = null;
+                })();
+              },
             });
             return;
           }
