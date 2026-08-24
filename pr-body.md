@@ -1,60 +1,62 @@
-## Problem
+## Summary
 
-Compose DAG node token usage and USD cost was **silently dropped** from the parent session's `session_sealed` telemetry. Two separate bugs combined to cause this:
+Implements Phase 2 of issue #12: job-to-be-done category grouping for `/skills`.
 
-### Bug 1: Compose executor's ephemeral manager never received the rollup callback
+Categories are **authored** at the source (in `SKILL.md` frontmatter or `registerSkill()` calls) — never inferred at render time.
 
-`ComposeExecutor.execute()` creates a **fresh `SubagentManager` per call** (~line 652 of compose-executor.ts). The rollup callback that accumulates subagent token/cost data is registered on the *root* manager via `rootManager.setOnSubagentSucceeded()` — but compose's ephemeral per-call manager never received it. All compose DAG node costs were silently discarded.
+## Changes
 
-### Bug 2: The rollup was only wired on the REPL surface
+### Core interface & vocabulary
+- **`src/skills/index.ts`** — Adds `category?: string` to `SkillMetadata`; exports `SKILL_CATEGORIES` const (7 canonical categories in render order) + `UNCATEGORIZED_LABEL = 'More skills'`.
 
-`setOnSubagentSucceeded` was called on `rootManager` only inside `bootstrap.ts` (the REPL path). Three other surfaces had **no wiring at all**:
+### Harvesting from SKILL.md frontmatter
+- **`src/cli/slash/_lib/flag-harvest.ts`** — No change needed; `parseSkillMd` already returns the `frontmatter` record.
+- **`src/skills/user-skills.ts`** — `parseUserSkillMd` now reads `category` from frontmatter and threads it into `SkillMetadata` via `scanSkillsFromDir`.
+- **`src/cli/slash/plugin-skills/flags.ts`** — Introduces `harvestPluginSkillMetadata()` (single-pass walk returning `{ flags, categories }`). `harvestPluginSkillFlags()` delegates to it for backwards compatibility.
+- **`src/cli/slash/plugin-skills/state.ts`** — `DiscoveredSkill` grows `category?: string`.
+- **`src/cli/slash/plugin-skills/dispatch.ts`** — `registerPluginSkills()` now calls `harvestPluginSkillMetadata()` (replacing the separate flags-only call) and threads `category` into each `DiscoveredSkill`.
 
-| Surface | File | Status before fix |
-|---------|------|-------------------|
-| REPL | `src/cli/commands/interactive/bootstrap.ts` | ✅ rootManager wired — **compose missing** |
-| Daemon | `src/cli/commands/daemon.ts` | ❌ neither rootManager nor compose |
-| Telegram | `src/telegram/session-anthropic.ts` | ❌ neither rootManager nor compose |
-| One-shot chat | `src/cli/commands/chat.ts` | ❌ neither rootManager nor compose |
+### Rendering
+- **`src/cli/slash/plugin-skills/listing.ts`** — `ListingGroup` carries `category?`; `buildListingGroups` propagates category from both registry skills and plugin skills. `renderUnifiedListing` switches to category-grouped layout when ≥1 skill has a category (canonical order, empty categories omitted, un-categorised skills in "More skills"); falls back to the legacy two-block layout when no category is authored.
 
-## Fix
+### Built-in skill annotations (4 of 5 requested)
+- **`src/skills/mint/index.ts`** — `category: 'Build & ship'`
+- **`src/skills/telegram-setup/index.ts`** — `category: 'Setup & ops'`
+- **`src/skills/service-setup/index.ts`** — `category: 'Setup & ops'`
+- **`src/skills/get-started/index.ts`** — `category: 'Setup & ops'`
 
-### 1. `src/agent/tools/compose-executor.ts`
+> **Note on `audit-fit`**: The issue listed `diagnose` (a plugin skill, not a built-in) in the set of 5. The actual 5th built-in candidate is `audit-fit`, but that file is already in the filesize-baseline at 421 code lines and the `--check` ratchet prohibits growing it. Category annotation is deferred to a follow-up extract of `audit-fit` into sibling files.
 
-- Added `onSubagentSucceeded` optional field to `ComposeExecutorContext`
-- Added `setOnSubagentSucceeded()` method to `ComposeExecutor` (mirrors the existing `setTraceWriter()` pattern) for late-binding after session construction
-- In `execute()`, immediately after the ephemeral `SubagentManager` is constructed, wires `ctx.onSubagentSucceeded` onto it via `manager.setOnSubagentSucceeded(cb)`
-
-### 2. `src/cli/commands/interactive/bootstrap.ts`
-
-Extracted the existing `rootManager.setOnSubagentSucceeded()` closure into a named `onSubagentSucceeded` constant, then reused it for `composeExecutor.setOnSubagentSucceeded(onSubagentSucceeded)`. Both read through `sessionRef.current` so a mid-session `/resume` swap routes costs into the live session.
-
-### 3. `src/cli/commands/daemon.ts`
-
-In `buildDaemonSessionFactory`, after the `AgentSession` is constructed (late-binding pattern), wires both `rootManager.setOnSubagentSucceeded()` and `composeExecutor.setOnSubagentSucceeded()` to accumulate per-tick session costs.
-
-### 4. `src/telegram/session-anthropic.ts`
-
-After `boundSession = session`, wires both `rootManager.setOnSubagentSucceeded()` and `composeExecutor.setOnSubagentSucceeded()` onto the constructed Telegram session.
-
-### 5. `src/cli/commands/chat.ts`
-
-After `boundSession = session`, wires both managers using a `wiredSession` const (TypeScript control-flow narrowing: the outer `session` variable is `AgentSession | null`, so a stable local reference satisfies the type checker).
-
-### 6. `.filesize-baseline.json`
-
-Updated via `pnpm audit:filesize:update` — compose-executor.ts grew from 545 to 560 code lines, and chat.ts / daemon.ts each grew ~7 lines.
-
-## Design notes
-
-- The compose manager is **ephemeral** (created and torn down per `execute()` call), so the callback routes to the *parent* session's accumulators (`session.recordSubagentCompletion()`), not a local one.
-- All wiring is **late-bound** (after session construction) to avoid the circular reference: executors are built before the session, session needs executors, so the rollup callback can only be registered once both exist.
-- The `setOnSubagentSucceeded` method on `ComposeExecutor` matches the existing `setTraceWriter` method's shape exactly — consistent API, no surprises.
+### Tests
+- **`src/cli/slash/plugin-skills-category.test.ts`** *(new)* — 8 tests covering category headers, "More skills" bucket, canonical render order, empty-category omission, legacy fallback, plugin skill grouping, vocabulary invariants.
 
 ## Verification
 
 ```
-pnpm lint   ✅ (tsc --noEmit + tsconfig.web.json)
-pnpm build  ✅
-pnpm audit:filesize:check  ✅ (42 grandfathered, 0 violations)
+pnpm lint           ✅  (tsc --noEmit clean)
+pnpm test --run src/cli/slash/ src/skills/
+                    ✅  72 test files, 1064 tests pass
+pnpm audit:filesize:check
+                    ✅  no new violations (2 pre-existing GREW violations in
+                        openai-compatible/index.ts and daemon.ts, both in
+                        .filesize-baseline.json before this PR)
 ```
+
+## Canonical category vocabulary
+
+| Order | Category |
+|-------|----------|
+| 1 | Build & ship |
+| 2 | Debug & fix |
+| 3 | Understand & explore |
+| 4 | Refactor & simplify |
+| 5 | Review & verify |
+| 6 | Setup & ops |
+| 7 | Author & meta |
+
+Un-annotated skills → **More skills** (always last).
+
+## Design decisions preserved from issue
+- No inference at render time — category is authored or absent
+- Phase 1 detail card, audience gate, wrapping, inline shadow suffixes are untouched
+- Empty categories are silently omitted from the listing
