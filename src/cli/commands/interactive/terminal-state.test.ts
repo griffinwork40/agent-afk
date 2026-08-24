@@ -98,11 +98,12 @@ describe('parseTerminalState — recognition', () => {
 });
 
 describe('parseTerminalState — bullet field mapping', () => {
-  it('done: maps "What was done", "Evidence", "Deferred" via substring match', () => {
-    const text = `prose\n\nDone\n- What was done: built the parser\n- Evidence that exists: see tests/parse.test.ts\n- Pending: integrate with renderer`;
+  it('done: maps each labelled field independently via substring match', () => {
+    const text = `prose\n\nDone\n- What was done: built the parser\n- Evidence that exists: see tests/parse.test.ts\n- What changed in the world: terminal verdicts are now parsed\n- Pending: integrate with renderer`;
     const v = parseTerminalState(text);
     expect(v?.whatWasDone).toBe('built the parser');
     expect(v?.evidence).toBe('see tests/parse.test.ts');
+    expect(v?.whatChanged).toBe('terminal verdicts are now parsed');
     expect(v?.deferred).toBe('integrate with renderer');
   });
 

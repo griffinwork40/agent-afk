@@ -174,6 +174,7 @@ function collectRows(state: TerminalState): Row[] {
     case 'done':
       push('done', state.whatWasDone);
       push('evidence', state.evidence);
+      push('changed', state.whatChanged);
       // Skip a deferred row that merely echoes the done field — models
       // sometimes emit identical text for both, producing a confusing
       // duplicate row in the card.

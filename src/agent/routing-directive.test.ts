@@ -215,6 +215,7 @@ describe('assembleSystemPrompt', () => {
       expect(verdict?.kind).toBe('done');
       expect(verdict?.whatWasDone).toContain('CacheManager');
       expect(verdict?.evidence).toContain('47 tests');
+      expect(verdict?.whatChanged).toContain('src/cache/manager.ts created');
     });
 
     it('parses a Blocked response shaped like the directive prescribes', () => {

@@ -45,8 +45,10 @@ export interface TerminalState {
   kind: TerminalKind;
   /** Done: "What was done". */
   whatWasDone?: string;
-  /** Done: "Evidence that exists" / "What changed in the world". */
+  /** Done: "Evidence that exists". */
   evidence?: string;
+  /** Done: "What changed in the world". */
+  whatChanged?: string;
   /** Done: "Anything still pending or deferred, with why". */
   deferred?: string;
   /** Blocked: "What blocks". */
@@ -242,8 +244,10 @@ function mapBulletsToFields(
       const out: Partial<TerminalState> = {};
       const whatWasDone = find('what was done', 'what i did', 'completed', 'done');
       if (whatWasDone !== undefined) out.whatWasDone = whatWasDone;
-      const evidence = find('evidence', 'what changed', 'change', 'artifact', 'output');
+      const evidence = find('evidence', 'artifact', 'output');
       if (evidence !== undefined) out.evidence = evidence;
+      const whatChanged = find('what changed', 'world-state', 'world state', 'change');
+      if (whatChanged !== undefined) out.whatChanged = whatChanged;
       const deferred = find('pending', 'deferred', 'follow-up', 'followup', 'next');
       if (deferred !== undefined) out.deferred = deferred;
       return out;

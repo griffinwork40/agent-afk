@@ -45,6 +45,7 @@ describe('renderVerdictCard', () => {
       kind: 'done',
       whatWasDone: 'shipped feature X',
       evidence: 'tests pass',
+      whatChanged: 'feature X is available to users',
       rawBody: '',
     };
     const out = stripAnsi(renderVerdictCard(state));
@@ -53,6 +54,8 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('shipped feature X');
     expect(out).toContain('evidence');
     expect(out).toContain('tests pass');
+    expect(out).toContain('changed');
+    expect(out).toContain('feature X is available to users');
     expect(out).toContain('Objective satisfied');
   });
 
