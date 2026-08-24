@@ -8,7 +8,8 @@
  * user-defined custom names also resolve onto these tier positions.
  *
  * IDENTITY vs. TIER: the built-in Claude handles (`haiku`/`sonnet`/`opus`/
- * `fable`/`*_1m`) are FIXED-IDENTITY aliases ({@link DIRECT_MODEL_ALIASES}) that
+ * `fable`/`*_1m`) and the xAI handle (`grok`) are FIXED-IDENTITY aliases
+ * ({@link DIRECT_MODEL_ALIASES}) that
  * always resolve to one concrete model — they are NOT tier aliases and are never
  * rebound by slot config. This prevents rebinding a capability tier (e.g.
  * `medium` → an OpenAI model) from silently hijacking the `sonnet` handle. Only
@@ -17,7 +18,7 @@
  * Resolution precedence for any model input string:
  *   1. custom name    — a user-assigned `name` on a binding      (tier; {@link slotForInput})
  *   2. neutral name   — `local` | `small` | `medium` | `large`   (tier; {@link slotForInput})
- *   3. identity alias — haiku/sonnet/opus/fable/*_1m → fixed id   ({@link resolveBinding})
+ *   3. identity alias — haiku/sonnet/opus/fable/*_1m/grok → fixed id   ({@link resolveBinding})
  *   4. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
  *
  * Bindings are process-global config (one afk.config.json + env per process),
@@ -115,6 +116,12 @@ export const CLAUDE_SONNET_ID = 'claude-sonnet-4-6';
 export const CLAUDE_OPUS_ID = 'claude-opus-5';
 /** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
+/**
+ * Current xAI Grok flagship wire id — the concrete target for the `grok`
+ * short alias. Update this constant when a new flagship ships; the alias
+ * table, `/model` picker, and docs all follow from this single definition.
+ */
+export const GROK_FLAGSHIP_ID = 'grok-4.6';
 
 /**
  * Default tier bindings — an unconfigured install behaves identically to the
@@ -162,6 +169,10 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet_1m: CLAUDE_SONNET_ID,
   haiku: CLAUDE_HAIKU_ID,
   fable: CLAUDE_FABLE_5_ID,
+  // xAI Grok flagship alias — a stable short handle that tracks
+  // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
+  // change. Not a capability tier: `grok` always resolves to one pinned id.
+  grok: GROK_FLAGSHIP_ID,
 };
 
 /**
