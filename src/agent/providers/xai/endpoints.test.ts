@@ -8,7 +8,19 @@ import {
   DEFAULT_XAI_OAUTH_BASE_URL,
   resolveXaiEndpoint,
 } from './endpoints.js';
-import { CLI_CHAT_PROXY_HOST } from './headers.js';
+import { CLI_CHAT_PROXY_HOST, type GrokCliHeaderDeps } from './headers.js';
+
+/** Build a fully-isolated GrokCliHeaderDeps — no real env or filesystem. */
+function headerDeps(overrides: Partial<GrokCliHeaderDeps> = {}): GrokCliHeaderDeps {
+  return {
+    readEnv: () => undefined,
+    homeDir: () => '/test-home',
+    readFile: () => {
+      throw new Error('version file unavailable');
+    },
+    ...overrides,
+  };
+}
 
 describe('resolveXaiEndpoint', () => {
   it('defaults API-key mode to api.x.ai without proxy headers', () => {
@@ -88,5 +100,77 @@ describe('resolveXaiEndpoint', () => {
       },
     });
     expect(r.baseURL).toBe(DEFAULT_XAI_API_BASE_URL);
+  });
+});
+
+describe('resolveXaiEndpoint — GrokCliHeaderDeps forwarding', () => {
+  // Verify that headerDeps.readEnv is forwarded through the oauth default path.
+  it('forwards headerDeps.readEnv env-override through the oauth default path', () => {
+    const r = resolveXaiEndpoint('oauth', {
+      readEnv: () => undefined,
+      headerDeps: headerDeps({ readEnv: () => '2.0.0' }),
+    });
+    expect(r.proxyHeadersApplied).toBe(true);
+    expect(r.defaultHeaders['x-grok-client-version']).toBe('2.0.0');
+    expect(r.defaultHeaders['User-Agent']).toBe('agent-afk (grok-cli-compat/2.0.0)');
+  });
+
+  // Verify that headerDeps.readFile (version file fallback) is forwarded through
+  // the oauth default path when no env override is present.
+  it('forwards headerDeps.readFile version-file fallback through the oauth default path', () => {
+    const r = resolveXaiEndpoint('oauth', {
+      readEnv: () => undefined,
+      headerDeps: headerDeps({
+        readFile: () => JSON.stringify({ version: '3.1.4' }),
+        homeDir: () => '/injected-home',
+      }),
+    });
+    expect(r.proxyHeadersApplied).toBe(true);
+    expect(r.defaultHeaders['x-grok-client-version']).toBe('3.1.4');
+  });
+
+  // Verify the same forwarding when the proxy is reached via baseUrlOverride.
+  it('forwards headerDeps.readEnv env-override through the baseUrlOverride proxy path', () => {
+    const r = resolveXaiEndpoint('apikey', {
+      baseUrlOverride: `https://${CLI_CHAT_PROXY_HOST}/v1`,
+      headerDeps: headerDeps({ readEnv: () => '4.5.6' }),
+    });
+    expect(r.proxyHeadersApplied).toBe(true);
+    expect(r.defaultHeaders['x-grok-client-version']).toBe('4.5.6');
+    expect(r.defaultHeaders['User-Agent']).toBe('agent-afk (grok-cli-compat/4.5.6)');
+  });
+
+  // Verify the same forwarding through the oauth env-override path
+  // (AFK_XAI_OAUTH_BASE_URL still resolves to the proxy host).
+  it('forwards headerDeps.readEnv through the oauth AFK_XAI_OAUTH_BASE_URL path', () => {
+    const r = resolveXaiEndpoint('oauth', {
+      readEnv: (k) =>
+        k === 'AFK_XAI_OAUTH_BASE_URL' ? `https://${CLI_CHAT_PROXY_HOST}/v1` : undefined,
+      headerDeps: headerDeps({ readEnv: () => '5.0.0' }),
+    });
+    expect(r.proxyHeadersApplied).toBe(true);
+    expect(r.defaultHeaders['x-grok-client-version']).toBe('5.0.0');
+  });
+
+  // When headerDeps has no valid sources, the endpoint falls back to
+  // DEFAULT_GROK_CLI_COMPAT_VERSION — the internal seam is still honoured.
+  it('falls through to clientVersion seam when headerDeps has no valid env or file', () => {
+    const r = resolveXaiEndpoint('oauth', {
+      readEnv: () => undefined,
+      clientVersion: '7.7.7',
+      headerDeps: headerDeps(), // readEnv returns undefined, readFile throws
+    });
+    expect(r.proxyHeadersApplied).toBe(true);
+    expect(r.defaultHeaders['x-grok-client-version']).toBe('7.7.7');
+  });
+
+  // Lock the User-Agent format: agent-afk (grok-cli-compat/<version>)
+  it('emits the expected User-Agent format (format lock)', () => {
+    const r = resolveXaiEndpoint('oauth', {
+      readEnv: () => undefined,
+      clientVersion: '1.2.3',
+      headerDeps: headerDeps(),
+    });
+    expect(r.defaultHeaders['User-Agent']).toBe('agent-afk (grok-cli-compat/1.2.3)');
   });
 });
