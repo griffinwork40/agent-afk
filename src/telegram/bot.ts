@@ -29,7 +29,7 @@ import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
 import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
-import { routeFromCtx, sendOptions } from './route.js';
+import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
 
 /**
@@ -614,18 +614,17 @@ export class TelegramBot {
       // one REPL session per operator).
       for (const sessionId of afkSessionIds) {
         if (this.watchManager.watching(chatId) === sessionId) continue; // already watching
-        // Route watch output to the most recently active topic for this chat.
-        // Resolve the route when output is sent (rather than when the watch is
-        // created), so a topic change during a long-running watch takes effect.
-        // When no session data exists, fall back to General ({ chatId }); this
-        // remains byte-identical to the pre-fix behavior for non-topic chats.
+        // Resolve the complete active route at use time so an existing watch
+        // follows topic changes. When no session data exists, fall back to
+        // General; this preserves pre-topics behavior for non-topic chats.
+        const autoRoute = (): TelegramRoute =>
+          this.sessionManager.getActiveRouteForChat(chatId) ?? { chatId };
         const send = async (msg: string): Promise<void> => {
-          const route = this.sessionManager.getActiveRouteForChat(chatId) ?? { chatId };
           for (const part of splitLongMessage(msg)) {
-            await this.bot.telegram.sendMessage(chatId, part, sendOptions(route)); // #1023, #1222
+            await this.bot.telegram.sendMessage(chatId, part, sendOptions(autoRoute())); // #1023, #1222
           }
         };
-        this.watchManager.start(chatId, sessionId, send);
+        this.watchManager.start(chatId, sessionId, send, autoRoute);
         this.log(`[auto-subscribe] started watch for ${sessionId} on chat ${chatId}`);
         break; // one session per chat at a time
       }
