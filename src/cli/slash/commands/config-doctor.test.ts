@@ -12,7 +12,7 @@
  * tested in unit coverage of doctor-checks.ts if desired.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -21,6 +21,15 @@ import type { PickerController, TerminalCompositor } from '../../terminal-compos
 import { configDoctorCommands } from './config-doctor.ts';
 import { registerAll } from '../index.js';
 import { resetRegistry, lookup } from '../registry.js';
+import { loadConfig } from '../../config.js';
+
+// Partial mock: only loadConfig is stubbed, so the overlay-provenance section
+// can be driven per-test. resolveCliPermissionMode and the rest of the module
+// keep their real implementations (the view calls both).
+vi.mock('../../config.js', async () => {
+  const real = await vi.importActual<typeof import('../../config.js')>('../../config.js');
+  return { ...real, loadConfig: vi.fn(real.loadConfig) };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -144,6 +153,18 @@ describe('/config slash command', () => {
 describe('/config fast-paths', () => {
   const configCmd = configDoctorCommands.find((c) => c.name === '/config')!;
 
+  // The overlay-provenance cases stub loadConfig; restore the real
+  // implementation after each so no stub leaks into a sibling test.
+  let realLoadConfig: typeof loadConfig;
+  beforeAll(async () => {
+    realLoadConfig = (
+      await vi.importActual<typeof import('../../config.js')>('../../config.js')
+    ).loadConfig;
+  });
+  afterEach(() => {
+    vi.mocked(loadConfig).mockImplementation(realLoadConfig);
+  });
+
   it('/config set model persists and applies through the real session adapter', async () => {
     const tmpHome = join(tmpdir(), `afk-cfg-set-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const originalAfkHome = process.env['AFK_HOME'];
@@ -216,6 +237,40 @@ describe('/config fast-paths', () => {
     const result = await configCmd.handler(ctx, 'view');
     expect(result).toBe('continue');
     expect(lines.join('\n')).toMatch(/model|provider/i);
+  });
+
+  it('/config view reports the resolved system-prompt overlay source', async () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      systemPromptSource: 'afk-md:/home/u/.afk/AFK.md+afk-md:/repo/AFK.md',
+    } as unknown as ReturnType<typeof loadConfig>);
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'view');
+    const out = lines.join('\n');
+    expect(out).toMatch(/System prompt overlay/i);
+    // The combined form must survive to the screen unflattened.
+    expect(out).toContain('afk-md:/home/u/.afk/AFK.md+afk-md:/repo/AFK.md');
+  });
+
+  it('/config view flags an AFK.md shadowed by a higher tier', async () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      systemPromptSource: 'env:AFK_SYSTEM_PROMPT',
+      shadowedAfkMdPaths: ['/repo/AFK.md'],
+    } as unknown as ReturnType<typeof loadConfig>);
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'view');
+    const out = lines.join('\n');
+    expect(out).toContain('/repo/AFK.md');
+    expect(out).toMatch(/shadowed/i);
+    expect(out).toMatch(/not loaded/i);
+  });
+
+  it('/config view reports no overlay when none is configured', async () => {
+    vi.mocked(loadConfig).mockReturnValue({} as unknown as ReturnType<typeof loadConfig>);
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'view');
+    const out = lines.join('\n');
+    expect(out).toMatch(/framework base only/i);
+    expect(out).not.toMatch(/shadowed/i);
   });
 
   it('/config set with no value warns about usage', async () => {

@@ -34,7 +34,7 @@ import { basename, dirname, join, resolve, relative } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../../paths.js';
 import { parseSource, assertHttpsUrl, type ParsedSource } from './source.js';
 import * as git from './git.js';
-import { upsertPlugin, type PluginIndexEntry } from './index-store.js';
+import { readIndex, upsertPlugin, type PluginIndexEntry } from './index-store.js';
 import { pickLatestSemverTag } from './versions.js';
 // Invalidate the process-lifetime scan cache after any successful install so
 // the running session sees the new plugin without a restart. (Audit F2)
@@ -131,7 +131,7 @@ function installLocal(
   const dest = join(pluginsDir, name);
   assertWithinPluginsDir(dest, pluginsDir);
 
-  assertDestAvailable(dest, options.force ?? false);
+  assertDestAvailable(dest, options.force ?? false, indexPath);
 
   // Remove stale symlink or directory when `force` is on.
   if (existsSync(dest) || isLink(dest)) {
@@ -175,7 +175,7 @@ async function installGit(
   assertSafePluginName(provisionalName);
   const dest = join(pluginsDir, provisionalName);
   assertWithinPluginsDir(dest, pluginsDir);
-  assertDestAvailable(dest, options.force ?? false);
+  assertDestAvailable(dest, options.force ?? false, indexPath);
   if (existsSync(dest)) removeDest(dest);
 
   const sourceString = parsed.type === 'github' ? `${parsed.owner}/${parsed.repo}` : parsed.url;
@@ -213,7 +213,7 @@ async function installGit(
       assertSafePluginName(manifestName);
       const renamedDir = join(pluginsDir, manifestName);
       assertWithinPluginsDir(renamedDir, pluginsDir);
-      assertDestAvailable(renamedDir, options.force ?? false);
+      assertDestAvailable(renamedDir, options.force ?? false, indexPath);
       if (existsSync(renamedDir)) removeDest(renamedDir);
       renameSync(dest, renamedDir);
       finalName = manifestName;
@@ -414,9 +414,32 @@ export function assertWithinPluginsDir(dest: string, parentDir: string): void {
   }
 }
 
-function assertDestAvailable(dest: string, force: boolean): void {
+/**
+ * Guard: refuse to overwrite an existing plugin dir unless forced.
+ *
+ * Ghost recovery: when the directory exists but the index has NO matching
+ * entry (e.g. a prior install crashed after cloning but before writing the
+ * index, or the index was rebuilt), the dir is a ghost — auto-remove it and
+ * proceed instead of trapping the user between "already exists" (install)
+ * and "not installed" (update).
+ */
+function assertDestAvailable(
+  dest: string,
+  force: boolean,
+  indexPath: string,
+): void {
   if (!existsSync(dest) && !isLink(dest)) return;
   if (force) return;
+
+  // Ghost detection: dir exists but no index entry → orphaned artifact.
+  // Auto-clean so the install can proceed without --force.
+  const name = basename(dest);
+  const index = readIndex(indexPath);
+  if (!index.plugins[name]) {
+    removeDest(dest);
+    return;
+  }
+
   throw new Error(
     `plugin directory already exists: ${dest} (re-run with --force to replace)`,
   );

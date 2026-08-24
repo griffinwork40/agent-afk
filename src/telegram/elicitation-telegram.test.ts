@@ -10,9 +10,11 @@
  *   - Unknown choice → answerCbQuery says so + does not resolve.
  *   - Abort signal aborts the pending promise as decline.
  *   - Form-mode requests with a 4-value enum render as 2×2 keyboard.
+ *   - message_thread_id is passed when a route with threadId is registered
+ *     in the elicitation-route registry (#1219).
  */
 
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTelegramElicitationHandler,
   composeTelegramElicitation,
@@ -22,11 +24,13 @@ import {
 import { ELICITATION_CALLBACK_PREFIX as ASK_QUESTION_PREFIX } from './elicitation-callback-data.js';
 import type { ElicitationHandler } from '../agent/elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from '../agent/types/sdk-types.js';
+import { setElicitationRoute, clearElicitationRoute } from './elicitation-route-registry.js';
 
 interface SentMessage {
   chatId: number;
   text: string;
   reply_markup?: unknown;
+  message_thread_id?: number;
 }
 
 function makeStubBot(): {
@@ -41,7 +45,14 @@ function makeStubBot(): {
   const bot: any = {
     telegram: {
       sendMessage: async (chatId: number, text: string, opts: Record<string, unknown>) => {
-        sent.push({ chatId, text, reply_markup: opts['reply_markup'] });
+        sent.push({
+          chatId,
+          text,
+          reply_markup: opts['reply_markup'],
+          ...(opts['message_thread_id'] !== undefined
+            ? { message_thread_id: opts['message_thread_id'] as number }
+            : {}),
+        });
       },
     },
     action: (re: RegExp, handler: (ctx: any) => Promise<void>) => {
@@ -278,5 +289,59 @@ describe('elicitation coexistence (PR #477 B1/B2)', () => {
     expect(askMatcher.test(askTap)).toBe(true);
     // And the constants themselves differ.
     expect(ELICITATION_CALLBACK_PREFIX).not.toBe(ASK_QUESTION_PREFIX);
+  });
+});
+
+/**
+ * Regression for #1219: elicitation keyboards must carry message_thread_id
+ * when the originating session lives in a topic thread.
+ */
+describe('createTelegramElicitationHandler — topic thread routing (#1219)', () => {
+  const SESSION_ID = 'test-session-topic-1219';
+  const CHAT_ID = 999;
+  const THREAD_ID = 42;
+
+  afterEach(() => {
+    clearElicitationRoute(SESSION_ID);
+    _resetPendingForTests();
+  });
+
+  it('includes message_thread_id when a topic route is registered for the session', async () => {
+    setElicitationRoute(SESSION_ID, { chatId: CHAT_ID, threadId: THREAD_ID });
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([CHAT_ID]));
+    const controller = new AbortController();
+
+    const p = handler(pathApprovalRequest(), {
+      signal: controller.signal,
+      sessionId: SESSION_ID,
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(stub.sent).toHaveLength(1);
+    expect(stub.sent[0]?.message_thread_id).toBe(THREAD_ID);
+
+    controller.abort();
+    await p;
+  });
+
+  it('omits message_thread_id when no route is registered (General / no-topics fallback)', async () => {
+    // No setElicitationRoute call — simulates a non-topic chat or missing mapping.
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([CHAT_ID]));
+    const controller = new AbortController();
+
+    const p = handler(pathApprovalRequest(), {
+      signal: controller.signal,
+      sessionId: 'unknown-session-id',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(stub.sent).toHaveLength(1);
+    expect(stub.sent[0]?.message_thread_id).toBeUndefined();
+
+    controller.abort();
+    await p;
   });
 });

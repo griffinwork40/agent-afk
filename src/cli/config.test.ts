@@ -641,6 +641,65 @@ describe('Config Loader', () => {
       const config = loadConfig();
       expect(config.systemPrompt).toBe('env-wins');
       expect(config.systemPromptSource).toBe('env:AFK_SYSTEM_PROMPT');
+      // Exclusivity is unchanged, but no longer silent: the shadowed file is
+      // reported so a stray env var masking a populated AFK.md is visible.
+      expect(config.shadowedAfkMdPaths).toBeDefined();
+      expect(config.shadowedAfkMdPaths!.length).toBeGreaterThan(0);
+    });
+
+    it('reports both paths shadowed when a higher tier wins over combined AFK.md tiers', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
+      process.env['AFK_SYSTEM_PROMPT'] = 'env-wins';
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return true; // both tiers present
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedRealpathSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return String(p); // genuinely distinct
+        return realFsModule.__realRealpathSync(p as fs.PathLike) as string;
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p).endsWith('AFK.md')) return 'shadowed content';
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('env-wins');
+      expect(config.shadowedAfkMdPaths).toEqual([homeAfkMd, cwdAfkMd]);
+    });
+
+    it('reports no shadowedAfkMdPaths when a higher tier wins and no AFK.md exists', () => {
+      process.env['AFK_SYSTEM_PROMPT'] = 'env-wins';
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return false; // nothing to shadow
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('env-wins');
+      expect(config.shadowedAfkMdPaths).toBeUndefined();
+    });
+
+    it('reports no shadowedAfkMdPaths when AFK.md itself supplied the overlay', () => {
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      mockedExistsSync().mockImplementation((p) => {
+        if (String(p).endsWith('AFK.md')) return String(p) === cwdAfkMd;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p) === cwdAfkMd) return 'project content';
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      // Nothing lost — AFK.md won, so there is nothing to warn about.
+      expect(config.systemPrompt).toBe('project content');
+      expect(config.shadowedAfkMdPaths).toBeUndefined();
     });
 
     it('ignores AFK.md when afk.config.json sets systemPrompt', () => {
@@ -661,6 +720,7 @@ describe('Config Loader', () => {
       const config = loadConfig();
       expect(config.systemPrompt).toBe('json-config-wins');
       expect(config.systemPromptSource).toBe(`file:${cwdConfigJson}`);
+      expect(config.shadowedAfkMdPaths).toBeDefined();
     });
 
     it('ignores a non-string systemPrompt in afk.config.json and falls back to AFK.md', () => {

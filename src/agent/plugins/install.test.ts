@@ -216,6 +216,28 @@ describe('installPlugin — collisions', () => {
     ).rejects.toThrow(/already exists/);
   });
 
+  it('auto-recovers ghost dir (exists on disk but not in index)', async () => {
+    // Simulate a ghost: directory exists but no index entry (e.g. prior
+    // install crashed after clone, before index write).
+    const ghostDir = join(pluginsDir, 'ghost-plugin');
+    mkdirSync(ghostDir, { recursive: true });
+    writeFileSync(join(ghostDir, 'stale.txt'), 'leftover');
+    // Confirm no index entry exists.
+    expect(readIndex(indexPath).plugins['ghost-plugin']).toBeUndefined();
+
+    // Install a local plugin that would land at the same name — should
+    // auto-clean the ghost and succeed without --force.
+    writeManifest(sourceDir, 'ghost-plugin');
+    const result = await installPlugin(
+      sourceDir,
+      {},
+      { pluginsDir, indexPath, now: () => new Date() },
+    );
+    expect(result.name).toBe('ghost-plugin');
+    expect(readIndex(indexPath).plugins['ghost-plugin']).toBeDefined();
+    expect(readIndex(indexPath).plugins['ghost-plugin']!.enabled).toBe(true);
+  });
+
   it('--force replaces the existing plugin', async () => {
     writeManifest(sourceDir, 'collide');
     await installPlugin(
