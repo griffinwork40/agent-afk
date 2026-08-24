@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.7] - 2026-08-24
+
+### Fixed
+- handle threadId=0 edge case in route normalization (#1271) (#1276) (30bc58ba)
+
+### Changed
+- add unit tests for streaming watchdog and sender (#1123) (#1277) (b7162c70)
+
 ## [5.149.6] - 2026-08-24
 
 ### Added
