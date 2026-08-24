@@ -192,7 +192,7 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
   it('is derived from the tiers + identity aliases, in the documented order', () => {
     expect(MODEL_ALIASES_HINT).toEqual([
       'local', 'small', 'medium', 'large',
-      'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable',
+      'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
     ]);
   });
 });
