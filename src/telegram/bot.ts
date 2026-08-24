@@ -88,7 +88,12 @@ export class TelegramBot {
     // usage-limit-pause-aware watchdog that throws a handled StreamTimeoutError.
     // p-timeout short-circuits on Infinity, handing it sole timeout control.
     this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
-    this.sessionManager = new SessionManager(options);
+    // Wire resumption-offer delivery into the session manager so wave manifests
+    // surface as plain messages when a new chat session is created.
+    this.sessionManager = new SessionManager({
+      ...options,
+      onResumptionOffer: (chatId, text) => { void this.bot.telegram.sendMessage(chatId, text).catch(() => undefined); },
+    });
     this.messageHandler = new MessageHandler(
       this.bot,
       this.sessionManager,
