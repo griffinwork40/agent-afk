@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.2] - 2026-08-24
+
+### Changed
+- extract pure resolution chain from forkSubagent (#1265) (e9951979)
+
 ## [5.149.1] - 2026-08-24
 
 ### Fixed
