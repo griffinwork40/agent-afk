@@ -20,6 +20,7 @@ import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
 import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
 import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
+import { resolveActiveRouteForChat } from './session-manager.active-route.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -892,26 +893,17 @@ export class SessionManager {
   async closeAll(): Promise<void> {
     this._evictStaleSessionData();
     await this.saveSessions();
-    const closePromises = Array.from(this.sessions.values()).map(
+    await Promise.all(Array.from(this.sessions.values()).map(
       session => session.close().catch(err => console.error('Error closing session:', err))
-    );
-    await Promise.all(closePromises);
+    ));
     this.sessions.clear();
   }
 
-  /**
-   * Get total number of active sessions
-   */
-  getSessionCount(): number {
-    return this.sessions.size;
-  }
+  /** Get total number of active sessions */
+  getSessionCount(): number { return this.sessions.size; }
 
-  /**
-   * Get total number of tracked chats
-   */
-  getChatCount(): number {
-    return this.sessionData.size;
-  }
+  /** Get total number of tracked chats */
+  getChatCount(): number { return this.sessionData.size; }
 
   /**
    * Return the most recently active topic thread id for a given chat, or
@@ -961,4 +953,11 @@ export class SessionManager {
     }
     return busy;
   }
+
+  /**
+   * Return the most recently active route for a given chatId, or `undefined`
+   * when no session data exists for that chat. Delegates to the extracted
+   * `resolveActiveRouteForChat` helper (session-manager.active-route.ts).
+   */
+  getActiveRouteForChat(chatId: number): TelegramRoute | undefined { return resolveActiveRouteForChat(this.sessionData.values(), chatId); }
 }
