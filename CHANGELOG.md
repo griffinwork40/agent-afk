@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.147.1] - 2026-08-24
+
+### Fixed
+- enforce version floor on ~/.grok/version.json reads (#1249) (d49ae2ec)
+
 ## [5.147.0] - 2026-08-23
 
 ### Added
