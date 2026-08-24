@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.3] - 2026-08-24
+
+### Fixed
+- route auto-subscribe watch output to active topic thread (#1222) (#1262) (a013af50)
+
 ## [5.149.2] - 2026-08-24
 
 ### Changed
