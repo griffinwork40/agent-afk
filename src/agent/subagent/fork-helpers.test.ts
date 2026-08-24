@@ -356,6 +356,18 @@ function makeArgs(
 }
 
 describe('assembleChildConfig', () => {
+  it('does not inject a workspace preamble when no workspace store is configured', () => {
+    const cfg = assembleChildConfig(makeArgs({
+      options: {
+        parent: { sessionId: 'p' },
+        config: { systemPrompt: 'Keep this prompt unchanged.' },
+        agentType: 't',
+      },
+    }));
+
+    expect(cfg.systemPrompt).toBe('Keep this prompt unchanged.');
+  });
+
   it('stamps isSubagentFork: true unconditionally', () => {
     const cfg = assembleChildConfig(makeArgs());
     expect(cfg.isSubagentFork).toBe(true);

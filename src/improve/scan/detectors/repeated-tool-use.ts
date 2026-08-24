@@ -5,26 +5,19 @@
  * with the same fingerprint within one agent context (one subagent or the
  * root session).
  *
- * ## Fingerprint caveat
+ * ## Fingerprint
  *
- * The witness-layer `tool_call` event payload does NOT contain raw tool
- * arguments. From `src/agent/trace/types.ts:42–62` the available fields
- * are: `name`, `inputBytes`, `resultBytes`, `isError`, `truncated`,
- * `durationMs`, `toolUseId`, `subagentId?`. No `args` blob.
+ * The `tool_call.started` trace event carries `argsFingerprint` — a
+ * SHA-256 hex digest of `JSON.stringify(input)`, the full serialized tool
+ * arguments. This detector uses that hash directly: two calls with the
+ * same `argsFingerprint` invoked the same tool with identical arguments.
  *
- * Phase 1A therefore derives a **proxy fingerprint** — a SHA-256 over a
- * stable 5-tuple `(name, inputBytes, resultBytes, isError, subagentId)`.
- * Two unrelated calls with coincidentally identical byte counts would
- * collide; at the 4-repeat threshold this is vanishingly unlikely, and
- * the evidence emitted on every detection includes the `toolUseId`s and
- * `seq` indices so a reviewer can confirm. The field is named
- * `argsFingerprint` (not `argsHash`) to make the proxy honest in the
- * schema.
- *
- * A future detector version (`v2-with-args-hash`) will become available
- * once the runtime is enriched to emit a content hash at tool-call time.
- * The `detail.fingerprintAlgorithm` field on emitted cards makes that
- * migration painless.
+ * History: before the `argsFingerprint` field was added to the trace
+ * (PR #1205), this detector derived a proxy fingerprint from a 5-tuple
+ * `(name, inputBytes, resultBytes, isError, subagentId)` — tagged
+ * `v1-bytes-tuple`. That scheme false-collided on unrelated calls with
+ * identical byte counts. The `computeFingerprint` function is retained
+ * for backward-compat with pre-upgrade traces.
  *
  * ## Pairing
  *
@@ -60,8 +53,6 @@ export const DEFAULT_MIN_REPEATS = 4;
  */
 const MAX_EXCERPT_EVENTS_PER_FINDING = 8;
 
-/** Algorithm tag stored on every emitted card for future migration. */
-const FINGERPRINT_ALGORITHM = 'v1-bytes-tuple';
 
 export interface RepeatedToolUseOptions {
   /** Override for the run-length threshold. Default {@link DEFAULT_MIN_REPEATS}. */
@@ -116,6 +107,8 @@ export interface ToolCallPair {
   /** Verbatim JSON line of the completed event for evidence excerpts. */
   rawLine: string;
   fingerprint: string;
+  /** True when fingerprint was derived from argsFingerprint (v2); false = v1 fallback. */
+  usedArgsHash: boolean;
 }
 
 function detectInSession(
@@ -143,7 +136,13 @@ function detectInSession(
 export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
   const startedById = new Map<
     string,
-    { seq: number; name: string; inputBytes: number; subagentId: string | undefined }
+    {
+      seq: number;
+      name: string;
+      inputBytes: number;
+      argsFingerprint: string | undefined;
+      subagentId: string | undefined;
+    }
   >();
   const pairs: ToolCallPair[] = [];
 
@@ -155,6 +154,7 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
         seq: ev.seq,
         name: ev.payload.name,
         inputBytes: ev.payload.inputBytes,
+        argsFingerprint: ev.payload.argsFingerprint,
         subagentId: ev.payload.subagentId,
       });
       continue;
@@ -164,13 +164,23 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
     if (!started) continue; // mismatched / out-of-order; ignore
     startedById.delete(ev.payload.toolUseId);
 
-    const fingerprint = computeFingerprint({
-      name: ev.payload.name,
-      inputBytes: started.inputBytes,
-      resultBytes: ev.payload.resultBytes,
-      isError: ev.payload.isError,
-      subagentId: started.subagentId,
-    });
+    // Invariant: the fingerprint must incorporate the tool name so different
+    // tools with identical args (especially `{}`) don't collide.
+    // Use argsFingerprint from the started event when present (v2); fall back
+    // to the v1-bytes-tuple proxy for pre-upgrade traces that lack it.
+    // History: v2 fingerprints on (toolName, argsHash) only — result fields
+    // (isError, resultBytes) are excluded, which widens detection to catch
+    // loops where successive calls alternate between success and failure.
+    const argsHash = started.argsFingerprint;
+    const fingerprint = argsHash
+      ? createHash('sha256').update(`${started.name}|${argsHash}`).digest('hex')
+      : computeFingerprint({
+          name: ev.payload.name,
+          inputBytes: started.inputBytes,
+          resultBytes: ev.payload.resultBytes,
+          isError: ev.payload.isError,
+          subagentId: started.subagentId,
+        });
 
     pairs.push({
       toolUseId: ev.payload.toolUseId,
@@ -184,6 +194,7 @@ export function pairToolCalls(events: ReaderEvent[]): ToolCallPair[] {
       subagentId: started.subagentId,
       rawLine: item.rawLine,
       fingerprint,
+      usedArgsHash: argsHash !== undefined,
     });
   }
 
@@ -301,7 +312,7 @@ function buildResult(
     evidence,
     detail: {
       detector: 'repeated-tool-use@v1',
-      fingerprintAlgorithm: FINGERPRINT_ALGORITHM,
+      fingerprintAlgorithm: first.usedArgsHash ? 'v2-args-hash' : 'v1-bytes-tuple',
       fingerprint: first.fingerprint,
       toolName: first.name,
       runLength: run.length,

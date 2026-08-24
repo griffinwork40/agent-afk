@@ -46,7 +46,11 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
   let initError: Error | undefined;
   /** Single-flight init: concurrent iterators join one promise (no double delegate). */
   let initPromise: Promise<ProviderQuery> | undefined;
-  /** Buffered values to replay onto innerQuery once it initializes. */
+  /**
+   * Invariant: buffered setCwd/setSystemPrompt values set before innerQuery
+   * exists are replayed immediately after the delegate is constructed so they
+   * are never silently dropped.
+   */
   let bufferedCwd: string | undefined;
   let bufferedSystemPrompt: string | undefined | null; // null = explicitly set to undefined
 
@@ -73,7 +77,9 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
           );
         }
         innerQuery = delegate(args, resolution.apiKey, resolution.mode);
-        // Replay buffered calls that arrived before the inner query existed.
+        // Replay buffered setCwd/setSystemPrompt values now that the inner
+        // query exists. This prevents silently dropped calls made before the
+        // first iterator pull (the lazy-init point).
         if (bufferedCwd !== undefined) innerQuery.setCwd?.(bufferedCwd);
         if (bufferedSystemPrompt !== undefined)
           innerQuery.setSystemPrompt?.(
@@ -125,19 +131,13 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
       await q?.setPermissionMode(mode);
     },
     setCwd(cwd: string) {
-      if (innerQuery) {
-        innerQuery.setCwd?.(cwd);
-      } else {
-        bufferedCwd = cwd;
-      }
+      bufferedCwd = cwd;
+      innerQuery?.setCwd?.(cwd);
     },
     setSystemPrompt(basePrompt: string | undefined) {
-      if (innerQuery) {
-        return innerQuery.setSystemPrompt?.(basePrompt) ?? false;
-      }
-      // null sentinel = caller explicitly passed undefined before init.
+      // null sentinel distinguishes "explicitly set to undefined" from "never called".
       bufferedSystemPrompt = basePrompt === undefined ? null : basePrompt;
-      return false;
+      return innerQuery?.setSystemPrompt?.(basePrompt) ?? false;
     },
     async reauth() {
       const q = innerQuery ?? (await ensureInner().catch(() => undefined));

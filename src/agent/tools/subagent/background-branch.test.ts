@@ -79,6 +79,7 @@ function fakeRegistryWithEvents(
 function makeJob(overrides?: Partial<BackgroundJob>): BackgroundJob {
   return {
     jobId: 'bg-abc123',
+    provenance: 'model',
     subagentId: 'sub-1',
     label: 'deep investigation',
     model: 'sonnet',
@@ -179,9 +180,9 @@ describe('runBackgroundBranch', () => {
           parentSessionId: undefined,
         }),
       ).rejects.toThrow('unexpected registry failure');
-      // A non-cap throw is NOT the leak-cleanup path — teardown is only wired
-      // for the cap branch, so it must not have been called here.
-      expect(teardownMock).not.toHaveBeenCalled();
+      // Non-cap errors now also tear down the orphaned handle to prevent
+      // worktree leaks (added in 2cd2c2f9).
+      expect(teardownMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -237,6 +238,7 @@ describe('runBackgroundBranch', () => {
         handle,
         prompt: 'the prompt',
         model: 'opus',
+        provenance: 'model',
         parentSessionId: 'parent-42',
       });
     });

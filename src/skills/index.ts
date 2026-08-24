@@ -100,6 +100,28 @@ export interface SkillExecutionContext {
    * before.
    */
   getReadScopeInputs?: () => ReadScopeInputs;
+  /**
+   * The session's shared workspace store. Inline handlers that fork sub-agents
+   * via their OWN `new SubagentManager(...)` (`/mint` phases, `/audit-fit`,
+   * user skills) MUST forward it, or their forks lose the workspace READ
+   * channel: `SubagentManager` is what carries the store into
+   * `assembleChildConfig` → `injectWorkspacePreamble`
+   * (agent/subagent/fork-child-config.ts:107), which queries entries relevant
+   * to the child's task and injects them into its system prompt.
+   *
+   * The WRITE channel is independent and already wired for every child (the
+   * provider registers `workspace_publish` against the shared store via
+   * `createChildProviderFactory`), so omitting this does NOT produce an error —
+   * it produces a fork that can publish findings but cannot see the ones its
+   * siblings already published. That asymmetry is exactly the silent failure
+   * this field exists to close, which is why every inline forking handler
+   * should thread it even though nothing breaks loudly without it.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions,
+   * test stubs, or a surface with no workspace). Then the fork's manager has no
+   * store and no preamble is injected — the pre-workspace behavior, unchanged.
+   */
+  workspaceStore?: import('../agent/workspace/index.js').WorkspaceStore;
 }
 
 export interface SkillMetadata {

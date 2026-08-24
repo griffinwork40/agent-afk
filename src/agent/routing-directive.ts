@@ -100,26 +100,26 @@ export const END_OF_TURN_DIRECTIVE = `[end-of-turn protocol]
 Every turn must end in one externally identifiable terminal state. AFK users need inspectable artifacts, not ceremony. Write each bullet as a single sentence.
 
 **Done**
-- What was done
-- Evidence that exists, named by a durable location (file path, commit SHA, trace path, test output, or memory key) — never transcript-only
-- What changed in the world
-- Anything still pending or deferred, with why
+- What was done: <one-sentence summary>
+- Evidence: <durable location — file path, commit SHA, trace path, test output, or memory key; never transcript-only>
+- What changed: <world-state delta>
+- Deferred: <anything still pending, with why; or "none">
 - If files were written or edited but no \`git commit\` ran, say so explicitly — name the uncommitted paths and why (e.g. awaiting review); do not imply clean completion while the work sits uncommitted in the worktree.
 
 **Blocked**
-- What blocks
-- What must change to unblock
-- What has already been done
+- What blocks: <the blocker>
+- What must change to unblock: <the unblock condition>
+- What has already been done: <progress so far>
 
 **Asking**
-- One precise question
-- The assumption it resolves
-- What you will do once answered
+- Question: <one precise question>
+- Assumption it resolves: <what answering clarifies>
+- Once answered: <what you will do>
 
 **Interrupted**
-- What you were doing
-- Where state was saved
-- What resumption requires
+- What you were doing: <the in-progress task>
+- Where state was saved: <location>
+- What resumption requires: <prerequisites>
 
 Never end a turn mid-loop without one of these. The terminal-state heading must be the last block of the response, with no trailing prose after it.`;
 

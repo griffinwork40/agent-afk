@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   renderVerdictCard,
   summarizeVerdict,
+  type VerdictMeta,
 } from './verdict-card.js';
 import { createVerdictLedger } from './verdict-ledger.js';
 import type { TerminalState } from './terminal-state.js';
@@ -45,6 +46,7 @@ describe('renderVerdictCard', () => {
       kind: 'done',
       whatWasDone: 'shipped feature X',
       evidence: 'tests pass',
+      whatChanged: 'feature X is available to users',
       rawBody: '',
     };
     const out = stripAnsi(renderVerdictCard(state));
@@ -53,7 +55,10 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('shipped feature X');
     expect(out).toContain('evidence');
     expect(out).toContain('tests pass');
-    expect(out).toContain('Objective satisfied');
+    expect(out).toContain('changed');
+    expect(out).toContain('feature X is available to users');
+    // With evidence present, the derived affordance replaces the static one.
+    expect(out).toContain('Review:');
   });
 
   // Regression: models sometimes emit identical text for the "done" and
@@ -88,10 +93,12 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('blocks');
     expect(out).toContain('API key missing');
     expect(out).toContain('unblock');
-    expect(out).toContain('External dependency');
+    // With unblockCondition present, derived affordance is shown instead of static.
+    expect(out).toContain('Unblock:');
+    expect(out).toContain('set ANTHROPIC_API_KEY');
   });
 
-  it('asking: shows the question and the "waiting on you" affordance', () => {
+  it('asking: shows the question and a context-specific affordance', () => {
     const state: TerminalState = {
       kind: 'asking',
       question: 'which branch?',
@@ -100,7 +107,8 @@ describe('renderVerdictCard', () => {
     const out = stripAnsi(renderVerdictCard(state));
     expect(out).toContain('? Asking');
     expect(out).toContain('which branch?');
-    expect(out).toContain('Waiting on you');
+    // With question present, derived affordance is shown instead of static.
+    expect(out).toContain('Answer:');
   });
 
   it('interrupted: shows resume affordance', () => {
@@ -124,12 +132,12 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('finished everything');
   });
 
-  // ── Item #9: synthesized one-line fallback ────────────────────────────────
+  // ── Fallback body rendering ───────────────────────────────────────────────
   //
-  // When no structured rows are parsed, the card should display ONLY the first
-  // non-empty line of rawBody — not all prose lines. This keeps the card
-  // compact when the model wrote a paragraph as its verdict body.
-  it('shows only the first non-empty rawBody line when no labelled fields are present (Item #9)', () => {
+  // When no structured rows are parsed, the card shows up to 5 non-empty body
+  // lines so the verdict card still carries substance. Capped to keep the card
+  // from sprawling on long unstructured responses.
+  it('shows up to 5 non-empty rawBody lines when no labelled fields are present', () => {
     const state: TerminalState = {
       kind: 'done',
       rawBody: [
@@ -140,15 +148,30 @@ describe('renderVerdictCard', () => {
     };
     const out = stripAnsi(renderVerdictCard(state));
 
-    // First line present.
+    // All three lines present (under the 5-line cap).
     expect(out).toContain('This is the first line of the verdict.');
-    // Subsequent prose lines must NOT appear in the card — card is a glance
-    // surface, not a prose viewer.
-    expect(out).not.toContain('second line with more detail');
-    expect(out).not.toContain('third line');
+    expect(out).toContain('second line with more detail');
+    expect(out).toContain('third line');
   });
 
-  it('ignores leading blank lines when selecting the first rawBody line (Item #9)', () => {
+  it('caps fallback body at 5 lines', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      rawBody: Array.from({ length: 8 }, (_, i) => `Line ${i + 1} of the body`).join('\n'),
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+
+    // First 5 present.
+    for (let i = 1; i <= 5; i++) {
+      expect(out).toContain(`Line ${i} of the body`);
+    }
+    // Lines 6+ excluded.
+    expect(out).not.toContain('Line 6');
+    expect(out).not.toContain('Line 7');
+    expect(out).not.toContain('Line 8');
+  });
+
+  it('ignores leading blank lines when selecting fallback body lines', () => {
     const state: TerminalState = {
       kind: 'asking',
       rawBody: [
@@ -160,10 +183,9 @@ describe('renderVerdictCard', () => {
     };
     const out = stripAnsi(renderVerdictCard(state));
 
-    // The first *non-empty* line is used.
+    // Both non-empty lines present.
     expect(out).toContain('Which database should I use?');
-    // The blank/whitespace-only lines and follow-on prose must not appear.
-    expect(out).not.toContain('More context about the question');
+    expect(out).toContain('More context about the question');
   });
 
   it('falls back to "<kind> (no structured fields)" when rawBody is empty (Item #9)', () => {
@@ -578,4 +600,201 @@ describe('renderVerdictCard geometry', () => {
       });
     },
   );
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Stats line (VerdictMeta — Improvement #1)
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — stats line', () => {
+  const baseDone: TerminalState = {
+    kind: 'done',
+    whatWasDone: 'shipped feature X',
+    rawBody: '',
+  };
+
+  it('renders cost, duration, and tool count when all meta fields are present', () => {
+    const meta: VerdictMeta = { durationMs: 23000, totalCostUsd: 0.42, toolCount: 7 };
+    const out = stripAnsi(renderVerdictCard(baseDone, meta));
+    expect(out).toContain('$0.42');
+    expect(out).toContain('23s');
+    expect(out).toContain('7 tool calls');
+  });
+
+  it('omits the stats line when no meta is passed (backward compat)', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone));
+    // No dollar sign, no duration suffix, no "tools" label
+    expect(out).not.toMatch(/\$\d/);
+    expect(out).not.toMatch(/\d+s/);
+    expect(out).not.toContain('tool calls');
+  });
+
+  it('omits the stats line when meta is an empty object', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, {}));
+    expect(out).not.toMatch(/\$\d/);
+    expect(out).not.toMatch(/\d+s/);
+    expect(out).not.toContain('tool calls');
+  });
+
+  it('renders only cost when only totalCostUsd is provided', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { totalCostUsd: 1.05 }));
+    expect(out).toContain('$1.05');
+    expect(out).not.toMatch(/\d+s/);
+    expect(out).not.toContain('tool calls');
+  });
+
+  it('renders only duration when only durationMs is provided', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { durationMs: 5000 }));
+    expect(out).toContain('5s');
+    expect(out).not.toMatch(/\$\d/);
+    expect(out).not.toContain('tool calls');
+  });
+
+  it('renders only tool count when only toolCount is provided', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { toolCount: 3 }));
+    expect(out).toContain('3 tool calls');
+    expect(out).not.toMatch(/\$\d/);
+  });
+
+  it('uses singular "tool call" when toolCount is 1', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { toolCount: 1 }));
+    expect(out).toContain('1 tool call');
+    expect(out).not.toContain('1 tool calls');
+  });
+
+  it('formats duration under a minute as Xs', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { durationMs: 45000 }));
+    expect(out).toContain('45s');
+  });
+
+  it('formats duration over a minute as Xm Ys', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { durationMs: 72000 }));
+    expect(out).toContain('1m 12s');
+  });
+
+  it('formats exact minute as Xm', () => {
+    const out = stripAnsi(renderVerdictCard(baseDone, { durationMs: 300000 }));
+    expect(out).toContain('5m');
+    // Should not have a spurious "0s" suffix
+    expect(out).not.toContain('5m 0s');
+  });
+
+  it('card geometry remains uniform when stats line is present', () => {
+    withCols(80, () => {
+      const meta: VerdictMeta = { durationMs: 23000, totalCostUsd: 0.42, toolCount: 7 };
+      const lines = renderVerdictCard(baseDone, meta).split('\n');
+      const widths = lines.map((l) => displayWidth(l));
+      expect(new Set(widths).size, `row widths not uniform: ${widths.join(',')}`).toBe(1);
+      for (const w of widths) {
+        expect(w).toBeLessThanOrEqual(80);
+      }
+    });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Context-specific affordances (Improvement #2)
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — context-specific affordances', () => {
+  it('done with evidence: affordance shows "Review: <evidence>"', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'shipped',
+      evidence: 'tests pass',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('Review:');
+    expect(out).toContain('tests pass');
+    // Must not show static fallback when derived affordance is used
+    expect(out).not.toContain('Objective satisfied');
+  });
+
+  it('done without evidence: falls back to static affordance', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'shipped',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('Objective satisfied');
+  });
+
+  it('blocked with unblockCondition: affordance shows "Unblock: <condition>"', () => {
+    const state: TerminalState = {
+      kind: 'blocked',
+      whatBlocks: 'API key missing',
+      unblockCondition: 'set ANTHROPIC_API_KEY',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('Unblock:');
+    expect(out).toContain('set ANTHROPIC_API_KEY');
+    expect(out).not.toContain('External dependency');
+  });
+
+  it('blocked without unblockCondition: falls back to static affordance', () => {
+    const state: TerminalState = {
+      kind: 'blocked',
+      whatBlocks: 'API key missing',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('External dependency');
+  });
+
+  it('asking with question: affordance shows "Answer: <question>"', () => {
+    const state: TerminalState = {
+      kind: 'asking',
+      question: 'which branch?',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('Answer:');
+    expect(out).toContain('which branch?');
+    expect(out).not.toContain('Waiting on you');
+  });
+
+  it('asking without question: falls back to static affordance', () => {
+    const state: TerminalState = {
+      kind: 'asking',
+      rawBody: 'which branch?',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('Waiting on you');
+  });
+
+  it('interrupted: always uses static affordance regardless of fields', () => {
+    const state: TerminalState = {
+      kind: 'interrupted',
+      whatWasInProgress: 'running tests',
+      resumeRequires: 'restart CI',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('Halted with state preserved');
+    expect(out).not.toContain('Answer:');
+    expect(out).not.toContain('Review:');
+    expect(out).not.toContain('Unblock:');
+  });
+
+  it('long evidence is truncated with "..." in the affordance line', () => {
+    withCols(80, () => {
+      const state: TerminalState = {
+        kind: 'done',
+        whatWasDone: 'shipped',
+        evidence: 'a'.repeat(200),
+        rawBody: '',
+      };
+      const out = stripAnsi(renderVerdictCard(state));
+      expect(out).toContain('Review:');
+      expect(out).toContain('...');
+      // The affordance line (second-to-last, before the bottom border)
+      // must stay within the card width.
+      const lines = renderVerdictCard(state).split('\n');
+      const affordanceLine = lines[lines.length - 2]!;
+      expect(displayWidth(affordanceLine)).toBeLessThanOrEqual(80);
+    });
+  });
 });

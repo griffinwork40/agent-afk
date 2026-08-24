@@ -60,6 +60,8 @@ import type {
   ElicitationResult,
 } from '../agent/types/sdk-types.js';
 import { escapeRegExp } from '../utils/regexp.js';
+import { sendOptions, type TelegramRoute } from './route.js';
+import { getElicitationRoute } from './elicitation-route-registry.js';
 
 /**
  * Prefix for path-approval / MCP elicitation callbacks. DISTINCT from the
@@ -96,6 +98,7 @@ export function createTelegramElicitationHandler(
   bot: Telegraf,
   chatIds: Set<number>,
   log: (...args: unknown[]) => void = () => {},
+  fallbackRoute?: (chatId: number) => TelegramRoute,
 ): ElicitationHandler {
   // Register the action handler exactly once per bot. Bots in tests may
   // reuse the same Telegraf instance across handler factories; guard
@@ -113,6 +116,14 @@ export function createTelegramElicitationHandler(
     if (options.signal.aborted) {
       return { action: 'decline' };
     }
+    // Resolve the per-session route so the keyboard lands in the correct topic
+    // thread on a supergroup with topics. Falls back to bare chatId (General)
+    // when no mapping exists — same pattern as makeTelegramElicitationHandler.
+    const resolvedRoute =
+      options.sessionId !== undefined
+        ? getElicitationRoute(options.sessionId)
+        : undefined;
+
     return new Promise<ElicitationResult>((resolve) => {
       const ulid = generateUlid();
       const enumValues = extractEnumValues(request);
@@ -128,8 +139,10 @@ export function createTelegramElicitationHandler(
       // taps from other chats hit the "stale" path.
       const sends = Array.from(chatIds).map(async (chatId) => {
         try {
+          const route = resolvedRoute ?? fallbackRoute?.(chatId);
           await bot.telegram.sendMessage(chatId, text, {
             reply_markup: keyboard,
+            ...(route !== undefined ? sendOptions(route) : {}),
           });
         } catch (err) {
           log('[elicitation] sendMessage failed:', err);

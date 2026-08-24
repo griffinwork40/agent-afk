@@ -355,6 +355,42 @@ describe('TUI rhythm contract — dispose() safety-net tool flush', () => {
     // Exactly one trailing blank, not double.
     expect(countBlanks(commitAboveCalls)).toBe(1);
   });
+
+  it('does not emit a phantom blank for an in-flight-only ancestor', async () => {
+    const { StreamRenderer } = await import('./stream-renderer.js');
+    const commitAboveCalls: string[] = [];
+    const recordingCompositor = {
+      setOverlay: (_t: string) => {},
+      commitAbove: (text: string) => { commitAboveCalls.push(text); },
+      setSpinner: (_c: { enabled: boolean; rotateVerbEveryMs?: number }) => {},
+      arm: async () => {},
+      disarm: () => {},
+      getBuffer: () => ({ text: '', queued: false }),
+      isArmed: () => true,
+    };
+    const { writer, lines } = makeWriter();
+    const r = new StreamRenderer({ out: writer, forceNonTty: true });
+    type PrivateRenderer = {
+      isTTY: boolean;
+      compositor: typeof recordingCompositor;
+      streamingMarkdownRef: { current: null };
+      toolLane: ToolLane;
+    };
+    const privateR = r as unknown as PrivateRenderer;
+    privateR.isTTY = true;
+    privateR.compositor = recordingCompositor;
+    privateR.streamingMarkdownRef.current = null;
+
+    // An unfinished root makes hasPending() true, while the surgical flush has
+    // no completed roots to return. This is the exact Phase-6 regression case.
+    privateR.toolLane.addStart('tu-in-flight', 'Agent', 'still running');
+    expect(privateR.toolLane.hasPending()).toBe(true);
+
+    await r.dispose();
+
+    expect(commitAboveCalls).toEqual([]);
+    expect(lines).not.toContain('');
+  });
 });
 
 describe('TUI rhythm contract — registry summary', () => {

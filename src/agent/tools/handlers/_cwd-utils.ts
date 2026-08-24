@@ -11,7 +11,11 @@
 import path from 'path';
 import { realpathSync } from 'fs';
 import type { ToolHandlerContext } from '../types.js';
-import { isReadDenied } from './read-denylist.js';
+import {
+  isReadDenied,
+  READ_DENYLIST_ENTRY_MARKER,
+  PROTECTED_CREDENTIAL_PATH_MARKER,
+} from './read-denylist.js';
 
 // Invariant: symlink containment must be resolved at the filesystem level, not
 // lexically. A symlink that lives INSIDE a granted root but points OUTSIDE it
@@ -214,8 +218,8 @@ export function resolveAndContain(
     const denied = isReadDenied(resolved);
     if (denied.denied) {
       throw new Error(
-        `Path \`${inputPath}\` is a protected credential/secret path ` +
-          `(read-denylist entry: \`${denied.matched}\`) and cannot be read.`,
+        `Path \`${inputPath}\` ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+          `(${READ_DENYLIST_ENTRY_MARKER} \`${denied.matched}\`) and cannot be read.`,
       );
     }
   }

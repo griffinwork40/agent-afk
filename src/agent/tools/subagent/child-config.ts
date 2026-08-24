@@ -99,6 +99,14 @@ export interface BuildChildConfigArgs {
    */
   traceWriter?: TraceSink;
   /**
+   * Shared workspace store. Threaded into the same TWO places as `traceWriter`
+   * above, for the same reason: (1) the depth-2+ child {@link SubagentManager},
+   * so grandchild forks get the sibling-findings preamble
+   * (`injectWorkspacePreamble`), and (2) the recursive child executor's ctx, so
+   * the chain holds to maxDepth. See SubagentExecutorContext.workspaceStore.
+   */
+  workspaceStore?: import('../../workspace/index.js').WorkspaceStore;
+  /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
    * this module never imports the executor at runtime (circular-import seam;
@@ -387,7 +395,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // ('cli'/'telegram'/'daemon', not 'unknown') via forkSubagent's
       // parentSurface fill. Mirrors the traceWriter/cwd chaining above and the
       // recursive child executor ctx below (which already forwards args.surface).
-      ...(args.surface !== undefined ? { surface: args.surface } : {}),
+      ...(args.surface !== undefined ? { surface: args.surface } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
     });
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({
@@ -411,9 +419,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // ITS own childManager for depth-3+ forks, also receives cwd. The
       // chain holds for arbitrary depth up to maxDepth.
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-      // Forward the trace writer for the same reason — the child executor's
-      // own childManager (depth-3+) needs it. See BuildChildConfigArgs.
-      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+      // Forward the trace writer + workspace store for the same reason — the
+      // child executor's own childManager (depth-3+) needs both. See BuildChildConfigArgs.
+      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
       // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
       // child calling the `agent` tool) keep the same tool allowlist and
       // bash gate that the originating read-only skill imposed.

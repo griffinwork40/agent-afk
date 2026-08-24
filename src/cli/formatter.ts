@@ -120,7 +120,35 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
   }
 
   function renderTokens(tokens: Token[]): string {
-    return tokens.map((token) => {
+    return tokens.map((token, idx) => {
+      // Repeated, compatible headers represent one logical table. Merge the
+      // rows before rendering so the group shares column widths and emits no
+      // blank-line seam. Schema comparison prevents unrelated adjacent tables
+      // from losing their headers.
+      if (token.type === 'table') {
+        const table = token as Tokens.Table;
+        const header = table.header.map((cell) => renderInline(cell.tokens as Tokens.Generic[]));
+        let end = idx + 1;
+        const rows = [...table.rows];
+        while (tokens[end]?.type === 'table' ||
+          (tokens[end]?.type === 'space' && tokens[end + 1]?.type === 'table')) {
+          const nextIndex = tokens[end]?.type === 'table' ? end : end + 1;
+          const next = tokens[nextIndex] as Tokens.Table;
+          const nextHeader = next.header.map((cell) => renderInline(cell.tokens as Tokens.Generic[]));
+          const sameSchema = nextHeader.length === header.length &&
+            nextHeader.every((cell, i) => cell === header[i]) &&
+            next.align.every((align, i) => align === table.align[i]);
+          if (!sameSchema) break;
+          rows.push(...next.rows);
+          // The map callback cannot skip entries, so mark the consumed space
+          // and table as inert tokens local to this render invocation.
+          if (nextIndex !== end) tokens[end] = { type: 'space', raw: '' } as Token;
+          tokens[nextIndex] = { type: 'space', raw: '' } as Token;
+          end = nextIndex + 1;
+        }
+        return renderTable({ ...table, rows }, maxTableWidth, renderInline);
+      }
+      let result: string;
       switch (token.type) {
         case 'heading': {
           const heading = token as Tokens.Heading;
@@ -136,9 +164,10 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // predecessor block's separation into a double blank — and in the
           // streaming commit path it survives `formatBlockForCommit` (which
           // strips trailing newlines) as a leading blank before the heading.
-          if (heading.depth === 1) return palette.brand.bold(headingText) + '\n';
-          if (heading.depth === 2) return palette.heading(headingText) + '\n';
-          return palette.bold(headingText) + '\n';
+          if (heading.depth === 1) result = palette.brand.bold(headingText) + '\n';
+          else if (heading.depth === 2) result = palette.heading(headingText) + '\n';
+          else result = palette.bold(headingText) + '\n';
+          break;
         }
         case 'paragraph': {
           // One trailing '\n' (line terminator), not '\n\n'. marked already
@@ -146,48 +175,57 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // paragraph; adding a second '\n' here double-spaced every block
           // boundary in non-streamed rendering. See the heading invariant above.
           const para = token as Tokens.Paragraph;
-          return renderInline(para.tokens as Tokens.Generic[]) + '\n';
+          result = renderInline(para.tokens as Tokens.Generic[]) + '\n';
+          break;
         }
         case 'code':
-          return renderCodeBlock(token as Tokens.Code, maxTableWidth);
+          result = renderCodeBlock(token as Tokens.Code, maxTableWidth);
+          break;
         case 'codespan': {
           const raw = (token as Tokens.Codespan).text;
-          return SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.tool(raw);
+          result = SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.tool(raw);
+          break;
         }
         case 'strong': {
           const strong = token as Tokens.Strong;
-          return palette.bold(strong.tokens ? renderInline(strong.tokens as Tokens.Generic[]) : strong.text);
+          result = palette.bold(strong.tokens ? renderInline(strong.tokens as Tokens.Generic[]) : strong.text);
+          break;
         }
         case 'em': {
           const em = token as Tokens.Em;
-          return palette.italic(em.tokens ? renderInline(em.tokens as Tokens.Generic[]) : em.text);
+          result = palette.italic(em.tokens ? renderInline(em.tokens as Tokens.Generic[]) : em.text);
+          break;
         }
         case 'text': {
           // Marked emits block-level 'text' tokens inside tight list items.
           // Its `.tokens` holds inline children (strong, em, codespan, …) —
           // render them through renderInline so bold/italic don't leak.
           const t = token as Tokens.Text;
-          return t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          result = t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          break;
         }
         case 'list':
-          return renderList(token as Tokens.List, maxTableWidth, renderTokens);
+          result = renderList(token as Tokens.List, maxTableWidth, renderTokens);
+          break;
         case 'space':
-          return '\n';
+          return token.raw ? '\n' : '';
         case 'hr': {
           // Use the configured maxTableWidth so the rule tracks the wrap width
           // instead of overflowing or falling short — it is already the
           // compositor's row budget, so no separate capping is needed. Fall
           // back to 40 when no width is set (e.g. direct callers that omit opts).
           const hrWidth = maxTableWidth ?? 40;
-          return palette.dim('─'.repeat(hrWidth)) + '\n';
+          result = palette.dim('─'.repeat(hrWidth)) + '\n';
+          break;
         }
         case 'blockquote':
-          return renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
-        case 'table':
-          return renderTable(token as Tokens.Table, maxTableWidth, renderInline);
+          result = renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
+          break;
         default:
-          return token.raw;
+          result = token.raw;
+          break;
       }
+      return result;
     }).join('');
   }
 

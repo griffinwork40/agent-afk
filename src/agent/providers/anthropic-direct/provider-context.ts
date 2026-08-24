@@ -47,6 +47,9 @@ export interface ProviderQueryContext {
    */
   readonly declaredSurface: string | undefined;
   readonly readOnlyMemory: boolean;
+  /** Presence-only: whether the workspace store is wired. Used to gate the
+   *  workspace system prompt fragment in prompt assembly. */
+  readonly workspaceStore: import('../../workspace/workspace-store.js').WorkspaceStore | undefined;
   readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
 

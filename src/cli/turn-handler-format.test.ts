@@ -58,13 +58,13 @@ describe('formatToolLine', () => {
   });
 
   it.each([
-    { content: 'Agent(research)', tag: '[subagent]' },
-    { content: 'agent(research)', tag: '[subagent]' },
-    { content: 'Task(verify)', tag: '[subagent]' },
+    { content: 'Agent(research)', tag: '[worker]' },
+    { content: 'agent(research)', tag: '[worker]' },
+    { content: 'Task(verify)', tag: '[worker]' },
     { content: 'Skill(/spec)', tag: '[skill]' },
     { content: 'skill(/spec)', tag: '[skill]' },
-    { content: 'compose(3 nodes)', tag: '[dag]' },
-    { content: 'Compose(...)', tag: '[dag]' },
+    { content: 'compose(3 nodes)', tag: '[workflow]' },
+    { content: 'Compose(...)', tag: '[workflow]' },
   ])('appends dispatch tag $tag to $content', ({ content, tag }) => {
     const stripped = strip(formatToolLine(content));
     expect(stripped).toContain(tag);

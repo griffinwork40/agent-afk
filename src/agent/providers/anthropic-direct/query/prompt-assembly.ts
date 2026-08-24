@@ -20,6 +20,7 @@ import { buildSkillManifest } from '../../../tools/skill-bridge.js';
 import {
   resolveToolSystemPrompt,
   resolveMemorySystemPrompt,
+  resolveWorkspaceSystemPrompt,
 } from '../../../tools/system-prompt.js';
 import {
   assembleSystemPrompt,
@@ -33,6 +34,9 @@ export interface PromptAssemblyArgs {
   cwd: string;
   surface: string;
   readOnlyMemory: boolean;
+  /** Whether workspace tools are enabled (store is wired). Gates inclusion of
+   *  the workspace system prompt fragment. */
+  workspaceEnabled: boolean;
   /** Present only when a skill executor is wired; gates manifest construction. */
   hasSkillExecutor: boolean;
   runtimeStateSource: RuntimeStateSource;
@@ -81,6 +85,7 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // instructions for memory_update / procedure_write — keeps the model from
   // being told about tools it does not have.
   const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory);
+  const workspacePrompt = resolveWorkspaceSystemPrompt(args.workspaceEnabled);
 
   // Awareness identity fields interleaved into the `# Environment` fragment
   // (Phase 1 + 2). The identity fields (surface/sessionId/depth/maxDepth) are
@@ -103,6 +108,7 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   const stableSystemPrefix = buildStableSystemPrefix({
     toolBase,
     memoryPrompt,
+    workspacePrompt,
     // Hot memory (HOT.md) rides its own config field, NOT prepended into
     // systemPrompt, so the assembler can place it after the memory
     // instructions rather than ahead of the # Agent AFK doctrine. Unset for

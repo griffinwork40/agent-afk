@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import type { HookContext, HookDecision } from '../hooks.js';
+import { killProcessGroup } from '../../utils/kill-process-group.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -226,13 +227,9 @@ export async function executeCommand(
     // --- Timeout ---
     const timer = setTimeout(() => {
       if (settled) return;
-      // SIGKILL the process group to avoid orphaned processes.
+      // Kill the process group (POSIX) / process tree (Windows) to avoid orphans.
       if (proc.pid !== undefined) {
-        try {
-          process.kill(-proc.pid, 'SIGKILL');
-        } catch {
-          // Process may have already exited.
-        }
+        killProcessGroup(proc.pid);
       }
       console.warn(
         `[hooks] command timed out after ${timeoutMs}ms: ${command}`,

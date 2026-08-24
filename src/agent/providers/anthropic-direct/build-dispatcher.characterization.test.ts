@@ -79,6 +79,12 @@ function stubSource(enabled: string[] = []): RuntimeStateSource {
 }
 
 describe('buildDispatcher characterization (#824) — handler map', () => {
+  it('omits workspace_publish schema and handler when no workspace store is provided', () => {
+    const d = build(new AnthropicDirectProvider());
+    expect(handlerNames(d)).not.toContain('workspace_publish');
+    expect(schemaNames(d)).not.toContain('workspace_publish');
+  });
+
   it('registers the builtin handlers plus the full memory trio by default', () => {
     const d = build(new AnthropicDirectProvider());
     const names = handlerNames(d);

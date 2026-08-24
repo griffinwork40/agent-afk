@@ -180,20 +180,30 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   if (ctx.toolLane.hasPending()) {
     const lines = ctx.toolLane.flushCompletedRoots();
     if (ctx.isTTY && ctx.compositorRef.current) {
-      // Atomic block commit — the safety-net flush is ONE coherent block;
-      // per-line commits desync band-hold under a tall overlay. See
-      // commit-block.ts.
-      commitBlockAbove(ctx.compositorRef.current, lines);
-      ctx.compositorRef.current.commitAbove('');
+      if (lines.length > 0) {
+        // Atomic block commit — the safety-net flush is ONE coherent block;
+        // per-line commits desync band-hold under a tall overlay. See
+        // commit-block.ts. Guard matches flushToolLaneToScrollback: only
+        // commit + trailing blank when there are actual lines to emit —
+        // prevents a phantom blank when hasPending() is true due to an
+        // in-flight ancestor entry but flushCompletedRoots() returns [].
+        commitBlockAbove(ctx.compositorRef.current, lines);
+        ctx.compositorRef.current.commitAbove('');
+      }
       if (ctx.overlayComposerRef.current) {
+        // Repaint the overlay even when there were no completed roots: an
+        // in-flight ancestor remains live and its overlay must survive dispose.
+        // Unlike the guarded block above, this does not emit scrollback rows.
         ctx.overlayComposerRef.current.markDirty('tool-lane');
         ctx.overlayComposerRef.current.flush();
       } else {
         ctx.compositorRef.current.setOverlay(ctx.toolLane.getOverlay());
       }
     } else {
-      for (const line of lines) ctx.out.line(line);
-      ctx.out.line('');
+      if (lines.length > 0) {
+        for (const line of lines) ctx.out.line(line);
+        ctx.out.line('');
+      }
     }
   }
 

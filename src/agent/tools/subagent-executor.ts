@@ -29,10 +29,11 @@ import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from 
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
-import { runBackgroundBranch } from './subagent/background-branch.js';
+import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { QueuedNoteClaim } from './subagent/queued-note.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
+import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
 import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { debugLog } from '../../utils/debug.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
@@ -171,8 +172,20 @@ export interface SubagentExecutorContext {
    * root manager's own manager-level writer (bootstrap/chat/telegram wiring);
    * this field closes the same gap for the nested managers, mirroring how
    * `cwd` chains through every depth.
+   *
+   * `workspaceStore` (declared on the same line below) is the exact parallel for
+   * the workspace READ channel: forwarded into the same per-call child manager so
+   * depth ≥ 2 `agent` forks receive the sibling-findings preamble
+   * `injectWorkspacePreamble` builds from it. Depth-1 forks are likewise covered
+   * by the root manager's own store (wire-executors.ts). Without it the READ
+   * channel stopped at depth 1 while the WRITE channel (the provider's
+   * `workspace_publish` handler) reached every depth — so a grandchild could
+   * publish into a store whose contents it was never shown.
+   *
+   * The two share one declaration line because this file is grandfathered in
+   * .filesize-baseline.json, whose ratchet permits only shrinkage.
    */
-  traceWriter?: TraceSink;
+  traceWriter?: TraceSink; workspaceStore?: import('../workspace/index.js').WorkspaceStore;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`
@@ -444,9 +457,9 @@ export class SubagentExecutor implements SubagentControl {
     updateWaveUnit(waveId, callId, status, extra);
   }
 
-  hasPromotableForeground(): boolean {
-    return this.ctx.backgroundRegistry !== undefined && this.promotionTriggers.size > 0;
-  }
+  supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
+  hasPromotableForeground(): boolean { return this.supportsBackgroundJobs() && this.promotionTriggers.size > 0; }
+  async cancelBackgroundJob(call: ToolCall): Promise<ToolResult> { return executeBackgroundCancel(this.ctx.backgroundRegistry, call); }
 
   hasActiveForeground(): boolean {
     return this.activeForegroundHandles.size > 0;
@@ -734,7 +747,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
       ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
-      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}), ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 
@@ -746,19 +759,14 @@ export class SubagentExecutor implements SubagentControl {
 
     // isolation:"worktree" — fork the child inside a fresh managed git worktree
     // so its writes/tests never collide with siblings sharing the parent tree.
-    // Skipped (no-op) for read-only children, which have nothing to isolate.
-    // Torn down in the foreground finally — a dirty / commits-ahead tree is
-    // preserved and locked, never destroyed. Forbidden with mode:'background'
-    // at parse time (a detached child would outlive the teardown that reclaims
-    // its worktree — proposal Open Q1). Only the direct child's cwd is
-    // isolated; deeper (grandchild) fan-out anchors at the parent tree for now.
+    // Read-only children skip (nothing to isolate). Foreground: torn down in
+    // the finally. Background: locked at creation so the sweep cannot race-reap
+    // it, then unlocked + torn down in markTerminal(). Dirty / commits-ahead
+    // trees are preserved and locked, never destroyed.
     let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
     if (parsed.isolation === 'worktree') {
       if (!childWriteCapable) {
-        debugLog(
-          `[isolation] skipped worktree for read-only dispatch ` +
-            `(agent_type=${parsed.agent_type ?? 'generic'}) — nothing to isolate`,
-        );
+        debugLog(`[isolation] skipped worktree for read-only ${parsed.agent_type ?? 'generic'}`);
       } else {
         const anchorCwd = this.currentCwd ?? process.cwd();
         try {
@@ -768,6 +776,8 @@ export class SubagentExecutor implements SubagentControl {
           });
           childConfig.cwd = iso.path;
           isolationTeardown = { repoRoot: iso.repoRoot, worktreePath: iso.path };
+          // Background: lock so sweep cannot race-reap; markTerminal() unlocks.
+          if (parsed.mode === 'background') await lockWorktreeForBackground(iso.repoRoot, iso.path);
         } catch (err) {
           // Fail loud: never silently fall back to the shared tree — that
           // reintroduces the cross-contamination bug isolation exists to
@@ -865,6 +875,12 @@ export class SubagentExecutor implements SubagentControl {
         // reach. Safe on a never-run handle: inFlight is null, so cancel()
         // skips session.interrupt().
         await handle.cancel();
+        // Background: unlock + tear down the isolated worktree that will never
+        // be registered (no registry entry → no markTerminal → no onCleanup).
+        if (isolationTeardown && parsed.mode === 'background') {
+          await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
+            debugLog(`[isolation] background worktree teardown failed after cancel: ${String(e)}`));
+        }
         return { content: 'Agent tool call aborted', isError: true };
       }
     } catch (err) {
@@ -881,6 +897,12 @@ export class SubagentExecutor implements SubagentControl {
         error_message: truncate(message),
         depth,
       });
+      // Background: unlock + tear down the isolated worktree that will never
+      // be registered (no registry entry → no markTerminal → no onCleanup).
+      if (isolationTeardown && parsed.mode === 'background') {
+        await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
+          debugLog(`[isolation] background worktree teardown failed after fork error: ${String(e)}`));
+      }
       return {
         content: `Failed to fork subagent: ${message}`,
         isError: true,
@@ -911,6 +933,12 @@ export class SubagentExecutor implements SubagentControl {
         onSettled: capturedWaveId !== undefined
           ? (isError) => updateWaveUnit(capturedWaveId, capturedCallId, isError ? 'failed' : 'done')
           : undefined,
+        onCleanup: isolationTeardown
+          ? async () => {
+              const result = await teardownBackgroundWorktree(isolationTeardown);
+              debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
+            } : undefined,
+        isolationTeardown,
       });
     }
 

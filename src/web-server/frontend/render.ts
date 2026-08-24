@@ -15,9 +15,12 @@
 import { stripAnsi } from './ansi-strip.js';
 import { renderMarkdown } from './markdown-dom.js';
 import type { TranscriptItem, ToolCallItem } from './view-model.js';
+import { applyIncrementalUpdate } from './render-incremental.js';
 
 /** Beyond this, tool output is collapsed behind a "show full" control. */
 const OUTPUT_PREVIEW_CHARS = 2_000;
+/** Beyond this, tool input is collapsed behind a "show full input" control. */
+const INPUT_PREVIEW_CHARS = 2_000;
 
 export interface SessionSummary {
   id: string;
@@ -43,8 +46,8 @@ function el<K extends keyof HTMLElementTagNameMap>(
 /** Trailing path segment of `cwd`, or undefined when absent/degenerate. */
 function basename(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
-  const parts = cwd.split('/').filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : undefined;
+  const b = cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '';
+  return b && b !== '.' ? b : undefined;
 }
 
 /**
@@ -82,7 +85,11 @@ export function renderSidebar(
     // string. The working directory is the field that actually varies, so it is
     // rendered first and given the strongest treatment in the meta row.
     const dir = basename(s.cwd);
-    if (dir) meta.appendChild(el('span', 'session-cwd', dir));
+    if (dir) {
+      const cwdEl = el('span', 'session-cwd', dir);
+      cwdEl.title = s.cwd ?? dir;
+      meta.appendChild(cwdEl);
+    }
     // A readonly session lives in another OS process; its approvals are
     // unreachable from here. The badge is the user-facing half of that
     // contract — the composer is disabled to match.
@@ -101,9 +108,15 @@ export function renderSidebar(
   }
 }
 
+/**
+ * Incrementally update the transcript container.
+ *
+ * Delegates to `applyIncrementalUpdate` in render-incremental.ts.
+ * Steady-state cost: O(new items). Full rebuild only on session switch/reset.
+ * Scroll-pinning: caller samples `isPinnedToBottom` before and scrolls after.
+ */
 export function renderTranscript(container: HTMLElement, items: TranscriptItem[]): void {
-  container.textContent = '';
-  for (const item of items) container.appendChild(renderItem(item));
+  applyIncrementalUpdate(container, items, renderItem);
 }
 
 function renderItem(item: TranscriptItem): HTMLElement {
@@ -147,7 +160,7 @@ function renderTool(item: ToolCallItem): HTMLElement {
   summary.appendChild(el('span', `tool-dot tool-dot-${item.status}`, ''));
   summary.appendChild(el('span', 'tool-name', item.name));
   if (item.inputPreview) {
-    summary.appendChild(el('span', 'tool-target', truncate(item.inputPreview, 90)));
+    summary.appendChild(el('span', 'tool-target', summarizeToolInput(item.name, item.inputPreview)));
   }
   node.appendChild(summary);
 
@@ -155,7 +168,23 @@ function renderTool(item: ToolCallItem): HTMLElement {
 
   if (item.inputPreview) {
     body.appendChild(el('div', 'tool-label', 'input'));
-    body.appendChild(el('pre', 'tool-pre', stripAnsi(item.inputPreview)));
+    const cleanInput = stripAnsi(item.inputPreview);
+    if (cleanInput.length > INPUT_PREVIEW_CHARS) {
+      const inputPre = el('pre', 'tool-pre', cleanInput.slice(0, INPUT_PREVIEW_CHARS));
+      body.appendChild(inputPre);
+      const moreInput = el(
+        'button',
+        'tool-more',
+        `Show full input (${cleanInput.length.toLocaleString()} chars)`,
+      );
+      moreInput.addEventListener('click', () => {
+        inputPre.textContent = cleanInput;
+        moreInput.remove();
+      });
+      body.appendChild(moreInput);
+    } else {
+      body.appendChild(el('pre', 'tool-pre', cleanInput));
+    }
   }
 
   // The honesty branch: "no output recorded" and "output produced nothing" are
@@ -191,7 +220,7 @@ function renderTool(item: ToolCallItem): HTMLElement {
 
   if (item.diff !== undefined) {
     body.appendChild(el('div', 'tool-label', 'diff'));
-    body.appendChild(el('pre', 'tool-pre', stripAnsi(String(item.diff))));
+    body.appendChild(renderDiff(stripAnsi(String(item.diff))));
   }
 
   node.appendChild(body);
@@ -201,6 +230,42 @@ function renderTool(item: ToolCallItem): HTMLElement {
 function truncate(s: string, n: number): string {
   const flat = s.replace(/\s+/g, ' ').trim();
   return flat.length <= n ? flat : `${flat.slice(0, n - 1)}…`;
+}
+
+/** Render a unified diff with per-line colour spans (no innerHTML). */
+function renderDiff(text: string): HTMLPreElement {
+  const pre = el('pre', 'tool-pre tool-diff');
+  for (const line of text.split('\n')) {
+    const span = document.createElement('span');
+    span.textContent = line;
+    span.className = line.startsWith('+++') || line.startsWith('---')
+      ? 'diff-ctx'
+      : line.startsWith('+')
+        ? 'diff-add'
+        : line.startsWith('-')
+          ? 'diff-del'
+          : line.startsWith('@@')
+            ? 'diff-hunk'
+            : 'diff-ctx';
+    pre.appendChild(span);
+  }
+  return pre;
+}
+
+/** Semantic one-liner for the tool summary row. */
+function summarizeToolInput(name: string, preview: string): string {
+  try {
+    const j = JSON.parse(preview) as Record<string, unknown>;
+    if ((name === 'bash' || name === 'shell') && typeof j['command'] === 'string')
+      return truncate(j['command'] as string, 80);
+    if ((name === 'edit_file' || name === 'write_file' || name === 'read_file') && typeof j['file_path'] === 'string')
+      return j['file_path'] as string;
+    if (name === 'agent' && typeof j['prompt'] === 'string')
+      return truncate(j['prompt'] as string, 60);
+    if ((name === 'grep' || name === 'glob') && typeof j['pattern'] === 'string')
+      return j['pattern'] as string;
+  } catch { /* fall through */ }
+  return truncate(preview, 90);
 }
 
 export function relativeTime(iso: string): string {
@@ -235,6 +300,16 @@ export type ApprovalAnswer =
   | { action: 'accept'; content?: Record<string, unknown> }
   | { action: 'decline' };
 
+/** Heuristic: titles or tool names that suggest irreversible side-effects. */
+const DESTRUCTIVE_RE = /bash|delete|remove|overwrite|rm |drop/i;
+
+/** Returns a short wait-time string like "waiting 2m", or "" if unknown. */
+function waitingLabel(createdAt: string | undefined): string {
+  if (!createdAt) return '';
+  const mins = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60_000);
+  return mins >= 1 ? `waiting ${mins}m` : '';
+}
+
 /**
  * Render pending approvals as actionable cards.
  *
@@ -254,16 +329,20 @@ export function renderApprovals(
 
   for (const item of pending) {
     const req = item.request ?? {};
-    const card = el('div', 'approval-card');
+    const title = req.title ?? req.message ?? 'The agent is waiting for a response.';
+
+    const isDestructive = DESTRUCTIVE_RE.test(title) || DESTRUCTIVE_RE.test(req.serverName ?? '');
+    const card = el('div', isDestructive ? 'approval-card approval-card--destructive' : 'approval-card');
 
     const head = el('div', 'approval-head');
     head.appendChild(el('span', 'approval-badge', req.origin === 'agent' ? 'question' : 'approval'));
     if (req.serverName) head.appendChild(el('span', 'approval-source', req.serverName));
+    const wait = waitingLabel(item.createdAt);
+    if (wait) head.appendChild(el('span', 'approval-time', wait));
     card.appendChild(head);
 
-    const title = req.title ?? req.message ?? 'The agent is waiting for a response.';
     card.appendChild(el('div', 'approval-title', title));
-    if (req.description && req.description !== title) {
+    if (req.description) {
       card.appendChild(el('div', 'approval-desc', req.description));
     }
 
@@ -277,6 +356,25 @@ export function renderApprovals(
         );
         actions.appendChild(btn);
       }
+    } else if (req.type === 'multi_choice' && Array.isArray(req.choices) && req.choices.length > 0) {
+      const checkboxes = el('div', 'approval-checkboxes');
+      const inputs: HTMLInputElement[] = [];
+      for (const choice of req.choices) {
+        const label = el('label', 'approval-checkbox-row');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = choice;
+        inputs.push(cb);
+        label.appendChild(cb);
+        label.appendChild(el('span', undefined, choice));
+        checkboxes.appendChild(label);
+      }
+      card.appendChild(checkboxes);
+      const send = el('button', 'approval-btn approval-primary', 'Submit');
+      send.addEventListener('click', () =>
+        onAnswer(item.id, { action: 'accept', content: { value: inputs.filter((c) => c.checked).map((c) => c.value) } }),
+      );
+      actions.appendChild(send);
     } else if (req.type === 'text' || req.type === 'number') {
       const input = document.createElement('input');
       input.className = 'approval-input';

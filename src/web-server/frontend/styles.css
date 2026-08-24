@@ -21,6 +21,8 @@
 }
 
 * { box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#prompt:focus-visible, .approval-input:focus-visible { outline: none; }
 
 html, body {
   margin: 0;
@@ -74,7 +76,7 @@ html, body {
 }
 .sidebar-head {
   padding: 12px 16px 8px; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.08em; color: var(--text-faint);
+  letter-spacing: 0.08em; color: var(--text-dim);
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .new-session {
@@ -111,24 +113,25 @@ html, body {
   font-family: var(--mono); font-size: 10px; color: var(--text-dim);
   background: var(--bg-sunken); border: 1px solid var(--border);
   border-radius: 4px; padding: 1px 5px;
-  max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .empty { padding: 16px; color: var(--text-faint); }
 
 /* ── transcript ──────────────────────────────────────────────────────────── */
-.transcript { flex: 1; overflow-y: auto; padding: 20px; scroll-behavior: smooth; }
-.msg { margin-bottom: 18px; max-width: 900px; }
+.transcript { flex: 1; overflow-y: auto; padding: 20px; scroll-behavior: smooth; display: flex; flex-direction: column; align-items: center; }
+.msg { margin-bottom: 18px; max-width: 900px; width: 100%; }
 .msg-role {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--text-faint); margin-bottom: 5px;
+  color: var(--text-dim); margin-bottom: 5px;
 }
 .msg-body { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .msg-user .msg-body {
   background: var(--bg-raised); border-left: 2px solid var(--accent);
   padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0;
 }
-.msg-thinking { opacity: 0.75; font-style: italic; }
-.msg-thinking summary { cursor: pointer; }
+.msg-thinking { opacity: 1; font-style: italic; }
+.msg-thinking summary { opacity: 0.65; cursor: pointer; }
+.msg-thinking[open] .msg-body { margin-top: 8px; padding: 8px 12px; border-left: 2px solid var(--border); font-size: 13px; }
 .msg-error .msg-body { color: var(--error); }
 
 /*
@@ -171,13 +174,21 @@ html, body {
   background: var(--bg-sunken); border: 1px solid var(--border);
   border-radius: var(--radius); white-space: pre;
 }
+.md-pre[data-lang]::before {
+  content: attr(data-lang); display: block; text-align: right;
+  font-family: var(--mono); font-size: 10px; color: var(--text-faint);
+  margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.06em;
+}
 .md-pre code {
   font-family: var(--mono); font-size: 12px; line-height: 1.55;
   color: var(--text); background: none; border: 0; padding: 0; white-space: pre;
 }
 .md-quote {
-  margin: 0 0 10px; padding: 2px 0 2px 12px;
-  border-left: 2px solid var(--border); color: var(--text-dim);
+  margin: 0 0 10px; padding: 4px 0 4px 14px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  border-radius: 0 4px 4px 0;
 }
 .md-hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
 .md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
@@ -194,20 +205,36 @@ html, body {
 .notice {
   font-family: var(--mono); font-size: 11px; color: var(--text-faint);
   padding: 5px 0; border-top: 1px dashed var(--border); margin: 14px 0;
+  max-width: 900px; width: 100%;
 }
 
 /* ── tool calls ──────────────────────────────────────────────────────────── */
 .tool {
   border: 1px solid var(--border); border-radius: var(--radius);
   margin-bottom: 10px; background: var(--bg-raised); overflow: hidden;
+  max-width: 900px; width: 100%;
 }
 .tool-summary {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   cursor: pointer; font-family: var(--mono); font-size: 12px; list-style: none;
 }
 .tool-summary::-webkit-details-marker { display: none; }
+.tool-summary::before {
+  content: '›';
+  display: inline-block;
+  font-size: 14px;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+  margin-right: 4px;
+  flex: 0 0 auto;
+}
+details[open] > .tool-summary::before { transform: rotate(90deg); }
 .tool-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
-.tool-dot-running { background: var(--warning); }
+@keyframes afk-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+.tool-dot-running { background: var(--warning); animation: afk-pulse 1.4s ease-in-out infinite; }
 .tool-dot-ok { background: var(--success); }
 .tool-dot-error { background: var(--error); }
 .tool-name { color: var(--accent); }
@@ -215,7 +242,7 @@ html, body {
 .tool-body { padding: 0 12px 12px; border-top: 1px solid var(--border); }
 .tool-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--text-faint); margin: 10px 0 4px;
+  color: var(--text-dim); margin: 10px 0 4px;
 }
 .tool-pre {
   margin: 0; padding: 10px; background: var(--bg-sunken); border-radius: 6px;
@@ -237,6 +264,10 @@ html, body {
   cursor: pointer; font-family: var(--mono); font-size: 11px;
 }
 .tool-more:hover { color: var(--text); border-color: var(--accent); }
+.diff-add  { color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); display: block; }
+.diff-del  { color: var(--error);   background: color-mix(in srgb, var(--error)   8%, transparent); display: block; }
+.diff-hunk { color: var(--accent);  opacity: 0.75; display: block; }
+.diff-ctx  { color: var(--text-dim); display: block; }
 
 /* ── composer ────────────────────────────────────────────────────────────── */
 .composer { border-top: 1px solid var(--border); background: var(--bg-raised); padding: 12px 20px; position: relative; }
@@ -302,7 +333,9 @@ html, body {
 .send {
   background: var(--accent); color: #1a0d05; border: none; border-radius: var(--radius);
   padding: 10px 18px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
 }
+.send:hover:not(:disabled) { filter: brightness(1.06); }
 .send:disabled { background: var(--border); color: var(--text-faint); cursor: not-allowed; }
 .queue { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
 .queue-row {

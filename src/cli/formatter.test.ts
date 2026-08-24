@@ -265,6 +265,101 @@ describe('renderMarkdownToTerminal', () => {
       // Only the header to data separator. No inter-row separator.
       expect(separators).toHaveLength(1);
     });
+
+    it('suppresses top chrome when consecutive tables have same structure', () => {
+      // LLMs sometimes repeat the header mid-table, splitting one logical
+      // table into two marked tokens. The renderer should suppress the
+      // second table's top border + header + separator, rendering a
+      // seamless continuation instead of a duplicated header seam.
+      const twoTables = [
+        '| Layer | What |',
+        '|-------|------|',
+        '| Core  | A    |',
+        '',
+        '| Layer | What |',
+        '|-------|------|',
+        '| Click | B    |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(twoTables));
+      const topBorders = out.split('\n').filter((l) => l.startsWith('┌'));
+      const bottomBorders = out.split('\n').filter((l) => l.startsWith('└'));
+      // Only one top border and one bottom border — visually one table.
+      expect(topBorders).toHaveLength(1);
+      expect(bottomBorders).toHaveLength(1);
+      // Both data rows present.
+      expect(out).toContain('Core');
+      expect(out).toContain('Click');
+      // Header text appears only once.
+      const headerMatches = out.split('\n').filter((l) => l.includes('Layer') && l.includes('What'));
+      expect(headerMatches).toHaveLength(1);
+      expect(out).not.toContain('\n\n');
+    });
+
+    it('keeps adjacent tables separate when their schemas differ', () => {
+      const out = stripAnsi(renderMarkdownToTerminal([
+        '| Summary | Value |', '|---|---|', '| Total | 2 |', '',
+        '| Name | Kind | Path |', '|---|---|---|', '| api | service | src/api |', '',
+      ].join('\n')));
+      expect(out.split('\n').filter((line) => line.startsWith('┌'))).toHaveLength(2);
+      expect(out).toContain('Summary');
+      expect(out).toContain('Name');
+    });
+
+    it('computes one shared layout across continued table rows', () => {
+      const out = stripAnsi(renderMarkdownToTerminal([
+        '| Key | Value |', '|---|---|', '| a | short |', '',
+        '| Key | Value |', '|---|---|', '| b | substantially longer value |', '',
+      ].join('\n')));
+      const structuralLines = out.split('\n').filter((line) => /^[┌├└│]/.test(line));
+      expect(new Set(structuralLines.map((line) => line.length))).toHaveLength(1);
+      expect(out.split('\n').filter((line) => line.startsWith('┌'))).toHaveLength(1);
+    });
+
+    it('does not suppress top chrome when a non-table block intervenes', () => {
+      // Table → paragraph → table should render as two separate tables.
+      const separated = [
+        '| A | B |',
+        '|---|---|',
+        '| 1 | 2 |',
+        '',
+        'Some text between tables.',
+        '',
+        '| A | B |',
+        '|---|---|',
+        '| 3 | 4 |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(separated));
+      const topBorders = out.split('\n').filter((l) => l.startsWith('┌'));
+      // Two separate tables → two top borders.
+      expect(topBorders).toHaveLength(2);
+    });
+
+    it('suppresses top chrome for three consecutive tables', () => {
+      const threeTables = [
+        '| X |',
+        '|---|',
+        '| a |',
+        '',
+        '| X |',
+        '|---|',
+        '| b |',
+        '',
+        '| X |',
+        '|---|',
+        '| c |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(threeTables));
+      const topBorders = out.split('\n').filter((l) => l.startsWith('┌'));
+      const bottomBorders = out.split('\n').filter((l) => l.startsWith('└'));
+      expect(topBorders).toHaveLength(1);
+      expect(bottomBorders).toHaveLength(1);
+      expect(out).toContain('a');
+      expect(out).toContain('b');
+      expect(out).toContain('c');
+    });
   });
 
   describe('ordered lists', () => {

@@ -28,15 +28,16 @@ import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
-import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory } from '../../agent/memory/index.js';
+import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
-import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
+import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 
 /**
  * Options for {@link buildDaemonSessionFactory}.
@@ -75,6 +76,11 @@ export function buildDaemonSessionFactory(
   // store is intentionally not closed here: the daemon owns it for its whole
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
   // process.exit(), which reclaims the descriptor.
+  //
+  // WorkspaceStore is intentionally NOT shared across tasks: one task's
+  // published entries are irrelevant to the next task's compose nodes, and
+  // reusing the store would inject stale workspace entries from a prior
+  // task's run. Create a fresh store per task invocation instead.
   let memoryStore: MemoryStore | undefined;
   return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
@@ -87,6 +93,12 @@ export function buildDaemonSessionFactory(
     // and threaded it in as config.traceWriter — reuse THAT SAME instance here
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
+    memoryStore ??= new MemoryStore();
+    // WorkspaceStore is fresh per task: one task's published entries are
+    // irrelevant to the next task's compose nodes, and reusing the store
+    // would inject stale workspace entries from a prior task's run.
+    // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
+    const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
@@ -106,9 +118,8 @@ export function buildDaemonSessionFactory(
         ? { traceWriter: config.traceWriter, skillTraceWriter: config.traceWriter }
         : {}),
       // No backgroundRegistry: background dispatch is interactive-only.
+      workspaceStore,
     });
-
-    memoryStore ??= new MemoryStore();
     const mcpManager = config.mcpManager;
     const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
 
@@ -116,18 +127,27 @@ export function buildDaemonSessionFactory(
       subagentExecutor,
       skillExecutor,
       composeExecutor,
-      memoryStore,
+      memoryStore, workspaceStore,
       model: String(opts.model),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
       permissions: {
-        allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose', ...mcpToolWireNames],
+        allowedTools: [
+          ...BUILTIN_TOOL_NAMES,
+          ...MEMORY_TOOL_NAMES,
+          ...AWARENESS_TOOL_NAMES,
+          ...WORKSPACE_TOOL_NAMES,
+          'agent',
+          'skill',
+          'compose',
+          ...mcpToolWireNames,
+        ],
       },
       subagentExecutor,
       skillExecutor,
       composeExecutor,
-      memoryStore,
+      memoryStore, workspaceStore,
       surface: 'daemon',
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
@@ -139,7 +159,7 @@ export function buildDaemonSessionFactory(
     // production chokepoint the scheduler routes every task through, so it also
     // caps scheduler/cron-spawned top-level sessions.
     const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    return new AgentSession(injectCompanionPrimer(injectHotMemory({
+    const session = new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless: no human watches to answer ask_question.
@@ -160,6 +180,19 @@ export function buildDaemonSessionFactory(
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
     })), ownedTraceWriter);
+    // Subagent-success rollup: wire both the root manager and the compose
+    // executor so all subagent token/cost data (including compose DAG nodes)
+    // accumulates into this session's session_sealed telemetry. Late-bound
+    // here because the session is constructed after the executors. The daemon
+    // creates a fresh session per task tick, so this wiring is per-tick too —
+    // each session's costs roll into ITS OWN sealed payload, not a shared one.
+    rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+      session.recordSubagentCompletion(usage, costUsd);
+    });
+    composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+      session.recordSubagentCompletion(usage, costUsd);
+    });
+    return session;
   };
 }
 

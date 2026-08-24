@@ -145,7 +145,7 @@ function renderSessions(agg: InsightAggregates): string {
   const topContent = hasData
     ? `<div class="metrics-grid">
         <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(s.totalSessions))}</div><div class="metric-label">Sessions</div></div>
-        <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(sessionsCardCostUsd))}</div><div class="metric-label">Total Cost</div></div>
+        <div class="metric-card"><div class="metric-val">${htmlEscape(formatCost(sessionsCardCostUsd))}</div><div class="metric-label">Total Cost (all traced sessions)</div></div>
         ${tokenCards}
       </div>${costNote}`
     : noData('session');
@@ -155,7 +155,7 @@ function renderSessions(agg: InsightAggregates): string {
   // disagree — and did so by ~3x on the datasets behind #864. TraceAggregates
   // carries no per-model/per-day cost split, so these cannot simply be
   // re-sourced; caption them instead so the gap reads as scope, not error.
-  const costScopeNote = `<p style="color:#8a93a3;font-size:13px;margin-top:6px">Sidecar-recorded sessions only — may not sum to Total Cost above.</p>`;
+  const costScopeNote = `<p style="color:#8a93a3;font-size:13px;margin-top:6px">Covers sessions with detailed cost records only — may not sum to Total Cost above, which includes all traced sessions (subagent forks, background tasks, etc.).</p>`;
 
   const modelEntries = Object.entries(s.byModel).map(([k, v]) => ({ label: k, value: v.costUsd }));
   const surfaceEntries = Object.entries(s.bySurface).map(([k, v]) => ({ label: k, value: v.sessions }));

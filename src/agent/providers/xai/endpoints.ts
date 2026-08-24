@@ -10,7 +10,11 @@
  */
 
 import { env } from '../../../config/env.js';
-import { isCliChatProxyBaseUrl, resolveGrokCliIdentityHeaders } from './headers.js';
+import {
+  isCliChatProxyBaseUrl,
+  resolveGrokCliIdentityHeaders,
+  type GrokCliHeaderDeps,
+} from './headers.js';
 
 /** Auth mode selects which default endpoint + header policy apply. */
 export type XaiAuthMode = 'apikey' | 'oauth';
@@ -32,13 +36,20 @@ export interface XaiEndpointResolution {
 export interface XaiEndpointDeps {
   /** Returns env value for key, or undefined. Defaults go through `env` (audit-env). */
   readEnv?: (key: string) => string | undefined;
-  /** Client version string for proxy identity headers. */
+  /** Internal compatibility/test seam for proxy identity headers. */
   clientVersion?: string;
   /**
    * Intentional xAI endpoint override (per-slot `baseUrl` only). Must NOT be
    * global `AFK_OPENAI_BASE_URL` — that hijacks Grok onto OpenAI shims.
    */
   baseUrlOverride?: string;
+  /**
+   * Injectable sources for Grok CLI header resolution (env override, version
+   * file, home dir). Forwarded verbatim to `resolveGrokCliIdentityHeaders` so
+   * endpoint-layer tests can control the full version-resolution chain without
+   * touching real env vars or the filesystem.
+   */
+  headerDeps?: GrokCliHeaderDeps;
 }
 
 /** Default env reader — only xAI endpoint vars; uses the typed `env` object. */
@@ -72,7 +83,7 @@ export function resolveXaiEndpoint(
     return {
       baseURL,
       defaultHeaders: useProxyHeaders
-        ? resolveGrokCliIdentityHeaders({ clientVersion: deps.clientVersion })
+        ? resolveGrokCliIdentityHeaders({ clientVersion: deps.clientVersion }, deps.headerDeps)
         : {},
       mode,
       proxyHeadersApplied: useProxyHeaders,
@@ -94,7 +105,7 @@ export function resolveXaiEndpoint(
   const baseURL = stripTrailingSlash((raw && raw.trim()) || DEFAULT_XAI_OAUTH_BASE_URL);
   const useProxyHeaders = isCliChatProxyBaseUrl(baseURL);
   const defaultHeaders = useProxyHeaders
-    ? resolveGrokCliIdentityHeaders({ clientVersion: deps.clientVersion })
+    ? resolveGrokCliIdentityHeaders({ clientVersion: deps.clientVersion }, deps.headerDeps)
     : {};
   return {
     baseURL,

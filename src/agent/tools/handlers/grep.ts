@@ -7,13 +7,12 @@
  * bare `foo|bar` alternates, matching either branch) — a deliberate contract
  * change from the previous system-`grep`-backed implementation, which ran in
  * BRE mode by default and required an `extended` opt-in for alternation.
- * Respects signal-based cancellation. Output is governed by two decoupled
- * thresholds (see `_output-cap.ts`): the accumulator is bounded at
- * HARD_CAP_BYTES (8MB) with a mid-stream SIGKILL only when it is crossed — a
- * genuine-runaway guard against V8 max-string-length overflow — while the
- * model-facing view is reduced to head+tail at MODEL_CAP_BYTES (100KB). A
- * broad-but-legitimate search therefore runs to completion. Strips ANSI escape
- * sequences.
+ * Respects signal-based cancellation. Output streams through a bounded
+ * head+tail collector (see `_streaming-cap.ts`) that retains at most
+ * MODEL_CAP_BYTES (100KB) while counting every byte and matching line, so
+ * memory no longer scales with match volume and a truncated view always
+ * reports the true total it was drawn from. A separate {@link SCAN_CAP_BYTES}
+ * ceiling SIGKILLs only a genuine runaway. Strips ANSI escape sequences.
  *
  * @module agent/tools/handlers/grep
  */
@@ -26,8 +25,19 @@ import { getReadDenylistDescendants } from './read-denylist.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { describeRgUnavailable } from './_rg-availability.js';
-import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
+import { MODEL_CAP_BYTES } from './_output-cap.js';
 import { classifyRgExit2, type GrepSettleResult } from './_rg-exit2.js';
+import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streaming-cap.js';
+
+/** Optional overrides for {@link createGrepHandler}. */
+export interface GrepHandlerOptions {
+  /**
+   * Override the scan-volume ceiling (default {@link SCAN_CAP_BYTES}). Tests
+   * inject a small value to exercise the runaway kill without writing a
+   * multi-hundred-MB fixture.
+   */
+  scanCapBytes?: number;
+}
 
 /**
  * Input shape for the grep tool (validated at runtime).
@@ -101,7 +111,8 @@ function parseGrepInput(
  * host's `process.cwd()`. Pass `undefined` for legacy/test contexts that
  * want host-global behavior.
  */
-export function createGrepHandler(cwd?: string): ToolHandler {
+export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): ToolHandler {
+  const scanCap = options?.scanCapBytes ?? SCAN_CAP_BYTES;
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
   const { pattern, path, include } = parseGrepInput(input, context, cwd);
 
@@ -193,30 +204,30 @@ export function createGrepHandler(cwd?: string): ToolHandler {
     const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
     const proc = spawn(rgPath, args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
 
-    let stdout = '';
-    let stderr = '';
+    // Invariant: the model never receives more than MODEL_CAP_BYTES, so there
+    // is no reason to hold more than that in memory. Both streams feed bounded
+    // head+tail collectors that discard the interior AS IT ARRIVES while
+    // keeping exact byte and line totals — which is what lets a truncated
+    // result state how much it omitted instead of looking complete. This
+    // replaces an accumulate-then-truncate design that buffered up to 8MB in
+    // order to show 100KB and SIGKILL'd at that ceiling, losing both the true
+    // total and the remainder of the traversal. The V8 max-string-length
+    // hazard that justified the old kill cannot arise here: neither collector
+    // grows past its budget no matter how much ripgrep emits.
+    const out = createStreamingCap(MODEL_CAP_BYTES);
+    const err = createStreamingCap(MODEL_CAP_BYTES);
 
-    // Mid-stream hard cap. Without an accumulator bound, `stdout += ...`
-    // grows unboundedly: a grep emitting >~512MB of stdout (an unconstrained
-    // recursive search across `node_modules`) overflows V8's max string
-    // length and throws `RangeError: Invalid string length` synchronously
-    // inside this data callback — escaping every try/catch because the throw
-    // originates inside Node's Socket.emit → Readable.push chain, and the
-    // post-close cap cannot save us (`close` never fires once the throw
-    // aborts the read pipeline). So we bound the string at HARD_CAP_BYTES and
-    // SIGKILL only when it is crossed — a genuine-runaway circuit-breaker.
-    // Broad-but-legitimate searches (well under 8MB) run to completion.
-    let totalBytes = 0;
-    let overflowKilled = false;
+    let scanKilled = false;
 
-    function maybeOverflow(stream: 'stdout' | 'stderr'): void {
+    function maybeScanCap(stream: 'stdout' | 'stderr'): void {
       // M3: one-shot latch — concurrent stdout+stderr data events can both
-      // push totalBytes past the threshold before the kill takes effect.
-      // Check overflowKilled FIRST so only the first caller settles.
-      if (overflowKilled) return;
+      // cross the threshold before the kill takes effect. Check the latch
+      // FIRST so only the first caller settles.
+      if (scanKilled) return;
       if (resolved) return;
-      if (totalBytes < HARD_CAP_BYTES) return;
-      overflowKilled = true;
+      const totalBytes = out.totalBytes() + err.totalBytes();
+      if (totalBytes < scanCap) return;
+      scanKilled = true;
       // P1: structured log so operators can observe runaway kills in
       // production without grepping for RangeError crash traces.
       console.warn(
@@ -235,36 +246,23 @@ export function createGrepHandler(cwd?: string): ToolHandler {
         stream,
       });
       proc.kill('SIGKILL');
-      // F1 + F2: combine stdout + stderr (mirror bash.ts) and hard-code
-      // isError: false — a byte-cap event is distinct from a grep error
-      // (exit code 2), which the post-close path keeps separate. The child
-      // was SIGKILL'd for exceeding the hard cap; give the model a head+tail
-      // view plus the kill sentinel, and signal non-model consumers via the
-      // structured `truncated: true` flag.
-      const combined = stripEscapeSequences((stdout + stderr).trimEnd());
-      const content = headAndTail(combined, MODEL_CAP_BYTES) + HARD_CAP_KILL_NOTE;
-      settle({ content, truncated: true });
+      // F1 + F2: hard-code isError: false — a scan-cap event is distinct from
+      // a grep error (exit code 2), which the post-close path keeps separate.
+      // Render the stream that actually produced the volume: a runaway is
+      // normally matches on stdout, but a search over an unreadable tree can
+      // be all stderr, and falling back keeps that diagnosable.
+      const body = out.totalBytes() === 0 && err.totalBytes() > 0 ? err.render() : out.render();
+      settle({ content: stripEscapeSequences(body.trimEnd()) + scanCapKillNote(scanCap), truncated: true });
     }
 
     proc.stdout!.on('data', (chunk: Buffer) => {
-      // H1 + M1: slice at the Buffer layer BEFORE .toString() so a single
-      // oversized chunk (>= HARD_CAP_BYTES) never allocates a full V8
-      // string. Remaining budget is computed in bytes (not UTF-16 code
-      // units) so truncation always lands on a valid byte boundary.
-      const remaining = HARD_CAP_BYTES - totalBytes;
-      const safe = chunk.length <= remaining ? chunk : chunk.subarray(0, Math.max(0, remaining));
-      totalBytes += safe.length;
-      stdout += safe.toString('utf8');
-      maybeOverflow('stdout');
+      out.push(chunk);
+      maybeScanCap('stdout');
     });
 
     proc.stderr!.on('data', (chunk: Buffer) => {
-      // H1 + M1: same Buffer-layer guard as stdout handler above.
-      const remaining = HARD_CAP_BYTES - totalBytes;
-      const safe = chunk.length <= remaining ? chunk : chunk.subarray(0, Math.max(0, remaining));
-      totalBytes += safe.length;
-      stderr += safe.toString('utf8');
-      maybeOverflow('stderr');
+      err.push(chunk);
+      maybeScanCap('stderr');
     });
 
     // Abort — resolve immediately, don't wait for streams.
@@ -276,11 +274,11 @@ export function createGrepHandler(cwd?: string): ToolHandler {
 
     // Normal completion — `close` fires after all stdio streams drain.
     proc.on('close', (code) => {
-      // Overflow path already settled before the SIGKILL → close
+      // Scan-cap path already settled before the SIGKILL → close
       // round-trip; drop the exit code (it is going to be `null` from
       // the signal) so we don't re-classify the result as "no matches"
       // (code === 1) or "grep error" (code === 2).
-      if (overflowKilled) return;
+      if (scanKilled) return;
 
       if (code === 1) {
         const message = `No matches found for '${pattern}' in ${path}`;
@@ -292,13 +290,14 @@ export function createGrepHandler(cwd?: string): ToolHandler {
         // rg exits 2 for a missing path, an unreadable path, AND a bad regex.
         // `classifyRgExit2` splits the first (benign `no-such-target`) from the
         // rest (unclassified, alarming) — see `_rg-exit2.ts` for the shapes.
-        settle(classifyRgExit2(stderr, path));
+        // The collector already bounds stderr at the model budget and reports
+        // whether anything was dropped.
+        settle(classifyRgExit2(err.render(), path));
         return;
       }
 
-      const combined = stripEscapeSequences(stdout.trimEnd());
-      const capped = capForModel(combined);
-      settle({ content: capped.content, ...(capped.truncated ? { truncated: true } : {}) });
+      const combined = stripEscapeSequences(out.render().trimEnd());
+      settle({ content: combined, ...(out.truncated() ? { truncated: true } : {}) });
     });
 
     proc.on('error', (err) => {

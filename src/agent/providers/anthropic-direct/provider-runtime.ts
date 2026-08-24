@@ -58,6 +58,7 @@ export {
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { MemoryStore } from '../../memory/index.js';
+import { WorkspaceStore } from '../../workspace/workspace-store.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
 import type { ProviderQueryContext } from './provider-context.js';
@@ -84,6 +85,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   /** Non-null only when the caller provides an explicit `opts.tools` override. */
   private readonly externalTools: ToolDispatcher | undefined;
   private readonly memoryStore: MemoryStore;
+  private readonly workspaceStore: WorkspaceStore | undefined;
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
   // Fields retained for per-query dispatcher construction (fixes C2 env race).
@@ -152,6 +154,7 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
+    this.workspaceStore = opts.workspaceStore;
     this.externalTools = opts.tools;
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
@@ -206,6 +209,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     return buildDispatcherImpl(
       {
         memoryStore: this.memoryStore,
+        workspaceStore: this.workspaceStore,
         surface: this.surface,
         readOnlyMemory: this.readOnlyMemory,
         readOnlyBash: this.readOnlyBash,
@@ -231,6 +235,7 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   close(): void {
     this.memoryStore.close();
+    this.workspaceStore?.close();
   }
 
   /**
@@ -310,6 +315,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       get surface() { return provider.surface; },
       get declaredSurface() { return provider.declaredSurface; },
       get readOnlyMemory() { return provider.readOnlyMemory; },
+      get workspaceStore() { return provider.workspaceStore; },
       get mcpManager() { return provider.mcpManager; },
       get fastModeController() { return provider.fastModeController; },
       getSharedReadRoots: () => provider.grants.readRoots,

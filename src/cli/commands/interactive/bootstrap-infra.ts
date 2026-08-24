@@ -62,6 +62,7 @@ export function createBootstrapInfra(a: {
   effectiveCwd: string | undefined;
   resumeTarget: ResolvedResumeTarget | undefined;
   bootWarnings: string[];
+  workspaceStore?: import('../../../agent/workspace/index.js').WorkspaceStore;
 }): BootstrapInfra {
   // Witness layer: open trace BEFORE the root SubagentManager and the
   // executor so (a) the manager inherits the writer — the `agent`-tool path
@@ -174,6 +175,7 @@ export function createBootstrapInfra(a: {
         producer: 'agent-registry',
         message,
       }),
+    ...(a.workspaceStore !== undefined ? { workspaceStore: a.workspaceStore } : {}),
   });
 
   return {

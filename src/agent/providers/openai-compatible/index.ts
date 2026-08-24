@@ -43,7 +43,8 @@ import {
   composeTool,
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
-import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
+import { WorkspaceStore, createWorkspaceHandlers, workspaceToolSchemas } from '../../workspace/index.js';
+import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { buildQueryFromConfig } from './query.js';
@@ -88,6 +89,7 @@ export interface OpenAICompatibleProviderOptions {
   composeExecutor?: ComposeExecutor;
   /** Shared memory store (avoids dual SQLite handles when CLI builds it once). */
   memoryStore?: MemoryStore;
+  workspaceStore?: WorkspaceStore;
   /** UI surface tag forwarded to memory handlers ('cli' | 'telegram' | etc.). */
   surface?: string;
   /**
@@ -134,6 +136,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
   private readonly providerOpts: OpenAICompatibleProviderOptions;
   private readonly memoryStore: MemoryStore;
+  private readonly workspaceStore: WorkspaceStore | undefined;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -173,6 +176,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.providerOpts = opts;
     this._defaultHeaders = opts.defaultHeaders;
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
+    this.workspaceStore = opts.workspaceStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
     // Executor-supplied `agent` def advertises named agent types when a
@@ -185,15 +189,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } else {
       schemas.push(...memoryToolSchemas);
     }
-    // Awareness layer (Phase 1) — parity with anthropic-direct. The
-    // system-prompt identity fragment is NOT built here: it's assembled
-    // per-query below (`envFragment`, Phase 2, ~line 325) once `config.cwd`
-    // and `runtimeStateSource` are available, then re-rendered per turn by
-    // `refreshEnvironmentDate()` in messages.ts so a resident session's
-    // `# Environment` block never goes stale across a local midnight. The
-    // `get_runtime_state` tool remains available so the model can also pull
-    // identity on demand.
-    schemas.push(getRuntimeStateTool);
+    // Workspace (per-session publish) + awareness (runtime-state) — parity
+    // with anthropic-direct/provider-schemas.ts. Keep the workspace schema in
+    // lockstep with its handler when AFK_WORKSPACE_DISABLED omits the store.
+    schemas.push(...(this.workspaceStore !== undefined ? workspaceToolSchemas : []), getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name
     // collides with an already-present builtin (or an earlier custom tool) is
@@ -391,12 +390,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
     const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
-    // Invariant: kept in lockstep with anthropic-direct's call site. Two
-    // deltas vs. the previous bare call: (1) `excludeName` omits the executing
-    // skill's own entry for a skill-dispatch fork (AgentConfig.skillDispatchName),
-    // and (2) `cwd` is now forwarded — its omission here was a silent parity gap
-    // that resolved `<cwd>/.afk/skills/` against the HOST process dir instead of
-    // the session's, which diverge on long-lived hosts (daemon, Telegram bot).
+    // Invariant: kept in lockstep with anthropic-direct's call site.
+    // `excludeName` omits the executing skill's own entry for a skill-dispatch
+    // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
+    // resolve against the session's dir, not the host process's (#876).
     const manifest = this.providerOpts.skillExecutor
       ? buildSkillManifest(undefined, {
           ...(typeof config.cwd === 'string' && config.cwd.length > 0
@@ -409,8 +406,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         })
       : '';
     const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
-    const existingSys =
-      typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+    const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
 
     // Contract: given the cwd-dependent `# Environment` fragment, return the
     // full joined system prompt over the STABLE fragments captured above.
@@ -420,6 +416,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const parts = [toolBase];
       if (existingSys !== undefined && existingSys.length > 0) parts.push(existingSys);
       parts.push(memoryPrompt);
+      const workspacePrompt = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined);
+      if (workspacePrompt) parts.push(workspacePrompt);
       if (hotMemory.length > 0) parts.push(hotMemory);
       parts.push(envFragment);
       if (manifest.length > 0) parts.push(manifest);
@@ -530,14 +528,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
-    const memoryHandlers = createMemoryHandlers(
-      this.memoryStore,
-      undefined,
-      this.providerOpts.surface ?? 'cli',
-    );
+    const memoryHandlers = createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli');
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;
       handlers.set(name, handler);
+    }
+    // Workspace tool: workspace_publish (per-session, ephemeral — no readOnly gate).
+    // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
+    if (this.workspaceStore !== undefined) {
+      for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
     }
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
@@ -548,11 +547,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the builtin wins (we skip the custom registration). This prevents a
     // user-supplied tool from silently overriding a built-in capability.
     // Location: src/agent/providers/openai-compatible/index.ts buildDispatcher.
-    for (const t of this.providerOpts.customTools ?? []) {
-      if (!handlers.has(t.schema.name)) {
-        handlers.set(t.schema.name, t.handler);
-      }
-    }
+    for (const t of this.providerOpts.customTools ?? []) if (!handlers.has(t.schema.name)) handlers.set(t.schema.name, t.handler);
     // Plan-exit tool: registered RESIDENT whenever the session supplied control
     // callbacks (top-level sessions only). NOT gated on the construction-time
     // `permissionMode` — the dispatcher is built once per query() and is not
@@ -717,6 +712,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   close(): void {
     this.memoryStore.close();
+    this.workspaceStore?.close();
   }
 
   /**

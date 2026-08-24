@@ -41,7 +41,7 @@ export function formatContextUsage(
     const limitK = Math.round(contextLimit / 1000);
     return {
       tier: 'over',
-      text: `  context OVER ${limitK}k tok by ~${formatTokens(overByTok)} tok — model output may be silently truncated`,
+      text: `  context OVER ${limitK}k tokens by ~${formatTokens(overByTok)} tokens — model output may be silently truncated`,
     };
   }
   if (contextPct >= 0.95) {
@@ -76,7 +76,7 @@ export function printTurnFooter(
   if (meta.totalCostUsd !== undefined) parts.push(formatCost(meta.totalCostUsd));
   const inTok = Number(meta.usage?.['input_tokens'] ?? 0);
   const outTok = Number(meta.usage?.['output_tokens'] ?? 0);
-  if (inTok + outTok > 0) parts.push(formatTokens(inTok + outTok) + ' tok');
+  if (inTok + outTok > 0) parts.push(formatTokens(inTok + outTok) + ' tokens');
   if (parts.length > 0) {
     write(palette.dim('  ◦ ' + parts.join('  ·  ')));
   }

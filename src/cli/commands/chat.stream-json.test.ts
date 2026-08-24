@@ -110,9 +110,14 @@ vi.mock('../../agent/memory/index.js', () => {
   };
 });
 
-vi.mock('../../agent/subagent.js', () => ({
-  SubagentManager: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('../../agent/subagent.js', () => {
+  // Use a class so `new SubagentManager()` always returns a fresh stub,
+  // surviving vi.restoreAllMocks() in afterEach (which strips mockImplementation).
+  class StubManager {
+    setOnSubagentSucceeded = vi.fn();
+  }
+  return { SubagentManager: StubManager };
+});
 
 vi.mock('../../agent/tools/subagent-executor.js', () => ({
   SubagentExecutor: vi.fn().mockImplementation(() => ({})),
@@ -122,9 +127,12 @@ vi.mock('../../agent/tools/skill-executor.js', () => ({
   SkillExecutor: vi.fn().mockImplementation(() => ({})),
 }));
 
-vi.mock('../../agent/tools/compose-executor.js', () => ({
-  ComposeExecutor: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('../../agent/tools/compose-executor.js', () => {
+  class StubCompose {
+    setOnSubagentSucceeded = vi.fn();
+  }
+  return { ComposeExecutor: StubCompose };
+});
 
 vi.mock('../../agent/tools/nesting.js', () => ({
   createChildProviderFactory: vi.fn(() => ({})),

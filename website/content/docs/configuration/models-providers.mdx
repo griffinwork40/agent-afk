@@ -1,9 +1,9 @@
 ---
 title: "Models & Providers"
-description: "How agent-afk routes model names to providers, and how to use Anthropic, OpenAI, and local OpenAI-compatible shims."
+description: "How agent-afk routes model names to providers, and how to use Anthropic, OpenAI, xAI, and local OpenAI-compatible shims."
 ---
 
-`agent-afk` speaks to two provider families through a single abstraction in
+`agent-afk` speaks to three provider families through a single abstraction in
 `src/agent/providers/`. The routing happens automatically based on the model
 name — no global `AFK_PROVIDER` needed in the common case.
 
@@ -31,6 +31,37 @@ endpoint via `AFK_OPENAI_BASE_URL`). Selected automatically for:
   underlying `@openai/codex-sdk` harness has been removed and this now
   resolves to the same `openai-compatible` provider. Still accepted for
   back-compat; will be removed in a future major release.
+
+### xai / xai-oauth
+
+Talks to the xAI inference API. Selected automatically for:
+
+- `grok-*` model IDs (e.g. `grok-4.6`, `grok-4.5`)
+- The `grok` short alias (resolves to the current flagship — `grok-4.6`)
+
+Two auth modes:
+
+- **`xai`** — API-key mode. Set `XAI_API_KEY`.
+- **`xai-oauth`** — SuperGrok / SuperGrok Heavy / X Premium+ subscription OAuth
+  via the Grok CLI chat proxy. No API key needed; uses the OAuth credential
+  written by `grok login`. Force this mode by binding a slot with
+  `provider: "xai-oauth"`.
+
+```bash
+export XAI_API_KEY=xai-...
+afk chat "summarise this diff" --model grok-4.6
+# or use the short alias
+afk i --model grok
+```
+
+```jsonc
+// afk.config.json — bind a slot to Grok
+{
+  "models": {
+    "large": { "id": "grok-4.6", "provider": "xai" }
+  }
+}
+```
 
 ### chatgpt-oauth (per-slot)
 
@@ -74,7 +105,7 @@ works for a single-model setup.
 Set the default for all sessions:
 
 ```bash
-export AFK_MODEL=sonnet          # or: haiku, opus, fable, gpt-5, etc.
+export AFK_MODEL=sonnet          # or: haiku, opus, fable, grok, gpt-5, etc.
 ```
 
 Override for a single call:
@@ -89,6 +120,8 @@ Switch mid-session in the REPL:
 
 ```
 /model gpt-5.5       # next turn routes to openai-compatible
+/model grok-4.6      # next turn routes to xai
+/model grok          # same — short alias for the current Grok flagship
 /model sonnet        # next turn routes back to anthropic-direct
 ```
 
@@ -109,7 +142,7 @@ export AFK_PROVIDER=openai-compatible   # all models routed to OpenAI compat
 ```
 
 Accepted values: `anthropic`, `anthropic-direct`, `openai`, `openai-compatible`,
-`openai-codex`. The `--provider` CLI flag wins when both are set.
+`openai-codex`, `xai`, `xai-oauth`. The `--provider` CLI flag wins when both are set.
 
 `AFK_PROVIDER` is now an escape hatch, not a requirement. Omit it to let the
 router pick automatically per model.
@@ -122,13 +155,15 @@ router pick automatically per model.
 | `opus` / `opus_1m` | Complex reasoning, multi-step planning, long contexts | anthropic-direct |
 | `sonnet` / `sonnet_1m` | Balanced — the `medium` tier's default model | anthropic-direct |
 | `haiku` | Fast and cheap, best for simple tasks | anthropic-direct |
+| `grok` | Current Grok flagship — resolves to `grok-4.6` | xai |
 
 `sonnet_1m` and `opus_1m` resolve to the same fixed model ID as their base
 alias (`sonnet`/`opus` respectively) — like all identity aliases, they are not
 tiers, so "resolve to the same tier" no longer applies. The 1M context window
 is handled by the model itself; passing the `_1m` suffix routes to the same
-pinned model ID. Source: `src/agent/session/model-slots.ts`
-(`DIRECT_MODEL_ALIASES`).
+pinned model ID. `grok` resolves to `GROK_FLAGSHIP_ID` in
+`src/agent/session/model-slots.ts`; upgrade the flagship by updating that one
+constant. Source: `DIRECT_MODEL_ALIASES` in `src/agent/session/model-slots.ts`.
 
 You can also pass any raw model ID accepted by the provider (e.g.
 `claude-opus-5`, `gpt-5`, `claude-haiku-4-5-20251001`).

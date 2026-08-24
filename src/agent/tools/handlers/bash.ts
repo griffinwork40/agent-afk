@@ -23,6 +23,7 @@ import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
 import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
+import { killProcessGroup } from '../../../utils/kill-process-group.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -255,7 +256,7 @@ export function createBashHandler(
     // including backgrounded grandchildren, atomically (S10).
     const timeoutHandle = setTimeout(() => {
       if (proc.pid !== undefined) {
-        process.kill(-proc.pid, 'SIGKILL');
+        killProcessGroup(proc.pid);
       }
       settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true });
     }, timeout_ms);
@@ -341,7 +342,7 @@ export function createBashHandler(
     // S10: same process-group SIGKILL rationale as timeout path above.
     const abortHandler = () => {
       if (proc.pid !== undefined) {
-        process.kill(-proc.pid, 'SIGKILL');
+        killProcessGroup(proc.pid);
       }
       settle({ content: 'Command aborted', isError: true });
     };

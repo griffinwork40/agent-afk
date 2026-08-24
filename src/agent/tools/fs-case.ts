@@ -81,12 +81,12 @@ export function isCaseInsensitiveFs(protectedPath = homedir()): boolean {
  * identifies the filesystem whose case semantics govern the comparison.
  */
 export function pathIsWithin(real: string, blocked: string, protectedPath = blocked): boolean {
-  if (real === blocked || real.startsWith(blocked + '/')) return true;
+  if (real === blocked || real.startsWith(blocked + '/') || real.startsWith(blocked + '\\')) return true;
   if (!isCaseInsensitiveFs(protectedPath)) return false;
 
   const r = real.toLowerCase();
   const b = blocked.toLowerCase();
-  return r === b || r.startsWith(b + '/');
+  return r === b || r.startsWith(b + '/') || r.startsWith(b + '\\');
 }
 
 /** Whether a normalized bash command line mentions a protected path. */

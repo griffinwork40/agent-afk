@@ -35,6 +35,10 @@
 import { createHash } from 'crypto';
 import type { DetectorResult, FailureEvidence, Severity } from '../../schemas.js';
 import type { SessionRead } from '../reader.js';
+import {
+  READ_DENYLIST_ENTRY_MARKER,
+  PROTECTED_CREDENTIAL_PATH_MARKER,
+} from '../../../agent/tools/handlers/read-denylist.js';
 
 /** Default minimum read-denials sharing a normalized reason before a card fires. */
 export const DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES = 2;
@@ -110,8 +114,8 @@ export type DenialMechanism = 'read-root-containment' | 'credential-floor' | 'un
  */
 export function classifyDenialMechanism(reason: string): DenialMechanism {
   const isFloor =
-    reason.includes('read-denylist entry:') ||
-    reason.includes('is a protected credential/secret path');
+    reason.includes(READ_DENYLIST_ENTRY_MARKER) ||
+    reason.includes(PROTECTED_CREDENTIAL_PATH_MARKER);
   if (isFloor) return 'credential-floor';
 
   const isContainment =

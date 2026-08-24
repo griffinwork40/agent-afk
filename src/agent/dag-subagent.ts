@@ -11,6 +11,7 @@
 
 import type { ZodType } from 'zod';
 import type { AgentModelInput, CanUseTool, IAgentSession } from './types.js';
+import type { ModelProvider } from './provider.js';
 import type { SubagentManager } from './subagent.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
 import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
@@ -77,6 +78,17 @@ export interface SubagentDAGNode {
    * layers disagree deliberately.
    */
   maxToolUseIterations?: number;
+  /**
+   * Optional pre-built provider for this node's subagent session. When set,
+   * forwarded directly into the fork config as `AgentConfig.provider` so the
+   * node's `AgentSession` uses this provider instead of falling back to bare
+   * `resolveProvider`. Used by compose-executor to thread a workspace-aware
+   * provider ({@link buildComposeNodeProvider}) onto each DAG node when the
+   * parent session has a `workspaceStore` — ensuring nodes can call
+   * `workspace_publish` / `workspace_query` even though compose nodes never
+   * receive a `childProviderFactory`.
+   */
+  provider?: ModelProvider;
 }
 
 export interface SubagentDAGOptions {
@@ -174,6 +186,12 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
           ...(spec.maxToolUseIterations !== undefined
             ? { maxToolUseIterations: spec.maxToolUseIterations }
             : {}),
+          // Workspace provider: when present, the compose executor has built a
+          // workspace-aware provider via buildComposeNodeProvider so that this
+          // node can call workspace_publish / workspace_query. Without it the
+          // node's AgentSession falls back to bare resolveProvider which never
+          // carries workspaceStore, silently stripping both tools from the schema.
+          ...(spec.provider !== undefined ? { provider: spec.provider } : {}),
           // Invariant: a DAG node has a SECOND wall-clock enforcer that does not
           // route through `agent/timeout.ts` — runDAG arms its own per-node
           // `setTimeout` (dag.ts) and cascades expiry into `handle.cancel()`

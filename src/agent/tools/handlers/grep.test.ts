@@ -342,15 +342,14 @@ describe('grepHandler', () => {
     });
 
     // Regression: V8 max-string-length crash (RangeError: Invalid string
-    // length). The accumulator is bounded at HARD_CAP_BYTES (8MB) and the
-    // child is SIGKILL'd when combined output crosses it — a genuine-runaway
-    // guard (an unconstrained recursive search across `node_modules`). We
-    // exercise it with >8MB of matching output so the mid-stream kill fires
-    // and emits the hard-cap sentinel; the model-facing view is reduced to a
-    // ~100KB head+tail regardless.
+    // length). Output now streams through a bounded head+tail collector, so
+    // the retained string never exceeds the model budget no matter how much
+    // ripgrep emits — the crash is structurally unreachable rather than
+    // guarded by a kill. 10MB of matches is far above the model budget but
+    // far below SCAN_CAP_BYTES, so the search must RUN TO COMPLETION (no
+    // sentinel) and report the true totals it was reduced from.
     it('handles matching output orders of magnitude above the cap (V8 overflow guard)', async () => {
-      // ~10MB of matching content: 10,000 lines × ~1010 bytes/line — well
-      // past the 8MB hard cap.
+      // ~10MB of matching content: 10,000 lines × ~1010 bytes/line.
       const largeLine = 'hello ' + 'x'.repeat(1000);
       const lines = Array(10_000).fill(largeLine).join('\n');
       writeFileSync(join(tempDir, 'huge.txt'), lines);
@@ -363,33 +362,36 @@ describe('grepHandler', () => {
       const elapsedMs = Date.now() - start;
 
       expect(result.isError).toBeFalsy();
-      // Head+tail model view (≤100KB) plus the short hard-cap kill sentinel.
+      // Bounded head+tail model view (≤100KB) — the whole point of streaming.
       expect(result.content.length).toBeLessThanOrEqual(100_000 + 200);
-      expect(result.content).toContain('was terminated');
-      // Structured flag is the load-bearing signal for non-model
-      // consumers (subagent traces, hooks). Sentinel string remains for
-      // the model's in-band context — both must be set on the mid-stream
-      // kill path.
+      // Ran to completion: the scan-cap sentinel must NOT appear at 10MB.
+      expect(result.content).not.toContain('was terminated');
+      // Structured flag is the load-bearing signal for non-model consumers
+      // (subagent traces, hooks) and must still be set — bytes were elided.
       expect(result.truncated).toBe(true);
-      // Reading 8MB off the pipe is sub-second; 5s is generous for CI load
-      // but discriminates from a "ran the full scan to completion" path.
+      // Honesty property: a bounded view states the true total it came from,
+      // so an agent cannot mistake 100KB of matches for the complete set.
+      const reported = /(\d+) matching lines total/.exec(result.content);
+      expect(reported).not.toBeNull();
+      expect(Number(reported![1])).toBeGreaterThanOrEqual(9_990);
       expect(elapsedMs).toBeLessThan(5_000);
     }, 30_000);
 
-    // Companion proof-of-kill test: two files, each on its own larger than
-    // the 8MB hard cap. The mid-stream kill fires while grep is still
-    // emitting matches from whichever file it opened first, so that file's
-    // content is (partially) captured and the other is never reached.
+    // Companion completion test — the inverse of the assertion this test
+    // originally made. Under the old accumulate-then-kill design the SIGKILL
+    // fired at 8MB mid-traversal, so exactly ONE of the two 9MB files could
+    // appear and the other was never opened. Streaming removes that ceiling:
+    // 18MB is under SCAN_CAP_BYTES, so the traversal completes and BOTH files
+    // are seen — the head retains the file rg opened first, the sliding tail
+    // retains the one it finished on. Both markers appearing is now the
+    // discriminating signal that no premature kill occurred.
     //
-    // F3: assertions are order-agnostic. `grep -r` traversal order is
-    // filesystem-dependent — BSD grep on macOS uses readdir() inode order,
-    // not lexical — so we cannot rely on first.txt being read before
-    // second.txt. Instead we assert "exactly one of {hello a, hello b}
-    // appears" — preserving the discriminating signal (kill fired
-    // mid-traversal) without depending on which file grep opened first.
-    it('mid-stream hard cap: kills grep mid-traversal, capturing only one file (V8 overflow guard)', async () => {
+    // F3 (retained): assertions stay order-agnostic. Traversal order is
+    // filesystem-dependent, so we assert both are present rather than which
+    // one landed in the head.
+    it('streams past the old 8MB ceiling and completes the full traversal', async () => {
       const aLine = 'hello a' + 'x'.repeat(993); // ~1001 bytes/line
-      const firstContent = Array(9000).fill(aLine).join('\n'); // ~9MB > 8MB cap
+      const firstContent = Array(9000).fill(aLine).join('\n'); // ~9MB
       writeFileSync(join(tempDir, 'first.txt'), firstContent);
 
       const bLine = 'hello b' + 'x'.repeat(993);
@@ -404,20 +406,35 @@ describe('grepHandler', () => {
       const elapsedMs = Date.now() - start;
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('was terminated');
+      expect(result.content).not.toContain('was terminated');
       expect(result.truncated).toBe(true);
+      // Memory stayed bounded across an 18MB stream.
+      expect(result.content.length).toBeLessThanOrEqual(100_000 + 200);
 
-      const hasA = result.content.includes('hello a');
-      const hasB = result.content.includes('hello b');
-      // Exactly one file's content survived — the kill fired before grep
-      // finished the first file and opened the second. If both appear, the
-      // mid-stream guard never fired; if neither, the sentinel assertion
-      // above would also have failed.
-      expect(hasA || hasB).toBe(true);
-      expect(hasA && hasB).toBe(false);
-      // Killed after ~8MB, well before a full scan of both 9MB files.
+      // Both files were reached — head holds one, sliding tail holds the
+      // other. Under the old mid-stream kill, exactly one could appear.
+      expect(result.content).toContain('hello a');
+      expect(result.content).toContain('hello b');
       expect(elapsedMs).toBeLessThan(5_000);
     }, 30_000);
+
+    // The surviving kill path. SCAN_CAP_BYTES bounds WORK, not memory, so it
+    // sits far above any legitimate search; this proves a true runaway still
+    // terminates and is still flagged.
+    it('SIGKILLs a genuine runaway above the scan ceiling', async () => {
+      // The production ceiling is 256MB; injecting a small one exercises the
+      // same kill path without writing a multi-hundred-MB fixture.
+      const line = 'hello ' + 'x'.repeat(100);
+      writeFileSync(join(tempDir, 'runaway.txt'), Array(5_000).fill(line).join('\n'));
+
+      const handler = createGrepHandler(tempDir, { scanCapBytes: 100_000 });
+      const result = await handler({ pattern: 'hello', path: tempDir }, createSignal());
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('was terminated');
+      expect(result.truncated).toBe(true);
+      expect(result.content.length).toBeLessThanOrEqual(100_000 + 200);
+    }, 60_000);
   });
 
   describe('input validation', () => {

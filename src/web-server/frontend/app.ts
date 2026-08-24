@@ -49,6 +49,9 @@ let pendingTimer: ReturnType<typeof setInterval> | undefined;
  */
 let turnActive = false;
 
+/** True while the SSE transport is in a reconnecting state. */
+let sseReconnecting = false;
+
 function $(id: string): HTMLElement {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing #${id}`);
@@ -139,12 +142,14 @@ async function loadSessions(): Promise<void> {
 
 function selectSession(id: string): void {
   activeId = id;
+  const snapshotId = id;
   items = [];
   panel().clear();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
   stream?.stop();
 
   turnActive = false;
+  sseReconnecting = false;
   renderSidebar($('sessions'), sessions, activeId, selectSession);
   renderTranscript($('transcript'), items);
   syncComposer();
@@ -152,6 +157,7 @@ function selectSession(id: string): void {
 
   stream = new SessionStream(id, token, {
     onEvent: (data) => {
+      if (activeId !== snapshotId) return;
       const frame = data as { record?: LedgerRecordLike };
       const record = frame.record;
       if (!record) return;
@@ -180,6 +186,7 @@ function selectSession(id: string): void {
       renderMeter();
     },
     onStatus: (status) => {
+      if (activeId !== snapshotId) return;
       const node = $('status');
       // Report the session's end honestly. 'ended' means the ledger reached its
       // terminal record and no further frame can arrive, so the indicator must
@@ -189,6 +196,10 @@ function selectSession(id: string): void {
       node.textContent = status === 'ended' ? 'session ended' : status;
       node.className = `status status-${status}`;
       if (status === 'ended') turnActive = false;
+      // Disable the composer while the transport is reconnecting so prompts
+      // cannot be submitted against a broken stream.
+      sseReconnecting = status === 'reconnecting' || status === 'connecting';
+      syncComposer();
       syncStop();
     },
   });
@@ -207,17 +218,24 @@ function renderMeter(): void {
  * readonly session. Those sessions run in another OS process whose elicitation
  * handler is unreachable from here, so an enabled button would be one that can
  * never resolve — the server enforces the same boundary with a 409.
+ *
+ * Additionally, the composer is disabled while the SSE transport is reconnecting
+ * so a queued prompt cannot be sent against a broken stream.
  */
 function syncComposer(): void {
   const live = isLive();
   const input = $('prompt') as HTMLTextAreaElement;
   const send = $('send') as HTMLButtonElement;
-  input.disabled = !live;
-  send.disabled = !live;
-  input.placeholder = live
-    ? 'Message the agent…  (queues while it works)'
-    : 'Read-only — this session runs in another process';
+  const blocked = !live || sseReconnecting;
+  input.disabled = blocked;
+  send.disabled = blocked;
+  input.placeholder = !live
+    ? 'Read-only — this session runs in another process'
+    : sseReconnecting
+      ? 'Reconnecting…'
+      : 'Message the agent…  (queues while it works)';
   $('composer').classList.toggle('is-readonly', !live);
+  $('composer').classList.toggle('is-reconnecting', live && sseReconnecting);
 }
 
 /**
@@ -242,12 +260,14 @@ async function createSession(): Promise<void> {
   const button = $('new-session') as HTMLButtonElement;
   button.disabled = true;
   button.textContent = 'starting…';
+  const snapshotId = activeId;
   try {
     const { session } = await api<{ session: { id: string } }>('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({}),
     });
     await loadSessions();
+    if (activeId !== snapshotId && activeId !== session.id) return;
     selectSession(session.id);
   } catch (err: unknown) {
     $('status').textContent = err instanceof Error ? err.message : 'could not start session';
@@ -272,6 +292,7 @@ async function pollPending(): Promise<void> {
     next.pending.some((p, i) => p.id !== pending[i]?.id);
   pending = next.pending;
   if (changed) renderApprovals($('approvals'), pending, answerApproval);
+  document.title = pending.length > 0 ? `(${pending.length}) afk web` : 'afk web';
 }
 
 /**
@@ -303,10 +324,19 @@ function answerApproval(id: string, answer: ApprovalAnswer): void {
 
 async function stopTurn(): Promise<void> {
   if (activeId === undefined) return;
-  await api(`/api/sessions/${encodeURIComponent(activeId)}/interrupt`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  });
+  const stopBtn = $('stop') as HTMLButtonElement;
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping…';
+  try {
+    await api(`/api/sessions/${encodeURIComponent(activeId)}/interrupt`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    stopBtn.disabled = false;
+    stopBtn.textContent = 'Stop';
+    throw err;
+  }
 }
 
 async function main(): Promise<void> {

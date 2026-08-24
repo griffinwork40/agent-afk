@@ -1007,6 +1007,15 @@
       "category": "debug"
     },
     {
+      "name": "AFK_WORKSPACE_DISABLED",
+      "description": "Disable the shared agent workspace (WorkspaceStore + workspace_publish/workspace_query tools + preamble injection). When set to 1, subagents do not get workspace tools and no workspace preamble is injected at fork time — each agent works in full isolation as before v5.133. Used as the control arm of the file-read deduplication A/B experiment. Default: workspace enabled (unset or 0).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_WORKTREE_AUTONAME",
       "description": "Auto-rename worktree branches based on the first user message in interactive mode. 1 = on (default), 0 = off.",
       "type": "boolean",
@@ -1101,6 +1110,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_XAI_GROK_CLIENT_VERSION",
+      "description": "Override the semver sent as x-grok-client-version to the xAI OAuth CLI chat proxy. Use only if the proxy raises its required Grok CLI version before agent-afk is updated; invalid values fall back to the official Grok Build version file or built-in compatible default.",
+      "type": "string",
+      "required": false,
+      "example": "1.0.6",
+      "category": "model"
+    },
+    {
       "name": "AFK_XAI_OAUTH_BASE_URL",
       "description": "Base URL for xAI SuperGrok / SuperGrok Heavy / X Premium+ OAuth inference. Default https://cli-chat-proxy.grok.com/v1 (subscription path). Some accounts work on https://api.x.ai/v1 with OAuth — override if needed. Distinct from AFK_XAI_BASE_URL (API-key mode).",
       "type": "string",
@@ -1131,6 +1148,13 @@
       "required": false,
       "category": "auth",
       "secret": true
+    },
+    {
+      "name": "APPDATA",
+      "description": "Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths.",
+      "type": "string",
+      "required": false,
+      "category": "process"
     },
     {
       "name": "ASCIINEMA_REC",
@@ -1227,6 +1251,13 @@
       "category": "process"
     },
     {
+      "name": "LOCALAPPDATA",
+      "description": "Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.).",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "NO_COLOR",
       "description": "Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output.",
       "type": "string",
@@ -1317,6 +1348,13 @@
       "type": "string",
       "required": false,
       "example": "/tmp/tmux-501/default,12345,0",
+      "category": "process"
+    },
+    {
+      "name": "USERPROFILE",
+      "description": "Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.",
+      "type": "string",
+      "required": false,
       "category": "process"
     },
     {

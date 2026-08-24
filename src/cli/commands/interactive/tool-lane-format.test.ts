@@ -464,20 +464,20 @@ describe('summarizeToolArgs — ask_question category-only summary', () => {
 });
 
 describe('formatToolLine — agent/Task/skill end-to-end (paren-balanced under truncation)', () => {
-  it('agent: full pipeline renders `→ agent(label) [subagent]` instead of raw JSON', () => {
+  it('agent: full pipeline renders `→ agent(label) [worker]` instead of raw JSON', () => {
     const args = JSON.stringify({ prompt: 'BUG 2 — fix spine narration' });
     const out = stripAnsi(formatToolLine('agent' + args));
     expect(out).toContain('agent(BUG 2 — fix spine narration)');
-    expect(out).toContain('[subagent]');
+    expect(out).toContain('[worker]');
     expect(out).not.toContain('"prompt"');
     expect(out).not.toContain('{');
   });
 
-  it('Task: full pipeline renders `→ Task(description) [subagent]`', () => {
+  it('Task: full pipeline renders `→ Task(description) [worker]`', () => {
     const args = JSON.stringify({ description: 'spine bug', prompt: 'long body' });
     const out = stripAnsi(formatToolLine('Task' + args));
     expect(out).toContain('Task(spine bug)');
-    expect(out).toContain('[subagent]');
+    expect(out).toContain('[worker]');
   });
 
   it('skill: full pipeline renders `◆ skill(name) [skill]`', () => {
@@ -490,8 +490,8 @@ describe('formatToolLine — agent/Task/skill end-to-end (paren-balanced under t
   it('agent: narrow maxWidth preserves the closing paren (bracket-pair-aware truncation)', () => {
     const args = JSON.stringify({ prompt: 'this is a very long prompt that will be clipped' });
     const out = stripAnsi(formatToolLine('agent' + args, 30));
-    // Must end with `) [subagent]` — the closing paren survives truncation
-    expect(out).toMatch(/…\) \[subagent\]$/);
+    // Must end with `) [worker]` — the closing paren survives truncation
+    expect(out).toMatch(/…\) \[worker\]$/);
   });
 });
 
@@ -868,13 +868,13 @@ describe('formatToolLine — web_scrape URL rendering', () => {
 
 describe('formatToolLine — bracket-pair preservation (Fix 4)', () => {
   it('never leaves an unmatched paren in Agent dispatch args at narrow widths', () => {
-    // At width 20 with `Agent(review) [subagent]`, the previous code
-    // produced `Agent(… [subagent]` — the closing `)` got eaten while
-    // the dispatch tag ` [subagent]` consumed the remaining budget.
+    // At width 20 with `Agent(review) [worker]`, the previous code
+    // produced `Agent(… [worker]` — the closing `)` got eaten while
+    // the dispatch tag ` [worker]` consumed the remaining budget.
     const result = stripAnsi(formatToolLine('Agent(review)', 20));
     expect(result).not.toMatch(/\(…(?! *\))/); // no `(…` without a matching `)` later
-    // Either `(review)` fits, or it collapses to `()` — but never unmatched.
-    expect(result).toMatch(/Agent(\(review\)|\(\))/);
+    // Full `(review)`, truncated `(r…)`, or collapsed `()` — but never unmatched.
+    expect(result).toMatch(/Agent\((review|r…)?\)/);
   });
 
   it('preserves closing paren on JSON-shape args (orchestrator agent dispatch)', () => {

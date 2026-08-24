@@ -103,6 +103,7 @@ describe('refreshEnvironmentDate', () => {
       buildStableSystemPrefix({
         toolBase: 'TOOL',
         memoryPrompt: 'MEM',
+        workspacePrompt: '',
         hotMemory: '',
         manifest: 'SKILLS',
         userSystem: 'OPERATOR',

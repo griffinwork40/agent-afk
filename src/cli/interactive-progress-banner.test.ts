@@ -93,7 +93,7 @@ describe('interactive REPL — progress banner rendering', () => {
       toolUses: 0,
       durationMs: 0,
     });
-    expect(strip(lines[0]!)).toContain('esc to interrupt · ctrl+b background');
+    expect(strip(lines[0]!)).toContain('esc to interrupt · ctrl+b to run in background');
     expect(lines).toHaveLength(1);
   });
 
@@ -117,7 +117,7 @@ describe('interactive REPL — progress banner rendering', () => {
       toolUses: 0,
       durationMs: 0,
     });
-    expect(strip(lines[0]!)).toContain('esc to interrupt · ctrl+b background');
+    expect(strip(lines[0]!)).toContain('esc to interrupt · ctrl+b to run in background');
   });
 
   it('hint trails all numeric stats', () => {

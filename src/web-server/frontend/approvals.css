@@ -11,10 +11,15 @@
   border-top: 1px solid var(--border); background: var(--bg-sunken);
   padding: 10px 16px; display: flex; flex-direction: column; gap: 8px;
   max-height: 42vh; overflow-y: auto;
+  position: sticky; bottom: 0; z-index: 5;
 }
 .approval-card {
   border: 1px solid var(--warning); border-radius: var(--radius);
   background: var(--bg-raised); padding: 11px 13px;
+}
+.approval-card--destructive {
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 5%, var(--bg-raised));
 }
 .approval-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-badge {
@@ -23,6 +28,9 @@
   border: 1px solid var(--warning); border-radius: 4px; padding: 1px 6px;
 }
 .approval-source { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.approval-time { font-family: var(--mono); font-size: 10px; color: var(--text-faint); margin-left: auto; }
+.approval-checkboxes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.approval-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer; }
 .approval-title { font-size: 13px; line-height: 1.5; color: var(--text); }
 .approval-desc { font-size: 12px; line-height: 1.5; color: var(--text-dim); margin-top: 4px; }
 .approval-input {

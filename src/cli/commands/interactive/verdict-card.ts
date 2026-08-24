@@ -27,6 +27,7 @@ import { displayWidth, padDisplayRight, truncateDisplayWidth } from '../../displ
 import { getTerminalWidth } from '../../terminal-size.js';
 import { renderCardLine } from '../../formatter.js';
 import { wrapToWidth } from '../../wrap.js';
+import { formatCost } from '../../format-utils.js';
 
 interface KindStyle {
   color: (s: string) => string;
@@ -72,6 +73,85 @@ const STYLES: Record<TerminalKind, KindStyle> = {
 };
 
 /**
+ * Optional performance/cost metadata to show inside the verdict card.
+ * All fields are optional — omit to render no stats line at all.
+ */
+export interface VerdictMeta {
+  durationMs?: number;
+  totalCostUsd?: number;
+  toolCount?: number;
+}
+
+/** Format milliseconds as a compact human-readable duration string. */
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`;
+}
+
+/**
+ * Build a compact dim stats string from VerdictMeta, or null when nothing
+ * is worth rendering (all fields absent or zero).
+ */
+function buildStatsLine(meta: VerdictMeta): string | null {
+  const parts: string[] = [];
+  if (meta.totalCostUsd !== undefined && meta.totalCostUsd > 0) {
+    parts.push(formatCost(meta.totalCostUsd));
+  }
+  if (meta.durationMs !== undefined && meta.durationMs > 0) {
+    parts.push(formatDuration(meta.durationMs));
+  }
+  if (meta.toolCount && meta.toolCount > 0) {
+    parts.push(`${meta.toolCount} ${meta.toolCount === 1 ? 'tool call' : 'tool calls'}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
+ * Derive a context-specific affordance string from the terminal state.
+ * Returns null to signal "use the static fallback from STYLES".
+ *
+ * Invariant: returned strings must be ASCII-only (same rule as STYLES
+ * affordances — see note at line 37). Use `...` for truncation, NOT `…`.
+ */
+function deriveAffordance(state: TerminalState, innerW: number): string | null {
+  let prefix: string;
+  let body: string | undefined;
+
+  switch (state.kind) {
+    case 'done':
+      if (!state.evidence) return null;
+      prefix = 'Review: ';
+      body = state.evidence;
+      break;
+    case 'blocked':
+      if (!state.unblockCondition) return null;
+      prefix = 'Unblock: ';
+      body = state.unblockCondition;
+      break;
+    case 'asking':
+      if (!state.question) return null;
+      prefix = 'Answer: ';
+      body = state.question;
+      break;
+    case 'interrupted':
+      return null;
+  }
+
+  if (!body) return null;
+
+  const budget = innerW - prefix.length;
+  if (budget <= 0) return null;
+  const truncated =
+    displayWidth(body) > budget
+      ? truncateDisplayWidth(body, budget - 3) + '...'
+      : body;
+  return prefix + truncated;
+}
+
+/**
  * Render the terminal-state card. Returns a multi-line string (no trailing
  * newline) that the caller writes via the configured Writer / compositor.
  *
@@ -80,7 +160,7 @@ const STYLES: Record<TerminalKind, KindStyle> = {
  * "summary" row containing the trimmed raw body, so the card still carries
  * meaning rather than rendering as an empty chip.
  */
-export function renderVerdictCard(state: TerminalState): string {
+export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): string {
   const style = STYLES[state.kind];
 
   // Invariant: every rendered row is `innerW + 6` columns wide
@@ -112,17 +192,19 @@ export function renderVerdictCard(state: TerminalState): string {
   const lines: string[] = [top, blankRow];
 
   if (rows.length === 0) {
-    // No structured fields parsed. Item #9: synthesize a single-line summary
-    // from the first non-empty rawBody line rather than dumping all prose into
-    // the card — the card is a glance surface, not a prose viewer. The full
-    // assistant text is already in scrollback above this card.
-    //
-    // Using the first non-empty line (not the whole body) keeps the card
-    // compact on long unstructured responses (e.g. the model wrote a paragraph
-    // as its verdict body — a common failure mode when the system prompt isn't
-    // followed strictly). Full prose remains readable in scrollback.
-    const firstLine = state.rawBody.split('\n').find(l => l.trim().length > 0)?.trim() ?? '';
-    const summary = firstLine.length > 0 ? firstLine : `${state.kind} (no structured fields)`;
+    // No structured fields parsed — the model's bullets lacked the colon
+    // separator the parser needs, or it wrote free-form prose. Show up to
+    // MAX_FALLBACK_LINES non-empty body lines so the card still carries the
+    // substance of the verdict. Capping keeps the card from sprawling when the
+    // model wrote a long paragraph; the full text is always in scrollback.
+    const MAX_FALLBACK_LINES = 5;
+    const bodyLines = state.rawBody
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .slice(0, MAX_FALLBACK_LINES);
+    const summary =
+      bodyLines.length > 0 ? bodyLines.join('\n') : `${state.kind} (no structured fields)`;
     const wrapped = wrapToWidth(renderCardLine(summary), innerW).split('\n');
     for (const wl of wrapped) {
       lines.push(pipe + '  ' + padDisplayRight(wl, innerW) + '  ' + pipe);
@@ -144,9 +226,21 @@ export function renderVerdictCard(state: TerminalState): string {
   }
 
   lines.push(blankRow);
+
+  // Optional stats line — dim, compact, between the structured rows and the
+  // affordance. Skipped entirely when meta is absent or all fields are zero.
+  if (meta) {
+    const statsStr = buildStatsLine(meta);
+    if (statsStr) {
+      const statsLine = palette.dim(truncateDisplayWidth(statsStr, innerW));
+      lines.push(pipe + '  ' + padDisplayRight(statsLine, innerW) + '  ' + pipe);
+    }
+  }
+
   // Affordance row — dim, underneath the structured rows, before the bottom
   // border. This is the one line a user scanning the transcript needs.
-  const affordance = palette.dim(truncateDisplayWidth(style.affordance, innerW));
+  const affordanceText = deriveAffordance(state, innerW) ?? style.affordance;
+  const affordance = palette.dim(truncateDisplayWidth(affordanceText, innerW));
   lines.push(pipe + '  ' + padDisplayRight(affordance, innerW) + '  ' + pipe);
   lines.push(bot);
 
@@ -172,6 +266,7 @@ function collectRows(state: TerminalState): Row[] {
     case 'done':
       push('done', state.whatWasDone);
       push('evidence', state.evidence);
+      push('changed', state.whatChanged);
       // Skip a deferred row that merely echoes the done field — models
       // sometimes emit identical text for both, producing a confusing
       // duplicate row in the card.

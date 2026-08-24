@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**166 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**171 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -62,7 +62,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_THINKING` | string |  | `adaptive` | `adaptive` | Extended-thinking mode. Accepts adaptive \| disabled \| max \| enabled:<N> \| enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models). |
 | `AFK_TIMEOUT_MS` | number |  |  | `120000` | Per-turn timeout in milliseconds. Provider/SDK default if unset. |
 | `AFK_VISION_MODELS` | string |  |  | `qwen2.5-vl,!gpt-4o-mini` | Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. "qwen2.5-vl" matches a local VL id); prefix a token with "!" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families. |
+| `AFK_WORKSPACE_DISABLED` | boolean |  | `0` | `1` | Disable the shared agent workspace (WorkspaceStore + workspace_publish/workspace_query tools + preamble injection). When set to 1, subagents do not get workspace tools and no workspace preamble is injected at fork time — each agent works in full isolation as before v5.133. Used as the control arm of the file-read deduplication A/B experiment. Default: workspace enabled (unset or 0). |
 | `AFK_XAI_BASE_URL` | string |  |  | `https://api.x.ai/v1` | Base URL for xAI API-key mode. Default https://api.x.ai/v1. The OpenAI SDK appends /chat/completions. |
+| `AFK_XAI_GROK_CLIENT_VERSION` | string |  |  | `1.0.6` | Override the semver sent as x-grok-client-version to the xAI OAuth CLI chat proxy. Use only if the proxy raises its required Grok CLI version before agent-afk is updated; invalid values fall back to the official Grok Build version file or built-in compatible default. |
 | `AFK_XAI_OAUTH_BASE_URL` | string |  |  | `https://cli-chat-proxy.grok.com/v1` | Base URL for xAI SuperGrok / SuperGrok Heavy / X Premium+ OAuth inference. Default https://cli-chat-proxy.grok.com/v1 (subscription path). Some accounts work on https://api.x.ai/v1 with OAuth — override if needed. Distinct from AFK_XAI_BASE_URL (API-key mode). |
 | `CLAUDE_MODEL` | string |  |  | `sonnet` | Legacy alias for AFK_MODEL — supported for back-compat with pre-AFK_* deployments. |
 
@@ -185,6 +187,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_FORCE_BASH_INTERPRETER_GUARD` | boolean |  | `0` | `1` | Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open). |
 | `AFK_SHELL_WRAPPER` | boolean |  |  | `1` | Set to 1 or true by the optional afk shell wrapper function (installed via `afk shell-init`). Signals that the parent shell has the wrapper active so the post-exit cd can fire. |
 | `AGENT_SURFACE` | string |  |  | `cli` | Internal surface marker propagated to subprocesses. Identifies which AFK surface (cli, telegram, daemon) spawned the process. |
+| `APPDATA` | string |  |  |  | Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths. |
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |
 | `CI` | string |  |  | `true` | Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX. |
 | `COLORFGBG` | string |  |  | `15;0` | Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark. |
@@ -192,6 +195,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `EDITOR` | string |  |  | `vim` | Standard POSIX env var naming the user's preferred editor (with optional flags). Consulted by the /editor slash command AFTER VISUAL, as the standard fallback. No default editor is assumed when both are unset — /editor prints a hint telling the user to set one. |
 | `FORCE_COLOR` | string |  |  | `1` | Standard Node convention. Force-enable ANSI color output even when stdout is not a TTY. |
 | `HOME` | string |  |  |  | Standard Unix home directory. Used as the fallback when AFK_HOME is unset. |
+| `LOCALAPPDATA` | string |  |  |  | Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.). |
 | `NO_COLOR` | string |  |  | `1` | Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output. |
 | `NO_UPDATE_NOTIFIER` | boolean |  |  |  | Disable the update-available notifier on CLI startup. Standard convention shared with many Node CLIs. |
 | `NODE_ENV` | string |  |  | `production` | Standard Node environment marker. test \| development \| production. Used by routing-telemetry.ts to suppress test-time writes. |
@@ -200,6 +204,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
+| `USERPROFILE` | string |  |  |  | Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32. |
 | `VISUAL` | string |  |  | `nvim` | Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing. |
 | `VITEST` | string |  |  |  | Set automatically by Vitest. Used at runtime to short-circuit code paths that should not fire in tests. |
 

@@ -26,6 +26,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { killProcessGroup } from '../../utils/kill-process-group.js';
 
 /**
  * ANSI / VT escape sequence regex — strips:
@@ -343,11 +344,7 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     // insurance against ever turning a child-kill into a self-kill. (PR #565
     // review: N3.)
     if (proc.pid !== undefined && proc.pid !== 0 && !proc.killed) {
-      try {
-        process.kill(-proc.pid, 'SIGKILL');
-      } catch {
-        // Already dead; ignore. Process-group lookups race with normal exit.
-      }
+      killProcessGroup(proc.pid);
     }
   }
 
@@ -525,11 +522,9 @@ export function startShell(opts: StartShellOptions): ShellHandle {
       // pid !== 0 guard: never let -pid resolve to -0 (this process's group).
       if (proc.pid === undefined || proc.pid === 0 || proc.killed) return;
       killedByCaller = true;
-      try {
-        process.kill(-proc.pid, signal);
-      } catch {
-        // Process group already gone; close handler will still fire.
-      }
+      // Note: on Windows the `signal` argument is silently ignored — taskkill
+      // always force-kills the process tree regardless of which signal is passed.
+      killProcessGroup(proc.pid, signal);
     },
   };
 }

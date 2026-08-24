@@ -5,6 +5,8 @@
  * branches of the batch loop:
  *  - {@link runConcurrentBatch} — `isConcurrencySafe` wave-admission loop.
  *  - {@link runSequentialBatch} — sequential (concurrency-unsafe) loop.
+ *  - {@link reconcileOutcomes} — post-wave result writing from settled promises.
+ *  - {@link stampBatchMetadata} — batch-membership annotation on each result.
  *
  * Both functions receive their dispatcher-state dependencies through an explicit
  * {@link BatchExecDeps} object rather than through closure, so the concerns are
@@ -86,6 +88,106 @@ function checkRepeatGuard(
   return verdict.result;
 }
 
+/**
+ * Per-call execution unit dispatched by `settleWithConcurrencyLimit`.
+ *
+ * Performs the per-call abort check inline so a call whose signal fires
+ * AFTER the wave is admitted still produces a clean abort result rather
+ * than being dispatched to `executeCore`. Returns `{ result, originalIndex }`
+ * so `reconcileOutcomes` can write results back at the correct position in
+ * a way that is order-independent.
+ */
+async function executeCallUnit(
+  batchIdx: number,
+  executableCalls: readonly IndexedCall[],
+  executeCore: BatchExecDeps['executeCore'],
+): Promise<{ result: ToolResult; originalIndex: number }> {
+  const { call, originalIndex } = executableCalls[batchIdx]!;
+  if (call.signal.aborted) {
+    return {
+      result: {
+        content: 'Tool call aborted',
+        isError: true,
+        failureClass: abortFailureClass(call.signal),
+      } as ToolResult,
+      originalIndex,
+    };
+  }
+  const result = await executeCore(call);
+  return { result, originalIndex };
+}
+
+// ---------------------------------------------------------------------------
+// Exported post-execution helpers (used by executeBatch in dispatcher.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write settled promise results back into the shared `results` array.
+ *
+ * Each fulfilled entry writes `value.result` at `value.originalIndex`.
+ * Each rejected entry constructs an error result; the original index is
+ * recovered via `wave[settled.indexOf(outcome)]` (rejection carries no payload
+ * by design — `executeCore` catches internally, so rejections are unexpected
+ * safety-net paths only).
+ *
+ * Invariant: `executeCore` never rejects today; this function retains the
+ * safety net for a future refactor that permits a rejection to escape.
+ *
+ * @internal Called only by {@link runConcurrentBatch}.
+ */
+export function reconcileOutcomes(
+  settled: PromiseSettledResult<{ result: ToolResult; originalIndex: number }>[],
+  wave: readonly number[],
+  executableCalls: readonly IndexedCall[],
+  results: ToolResult[],
+): void {
+  for (const outcome of settled) {
+    if (outcome.status === 'fulfilled') {
+      results[outcome.value.originalIndex] = outcome.value.result;
+    } else {
+      const msg =
+        outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+      const batchIdx = wave[settled.indexOf(outcome)]!;
+      results[executableCalls[batchIdx]!.originalIndex] = {
+        content: `Tool execution error: ${msg}`,
+        isError: true,
+      };
+    }
+  }
+}
+
+/**
+ * Stamp batch-membership metadata onto each result in `batch.indices`.
+ *
+ * Downstream consumers (TUI tool-lane render + `tool_call` completed trace
+ * event) use `batchIndex`/`batchSize` to distinguish a genuine parallel wave
+ * from back-to-back sequential dispatches — which are otherwise
+ * indistinguishable once a fast root commits to scrollback ahead of a slow one.
+ * 1-based `batchIndex` = ordinal within the batch; `batchSize` = number of
+ * calls dispatched together. A concurrency-unsafe tool (bash, write_file, …)
+ * is always its own singleton batch, so it lands `batchSize=1` and is never
+ * badged. Blocked / short-circuited calls are excluded from `executableCalls`,
+ * so they correctly carry no batch info at all.
+ *
+ * @internal Called by {@link SessionToolDispatcher.executeBatch} after each
+ *   batch's execution branch completes.
+ */
+export function stampBatchMetadata(
+  batch: Batch,
+  executableCalls: readonly IndexedCall[],
+  results: ToolResult[],
+): void {
+  const batchSize = batch.indices.length;
+  for (let pos = 0; pos < batch.indices.length; pos++) {
+    const batchIdx = batch.indices[pos]!;
+    const r = results[executableCalls[batchIdx]!.originalIndex];
+    if (r) {
+      r.batchIndex = pos + 1;
+      r.batchSize = batchSize;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Concurrent branch
 // ---------------------------------------------------------------------------
@@ -158,38 +260,10 @@ export async function runConcurrentBatch(
     const settled = await settleWithConcurrencyLimit(
       wave,
       deps.maxConcurrentSafeCalls,
-      async (batchIdx) => {
-        const { call, originalIndex } = executableCalls[batchIdx]!;
-        if (call.signal.aborted) {
-          return {
-            result: {
-              content: 'Tool call aborted',
-              isError: true,
-              failureClass: abortFailureClass(call.signal),
-            } as ToolResult,
-            originalIndex,
-          };
-        }
-        const result = await deps.executeCore(call);
-        return { result, originalIndex };
-      },
+      (batchIdx) => executeCallUnit(batchIdx, executableCalls, deps.executeCore),
     );
 
-    for (const outcome of settled) {
-      if (outcome.status === 'fulfilled') {
-        results[outcome.value.originalIndex] = outcome.value.result;
-      } else {
-        // Invariant: executeCore catches today; retain this safety net
-        // for a future refactor that permits a rejection to escape.
-        const msg =
-          outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
-        const batchIdx = wave[settled.indexOf(outcome)]!;
-        results[executableCalls[batchIdx]!.originalIndex] = {
-          content: `Tool execution error: ${msg}`,
-          isError: true,
-        };
-      }
-    }
+    reconcileOutcomes(settled, wave, executableCalls, results);
 
     // Apply observations only after every handler settles, and in the
     // batch's original call order rather than completion order.

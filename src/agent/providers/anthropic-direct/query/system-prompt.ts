@@ -22,6 +22,8 @@ import { formatEnvironmentFragment, type RuntimeStateSource } from '../../../awa
 export interface StableSystemPromptInputs {
   toolBase: string;
   memoryPrompt: string;
+  /** Workspace usage instructions; empty string when workspace is disabled. */
+  workspacePrompt: string;
   /**
    * `<cross-session-memory>` hot-memory block (project context); empty string
    * when none. Placed in the cross-session-memory region, after `memoryPrompt`.
@@ -68,12 +70,13 @@ export interface EnvironmentIdentity {
  * cwd-dependent `# Environment` fragment, joined by blank lines.
  *
  * Order (see the module Invariant):
- *   1. `toolBase`     — tool/runtime conventions
- *   2. `userSystem`   — `# Agent AFK` doctrine + operator overlay + directives
- *   3. `memoryPrompt` — cross-session-memory instructions
- *   4. `hotMemory`    — `<cross-session-memory>` project-context block
- *   5. `# Environment`— cwd/session/workspace (recomputed per cwd)
- *   6. `manifest`     — skill/agent catalog
+ *   1. `toolBase`        — tool/runtime conventions
+ *   2. `userSystem`      — `# Agent AFK` doctrine + operator overlay + directives
+ *   3. `memoryPrompt`    — cross-session-memory instructions
+ *   4. `workspacePrompt` — shared-workspace usage instructions (when enabled)
+ *   5. `hotMemory`       — `<cross-session-memory>` project-context block
+ *   6. `# Environment`   — cwd/session/workspace (recomputed per cwd)
+ *   7. `manifest`        — skill/agent catalog
  * Optional parts (`userSystem`, `hotMemory`, `manifest`) are skipped when
  * empty; `# Environment` is inserted before `manifest` by name rather than a
  * fixed index, so it stays correctly positioned regardless of which optional
@@ -101,6 +104,7 @@ export function assembleSystemPrompt(
   const ordered: string[] = [parts.toolBase];
   if (parts.userSystem) ordered.push(parts.userSystem);
   ordered.push(parts.memoryPrompt);
+  if (parts.workspacePrompt.length > 0) ordered.push(parts.workspacePrompt);
   if (parts.hotMemory.length > 0) ordered.push(parts.hotMemory);
   ordered.push(environment);
   if (parts.manifest.length > 0) ordered.push(parts.manifest);

@@ -17,6 +17,7 @@ import { BackgroundJobCapError, type BackgroundAgentRegistry, type BackgroundJob
 import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
+import { teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -35,6 +36,14 @@ export interface RunBackgroundBranchArgs {
    * `currentWaveId` before the job finishes (#1083).
    */
   onSettled?: (isError: boolean) => void;
+  /**
+   * Optional post-terminal cleanup. Forwarded to the registry so markTerminal()
+   * runs it after handle.teardown(). Used by isolation:"worktree" to unlock +
+   * tear down the child's worktree.
+   */
+  onCleanup?: () => Promise<void>;
+  /** Worktree lock to release when registration fails before onCleanup owns it. */
+  isolationTeardown?: { repoRoot: string; worktreePath: string };
 }
 
 /**
@@ -56,13 +65,19 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId, onSettled } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled, onCleanup, isolationTeardown } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
     await handle.teardown().catch((e: unknown) =>
       debugLog('subagent-executor: handle teardown failed: ' + (e instanceof Error ? e.message : String(e))),
     );
+    // Unlock + tear down the isolated worktree — no registry means no
+    // markTerminal and no onCleanup, so this is the only cleanup path.
+    if (isolationTeardown) {
+      await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
+        debugLog(`[isolation] background worktree teardown failed (no registry): ${String(e)}`));
+    }
     onSettled?.(true);
     return {
       content:
@@ -77,7 +92,9 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       handle,
       prompt,
       model: model ?? 'sonnet',
+      provenance: 'model',
       parentSessionId,
+      onCleanup,
     });
   } catch (e) {
     if (e instanceof BackgroundJobCapError) {
@@ -85,11 +102,26 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       await handle.teardown().catch((te: unknown) =>
         debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),
       );
+      // Unlock + tear down the isolated worktree — cap rejection means no
+      // registry entry, so markTerminal/onCleanup will never fire.
+      if (isolationTeardown) {
+        await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>
+          debugLog(`[isolation] background worktree teardown failed (cap error): ${String(te)}`));
+      }
       onSettled?.(true);
       return {
         content: e.message,
         isError: true,
       };
+    }
+    // Any other registration failure: clean up the orphaned handle + worktree
+    // before rethrowing. Without this, a locked worktree leaks permanently.
+    await handle.teardown().catch((te: unknown) =>
+      debugLog('subagent-executor: handle teardown failed after register error: ' + (te instanceof Error ? te.message : String(te))),
+    );
+    if (isolationTeardown) {
+      await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>
+        debugLog(`[isolation] background worktree teardown failed (register error): ${String(te)}`));
     }
     throw e;
   }

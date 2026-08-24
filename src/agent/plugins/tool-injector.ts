@@ -9,11 +9,30 @@
  * @module agent/plugins/tool-injector
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, opendirSync, readFileSync, statSync } from 'fs';
 import { normalizeSkillSource } from './source-guard.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
+import { _registerScanCacheResetHook } from '../plugins-scanner.js';
+
+/** Depth cap — cycle/runaway guard. Matches `command-files.ts`. */
+const MAX_DEPTH = 10;
+/** Total-entry breadth cap — prevents large flat dirs from blocking the event loop. */
+const MAX_ENTRIES = 1000;
+
+/**
+ * Cache for `extractPluginSkills`, keyed by plugin path and the tool-name
+ * context used to normalize `allowedTools`. Called twice per discovery pass
+ * (buildSkillManifest + discoverPluginSkillBodies); the second call is O(1).
+ * Cleared by `_resetPluginScanCache` via the hook below.
+ */
+const skillCache = new Map<string, PluginSkillMetadata[]>();
+_registerScanCacheResetHook(() => skillCache.clear());
+
+function skillCacheKey(pluginPath: string, knownToolNames?: ReadonlySet<string>): string {
+  return JSON.stringify([pluginPath, knownToolNames === undefined ? null : [...knownToolNames].sort()]);
+}
 
 /**
  * Metadata extracted from a skill's SKILL.md frontmatter, plus the body.
@@ -210,20 +229,31 @@ export function extractPluginSkills(
   pluginPath: string,
   knownToolNames?: ReadonlySet<string>,
 ): PluginSkillMetadata[] {
+  const cacheKey = skillCacheKey(pluginPath, knownToolNames);
+  const cached = skillCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const skills: PluginSkillMetadata[] = [];
+  let totalEntries = 0;
 
   function walkDirectory(dir: string, depth: number = 0): void {
-    if (depth > 10) return; // Prevent infinite recursion
+    if (depth > MAX_DEPTH) return;
+    if (totalEntries >= MAX_ENTRIES) return;
     if (!existsSync(dir)) return;
 
-    let entries: string[];
+    let directory;
     try {
-      entries = readdirSync(dir);
+      directory = opendirSync(dir);
     } catch {
       return;
     }
 
-    for (const name of entries) {
+    try {
+      while (totalEntries < MAX_ENTRIES) {
+        const dirent = directory.readSync();
+        if (dirent === null) break;
+        totalEntries++;
+        const name = dirent.name;
       if (name.startsWith('.')) continue;
       const fullPath = join(dir, name);
 
@@ -242,10 +272,14 @@ export function extractPluginSkills(
       } else if (stat.isDirectory()) {
         walkDirectory(fullPath, depth + 1);
       }
+      }
+    } finally {
+      directory.closeSync();
     }
   }
 
   walkDirectory(pluginPath);
+  skillCache.set(cacheKey, skills);
   return skills;
 }
 
@@ -418,7 +452,7 @@ export function resolveKnownToolNames(
  * @returns Plugin name derived from the path
  */
 export function extractPluginName(pluginPath: string): string {
-  const parts = pluginPath.split('/').filter(Boolean);
+  const parts = pluginPath.split(/[/\\]/).filter(Boolean);
   if (parts.length === 0) return 'unknown';
 
   // Marketplace cache layout: ~/.afk/plugins/cache/<marketplace>/<plugin>/<version>

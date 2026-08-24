@@ -20,6 +20,7 @@ import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
 import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
 import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
+import { resolveActiveRouteForChat } from './session-manager.active-route.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -242,6 +243,8 @@ export class SessionManager {
       const config: AgentConfig = {
         model: data.model,
         apiKey: this.options.apiKey,
+        telegramChatId: route.chatId,
+        ...(route.threadId !== undefined ? { telegramThreadId: route.threadId } : {}),
       };
       if (this.options.settingSources?.length) {
         config.settingSources = this.options.settingSources;
@@ -259,7 +262,6 @@ export class SessionManager {
       if (effectiveCwd !== undefined && effectiveCwd.length > 0) {
         config.cwd = effectiveCwd;
       }
-
       // /switch: continue a staged prior conversation instead of starting fresh.
       // Consumed after a successful build below — a failed createSession leaves it
       // staged so the next getSession retries the resume; teardown via _resetStats
@@ -891,25 +893,45 @@ export class SessionManager {
   async closeAll(): Promise<void> {
     this._evictStaleSessionData();
     await this.saveSessions();
-    const closePromises = Array.from(this.sessions.values()).map(
+    await Promise.all(Array.from(this.sessions.values()).map(
       session => session.close().catch(err => console.error('Error closing session:', err))
-    );
-    await Promise.all(closePromises);
+    ));
     this.sessions.clear();
   }
 
-  /**
-   * Get total number of active sessions
-   */
-  getSessionCount(): number {
-    return this.sessions.size;
-  }
+  /** Get total number of active sessions */
+  getSessionCount(): number { return this.sessions.size; }
+
+  /** Get total number of tracked chats */
+  getChatCount(): number { return this.sessionData.size; }
 
   /**
-   * Get total number of tracked chats
+   * Return the most recently active topic thread id for a given chat, or
+   * `undefined` when the chat has no topic sessions (non-topic chat, or all
+   * sessions belong to General).
+   *
+   * Used by the auto-subscribe loop to route watch output to the correct topic
+   * thread without an inbound message context. The lookup scans `sessionData`
+   * (in-memory, populated from disk on start) for all entries that share
+   * `chatId` and carry a `threadId`, then picks the entry with the most-recent
+   * `lastActivity` timestamp.
+   *
+   * Backward-compatible: returns `undefined` for any chat that has never used
+   * Telegram topics, leaving the downstream `sendOptions` call equivalent to
+   * the pre-fix General-only behaviour.
+   *
+   * @param chatId - Telegram chat id to look up
+   * @returns The most recently active topic thread id for this chat, or `undefined`
    */
-  getChatCount(): number {
-    return this.sessionData.size;
+  getActiveThreadId(chatId: number): number | undefined {
+    let best: SessionData | undefined;
+    for (const data of this.sessionData.values()) {
+      if (data.chatId !== chatId || data.threadId === undefined) continue;
+      if (best === undefined || data.lastActivity > best.lastActivity) {
+        best = data;
+      }
+    }
+    return best?.threadId;
   }
 
   /**
@@ -931,4 +953,11 @@ export class SessionManager {
     }
     return busy;
   }
+
+  /**
+   * Return the most recently active route for a given chatId, or `undefined`
+   * when no session data exists for that chat. Delegates to the extracted
+   * `resolveActiveRouteForChat` helper (session-manager.active-route.ts).
+   */
+  getActiveRouteForChat(chatId: number): TelegramRoute | undefined { return resolveActiveRouteForChat(this.sessionData.values(), chatId); }
 }

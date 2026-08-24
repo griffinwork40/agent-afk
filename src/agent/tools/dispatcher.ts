@@ -53,8 +53,13 @@ import {
   type SuspectedLoopWindow,
 } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
-import { runConcurrentBatch, runSequentialBatch } from './dispatcher.batch-process.js';
+import {
+  runConcurrentBatch,
+  runSequentialBatch,
+  stampBatchMetadata,
+} from './dispatcher.batch-process.js';
 import type { IndexedCall, BatchExecDeps } from './dispatcher.batch-process.js';
+import { executeSubagentProviderTool, isSubagentProviderTool } from './dispatcher.subagent-tools.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -546,10 +551,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
+    const available = this.subagentExecutor?.supportsBackgroundJobs?.()
+      ? this.schemas
+      : this.schemas.filter((schema) => schema.name !== 'cancel_background_job');
     const allowed = this.permissions?.allowedTools;
-    if (!allowed) return this.schemas;
+    if (!allowed) return available;
     const set = new Set(allowed);
-    return this.schemas.filter((s) => set.has(s.name));
+    return available.filter((s) => set.has(s.name));
   }
 
   /**
@@ -592,6 +600,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     return (
       this.handlers.has(toolName) ||
       (toolName === 'agent' && this.subagentExecutor !== undefined) ||
+      (toolName === 'cancel_background_job' && this.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
       (toolName === 'skill' && this.skillExecutor !== undefined) ||
       (toolName === 'compose' && this.composeExecutor !== undefined)
     );
@@ -1078,25 +1087,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
         await runSequentialBatch(batch, executableCalls, results, batchDeps);
       }
 
-      // Stamp batch membership onto each result so downstream consumers
-      // (TUI tool-lane render + `tool_call` completed trace event) can tell a
-      // genuine parallel wave apart from back-to-back sequential dispatches —
-      // which are otherwise indistinguishable once a fast root commits to
-      // scrollback ahead of a slow one. 1-based `batchIndex` = ordinal within
-      // the batch; `batchSize` = number of calls dispatched together. A
-      // concurrency-unsafe tool (bash, write_file, …) is always its own
-      // singleton batch, so it lands batchSize=1 and is never badged. Blocked
-      // / short-circuited calls (permission, read-only-bash gate, circuit
-      // breaker) are excluded from `executableCalls`, so they correctly carry
-      // no batch info at all.
-      const batchSize = batch.indices.length;
-      batch.indices.forEach((batchIdx, pos) => {
-        const r = results[executableCalls[batchIdx]!.originalIndex];
-        if (r) {
-          r.batchIndex = pos + 1;
-          r.batchSize = batchSize;
-        }
-      });
+      // Stamp batch membership onto each result. See stampBatchMetadata in
+      // dispatcher.batch-process.ts for full rationale and field semantics.
+      stampBatchMetadata(batch, executableCalls, results);
     }
 
     // Reset-on-success (#546): if any call in this batch executed successfully,
@@ -1175,30 +1168,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * whatever result this returns.
    */
   private async executeCoreInner(call: ToolCall): Promise<ToolResult> {
-    // Agent tool — provider-level dispatch
-    if (call.name === 'agent') {
-      if (!this.subagentExecutor) {
-        return {
-          content: 'Agent tool is not available in this session configuration',
-          isError: true,
-        };
-      }
-      let result: ToolResult;
-      let agentThrew = false;
-      let agentErrMsg = '';
-      try {
-        result = await this.subagentExecutor.execute(call);
-      } catch (err) {
-        agentThrew = true;
-        agentErrMsg = err instanceof Error ? err.message : String(err);
-        result = { content: `Agent tool error: ${agentErrMsg}`, isError: true };
-      }
-      if (agentThrew) {
-        this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
+    // Agent dispatch and model cancellation share the provider-level executor.
+    if (isSubagentProviderTool(call.name)) {
+      const outcome = await executeSubagentProviderTool(this.subagentExecutor, call);
+      if (outcome.thrownMessage !== undefined) {
+        this.firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, call.input);
       } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input, result);
+        this.firePostToolUse(call.name, outcome.result.content, call.signal, call.input, outcome.result);
       }
-      return result;
+      return outcome.result;
     }
 
     // Skill tool — provider-level dispatch
