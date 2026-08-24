@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.148.0] - 2026-08-24
+
+### Added
+- add claim normalization, STALE verdict, scale cap, and gate verdict (#1253) (c1add023)
+- report shadowed AFK.md files and lock overlay provenance (#845 follow-up) (#1255) (2a3b7f65)
+
+### Fixed
+- auto-recover ghost dirs on install (#1204) (46586071)
+- pass message_thread_id to elicitation keyboards (#1219) (#1233) (f5c42658)
+- stream grep output through a bounded collector instead of buffering 8MB (#1254) (ada88650)
+
+### Changed
+- memoize plugin discovery walks and cap breadth (#990) (#1240) (c6a483b2)
+
 ## [5.147.2] - 2026-08-24
 
 ### Fixed
