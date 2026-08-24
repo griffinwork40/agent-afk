@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.147.2] - 2026-08-24
+
+### Fixed
+- populate structured fields and improve fallback display (#1252) (557bc535)
+
+### Changed
+- bump next from 16.3.0 to 16.3.2 in /website (#1251) (4770c815)
+- bump the fumadocs group in /website with 3 updates (#1250) (5bde8195)
+
 ## [5.147.1] - 2026-08-24
 
 ### Fixed
