@@ -85,7 +85,11 @@ export function renderSidebar(
     // string. The working directory is the field that actually varies, so it is
     // rendered first and given the strongest treatment in the meta row.
     const dir = basename(s.cwd);
-    if (dir) meta.appendChild(el('span', 'session-cwd', dir));
+    if (dir) {
+      const cwdEl = el('span', 'session-cwd', dir);
+      cwdEl.title = s.cwd ?? dir;
+      meta.appendChild(cwdEl);
+    }
     // A readonly session lives in another OS process; its approvals are
     // unreachable from here. The badge is the user-facing half of that
     // contract — the composer is disabled to match.
