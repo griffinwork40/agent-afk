@@ -208,19 +208,6 @@ export async function runInputLoop(
   // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
   const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
 
-  // Publish steerReadLine on TurnState so interactive.ts's onSteer callback
-  // can invoke surface.readLine without holding a direct surface reference.
-  // Cleared in the finally block to prevent dangling closure leaks.
-  turnState.steerReadLine = async () => {
-    const result = await surface.readLine({
-      promptFn: () => 'Steer the agent → ',
-      // onSigint not passed here: the second-Ctrl+C safety hatch is already
-      // live via turnState.interruptPickerAbort in handleSigint. The abort
-      // controller remains set until onSteer clears it after readline settles.
-    });
-    return result.text;
-  };
-
   let autoResumeCount = 0;
   bgResultNotifier.onInjectable = () => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
@@ -238,6 +225,21 @@ export async function runInputLoop(
   };
 
   try {
+  // Publish steerReadLine on TurnState so interactive.ts's onSteer callback
+  // can invoke surface.readLine without holding a direct surface reference.
+  // Assigned here (inside the try) so the paired finally-clear at the bottom
+  // always fires — placing it before the try would leave the closure set if
+  // anything between assignment and try-entry threw.
+  turnState.steerReadLine = async () => {
+    const result = await surface.readLine({
+      promptFn: () => 'Steer the agent → ',
+      // onSigint not passed here: the second-Ctrl+C safety hatch is already
+      // live via turnState.interruptPickerAbort in handleSigint. The abort
+      // controller remains set until onSteer clears it after readline settles.
+    });
+    return result.text;
+  };
+
   while (true) {
       if (pendingInitMeta) {
         ctx.replRenderer.writeLine(pendingInitMeta);

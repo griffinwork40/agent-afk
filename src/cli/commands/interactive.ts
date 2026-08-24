@@ -700,17 +700,27 @@ export function registerInteractiveCommand(program: Command): void {
                     return;
                   }
 
-                  const text = await steerFn();
+                  try {
+                    const text = await steerFn();
 
-                  if (text.trim().length > 0) {
-                    // Non-empty steer message: deliver it to the next turn iteration
-                    // via the pendingSteerText drain at the top of the while-body.
-                    turnState.pendingSteerText = text;
+                    if (text.trim().length > 0) {
+                      // Non-empty steer message: deliver it to the next turn iteration
+                      // via the pendingSteerText drain at the top of the while-body.
+                      turnState.pendingSteerText = text;
+                    }
+                    // Empty text (ESC or bare Enter): degrade to Stop — turn already
+                    // soft-stopped by onStop() in showInterruptPicker. ESC re-show
+                    // deferred: surface.readLine does not expose a native ESC callback;
+                    // empty result = Stop is the documented degradation path.
+                  } finally {
+                    // Always clear — even if steerFn() rejects (e.g. surface disposed
+                    // mid-readline). Without this, interruptPickerAbort stays non-null
+                    // and permanently blocks the second-Ctrl+C hard-cancel safety hatch
+                    // for every subsequent turn until session exit.
+                    // onSteer owns this clear for the 'steer' branch;
+                    // launchInterruptPicker's .then() defers to us here.
+                    turnState.interruptPickerAbort = null;
                   }
-                  // Clear the abort controller now that the readline has settled —
-                  // the steer path is complete. onSteer owns this clear for the
-                  // 'steer' branch (launchInterruptPicker's .then() defers it).
-                  turnState.interruptPickerAbort = null;
                 })();
               },
             });

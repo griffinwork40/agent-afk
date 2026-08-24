@@ -3,7 +3,7 @@
  * turn, giving the user a deliberate choice instead of an immediate stop.
  *
  * UX contract:
- *   - 1st Ctrl+C → show this picker (Stop / Cancel + TODO Steer)
+ *   - 1st Ctrl+C → show this picker (Stop / Steer / Cancel)
  *   - 2nd Ctrl+C while picker is open → hard-cancel immediately (safety hatch)
  *   - Picker dismisses cleanly if the turn completes while it is open
  *   - Esc inside the picker = "Cancel" (dismiss without action)
@@ -12,9 +12,6 @@
  * machinery so no second stdin listener is ever installed (single-consumer
  * stdin invariant, #511).
  *
- * Steer (inject a correction message) is scaffolded as a label but requires
- * session-level injection that is currently outside the turn-handler boundary.
- * TODO: implement Steer once session.injectUserMessage() lands. See below.
  */
 
 import { runPicker } from '../../render/picker.js';
