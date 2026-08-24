@@ -176,18 +176,41 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Curated OpenAI model ids surfaced in the `/model` picker. Wire ids only —
+ * no short aliases (OpenAI has no stable short alias layer like `sonnet`).
+ * Ordered flagship → balanced → mini so the most-common choices appear first.
+ * `gpt-5.5` is included as the prior-generation baseline.
+ *
+ * This list is deliberately narrow: it covers models agent-afk already has
+ * explicit metadata for (context limits, capability flags, max-output overrides
+ * in `model-limits.ts` / `model-capabilities.ts`). Any raw OpenAI id not listed
+ * here is still accepted at the `/model` surface — this is the discoverable
+ * subset, not the whole acceptable set.
+ */
+export const OPENAI_MODEL_HINTS: readonly string[] = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+];
+
+/**
  * User-facing model handles shown by the `/model` picker (REPL + Telegram) and
- * accepted by name. DERIVED from the two stable layers — the capability TIERS
- * ({@link SLOT_NAMES}) plus the fixed-identity aliases ({@link DIRECT_MODEL_ALIASES})
- * — so the discoverable list can never drift from what actually resolves. This
- * is the single source of truth: both the CLI (`/model`) and Telegram surfaces
- * import it rather than re-declaring it. Raw wire ids and `org/model` ids are
- * also accepted at the `/model` surface (this list is the discoverable subset,
- * not the whole acceptable set).
+ * accepted by name. DERIVED from three stable layers:
+ *   1. Capability TIERS ({@link SLOT_NAMES})
+ *   2. Fixed-identity Claude/xAI aliases ({@link DIRECT_MODEL_ALIASES})
+ *   3. Curated OpenAI wire ids ({@link OPENAI_MODEL_HINTS})
+ *
+ * The three-part ordering keeps Claude/tier handles at the top (most users),
+ * followed by OpenAI models. Raw wire ids and `org/model` ids are also accepted
+ * at the `/model` surface — this list is the discoverable subset, not the whole
+ * acceptable set. Both the CLI (`/model`) and Telegram surfaces import it rather
+ * than re-declaring it; it is the single source of truth for the picker.
  */
 export const MODEL_ALIASES_HINT: readonly string[] = [
   ...SLOT_NAMES,
   ...Object.keys(DIRECT_MODEL_ALIASES),
+  ...OPENAI_MODEL_HINTS,
 ];
 
 /**

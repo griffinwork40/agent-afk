@@ -15,6 +15,7 @@ import {
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
   MODEL_ALIASES_HINT,
+  OPENAI_MODEL_HINTS,
   parseModelsConfig,
   resetSlotBindings,
   resolveBinding,
@@ -188,12 +189,39 @@ describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers,
   });
 });
 
+describe('OPENAI_MODEL_HINTS', () => {
+  it('contains the curated OpenAI wire ids', () => {
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-sol');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-terra');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-luna');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.5');
+  });
+
+  it('all entries start with a known OpenAI pattern', () => {
+    for (const id of OPENAI_MODEL_HINTS) {
+      const ok = id.startsWith('gpt-') || id.startsWith('o') || id.startsWith('codex');
+      expect(ok, `${id} should match a known OpenAI prefix`).toBe(true);
+    }
+  });
+});
+
 describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', () => {
-  it('is derived from the tiers + identity aliases, in the documented order', () => {
+  it('is derived from the tiers + identity aliases + OpenAI hints, in the documented order', () => {
     expect(MODEL_ALIASES_HINT).toEqual([
+      // Capability tiers (SLOT_NAMES)
       'local', 'small', 'medium', 'large',
+      // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
+      // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+      'gpt-5.5',
     ]);
+  });
+
+  it('includes all OPENAI_MODEL_HINTS entries', () => {
+    for (const id of OPENAI_MODEL_HINTS) {
+      expect(MODEL_ALIASES_HINT).toContain(id);
+    }
   });
 });
 
