@@ -191,12 +191,10 @@ describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers,
 
 describe('OPENAI_MODEL_HINTS', () => {
   it('contains the curated OpenAI wire ids', () => {
-    expect(OPENAI_MODEL_HINTS).toContain('gpt-4.1');
-    expect(OPENAI_MODEL_HINTS).toContain('gpt-4o');
-    expect(OPENAI_MODEL_HINTS).toContain('o3');
-    expect(OPENAI_MODEL_HINTS).toContain('o4-mini');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-sol');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-terra');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-luna');
     expect(OPENAI_MODEL_HINTS).toContain('gpt-5.5');
-    expect(OPENAI_MODEL_HINTS).toContain('codex-mini');
   });
 
   it('all entries start with a known OpenAI pattern', () => {
@@ -215,10 +213,8 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
       // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
       // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
-      'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
-      'gpt-4o', 'gpt-4o-mini',
-      'o3', 'o3-mini', 'o4-mini',
-      'gpt-5.5', 'codex-mini',
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+      'gpt-5.5',
     ]);
   });
 

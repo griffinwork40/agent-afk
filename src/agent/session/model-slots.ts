@@ -178,8 +178,8 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
 /**
  * Curated OpenAI model ids surfaced in the `/model` picker. Wire ids only —
  * no short aliases (OpenAI has no stable short alias layer like `sonnet`).
- * Ordered current-flagship → reasoning → mini/nano so the most-common choices
- * appear first. `gpt-4o` is included as the widely-known baseline.
+ * Ordered flagship → balanced → mini so the most-common choices appear first.
+ * `gpt-5.5` is included as the prior-generation baseline.
  *
  * This list is deliberately narrow: it covers models agent-afk already has
  * explicit metadata for (context limits, capability flags, max-output overrides
@@ -188,16 +188,10 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
  * subset, not the whole acceptable set.
  */
 export const OPENAI_MODEL_HINTS: readonly string[] = [
-  'gpt-4.1',
-  'gpt-4.1-mini',
-  'gpt-4.1-nano',
-  'gpt-4o',
-  'gpt-4o-mini',
-  'o3',
-  'o3-mini',
-  'o4-mini',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
-  'codex-mini',
 ];
 
 /**
