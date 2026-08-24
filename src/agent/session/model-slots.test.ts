@@ -443,7 +443,7 @@ describe('coerceSlotBindingInput', () => {
     if (!resName.ok) expect(resName.error).toMatch(/control characters/);
   });
   it('rejects names that shadow built-in aliases (slot keys, legacy aliases, auto, direct aliases)', () => {
-    for (const reserved of ['local', 'small', 'medium', 'large', 'haiku', 'sonnet', 'opus', 'auto', 'fable']) {
+    for (const reserved of ['local', 'small', 'medium', 'large', 'haiku', 'sonnet', 'opus', 'auto', 'fable', 'grok']) {
       const res = coerceSlotBindingInput({ id: 'glm-5.2', name: reserved });
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toMatch(/shadow a built-in alias/);

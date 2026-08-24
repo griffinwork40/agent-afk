@@ -1,8 +1,11 @@
 /**
- * Accept/reject matrix for Telegram `/model <id>` (aliases, slots, wire ids).
+ * Compatibility shim re-exporting {@link isValidModelArg} from
+ * `agent/session/model-validate` for Telegram command handlers.
  *
- * Delegates to the shared {@link isValidModelArg} helper so REPL and Telegram
- * cannot drift — both surfaces accept exactly the same set of model arguments.
+ * The primary implementation lives in `agent/session/model-validate`; this
+ * module is a thin re-export so Telegram handler imports do not need to reach
+ * into the agent layer directly. REPL and Telegram accept exactly the same set
+ * of model arguments — both delegate to the shared predicate.
  *
  * @module telegram/handlers/commands.model-validate
  */

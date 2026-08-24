@@ -8,7 +8,8 @@
  * user-defined custom names also resolve onto these tier positions.
  *
  * IDENTITY vs. TIER: the built-in Claude handles (`haiku`/`sonnet`/`opus`/
- * `fable`/`*_1m`) are FIXED-IDENTITY aliases ({@link DIRECT_MODEL_ALIASES}) that
+ * `fable`/`*_1m`) and the xAI handle (`grok`) are FIXED-IDENTITY aliases
+ * ({@link DIRECT_MODEL_ALIASES}) that
  * always resolve to one concrete model — they are NOT tier aliases and are never
  * rebound by slot config. This prevents rebinding a capability tier (e.g.
  * `medium` → an OpenAI model) from silently hijacking the `sonnet` handle. Only
@@ -17,7 +18,7 @@
  * Resolution precedence for any model input string:
  *   1. custom name    — a user-assigned `name` on a binding      (tier; {@link slotForInput})
  *   2. neutral name   — `local` | `small` | `medium` | `large`   (tier; {@link slotForInput})
- *   3. identity alias — haiku/sonnet/opus/fable/*_1m → fixed id   ({@link resolveBinding})
+ *   3. identity alias — haiku/sonnet/opus/fable/*_1m/grok → fixed id   ({@link resolveBinding})
  *   4. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
  *
  * Bindings are process-global config (one afk.config.json + env per process),
