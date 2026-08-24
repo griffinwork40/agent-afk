@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
+import { runStartupReconcile } from '../../agent/manifest/startup-reconcile.js';
 import path from 'path';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
@@ -192,6 +193,19 @@ export function buildDaemonSessionFactory(
     composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
       session.recordSubagentCompletion(usage, costUsd);
     });
+    // Wave manifest reconciliation: surface resumption offers for any stale
+    // manifests from interrupted sessions. Fire-and-forget — startup must
+    // never fail because of this. The session ID comes from config.sessionId
+    // (set by the scheduler's daemonTraceLabel). Daemon is non-interactive;
+    // only surfaces offers when AFK_WAVE_RESUME_UNATTENDED=1.
+    const daemonSessionId = (config as { sessionId?: string }).sessionId ?? session.sessionId;
+    if (daemonSessionId) {
+      runStartupReconcile({
+        sessionId: daemonSessionId,
+        isInteractive: false,
+        outputOffer: (text) => { process.stderr.write(`${text}\n`); },
+      });
+    }
     return session;
   };
 }

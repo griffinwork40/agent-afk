@@ -22,6 +22,7 @@ import { createReplSlashContext } from './bootstrap-slash-context.js';
 import { wireTrustedSkillEvents, wireProviderGrants, createReplInput } from './bootstrap-wiring.js';
 import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
+import { runStartupReconcile } from '../../../agent/manifest/startup-reconcile.js';
 
 // Re-exported so `resume-swap.test.ts` (and the mid-session swap closure
 // below) can resolve `buildAgentSession` from this module — the historical
@@ -148,6 +149,18 @@ export async function bootstrapSession(
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).
   sessionRef.current = session;
+
+  // Wave manifest reconciliation: surface resumption offers for any stale
+  // manifests from interrupted sessions. Fire-and-forget — startup must never
+  // fail because of this. Runs after the session ID is known so isOwnSession
+  // matching works correctly. REPL is an interactive surface.
+  if (session.sessionId) {
+    runStartupReconcile({
+      sessionId: session.sessionId,
+      isInteractive: true,
+      outputOffer: (text) => { process.stderr.write(`${text}\n`); },
+    });
+  }
 
   // Step 7: register this REPL session in the cross-surface session registry so
   // it appears alongside Telegram/daemon sessions. Best-effort (never throws).

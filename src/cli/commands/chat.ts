@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { palette } from '../palette.js';
+import { runStartupReconcile } from '../../agent/manifest/startup-reconcile.js';
 import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import * as os from 'node:os';
@@ -625,6 +626,18 @@ export function registerChatCommand(program: Command): void {
         })), trace?.writer);
 
         boundSession = session;
+        // Wave manifest reconciliation: surface resumption offers for any stale
+        // manifests from interrupted sessions. Fire-and-forget — startup must
+        // never fail because of this. One-shot chat is non-interactive; only
+        // surfaces offers when AFK_WAVE_RESUME_UNATTENDED=1.
+        const chatSessionId = session.sessionId ?? options.sessionId;
+        if (chatSessionId) {
+          runStartupReconcile({
+            sessionId: chatSessionId,
+            isInteractive: false,
+            outputOffer: (text) => { process.stderr.write(`${text}\n`); },
+          });
+        }
         // Subagent-success rollup: wire both the root manager and the compose
         // executor so all subagent token/cost data (including compose DAG nodes)
         // accumulates into this session's session_sealed telemetry. Late-bound

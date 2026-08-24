@@ -88,7 +88,22 @@ export class TelegramBot {
     // usage-limit-pause-aware watchdog that throws a handled StreamTimeoutError.
     // p-timeout short-circuits on Infinity, handing it sole timeout control.
     this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
-    this.sessionManager = new SessionManager(options);
+    // Wire the resumption-offer callback now that `this.bot.telegram` is
+    // available.  Runs after every new Telegram session is created and surfaces
+    // stale wave manifests as a message in the chat.  Fire-and-forget by
+    // contract — sendMessage failures are logged and swallowed.
+    const telegramRef = this.bot.telegram;
+    this.sessionManager = new SessionManager({
+      ...options,
+      onResumptionOffer: (route, offerText) => {
+        const sendOpts = sendOptions(route);
+        void telegramRef
+          .sendMessage(route.chatId, offerText, sendOpts)
+          .catch((err: unknown) => {
+            console.error('[bot] resumption offer send failed:', err instanceof Error ? err.message : String(err));
+          });
+      },
+    });
     this.messageHandler = new MessageHandler(
       this.bot,
       this.sessionManager,
