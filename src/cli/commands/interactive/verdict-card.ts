@@ -112,17 +112,19 @@ export function renderVerdictCard(state: TerminalState): string {
   const lines: string[] = [top, blankRow];
 
   if (rows.length === 0) {
-    // No structured fields parsed. Item #9: synthesize a single-line summary
-    // from the first non-empty rawBody line rather than dumping all prose into
-    // the card — the card is a glance surface, not a prose viewer. The full
-    // assistant text is already in scrollback above this card.
-    //
-    // Using the first non-empty line (not the whole body) keeps the card
-    // compact on long unstructured responses (e.g. the model wrote a paragraph
-    // as its verdict body — a common failure mode when the system prompt isn't
-    // followed strictly). Full prose remains readable in scrollback.
-    const firstLine = state.rawBody.split('\n').find(l => l.trim().length > 0)?.trim() ?? '';
-    const summary = firstLine.length > 0 ? firstLine : `${state.kind} (no structured fields)`;
+    // No structured fields parsed — the model's bullets lacked the colon
+    // separator the parser needs, or it wrote free-form prose. Show up to
+    // MAX_FALLBACK_LINES non-empty body lines so the card still carries the
+    // substance of the verdict. Capping keeps the card from sprawling when the
+    // model wrote a long paragraph; the full text is always in scrollback.
+    const MAX_FALLBACK_LINES = 5;
+    const bodyLines = state.rawBody
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .slice(0, MAX_FALLBACK_LINES);
+    const summary =
+      bodyLines.length > 0 ? bodyLines.join('\n') : `${state.kind} (no structured fields)`;
     const wrapped = wrapToWidth(renderCardLine(summary), innerW).split('\n');
     for (const wl of wrapped) {
       lines.push(pipe + '  ' + padDisplayRight(wl, innerW) + '  ' + pipe);

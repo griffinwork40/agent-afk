@@ -124,12 +124,12 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('finished everything');
   });
 
-  // ── Item #9: synthesized one-line fallback ────────────────────────────────
+  // ── Fallback body rendering ───────────────────────────────────────────────
   //
-  // When no structured rows are parsed, the card should display ONLY the first
-  // non-empty line of rawBody — not all prose lines. This keeps the card
-  // compact when the model wrote a paragraph as its verdict body.
-  it('shows only the first non-empty rawBody line when no labelled fields are present (Item #9)', () => {
+  // When no structured rows are parsed, the card shows up to 5 non-empty body
+  // lines so the verdict card still carries substance. Capped to keep the card
+  // from sprawling on long unstructured responses.
+  it('shows up to 5 non-empty rawBody lines when no labelled fields are present', () => {
     const state: TerminalState = {
       kind: 'done',
       rawBody: [
@@ -140,15 +140,30 @@ describe('renderVerdictCard', () => {
     };
     const out = stripAnsi(renderVerdictCard(state));
 
-    // First line present.
+    // All three lines present (under the 5-line cap).
     expect(out).toContain('This is the first line of the verdict.');
-    // Subsequent prose lines must NOT appear in the card — card is a glance
-    // surface, not a prose viewer.
-    expect(out).not.toContain('second line with more detail');
-    expect(out).not.toContain('third line');
+    expect(out).toContain('second line with more detail');
+    expect(out).toContain('third line');
   });
 
-  it('ignores leading blank lines when selecting the first rawBody line (Item #9)', () => {
+  it('caps fallback body at 5 lines', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      rawBody: Array.from({ length: 8 }, (_, i) => `Line ${i + 1} of the body`).join('\n'),
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+
+    // First 5 present.
+    for (let i = 1; i <= 5; i++) {
+      expect(out).toContain(`Line ${i} of the body`);
+    }
+    // Lines 6+ excluded.
+    expect(out).not.toContain('Line 6');
+    expect(out).not.toContain('Line 7');
+    expect(out).not.toContain('Line 8');
+  });
+
+  it('ignores leading blank lines when selecting fallback body lines', () => {
     const state: TerminalState = {
       kind: 'asking',
       rawBody: [
@@ -160,10 +175,9 @@ describe('renderVerdictCard', () => {
     };
     const out = stripAnsi(renderVerdictCard(state));
 
-    // The first *non-empty* line is used.
+    // Both non-empty lines present.
     expect(out).toContain('Which database should I use?');
-    // The blank/whitespace-only lines and follow-on prose must not appear.
-    expect(out).not.toContain('More context about the question');
+    expect(out).toContain('More context about the question');
   });
 
   it('falls back to "<kind> (no structured fields)" when rawBody is empty (Item #9)', () => {
