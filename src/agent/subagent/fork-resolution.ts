@@ -2,9 +2,8 @@
  * Pure resolution chain for `SubagentManager.forkSubagent`.
  *
  * Extracted from `forkSubagent` to reduce function size — every resolution here
- * is synchronous and side-effect-free (apart from one `process.stderr.write`
- * when model coercion fires). Takes EXPLICIT parameters so a reader can
- * understand every input without tracing back to the caller.
+ * is synchronous and side-effect-free. Takes EXPLICIT parameters so a reader
+ * can understand every input without tracing back to the caller.
  *
  * Deliberately EXCLUDES:
  * - `dispatchSubagentStart` — async side-effect (hook dispatch)
@@ -67,6 +66,12 @@ export interface ForkResolved {
   // ./child-model-fallback.ts.
   effectiveChildModel: AgentModelInput;
 
+  // The original model string before coercion, when coercion fired.
+  // `undefined` means no coercion was needed. The caller emits the warning
+  // AFTER hook dispatch so a blocked fork never tells the operator it is
+  // "running" under a substituted model.
+  coercedFrom: string | undefined;
+
   // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS).
   // Settled in the resolution phase (not inline at handle construction) because
   // it feeds TWO consumers that must agree: the handle's hard `withTimeout`
@@ -79,10 +84,10 @@ export interface ForkResolved {
  * Resolve the pure, synchronous inputs for a subagent fork.
  *
  * Every field on the returned {@link ForkResolved} is deterministic given its
- * inputs — no async work, no manager-state mutation, no abort-graph wiring.
- * The single side-effect is a `process.stderr.write` when model coercion fires
- * (logged here rather than at the call site so the coercion log stays adjacent
- * to its decision).
+ * inputs — no async work, no manager-state mutation, no abort-graph wiring,
+ * no I/O side-effects. The coercion warning is deferred to the caller so it
+ * fires AFTER hook dispatch (a blocked fork never tells the operator it is
+ * "running" under a substituted model).
  */
 export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
   const { options, counter, managerHookRegistry, parentTraceWriter, parentModel } = args;
@@ -104,13 +109,6 @@ export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
     parentModel,
   );
   const effectiveChildModel = childModelCoercion.model ?? options.config.model;
-  if (childModelCoercion.coercedFrom !== undefined) {
-    process.stderr.write(
-      `[afk] subagent: child model "${childModelCoercion.coercedFrom}" cannot run on this ` +
-        `session's OpenAI/ChatGPT backend — running it as "${effectiveChildModel ?? ''}" instead ` +
-        `(set AFK_DEFAULT_SUBAGENT_MODEL to choose a different one).\n`,
-    );
-  }
 
   const effectiveTimeoutMs = options.config.timeoutMs ?? resolveSubagentTimeoutMs();
 
@@ -120,6 +118,7 @@ export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
     registry,
     effectiveTraceWriter,
     effectiveChildModel,
+    coercedFrom: childModelCoercion.coercedFrom,
     effectiveTimeoutMs,
   };
 }

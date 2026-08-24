@@ -13,7 +13,7 @@
     "src/agent/providers/openai-compatible/query/dispatch-append.ts::dispatchAndAppendToolCalls": { "loc": 233, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/session/stream-consumer.ts::transformProviderEvent": { "loc": 254, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/shell-jobs/streamer.ts::startShell": { "loc": 284, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/subagent.ts::SubagentManager.forkSubagent": { "loc": 213, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/agent/subagent.ts::SubagentManager.forkSubagent": { "loc": 225, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/fork-child-config.ts::assembleChildConfig": { "loc": 232, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/handle.ts::SubagentHandleImpl.streamToFinalMessage": { "loc": 226, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/compose-executor.ts::ComposeExecutor.execute": { "loc": 340, "reason": "legacy: predates the function-size gate; pending helper extraction" },

@@ -297,7 +297,7 @@ export class SubagentManager {
     // Pure resolution chain: ID, registry, trace writer, model coercion,
     // timeout. See ./subagent/fork-resolution.ts for precedence comments.
     const {
-      id, resume, registry, effectiveTraceWriter, effectiveChildModel, effectiveTimeoutMs,
+      id, resume, registry, effectiveTraceWriter, effectiveChildModel, coercedFrom, effectiveTimeoutMs,
     } = resolveForkInputs({
       options,
       counter: ++this.counter,
@@ -320,6 +320,18 @@ export class SubagentManager {
           signal: this.rootController.signal,
           ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
         },
+      );
+    }
+
+    // Ordering constraint: the coercion warning fires AFTER hook dispatch so a
+    // blocked fork never tells the operator it is "running" under a substituted
+    // model. Before this extraction the warning was inline after the hook; the
+    // resolution chain defers it via `coercedFrom` to preserve that ordering.
+    if (coercedFrom !== undefined) {
+      process.stderr.write(
+        `[afk] subagent: child model "${coercedFrom}" cannot run on this ` +
+          `session's OpenAI/ChatGPT backend — running it as "${effectiveChildModel ?? ''}" instead ` +
+          `(set AFK_DEFAULT_SUBAGENT_MODEL to choose a different one).\n`,
       );
     }
 
