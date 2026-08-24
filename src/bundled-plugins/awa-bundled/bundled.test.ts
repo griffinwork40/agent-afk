@@ -118,7 +118,7 @@ const PINNED_HASHES = {
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
-    'd84c1b785eaaffe2ed538627e3b72a75e5398dcb2fbfda882febed2181241597',
+    '9f7db5a0612c6042512729c84ce6ee1b534a04fdb49ba0c0904903208acfb136',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
