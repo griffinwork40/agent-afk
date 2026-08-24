@@ -68,19 +68,20 @@ describe('runTelegramReconcile', () => {
     const sendText = vi.fn();
     seedManifest('tg-sess');
 
-    runTelegramReconcile('tg-sess', 42, sendText);
+    const route = { chatId: 42, threadId: 7 };
+    runTelegramReconcile('tg-sess', route, sendText);
     await Promise.resolve();
 
     expect(sendText).toHaveBeenCalledOnce();
-    const [calledChatId, calledText] = sendText.mock.calls[0] as [number, string];
-    expect(calledChatId).toBe(42);
+    const [calledRoute, calledText] = sendText.mock.calls[0] as [typeof route, string];
+    expect(calledRoute).toBe(route);
     expect(calledText).toContain('[wave-resume]');
   });
 
   it('is a no-op when no manifests exist', async () => {
     const sendText = vi.fn();
 
-    runTelegramReconcile('no-manifests-sess', 99, sendText);
+    runTelegramReconcile('no-manifests-sess', { chatId: 99 }, sendText);
     await Promise.resolve();
 
     expect(sendText).not.toHaveBeenCalled();

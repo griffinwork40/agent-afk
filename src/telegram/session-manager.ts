@@ -143,7 +143,7 @@ export interface SessionManagerOptions {
    * resumption offer is available. The caller (TelegramBot) is responsible for
    * forwarding the offer text to the chat. Never invoked when no offers exist.
    */
-  onResumptionOffer?: (chatId: number, text: string) => void;
+  onResumptionOffer?: (route: TelegramRoute, text: string) => void;
 }
 
 /**
@@ -306,7 +306,7 @@ export class SessionManager {
       // Wave-manifest reconciliation: surface resumption offers for unfinished
       // work. Telegram is interactive — fire-and-forget, never blocks creation.
       if (this.options.onResumptionOffer) {
-        runTelegramReconcile(session.sessionId ?? '', route.chatId, this.options.onResumptionOffer);
+        runTelegramReconcile(session.sessionId ?? '', route, this.options.onResumptionOffer);
       }
       // Consume the staged resume only after a successful build: a thrown
       // createSession must leave it staged so the next getSession retries the

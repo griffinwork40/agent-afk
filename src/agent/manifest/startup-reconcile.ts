@@ -39,20 +39,20 @@ export function runReplReconcile(sessionId: string): void {
  * Fire-and-forget: returns immediately; errors are swallowed.
  *
  * @param sessionId - The SDK session ID of the newly created session.
- * @param chatId    - The Telegram chat ID to deliver the offer to.
- * @param sendText  - Callback that delivers a plain-text message to the chat.
+ * @param route     - The Telegram route to deliver the offer to.
+ * @param sendText  - Callback that delivers a plain-text message to the route.
  */
-export function runTelegramReconcile(
+export function runTelegramReconcile<Route>(
   sessionId: string,
-  chatId: number,
-  sendText: (chatId: number, text: string) => void,
+  route: Route,
+  sendText: (route: Route, text: string) => void,
 ): void {
   if (!shouldSurfaceResumptionOffer(true)) return;
   void Promise.resolve().then(() => {
     try {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
-        sendText(chatId, formatResumptionOffer(offer));
+        sendText(route, formatResumptionOffer(offer));
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.
