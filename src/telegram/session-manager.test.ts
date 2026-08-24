@@ -1317,3 +1317,67 @@ describe('SessionManager — session registry wiring', () => {
     expect(fresh?.model).toBe('haiku');
   });
 });
+
+// ---------------------------------------------------------------------------
+// getActiveThreadId — fix for issue #1222
+// ---------------------------------------------------------------------------
+describe('SessionManager — getActiveThreadId', () => {
+  // Tests for the method that surfaces the most recently active topic thread id
+  // for a given chat, used by the auto-subscribe loop (#1222 fix).
+  useUnsetAfkHome();
+
+  let testDataDir: string;
+  let manager: SessionManager;
+
+  beforeEach(() => {
+    const entropy = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    testDataDir = join(tmpdir(), `afk-tg-ati-${entropy}`);
+    manager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async () => ({ state: 'idle' } as IAgentSession),
+    });
+  });
+
+  afterEach(async () => {
+    await manager.closeAll().catch(() => {});
+    if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
+  });
+
+  test('returns undefined when the chat has no sessions at all', () => {
+    expect(manager.getActiveThreadId(999)).toBeUndefined();
+  });
+
+  test('returns undefined when the chat only has a General session (no threadId)', async () => {
+    // sessionData is populated by getSession — mimics the real message-handler flow.
+    await manager.getSession({ chatId: 100 });
+    expect(manager.getActiveThreadId(100)).toBeUndefined();
+  });
+
+  test('returns the threadId when a single topic session exists', async () => {
+    await manager.getSession({ chatId: 200, threadId: 5 });
+    expect(manager.getActiveThreadId(200)).toBe(5);
+  });
+
+  test('returns the most recently active threadId when multiple topics exist', async () => {
+    // Both topics must be getSession'd so sessionData entries exist.
+    await manager.getSession({ chatId: 300, threadId: 10 });
+    // Small delay so the ISO lastActivity timestamps differ.
+    await new Promise((r) => setTimeout(r, 2));
+    await manager.getSession({ chatId: 300, threadId: 20 });
+    expect(manager.getActiveThreadId(300)).toBe(20);
+  });
+
+  test('ignores General sessions and picks the only topic when both exist', async () => {
+    await manager.getSession({ chatId: 400 });
+    await manager.getSession({ chatId: 400, threadId: 7 });
+    expect(manager.getActiveThreadId(400)).toBe(7);
+  });
+
+  test('is scoped to chatId — does not bleed across chats', async () => {
+    await manager.getSession({ chatId: 500, threadId: 3 });
+    // Different chat — getActiveThreadId must NOT return chat 500's threadId for chat 501.
+    expect(manager.getActiveThreadId(501)).toBeUndefined();
+  });
+});

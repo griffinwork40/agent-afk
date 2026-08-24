@@ -914,6 +914,35 @@ export class SessionManager {
   }
 
   /**
+   * Return the most recently active topic thread id for a given chat, or
+   * `undefined` when the chat has no topic sessions (non-topic chat, or all
+   * sessions belong to General).
+   *
+   * Used by the auto-subscribe loop to route watch output to the correct topic
+   * thread without an inbound message context. The lookup scans `sessionData`
+   * (in-memory, populated from disk on start) for all entries that share
+   * `chatId` and carry a `threadId`, then picks the entry with the most-recent
+   * `lastActivity` timestamp.
+   *
+   * Backward-compatible: returns `undefined` for any chat that has never used
+   * Telegram topics, leaving the downstream `sendOptions` call equivalent to
+   * the pre-fix General-only behaviour.
+   *
+   * @param chatId - Telegram chat id to look up
+   * @returns The most recently active topic thread id for this chat, or `undefined`
+   */
+  getActiveThreadId(chatId: number): number | undefined {
+    let best: SessionData | undefined;
+    for (const data of this.sessionData.values()) {
+      if (data.chatId !== chatId || data.threadId === undefined) continue;
+      if (best === undefined || data.lastActivity > best.lastActivity) {
+        best = data;
+      }
+    }
+    return best?.threadId;
+  }
+
+  /**
    * Count sessions that are mid-turn (not idle and not closed).
    *
    * Used by the version-drift watchdog to defer the upgrade-exit while a
