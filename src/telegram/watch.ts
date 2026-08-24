@@ -28,6 +28,7 @@ import { makeTelegramElicitationHandler } from './elicitation-handler.js';
 import { createTelegramElicitationHandler, composeTelegramElicitation } from './elicitation-telegram.js';
 import type { MessageHandler } from './handlers/message.js';
 import type { Telegraf } from 'telegraf';
+import type { TelegramRoute } from './route.js';
 
 type SendFn = (text: string) => Promise<void>;
 type LogFn = (...args: unknown[]) => void;
@@ -200,11 +201,18 @@ export class SessionWatchManager {
    * Start watching `sessionId` for `chatId`, replacing any existing watch.
    * `send` delivers rendered batches to the chat; failures are logged and
    * the watch continues (a transient Telegram error must not kill the tail).
+   * `route` is resolved for each elicitation so long-lived auto-watches follow
+   * the operator when their most recently active topic changes.
    */
-  start(chatId: number, sessionId: string, send: SendFn): void {
+  start(
+    chatId: number,
+    sessionId: string,
+    send: SendFn,
+    route: () => TelegramRoute = () => ({ chatId }),
+  ): void {
     this.stop(chatId);
     const abort = new AbortController();
-    const finished = this._run(chatId, sessionId, send, abort.signal).catch((err) => {
+    const finished = this._run(chatId, sessionId, send, route, abort.signal).catch((err) => {
       this.log('watch loop error:', err);
     });
     this.watches.set(chatId, { sessionId, abort, finished });
@@ -231,6 +239,7 @@ export class SessionWatchManager {
     chatId: number,
     sessionId: string,
     send: SendFn,
+    route: () => TelegramRoute,
     signal: AbortSignal,
   ): Promise<void> {
     let batch: string[] = [];
@@ -257,13 +266,14 @@ export class SessionWatchManager {
     const elicitHandler =
       this.bot !== undefined && this.messageHandler !== undefined
         ? composeTelegramElicitation(
-            makeTelegramElicitationHandler(this.messageHandler, this.bot, chatId, {
+            makeTelegramElicitationHandler(this.messageHandler, this.bot, route, {
               ledgerOriginated: true,
             }),
             createTelegramElicitationHandler(
               this.bot,
               new Set([chatId]),
               (...args) => this.log('[elicitation]', ...args),
+              route,
             ),
           )
         : undefined;

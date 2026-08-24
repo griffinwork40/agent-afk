@@ -60,7 +60,7 @@ import type {
   ElicitationResult,
 } from '../agent/types/sdk-types.js';
 import { escapeRegExp } from '../utils/regexp.js';
-import { sendOptions } from './route.js';
+import { sendOptions, type TelegramRoute } from './route.js';
 import { getElicitationRoute } from './elicitation-route-registry.js';
 
 /**
@@ -98,6 +98,7 @@ export function createTelegramElicitationHandler(
   bot: Telegraf,
   chatIds: Set<number>,
   log: (...args: unknown[]) => void = () => {},
+  fallbackRoute?: (chatId: number) => TelegramRoute,
 ): ElicitationHandler {
   // Register the action handler exactly once per bot. Bots in tests may
   // reuse the same Telegraf instance across handler factories; guard
@@ -122,7 +123,6 @@ export function createTelegramElicitationHandler(
       options.sessionId !== undefined
         ? getElicitationRoute(options.sessionId)
         : undefined;
-    const threadOpts = resolvedRoute !== undefined ? sendOptions(resolvedRoute) : {};
 
     return new Promise<ElicitationResult>((resolve) => {
       const ulid = generateUlid();
@@ -139,9 +139,10 @@ export function createTelegramElicitationHandler(
       // taps from other chats hit the "stale" path.
       const sends = Array.from(chatIds).map(async (chatId) => {
         try {
+          const route = resolvedRoute ?? fallbackRoute?.(chatId);
           await bot.telegram.sendMessage(chatId, text, {
             reply_markup: keyboard,
-            ...threadOpts,
+            ...(route !== undefined ? sendOptions(route) : {}),
           });
         } catch (err) {
           log('[elicitation] sendMessage failed:', err);
