@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.6] - 2026-08-24
+
+### Added
+- add OpenAI models to /model picker (#1258) (#1274) (e45e35f9)
+
+### Fixed
+- keep auto-watch routes current (#1270) (7c2ca4b2)
+
 ## [5.149.5] - 2026-08-24
 
 ### Fixed
