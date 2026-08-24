@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.149.4] - 2026-08-24
+
+### Fixed
+- UI polish — code lang badge, centered transcript, blockquotes, transitions (#23-30) (#1201) (5f9eafea)
+
 ## [5.149.3] - 2026-08-24
 
 ### Fixed
