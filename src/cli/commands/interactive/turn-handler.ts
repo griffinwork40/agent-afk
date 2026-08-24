@@ -797,7 +797,7 @@ export async function runTurn(
         writeAbove(renderVerdictCard(verdict, {
           durationMs: doneMeta?.durationMs,
           totalCostUsd: doneMeta?.totalCostUsd,
-          toolCount: toolEvents?.length,
+          toolCount: toolEvents.length,
         }));
         writeAbove('');
         // One evidence check, two consumers: (1) the onTerminalState callback

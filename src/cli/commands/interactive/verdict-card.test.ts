@@ -618,7 +618,7 @@ describe('renderVerdictCard — stats line', () => {
     const out = stripAnsi(renderVerdictCard(baseDone, meta));
     expect(out).toContain('$0.42');
     expect(out).toContain('23s');
-    expect(out).toContain('7 tools');
+    expect(out).toContain('7 tool calls');
   });
 
   it('omits the stats line when no meta is passed (backward compat)', () => {
@@ -626,40 +626,40 @@ describe('renderVerdictCard — stats line', () => {
     // No dollar sign, no duration suffix, no "tools" label
     expect(out).not.toMatch(/\$\d/);
     expect(out).not.toMatch(/\d+s/);
-    expect(out).not.toContain('tools');
+    expect(out).not.toContain('tool calls');
   });
 
   it('omits the stats line when meta is an empty object', () => {
     const out = stripAnsi(renderVerdictCard(baseDone, {}));
     expect(out).not.toMatch(/\$\d/);
     expect(out).not.toMatch(/\d+s/);
-    expect(out).not.toContain('tools');
+    expect(out).not.toContain('tool calls');
   });
 
   it('renders only cost when only totalCostUsd is provided', () => {
     const out = stripAnsi(renderVerdictCard(baseDone, { totalCostUsd: 1.05 }));
     expect(out).toContain('$1.05');
     expect(out).not.toMatch(/\d+s/);
-    expect(out).not.toContain('tools');
+    expect(out).not.toContain('tool calls');
   });
 
   it('renders only duration when only durationMs is provided', () => {
     const out = stripAnsi(renderVerdictCard(baseDone, { durationMs: 5000 }));
     expect(out).toContain('5s');
     expect(out).not.toMatch(/\$\d/);
-    expect(out).not.toContain('tools');
+    expect(out).not.toContain('tool calls');
   });
 
   it('renders only tool count when only toolCount is provided', () => {
     const out = stripAnsi(renderVerdictCard(baseDone, { toolCount: 3 }));
-    expect(out).toContain('3 tools');
+    expect(out).toContain('3 tool calls');
     expect(out).not.toMatch(/\$\d/);
   });
 
-  it('uses singular "tool" when toolCount is 1', () => {
+  it('uses singular "tool call" when toolCount is 1', () => {
     const out = stripAnsi(renderVerdictCard(baseDone, { toolCount: 1 }));
-    expect(out).toContain('1 tool');
-    expect(out).not.toContain('1 tools');
+    expect(out).toContain('1 tool call');
+    expect(out).not.toContain('1 tool calls');
   });
 
   it('formats duration under a minute as Xs', () => {

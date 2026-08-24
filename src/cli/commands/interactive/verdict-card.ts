@@ -27,6 +27,7 @@ import { displayWidth, padDisplayRight, truncateDisplayWidth } from '../../displ
 import { getTerminalWidth } from '../../terminal-size.js';
 import { renderCardLine } from '../../formatter.js';
 import { wrapToWidth } from '../../wrap.js';
+import { formatCost } from '../../format-utils.js';
 
 interface KindStyle {
   color: (s: string) => string;
@@ -96,14 +97,14 @@ function formatDuration(ms: number): string {
  */
 function buildStatsLine(meta: VerdictMeta): string | null {
   const parts: string[] = [];
-  if (meta.totalCostUsd && meta.totalCostUsd > 0) {
-    parts.push(`$${meta.totalCostUsd.toFixed(2)}`);
+  if (meta.totalCostUsd !== undefined && meta.totalCostUsd > 0) {
+    parts.push(formatCost(meta.totalCostUsd));
   }
   if (meta.durationMs !== undefined && meta.durationMs > 0) {
     parts.push(formatDuration(meta.durationMs));
   }
   if (meta.toolCount && meta.toolCount > 0) {
-    parts.push(`${meta.toolCount} ${meta.toolCount === 1 ? 'tool' : 'tools'}`);
+    parts.push(`${meta.toolCount} ${meta.toolCount === 1 ? 'tool call' : 'tool calls'}`);
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }
@@ -141,14 +142,12 @@ function deriveAffordance(state: TerminalState, innerW: number): string | null {
 
   if (!body) return null;
 
-  // Strip non-ASCII from body so the invariant is always met.
-  const safeBody = body.replace(/[^\x20-\x7E]/g, '');
   const budget = innerW - prefix.length;
   if (budget <= 0) return null;
   const truncated =
-    displayWidth(safeBody) > budget
-      ? truncateDisplayWidth(safeBody, budget - 3) + '...'
-      : safeBody;
+    displayWidth(body) > budget
+      ? truncateDisplayWidth(body, budget - 3) + '...'
+      : body;
   return prefix + truncated;
 }
 
