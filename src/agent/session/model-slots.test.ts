@@ -15,6 +15,7 @@ import {
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
   MODEL_ALIASES_HINT,
+  OPENAI_MODEL_HINTS,
   parseModelsConfig,
   resetSlotBindings,
   resolveBinding,
@@ -188,12 +189,43 @@ describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers,
   });
 });
 
+describe('OPENAI_MODEL_HINTS', () => {
+  it('contains the curated OpenAI wire ids', () => {
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-4.1');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-4o');
+    expect(OPENAI_MODEL_HINTS).toContain('o3');
+    expect(OPENAI_MODEL_HINTS).toContain('o4-mini');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.5');
+    expect(OPENAI_MODEL_HINTS).toContain('codex-mini');
+  });
+
+  it('all entries start with a known OpenAI pattern', () => {
+    for (const id of OPENAI_MODEL_HINTS) {
+      const ok = id.startsWith('gpt-') || id.startsWith('o') || id.startsWith('codex');
+      expect(ok, `${id} should match a known OpenAI prefix`).toBe(true);
+    }
+  });
+});
+
 describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', () => {
-  it('is derived from the tiers + identity aliases, in the documented order', () => {
+  it('is derived from the tiers + identity aliases + OpenAI hints, in the documented order', () => {
     expect(MODEL_ALIASES_HINT).toEqual([
+      // Capability tiers (SLOT_NAMES)
       'local', 'small', 'medium', 'large',
+      // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
+      // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
+      'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+      'gpt-4o', 'gpt-4o-mini',
+      'o3', 'o3-mini', 'o4-mini',
+      'gpt-5.5', 'codex-mini',
     ]);
+  });
+
+  it('includes all OPENAI_MODEL_HINTS entries', () => {
+    for (const id of OPENAI_MODEL_HINTS) {
+      expect(MODEL_ALIASES_HINT).toContain(id);
+    }
   });
 });
 
