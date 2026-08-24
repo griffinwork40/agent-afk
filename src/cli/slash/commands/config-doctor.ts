@@ -17,7 +17,7 @@ import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { providerForModel } from '../../../agent/providers/index.js';
-import { resolveCliPermissionMode } from '../../config.js';
+import { resolveCliPermissionMode, loadConfig } from '../../config.js';
 import { runDoctorChecks } from '../../commands/doctor-checks.js';
 import { getConfigKeySpec } from '../../../config/settable-keys.js';
 import { setConfigValue, RESTART_NOTE } from '../../../config/mutate.js';
@@ -114,7 +114,42 @@ function renderConfigView(out: Writer): void {
   for (const [k, v] of envRows) {
     out.line(`  ${palette.meta(k.padEnd(keyWidth))} ${v}`);
   }
+
+  renderSystemPromptSection(out);
   out.line();
+}
+
+/**
+ * Contract: report which operator overlay actually governs this session, and
+ * which candidate files lost.
+ *
+ * The overlay resolves across three exclusive tiers (AFK_SYSTEM_PROMPT >
+ * afk.config.json > AFK.md), so a populated AFK.md can be fully ignored with
+ * no visible sign. This is the surface that makes that legible — the nearest
+ * AFK analogue to "which memory files loaded". Read-only: `loadConfig()` is
+ * memoized and side-effect-free after first call.
+ */
+function renderSystemPromptSection(out: Writer): void {
+  const { systemPromptSource, shadowedAfkMdPaths } = loadConfig();
+
+  out.line();
+  out.line(palette.bold('System prompt overlay'));
+  out.line(divider());
+
+  out.line(
+    `  source      ${systemPromptSource
+      ? palette.info(systemPromptSource)
+      : palette.dim('(none — framework base only)')}`,
+  );
+
+  if (shadowedAfkMdPaths !== undefined && shadowedAfkMdPaths.length > 0) {
+    for (const path of shadowedAfkMdPaths) {
+      out.line(`  ${palette.warning('⚠ shadowed')}  ${palette.dim(path)}`);
+    }
+    out.line(
+      `              ${palette.dim('a higher-precedence tier supplied the overlay; this file was not loaded')}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
