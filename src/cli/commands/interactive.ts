@@ -690,28 +690,24 @@ export function registerInteractiveCommand(program: Command): void {
               onSteer: () => {
                 // Fire-and-forget: async readline work begins here; handleSigint
                 // must return synchronously so we void-dispatch the async chain.
-                void (async () => {
+                const steerRead = (async (): Promise<string | null> => {
                   const steerFn = turnState.steerReadLine;
                   if (!steerFn) {
                     // steerReadLine not yet published (surface not fully up) —
                     // degrade to Stop behavior. The turn was already soft-stopped
                     // by onStop() firing before onSteer() in showInterruptPicker.
                     turnState.interruptPickerAbort = null;
-                    return;
+                    return null;
                   }
 
                   try {
-                    const text = await steerFn();
-
-                    if (text.trim().length > 0) {
-                      // Non-empty steer message: deliver it to the next turn iteration
-                      // via the pendingSteerText drain at the top of the while-body.
-                      turnState.pendingSteerText = text;
-                    }
-                    // Empty text (ESC or bare Enter): degrade to Stop — turn already
-                    // soft-stopped by onStop() in showInterruptPicker. ESC re-show
-                    // deferred: surface.readLine does not expose a native ESC callback;
-                    // empty result = Stop is the documented degradation path.
+                    const text = await steerFn(turnState.interruptPickerAbort?.signal);
+                    return text.trim().length > 0 ? text : null;
+                  } catch {
+                    // Surface disposal / session teardown is an expected way for
+                    // this detached read to end. Convert it to a cancelled steer
+                    // so it can never become an unhandled rejection.
+                    return null;
                   } finally {
                     // Always clear — even if steerFn() rejects (e.g. surface disposed
                     // mid-readline). Without this, interruptPickerAbort stays non-null
@@ -722,6 +718,9 @@ export function registerInteractiveCommand(program: Command): void {
                     turnState.interruptPickerAbort = null;
                   }
                 })();
+                // Publish synchronously, before the stopped turn can reach its
+                // next loop iteration and attempt an ordinary surface.readLine().
+                turnState.pendingSteerRead = steerRead;
               },
             });
             return;

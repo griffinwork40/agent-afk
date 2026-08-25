@@ -64,12 +64,18 @@ export interface TurnState {
   interruptPickerAbort?: AbortController | null;
   /**
    * Steer message injected by the interrupt-and-steer picker's "Steer" path.
-   * Set by the `onSteer` callback in `interactive.ts` after the user types a
-   * redirect message; drained at the top of the `runInputLoop` while-body and
+   * Set after the pending steer read resolves with a redirect message; drained
+   * at the top of the `runInputLoop` while-body and
    * promoted to `seedBuffer` so it takes the same fast-path as slash-command
    * submit results. Null once drained.
    */
   pendingSteerText?: string | null;
+  /**
+   * The redirect read started by the Steer picker. The loop awaits this before
+   * opening its ordinary turn-boundary prompt, preserving InputSurface's
+   * single-pending-reader invariant when a stopped turn winds down quickly.
+   */
+  pendingSteerRead?: Promise<string | null> | null;
   /**
    * Accessor published by `runInputLoop` once the InputSurface is constructed.
    * Enables the `onSteer` closure in `interactive.ts` to call
@@ -77,7 +83,7 @@ export interface TurnState {
    * Cleared to null in `runInputLoop`'s finally block so no dangling closure
    * holds a reference to the disposed surface.
    */
-  steerReadLine?: (() => Promise<string>) | null;
+  steerReadLine?: ((signal?: AbortSignal) => Promise<string>) | null;
 }
 
 export function buildPrompt(mode: PermissionMode): string {

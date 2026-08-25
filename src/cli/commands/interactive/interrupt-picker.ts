@@ -86,7 +86,7 @@ const OPTIONS = [LABEL_STOP, LABEL_STEER, LABEL_CANCEL];
  *   2. `onSteer?.()` fires next (fire-and-forget): the callback reads a redirect
  *      message from the user and sets `turnState.pendingSteerText`, which the
  *      `runInputLoop` while-body drains on the next iteration.
- *   3. An empty redirect message (ESC or empty Enter) degrades to pure Stop
+ *   3. Escape cancels the dedicated redirect read and degrades to pure Stop
  *      behavior — the turn was already soft-stopped in step 1.
  */
 export async function showInterruptPicker(

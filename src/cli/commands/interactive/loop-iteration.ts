@@ -230,14 +230,20 @@ export async function runInputLoop(
   // Assigned here (inside the try) so the paired finally-clear at the bottom
   // always fires — placing it before the try would leave the closure set if
   // anything between assignment and try-entry threw.
-  turnState.steerReadLine = async () => {
-    const result = await surface.readLine({
-      promptFn: () => 'Steer the agent → ',
-      // onSigint not passed here: the second-Ctrl+C safety hatch is already
-      // live via turnState.interruptPickerAbort in handleSigint. The abort
-      // controller remains set until onSteer clears it after readline settles.
-    });
-    return result.text;
+  turnState.steerReadLine = async (signal) => {
+    const cancel = () => surface.abortPendingRead({ clearBuffer: true });
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+      const result = await surface.readLine({
+        promptFn: () => 'Steer the agent → ',
+        // Unlike the ordinary idle prompt, a single Escape cancels this
+        // borrowed read. Discard the redirect draft and degrade to Stop.
+        onEscape: cancel,
+      });
+      return result.text;
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
   };
 
   while (true) {
@@ -305,6 +311,14 @@ export async function runInputLoop(
       // so it takes the same fast-path as slash-command submit results.
       // Must sit BEFORE the seedBuffer === undefined plan-exit check so a steer
       // message is not skipped when a plan exit is also pending.
+      const steerRead = turnState.pendingSteerRead;
+      if (steerRead) {
+        const steerText = await steerRead;
+        if (turnState.pendingSteerRead === steerRead) {
+          turnState.pendingSteerRead = null;
+        }
+        if (steerText?.trim()) turnState.pendingSteerText = steerText;
+      }
       if (turnState.pendingSteerText) {
         seedBuffer = { text: turnState.pendingSteerText, attachments: [] };
         turnState.pendingSteerText = null;
