@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.2] - 2026-08-25
+
+### Fixed
+- cap list_directory output at 500 entries (#1292) (aff2d362)
+
 ## [5.152.1] - 2026-08-25
 
 ### Fixed
