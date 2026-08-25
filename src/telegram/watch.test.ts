@@ -14,6 +14,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-watch-test-'));
 process.env['AFK_HOME'] = tmpDir;
 
 import { SessionWatchManager, renderLedgerRecord, resolveWatchTarget } from './watch.js';
+import { routeKey } from './route.js';
 import { SessionLedgerWriter, type LedgerRecord } from '../agent/session-ledger.js';
 import { getSessionsDir } from '../paths.js';
 import {
@@ -278,7 +279,12 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
       bot as unknown as import('telegraf').Telegraf,
       messageHandler,
     );
-    manager.start(chatId, id, async (text) => { sent.push(text); });
+    manager.start(
+      chatId,
+      id,
+      async (text) => { sent.push(text); },
+      () => ({ chatId, threadId: 88 }),
+    );
 
     await sleep(100);
 
@@ -295,8 +301,13 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
 
     // Simulate the operator typing an answer into Telegram (the message handler
     // fires the resolver, which is what handle() would do when it sees a text).
-    const resolver = pendingElicitations.get(String(chatId));
+    const resolver = pendingElicitations.get(routeKey({ chatId, threadId: 88 }));
     expect(resolver).toBeDefined();
+    expect(bot.telegram.sendMessage).toHaveBeenCalledWith(
+      chatId,
+      expect.stringContaining('What is your name?'),
+      expect.objectContaining({ message_thread_id: 88 }),
+    );
     resolver!('Alice');
 
     // Give _run time to receive the result and write back the response.

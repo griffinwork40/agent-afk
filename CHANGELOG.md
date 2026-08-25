@@ -11,6 +11,73 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.151.0] - 2026-08-25
+
+### Added
+- add /copy slash command with render-time code block capture (#1285) (e4c1844e)
+
+## [5.150.2] - 2026-08-25
+
+### Fixed
+- guard bot.catch and acknowledge unsupported message types (#1178) (b4702a4b)
+
+### Changed
+- add unit tests for streaming watchdog module (#1123) (#1275) (ade4b218)
+
+## [5.150.1] - 2026-08-25
+
+### Fixed
+- resolve autoRoute thread at send time, not tick time (#1271) (#1273) (cab2217b)
+
+## [5.150.0] - 2026-08-25
+
+### Added
+- wire reconcileWaveManifests into session startup paths (#1082) (#1266) (c9fcac8f)
+
+## [5.149.7] - 2026-08-24
+
+### Fixed
+- handle threadId=0 edge case in route normalization (#1271) (#1276) (30bc58ba)
+
+### Changed
+- add unit tests for streaming watchdog and sender (#1123) (#1277) (b7162c70)
+
+## [5.149.6] - 2026-08-24
+
+### Added
+- add OpenAI models to /model picker (#1258) (#1274) (e45e35f9)
+
+### Fixed
+- keep auto-watch routes current (#1270) (7c2ca4b2)
+
+## [5.149.5] - 2026-08-24
+
+### Fixed
+- route auto-subscribe watch output to active topic thread (#1222) (#1267) (9f6c0ba3)
+
+### Changed
+- add unit tests for resolveForkInputs precedence paths (#1269) (#1272) (8cd25c7a)
+
+## [5.149.4] - 2026-08-24
+
+### Fixed
+- UI polish — code lang badge, centered transcript, blockquotes, transitions (#23-30) (#1201) (5f9eafea)
+
+## [5.149.3] - 2026-08-24
+
+### Fixed
+- route auto-subscribe watch output to active topic thread (#1222) (#1262) (a013af50)
+
+## [5.149.2] - 2026-08-24
+
+### Changed
+- extract pure resolution chain from forkSubagent (#1265) (e9951979)
+
+## [5.149.1] - 2026-08-24
+
+### Fixed
+- add xAI/Grok models to /model picker and docs (#1105) (#1263) (77717022)
+
 ## [5.149.0] - 2026-08-24
 
 ### Added

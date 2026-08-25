@@ -2,6 +2,7 @@ import { MemoryStore } from '../../../agent/memory/index.js';
 import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
 import { env } from '../../../config/env.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
+import { runReplReconcile } from '../../../agent/manifest/startup-reconcile.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, InteractiveCtx } from './shared.js';
@@ -148,6 +149,10 @@ export async function bootstrapSession(
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).
   sessionRef.current = session;
+
+  // Wave-manifest reconciliation: surface resumption offers for unfinished work
+  // from prior sessions. Fire-and-forget — never blocks session startup.
+  runReplReconcile(session.sessionId ?? '');
 
   // Step 7: register this REPL session in the cross-surface session registry so
   // it appears alongside Telegram/daemon sessions. Best-effort (never throws).

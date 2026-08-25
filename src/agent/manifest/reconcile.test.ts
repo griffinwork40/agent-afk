@@ -200,6 +200,8 @@ describe('formatResumptionOffer', () => {
     expect(formatted).toContain(waveId ?? '');
     expect(formatted).toContain('agent-tool');
     expect(formatted).toContain('investigate bug');
+    expect(formatted).toContain("re-dispatch each ready unit's prompt from its listed cwd");
+    expect(formatted).not.toContain('Accept? [yes/no]');
   });
 });
 

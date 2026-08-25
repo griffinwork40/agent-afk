@@ -184,7 +184,7 @@ export function formatResumptionOffer(offer: StaleManifestOffer): string {
     }
   }
 
-  lines.push(`  Accept? [yes/no] — or ignore to dismiss without retrying.`);
+  lines.push(`  To retry, re-dispatch each ready unit's prompt from its listed cwd; this notice does not accept yes/no replies.`);
   return lines.join('\n');
 }
 

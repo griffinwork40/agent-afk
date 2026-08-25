@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
 import path from 'path';
+import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import os from 'os';
@@ -523,6 +524,11 @@ export function registerDaemonCommand(program: Command): void {
             ).catch(() => undefined);
           },
         });
+
+        // Wave-manifest reconciliation at daemon startup: surface resumption
+        // offers for unfinished work. Non-interactive — requires
+        // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
+        runNonInteractiveReconcile('');
 
         if (options.once) {
           console.log(palette.info(`▶ Firing task '${taskId}' once...`));
