@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.151.0] - 2026-08-25
+
+### Added
+- add /copy slash command with render-time code block capture (#1285) (e4c1844e)
+
 ## [5.150.2] - 2026-08-25
 
 ### Fixed
