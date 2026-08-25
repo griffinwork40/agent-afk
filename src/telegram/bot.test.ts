@@ -535,6 +535,23 @@ describe('TelegramBot', () => {
     });
   });
 
+  describe('wave resumption offer routing', () => {
+    test('sends an offer to the session topic', () => {
+      const sendMessageMock = vi.fn(async () => ({ message_id: 1 }));
+      (bot as any).bot.telegram.sendMessage = sendMessageMock;
+
+      const sendOffer = (bot as any).sessionManager.options.onResumptionOffer as
+        ((route: { chatId: number; threadId?: number }, text: string) => void);
+      sendOffer({ chatId: 12345, threadId: 77 }, 'resume notice');
+
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        12345,
+        'resume notice',
+        { message_thread_id: 77 },
+      );
+    });
+  });
+
   describe('stats', () => {
     test('should track bot stats', () => {
       const stats = bot.getStats();

@@ -7,6 +7,7 @@ import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, Effor
 import { injectHotMemory } from '../agent/memory/index.js';
 import { injectCompanionPrimer } from '../agent/companion/index.js';
 import { setElicitationRoute, clearElicitationRoute } from './elicitation-route-registry.js';
+import { runTelegramReconcile } from '../agent/manifest/startup-reconcile.js';
 // Shared session-persistence utilities. These live under src/cli/ but are
 // surface-agnostic (pure functions over SessionStats / sidecar files); the
 // Telegram bot reuses them so a chat session lands in the SAME
@@ -137,6 +138,13 @@ export interface SessionManagerOptions {
    * process-wide `sessionRegistry` singleton when not provided.
    */
   registry?: SessionRegistry;
+
+  /**
+   * Called fire-and-forget when a new session is created and a wave-manifest
+   * resumption offer is available. The caller (TelegramBot) is responsible for
+   * forwarding the offer text to the chat. Never invoked when no offers exist.
+   */
+  onResumptionOffer?: (route: TelegramRoute, text: string) => void;
 }
 
 /**
@@ -180,8 +188,8 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry'>> &
-    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry'>;
+  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>> &
+    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>;
 
   constructor(options: SessionManagerOptions) {
     this.options = {
@@ -196,6 +204,7 @@ export class SessionManager {
       botCwd: options.botCwd,
       createSession: options.createSession,
       registry: options.registry,
+      onResumptionOffer: options.onResumptionOffer,
     };
   }
 
@@ -294,6 +303,11 @@ export class SessionManager {
       if (session.sessionId) {
         setElicitationRoute(session.sessionId, route);
         data.sessionId = session.sessionId;
+      }
+      // Wave-manifest reconciliation: surface resumption offers for unfinished
+      // work. Telegram is interactive — fire-and-forget, never blocks creation.
+      if (this.options.onResumptionOffer) {
+        runTelegramReconcile(session.sessionId ?? '', route, this.options.onResumptionOffer);
       }
       // Consume the staged resume only after a successful build: a thrown
       // createSession must leave it staged so the next getSession retries the
