@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.150.2] - 2026-08-25
+
+### Fixed
+- guard bot.catch and acknowledge unsupported message types (#1178) (b4702a4b)
+
+### Changed
+- add unit tests for streaming watchdog module (#1123) (#1275) (ade4b218)
+
 ## [5.150.1] - 2026-08-25
 
 ### Fixed
