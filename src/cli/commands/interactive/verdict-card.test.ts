@@ -798,3 +798,58 @@ describe('renderVerdictCard — context-specific affordances', () => {
     });
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Block-level markdown rendering (tables, code blocks, etc.)
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — block-level markdown rendering', () => {
+  it('GFM table in evidence field renders with box-drawing chars, not raw pipes', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'Fixed three files',
+      evidence: '| File | LOC |\n|------|-----|\n| a.ts | 100 |\n| b.ts | 200 |',
+      rawBody: '',
+    };
+    const card = withCols(120, () => renderVerdictCard(state));
+    const plain = stripAnsi(card);
+    // The raw GFM pipe-table syntax should NOT appear
+    expect(plain).not.toContain('|------|');
+    expect(plain).not.toContain('|------');
+    // Box-drawing characters from renderTable should appear
+    expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
+    // Table content should still be present
+    expect(plain).toContain('a.ts');
+    expect(plain).toContain('b.ts');
+    expect(plain).toContain('File');
+    expect(plain).toContain('LOC');
+  });
+
+  it('GFM table in fallback body renders with box-drawing chars', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      rawBody: '| PR | Status |\n|-----|--------|\n| #42 | merged |',
+    };
+    const card = withCols(120, () => renderVerdictCard(state));
+    const plain = stripAnsi(card);
+    expect(plain).not.toContain('|-----|');
+    expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
+    expect(plain).toContain('#42');
+    expect(plain).toContain('merged');
+  });
+
+  it('inline markdown (bold, code) still renders in row values', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'Run `pnpm test` to verify **success**',
+      rawBody: '',
+    };
+    const card = renderVerdictCard(state);
+    const plain = stripAnsi(card);
+    expect(plain).toContain('pnpm test');
+    expect(plain).toContain('success');
+    // Raw markdown markers should not appear
+    expect(plain).not.toContain('**');
+    expect(plain).not.toContain('`pnpm test`');
+  });
+});

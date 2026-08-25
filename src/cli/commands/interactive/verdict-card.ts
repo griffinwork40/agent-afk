@@ -25,7 +25,7 @@ import type { TerminalState, TerminalKind } from './terminal-state.js';
 import { palette } from '../../palette.js';
 import { displayWidth, padDisplayRight, truncateDisplayWidth } from '../../display.js';
 import { getTerminalWidth } from '../../terminal-size.js';
-import { renderCardLine } from '../../formatter.js';
+import { renderMarkdownToTerminal } from '../../formatter.js';
 import { wrapToWidth } from '../../wrap.js';
 import { formatCost } from '../../format-utils.js';
 
@@ -142,6 +142,11 @@ function deriveAffordance(state: TerminalState, innerW: number): string | null {
 
   if (!body) return null;
 
+  // When the source field contains block-level markdown (GFM tables, code
+  // fences), it cannot be meaningfully compressed to a one-line affordance.
+  // Fall back to the static default so the affordance row stays clean.
+  if (/^\|[-| :]+\|$/m.test(body) || /^```/m.test(body)) return null;
+
   const budget = innerW - prefix.length;
   if (budget <= 0) return null;
   const truncated =
@@ -205,14 +210,22 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
       .slice(0, MAX_FALLBACK_LINES);
     const summary =
       bodyLines.length > 0 ? bodyLines.join('\n') : `${state.kind} (no structured fields)`;
-    const wrapped = wrapToWidth(renderCardLine(summary), innerW).split('\n');
+    const rendered = renderMarkdownToTerminal(summary, { maxWidth: innerW });
+    const wrapped = wrapToWidth(rendered, innerW).split('\n');
     for (const wl of wrapped) {
+      if (wl === '') continue; // drop empty trailing lines from block terminators
       lines.push(pipe + '  ' + padDisplayRight(wl, innerW) + '  ' + pipe);
     }
   } else {
     for (const row of rows) {
       const label = palette.dim(padDisplayRight(row.label, labelW));
-      const wrapped = wrapToWidth(renderCardLine(row.value), valueW).split('\n');
+      const rendered = renderMarkdownToTerminal(row.value, { maxWidth: valueW });
+      const wrapped = wrapToWidth(rendered, valueW).split('\n');
+      // Filter trailing empty lines from block-level markdown terminators
+      // (e.g. tables, paragraphs emit a trailing '\n' that produces an empty
+      // entry after split). Without this the card would show a blank row at
+      // the bottom of every value that contained block-level markup.
+      while (wrapped.length > 0 && wrapped[wrapped.length - 1] === '') wrapped.pop();
       const first = wrapped[0] ?? '';
       lines.push(
         pipe + '  ' + label + '  ' + padDisplayRight(first, valueW) + '  ' + pipe,
