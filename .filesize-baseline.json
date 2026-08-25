@@ -26,11 +26,11 @@
     "src/cli/commands/interactive.ts": { "loc": 581, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/loop-iteration.ts": { "loc": 428, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/tool-lane.ts": { "loc": 448, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/interactive/turn-handler.ts": { "loc": 407, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/interactive/turn-handler.ts": { "loc": 411, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/worktree.ts": { "loc": 478, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/trace.ts": { "loc": 573, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/elicitation/agent-question.ts": { "loc": 399, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/slash/commands/info.ts": { "loc": 450, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/slash/commands/info.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts": { "loc": 507, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/env.ts": { "loc": 1804, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
@@ -38,9 +38,9 @@
     "src/improve/eval-run/runner.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/propose/template-engine.ts": { "loc": 459, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/skills/audit-fit/index.ts": { "loc": 421, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/bot.ts": { "loc": 392, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/bot.ts": { "loc": 369, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 392, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/message.ts": { "loc": 581, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/session-manager.ts": { "loc": 461, "reason": "legacy: predates the ceiling gate; pending concern extraction" }
+    "src/telegram/session-manager.ts": { "loc": 468, "reason": "legacy: predates the ceiling gate; pending concern extraction" }
   }
 }
