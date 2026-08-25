@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.150.1] - 2026-08-25
+
+### Fixed
+- resolve autoRoute thread at send time, not tick time (#1271) (#1273) (cab2217b)
+
 ## [5.150.0] - 2026-08-25
 
 ### Added
