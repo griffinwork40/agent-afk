@@ -17,6 +17,7 @@ import {
   MAX_TOOL_INFLIGHT_MS,
   NEXT_EVENT_TIMEOUT_MS,
   PAUSE_SLACK_MS,
+  PROGRESS_START_DELAY_MS,
   TOOL_INFLIGHT_RECHECK_MS,
   armProgressGateTimer,
   makeNextWithTimeout,
@@ -111,6 +112,397 @@ describe('WatchdogState — apiRoundInFlight fields', () => {
     expect(state.apiRoundInFlight).toBe(true);
     expect(state.apiRoundSince).toBeTypeOf('number');
   });
+});
+
+describe('makeNextWithTimeout — first-event timeout (FIRST_EVENT_TIMEOUT_MS)', () => {
+  it('fires StreamTimeoutError after FIRST_EVENT_TIMEOUT_MS of silence on first call', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      // receivedAny=false → windowMs = FIRST_EVENT_TIMEOUT_MS
+      const state = makeState({ receivedAny: false });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      // Just before the deadline: not fired yet.
+      await vi.advanceTimersByTimeAsync(FIRST_EVENT_TIMEOUT_MS - 1);
+      let settled = false;
+      void p.catch(() => { settled = true; });
+      expect(settled).toBe(false);
+
+      // Exactly at the deadline: fires.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('first-event error message distinguishes "first message" from subsequent timeouts', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: false });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      const rejection = p.catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(FIRST_EVENT_TIMEOUT_MS + 1);
+      const err = await rejection;
+      expect(err).toBeInstanceOf(StreamTimeoutError);
+      expect((err as StreamTimeoutError).message).toContain('first message');
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('does NOT fire before FIRST_EVENT_TIMEOUT_MS elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: false });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(FIRST_EVENT_TIMEOUT_MS - 100);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('resolves cleanly when iterator yields before the first-event timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolve!: (v: IteratorResult<never>) => void;
+      const iter: AsyncIterator<never> = {
+        next: () => new Promise<IteratorResult<never>>((res) => { resolve = res; }),
+      };
+      const state = makeState({ receivedAny: false });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      // Yield the event before the timeout fires.
+      await vi.advanceTimersByTimeAsync(FIRST_EVENT_TIMEOUT_MS / 2);
+      resolve({ value: undefined as never, done: true });
+      const result = await p;
+      expect(result.done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('uses NEXT_EVENT_TIMEOUT_MS (not FIRST) once receivedAny=true', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      // receivedAny=true → windowMs = NEXT_EVENT_TIMEOUT_MS
+      const state = makeState({ receivedAny: true });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      // Advance past FIRST_EVENT_TIMEOUT_MS — must NOT fire on the first-event path.
+      // (FIRST_EVENT_TIMEOUT_MS < NEXT_EVENT_TIMEOUT_MS, so this distinguishes them.)
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(FIRST_EVENT_TIMEOUT_MS + 1);
+      expect(settled).toBe(false);
+
+      // Advance the remaining gap to NEXT_EVENT_TIMEOUT_MS.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS - FIRST_EVENT_TIMEOUT_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+});
+
+describe('makeNextWithTimeout — between-event timeout (NEXT_EVENT_TIMEOUT_MS)', () => {
+  it('fires StreamTimeoutError after NEXT_EVENT_TIMEOUT_MS of silence', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: true });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS - 1);
+      let settled = false;
+      void p.catch(() => { settled = true; });
+      expect(settled).toBe(false);
+
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('between-event error message omits "first message" wording', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: true });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      const rejection = p.catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      const err = await rejection;
+      expect(err).toBeInstanceOf(StreamTimeoutError);
+      expect((err as StreamTimeoutError).message).not.toContain('first message');
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('re-arming: updating lastActivityAt resets the countdown', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: true });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // Advance almost to the timeout.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS - 100);
+      expect(settled).toBe(false);
+
+      // Simulate sub-agent sink activity updating lastActivityAt.
+      state.lastActivityAt = Date.now();
+
+      // Advance another full window — the watchdog re-reads lastActivityAt
+      // on each arm() invocation, so this advances from the new baseline
+      // and the deadline should not have fired yet.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS - 100);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('sets state.timedOut=true when the watchdog fires', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: true });
+      expect(state.timedOut).toBe(false);
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      // Attach rejection handler BEFORE advancing timers so the unhandled-
+      // rejection warning is never emitted.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      await rejection;
+
+      expect(state.timedOut).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+});
+
+describe('makeNextWithTimeout — tool-in-flight suspension', () => {
+  it('suspends watchdog while inFlightTools.size > 0, within MAX_TOOL_INFLIGHT_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const toolInFlightSince = Date.now();
+      const state = makeState({
+        receivedAny: true,
+        inFlightTools: new Set(['tool-abc']),
+        toolInFlightSince,
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // Past the normal window — watchdog would have fired without tool-in-flight.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + TOOL_INFLIGHT_RECHECK_MS);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('fires past MAX_TOOL_INFLIGHT_MS even when a tool is still in flight (wedged tool)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const toolInFlightSince = Date.now(); // fake epoch = 0 ms
+      const state = makeState({
+        receivedAny: true,
+        inFlightTools: new Set(['tool-abc']),
+        toolInFlightSince,
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // The ceiling check is: Date.now() - toolInFlightSince < MAX_TOOL_INFLIGHT_MS.
+      // toolInFlightSince=0, so ceiling is at MAX_TOOL_INFLIGHT_MS total clock time.
+      // Advance to just before that ceiling to confirm suspension is still active.
+      const justBeforeCeiling = MAX_TOOL_INFLIGHT_MS - TOOL_INFLIGHT_RECHECK_MS;
+      await vi.advanceTimersByTimeAsync(justBeforeCeiling);
+      expect(settled).toBe(false);
+
+      // Past the ceiling — watchdog must fire.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(TOOL_INFLIGHT_RECHECK_MS * 2);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('resumes normal watchdog after all tools complete (inFlightTools.size = 0)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const toolInFlightSince = Date.now();
+      const state = makeState({
+        receivedAny: true,
+        inFlightTools: new Set(['tool-abc']),
+        toolInFlightSince,
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // Advance past normal window — suspended while tool runs.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      expect(settled).toBe(false);
+
+      // Tool completes — simulate streaming.ts clearing the set.
+      state.inFlightTools.delete('tool-abc');
+      state.toolInFlightSince = null;
+      state.lastActivityAt = Date.now();
+
+      // Now a full NEXT_EVENT_TIMEOUT_MS of silence should fire.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + TOOL_INFLIGHT_RECHECK_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('toolInFlightSince=null disables suspension even when inFlightTools.size > 0', async () => {
+    // Defensive: if the set is non-empty but toolInFlightSince is null the
+    // implementation must NOT suspend indefinitely — it should fall through to
+    // the apiRoundInFlight check and then reject.
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({
+        receivedAny: true,
+        inFlightTools: new Set(['tool-abc']),
+        toolInFlightSince: null, // inconsistent but defensive
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + TOOL_INFLIGHT_RECHECK_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+});
+
+describe('makeNextWithTimeout — paused-window extension (pausedUntil)', () => {
+  it('extends deadline to pausedUntil + PAUSE_SLACK_MS when pausedUntil is set', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const pauseMs = 120_000; // 120 s pause window
+      const pausedUntil = new Date(Date.now() + pauseMs);
+      const state = makeState({
+        receivedAny: true,
+        pausedUntil,
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // Advance past normal NEXT_EVENT_TIMEOUT_MS — must NOT fire because
+      // the window is extended to (pausedUntil - now) + PAUSE_SLACK_MS.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      expect(settled).toBe(false);
+
+      // Advance past the pause itself but NOT past the slack — still alive.
+      await vi.advanceTimersByTimeAsync(pauseMs - NEXT_EVENT_TIMEOUT_MS - 1 + PAUSE_SLACK_MS - 1);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('extended window is at least NEXT_EVENT_TIMEOUT_MS even for a near-expiry pausedUntil', async () => {
+    // pausedUntil is 1 ms in the future — the extension formula's Math.max
+    // ensures the window never shrinks below NEXT_EVENT_TIMEOUT_MS.
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const pausedUntil = new Date(Date.now() + 1);
+      const state = makeState({
+        receivedAny: true,
+        pausedUntil,
+      });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      // The window must be at least NEXT_EVENT_TIMEOUT_MS, so advance to just
+      // before that — must not fire yet.
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(2);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('pausedUntil=null uses the standard receivedAny path', async () => {
+    vi.useFakeTimers();
+    try {
+      const { iter } = makeHangingIter();
+      const state = makeState({ receivedAny: true, pausedUntil: null });
+      const next = makeNextWithTimeout(iter, state);
+      const p = next();
+
+      // Should fire at exactly NEXT_EVENT_TIMEOUT_MS.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
 });
 
 describe('makeNextWithTimeout — apiRoundInFlight behavioral tests', () => {
@@ -531,5 +923,13 @@ describe('armProgressGateTimer', () => {
     clearTimeout(handle);
     await vi.advanceTimersByTimeAsync(500);
     expect(opened).toBe(false);
+  });
+
+  it('PROGRESS_START_DELAY_MS is the expected default gate delay (5 000 ms)', () => {
+    expect(PROGRESS_START_DELAY_MS).toBe(5_000);
+  });
+
+  it('PAUSE_SLACK_MS is exported and equals 90 000 ms', () => {
+    expect(PAUSE_SLACK_MS).toBe(90_000);
   });
 });
