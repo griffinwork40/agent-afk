@@ -212,6 +212,9 @@ export async function runInputLoop(
   bgResultNotifier.onInjectable = () => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
     if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
+    // Don't abort a steer readline — the user is mid-input and aborting would
+    // degrade their redirect to Stop with no feedback (Item 1 fix).
+    if (turnState.pendingSteerRead) return;
     autoResumeCount++;
     // Audible cue (no-op unless AFK_BELL=1 + TTY) before the seeded turn takes
     // over the prompt — the human-facing "your background work resumed" signal.
@@ -233,6 +236,11 @@ export async function runInputLoop(
   turnState.steerReadLine = async (signal) => {
     const cancel = () => surface.abortPendingRead({ clearBuffer: true });
     signal?.addEventListener('abort', cancel, { once: true });
+    // Per WHATWG spec, addEventListener fires cancel() synchronously when the
+    // signal is already aborted — pendingReadResolve is null at that point so
+    // abortPendingRead is a no-op and the listener is consumed. Guard here so we
+    // degrade to Stop cleanly instead of starting a readLine the abort can't kill.
+    if (signal?.aborted) return '';
     try {
       const result = await surface.readLine({
         promptFn: () => 'Steer the agent → ',
@@ -872,5 +880,8 @@ export async function runInputLoop(
     // Clear the steer-readline accessor so no dangling closure holds a
     // reference to the disposed InputSurface after runInputLoop exits.
     turnState.steerReadLine = null;
+    // Prevent stale steer state from replaying on session re-entry (Item 3 fix).
+    turnState.pendingSteerRead = null;
+    turnState.pendingSteerText = null;
   }
 }

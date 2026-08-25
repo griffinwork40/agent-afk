@@ -1164,4 +1164,100 @@ describe('runReplLoop — steer drain (pendingSteerText → seedBuffer)', () => 
     const { text } = firstCall![0] as { text: string };
     expect(text).toBe('normal turn');
   });
+
+  // ── pendingSteerRead promise paths (Item 4) ─────────────────────────────
+
+  it('4a: pendingSteerRead resolves with text → runTurn receives that text as seed', async () => {
+    // Pre-set a pendingSteerRead Promise that resolves to a steer message.
+    // The loop's steer-drain block awaits it and promotes non-empty text to
+    // pendingSteerText → seedBuffer, bypassing readLine for that iteration.
+    surfaceState.readLineQueue = [{ text: '/exit', attachments: [] }];
+
+    const turnState = makeTurnState();
+    turnState.pendingSteerRead = Promise.resolve('redirect me');
+
+    await runReplLoop(makeCtx(), makeTranscript() as never, turnState, vi.fn());
+
+    // runTurn should have been called with the steer text
+    const firstCall = vi.mocked(runTurn).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const { text } = firstCall![0] as { text: string };
+    expect(text).toBe('redirect me');
+
+    // pendingSteerRead should be null after the loop drains and exits (Item 3)
+    expect(turnState.pendingSteerRead).toBeNull();
+  });
+
+  it('4b: pendingSteerRead resolves with null → readLine called normally (no steer text injected)', async () => {
+    // A null-resolving pendingSteerRead means the user cancelled the steer
+    // readline. The loop should NOT inject any steer text and must call
+    // readLine for the next prompt as normal.
+    surfaceState.readLineQueue = [{ text: 'normal input', attachments: [] }];
+
+    const turnState = makeTurnState();
+    turnState.pendingSteerRead = Promise.resolve(null);
+
+    await runReplLoop(makeCtx(), makeTranscript() as never, turnState, vi.fn());
+
+    // readLine must have been called (normal path, not the steer fast-path)
+    expect(surfaceState.readLineCalls).toBeGreaterThanOrEqual(1);
+    // runTurn was called with the ordinary readLine text, not steer text
+    const firstCall = vi.mocked(runTurn).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const { text } = firstCall![0] as { text: string };
+    expect(text).toBe('normal input');
+  });
+
+  it('4c: background job settles while pendingSteerRead is set — steer text still reaches runTurn', async () => {
+    // Regression guard for Item 1 fix: if auto-resume were to call
+    // abortPendingRead() while a steer readline is active, the steer
+    // Promise would resolve to empty and the redirect would be lost.
+    // With the fix, onInjectable returns early when pendingSteerRead is set.
+    // Verify the steer text is preserved end-to-end even when a bg job settles.
+    const ctx = makeCtx();
+    const registry = ctx.backgroundRegistry;
+
+    // Stub a background subagent we can fire from within beforeReturn
+    let captured: ((r: { id: string; status: string; message: object }) => void) | undefined;
+    const handle = {
+      id: 'steer-bg-1',
+      status: 'idle',
+      runInBackground: vi.fn((_p: string, on?: (r: never) => void) => { captured = on as never; }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      teardown: vi.fn().mockResolvedValue(undefined),
+      run: vi.fn(),
+      runToResult: vi.fn(),
+    } as unknown as import('../../../agent/subagent.js').SubagentHandle;
+
+    surfaceState.readLineQueue = [
+      {
+        text: '/exit',
+        attachments: [],
+        beforeReturn() {
+          // Register + settle the bg job inside the readLine mock — by this
+          // point BgResultNotifier is subscribed to the registry.
+          registry.register({ handle, prompt: 'background task', model: 'sonnet' });
+          // Fire terminal event (triggers onInjectable)
+          captured?.({
+            id: 'steer-bg-1',
+            status: 'succeeded',
+            message: { content: 'bg result', role: 'assistant' },
+          } as never);
+        },
+      },
+    ];
+
+    const turnState = makeTurnState();
+    // Pre-set pendingSteerRead to a resolved steer message.
+    // The guard (Item 1 fix) must prevent onInjectable from aborting this.
+    turnState.pendingSteerRead = Promise.resolve('my steer redirect');
+
+    await runReplLoop(ctx, makeTranscript() as never, turnState, vi.fn());
+
+    // The steer text must have been delivered to runTurn (not lost to abort)
+    const firstCall = vi.mocked(runTurn).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const { text } = firstCall![0] as { text: string };
+    expect(text).toBe('my steer redirect');
+  });
 });
