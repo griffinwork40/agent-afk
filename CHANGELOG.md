@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.1] - 2026-08-25
+
+### Fixed
+- skip node_modules in plugin skill discovery walk (#1297) (b086417b)
+
 ## [5.152.0] - 2026-08-25
 
 ### Added
