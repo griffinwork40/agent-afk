@@ -160,7 +160,7 @@ export function registerChatCommand(program: Command): void {
     .option('--session-id <uuid>', 'Assign a specific UUID to this session (creates new; errors if already exists)')
     .option('--post <targets>', 'Headless publish of the final assistant message: github, telegram, or github,telegram')
     .option('--post-pr <ref>', 'PR number, URL, or branch for --post github (defaults to the current-branch PR)')
-    .option('--dangerously-skip-permissions', 'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question.')
+    .option('--dangerously-skip-permissions', 'Skip path-approval prompts: read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question.')
     .action(async (rawMessage: string | undefined, options: {
       model: AgentModelInput;
       stream: boolean;
@@ -593,7 +593,7 @@ export function registerChatCommand(program: Command): void {
           isNonInteractive: true,
           // Permission mode: --dangerously-skip-permissions forces bypass; else
           // the resolved afk.config.json `permissionMode` (loadConfig now always
-          // returns one — DEFAULT_CLI_PERMISSION_MODE = bypass for new installs,
+          // returns one — DEFAULT_CLI_PERMISSION_MODE = contained for new installs,
           // overridable by the config key). Always defined, so chat never falls
           // through to the session-layer 'default'.
           ...(options.dangerouslySkipPermissions

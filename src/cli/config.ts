@@ -96,7 +96,7 @@ export function loadTelegramConfig(): NonNullable<CliConfig['telegram']> {
 /**
  * Resolve the effective CLI permission mode for display / status surfaces:
  * the afk.config.json `permissionMode` when set, else the new-install default
- * (`DEFAULT_CLI_PERMISSION_MODE` = bypass). Reads the memoized JSON directly so
+ * (`DEFAULT_CLI_PERMISSION_MODE` = contained). Reads the memoized JSON directly so
  * it is side-effect-free and never throws on the `local-*`-model guard that the
  * full `loadConfig` enforces — same rationale as `loadTelegramConfig`. This is
  * the canonical answer to "what mode would a fresh `afk chat`/`afk i` run in?"
@@ -185,7 +185,7 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
     ...(merged.systemPrompt !== undefined ? { systemPrompt: merged.systemPrompt } : {}),
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
     ...(shadowedAfkMdPaths !== undefined ? { shadowedAfkMdPaths } : {}),
-    // New-install default is bypass (DEFAULT_CLI_PERMISSION_MODE); an explicit
+    // New-install default is contained (DEFAULT_CLI_PERMISSION_MODE); an explicit
     // afk.config.json / env / override `permissionMode` still wins.
     permissionMode: merged.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE,
     ...(merged.autoRouting !== undefined ? { autoRouting: merged.autoRouting } : {}),

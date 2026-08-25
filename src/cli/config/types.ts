@@ -415,12 +415,15 @@ export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {
 /**
  * Invariant: the CLI-surface default permission mode. When `afk.config.json`
  * sets no `permissionMode`, the human-driven CLI surfaces (`afk chat` and
- * `afk interactive`) start in `bypassPermissions` — path containment and the
- * path-approval prompt are OFF, so the agent reads/writes anywhere with no
- * confirmation. This is the new-install default and it persists every session
- * until the operator changes it (`afk config set permissionMode default`, a
- * `permissionMode` key in afk.config.json, `--dangerously-skip-permissions`, or
- * the live `/bypass` toggle).
+ * `afk interactive`) start in `default` — path containment is ON, the agent
+ * prompts before writing outside the working directory. Pass
+ * `--dangerously-skip-permissions` or `afk config set permissionMode
+ * bypassPermissions` to opt into unrestricted mode.
+ *
+ * History: prior to #1283 this defaulted to `bypassPermissions`, meaning a
+ * fresh `npm install -g agent-afk && afk i` could write anywhere with no
+ * prompt. Telegram already defaulted to `'default'` with hook-based
+ * enforcement; this change aligns the CLI surfaces to the same posture.
  *
  * Scope is deliberately narrow: this default lives at the loadConfig() layer,
  * which only `afk chat` + `afk interactive` consume via `cliConfig.permissionMode`.
@@ -430,4 +433,4 @@ export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {
  * subagents that inherit no explicit mode all remain contained. The daemon sets
  * `bypassPermissions` explicitly and is unaffected.
  */
-export const DEFAULT_CLI_PERMISSION_MODE: PermissionMode = 'bypassPermissions';
+export const DEFAULT_CLI_PERMISSION_MODE: PermissionMode = 'default';

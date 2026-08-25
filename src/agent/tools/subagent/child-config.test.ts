@@ -773,11 +773,11 @@ describe('permission-mode inheritance (ADR-0001 premise — previously pinned by
     expect(metadata.permissionMode).toBe('default');
   });
 
-  it('leaves the child contained even though every top-level surface defaults to bypass', () => {
-    // Parent side: the CLI default really is a containment-disabling mode.
-    expect(DEFAULT_CLI_PERMISSION_MODE).toBe('bypassPermissions');
-    expect(pathContainmentBypassed(DEFAULT_CLI_PERMISSION_MODE)).toBe(true);
-    // Child side: resolves to 'default', which does NOT disable containment.
+  it('confirms both CLI and child default to contained mode', () => {
+    // Parent side: the CLI default is now contained (flipped from bypass in #1283).
+    expect(DEFAULT_CLI_PERMISSION_MODE).toBe('default');
+    expect(pathContainmentBypassed(DEFAULT_CLI_PERMISSION_MODE)).toBe(false);
+    // Child side: also resolves to 'default'.
     const { childConfig } = buildChildConfig(baseArgs());
     const { metadata } = buildInitialState(childConfig, 'sonnet');
     expect(pathContainmentBypassed(metadata.permissionMode)).toBe(false);

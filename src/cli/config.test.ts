@@ -1444,11 +1444,11 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     _resetConfigCache();
   });
 
-  it('defaults to bypassPermissions when afk.config.json sets no permissionMode', () => {
+  it('defaults to contained mode when afk.config.json sets no permissionMode', () => {
     mockConfig({});
-    expect(loadConfig().permissionMode).toBe('bypassPermissions');
+    expect(loadConfig().permissionMode).toBe('default');
     // The exported constant is the single source of truth.
-    expect(DEFAULT_CLI_PERMISSION_MODE).toBe('bypassPermissions');
+    expect(DEFAULT_CLI_PERMISSION_MODE).toBe('default');
     expect(loadConfig().permissionMode).toBe(DEFAULT_CLI_PERMISSION_MODE);
   });
 
@@ -1462,19 +1462,19 @@ describe('loadConfig() — permissionMode default (new-install bypass)', () => {
     expect(loadConfig().permissionMode).toBe('plan');
   });
 
-  it('falls back to the bypass default when permissionMode is garbage (invalid ignored)', () => {
+  it('falls back to the contained default when permissionMode is garbage (invalid ignored)', () => {
     mockConfig({ permissionMode: 'totally-not-a-mode' });
-    expect(loadConfig().permissionMode).toBe('bypassPermissions');
+    expect(loadConfig().permissionMode).toBe('default');
   });
 
   it('an explicit overrides.permissionMode still wins over the default', () => {
     mockConfig({});
-    expect(loadConfig({ permissionMode: 'default' }).permissionMode).toBe('default');
+    expect(loadConfig({ permissionMode: 'bypassPermissions' }).permissionMode).toBe('bypassPermissions');
   });
 
-  it('resolveCliPermissionMode() returns the bypass default when unset, and the config value when set', () => {
+  it('resolveCliPermissionMode() returns the contained default when unset, and the config value when set', () => {
     mockConfig({});
-    expect(resolveCliPermissionMode()).toBe('bypassPermissions');
+    expect(resolveCliPermissionMode()).toBe('default');
     _resetConfigCache();
     mockConfig({ permissionMode: 'plan' });
     expect(resolveCliPermissionMode()).toBe('plan');
