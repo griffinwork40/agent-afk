@@ -14,7 +14,7 @@ import {
   type VerdictMeta,
 } from './verdict-card.js';
 import { createVerdictLedger } from './verdict-ledger.js';
-import type { TerminalState } from './terminal-state.js';
+import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { displayWidth, stripAnsi as displayStripAnsi } from '../../display.js';
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -804,6 +804,20 @@ describe('renderVerdictCard — context-specific affordances', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('renderVerdictCard — block-level markdown rendering', () => {
+  it('renders a GFM table preserved by the terminal-state parser', () => {
+    const parsed = parseTerminalState(
+      'Done\n- What was done: Fixed one file\n- Evidence: results:\n' +
+        '  | File | LOC |\n  |------|-----|\n  | a.ts | 100 |',
+    );
+    expect(parsed).not.toBeNull();
+
+    const plain = stripAnsi(withCols(120, () => renderVerdictCard(parsed!)));
+    expect(plain).not.toContain('|------|');
+    expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
+    expect(plain).toContain('results:');
+    expect(plain).toContain('a.ts');
+  });
+
   it('GFM table in evidence field renders with box-drawing chars, not raw pipes', () => {
     const state: TerminalState = {
       kind: 'done',
@@ -836,6 +850,16 @@ describe('renderVerdictCard — block-level markdown rendering', () => {
     expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
     expect(plain).toContain('#42');
     expect(plain).toContain('merged');
+  });
+
+  it('normalizes an orphaned bold opener in fallback body content', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      rawBody: '** No code changed',
+    };
+    const plain = stripAnsi(renderVerdictCard(state));
+    expect(plain).toContain('No code changed');
+    expect(plain).not.toContain('**');
   });
 
   it('inline markdown (bold, code) still renders in row values', () => {

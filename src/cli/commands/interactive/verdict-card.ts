@@ -210,7 +210,12 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
       .slice(0, MAX_FALLBACK_LINES);
     const summary =
       bodyLines.length > 0 ? bodyLines.join('\n') : `${state.kind} (no structured fields)`;
-    const rendered = renderMarkdownToTerminal(summary, { maxWidth: innerW });
+    // Keep renderCardLine's tolerance for a common malformed bold opener.
+    // `** ` and `__ ` cannot open CommonMark emphasis, so the block renderer
+    // would otherwise display the orphaned marker literally. The whitespace
+    // guard deliberately leaves globs and identifiers untouched.
+    const normalizedSummary = summary.replace(/^(?:\*\*|__)\s/, '');
+    const rendered = renderMarkdownToTerminal(normalizedSummary, { maxWidth: innerW });
     const wrapped = wrapToWidth(rendered, innerW).split('\n');
     for (const wl of wrapped) {
       if (wl === '') continue; // drop empty trailing lines from block terminators
