@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.151.1] - 2026-08-25
+
+### Fixed
+- render block-level markdown (tables, code) in verdict cards (#1295) (d26ada64)
+
 ## [5.151.0] - 2026-08-25
 
 ### Added
