@@ -2,6 +2,7 @@ import { type Token, type Tokens } from 'marked';
 import { wrapToWidth } from './wrap.js';
 import { highlightCode } from './syntax-highlight.js';
 import { palette } from './palette.js';
+import { registerCodeBlock } from './code-block-register.js';
 
 /**
  * Render a blockquote token to ANSI-styled terminal output.
@@ -95,15 +96,23 @@ export function renderCodeBlock(
     // gap after an empty fence in the non-streamed render paths.
     return palette.dim(`│ ${label}`) + '\n';
   }
+  // Register the raw text before any ANSI decoration so `/copy N` can
+  // retrieve clean, paste-ready source. The index is 1-based per turn.
+  const blockIndex = registerCodeBlock(lang, code.text);
+
   const highlighted = highlightCode(code.text, lang);
   const bodyLines = highlighted.split('\n');
   // Drop trailing empty line so adjacent blocks don't double-space.
   if (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') bodyLines.pop();
   const gutter = palette.dim('│ ');
   const body = bodyLines.map((line) => gutter + line).join('\n');
-  // Language tag only when explicitly given; no literal "[code]" header
-  // when the fence has no language. The dim left gutter visually marks
-  // the block (mirrors the blockquote convention above).
-  const header = code.lang ? palette.dim(`│ ${code.lang}`) + '\n' : '';
+  // Language tag + copy hint. The `/cp N` hint tells the user which index
+  // to pass to `/copy` to grab this block. When there is no explicit
+  // language tag, emit a bare hint line instead of no header at all —
+  // the hint is the point.
+  const copyHint = palette.dim(` ── /cp ${blockIndex}`);
+  const header = code.lang
+    ? palette.dim(`│ ${code.lang}`) + copyHint + '\n'
+    : palette.dim('│') + copyHint + '\n';
   return header + body + '\n';
 }
