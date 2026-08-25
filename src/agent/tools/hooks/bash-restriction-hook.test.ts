@@ -428,6 +428,18 @@ describe('SENSITIVE_PATH_SIGNAL stays in sync with the built-in sensitive roots'
     const uncovered = allCandidates.filter((c) => !SENSITIVE_PATH_SIGNAL.test(c));
     expect(uncovered).toEqual([]);
   });
+
+  it('includes Library/LaunchAgents in builtinBashSensitiveRoots', () => {
+    expect(allCandidates.some((c) => c.includes('LaunchAgents'))).toBe(true);
+  });
+
+  it('includes Library/LaunchDaemons in builtinBashSensitiveRoots', () => {
+    expect(allCandidates.some((c) => c.includes('LaunchDaemons'))).toBe(true);
+  });
+
+  it('includes .config/systemd/user in builtinBashSensitiveRoots', () => {
+    expect(allCandidates.some((c) => c.includes('systemd'))).toBe(true);
+  });
 });
 
 describe('deriveRestrictedSubstrings — no coverage regression from sharing the read denylist', () => {

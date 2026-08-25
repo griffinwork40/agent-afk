@@ -754,3 +754,32 @@ describe('write-denylist — tilde backslash expansion in AFK_WRITE_DENYLIST (PR
     expect(expanded?.startsWith(homedir())).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PR #1279 — OS service registration directories in BUILTIN_WRITE_DENYLIST
+// ---------------------------------------------------------------------------
+
+describe('write-denylist — OS service registration directories (PR #1279)', () => {
+  it('macOS: LaunchAgents/LaunchDaemons present only on darwin', () => {
+    if (process.platform === 'darwin') {
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('LaunchAgents'))).toBe(true);
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('LaunchDaemons'))).toBe(true);
+      expect(BUILTIN_WRITE_DENYLIST).toContain(`${homedir()}/Library/LaunchAgents`);
+      expect(BUILTIN_WRITE_DENYLIST).toContain(`${homedir()}/Library/LaunchDaemons`);
+      expect(BUILTIN_WRITE_DENYLIST).toContain('/Library/LaunchAgents');
+      expect(BUILTIN_WRITE_DENYLIST).toContain('/Library/LaunchDaemons');
+    } else {
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('LaunchAgents'))).toBe(false);
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('LaunchDaemons'))).toBe(false);
+    }
+  });
+
+  it('linux: systemd/user present only on linux', () => {
+    if (process.platform === 'linux') {
+      expect(BUILTIN_WRITE_DENYLIST).toContain(`${homedir()}/.config/systemd/user`);
+      expect(BUILTIN_WRITE_DENYLIST).toContain('/etc/systemd/system');
+    } else {
+      expect(BUILTIN_WRITE_DENYLIST.some((p) => p.includes('systemd') && !p.includes('/etc'))).toBe(false);
+    }
+  });
+});

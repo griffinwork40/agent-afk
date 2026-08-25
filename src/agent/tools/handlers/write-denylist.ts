@@ -61,6 +61,21 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
         `${env.USERPROFILE}\\.gnupg`,
       ]
     : []),
+  // S5 — OS service registration directories (#1279)
+  ...(process.platform === 'darwin'
+    ? [
+        `${homedir()}/Library/LaunchAgents`,
+        `${homedir()}/Library/LaunchDaemons`,
+        '/Library/LaunchAgents',
+        '/Library/LaunchDaemons',
+      ]
+    : []),
+  ...(process.platform === 'linux'
+    ? [
+        `${homedir()}/.config/systemd/user`,
+        '/etc/systemd/system',
+      ]
+    : []),
 ];
 
 /**

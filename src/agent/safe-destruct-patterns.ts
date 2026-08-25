@@ -213,4 +213,18 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     blockReason:
       'safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
+  {
+    id: 'launchctl-load',
+    re: /\blaunchctl\s+(load|bootstrap|submit|start)\b/i,
+    tier: 'block',
+    blockReason:
+      'safe-destruct: blocked [launchctl-load] — installs a persistent launchd service that survives reboots and session termination. Use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the installation is genuinely intended, stop and ask the operator to run it.',
+  },
+  {
+    id: 'systemctl-enable',
+    re: /\bsystemctl\s+(enable|start|daemon-reload)\b/i,
+    tier: 'block',
+    blockReason:
+      'safe-destruct: blocked [systemctl-enable] — enables or starts a persistent systemd service that survives reboots and session termination. Use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the installation is genuinely intended, stop and ask the operator to run it.',
+  },
 ];

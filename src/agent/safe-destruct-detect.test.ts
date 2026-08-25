@@ -81,6 +81,13 @@ describe('detectDestructiveCommands', () => {
     ["psql -c 'DROP SCHEMA public'", 'sql-drop-truncate'],
     ["psql -c 'DROP INDEX idx_name'", 'sql-drop-truncate'],
     ['terraform destroy -auto-approve', 'terraform-destroy'],
+    ['launchctl load ~/Library/LaunchAgents/com.example.plist', 'launchctl-load'],
+    ['launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.example.plist', 'launchctl-load'],
+    ['launchctl submit -l com.example -- /usr/bin/example', 'launchctl-load'],
+    ['launchctl start com.example', 'launchctl-load'],
+    ['systemctl enable my-service', 'systemctl-enable'],
+    ['systemctl start my.service', 'systemctl-enable'],
+    ['systemctl daemon-reload', 'systemctl-enable'],
   ])('BLOCK: flags %j → %s', (command, expectedId) => {
     expect(detectDestructiveCommands(command)).toContain(expectedId);
   });
@@ -104,6 +111,10 @@ describe('detectDestructiveCommands', () => {
     ['truncate -s 0 app.log'], // shell truncate, not SQL TRUNCATE TABLE
     ['echo "safe"'],
     [''],
+    ['launchctl list'], // read-only query
+    ['launchctl print gui/501'], // read-only query
+    ['systemctl status my-service'], // read-only query
+    ['systemctl is-enabled my-service'], // read-only query
   ])('does not flag benign %j', (command) => {
     expect(detectDestructiveCommands(command)).toEqual([]);
   });
@@ -163,6 +174,10 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     ["psql -c 'DROP DATABASE prod'", 'sql-drop-truncate'],
     ["mysql -e 'TRUNCATE TABLE users'", 'sql-drop-truncate'],
     ['terraform destroy -auto-approve', 'terraform-destroy'],
+    ['launchctl load ~/Library/LaunchAgents/com.example.plist', 'launchctl-load'],
+    ['launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.example.plist', 'launchctl-load'],
+    ['systemctl enable my-service', 'systemctl-enable'],
+    ['systemctl daemon-reload', 'systemctl-enable'],
   ])('BLOCK pattern %s returns block decision naming %s with injectContext', (command, expectedPatternId) => {
     const decision: HookDecision = hook(preCtx(command));
     expect(decision.decision).toBe('block');
