@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.0] - 2026-08-25
+
+### Added
+- add Steer option to interrupt-picker (post-stop redirect) (#1268) (473cda2f)
+
 ## [5.151.1] - 2026-08-25
 
 ### Fixed
