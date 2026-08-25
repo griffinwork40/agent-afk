@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.150.0] - 2026-08-25
+
+### Added
+- wire reconcileWaveManifests into session startup paths (#1082) (#1266) (c9fcac8f)
+
 ## [5.149.7] - 2026-08-24
 
 ### Fixed
