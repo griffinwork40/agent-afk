@@ -120,6 +120,8 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   onRewindRequest?: () => void;
+  /** Per-read single-Escape override for cancellable borrowed idle prompts. */
+  onIdleEscape?: () => void;
   /**
    * Timestamp (ms) of the last Escape at an empty idle prompt, for double-tap
    * detection in `handleEscape`. 0 = disarmed.
@@ -697,6 +699,10 @@ export class TerminalCompositor {
    */
   setOnRewindRequest(handler: (() => void) | null): void {
     this.onRewindRequest = handler ?? undefined;
+  }
+
+  setOnIdleEscape(handler: (() => void) | null): void {
+    this.onIdleEscape = handler ?? undefined;
   }
 
   /**

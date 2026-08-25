@@ -778,6 +778,29 @@ describe('InputSurface', () => {
       await surface.dispose();
     });
 
+    it('a borrowed read can cancel on one Escape, discard its draft, and yield to the next read', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk › ', onCancel: () => {}, stdout, stdin });
+
+      const borrowed = surface.readLine({
+        promptFn: () => 'Steer the agent → ',
+        onEscape: () => surface.abortPendingRead({ clearBuffer: true }),
+      });
+      for (const ch of 'draft redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'escape' });
+      expect(await borrowed).toEqual({ text: '', attachments: [] });
+      expect(surface.bufferIsEmpty()).toBe(true);
+
+      const ordinary = surface.readLine({ promptFn: () => 'afk › ' });
+      for (const ch of 'next') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return' });
+      expect((await ordinary).text).toBe('next');
+
+      await surface.dispose();
+    });
+
     it('abortPendingRead() clears onSubmit so a later Enter cannot double-fire, and the NEXT read works normally', async () => {
       const stdout = makeMockStdout();
       const stdin = makeMockStdin();
