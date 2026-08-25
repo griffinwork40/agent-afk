@@ -222,7 +222,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   },
   {
     id: 'systemctl-enable',
-    re: /\bsystemctl\s+(enable|start|daemon-reload)\b/i,
+    re: /\bsystemctl\s+(?:--?\w[\w-]*(?:[= ]\S+)?\s+)*(enable|start|daemon-reload)\b/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [systemctl-enable] — enables or starts a persistent systemd service that survives reboots and session termination. Use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the installation is genuinely intended, stop and ask the operator to run it.',

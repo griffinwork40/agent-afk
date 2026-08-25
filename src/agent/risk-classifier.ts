@@ -74,6 +74,15 @@ const BASH_HIGH: readonly string[] = [
   'systemctl enable',
   'systemctl start',
   'systemctl daemon-reload',
+  // Invariant: `systemctl --user <verb>` is the canonical form for user-service
+  // management on Linux (see src/service/systemd/install.ts:43-46). The bare
+  // forms above miss it because `--user` sits between `systemctl` and the verb.
+  // The substring table cannot express "optional flags" so we enumerate the
+  // common variant. Other global options (`--no-block`, `--quiet`, etc.) are
+  // not enumerated — the safe-destruct regex catches those via its quantifier.
+  'systemctl --user enable',
+  'systemctl --user start',
+  'systemctl --user daemon-reload',
 ];
 
 /**

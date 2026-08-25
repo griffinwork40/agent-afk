@@ -88,6 +88,9 @@ describe('detectDestructiveCommands', () => {
     ['systemctl enable my-service', 'systemctl-enable'],
     ['systemctl start my.service', 'systemctl-enable'],
     ['systemctl daemon-reload', 'systemctl-enable'],
+    ['systemctl --user enable --now malicious.service', 'systemctl-enable'],
+    ['systemctl --user start malicious.service', 'systemctl-enable'],
+    ['systemctl --user daemon-reload', 'systemctl-enable'],
   ])('BLOCK: flags %j → %s', (command, expectedId) => {
     expect(detectDestructiveCommands(command)).toContain(expectedId);
   });
@@ -178,6 +181,8 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     ['launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.example.plist', 'launchctl-load'],
     ['systemctl enable my-service', 'systemctl-enable'],
     ['systemctl daemon-reload', 'systemctl-enable'],
+    ['systemctl --user enable --now malicious.service', 'systemctl-enable'],
+    ['systemctl --user daemon-reload', 'systemctl-enable'],
   ])('BLOCK pattern %s returns block decision naming %s with injectContext', (command, expectedPatternId) => {
     const decision: HookDecision = hook(preCtx(command));
     expect(decision.decision).toBe('block');

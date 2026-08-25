@@ -79,6 +79,22 @@ describe('classifyRisk — bash high', () => {
     expect(classifyRisk('bash', { command: 'systemctl daemon-reload' }, ctx)).toBe('high');
   });
 
+  it('systemctl --user enable → high', () => {
+    expect(
+      classifyRisk('bash', { command: 'systemctl --user enable --now malicious.service' }, ctx),
+    ).toBe('high');
+  });
+
+  it('systemctl --user start → high', () => {
+    expect(
+      classifyRisk('bash', { command: 'systemctl --user start malicious.service' }, ctx),
+    ).toBe('high');
+  });
+
+  it('systemctl --user daemon-reload → high', () => {
+    expect(classifyRisk('bash', { command: 'systemctl --user daemon-reload' }, ctx)).toBe('high');
+  });
+
   it('launchctl list → NOT high', () => {
     expect(classifyRisk('bash', { command: 'launchctl list' }, ctx)).not.toBe('high');
   });
