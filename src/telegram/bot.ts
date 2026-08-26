@@ -24,7 +24,8 @@ import {
 } from './elicitation-telegram.js';
 import { elicitationRouter } from '../agent/elicitation-router.js';
 import { ensurePluginEntrypointsLoaded } from '../agent/tools/skill-bridge.js';
-import { SessionWatchManager, resolveWatchTarget, listWatchableSessions } from './watch.js';
+import { SessionWatchManager } from './watch.js';
+import { handleWatchCommand } from './bot.watch-command.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
 import { SessionLedgerWriter } from '../agent/session-ledger.js';
@@ -194,35 +195,9 @@ export class TelegramBot {
         await ctx.reply(formatError('Could not identify chat'));
         return;
       }
-      const { chatId } = route;
       // Pin the streamed watch output to the topic /watch was invoked from
       // (General omits message_thread_id → default delivery, byte-identical).
-      const watchThreadOpts = sendOptions(route);
-      const text = (ctx.message && 'text' in ctx.message ? ctx.message.text : '') ?? '';
-      const arg = text.split(/\s+/).slice(1).join(' ').trim();
-      try {
-        if (!arg) {
-          await ctx.reply(await listWatchableSessions());
-          return;
-        }
-        const sessionId = await resolveWatchTarget(arg);
-        if (!sessionId) {
-          await ctx.reply(
-            `No session ledger found for "${arg}". Use /watch with no argument to list watchable sessions.`,
-          );
-          return;
-        }
-        const send = async (msg: string): Promise<void> => {
-          for (const part of splitLongMessage(msg)) {
-            await ctx.telegram.sendMessage(chatId, part, watchThreadOpts);
-          }
-        };
-        this.watchManager.start(chatId, sessionId, send);
-        await ctx.reply(`📡 Watching ${sessionId} — new activity will stream here. /unwatch to stop.`);
-      } catch (error) {
-        this.log('Watch error:', error);
-        await ctx.reply(formatError(error as Error));
-      }
+      await handleWatchCommand(ctx, route, this.watchManager, sendOptions(route), this.log.bind(this));
     });
     this.bot.command('unwatch', async (ctx) => {
       const chatId = ctx.chat?.id;

@@ -38,7 +38,7 @@
     "src/improve/eval-run/runner.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/propose/template-engine.ts": { "loc": 459, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/skills/audit-fit/index.ts": { "loc": 421, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/bot.ts": { "loc": 394, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/bot.ts": { "loc": 369, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 392, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/message.ts": { "loc": 581, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/session-manager.ts": { "loc": 468, "reason": "legacy: predates the ceiling gate; pending concern extraction" }

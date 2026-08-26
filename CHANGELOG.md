@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.5] - 2026-08-26
+
+### Fixed
+- guard code-block register with enabled flag (#1289) (#1300) (c9c205d6)
+
+## [5.152.4] - 2026-08-26
+
+### Changed
+- extract watch command handler from bot.ts (#1290) (5b681553)
+
 ## [5.152.3] - 2026-08-26
 
 ### Changed
