@@ -11,6 +11,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.2] - 2026-08-25
+
+### Fixed
+- cap list_directory output at 500 entries (#1292) (aff2d362)
+
+## [5.152.1] - 2026-08-25
+
+### Fixed
+- skip node_modules in plugin skill discovery walk (#1297) (b086417b)
+
+## [5.152.0] - 2026-08-25
+
+### Added
+- add Steer option to interrupt-picker (post-stop redirect) (#1268) (473cda2f)
+
+## [5.151.1] - 2026-08-25
+
+### Fixed
+- render block-level markdown (tables, code) in verdict cards (#1295) (d26ada64)
+
+## [5.151.0] - 2026-08-25
+
+### Added
+- add /copy slash command with render-time code block capture (#1285) (e4c1844e)
+
 ## [5.150.2] - 2026-08-25
 
 ### Fixed

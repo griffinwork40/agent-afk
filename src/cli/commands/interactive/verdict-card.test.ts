@@ -14,7 +14,7 @@ import {
   type VerdictMeta,
 } from './verdict-card.js';
 import { createVerdictLedger } from './verdict-ledger.js';
-import type { TerminalState } from './terminal-state.js';
+import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { displayWidth, stripAnsi as displayStripAnsi } from '../../display.js';
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -796,5 +796,84 @@ describe('renderVerdictCard — context-specific affordances', () => {
       const affordanceLine = lines[lines.length - 2]!;
       expect(displayWidth(affordanceLine)).toBeLessThanOrEqual(80);
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Block-level markdown rendering (tables, code blocks, etc.)
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — block-level markdown rendering', () => {
+  it('renders a GFM table preserved by the terminal-state parser', () => {
+    const parsed = parseTerminalState(
+      'Done\n- What was done: Fixed one file\n- Evidence: results:\n' +
+        '  | File | LOC |\n  |------|-----|\n  | a.ts | 100 |',
+    );
+    expect(parsed).not.toBeNull();
+
+    const plain = stripAnsi(withCols(120, () => renderVerdictCard(parsed!)));
+    expect(plain).not.toContain('|------|');
+    expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
+    expect(plain).toContain('results:');
+    expect(plain).toContain('a.ts');
+  });
+
+  it('GFM table in evidence field renders with box-drawing chars, not raw pipes', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'Fixed three files',
+      evidence: '| File | LOC |\n|------|-----|\n| a.ts | 100 |\n| b.ts | 200 |',
+      rawBody: '',
+    };
+    const card = withCols(120, () => renderVerdictCard(state));
+    const plain = stripAnsi(card);
+    // The raw GFM pipe-table syntax should NOT appear
+    expect(plain).not.toContain('|------|');
+    expect(plain).not.toContain('|------');
+    // Box-drawing characters from renderTable should appear
+    expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
+    // Table content should still be present
+    expect(plain).toContain('a.ts');
+    expect(plain).toContain('b.ts');
+    expect(plain).toContain('File');
+    expect(plain).toContain('LOC');
+  });
+
+  it('GFM table in fallback body renders with box-drawing chars', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      rawBody: '| PR | Status |\n|-----|--------|\n| #42 | merged |',
+    };
+    const card = withCols(120, () => renderVerdictCard(state));
+    const plain = stripAnsi(card);
+    expect(plain).not.toContain('|-----|');
+    expect(plain).toMatch(/[┌┬┐├┼┤└┴┘│─]/);
+    expect(plain).toContain('#42');
+    expect(plain).toContain('merged');
+  });
+
+  it('normalizes an orphaned bold opener in fallback body content', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      rawBody: '** No code changed',
+    };
+    const plain = stripAnsi(renderVerdictCard(state));
+    expect(plain).toContain('No code changed');
+    expect(plain).not.toContain('**');
+  });
+
+  it('inline markdown (bold, code) still renders in row values', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'Run `pnpm test` to verify **success**',
+      rawBody: '',
+    };
+    const card = renderVerdictCard(state);
+    const plain = stripAnsi(card);
+    expect(plain).toContain('pnpm test');
+    expect(plain).toContain('success');
+    // Raw markdown markers should not appear
+    expect(plain).not.toContain('**');
+    expect(plain).not.toContain('`pnpm test`');
   });
 });

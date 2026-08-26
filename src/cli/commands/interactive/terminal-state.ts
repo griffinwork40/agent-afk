@@ -172,8 +172,9 @@ interface Bullet {
  * Walk the captured body and return a flat list of bullets. Recognizes
  * `- foo: bar`, `* foo`, plain `foo: bar` lines, and unlabelled prose.
  *
- * Multi-line continuations (bullets spanning two lines) are merged into the
- * preceding bullet's value.
+ * Multi-line prose continuations are merged into the preceding bullet's
+ * value. Markdown block continuations retain their line breaks so downstream
+ * renderers can still recognize tables, fenced code, and similar constructs.
  */
 function extractBullets(bodyLines: string[]): Bullet[] {
   const out: Bullet[] = [];
@@ -187,7 +188,10 @@ function extractBullets(bodyLines: string[]): Bullet[] {
     if (!bulletMatch && out.length > 0 && line.length > 0) {
       // Continuation of the previous bullet.
       const prev = out[out.length - 1]!;
-      prev.value = `${prev.value} ${line}`.trim();
+      const beginsMarkdownBlock = /^(?:```|~~~|\|.*\||>|#{1,6}\s)/.test(line);
+      const insideMarkdownBlock = prev.value.includes('\n');
+      const separator = beginsMarkdownBlock || insideMarkdownBlock ? '\n' : ' ';
+      prev.value = `${prev.value}${separator}${line}`.trim();
       continue;
     }
 

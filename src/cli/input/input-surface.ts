@@ -89,6 +89,8 @@ export interface InputSurfaceOptions {
 export interface InputSurfaceReadOpts {
   promptFn: () => string;
   onSigint?: () => void;
+  /** Called for a single Escape on the compositor (TTY) path. */
+  onEscape?: () => void;
   onShiftTab?: () => void;
   /**
    * Pre-fill the editable input buffer before blocking for input (the
@@ -392,6 +394,7 @@ export class InputSurface {
     // handler would call resolve after we've already rejected).
     if (this.pendingReadReject) {
       this.compositor.setOnSubmit(null);
+      this.compositor.setOnIdleEscape(null);
       const reject = this.pendingReadReject;
       this.pendingReadReject = null;
       this.pendingReadResolve = null;
@@ -495,6 +498,7 @@ export class InputSurface {
         // (auto-resume) without a keypress.
         this.pendingReadReject = reject;
         this.pendingReadResolve = resolve;
+        compositor.setOnIdleEscape(opts.onEscape ?? null);
 
         // Per-turn prompt handoff: ask for an empty-prompt suggestion now that
         // the prompt belongs to the user again. Fire-and-forget by contract —
@@ -520,6 +524,7 @@ export class InputSurface {
           // Promise.
           this.pendingReadReject = null;
           this.pendingReadResolve = null;
+          compositor.setOnIdleEscape(null);
 
           // Visual parity with `readWithAutocomplete`: commit the
           // submitted message to scrollback above the live overlay.
@@ -645,12 +650,14 @@ export class InputSurface {
    * `loop-iteration.ts` and
    * `.afk/plans/auto-resume-repl-on-background-completion.md`.
    */
-  abortPendingRead(): void {
+  abortPendingRead(opts?: { clearBuffer?: boolean }): void {
     if (!this.pendingReadResolve) return;
     this.compositor?.setOnSubmit(null);
     const resolve = this.pendingReadResolve;
     this.pendingReadReject = null;
     this.pendingReadResolve = null;
+    this.compositor?.setOnIdleEscape(null);
+    if (opts?.clearBuffer) this.compositor?.prefillInput('');
     resolve({ text: '', attachments: [] });
   }
 
@@ -669,6 +676,7 @@ export class InputSurface {
     const resolve = this.pendingReadResolve;
     this.pendingReadReject = null;
     this.pendingReadResolve = null;
+    this.compositor?.setOnIdleEscape(null);
     resolve({ text: '/rewind', attachments: [] });
     return true;
   }
