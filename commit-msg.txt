@@ -1,30 +1,32 @@
-feat(tui): live elapsed counters on in-flight tool/subagent overlay rows; fix stalled tick loop
+refactor(cli): extract paused-event handler from turn-handler.ts
 
-Problem 1 (tool-lane.ts:504,524): while a tool call was in flight the live overlay
-showed only a static `…` placeholder. A user watching `grep(…)  …` for 30s could
-not tell working from hung.
+The filesize ratchet flagged GREW: `src/cli/commands/interactive/turn-handler.ts`
+grew from its 407-line baseline to 411 lines. This extraction brings it to 365
+code lines, comfortably below the baseline, by pulling the usage-limit pause
+handler into its own sibling file.
 
-Problem 2 (docs/rendering-architecture-current.md §5 / Bug #3): if a subagent's
-`done` event never fired, the 80ms tick loop ran until the whole renderer was torn
-down — verified as already fixed (stream-renderer-dispose.ts Phase 7 clears the
-interval unconditionally; checkPauseAnnotations has a `disposed` guard). Added a
-regression test that pins both invariants.
+## What moved
 
-Changes:
-- tool-lane-render.ts: add `startedAt: number` to ToolEntryFields; export `freshToolEntry`
-  factory (stamps `Date.now()` once at creation, never mutated); re-export `formatElapsed`
-  from terminal-compositor.scrollback.ts so ratchet-capped tool-lane.ts needs no new import.
-- tool-lane.ts: import `freshToolEntry` + `formatElapsed` from tool-lane-render.ts (no new
-  import line); replace both addStart / addStartWithAgentContext object literals with
-  freshToolEntry() call; append `formatElapsed(entry.startedAt)` to the three in-flight `…`
-  render sites in getOverlay() — sub-2s shows nothing (ELAPSED_GRACE_MS), then whole seconds
-  ("12s"), then minutes form ("1m05s"). Net: file SHRINKS from 436 → 424 code lines.
-- tool-lane-render-children.ts: same treatment for in-flight child tool rows in
-  renderOverlayChildren (connector + prefix + `…` + elapsed, before the inProgressVerb line).
-- tool-lane.elapsed.test.ts: 10 new tests covering grace period, 12s, 1m05s, completed-row
-  unchanged, NESTING childless rows, child rows, and the tick-loop regression.
+`turn-handler.ts` → `turn-handler.paused.ts`:
+- `handlePausedEvent()` — named async helper taking explicit parameters
+- `PausedPickerRef` type (the abort-controller ref object)
+- `PausedEvent` type alias (`Extract<OutputEvent, { type: 'paused' }>`)
+- All option-label constants for the interactive picker
+- Full JSDoc and `// Contract:`, `// Invariant:` comments
 
-Deliberately untouched: plain-output mode paths (isPlainOutputRequested branches),
-compositor commit/scrollback machinery (terminal-compositor*.ts commit paths), footer
-subsystems (footer-subsystems.ts). Overlay row formatting and tick lifecycle only.
-Low blast radius by design.
+`turn-handler.ts` retains:
+- Public call site: `await handlePausedEvent({ event, session, ... })`
+- Unchanged public surface — no importer rewrites required
+- `pickerRef` typed as `PausedPickerRef` (imported from the new file)
+- Removed unused imports: `usageLimitBox`, `runPicker` (both moved)
+
+## Gates
+
+- `pnpm lint` ✓ (TypeScript noEmit, zero errors)
+- `pnpm audit:filesize:update` ✓ (baseline updated to 365)
+- `pnpm audit:filesize:check` ✓ (all 41 grandfathered files, no new violations)
+- `pnpm audit:funcsize:update` ✓
+- `pnpm test src/cli/commands/interactive/` ✓ (1145 tests passed)
+
+Before: 411 code lines
+After:  365 code lines (−46 from turn-handler.ts, +90 in new file)

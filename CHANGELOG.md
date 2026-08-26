@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.3] - 2026-08-26
+
+### Changed
+- extract paused-event handler from turn-handler.ts (#1291) (c1666ff6)
+
+## [5.152.2] - 2026-08-25
+
+### Fixed
+- cap list_directory output at 500 entries (#1292) (aff2d362)
+
+## [5.152.1] - 2026-08-25
+
+### Fixed
+- skip node_modules in plugin skill discovery walk (#1297) (b086417b)
+
 ## [5.152.0] - 2026-08-25
 
 ### Added
