@@ -34,7 +34,7 @@ import type { InputSurface } from '../../input/input-surface.js';
 import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
-import { resetCodeBlockRegister } from '../../code-block-register.js';
+import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-block-register.js';
 
 /** Per-handler timeout for the post-turn Stop notification. Tighter than the
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
@@ -673,8 +673,11 @@ export async function runInputLoop(
       // onTerminalState re-sets these during runTurn when a verdict parses.
       currentTerminalKind = undefined;
       currentDoneHasEvidence = undefined;
-      // Clear the code-block register so `/copy N` indices match the blocks
-      // rendered in THIS turn, not a prior one.
+      // Enable and clear the code-block register so `/copy N` indices match
+      // the blocks rendered in THIS turn, not a prior one.  enableCodeBlockRegister()
+      // is idempotent after the first turn; calling it here ensures it is set
+      // before the first runTurn and stays set for every subsequent turn.
+      enableCodeBlockRegister();
       resetCodeBlockRegister();
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
