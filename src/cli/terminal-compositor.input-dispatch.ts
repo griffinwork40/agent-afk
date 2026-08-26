@@ -147,6 +147,7 @@ export interface KeyDispatchHost {
   readonly onCancel?: () => void;
   readonly onSoftStop?: () => void;
   readonly onBackground?: () => void;
+  readonly onIdleEscape?: () => void;
   /** Double-Esc-at-empty-idle rewind handler — see {@link TerminalCompositor.onRewindRequest}. */
   readonly onRewindRequest?: () => void;
   /** Submitted-line-during-pause handler — see {@link TerminalCompositorOptions.onPauseInterrupt}. */
@@ -351,6 +352,10 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
     self.repaint();
   }
   if (self.inputMode === 'idle') {
+    if (self.onIdleEscape) {
+      self.onIdleEscape();
+      return true;
+    }
     // Idle ESC is normally a pure UI-dismissal no-op. Exception: a DOUBLE Esc
     // at an EMPTY prompt opens the rewind picker ("edit a previous message").
     // Detect the double-tap here; a lone Esc just arms the window. A non-empty

@@ -254,7 +254,7 @@ export function extractPluginSkills(
         if (dirent === null) break;
         totalEntries++;
         const name = dirent.name;
-      if (name.startsWith('.')) continue;
+      if (name.startsWith('.') || name === 'node_modules') continue;
       const fullPath = join(dir, name);
 
       let stat;
