@@ -40,7 +40,7 @@
     "src/cli/commands/interactive/surface-setup.ts::setupSurface": { "loc": 307, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane-render-children.ts::renderOverlayChildren": { "loc": 248, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane.ts::ToolLane.getOverlay": { "loc": 234, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/interactive/turn-handler.ts::runTurn": { "loc": 869, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/cli/commands/interactive/turn-handler.ts::runTurn": { "loc": 777, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/worktree.ts::createWorktreeAt": { "loc": 265, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/marketplace.ts::registerMarketplaceCommand": { "loc": 220, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/trace.ts::renderEvent": { "loc": 285, "reason": "legacy: predates the function-size gate; pending helper extraction" },

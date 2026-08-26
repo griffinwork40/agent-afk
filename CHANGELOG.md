@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.3] - 2026-08-26
+
+### Changed
+- extract paused-event handler from turn-handler.ts (#1291) (c1666ff6)
+
 ## [5.152.2] - 2026-08-25
 
 ### Fixed
