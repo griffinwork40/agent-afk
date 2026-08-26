@@ -305,28 +305,24 @@ export async function compactOpenAIHistory(
     deps.clearAbort(controller);
   }
 
-  // Deterministic fallback: when turn-granular summarization found nothing to do
-  // (short-but-full session — huge tool payloads inside the one kept turn), clear
-  // large/old tool_result CONTENT in place. Additive: the summarization success
-  // path above is untouched; this only runs on the no-op reasons.
-  if (
-    !result.compacted &&
-    (result.reason === 'history-too-short' || result.reason === 'nothing-to-summarize')
-  ) {
-    const opts = resolveMicrocompactOptions(
-      env.AFK_MICROCOMPACT_TOOL_RESULT_BYTES,
-      env.AFK_MICROCOMPACT_KEEP_LAST,
-    );
-    const { blocksCleared, bytesReclaimed } = microcompactToolResults(deps.priorTurns, opts);
-    if (blocksCleared > 0) {
-      return {
-        compacted: false,
-        reason: 'microcompacted',
-        messagesBefore,
-        messagesAfter: deps.priorTurns.length,
-        microcompaction: { blocksCleared, bytesReclaimed },
-      };
-    }
+  // Deterministic microcompaction: after any compaction attempt, clear large/old
+  // tool_result CONTENT in place. The sentinel guard inside microcompactToolResults
+  // (`isMicrocompactPlaceholder`) prevents double-clearing blocks that were already
+  // replaced in a prior pass. This runs unconditionally so a single large tool result
+  // in the kept tail is never immune — even when turn-granular compaction succeeded.
+  const opts = resolveMicrocompactOptions(
+    env.AFK_MICROCOMPACT_TOOL_RESULT_BYTES,
+    env.AFK_MICROCOMPACT_KEEP_LAST,
+  );
+  const { blocksCleared, bytesReclaimed } = microcompactToolResults(deps.priorTurns, opts);
+  if (blocksCleared > 0 && !result.compacted) {
+    return {
+      compacted: false,
+      reason: 'microcompacted',
+      messagesBefore,
+      messagesAfter: deps.priorTurns.length,
+      microcompaction: { blocksCleared, bytesReclaimed },
+    };
   }
 
   return result;

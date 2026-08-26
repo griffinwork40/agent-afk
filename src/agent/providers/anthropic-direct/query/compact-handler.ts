@@ -231,6 +231,12 @@ export async function compactHistory(
     tokensSavedEstimate,
   });
 
+  // Deterministic microcompaction: run unconditionally after a successful
+  // compaction so large tool results in the kept tail are also cleared.
+  // The sentinel guard inside microcompactToolResults (`isMicrocompactPlaceholder`)
+  // prevents double-clearing any block that was already replaced in a prior pass.
+  microcompactToolResults(state.messages, readMicrocompactOptions());
+
   return {
     compacted: true,
     messagesBefore,
