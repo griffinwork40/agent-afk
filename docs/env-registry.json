@@ -668,6 +668,30 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SESSION_MAX_AGE_DAYS",
+      "description": "Evict a session sidecar file once it is older than this many days (based on savedAt). Default 30.",
+      "type": "number",
+      "required": false,
+      "default": "30",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_SESSION_MAX_COUNT",
+      "description": "Count-based safety valve: evict oldest session sidecars first once the total exceeds this number. Default 1000.",
+      "type": "number",
+      "required": false,
+      "default": "1000",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_SESSION_RETENTION_DISABLE",
+      "description": "Disable the session sidecar retention sweep entirely, so no state/sessions/*.json file is ever evicted.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_SESSIONSTART_COOLDOWN_MS",
       "description": "Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.",
       "type": "number",

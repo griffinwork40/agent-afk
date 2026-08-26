@@ -13,6 +13,7 @@ import {
   writeFileSync,
   existsSync,
   utimesSync,
+  unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -202,5 +203,132 @@ describe('sweepSessionSidecars — missing root', () => {
     const result = await sweepSessionSidecars({ root: join(root, 'does-not-exist'), force: true });
     expect(result.evictedAge).toBe(0);
     expect(result.evictedCount).toBe(0);
+  });
+});
+
+describe('sweepSessionSidecars — activeSessionId exclusion (Item 4)', () => {
+  it('skips the active session sidecar by identity', async () => {
+    const now = Date.now();
+    // An old sidecar that would normally be evicted.
+    const oldPath = makeSidecar('old-session', now - 40 * DAY_MS);
+    // The active session's sidecar — also old but must be excluded.
+    const activeId = 'active-session-id';
+    const activePath = makeSidecar(activeId, now - 40 * DAY_MS);
+
+    const result = await sweepSessionSidecars({ root, force: true, activeSessionId: activeId });
+
+    expect(existsSync(oldPath)).toBe(false);
+    expect(existsSync(activePath)).toBe(true);
+    expect(result.evictedAge).toBe(1);
+  });
+});
+
+describe('sweepSessionSidecars — future savedAt clamped (Item 2)', () => {
+  it('treats a future savedAt as age 0 and respects the grace window', async () => {
+    const now = Date.now();
+    // savedAt is 1 hour in the future — without clamping this produces
+    // a negative ageMs that excludes the file from both passes permanently.
+    // With clamping it becomes ageMs=0, which is within the grace window
+    // (< GRACE_MS = 1h), so the file is kept — correctly.
+    const path = makeSidecar('future-session', now + 60 * 60 * 1000);
+
+    process.env['AFK_SESSION_MAX_AGE_DAYS'] = '0.001'; // extremely short age bound
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    // File should survive: clamped to ageMs=0, inside grace window.
+    expect(existsSync(path)).toBe(true);
+    expect(result.evictedAge).toBe(0);
+  });
+
+  it('does not permanently exclude a file with a future savedAt from count eviction', async () => {
+    const now = Date.now();
+    // Two sidecars: one old (will be count-evicted), one with future savedAt.
+    // The future-dated one gets ageMs=0 (inside grace window), so it is
+    // NOT a count candidate — but the old one IS.
+    const oldPath = makeSidecar('old-a', now - 10 * DAY_MS);
+    makeSidecar('future-b', now + DAY_MS);
+
+    process.env['AFK_SESSION_MAX_COUNT'] = '1';
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    // old-a should be count-evicted; future-b stays (grace window).
+    expect(existsSync(oldPath)).toBe(false);
+    expect(result.evictedCount).toBe(1);
+    expect(result.remaining).toBe(1);
+  });
+});
+
+describe('sweepSessionSidecars — unlink failure counter correctness (Item 1)', () => {
+  it('decrements evictedCount (not evictedAge) when a count-doomed unlink fails', async () => {
+    const now = Date.now();
+    // Three old sidecars; set maxCount=1 so two get count-doomed.
+    const oldest = makeSidecar('oldest', now - 10 * DAY_MS);
+    const middle = makeSidecar('middle', now - 5 * DAY_MS);
+    makeSidecar('newest', now - 3 * DAY_MS);
+
+    process.env['AFK_SESSION_MAX_COUNT'] = '1';
+
+    // Inject a failing unlink for `oldest`; fall through to real unlink otherwise.
+    const injectedUnlink = async (p: string): Promise<void> => {
+      if (p === oldest) throw Object.assign(new Error('EPERM simulated'), { code: 'EPERM' });
+      unlinkSync(p);
+    };
+
+    const result = await sweepSessionSidecars({ root, force: true, _unlink: injectedUnlink });
+
+    // oldest unlink failed → evictedCount decremented from 2 back to 1.
+    expect(result.evictedCount).toBe(1);
+    expect(result.evictedAge).toBe(0);
+    // oldest still on disk (unlink failed); middle removed.
+    expect(existsSync(oldest)).toBe(true);
+    expect(existsSync(middle)).toBe(false);
+    // remaining = 3 total - 1 actually evicted = 2
+    expect(result.remaining).toBe(2);
+  });
+
+  it('decrements evictedAge (not evictedCount) when an age-doomed unlink fails', async () => {
+    const now = Date.now();
+    // Two very old sidecars — both will be age-doomed.
+    const target = makeSidecar('age-fail', now - 40 * DAY_MS);
+    const other = makeSidecar('age-ok', now - 35 * DAY_MS);
+
+    // Inject a failing unlink for `target` only; fall through to real unlink otherwise.
+    const injectedUnlink = async (p: string): Promise<void> => {
+      if (p === target) throw Object.assign(new Error('EACCES simulated'), { code: 'EACCES' });
+      unlinkSync(p);
+    };
+
+    const result = await sweepSessionSidecars({ root, force: true, _unlink: injectedUnlink });
+
+    // One age-unlink failed → evictedAge decremented from 2 to 1.
+    expect(result.evictedAge).toBe(1);
+    expect(result.evictedCount).toBe(0);
+    expect(existsSync(target)).toBe(true);
+    expect(existsSync(other)).toBe(false);
+  });
+});
+
+describe('sweepSessionSidecars — combined age + count eviction (Item 7)', () => {
+  it('evicts some files by age and others by count in the same run', async () => {
+    const now = Date.now();
+    // ancient → age-evicted.
+    const ancient = makeSidecar('ancient', now - 60 * DAY_MS);
+    // old-a and old-b → count-evicted (survive age pass but over maxCount=1).
+    const oldA = makeSidecar('old-a', now - 10 * DAY_MS);
+    const oldB = makeSidecar('old-b', now - 5 * DAY_MS);
+    // newest → survives both passes.
+    const newest = makeSidecar('newest', now - 3 * DAY_MS);
+
+    process.env['AFK_SESSION_MAX_COUNT'] = '1';
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    expect(existsSync(ancient)).toBe(false);
+    expect(existsSync(oldA)).toBe(false);
+    expect(existsSync(oldB)).toBe(false);
+    expect(existsSync(newest)).toBe(true);
+    // 1 age-evicted, 2 count-evicted.
+    expect(result.evictedAge).toBe(1);
+    expect(result.evictedCount).toBe(2);
+    expect(result.remaining).toBe(1);
   });
 });

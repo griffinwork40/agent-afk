@@ -284,7 +284,7 @@ export class AgentSession implements IAgentSession {
       }, WITNESS_SWEEP_START_DELAY_MS);
       witnessSweepTimer.unref();
       const sidecarSweepTimer = setTimeout(() => {
-        void sweepSessionSidecars();
+        void sweepSessionSidecars({ activeSessionId: this.sessionId });
       }, SESSION_SIDECAR_SWEEP_START_DELAY_MS);
       sidecarSweepTimer.unref();
     }

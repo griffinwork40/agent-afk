@@ -19,7 +19,7 @@
  * @module agent/session-sidecar-sweep
  */
 
-import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { readdir, readFile, stat, unlink, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getSessionsDir } from '../paths.js';
 import { env } from '../config/env.js';
@@ -63,6 +63,20 @@ export interface SessionSweepOptions {
   root?: string;
   /** Bypass the inter-sweep stamp (for testing). */
   force?: boolean;
+  /**
+   * Session ID of the currently-running session. That sidecar is excluded from
+   * the sweep by identity (not by timestamp) — mirrors the `activeLabel` pattern
+   * used by the witness sweep.
+   */
+  activeSessionId?: string;
+  /**
+   * Override the unlink implementation (testing only). Allows unit tests to
+   * simulate EPERM/EACCES without requiring `vi.mock` on non-configurable
+   * native ESM exports.
+   *
+   * @internal
+   */
+  _unlink?: (path: string) => Promise<void>;
 }
 
 function positiveNumber(raw: string | undefined, fallback: number): number {
@@ -79,12 +93,22 @@ const noop = (reason: string): SessionSweepResult => ({
 });
 
 /** True when the stamp says a sweep ran recently enough to skip this one. */
-function sweptRecently(root: string, now: number): boolean {
+async function sweptRecently(root: string, now: number): Promise<boolean> {
   try {
-    const st = statSync(join(root, STAMP_FILE));
+    const st = await stat(join(root, STAMP_FILE));
     return now - st.mtimeMs < SWEEP_INTERVAL_MS;
   } catch {
     return false; // no stamp yet — run the sweep
+  }
+}
+
+/** True when the path exists (async replacement for existsSync). */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -105,11 +129,11 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
   const now = Date.now();
 
   try {
-    if (opts?.force !== true && sweptRecently(root, now)) {
+    if (opts?.force !== true && (await sweptRecently(root, now))) {
       return noop('stamp');
     }
 
-    if (!existsSync(root)) {
+    if (!(await pathExists(root))) {
       return { skipped: false, evictedAge: 0, evictedCount: 0, remaining: 0 };
     }
 
@@ -118,12 +142,13 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
     const maxAgeMs = maxAgeDays * DAY_MS;
 
     // Enumerate all flat .json files (skip subdirectories and the stamp file).
-    const entries = readdirSync(root, { withFileTypes: true });
+    const entries = await readdir(root, { withFileTypes: true });
     interface SidecarRecord {
       name: string;
       path: string;
-      ageMs: number; // how old: now - savedAt (or mtime)
-      savedAtMs: number; // the resolved timestamp used for age
+      ageMs: number;    // how old: now - savedAt (or mtime), clamped to ≥0
+      savedAtMs: number; // resolved content timestamp used for age ranking
+      mtimeMs: number;   // OS mtime at enumeration time, used for the race guard
     }
     const sidecars: SidecarRecord[] = [];
 
@@ -131,12 +156,21 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
       if (!entry.isFile()) continue;
       if (!entry.name.endsWith('.json')) continue;
 
+      // Item 4: skip the active session's own sidecar by identity.
+      if (opts?.activeSessionId !== undefined && entry.name === `${opts.activeSessionId}.json`) {
+        continue;
+      }
+
       const path = join(root, entry.name);
 
       let savedAtMs: number;
+      let mtimeMs: number;
       try {
-        const raw = readFileSync(path, 'utf8');
+        const raw = await readFile(path, 'utf8');
         const parsed: unknown = JSON.parse(raw);
+        // Always stat for the race-guard mtime.
+        const st = await stat(path);
+        mtimeMs = st.mtimeMs;
         if (
           parsed !== null &&
           typeof parsed === 'object' &&
@@ -146,18 +180,22 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
           savedAtMs = (parsed as Record<string, unknown>)['savedAt'] as number;
         } else {
           // Valid JSON but no usable savedAt — fall back to mtime.
-          savedAtMs = statSync(path).mtimeMs;
+          savedAtMs = mtimeMs;
         }
       } catch {
         // Corrupt JSON or unreadable file — fall back to mtime.
         try {
-          savedAtMs = statSync(path).mtimeMs;
+          const st = await stat(path);
+          savedAtMs = st.mtimeMs;
+          mtimeMs = st.mtimeMs;
         } catch {
           continue; // raced away; skip entirely
         }
       }
 
-      sidecars.push({ name: entry.name, path, ageMs: now - savedAtMs, savedAtMs });
+      // Item 2: clamp ageMs so a future savedAt (clock skew, corrupt value)
+      // does not produce a negative age that permanently excludes the file.
+      sidecars.push({ name: entry.name, path, ageMs: Math.max(0, now - savedAtMs), savedAtMs, mtimeMs });
     }
 
     // Protect files inside the grace window.
@@ -168,12 +206,14 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
 
     let evictedAge = 0;
     let evictedCount = 0;
-    const doomed = new Set<string>();
+    // Item 1: tag each doomed path with the pass that condemned it so the
+    // catch block can decrement the right counter on unlink failure.
+    const doomed = new Map<string, 'age' | 'count'>();
 
     // Age pass.
     for (const s of evictable) {
       if (s.ageMs > maxAgeMs) {
-        doomed.add(s.path);
+        doomed.set(s.path, 'age');
         evictedAge += 1;
       }
     }
@@ -190,7 +230,7 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
       for (const s of candidates) {
         if (count <= maxCount) break;
         if (!doomed.has(s.path)) {
-          doomed.add(s.path);
+          doomed.set(s.path, 'count');
           evictedCount += 1;
           count -= 1;
         }
@@ -198,22 +238,39 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
     }
 
     // Execute evictions.
-    const actuallyEvicted = new Set<string>();
-    for (const path of doomed) {
+    const unlinkFn = opts?._unlink ?? unlink;
+    let actuallyEvicted = 0;
+    for (const [path, bucket] of doomed) {
       try {
-        unlinkSync(path);
-        actuallyEvicted.add(path);
+        // Item 5: re-stat before unlinking. If another process wrote to this
+        // file after enumeration, its mtime will have changed; skip deletion to
+        // avoid removing live data. Compare against the mtime recorded during
+        // enumeration, not the content-derived savedAt.
+        const sidecarRecord = sidecars.find((s) => s.path === path);
+        if (sidecarRecord !== undefined) {
+          const freshStat = await stat(path);
+          if (freshStat.mtimeMs !== sidecarRecord.mtimeMs) {
+            // File was modified after enumeration — leave it for the next sweep.
+            if (bucket === 'age') evictedAge -= 1;
+            else evictedCount -= 1;
+            continue;
+          }
+        }
+        await unlinkFn(path);
+        actuallyEvicted += 1;
       } catch {
         // Raced away or permission error — leave it for the next sweep.
-        evictedAge -= evictedAge > 0 && !actuallyEvicted.has(path) ? 1 : 0;
+        // Item 1: decrement the correct counter based on which pass doomed it.
+        if (bucket === 'age') evictedAge -= 1;
+        else evictedCount -= 1;
       }
     }
 
-    const remaining = sidecars.length - actuallyEvicted.size;
+    const remaining = sidecars.length - actuallyEvicted;
 
     // Write the stamp so the next session start is a no-op.
     try {
-      writeFileSync(join(root, STAMP_FILE), `${new Date(now).toISOString()}\n`, { mode: 0o600 });
+      await writeFile(join(root, STAMP_FILE), `${new Date(now).toISOString()}\n`, { mode: 0o600 });
     } catch {
       // Stamp is an optimization, not a correctness requirement.
     }
