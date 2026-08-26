@@ -207,7 +207,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // command is not misattributed to the preceding curl invocation.
   {
     id: 'curl-write-method',
-    re: /\bcurl\b[^|;&]*\s-X\s+(POST|PUT|PATCH|DELETE)\b/i,
+    re: /\bcurl\b[^|;&]*\s(-X\s*|--request\s+)(POST|PUT|PATCH|DELETE)\b/i,
     tier: 'observe',
   },
   {

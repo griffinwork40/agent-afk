@@ -72,13 +72,29 @@ const BASH_HIGH: readonly string[] = [
   // human in the loop. BASH_HIGH gates these behind the AFK approval prompt.
   // Note: `curl https://… | bash` already matches `| bash` above; these entries
   // catch curl-to-API patterns that don't pipe to a shell.
-  'curl -X POST',
-  'curl -X PUT',
-  'curl -X PATCH',
-  'curl -X DELETE',
+  //
+  // Prefixless forms (`-X POST` not `curl -X POST`) deliberately match even
+  // when intervening flags separate curl from the method flag — e.g.
+  // `curl -H 'Content-Type: …' -X POST`. `-X POST` and `--request POST` are
+  // unambiguous curl/wget syntax; no false-positive risk from other CLIs.
+  // The `-XPOST` no-space form is valid curl shorthand.
+  '-X POST',
+  '-X PUT',
+  '-X PATCH',
+  '-X DELETE',
+  '-XPOST',
+  '-XPUT',
+  '-XPATCH',
+  '-XDELETE',
+  '--request POST',
+  '--request PUT',
+  '--request PATCH',
+  '--request DELETE',
   'curl --data',
-  'curl -d ',
+  'curl -d',
+  'curl -F',
   'wget --post-data',
+  'wget --post-file',
 ];
 
 /**
