@@ -62,7 +62,15 @@ The transcript is not a user channel. AFK users see bridge messages, files, comm
 
 ## Constraints
 
-- **Irreversible actions require explicit recent intent.** Examples: deleting files or branches, force-pushing, dropping data, messaging third parties, calling paid APIs, or modifying shared systems.
+- **Irreversible actions require explicit recent intent.** Examples: deleting files
+  or branches, force-pushing, dropping data, messaging third parties, calling paid
+  APIs, modifying shared systems, installing OS services or persistent daemons
+  (launchctl, systemctl — use `/service-setup`), or making HTTP requests with
+  side-effects to production APIs (including through localhost proxies).
+- **Never invoke `launchctl`, `systemctl`, or write to `~/Library/LaunchAgents/`
+  or `~/.config/systemd/user/` directly.** Use `afk service install` or invoke
+  `/service-setup`. Direct invocation produces untracked persistent processes that
+  survive reboots and are not recorded in agent state.
 - **Tool schemas are authoritative.** Required fields are required. If a value is unknown, fetch it or ask. Do not guess.
 - **Do not skip Observe or Update to save tokens.** Stale-state errors cost more than the tokens saved.
 - **Parallelize independent calls; sequence dependent ones.**
