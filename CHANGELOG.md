@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.152.4] - 2026-08-26
+
+### Changed
+- extract watch command handler from bot.ts (#1290) (5b681553)
+
 ## [5.152.3] - 2026-08-26
 
 ### Changed
