@@ -55,6 +55,15 @@ describe('detectDestructiveCommands', () => {
     ['docker rm -f web', 'docker-destructive'],
     ['kubectl delete pod api-0', 'kubectl-delete'],
     ["psql -c 'DELETE FROM orders'", 'sql-delete-from'],
+    // outbound HTTP writes (#1280)
+    ['curl -X POST https://api.example.com/users', 'curl-write-method'],
+    ['curl -X PUT https://api.example.com/users/1', 'curl-write-method'],
+    ['curl -X PATCH https://api.example.com/users/1 -d \'{}\'', 'curl-write-method'],
+    ['curl -X DELETE https://api.example.com/users/1', 'curl-write-method'],
+    ['curl -d \'{"k":"v"}\' https://api.example.com/hook', 'curl-data-flag'],
+    ['curl --data @body.json https://api.example.com/events', 'curl-data-flag'],
+    ['curl -F file=@photo.png https://api.example.com/upload', 'curl-data-flag'],
+    ['wget --post-data="msg=hi" https://api.example.com/notify', 'curl-data-flag'],
   ])('OBSERVE: flags %j → %s', (command, expectedId) => {
     expect(detectDestructiveCommands(command)).toContain(expectedId);
   });
@@ -143,6 +152,10 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     ['docker system prune -af', 'docker-destructive'],
     ['kubectl delete pod api-0', 'kubectl-delete'],
     ['DELETE FROM sessions WHERE expired=1', 'sql-delete-from'],
+    // outbound HTTP writes (#1280) — OBSERVE, never block
+    ['curl -X POST https://api.example.com/', 'curl-write-method'],
+    ['curl -d \'{"k":"v"}\' https://api.example.com/events', 'curl-data-flag'],
+    ['wget --post-data="x=1" https://api.example.com/hook', 'curl-data-flag'],
   ])('OBSERVE pattern %s returns approve, not block', (command, _id) => {
     const decision: HookDecision = hook(preCtx(command));
     expect(decision.decision).toBe('approve');

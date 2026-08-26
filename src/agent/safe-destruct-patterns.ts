@@ -189,6 +189,33 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     tier: 'observe',
   },
 
+  // ── outbound HTTP writes (curl / wget) ─────────────────────────────────────
+  //
+  // Invariant: OBSERVE (not BLOCK) — curl writes are inner-loop for many agent
+  // workflows (posting to local dev servers, CI webhooks, self-hosted APIs).
+  // A hard block would generate unacceptable friction; OBSERVE records the event
+  // so audit logs capture outbound mutations without stopping the flow.
+  //
+  // Two patterns cover the common shapes:
+  //   curl-write-method: explicit method override via -X (POST / PUT / PATCH / DELETE).
+  //   curl-data-flag:    body-payload flags (-d / --data / -F / --form) which imply
+  //                      a POST even when -X is omitted.
+  //
+  // wget --post-data is captured under curl-data-flag via a shared pattern that
+  // is checked after these two entries (see curl-data-flag regex).
+  // Regex uses [^|;&]* to stop at shell pipeline/compound boundaries so a piped
+  // command is not misattributed to the preceding curl invocation.
+  {
+    id: 'curl-write-method',
+    re: /\bcurl\b[^|;&]*\s-X\s+(POST|PUT|PATCH|DELETE)\b/i,
+    tier: 'observe',
+  },
+  {
+    id: 'curl-data-flag',
+    re: /\bcurl\b[^|;&]*\s(-d\b|--data\b|-F\b|--form\b)|\bwget\b[^|;&]*\s(--post-data\b|--post-file\b)/i,
+    tier: 'observe',
+  },
+
   // ── infra / containers ───────────────────────────────────────────────────────
   //
   // Invariant: docker-destructive and kubectl-delete stay OBSERVE because their

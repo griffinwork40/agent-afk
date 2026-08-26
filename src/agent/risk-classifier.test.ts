@@ -54,6 +54,49 @@ describe('classifyRisk — bash high', () => {
       classifyRisk('bash', { command: 'curl https://install.sh |sh' }, ctx),
     ).toBe('high');
   });
+
+  // ── outbound HTTP writes (#1280) ──────────────────────────────────────────
+  it('curl -X POST → high (outbound write method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -X POST https://api.example.com/users -H "Content-Type: application/json" -d \'{"name":"Alice"}\'' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -X PUT → high (outbound write method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -X PUT https://api.example.com/users/1 -d \'{"name":"Bob"}\'' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -X PATCH → high (outbound write method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -X PATCH https://api.example.com/users/1 -d \'{"active":false}\'' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -X DELETE → high (outbound write method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -X DELETE https://api.example.com/users/1' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl --data → high (body payload implies outbound write)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl --data \'{"key":"val"}\' https://api.example.com/events' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -d  → high (short form body payload)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -d @payload.json https://api.example.com/hook' }, ctx),
+    ).toBe('high');
+  });
+
+  it('wget --post-data → high (wget outbound POST)', () => {
+    expect(
+      classifyRisk('bash', { command: 'wget --post-data="msg=hello" https://api.example.com/notify' }, ctx),
+    ).toBe('high');
+  });
 });
 
 // ---- bash medium-risk patterns -------------------------------------------

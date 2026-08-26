@@ -67,6 +67,18 @@ const BASH_HIGH: readonly string[] = [
   '| bash',
   '|sh',
   '|bash',
+  // Outbound HTTP write methods — autonomous agents posting to external APIs
+  // can send irreversible mutations (payments, emails, Webhooks) without a
+  // human in the loop. BASH_HIGH gates these behind the AFK approval prompt.
+  // Note: `curl https://… | bash` already matches `| bash` above; these entries
+  // catch curl-to-API patterns that don't pipe to a shell.
+  'curl -X POST',
+  'curl -X PUT',
+  'curl -X PATCH',
+  'curl -X DELETE',
+  'curl --data',
+  'curl -d ',
+  'wget --post-data',
 ];
 
 /**
