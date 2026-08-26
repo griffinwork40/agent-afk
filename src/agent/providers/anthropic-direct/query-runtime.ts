@@ -183,6 +183,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       toolDispatcher: opts.toolDispatcher,
       ...(opts.initialMessages ? { initialMessages: opts.initialMessages } : {}),
       ...(opts.autoCompactThreshold !== undefined ? { autoCompactThreshold: opts.autoCompactThreshold } : {}),
+      ...(opts.initialUsageInputTokens !== undefined ? { initialUsageInputTokens: opts.initialUsageInputTokens } : {}),
     });
     this.abort = new AbortCoordinator();
   }

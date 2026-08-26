@@ -271,6 +271,11 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * `anthropic-direct/query.ts:186` so the REPL status line gets a real
    * context-% reading on OpenAI models instead of falling through to the
    * sampler's local-stats approximation.
+   *
+   * Seeded from the last stored turn's token count on session resume (#1294)
+   * so the context-overflow guard fires correctly on the first resumed turn
+   * instead of being skipped (the guard skips when `lastUsage` is null,
+   * treating it as a fresh session with no prior context to check against).
    */
   private lastUsage: ProviderUsage | null = null;
 
@@ -322,6 +327,21 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.useOpenAIPricing =
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
+
+    // Seed the context-overflow guard from the last stored turn's token count
+    // (#1294). The last turn of resumeHistory carries `inputTokens` when the
+    // session was saved with a recent enough sidecar; absent on legacy sidecars.
+    // Conservative: over-estimate (triggers compaction) > under-estimate
+    // (lets a full context reach the wire, rejected with HTTP 400).
+    const lastResumedTurn = opts.config.resumeHistory?.at(-1);
+    if (lastResumedTurn?.inputTokens !== undefined && lastResumedTurn.inputTokens > 0) {
+      this.lastUsage = {
+        inputTokens: lastResumedTurn.inputTokens,
+        stopReason: null,
+        resultSubtype: 'success',
+        isError: false,
+      };
+    }
 
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
