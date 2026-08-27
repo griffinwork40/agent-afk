@@ -577,7 +577,7 @@ describe('Spine renderer scenarios', () => {
     // Both rows: `│ <connector><pad><content>`. The connector + pad spans
     // 3 cells (`╰─ ` for child, `⌇  ` for tail), placing content at col 5
     // in both. The 1-col drift pre-fix had tail content at col 6.
-    const childContentCol = childLine!.indexOf('$ bash');
+    const childContentCol = childLine!.indexOf('▸ bash');
     const tailContentCol = tailLine!.indexOf('narration content');
     expect(childContentCol).toBe(5);
     expect(tailContentCol).toBe(5);

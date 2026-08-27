@@ -4,11 +4,11 @@ exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 2 — multi-tool entry (3 tools, all completed) 1`] = `
 "  ● Read("a.ts") — ✓ 10 lines
-  $ Bash("ls -la") — ✓ 5 lines
+  ▸ Bash("ls -la") — ✓ 5 lines
   ● Glob("**/*.ts") — ✓ 23 paths"
 `;
 
-exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 3 — tool entry with error result 1`] = `"  $ Bash("npm test") — ✗ Error: 3 tests failed"`;
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 3 — tool entry with error result 1`] = `"  ▸ Bash("npm test") — ✗ Error: 3 tests failed"`;
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 4 — subagent Agent entry with children, completed 1`] = `
 "◉ → Agent(snap-researcher) [worker]
@@ -20,7 +20,7 @@ exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 5 — subagent Agent entry with overflow (4 children, MAX=3) 1`] = `
 "◉ → Agent(snap-overflower) [worker] — 4 tool calls
 │ ├─ … +1 (1 Read)
-│ ├─ $ Bash("snap1.ts") — ✓ snap-result-1
+│ ├─ ▸ Bash("snap1.ts") — ✓ snap-result-1
 │ ├─ ● Grep("snap2.ts") — ✓ snap-result-2
 │ ├─ ● Glob("snap3.ts") — ✓ snap-result-3
 │ ╰─ Done (4 tool calls · 4.0s)"
