@@ -12,7 +12,7 @@
  * fresh user turn `findCompactionBoundary` returns -1, so `retry` and
  * `traceWriter` are never dereferenced. That makes this a pure in-memory test.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { compactHistory } from './compact-handler.js';
 import { createSessionState, type SessionState } from './session-state.js';
@@ -150,5 +150,93 @@ describe('compactHistory — microcompaction fallback wiring', () => {
     // Three fresh user turns, keepLastN=2 → boundary points at turn 3 (> 0), so
     // findCompactionBoundary does NOT return -1 → the fallback is not the path.
     expect(findCompactionBoundary(messages, 2)).toBeGreaterThan(0);
+  });
+});
+
+describe('compactHistory — microcompaction runs after successful compaction', () => {
+  const KEEP = 'AFK_MICROCOMPACT_KEEP_LAST';
+  const BYTES = 'AFK_MICROCOMPACT_TOOL_RESULT_BYTES';
+  beforeEach(() => {
+    delete process.env[KEEP];
+    delete process.env[BYTES];
+  });
+  afterEach(() => {
+    delete process.env[KEEP];
+    delete process.env[BYTES];
+  });
+
+  /**
+   * History with enough fresh user turns so normal compaction finds a boundary
+   * AND a large tool result in the kept tail that microcompaction should clear.
+   *
+   * Shape (keepLastN=2):
+   *   u1 / a1                — older turn (summarized away)
+   *   u2 / a2 / use(t1) / result(t1, 20KB) — kept tail: t1 is large → micro target
+   *   u3                     — second kept fresh turn
+   *
+   * findCompactionBoundary returns > 0, so the network path fires; we stub it.
+   */
+  function historyWithLargeTailResult(): MessageParam[] {
+    const bigContent = 'x'.repeat(20_000);
+    return [
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 't1', content: bigContent }],
+      },
+      { role: 'user', content: 'u3' },
+    ];
+  }
+
+  /** Minimal stub that streams a single text_delta event carrying the summary. */
+  async function* stubStream(summary: string) {
+    yield {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: summary },
+    };
+  }
+
+  it('clears large tool results in the kept tail even when compaction succeeds', async () => {
+    // keepLast=0 → no results protected → all oversized results are candidates.
+    process.env[KEEP] = '0';
+    // Low threshold so our 20KB content qualifies.
+    process.env[BYTES] = '100';
+
+    const messages = historyWithLargeTailResult();
+    // Sanity: boundary is positive so the summarization path runs.
+    expect(findCompactionBoundary(messages, 2)).toBeGreaterThan(0);
+
+    const messagesCreateMock = vi.fn(() => stubStream('COMPRESSED'));
+    const fakeRetry = {
+      client: { messages: { create: messagesCreateMock } },
+      authMode: 'api-key',
+    } as unknown as RetryLayer;
+
+    const state = makeState(messages);
+    const result = await compactHistory({
+      state,
+      abort: new AbortCoordinator(),
+      retry: fakeRetry,
+      initSessionId: 'test-session',
+    });
+
+    // Normal compaction ran — the summarizer was called.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(1);
+    // The result reports a successful compaction (not just microcompacted).
+    expect(result.compacted).toBe(true);
+
+    // The large tool result in the kept tail was also cleared by microcompaction.
+    const toolResultMsg = state.messages.find((m) => {
+      if (!Array.isArray(m.content)) return false;
+      const block = m.content[0] as { type?: string };
+      return block?.type === 'tool_result';
+    });
+    expect(toolResultMsg).toBeDefined();
+    const block = (toolResultMsg!.content as Array<{ type?: string; content?: unknown }>)[0];
+    expect(typeof block.content).toBe('string');
+    expect(isMicrocompactPlaceholder(block.content as string)).toBe(true);
   });
 });
