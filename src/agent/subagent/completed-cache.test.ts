@@ -15,8 +15,8 @@ function makeHandle(id: string): SubagentHandle {
   return { id } as unknown as SubagentHandle;
 }
 
-function makeResult(): Pick<SubagentResult, 'id' | 'status'> {
-  return { id: 'stub-id', status: 'succeeded' };
+function makeResult(): SubagentResult {
+  return { status: 'succeeded', value: null } as unknown as SubagentResult;
 }
 
 // ---------------------------------------------------------------------------
