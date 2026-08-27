@@ -78,6 +78,7 @@ export const searchWitnessHandler: ToolHandler = async (input) => {
   const sessions = typeof obj['sessions'] === 'number' ? obj['sessions'] : undefined;
   const kinds = asStringArray(obj['kinds']);
   const since = typeof obj['since'] === 'string' ? obj['since'] : undefined;
+  const toolName = typeof obj['tool_name'] === 'string' ? obj['tool_name'] : undefined;
 
   try {
     const result = await searchAcrossSessions({
@@ -85,6 +86,7 @@ export const searchWitnessHandler: ToolHandler = async (input) => {
       sessions,
       kinds,
       since,
+      toolName,
     });
     return { content: JSON.stringify(result) };
   } catch (err) {
