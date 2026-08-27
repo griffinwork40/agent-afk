@@ -149,12 +149,10 @@ export class SubagentLogReader {
     subagentId: string,
   ): AsyncGenerator<OutputEvent> {
     const logPath = getSubagentLogPath(sessionLabel, subagentId);
-    let fileStream: fs.ReadStream;
-    try {
-      fileStream = fs.createReadStream(logPath, { encoding: 'utf8' });
-    } catch {
-      return;
-    }
+    // fs.createReadStream doesn't throw synchronously — it emits an 'error'
+    // event. A try/catch here would be dead code; the outer try/catch below
+    // handles all errors (including ENOENT via the rl async iteration).
+    const fileStream = fs.createReadStream(logPath, { encoding: 'utf8' });
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
     try {
       for await (const line of rl) {

@@ -87,14 +87,15 @@ function resolveId(manager: SubagentManager, raw: string): string | null {
   const handle = manager.get(raw);
   if (handle) return handle.id;
 
-  // Prefix match against completed cache.
-  const completedMatches = manager.completed
-    .list()
-    .filter(e => e.handle.id.startsWith(raw))
-    .map(e => e.handle.id);
+  // Prefix match across BOTH active and completed pools so a running
+  // subagent's 12-char truncated display ID can be resolved.
+  const activeIds = manager.list().map(h => h.id);
+  const completedIds = manager.completed.list().map(e => e.handle.id);
+  const allIds = [...new Set([...activeIds, ...completedIds])];
+  const matches = allIds.filter(id => id.startsWith(raw));
 
-  if (completedMatches.length === 1 && completedMatches[0] !== undefined) {
-    return completedMatches[0];
+  if (matches.length === 1 && matches[0] !== undefined) {
+    return matches[0];
   }
   return null;
 }
@@ -186,8 +187,11 @@ export const tasksCmd: SlashCommand = {
     ]);
     const diskIds = (await SubagentLogReader.list(sessionLabel))
       .filter(id => !memoryIds.has(id));
+    // v1 limitation: terminal status is not persisted to the log filename or
+    // header, so we cannot distinguish succeeded/failed/cancelled from disk
+    // alone. Use 'idle' (renders as '·') as a neutral/unknown indicator.
     const diskRows = diskIds.map(id =>
-      formatHandleLine(id, 'succeeded' as SubagentStatus, undefined, undefined, undefined, 0),
+      formatHandleLine(id, 'idle' as SubagentStatus, undefined, undefined, undefined, 0),
     );
 
     const allRows = [...activeRows, ...completedRows, ...diskRows];
@@ -227,10 +231,13 @@ export const tasksViewCmd: SlashCommand = {
     const resolvedId = resolveId(manager, raw) ?? raw;
     const handle = manager.get(resolvedId);
 
-    // Memory-first: handle exists — render getHistory().
-    if (handle) {
-      const history = handle.session.getHistory?.() ?? [];
+    // Memory-first: handle exists AND has getHistory — render conversation.
+    // When getHistory is absent (some session implementations don't expose it),
+    // fall through to the disk-based replay path below so logs are still shown.
+    if (handle && typeof handle.session.getHistory === 'function') {
+      const history = handle.session.getHistory();
       if (history.length === 0) {
+        // getHistory exists but returned nothing — "no history yet" is correct.
         ctx.out.info(`Subagent ${resolvedId} has no history yet.`);
         return 'continue';
       }

@@ -244,4 +244,12 @@ export interface SubagentManagerOptions {
    * relevant entries published by sibling agents.
    */
   workspaceStore?: WorkspaceStore;
+  /**
+   * Session label used as the directory key for subagent log files
+   * (`~/.afk/state/subagent-logs/<sessionLabel>/<subagentId>.jsonl`).
+   * Must match the label passed to `setTasksRegistry` so the writer and
+   * reader agree on the directory.  Defaults to `options.parent.sessionId`
+   * when absent (old behaviour, kept for backwards compatibility).
+   */
+  sessionLabel?: string;
 }

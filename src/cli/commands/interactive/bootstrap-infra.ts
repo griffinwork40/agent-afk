@@ -17,6 +17,7 @@ import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub
 import { setTasksRegistry } from '../../slash/commands/tasks.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
+import { randomUUID } from 'node:crypto';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import type { CliOptions } from './shared.js';
 import { recordBootWarning } from './boot-warning-recorder.js';
@@ -77,6 +78,12 @@ export function createBootstrapInfra(a: {
   const trace = createDefaultTraceWriter(
     traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
   );
+  // Compute a stable session label for subagent-log directory naming.
+  // When trace is active it provides the label (same directory used by the
+  // trace writer). When AFK_TRACE_DISABLED=1 trace is null, so we generate
+  // a fresh UUID — the same mechanism createDefaultTraceWriter uses — so
+  // /tasks still works regardless of trace state.
+  const sessionLabel = trace?.sessionLabel ?? randomUUID();
 
   // Match session credential family to --provider when set (anti-leak for
   // --provider xai with a Claude default model).
@@ -177,15 +184,15 @@ export function createBootstrapInfra(a: {
         message,
       }),
     ...(a.workspaceStore !== undefined ? { workspaceStore: a.workspaceStore } : {}),
+    sessionLabel,
   });
 
-  // Wire the /tasks slash commands to the root manager and the trace session
-  // label, mirroring the setBgsubRegistry call above. Must come after
-  // wireExecutors so rootManager exists. trace?.sessionLabel is the same label
-  // that names the subagent-logs directory for this session.
-  if (trace?.sessionLabel) {
-    setTasksRegistry(rootManager, trace.sessionLabel);
-  }
+  // Wire the /tasks slash commands to the root manager and the session label.
+  // Called unconditionally: when AFK_TRACE_DISABLED=1 trace is null so
+  // trace?.sessionLabel would be undefined, but we computed a fallback UUID
+  // label above. The manager's SubagentLogWriter uses the same sessionLabel so
+  // writer and reader agree on the directory path regardless of trace state.
+  setTasksRegistry(rootManager, sessionLabel);
 
   return {
     trace,

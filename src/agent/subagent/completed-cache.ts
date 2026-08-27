@@ -17,7 +17,10 @@ import type { SubagentResult } from './result.js';
 
 export interface CompletedEntry<T = unknown> {
   readonly handle: SubagentHandle<T>;
-  readonly result: SubagentResult<T>;
+  /** Minimal result stub — only `id` and `status` are populated at eviction
+   *  time. Narrowed from `SubagentResult<T>` to prevent callers from accessing
+   *  fields that were never set. */
+  readonly result: Pick<SubagentResult, 'id' | 'status'>;
   readonly completedAt: number;
 }
 
@@ -32,7 +35,7 @@ export class CompletedCache {
   }
 
   /** Record a completed subagent. Evicts oldest entry when over capacity. */
-  add(id: string, handle: SubagentHandle, result: SubagentResult): void {
+  add(id: string, handle: SubagentHandle, result: Pick<SubagentResult, 'id' | 'status'>): void {
     // Delete first so re-insertion moves to end (Map iteration order = insertion order)
     this.entries.delete(id);
     this.entries.set(id, { handle, result, completedAt: Date.now() });

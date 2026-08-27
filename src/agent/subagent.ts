@@ -124,6 +124,9 @@ export class SubagentManager {
   private readonly parentSurface: Surface | undefined;
   private readonly parentAbortSignal: AbortSignal | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
+  /** Session label for subagent-log directory naming. Matches the label
+   *  given to `setTasksRegistry` so writer and reader agree on the path. */
+  private readonly sessionLabel: string | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
   private rootController: AbortController;
@@ -148,6 +151,7 @@ export class SubagentManager {
     this.parentAbortSignal = options.parentAbortSignal;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
     this.workspaceStore = options.workspaceStore;
+    this.sessionLabel = options.sessionLabel;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
     this.abortGraph = new AbortGraph(options.traceWriter);
@@ -434,8 +438,14 @@ export class SubagentManager {
       effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
       const effectiveParentId = options.parentId?.trim() || undefined;
       // Per-subagent conversation log — always on unless AFK_SUBAGENT_LOG=0.
-      const logWriter = SubagentLogWriter.isEnabled() && options.parent.sessionId
-        ? new SubagentLogWriter(options.parent.sessionId, id)
+      // Use sessionLabel (the directory key for /tasks) rather than
+      // options.parent.sessionId (the SDK runtime ID): writer and reader must
+      // agree on the same key so logs are found after the handle is evicted.
+      // Falls back to options.parent.sessionId for backwards compatibility
+      // when no sessionLabel was threaded through SubagentManagerOptions.
+      const logSessionKey = this.sessionLabel ?? options.parent.sessionId;
+      const logWriter = SubagentLogWriter.isEnabled() && logSessionKey
+        ? new SubagentLogWriter(logSessionKey, id)
         : undefined;
       handle = new SubagentHandleImpl<T>(
         id,
@@ -460,7 +470,7 @@ export class SubagentManager {
           this.completed.add(id, handle as SubagentHandle, {
             id,
             status: handle._currentStatus === 'running' ? 'succeeded' : handle._currentStatus,
-          } as SubagentResult);
+          });
           this.active.delete(id);
           this.abortGraph.dispose(id);
           void logWriter?.close();
