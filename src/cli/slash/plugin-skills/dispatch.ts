@@ -226,6 +226,12 @@ export async function registerPluginSkills(
     const existing = harvestedFlags.get(name) ?? [];
     harvestedFlags.set(name, Array.from(new Set([...existing, ...flags])).sort());
   }
+  // Category merge: marketplace-first-wins (first-write-wins). If the marketplace
+  // cache already has a category for a skill name, the bundled-plugins dir does
+  // not overwrite it. This differs from flags, which use union-merge (both
+  // sources contribute). The asymmetry is intentional: a marketplace plugin's
+  // category annotation takes precedence over a bundled default, since the
+  // marketplace version is the actively-installed copy.
   for (const [name, cat] of bundled.categories) {
     if (!harvestedCategories.has(name)) harvestedCategories.set(name, cat);
   }

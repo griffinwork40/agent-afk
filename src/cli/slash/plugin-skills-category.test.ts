@@ -216,6 +216,46 @@ describe('/skills category grouping (Phase 2)', () => {
     expect(out).toContain('/user-custom');
   });
 
+  // Builtin-guard: a plugin alt must NOT contaminate an unannotated builtin
+  // skill with the plugin's category. The builtin renders under "More skills".
+  it('does not adopt plugin category onto an unannotated builtin skill', async () => {
+    // Register a categorised builtin so the category layout activates.
+    registerSkill({
+      name: 'mint',
+      description: 'Build features.',
+      category: 'Build & ship',
+      handler: async () => 'ok',
+    });
+    // Register a builtin with no category.
+    registerSkill({
+      name: 'audit-fit',
+      description: 'Audit artifact types.',
+      handler: async () => 'ok',
+    });
+
+    // Pass a plugin DiscoveredSkill that collides on bare name with a category.
+    const cmd = makeDynamicSkillsCmd([
+      {
+        name: 'plugin:audit-fit',
+        description: 'Plugin audit-fit.',
+        category: 'Debug & fix',
+        source: 'plugin',
+      },
+    ]);
+
+    const { ctx, lines } = makeCtx();
+    await cmd.handler(ctx, '');
+    const out = stripAnsi(lines.join('\n'));
+
+    // The builtin should NOT appear under the plugin's category.
+    // It should be under "More skills" since it has no authored category.
+    expect(out).toContain('/audit-fit');
+    expect(out).toContain(UNCATEGORIZED_LABEL);
+    // "Debug & fix" should NOT appear — only the plugin contributes it,
+    // but adoption onto the builtin is blocked.
+    expect(out).not.toContain('Debug & fix');
+  });
+
   // F4b: skills with an OOV category string must NOT vanish — they must appear
   // under UNCATEGORIZED_LABEL instead, and the OOV string must not appear as
   // a section header.
