@@ -1,22 +1,28 @@
 /**
  * Task-view replay renderer.
  *
- * Renders a subagent's conversation history (in-memory Message[] path) to a
- * terminal string. Emits a header box, the body, and a footer separator,
- * and returns a fully-assembled string so callers can page, write, or stream
- * it as they see fit.
+ * Renders a subagent's conversation history to a terminal string via two
+ * input paths:
  *
- * Disk-path rendering (streaming OutputEvent replay) is handled by
- * `replayDiskEvents` in task-view-mode.ts, which streams events directly to
- * ctx.out line-by-line.
+ *   - Memory path  — takes a `Message[]` array already held in memory and
+ *     renders each message using renderMarkdownToTerminal.
+ *
+ *   - Disk path    — takes an `AsyncIterable<OutputEvent>` (produced by
+ *     BgJobLogReader.readEvents()) and renders events with formatOutputEvent.
+ *
+ * Both paths emit a header box, the body, and a footer separator, and both
+ * return a fully-assembled string so callers can page, write, or stream it
+ * as they see fit.
  *
  * @module cli/commands/interactive/task-view
  */
 
 import { palette } from '../../palette.js';
 import { renderMarkdownToTerminal } from '../../formatter.js';
+import { formatOutputEvent } from '../../output-event-format.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import type { Message } from '../../../agent/types/message-types.js';
+import type { OutputEvent } from '../../../agent/types/session-types.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -39,9 +45,16 @@ export interface TaskViewHeader {
   turnCount?: number;
 }
 
+export interface TaskViewOptions {
+  /** Maximum number of disk events to render (default 500). */
+  maxEvents?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+const DEFAULT_MAX_EVENTS = 500;
 /** Truncation limit for tool input / result previews (characters). */
 const CONTENT_PREVIEW_CHARS = 200;
 
@@ -217,7 +230,49 @@ export function renderMessagesView(
   return sections.join('\n');
 }
 
-// renderEventsView was removed — it was a dead export with zero callers (#1335).
-// Disk-path rendering is handled by replayDiskEvents in task-view-mode.ts,
-// which streams events line-by-line to ctx.out and does not share the
-// "return full string" contract of this module's memory-path API.
+/**
+ * Render a subagent conversation from a disk OutputEvent replay stream.
+ *
+ * Contract: reads up to `options.maxEvents` (default 500) events, formats
+ * each with formatOutputEvent (null returns are skipped), and returns a
+ * fully assembled terminal string (header + body + footer) with a trailing
+ * newline.
+ */
+export async function renderEventsView(
+  header: TaskViewHeader,
+  events: AsyncIterable<OutputEvent>,
+  options?: TaskViewOptions,
+): Promise<string> {
+  const limit = options?.maxEvents ?? DEFAULT_MAX_EVENTS;
+  const lines: string[] = [];
+  let count = 0;
+  let truncated = false;
+
+  for await (const event of events) {
+    if (count >= limit) {
+      truncated = true;
+      break;
+    }
+    const formatted = formatOutputEvent(event);
+    if (formatted !== null) {
+      lines.push(formatted);
+      count++;
+    }
+  }
+
+  const sections: string[] = [buildHeader(header), ''];
+
+  if (lines.length > 0) {
+    sections.push(lines.join('\n'));
+  } else {
+    sections.push(palette.dim('  (no events recorded)'));
+  }
+
+  if (truncated) {
+    sections.push('');
+    sections.push(palette.dim(`  [truncated — showing first ${limit} events]`));
+  }
+
+  sections.push('', buildFooter());
+  return sections.join('\n');
+}
