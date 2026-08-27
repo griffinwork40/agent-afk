@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.156.0] - 2026-08-27
+
+### Added
+- add tool_name filter to search_witness (#1314) (40687d88)
+
 ## [5.155.0] - 2026-08-27
 
 ### Added

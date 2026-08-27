@@ -245,6 +245,7 @@ export interface SearchWitnessParams {
   sessions?: number;
   kinds?: string[];
   since?: string;
+  toolName?: string;
 }
 
 export interface SearchMatch {
@@ -329,6 +330,12 @@ export async function searchAcrossSessions(
       const [event] = parseJsonlLines<TraceEvent>(line, { guard: isTraceEvent });
       if (!event) continue;
       if (kindFilter && !kindFilter.has(event.kind)) continue;
+      // toolName filter: reject non-tool_call events and mismatched names
+      if (params.toolName) {
+        if (event.kind !== 'tool_call') continue;
+        const payload = event.payload as { name?: string };
+        if (payload.name !== params.toolName) continue;
+      }
       matches.push({
         sessionId: entry.sessionId,
         event,

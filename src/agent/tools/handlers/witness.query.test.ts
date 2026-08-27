@@ -8,6 +8,7 @@
  *  - parseEvents with malformed lines (via readSessionTrace)
  *  - readSessionTrace path-traversal rejection
  *  - readSessionTrace invalid "since" date (via searchAcrossSessions)
+ *  - searchAcrossSessions toolName filter
  *  - UTF-8 boundary alignment on byte cap (via readTraceSafe, indirectly)
  */
 
@@ -428,6 +429,48 @@ describe('searchAcrossSessions — truncatedSessions', () => {
     expect(result.matches.some((m) => m.sessionId === 'big-session-2')).toBe(true);
     // And truncation must be reported.
     expect(result.truncatedSessions).toContain('big-session-2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// searchAcrossSessions — toolName filter
+// ---------------------------------------------------------------------------
+
+describe('searchAcrossSessions — toolName filter', () => {
+  it('returns only tool_call events with matching name', async () => {
+    await writeTrace('search-tool-1', [
+      makeEventLine('tool_call', 1, { phase: 'completed', isError: false, name: 'bash', resultBytes: 10, durationMs: 5 }),
+      makeEventLine('tool_call', 2, { phase: 'completed', isError: false, name: 'read_file', resultBytes: 5, durationMs: 2 }),
+      makeEventLine('closure', 3, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const result = await searchAcrossSessions({ query: 'completed', toolName: 'bash' });
+    expect(result.matches).toHaveLength(1);
+    const payload = result.matches[0]!.event.payload as { name?: string };
+    expect(payload.name).toBe('bash');
+  });
+
+  it('excludes non-tool_call events when toolName is set', async () => {
+    await writeTrace('search-tool-2', [
+      makeEventLine('closure', 1, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+      makeEventLine('session_phase', 2, { phase: 'session_init_start' }),
+      makeEventLine('tool_call', 3, { phase: 'completed', isError: false, name: 'bash', resultBytes: 10, durationMs: 5 }),
+    ]);
+
+    const result = await searchAcrossSessions({ query: 'session', toolName: 'bash' });
+    // Only the tool_call with name=bash should match, even though 'session' appears in other events
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it('returns all matching events when toolName is not set', async () => {
+    await writeTrace('search-tool-3', [
+      makeEventLine('tool_call', 1, { phase: 'completed', isError: false, name: 'bash', resultBytes: 10, durationMs: 5 }),
+      makeEventLine('closure', 2, { reason: 'end_turn', finalCostUsd: 0, finalTurnCount: 1 }),
+    ]);
+
+    const result = await searchAcrossSessions({ query: 'end_turn' });
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]!.event.kind).toBe('closure');
   });
 });
 
