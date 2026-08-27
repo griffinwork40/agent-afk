@@ -23,10 +23,10 @@ export function calculateContentWidth(indentLength: number): number {
  * Render text block using either markdown or plain text wrapping.
  * Chooses rendering strategy based on markdown content detection.
  */
-export function renderTextBlock(text: string, contentWidth: number): string {
+export function renderTextBlock(text: string, contentWidth: number, isCommit = false): string {
   const isMarkdown = hasMarkdownContent(text);
   if (isMarkdown) {
-    return renderMarkdownToTerminal(text, { maxWidth: contentWidth });
+    return renderMarkdownToTerminal(text, { maxWidth: contentWidth, isCommit });
   } else {
     // breakLongWords: this output is painted as raw lines by the compositor,
     // which then hard-wraps at paint time. A soft wrap here leaves a long
@@ -94,7 +94,7 @@ export function formatBlockForCommit(
   indentStr: string,
   contentWidth: number,
 ): string {
-  const rendered = renderTextBlock(blockText, contentWidth);
+  const rendered = renderTextBlock(blockText, contentWidth, true);
 
   // Wrap rendered content to contentWidth BEFORE adding indent. This
   // enforces width on prose that renderMarkdownToTerminal didn't hard-wrap,

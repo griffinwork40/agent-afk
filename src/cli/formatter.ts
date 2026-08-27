@@ -34,7 +34,7 @@ const URL_RE = /^https?:\/\/\S+$/;
  */
 const SHELL_PROMPT_LINE_RE = /^[$>]\s+(\S.*)$/;
 
-function renderInlineTokens(tokens?: Tokens.Generic[]): string {
+function renderInlineTokens(tokens?: Tokens.Generic[], commitOnly = false): string {
   if (!tokens) return '';
   return tokens.map((token) => {
     switch (token.type) {
@@ -42,23 +42,27 @@ function renderInlineTokens(tokens?: Tokens.Generic[]): string {
         const csText = (token as Tokens.Codespan).text;
         // Register CLI commands and URLs embedded in backtick spans so
         // `/copy N` works for inline shell snippets without a fenced block.
-        if (CLI_PREFIX_RE.test(csText)) registerArtifact('command', '', csText);
-        else if (URL_RE.test(csText)) registerArtifact('url', '', csText);
+        // Guard behind commitOnly so streaming pending-buffer repaints do not
+        // register duplicates — artifacts are captured only on the final commit.
+        if (commitOnly) {
+          if (CLI_PREFIX_RE.test(csText)) registerArtifact('command', '', csText);
+          else if (URL_RE.test(csText)) registerArtifact('url', '', csText);
+        }
         return SLASH_CODESPAN_RE.test(csText) ? palette.brand(csText) : palette.tool(csText);
       }
       case 'strong': {
         const strong = token as Tokens.Strong;
-        return palette.bold(strong.tokens ? renderInlineTokens(strong.tokens as Tokens.Generic[]) : strong.text);
+        return palette.bold(strong.tokens ? renderInlineTokens(strong.tokens as Tokens.Generic[], commitOnly) : strong.text);
       }
       case 'em': {
         const em = token as Tokens.Em;
-        return palette.italic(em.tokens ? renderInlineTokens(em.tokens as Tokens.Generic[]) : em.text);
+        return palette.italic(em.tokens ? renderInlineTokens(em.tokens as Tokens.Generic[], commitOnly) : em.text);
       }
       case 'text':
         return (token as Tokens.Text).text.replace(SLASH_TOKEN_RE, (t) => palette.brand(t));
       case 'link': {
         const link = token as Tokens.Link;
-        const linkText = link.tokens ? renderInlineTokens(link.tokens as Tokens.Generic[]) : link.text;
+        const linkText = link.tokens ? renderInlineTokens(link.tokens as Tokens.Generic[], commitOnly) : link.text;
         // Bare auto-link (linkText === href): emit the URL once. Otherwise show
         // text plus parenthesized href so the destination is still visible.
         return linkText === link.href
@@ -134,6 +138,13 @@ export function renderCardLine(text: string): string {
 
 interface RenderMarkdownOptions {
   maxWidth?: number;
+  /**
+   * When true, artifact registration (`registerArtifact`) fires for inline
+   * commands and URLs found during this render. Must be false (or omitted)
+   * during streaming pending-buffer repaints so that a single response block
+   * is not registered N+1 times, which would shift all /copy indices.
+   */
+  isCommit?: boolean;
 }
 
 /**
@@ -142,9 +153,10 @@ interface RenderMarkdownOptions {
 export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptions = {}): string {
   const tokens = Lexer.lex(text);
   const maxTableWidth = Number.isFinite(opts.maxWidth) ? Math.floor(opts.maxWidth ?? 0) : undefined;
+  const commitOnly = opts.isCommit === true;
 
   function renderInline(tokens?: Tokens.Generic[]): string {
-    return renderInlineTokens(tokens);
+    return renderInlineTokens(tokens, commitOnly);
   }
 
   function renderTokens(tokens: Token[]): string {
@@ -206,13 +218,16 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // Scan raw paragraph lines for standalone URLs and shell-prompt
           // commands not inside backticks (codespan tokens handle backtick-
           // wrapped text in renderInlineTokens above).
-          for (const rawLine of para.raw.split('\n')) {
-            const trimmed = rawLine.trim();
-            if (URL_RE.test(trimmed)) {
-              registerArtifact('url', '', trimmed);
-            } else {
-              const shellMatch = SHELL_PROMPT_LINE_RE.exec(trimmed);
-              if (shellMatch?.[1]) registerArtifact('command', '', shellMatch[1]);
+          // Guard behind commitOnly — same rationale as renderInlineTokens.
+          if (commitOnly) {
+            for (const rawLine of para.raw.split('\n')) {
+              const trimmed = rawLine.trim();
+              if (URL_RE.test(trimmed)) {
+                registerArtifact('url', '', trimmed);
+              } else {
+                const shellMatch = SHELL_PROMPT_LINE_RE.exec(trimmed);
+                if (shellMatch?.[1]) registerArtifact('command', '', shellMatch[1]);
+              }
             }
           }
           result = renderInline(para.tokens as Tokens.Generic[]) + '\n';
