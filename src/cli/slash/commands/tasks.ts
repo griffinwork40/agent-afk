@@ -240,9 +240,21 @@ export const tasksCmd: SlashCommand = {
     }
 
     // ── Interactive mode ──────────────────────────────────────────────────────
+    // Invariant: the TerminalCompositor holds the stdin claim during slash
+    // dispatch. We must suspend it before attaching our own 'data' listener
+    // to avoid the dual-consumer phantom-turn bug (#511 class). Resume on
+    // every exit path (Esc, Ctrl-C, Enter→view, soft-stop).
+    const compositor = ctx.getCompositor?.() ?? null;
+    compositor?.suspendInput();
+
     renderList();
 
     await new Promise<void>((resolve) => {
+      const cleanup = (): void => {
+        process.stdin.off('data', onKeypress);
+        compositor?.resumeInput();
+      };
+
       const onKeypress = (chunk: Buffer | string): void => {
         const str = typeof chunk === 'string' ? chunk : chunk.toString();
         if (str === '\x1b[A' || str === '\x1bOA') {
@@ -257,21 +269,20 @@ export const tasksCmd: SlashCommand = {
           // Enter — open the selected task in view mode.
           const selected = tasks[cursor];
           if (selected) {
-            // Wire Esc to resolve this promise (return to main prompt).
             ctx.setSoftStopHandler?.(null);
-            process.stdin.off('data', onKeypress);
+            cleanup();
             const entry: TaskViewEntry = {
               id: selected.id,
               manager,
               sessionLabel,
               ctx,
             };
-            void enterTaskViewMode(entry).then(resolve);
+            void enterTaskViewMode(entry).then(resolve).catch(() => resolve());
           }
         } else if (str === '\x1b' || str === '\x03') {
           // Esc or Ctrl-C — exit to main prompt.
           ctx.setSoftStopHandler?.(null);
-          process.stdin.off('data', onKeypress);
+          cleanup();
           ctx.ui.clearScreen();
           ctx.ui.repaintStatusLine();
           resolve();
@@ -281,7 +292,7 @@ export const tasksCmd: SlashCommand = {
       // Wire Esc handler via the surface-level soft-stop.
       ctx.setSoftStopHandler?.(() => {
         ctx.setSoftStopHandler?.(null);
-        process.stdin.off('data', onKeypress);
+        cleanup();
         ctx.ui.clearScreen();
         ctx.ui.repaintStatusLine();
         resolve();

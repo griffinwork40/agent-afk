@@ -19,6 +19,7 @@
 
 import { palette } from '../../palette.js';
 import { formatOutputEvent } from '../../output-event-format.js';
+import { renderMessagesView } from './task-view.js';
 import { SubagentLogReader } from '../../../agent/subagent/log.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SlashContext } from '../../slash/types.js';
@@ -158,28 +159,21 @@ export async function enterTaskViewMode(entry: TaskViewEntry): Promise<void> {
   const status  = handle ? handle.status : 'completed';
   const agentType = (handle as unknown as { _agentType?: string })?._agentType;
 
-  ctx.out.line(renderTaskViewHeader(id, status, agentType));
-  ctx.out.line('');
-
   // ── Memory-first: render from handle.session.getHistory() ────────────────
   // getHistory is optional on the interface — some session implementations
   // don't expose it. Fall through to disk replay when absent.
+  // Invariant: the memory path renders via renderMessagesView (task-view.ts)
+  // which truncates tool_use/tool_result content — never raw JSON.stringify.
   if (handle && typeof handle.session.getHistory === 'function') {
     const history = handle.session.getHistory();
-    if (history.length > 0) {
-      for (const msg of history) {
-        const role = msg.role === 'user' ? palette.bold('user') : palette.bold('assistant');
-        ctx.out.line(`${role}:`);
-        const raw = msg.content;
-        const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
-        for (const l of text.split('\n')) ctx.out.line(`  ${l}`);
-        ctx.out.line('');
-      }
-    } else {
+    ctx.out.line(renderMessagesView({ id, status, agentType }, history));
+    if (history.length === 0) {
       ctx.out.line(palette.dim('  (no history yet)'));
-      ctx.out.line('');
     }
+    ctx.out.line('');
   } else {
+    ctx.out.line(renderTaskViewHeader(id, status, agentType));
+    ctx.out.line('');
     // ── Disk fallback: replay JSONL events ──────────────────────────────────
     const count = await replayDiskEvents(entry);
     if (count === 0) {
@@ -223,12 +217,12 @@ export async function enterTaskViewMode(entry: TaskViewEntry): Promise<void> {
   } catch {
     // Abort or any stream error — exit cleanly.
   } finally {
-    // The subagent finished naturally (not Esc). Update footer.
+    // The subagent finished naturally (not Esc). Update footer and exit view.
     if (!signal.aborted) {
       ctx.out.line('');
       ctx.out.line(FOOTER_COMPLETE);
+      exitTaskViewMode(entry);
       ctx.setSoftStopHandler?.(null);
-      if (ictx) ictx.viewingTaskId = undefined;
     }
   }
 }
