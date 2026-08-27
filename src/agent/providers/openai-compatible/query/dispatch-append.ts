@@ -3,7 +3,7 @@ import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
-import { extractRawToolInput } from '../../../facets/raw-input.js';
+import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/raw-input.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
@@ -115,6 +115,7 @@ export async function* dispatchAndAppendToolCalls({
       toolName: call.name,
       toolInput: summarizeToolInput(call.name, call.input),
       toolInputRaw: extractRawToolInput(call.input),
+      toolInputCapture: extractCaptureToolInput(call.input),
       sessionId,
     };
   }

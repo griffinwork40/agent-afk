@@ -197,6 +197,39 @@ describe('createSubagentOutputRecorder', () => {
     expect(body).toContain('exact --value');
   });
 
+  /**
+   * Regression test for #948: bash commands longer than 161 chars were
+   * truncated in capture because the fallback was the UI summary
+   * (COMMAND_SUMMARY_MAX=160). `toolInputCapture` is now the preferred source,
+   * carrying the verbatim command through the secret redactor at 8192 chars.
+   */
+  it('records a >161-char bash command verbatim via toolInputCapture (#948)', async () => {
+    // Use a command without JSON-special chars so the captured JSON round-trips
+    // cleanly and the substring check is unambiguous.
+    const longCmd =
+      'find /Users/griffinlong/Projects -type f -name SKILL.md | xargs grep -l extractRawToolInput | sort | head -n 20 && echo done-scanning-the-whole-project-tree-for-that-import-symbol';
+    expect(longCmd.length).toBeGreaterThan(161);
+    const rec = createSubagentOutputRecorder(baseInput({ subagentId: 'capture-948' }));
+    rec?.observe({
+      type: 'chunk',
+      chunk: {
+        type: 'tool_use_detail',
+        toolUseId: 't948',
+        toolName: 'bash',
+        // toolInput is the 161-char truncated UI summary — what was recorded before the fix.
+        toolInput: longCmd.slice(0, 160) + '\u2026',
+        // toolInputCapture carries the full verbatim command (secret-redacted).
+        toolInputCapture: JSON.stringify({ command: longCmd }),
+      },
+    } as Parameters<Recorder['observe']>[0]);
+    const body = await waitForRecords('capture-948', 1);
+    // The tail of the command that the UI truncation would have cut must be present.
+    const tail = longCmd.slice(161);
+    expect(body).toContain(tail);
+    // The truncation sentinel from the UI summary must NOT appear in the tool record.
+    expect(body.indexOf('\u2026')).toBe(-1);
+  });
+
   it('records a tool call ONCE — the pending paint is skipped, not written as a duplicate', async () => {
     const rec = createSubagentOutputRecorder(baseInput({ subagentId: 'dup-1' }));
     // anthropic-direct announces every call twice: the pending paint fires at
