@@ -229,7 +229,7 @@ export const tasksViewCmd: SlashCommand = {
 
     // Memory-first: handle exists — render getHistory().
     if (handle) {
-      const history = handle.session.getHistory();
+      const history = handle.session.getHistory?.() ?? [];
       if (history.length === 0) {
         ctx.out.info(`Subagent ${resolvedId} has no history yet.`);
         return 'continue';

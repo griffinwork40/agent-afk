@@ -124,6 +124,9 @@ export class SubagentLogWriter {
     }
   }
 
+  // Invariant: bytesWritten tracks bytes ATTEMPTED (queued to the stream),
+  // not bytes confirmed persisted to disk. This matches BgJobLogWriter's
+  // accepted tradeoff — the cap is best-effort, not a durability guarantee.
   private writeLine(line: string): void {
     if (this.errored || !this.stream || this.bytesWritten >= MAX_LOG_BYTES) return;
     this.bytesWritten += Buffer.byteLength(line, 'utf8');

@@ -453,6 +453,14 @@ export class SubagentManager {
           // timeout, and abort — so it is the settle hook the heartbeat's
           // teardown belongs on.
           stopOccupancyHeartbeat();
+          // Populate the completed cache BEFORE removing from active so that
+          // the memory-first /tasks:view path can access the handle after
+          // teardown. The result is a minimal stub — consumers only use
+          // `handle` from the entry (see completed.get(id)?.handle).
+          this.completed.add(id, handle as SubagentHandle, {
+            id,
+            status: handle._currentStatus === 'running' ? 'succeeded' : handle._currentStatus,
+          } as SubagentResult);
           this.active.delete(id);
           this.abortGraph.dispose(id);
           void logWriter?.close();
