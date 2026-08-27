@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.157.0] - 2026-08-27
+
+### Added
+- /tasks commands + always-on subagent conversation logging (v1) (#1312) (5d37b230)
+- add job-to-be-done category grouping to /skills listing (#12) (#1264) (eb175b9e)
+
 ## [5.156.0] - 2026-08-27
 
 ### Added
