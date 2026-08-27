@@ -31,13 +31,30 @@
  * derive.ts reads AND that are safe to persist verbatim. This module is the
  * single source of that contract — never add a secret-bearing field (notably
  * `command`); add a field only when derive.ts consumes it and it cannot leak.
+ *
+ * `extractCaptureToolInput` is the CAPTURE-ONLY variant. It includes `command`
+ * after passing it through the secret redactor, and applies a generous byte cap
+ * (CAPTURE_FIELD_CAP). It is NOT used by derive.ts and MUST NOT be wired into
+ * the session sidecar or the facet pipeline — those consumers require the strict
+ * whitelist. Its sole consumer is subagent-output-capture.ts, which writes an
+ * opt-in witness artifact that already carries a best-effort-redaction banner.
  */
+
+import { redactSecrets } from '../redact-secrets.js';
 
 /** The exact non-sensitive scalar fields facet derivation reads from a tool input. */
 export const RAW_INPUT_FIELDS = ['file_path', 'name', 'id_prefix'] as const;
 
 /** Per-field character cap — a pathologically large field value is truncated. */
 export const RAW_INPUT_FIELD_CAP = 4096;
+
+/**
+ * Character cap for a single field in `extractCaptureToolInput`. Generous
+ * enough to preserve a real bash command or file path, tight enough to bound
+ * the witness artifact when a tool emits a multi-KB value (e.g. write_file
+ * `content`, edit_file `new_string`).
+ */
+export const CAPTURE_FIELD_CAP = 8192;
 
 /**
  * Project a tool input down to the whitelisted scalar fields facet derivation
@@ -58,4 +75,40 @@ export function extractRawToolInput(input: unknown): string | undefined {
         : value;
   }
   return Object.keys(picked).length > 0 ? JSON.stringify(picked) : undefined;
+}
+
+/**
+ * Extract verbatim tool input for CAPTURE purposes only — NOT for facet
+ * derivation or the session sidecar. Unlike `extractRawToolInput`, this
+ * function includes `command` (and all other scalar string fields) after
+ * running each value through the secret redactor. All string values are
+ * capped at CAPTURE_FIELD_CAP characters; non-string scalars are included
+ * as-is; object and array fields are omitted.
+ *
+ * Contract: do NOT use this in derive.ts, the session sidecar, or any
+ * consumer that stores data outside the opt-in witness artifact. Those paths
+ * require the strict RAW_INPUT_FIELDS whitelist above. The caller
+ * (subagent-output-capture.ts) already carries a best-effort-redaction
+ * banner so the explicit redaction pass here still applies but is not a
+ * security guarantee.
+ *
+ * Returns `undefined` for non-object inputs so callers can fall back cleanly.
+ */
+export function extractCaptureToolInput(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const obj = input as Record<string, unknown>;
+  if (Object.keys(obj).length === 0) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (typeof value === 'string') {
+      const capped = value.length > CAPTURE_FIELD_CAP ? value.slice(0, CAPTURE_FIELD_CAP) : value;
+      out[key] = redactSecrets(capped);
+    } else if (value !== null && value !== undefined && typeof value !== 'object') {
+      // Scalar non-strings (numbers, booleans) are safe to include verbatim.
+      out[key] = value;
+    }
+    // Objects and arrays are omitted — they can be arbitrarily large and are
+    // not useful for the "what command did the agent run" capture use case.
+  }
+  return Object.keys(out).length > 0 ? JSON.stringify(out) : undefined;
 }
