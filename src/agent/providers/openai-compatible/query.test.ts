@@ -1689,25 +1689,21 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     await collect(q);
 
     // 1st compact: not yet latched, so it attempts the summarize and is refused.
-    // The core reports a safe no-op and the latch engages. (The core's own
-    // microcompaction fallback does NOT run on a summarization failure, so every
-    // oversized tool result is still present for the next call.)
+    // The latch engages. microcompaction now runs unconditionally after any
+    // compaction attempt (PR #1293), so eligible tool results (older than the
+    // keepLast=4 window) are cleared immediately on this first call.
     const first = await q.compact();
     expect(first.compacted).toBe(false);
-    expect(first.reason).not.toBe('microcompacted');
+    expect(first.reason).toBe('microcompacted');
+    expect(first.microcompaction?.blocksCleared).toBeGreaterThan(0);
+    expect(first.microcompaction?.bytesReclaimed).toBeGreaterThan(0);
 
-    // 2nd compact: takes the latched path — which must still microcompact rather
-    // than short-circuiting on the latch alone.
+    // 2nd compact: takes the latched path. The oldest tool results were already
+    // cleared by the first compact, and the remaining four are inside the
+    // protected window — nothing left to reclaim, so the latch reason surfaces.
     const second = await q.compact();
     expect(second.compacted).toBe(false);
-    expect(second.reason).toBe('microcompacted');
-    expect(second.microcompaction?.blocksCleared).toBeGreaterThan(0);
-    expect(second.microcompaction?.bytesReclaimed).toBeGreaterThan(0);
-
-    // 3rd compact: every remaining result is inside the protected window, so
-    // there is nothing left to reclaim and the latch reason surfaces.
-    const third = await q.compact();
-    expect(third.reason).toBe('responses-compaction-unavailable');
+    expect(second.reason).toBe('responses-compaction-unavailable');
     q.close();
     installMockClient();
   });
