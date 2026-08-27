@@ -168,8 +168,9 @@ describe('QueuePanel — one entry per turn', () => {
     await settle();
 
     // ↑ on the second row (index 1) — the control the write-through made dead.
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
     const rowButtons = h.container.querySelectorAll('.queue-row')[1]?.querySelectorAll('button');
-    (rowButtons?.[0] as HTMLButtonElement).click();
+    (rowButtons?.[1] as HTMLButtonElement).click();
     expect(h.rows()).toEqual(['third', 'second']);
 
     h.setTurnActive(false);
@@ -279,8 +280,9 @@ describe('QueuePanel — reorder helpers are wired to the rendered controls', ()
     type(h, 'b');
     await settle();
 
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
     const buttons = h.container.querySelectorAll('.queue-row')[0]?.querySelectorAll('button');
-    (buttons?.[2] as HTMLButtonElement).click();
+    (buttons?.[3] as HTMLButtonElement).click();
     expect(h.rows()).toEqual(['b']);
   });
 
@@ -291,8 +293,9 @@ describe('QueuePanel — reorder helpers are wired to the rendered controls', ()
     type(h, 'b');
     await settle();
 
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
     const buttons = h.container.querySelectorAll('.queue-row')[0]?.querySelectorAll('button');
-    (buttons?.[1] as HTMLButtonElement).click();
+    (buttons?.[2] as HTMLButtonElement).click();
     expect(h.rows()).toEqual(['b', 'a']);
   });
 

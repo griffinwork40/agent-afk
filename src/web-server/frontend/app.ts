@@ -110,10 +110,19 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   // `401 {"error":"unauthorized",...}` there states the failure without naming
   // the fix, and the sidebar renders empty behind it.
   if (res.status === 401) {
-    throw new Error(
+    const msg =
       'Session credential missing — reopen the URL printed by `afk web`. ' +
-        'A new tab does not inherit the credential from the first one.',
-    );
+      'A new tab does not inherit the credential from the first one.';
+    // Write to #status directly so the recovery instruction is visible even
+    // when the sidebar is empty and the SSE stream has not opened yet. The
+    // toast layer may not be visible if the layout has not rendered.
+    try {
+      const statusEl = document.getElementById('status');
+      if (statusEl) statusEl.textContent = msg;
+    } catch {
+      // DOM unavailable (e.g. non-browser context); ignore.
+    }
+    throw new Error(msg);
   }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return (await res.json()) as T;
