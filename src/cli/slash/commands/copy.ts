@@ -77,9 +77,13 @@ export const copyCmd: SlashCommand = {
       const copied = copyToClipboard(block.text);
       if (copied) {
         const lines = block.text.split('\n').length;
+        const label =
+          block.type === 'command' ? 'command' :
+          block.type === 'url' ? 'url' :
+          block.lang || 'code';
         out.success(
           `Copied block ${n} ` +
-          palette.dim(`(${block.lang}, ${lines} line${lines === 1 ? '' : 's'})`) +
+          palette.dim(`(${label}, ${lines} line${lines === 1 ? '' : 's'})`) +
           palette.dim(' to clipboard'),
         );
       } else {
