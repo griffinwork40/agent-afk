@@ -22,6 +22,7 @@ import { state, bareName, type DiscoveredSkill } from './state.js';
 import type { SkillManifestEntry } from '../../../agent/tools/skill-bridge.js';
 import { renderSkillDetail, registryOriginToSource, friendlySource, tryGetRegistrySkill } from './listing-detail.js';
 import { renderSkillSearch, buildSearchUniverse } from './search-render.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 
 /**
  * Where a listing row's skill came from. Drives the friendly source label.
@@ -76,8 +77,10 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
       groups.set(key, { main: row, alts: [], ...(category ? { category } : {}) });
     } else {
       existing.alts.push(row);
-      // If the group had no category yet, adopt the alt's category.
-      if (!existing.category && category) existing.category = category;
+      // F3: Only adopt the alt's category when the existing main is NOT a
+      // builtin — a plugin alt must not contaminate an unannotated built-in
+      // skill with the plugin's own category.
+      if (!existing.category && category && existing.main.source !== 'builtin') existing.category = category;
     }
   };
 
@@ -214,7 +217,11 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
     // Preserve canonical render order from SKILL_CATEGORIES, skip empties.
     const byCategory = new Map<string, ListingGroup[]>();
     for (const g of allGroups) {
-      const bucket = g.category ?? UNCATEGORIZED_LABEL;
+      // F1: Clamp OOV category strings to UNCATEGORIZED_LABEL so skills with
+      // a misspelled or future category are not silently dropped from the
+      // listing (they would land in a bucket that renderOrder never visits).
+      const isCanonical = (SKILL_CATEGORIES as readonly string[]).includes(g.category ?? '');
+      const bucket = isCanonical ? g.category! : UNCATEGORIZED_LABEL;
       const existing = byCategory.get(bucket) ?? [];
       existing.push(g);
       byCategory.set(bucket, existing);
@@ -230,7 +237,7 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
       const catGroups = (byCategory.get(cat) ?? []).sort(byBareName);
       if (catGroups.length === 0) continue;
       ctx.out.line();
-      ctx.out.line(divider(cat));
+      ctx.out.line(divider(sanitizeForDisplay(cat)));
       for (const g of catGroups) renderGroupRows(ctx, g, nameW, descW);
     }
   }

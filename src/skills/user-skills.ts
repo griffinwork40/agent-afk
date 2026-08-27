@@ -35,6 +35,8 @@ import { getSkillsDir } from '../paths.js';
 import {
   getSkill,
   registerSkill,
+  SKILL_CATEGORIES,
+  type SkillCategory,
   type SkillExecutionContext,
   type SkillMetadata,
 } from './index.js';
@@ -332,7 +334,12 @@ export function scanSkillsFromDir(
     };
     if (parsed.argumentHint) meta.argumentHint = parsed.argumentHint;
     if (parsed.flags && parsed.flags.length > 0) meta.flags = parsed.flags;
-    if (parsed.category) meta.category = parsed.category;
+    // Narrow the raw frontmatter string to the SkillCategory union. OOV values
+    // are dropped (undefined) — the listing's F1 clamping only helps at render
+    // time; rejecting here keeps the registry clean.
+    if (parsed.category && (SKILL_CATEGORIES as readonly string[]).includes(parsed.category)) {
+      meta.category = parsed.category as SkillCategory;
+    }
     // Default to in-context LOAD; fork only when `context: fork` is explicit
     // (symmetric with the plugin-skill default in skill-executor.ts). In load
     // mode we set `context: 'load'` + `loadBody` so the executor's load path

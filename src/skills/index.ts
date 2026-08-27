@@ -203,7 +203,7 @@ export interface SkillMetadata {
    *   'Refactor & simplify' | 'Review & verify' | 'Setup & ops' |
    *   'Author & meta'
    */
-  category?: string;
+  category?: SkillCategory;
 }
 
 /**

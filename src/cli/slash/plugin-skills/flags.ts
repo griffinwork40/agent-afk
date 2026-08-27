@@ -9,7 +9,7 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { getMarketplaceCacheDir, getBundledPluginsDir } from '../../../paths.js';
-import { harvestFlagsFromSkillMd, parseSkillMd } from '../_lib/flag-harvest.js';
+import { parseSkillMd, extractFlagsFromBody } from '../_lib/flag-harvest.js';
 
 /** Result of a full SKILL.md harvest pass (flags + category). */
 export interface PluginSkillHarvest {
@@ -95,7 +95,18 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
       const skillName = basename(dirname(fullPath));
       if (!skillName) continue;
 
-      const skillFlags = harvestFlagsFromSkillMd(content);
+      // F5: Parse once; derive both flags and category from the single result.
+      // Previously called harvestFlagsFromSkillMd(content) — which internally
+      // calls parseSkillMd — then called parseSkillMd(content) again separately.
+      const parsed = parseSkillMd(content);
+
+      // Flag extraction mirrors harvestFlagsFromSkillMd's precedence rules:
+      // frontmatter flags win; fall back to argument-hint + body scan.
+      const skillFlags: string[] =
+        parsed.frontmatterFlags && parsed.frontmatterFlags.length > 0
+          ? parsed.frontmatterFlags
+          : extractFlagsFromBody(`${parsed.frontmatter?.['argument-hint'] ?? ''}\n${parsed.body}`);
+
       if (skillFlags.length > 0) {
         const existing = flags.get(skillName) ?? [];
         const merged = new Set([...existing, ...skillFlags]);
@@ -103,7 +114,6 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
       }
 
       // Harvest category — no merge (last-write-wins across plugins with same skill name).
-      const parsed = parseSkillMd(content);
       const cat = parsed.frontmatter?.['category'];
       if (cat && cat.length > 0) {
         categories.set(skillName, cat);

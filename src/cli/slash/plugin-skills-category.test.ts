@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { _resetRegistry, registerSkill, SKILL_CATEGORIES, UNCATEGORIZED_LABEL } from '../../skills/index.js';
+import { _resetRegistry, registerSkill, SKILL_CATEGORIES, UNCATEGORIZED_LABEL, type SkillCategory } from '../../skills/index.js';
 import { resetRegistry } from './registry.js';
 import { initialSkillsCmd } from './plugin-skills.js';
 import { makeDynamicSkillsCmd } from './plugin-skills/listing.js';
@@ -196,5 +196,45 @@ describe('/skills category grouping (Phase 2)', () => {
 
   it('UNCATEGORIZED_LABEL is the "More skills" bucket label', () => {
     expect(UNCATEGORIZED_LABEL).toBe('More skills');
+  });
+
+  // F4a: user-scope skills with an authored category must be grouped correctly.
+  it('groups user-scope skills with authored category', async () => {
+    registerSkill({
+      name: 'user-custom',
+      description: 'A user skill with category.',
+      origin: 'user',
+      category: 'Author & meta',
+      handler: async () => 'ok',
+    });
+
+    const { ctx, lines } = makeCtx();
+    await initialSkillsCmd.handler(ctx, '');
+    const out = stripAnsi(lines.join('\n'));
+
+    expect(out).toContain('Author & meta');
+    expect(out).toContain('/user-custom');
+  });
+
+  // F4b: skills with an OOV category string must NOT vanish — they must appear
+  // under UNCATEGORIZED_LABEL instead, and the OOV string must not appear as
+  // a section header.
+  it('clamps out-of-vocabulary category to "More skills"', async () => {
+    registerSkill({
+      name: 'typo-skill',
+      description: 'Skill with typo category.',
+      // Intentional OOV value (missing '&') to exercise the clamping fix.
+      category: 'Build and ship' as SkillCategory,
+      handler: async () => 'ok',
+    });
+
+    const { ctx, lines } = makeCtx();
+    await initialSkillsCmd.handler(ctx, '');
+    const out = stripAnsi(lines.join('\n'));
+
+    // Must NOT silently vanish — must appear under "More skills".
+    expect(out).toContain('/typo-skill');
+    expect(out).toContain(UNCATEGORIZED_LABEL);
+    expect(out).not.toContain('Build and ship');
   });
 });

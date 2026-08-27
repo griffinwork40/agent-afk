@@ -50,7 +50,9 @@ import { reloadPluginsCmd } from './plugin-skills/reload.js';
 
 export {
   harvestPluginSkillFlags,
+  harvestPluginSkillMetadata,
   extractHintFromDescription,
+  type PluginSkillHarvest,
 } from './plugin-skills/flags.js';
 export { initialSkillsCmd } from './plugin-skills/listing.js';
 export {
