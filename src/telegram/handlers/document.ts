@@ -153,7 +153,7 @@ export async function handleDocumentMessage(
   if (kind === 'unsupported') {
     log(`Document handling: unsupported type mime=${mimeType ?? '(none)'} name=${fileName ?? '(none)'} for chat ${chatId ?? '(unknown)'}`);
     await ctx.reply(
-      `❌ Unsupported document type. Please send ${SUPPORTED_FORMATS}.`,
+      `❌ Unsupported file type. Please send ${SUPPORTED_FORMATS}.`,
     );
     return null;
   }
@@ -234,13 +234,8 @@ export async function handleDocumentMessage(
     const displayName = fileName ?? 'document';
     const text = bytes.toString('utf8');
     contentBlocks.push({
-      type: 'document' as const,
-      source: {
-        type: 'text' as const,
-        media_type: 'text/plain' as const,
-        data: text,
-      },
-      title: `📎 Document: ${displayName}`,
+      type: 'text' as const,
+      text: `📎 Document: ${displayName}\n\n${text}`,
     });
   } else {
     // PDF — base64-encode and send as a document block.
