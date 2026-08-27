@@ -20,6 +20,7 @@ import type { RunTurnInput, ToolCall, ToolResult, TurnResult } from '../types.js
 import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/raw-input.js';
+import { env } from '../../../../config/env.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
@@ -78,7 +79,7 @@ export async function* dispatchToolCalls(
       toolName: block.name,
       toolInput: summarizeToolInput(block.name, block.input),
       toolInputRaw: extractRawToolInput(block.input),
-      toolInputCapture: extractCaptureToolInput(block.input),
+      toolInputCapture: env.AFK_CAPTURE_SUBAGENT_OUTPUT === '1' ? extractCaptureToolInput(block.input) : undefined,
       sessionId: input.ctx.sessionId,
     };
   }
