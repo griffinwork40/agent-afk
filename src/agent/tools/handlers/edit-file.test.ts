@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { rm } from 'fs/promises';
+import { utimesSync } from 'node:fs';
 import os from 'os';
 import path from 'path';
 import { randomBytes } from 'crypto';
@@ -462,6 +463,64 @@ describe('editFileHandler cwd containment', () => {
 
       expect(result.isError).toBeUndefined();
       expect(result.render).toBeUndefined();
+    });
+  });
+
+  describe('TOCTOU mtime guard', () => {
+    it('rejects the write when file mtime changes between read and write', async () => {
+      // Invariant: the guard compares mtimeMs from stat-before (pre-read) and
+      // stat-after (pre-write). To trigger it deterministically we inject a
+      // concurrent mtime bump between the handler's two I/O boundaries using
+      // setImmediate + utimesSync. setImmediate fires after the current I/O
+      // callback drains, which on libuv lands between the handler's readFile
+      // await and its second stat await — the window we want to test.
+      // utimesSync is synchronous so the bump completes before Node yields
+      // to the I/O queue that processes the second stat. This avoids the
+      // "Cannot redefine property" error that vi.spyOn hits on ESM named exports.
+      const filePath = await createTempFile('toctou.txt', 'original content\n');
+
+      // Advance mtime to a value 10 seconds in the past so stat-before
+      // captures a known baseline; then schedule the bump to a future value.
+      const base = new Date(Date.now() - 10_000);
+      utimesSync(filePath, base, base);
+
+      // Bump fires after readFile completes, before the second stat runs.
+      const future = new Date(Date.now() + 10_000);
+      setImmediate(() => {
+        utimesSync(filePath, future, future);
+      });
+
+      const signal = new AbortController().signal;
+      const result = await editFileHandler(
+        {
+          file_path: filePath,
+          old_string: 'original content',
+          new_string: 'replacement content',
+        },
+        signal,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/modified by another process/);
+      expect(result.content).toMatch(/mtime changed/);
+    });
+
+    it('succeeds when mtime is stable between read and write', async () => {
+      // Guard must be transparent when no concurrent modification occurs.
+      const filePath = await createTempFile('toctou-ok.txt', 'stable content\n');
+      const signal = new AbortController().signal;
+
+      const result = await editFileHandler(
+        {
+          file_path: filePath,
+          old_string: 'stable content',
+          new_string: 'updated content',
+        },
+        signal,
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe(`Replaced 1 occurrence in ${filePath}`);
     });
   });
 });
