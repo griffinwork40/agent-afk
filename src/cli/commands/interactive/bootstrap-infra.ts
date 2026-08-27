@@ -14,6 +14,7 @@ import type { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub.js';
+import { setTasksRegistry } from '../../slash/commands/tasks.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
@@ -177,6 +178,14 @@ export function createBootstrapInfra(a: {
       }),
     ...(a.workspaceStore !== undefined ? { workspaceStore: a.workspaceStore } : {}),
   });
+
+  // Wire the /tasks slash commands to the root manager and the trace session
+  // label, mirroring the setBgsubRegistry call above. Must come after
+  // wireExecutors so rootManager exists. trace?.sessionLabel is the same label
+  // that names the subagent-logs directory for this session.
+  if (trace?.sessionLabel) {
+    setTasksRegistry(rootManager, trace.sessionLabel);
+  }
 
   return {
     trace,

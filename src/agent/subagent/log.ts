@@ -125,7 +125,7 @@ export class SubagentLogWriter {
   }
 
   private writeLine(line: string): void {
-    if (this.errored || !this.stream) return;
+    if (this.errored || !this.stream || this.bytesWritten >= MAX_LOG_BYTES) return;
     this.bytesWritten += Buffer.byteLength(line, 'utf8');
     this.stream.write(line);
   }
