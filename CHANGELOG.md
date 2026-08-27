@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.154.0] - 2026-08-27
+
+### Added
+- add sidecar retention sweep with age + count eviction (#1190) (319cb7ec)
+
+### Changed
+- add unit tests for streaming handlers and progress modules (#1305) (16b776d2)
+
 ## [5.153.0] - 2026-08-27
 
 ### Added
