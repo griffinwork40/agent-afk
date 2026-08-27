@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.155.0] - 2026-08-27
+
+### Added
+- render-time artifact capture for non-code copyable regions (#1287) (#1310) (12ffd199)
+- add /copy plain mode for Slack/email-friendly output (#1286) (#1309) (2997ae66)
+- accept inbound documents with text extraction (#687) (#1306) (67ca3ba4)
+
+### Fixed
+- run microcompaction unconditionally after compaction (#1293) (#1303) (0b5367d3)
+- record verbatim tool args in subagent output capture (#948) (#1308) (c7912731)
+- add edit_file TOCTOU guard and verify grep ENOENT enrichment (#441) (#1307) (4809c097)
+
 ## [5.154.0] - 2026-08-27
 
 ### Added
