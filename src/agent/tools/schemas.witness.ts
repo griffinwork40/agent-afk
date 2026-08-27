@@ -89,6 +89,12 @@ export const searchWitnessTool: AnthropicToolDef = {
         type: 'string',
         description: 'ISO date string — only search sessions modified after this date.',
       },
+      tool_name: {
+        type: 'string',
+        description:
+          'Filter tool_call events to only this tool name (e.g. "bash", "edit_file"). ' +
+          'Non-tool_call events are excluded when set.',
+      },
     },
     required: ['query'],
   },

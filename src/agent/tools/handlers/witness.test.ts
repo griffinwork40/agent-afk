@@ -290,6 +290,7 @@ describe('searchWitnessHandler — valid input', () => {
       sessions: 10,
       kinds: ['subagent_lifecycle'],
       since: '2024-01-01T00:00:00Z',
+      tool_name: 'bash',
     };
     const expectedResult = makeSearchResult({ query: 'forkbomb', sessionsAvailable: 10, sessionsSearched: 10, sessionsScanned: 10 });
     mockSearchAcrossSessions.mockResolvedValue(expectedResult);
@@ -303,6 +304,7 @@ describe('searchWitnessHandler — valid input', () => {
       sessions: 10,
       kinds: ['subagent_lifecycle'],
       since: '2024-01-01T00:00:00Z',
+      toolName: 'bash',
     });
     expect(result.content).toBe(JSON.stringify(expectedResult));
   });
@@ -316,7 +318,22 @@ describe('searchWitnessHandler — valid input', () => {
       sessions: undefined,
       kinds: undefined,
       since: undefined,
+      toolName: undefined,
     });
+  });
+
+  it('tool_name string → toolName passed through; non-string → undefined', async () => {
+    await searchWitnessHandler({ query: 'x', tool_name: 'edit_file' }, signal);
+    expect(mockSearchAcrossSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'edit_file' }),
+    );
+
+    vi.clearAllMocks();
+    mockSearchAcrossSessions.mockResolvedValue(makeSearchResult());
+    await searchWitnessHandler({ query: 'x', tool_name: 42 }, signal);
+    expect(mockSearchAcrossSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: undefined }),
+    );
   });
 
   it('wrong-typed optional fields coerced: non-number sessions → undefined', async () => {
