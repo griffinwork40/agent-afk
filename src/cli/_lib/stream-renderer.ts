@@ -350,7 +350,7 @@ export class StreamRenderer {
     // Reduced-motion suppresses the spinner ticker at the source. State-transition
     // repaints remain active — only the high-frequency 12.5 Hz animation is gated.
     compositor.setSpinner({ enabled: !this.reducedMotion, rotateVerbEveryMs: 3500 });
-    this.pauseTickInterval = setInterval(() => this.checkPauseAnnotations(), 80);
+    this.pauseTickInterval = setInterval(() => this.checkPauseAnnotations(), 80).unref();
     // Subagent elapsed-time ticker: updates activeSubagents' elapsedMs fields and
     // flushes the 'subagent-status' overlay slot every 250ms. Stopped in dispose().
     this.subagentTickInterval = setInterval(() => {
@@ -364,7 +364,7 @@ export class StreamRenderer {
         this.overlayComposer.markDirty('subagent-status');
         this.overlayComposer.flush();
       }
-    }, 250);
+    }, 250).unref();
     // Re-derive the composed overlay (tool lane / thinking / progress) at the
     // current terminal width whenever the window resizes. The markdown stream
     // owns its own resize subscription; this covers the rest of the overlay

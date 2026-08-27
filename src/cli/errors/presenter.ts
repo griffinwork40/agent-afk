@@ -1,7 +1,7 @@
 /**
  * Error presenter: renders a ClassifiedError to the terminal.
  *
- * TTY surfaces get a full errorBox with borders; non-TTY surfaces get a
+ * TTY surfaces get a full errorCard with borders; non-TTY surfaces get a
  * plain "afk: error:" line on stderr. Debug mode appends the raw stack.
  *
  * @module cli/errors/presenter

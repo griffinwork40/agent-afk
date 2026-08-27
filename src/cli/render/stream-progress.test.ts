@@ -83,6 +83,31 @@ describe('streamProgress', () => {
     expect(result).toContain('$0.04');
   });
 
+  it('renders sub-cent cost with 4 decimal places', () => {
+    const result = stripAnsi(
+      streamProgress({
+        label: 'test',
+        spinnerFrame: 0,
+        elapsedMs: 1000,
+        costCents: 0.5,
+      }),
+    );
+    expect(result).toContain('$0.0050');
+  });
+
+  it('renders large cost as whole dollars', () => {
+    const result = stripAnsi(
+      streamProgress({
+        label: 'test',
+        spinnerFrame: 0,
+        elapsedMs: 1000,
+        costCents: 300,
+      }),
+    );
+    expect(result).toContain('$3');
+    expect(result).not.toContain('$3.');
+  });
+
   it('omits cost when zero', () => {
     const result = stripAnsi(
       streamProgress({

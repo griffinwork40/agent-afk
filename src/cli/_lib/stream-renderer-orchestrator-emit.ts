@@ -383,7 +383,8 @@ export function emitMarkdown(text: string, out: Writer): void {
  * Emit an error box. Splits the rendered box by newlines and emits each line.
  */
 export function emitErrorBox(err: Error, out: Writer): void {
-  const box = errorCard({ body: err.message, hint: err.stack });
+  const stackTrace = err.stack?.split('\n').slice(1).join('\n');
+  const box = errorCard({ body: err.message, hint: stackTrace });
   for (const line of box.split('\n')) {
     out.line(line);
   }

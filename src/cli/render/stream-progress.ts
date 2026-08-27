@@ -3,7 +3,7 @@ import { palette } from '../palette.js';
 // ─── Stream Progress ─────────────────────────────────────────────────────────
 
 /**
- * Spinner glyphs for the progress line — 4-frame cycle.
+ * Spinner glyphs for the progress line — 10-frame cycle.
  * Caller drives the tick by incrementing `spinnerFrame`.
  */
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
@@ -69,9 +69,9 @@ function formatTokenCount(tokens: number): string {
 
 /** Format cost in cents as dollars. */
 function formatCost(cents: number): string {
-  if (cents < 1) return `$${cents.toFixed(3)}`;
+  if (cents < 1) return `$${(cents / 100).toFixed(4)}`;
   if (cents < 100) return `$${(cents / 100).toFixed(2)}`;
-  return `$${(cents / 100).toFixed(2)}`;
+  return `$${(cents / 100).toFixed(0)}`;
 }
 
 /** Format elapsed milliseconds as a compact human string. */

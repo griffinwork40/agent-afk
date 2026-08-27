@@ -44,15 +44,14 @@ export function subagentStatusBar(spec: SubagentStatusBarSpec): string {
   const fixedWidth =
     displayWidth(leftPlain) +
     2 + // gap after label
-    displayWidth(phasePlain) +
-    2 + // gap after phase
+    (phasePlain ? displayWidth(phasePlain) + 2 : 0) + // phase + gap after phase (omitted when absent)
     displayWidth(elapsed) +
     (batchPlain ? 2 + displayWidth(batchPlain) : 0);
 
   const fillLen = Math.max(0, width - fixedWidth);
   const fill = palette.dim('─'.repeat(Math.min(fillLen, 20)));
 
-  const parts = [left, fill, phase, palette.dim(elapsed)];
+  const parts = [left, fill, ...(phase ? [phase] : []), palette.dim(elapsed)];
   if (batch) parts.push(batch);
 
   return parts.join('  ');
