@@ -34,6 +34,14 @@ export interface ToolConfig {
 export interface ResumeHistoryTurn {
   user: string;
   assistant: string;
+  /**
+   * Context-window token count from the last completed turn before resume
+   * (i.e. `contextWindowTokens ?? inputTokens` from the stored TurnRecord).
+   * Used to seed `lastUsage` on session restore so the context-overflow guard
+   * (#1294) fires correctly on the first resumed turn instead of being skipped.
+   * Optional for backward compat — absent on history entries that predate the fix.
+   */
+  inputTokens?: number;
 }
 
 /**

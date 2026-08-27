@@ -34,7 +34,7 @@ describe('resume-session', () => {
     expect(resumeConfigFor(target)).toEqual({
       resume: 'sdk-resume',
       sessionId: 'sdk-resume',
-      resumeHistory: [{ user: 'hello', assistant: 'hi' }],
+      resumeHistory: [{ user: 'hello', assistant: 'hi', inputTokens: 0 }],
     });
   });
 
