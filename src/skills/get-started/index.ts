@@ -55,6 +55,7 @@ export const getStartedSkill: SkillMetadata = {
   audience: 'public',
   whenToUse:
     "When someone is setting up AFK for the first time or asks how to get going — triggers on `/get-started`, 'how do I start', 'set me up', 'onboard me', or a fresh install with no AFK.md and unconfigured capabilities. Best run in the interactive REPL.",
+  category: 'Setup & ops',
 };
 
 registerSkill(getStartedSkill);

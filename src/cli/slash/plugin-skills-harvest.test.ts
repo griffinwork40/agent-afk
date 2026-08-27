@@ -21,10 +21,12 @@ describe('harvestPluginSkillFlags', () => {
 
   let tmpRoot: string;
   let harvestPluginSkillFlags: (cacheRoot?: string) => Map<string, string[]>;
+  let harvestPluginSkillMetadata: (cacheRoot?: string) => { flags: Map<string, string[]>; categories: Map<string, string> };
 
   beforeEach(async () => {
     const mod = await import('./plugin-skills.js');
     harvestPluginSkillFlags = mod.harvestPluginSkillFlags;
+    harvestPluginSkillMetadata = mod.harvestPluginSkillMetadata;
     tmpRoot = join(tmpdir(), `afk-harvest-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(tmpRoot, { recursive: true });
   });
@@ -389,5 +391,60 @@ Mentions --zebra, --apple, --monkey, --banana in random order.
     const flags = result.get('unsorted');
     const sorted = [...flags!].sort();
     expect(flags).toEqual(sorted);
+  });
+
+  // --- Category harvesting (harvestPluginSkillMetadata) ---
+
+  it('harvests category from SKILL.md frontmatter', () => {
+    mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'diagnose'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'diagnose', 'SKILL.md'),
+      `---
+name: diagnose
+description: Diagnose a bug
+category: Debug & fix
+---
+
+# Diagnose skill body.
+`,
+    );
+
+    const result = harvestPluginSkillMetadata(tmpRoot);
+    expect(result.categories.get('diagnose')).toBe('Debug & fix');
+  });
+
+  it('omits category when SKILL.md has no category frontmatter', () => {
+    mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'no-cat'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'no-cat', 'SKILL.md'),
+      `---
+name: no-cat
+description: Skill without category
+---
+
+# Body only.
+`,
+    );
+
+    const result = harvestPluginSkillMetadata(tmpRoot);
+    expect(result.categories.has('no-cat')).toBe(false);
+  });
+
+  it('omits category when frontmatter category is empty string', () => {
+    mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'empty-cat'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'empty-cat', 'SKILL.md'),
+      `---
+name: empty-cat
+description: Skill with empty category
+category: ""
+---
+
+# Body only.
+`,
+    );
+
+    const result = harvestPluginSkillMetadata(tmpRoot);
+    expect(result.categories.has('empty-cat')).toBe(false);
   });
 });

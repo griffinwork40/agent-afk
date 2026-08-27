@@ -58,6 +58,7 @@ export const telegramSetupSkill: SkillMetadata = {
   context: 'fork',
   whenToUse:
     'When the user wants to set up Telegram bot notifications for the first time, or when they say something like "set up telegram", "connect telegram", "enable push", or you detect that TELEGRAM_BOT_TOKEN is unset and they\'re asking for notifications.',
+  category: 'Setup & ops',
 };
 
 registerSkill(telegramSetupSkill);

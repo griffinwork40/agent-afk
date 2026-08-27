@@ -53,6 +53,7 @@ export const serviceSetupSkill: SkillMetadata = {
   context: 'fork',
   whenToUse:
     "When the user wants to make `afk telegram start` or `afk daemon` always-on — i.e., survive reboot, crash, OOM. Triggers on phrasings like 'install as a service', 'auto-start on login', 'keep the bot running', 'launchd', 'always-on telegram', or right after a successful `/telegram-setup` when the user asks how to make it persistent.",
+  category: 'Setup & ops',
 };
 
 registerSkill(serviceSetupSkill);

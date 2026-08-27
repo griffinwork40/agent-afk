@@ -449,6 +449,7 @@ const mintSkill: SkillMetadata = {
   whenToUse:
     'When the user wants a feature or refactor delivered end-to-end (spec → research → build → verify) in one ship-ready pass. After the spec phase pauses for approval, resume by invoking mint again with the literal string `"approved"` (or `"yes"`, `"lgtm"`, `"--continue approved"`) as the arguments. Equivalent JSON forms `{"userApproved": true}` and `{"idea": "approved"}` are also accepted. The handler reloads the spec state from disk and runs phases 2–8.',
   flags: ['--continue'],
+  category: 'Build & ship',
 };
 
 registerSkill(mintSkill);

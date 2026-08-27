@@ -191,7 +191,43 @@ export interface SkillMetadata {
    * the end user does not have installed.
    */
   audience?: 'public' | 'internal';
+  /**
+   * Job-to-be-done category for grouping in the `/skills` listing.
+   *
+   * Authored at the source (in SKILL.md frontmatter or registerSkill calls),
+   * never inferred at render time. Skills without a category render under
+   * "More skills" in the listing.
+   *
+   * Valid values (render order preserved):
+   *   'Build & ship' | 'Debug & fix' | 'Understand & explore' |
+   *   'Refactor & simplify' | 'Review & verify' | 'Setup & ops' |
+   *   'Author & meta'
+   */
+  category?: SkillCategory;
 }
+
+/**
+ * Canonical category vocabulary for the `/skills` job-to-be-done grouping.
+ *
+ * The order here is the render order in the listing — built-in skills follow
+ * this order; un-categorised skills fall into "More skills" at the end.
+ * No inference at render time; categories must be authored.
+ */
+export const SKILL_CATEGORIES = [
+  'Build & ship',
+  'Debug & fix',
+  'Understand & explore',
+  'Refactor & simplify',
+  'Review & verify',
+  'Setup & ops',
+  'Author & meta',
+] as const;
+
+/** Union type of the valid authored categories. */
+export type SkillCategory = (typeof SKILL_CATEGORIES)[number];
+
+/** Bucket label for skills with no authored category. */
+export const UNCATEGORIZED_LABEL = 'More skills';
 
 /**
  * Test whether a registered skill should be visible at end-user surfaces

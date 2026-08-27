@@ -16,6 +16,8 @@ export interface DiscoveredSkill {
   description: string;
   argumentHint?: string;
   source?: SkillManifestEntry['source'];
+  /** Job-to-be-done category authored in SKILL.md frontmatter. */
+  category?: string;
 }
 
 /** Track collisions detected at registration time so /skills can render alts and boot can notify. */
