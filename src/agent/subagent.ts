@@ -45,6 +45,8 @@ import {
 } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
+import { CompletedCache } from './subagent/completed-cache.js';
+import { SubagentLogWriter } from './subagent/log.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -85,6 +87,8 @@ export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
 
 export class SubagentManager {
   private readonly active = new Map<string, SubagentHandleImpl<unknown>>();
+  /** Recently-completed subagent handles for `/tasks:view` memory-first path. */
+  readonly completed = new CompletedCache();
   private readonly parentCanUseTool: CanUseTool | undefined;
   private readonly hookRegistry: HookRegistry | undefined;
   private readonly progressSink: SubagentProgressSink | undefined;
@@ -120,6 +124,9 @@ export class SubagentManager {
   private readonly parentSurface: Surface | undefined;
   private readonly parentAbortSignal: AbortSignal | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
+  /** Session label for subagent-log directory naming. Matches the label
+   *  given to `setTasksRegistry` so writer and reader agree on the path. */
+  private readonly sessionLabel: string | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
   private rootController: AbortController;
@@ -144,6 +151,7 @@ export class SubagentManager {
     this.parentAbortSignal = options.parentAbortSignal;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
     this.workspaceStore = options.workspaceStore;
+    this.sessionLabel = options.sessionLabel;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
     this.abortGraph = new AbortGraph(options.traceWriter);
@@ -174,7 +182,7 @@ export class SubagentManager {
   }
 
   get(id: string): SubagentHandle | undefined {
-    return this.active.get(id);
+    return this.active.get(id) ?? this.completed.get(id)?.handle;
   }
 
   /** Subscribe to aborts of any subagent under this manager. */
@@ -429,6 +437,16 @@ export class SubagentManager {
       effectiveAgentType = options.agentType?.trim() || undefined;
       effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
       const effectiveParentId = options.parentId?.trim() || undefined;
+      // Per-subagent conversation log — always on unless AFK_SUBAGENT_LOG=0.
+      // Use sessionLabel (the directory key for /tasks) rather than
+      // options.parent.sessionId (the SDK runtime ID): writer and reader must
+      // agree on the same key so logs are found after the handle is evicted.
+      // Falls back to options.parent.sessionId for backwards compatibility
+      // when no sessionLabel was threaded through SubagentManagerOptions.
+      const logSessionKey = this.sessionLabel ?? options.parent.sessionId;
+      const logWriter = SubagentLogWriter.isEnabled() && logSessionKey
+        ? new SubagentLogWriter(logSessionKey, id)
+        : undefined;
       handle = new SubagentHandleImpl<T>(
         id,
         session,
@@ -445,8 +463,17 @@ export class SubagentManager {
           // timeout, and abort — so it is the settle hook the heartbeat's
           // teardown belongs on.
           stopOccupancyHeartbeat();
+          // Populate the completed cache BEFORE removing from active so that
+          // the memory-first /tasks:view path can access the handle after
+          // teardown. The result is a minimal stub — consumers only use
+          // `handle` from the entry (see completed.get(id)?.handle).
+          this.completed.add(id, handle as SubagentHandle, {
+            id,
+            status: handle._currentStatus === 'running' ? 'succeeded' : handle._currentStatus,
+          });
           this.active.delete(id);
           this.abortGraph.dispose(id);
+          void logWriter?.close();
         },
         parentInputStreamRef,
         parentAbortSignal,
@@ -479,6 +506,7 @@ export class SubagentManager {
         // is not set. Runs concurrently with the wall-clock budget above.
         options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
       );
+      if (logWriter) handle._logWriter = logWriter;
       this.active.set(id, handle as SubagentHandleImpl<unknown>);
     } catch (err) {
       // Construction or manager-wiring failed (invalid model, sync init

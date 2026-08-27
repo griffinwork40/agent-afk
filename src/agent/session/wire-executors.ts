@@ -135,6 +135,12 @@ export interface WireExecutorsOptions {
   agentRegistryWarn?: (message: string) => void;
   /** Shared workspace store forwarded to compose DAG nodes. */
   workspaceStore?: WorkspaceStore;
+  /**
+   * Session label for the subagent-log directory
+   * (`~/.afk/state/subagent-logs/<sessionLabel>/`).  Forwarded to the root
+   * `SubagentManager` so the log writer and `/tasks` reader use the same key.
+   */
+  sessionLabel?: string;
 }
 
 /** The wired executor set returned by {@link wireExecutors}. */
@@ -218,6 +224,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...traceOpt,
     surface,
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+    ...(opts.sessionLabel !== undefined ? { sessionLabel: opts.sessionLabel } : {}),
   });
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing

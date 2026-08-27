@@ -144,3 +144,86 @@ describe('sweepWitnessTree — safety properties', () => {
     expect(WITNESS_MAX_BYTES_DEFAULT).toBe(2 * 1024 * 1024 * 1024);
   });
 });
+
+describe('sweepWitnessTree — subagent-logs path is swept alongside witness tree', () => {
+  let stateRoot: string;
+
+  beforeEach(() => {
+    stateRoot = mkdtempSync(join(tmpdir(), 'afk-sweep-sublogs-'));
+    // Point AFK_STATE_DIR at our temp root so getSubagentLogsRoot() resolves
+    // to stateRoot/subagent-logs instead of the real ~/.afk/state.
+    process.env['AFK_STATE_DIR'] = stateRoot;
+  });
+
+  afterEach(() => {
+    rmSync(stateRoot, { recursive: true, force: true });
+    delete process.env['AFK_STATE_DIR'];
+  });
+
+  /** Create a subagent-logs session dir: stateRoot/subagent-logs/<label>/<subagentId>.jsonl */
+  function makeSubagentLogSession(
+    sessionLabel: string,
+    subagentId: string,
+    ageMs: number,
+    bytes = 64,
+  ): string {
+    const dir = join(stateRoot, 'subagent-logs', sessionLabel);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${subagentId}.jsonl`);
+    writeFileSync(file, 'x'.repeat(bytes));
+    const when = new Date(Date.now() - ageMs);
+    utimesSync(file, when, when);
+    return dir;
+  }
+
+  it('evicts old subagent-log session dirs while preserving the active session', async () => {
+    const oldDir = makeSubagentLogSession('old-parent-session', 'sub-abc', 40 * DAY_MS);
+    const activeDir = makeSubagentLogSession('active-parent-session', 'sub-xyz', 40 * DAY_MS);
+
+    // Sweep the witness tree (root is our temp witness root — no witness dirs
+    // to evict). The subagent-logs sweep is co-located and fires automatically.
+    const witnessRoot = join(stateRoot, 'witness');
+    mkdirSync(witnessRoot, { recursive: true });
+
+    await sweepWitnessTree({
+      root: witnessRoot,
+      activeLabel: 'active-parent-session',
+      maxAgeDays: 30,
+      force: true,
+    });
+
+    // sweepSessionDirTree is fire-and-forget inside sweepWitnessTree. The
+    // function contains multiple async I/O operations (readdir, stat, rm), so
+    // we poll briefly until the filesystem reflects the expected state or a
+    // short wall-clock deadline elapses — whichever comes first.
+    const deadline = Date.now() + 2000;
+    while (existsSync(oldDir) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(existsSync(oldDir)).toBe(false);
+    expect(existsSync(activeDir)).toBe(true);
+  });
+
+  it('preserves subagent-log dirs that are within the grace window', async () => {
+    const recentDir = makeSubagentLogSession(
+      'recent-parent-session',
+      'sub-123',
+      WITNESS_EVICTION_GRACE_MS / 2,
+      5000,
+    );
+
+    const witnessRoot = join(stateRoot, 'witness');
+    mkdirSync(witnessRoot, { recursive: true });
+
+    await sweepWitnessTree({
+      root: witnessRoot,
+      maxAgeDays: 0.001,
+      maxBytes: 1,
+      force: true,
+    });
+
+    // Grace window protects dirs whose content mtime is very recent.
+    expect(existsSync(recentDir)).toBe(true);
+  });
+});

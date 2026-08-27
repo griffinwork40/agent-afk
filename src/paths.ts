@@ -636,6 +636,36 @@ export function getBgJobMeta(jobId: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Subagent conversation logs — powers /tasks:view replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Root directory for per-subagent conversation JSONL logs.
+ * Layout: `~/.afk/state/subagent-logs/<sessionLabel>/<subagentId>.jsonl`
+ */
+export function getSubagentLogsRoot(): string {
+  return join(getAfkStateDir(), 'subagent-logs');
+}
+
+/**
+ * Session-scoped directory for one parent session's subagent logs.
+ * @throws if `sessionLabel` fails {@link assertSafeJobId} (reuses the same charset guard).
+ */
+export function getSubagentLogSessionDir(sessionLabel: string): string {
+  assertSafeJobId(sessionLabel);
+  return join(getSubagentLogsRoot(), sessionLabel);
+}
+
+/**
+ * JSONL event log for a specific subagent within a session.
+ * @throws if `sessionLabel` or `subagentId` fail {@link assertSafeJobId}.
+ */
+export function getSubagentLogPath(sessionLabel: string, subagentId: string): string {
+  assertSafeJobId(subagentId);
+  return join(getSubagentLogSessionDir(sessionLabel), `${subagentId}.jsonl`);
+}
+
+// ---------------------------------------------------------------------------
 // Browser session-vault paths
 //
 // Invariant: a profile name flows into a filesystem path, so it MUST pass

@@ -30,9 +30,9 @@ import type { SlashCommand } from '../types.js';
 import type { BackgroundAgentRegistry, BackgroundJob } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { BgJobLogReader } from '../../../agent/bg-job-log.js';
-import type { OutputEvent } from '../../../agent/types/session-types.js';
 import { annotateIfIncomplete, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { formatDiskEvent } from '../../output-event-format.js';
 
 let registryRef: BackgroundAgentRegistry | undefined;
 let summarizerRef: BackgroundSummarizer | undefined;
@@ -283,32 +283,6 @@ export const bgsubJoinCmd: SlashCommand = {
     return 'continue';
   },
 };
-
-/**
- * Format a disk-replayed OutputEvent for terminal display.
- * Returns null for event types that have no meaningful text representation.
- *
- * ANSI codes are stripped from user-generated content (chunk/message) so
- * replayed output doesn't corrupt the terminal with double-rendered escapes.
- * Newlines are preserved — this is a replay, not a single-line badge.
- */
-function formatDiskEvent(event: OutputEvent): string | null {
-  if (event.type === 'chunk') {
-    const chunk = event.chunk;
-    if (chunk.type === 'content') return stripEscapeSequences(chunk.content);
-    if (chunk.type === 'tool_use_detail') {
-      return palette.dim(`  [tool: ${chunk.toolName}]`);
-    }
-    return null;
-  }
-  if (event.type === 'error') return palette.dim(`  [error: ${event.error.message}]`);
-  if (event.type === 'message') {
-    const c = event.message.content;
-    const text = typeof c === 'string' ? c : JSON.stringify(c);
-    return stripEscapeSequences(text);
-  }
-  return null;
-}
 
 export const bgsubCancelCmd: SlashCommand = {
   name: '/bgsub:cancel',

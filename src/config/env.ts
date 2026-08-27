@@ -1439,6 +1439,17 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_SUBAGENT_LOG',
+    description:
+      'Always-on per-subagent conversation log. Writes OutputEvent JSONL to ' +
+      'state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and ' +
+      'background subagents. Powers /tasks:view replay. ON by default; set to 0 to disable.',
+    type: 'boolean',
+    required: false,
+    default: '1',
+    category: 'debug',
+  },
+  {
     name: 'DEBUG',
     description: 'Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.',
     type: 'string',
@@ -1919,6 +1930,7 @@ export const env = {
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
   get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
   get AFK_CAPTURE_SUBAGENT_OUTPUT(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_OUTPUT']; },
+  get AFK_SUBAGENT_LOG(): string | undefined { return process.env['AFK_SUBAGENT_LOG']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 

@@ -18,7 +18,7 @@
 import { readdir, stat, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { env } from '../config/env.js';
-import { getWitnessRoot } from '../paths.js';
+import { getWitnessRoot, getSubagentLogsRoot } from '../paths.js';
 import { sweepExpiredManifests as sweepWaveManifests } from './manifest/reconcile.js';
 
 /** Evict a session directory once its newest content is older than this. */
@@ -43,6 +43,59 @@ export const WITNESS_EVICTION_GRACE_MS = 60 * 60 * 1000; // 1 hour
 export const WITNESS_SWEEP_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const STAMP_FILE = '.last-sweep';
+
+interface TreeSweepOptions {
+  root: string;
+  activeLabel: string | undefined;
+  maxAgeMs: number;
+  maxBytes: number;
+  now: number;
+}
+
+/**
+ * Sweep a `<root>/<sessionLabel>/` directory tree using the same age+bytes
+ * policy as the main witness tree. Best-effort: never throws.
+ */
+async function sweepSessionDirTree(opts: TreeSweepOptions): Promise<void> {
+  try {
+    const entries = await readdir(opts.root, { withFileTypes: true });
+    const dirs = entries.filter(
+      (e) => e.isDirectory() && e.name !== opts.activeLabel,
+    );
+
+    const measured: Array<{ label: string; path: string } & DirStats> = [];
+    for (const d of dirs) {
+      const p = join(opts.root, d.name);
+      try {
+        measured.push({ label: d.name, path: p, ...(await newestMtimeAndBytes(p)) });
+      } catch { /* unreadable */ }
+    }
+
+    measured.sort((a, b) => a.newestMtimeMs - b.newestMtimeMs);
+    const evictable = measured.filter(
+      (m) => opts.now - m.newestMtimeMs >= WITNESS_EVICTION_GRACE_MS,
+    );
+    let totalBytes = measured.reduce((sum, m) => sum + m.bytes, 0);
+
+    const doomed = new Set<string>();
+    for (const m of evictable) {
+      if (opts.now - m.newestMtimeMs > opts.maxAgeMs) doomed.add(m.label);
+    }
+    for (const m of evictable) {
+      if (totalBytes <= opts.maxBytes) break;
+      if (doomed.has(m.label)) { totalBytes -= m.bytes; continue; }
+      doomed.add(m.label);
+      totalBytes -= m.bytes;
+    }
+
+    for (const m of measured) {
+      if (!doomed.has(m.label)) continue;
+      try {
+        await rm(m.path, { recursive: true, force: true });
+      } catch { /* leave for next sweep */ }
+    }
+  } catch { /* missing root or permission error — not fatal */ }
+}
 
 export interface WitnessSweepOptions {
   /** Witness root to sweep. Defaults to the canonical `getWitnessRoot()`. */
@@ -218,6 +271,19 @@ export async function sweepWitnessTree(
     // Co-locate expired wave manifest cleanup. Same cadence as the witness
     // sweep (gated on the shared stamp above). Fire-and-forget; never throws.
     sweepWaveManifests();
+
+    // Co-locate subagent-logs retention. Layout mirrors the witness tree:
+    // <root>/<sessionLabel>/ directories, same age+size policy. The active
+    // session label is excluded by identity, matching the witness logic above.
+    // Fire-and-forget; never throws.
+    void sweepSessionDirTree({
+      root: getSubagentLogsRoot(),
+      activeLabel: options.activeLabel,
+      maxAgeMs,
+      maxBytes,
+      now,
+    });
+
     return result;
   } catch {
     return { skipped: false, scanned: 0, evicted: 0, freedBytes: 0, evictedLabels: [] };

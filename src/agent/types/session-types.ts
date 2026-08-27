@@ -281,6 +281,17 @@ export interface IAgentSession {
   getOutputStream(): AsyncIterable<OutputEvent>;
 
   /**
+   * Return a snapshot copy of the conversation history. Each entry is a
+   * user or assistant message (including tool_use / tool_result blocks).
+   * The array is disconnected from the session's internal state — mutations
+   * do not propagate.
+   *
+   * Optional to preserve backward-compat with external implementers who did
+   * not implement this method before it was added to the interface.
+   */
+  getHistory?(): readonly Message[];
+
+  /**
    * Get a narrow reference to the session's input channels.
    *
    * `pushUserMessage` starts a standalone turn (live steering);
