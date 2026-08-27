@@ -118,7 +118,7 @@ describe('/copy slash command', () => {
   });
 
   it('copies a specific code block by index', async () => {
-    mockedGetBlock.mockReturnValue({ index: 2, lang: 'python', text: 'print("hello")' });
+    mockedGetBlock.mockReturnValue({ index: 2, type: 'code_block', lang: 'python', text: 'print("hello")' });
     mockedCopy.mockReturnValue(true);
     const { ctx, lines } = makeCtx({ assistant: 'Here is code:\n```python\nprint("hello")\n```' });
     const result = await copyCmd.handler(ctx, '2');
@@ -131,7 +131,7 @@ describe('/copy slash command', () => {
   it('warns when block index is out of range', async () => {
     mockedGetBlock.mockReturnValue(undefined);
     mockedGetBlocks.mockReturnValue([
-      { index: 1, lang: 'bash', text: 'echo hi' },
+      { index: 1, type: 'code_block', lang: 'bash', text: 'echo hi' },
     ]);
     const { ctx, lines } = makeCtx({ assistant: 'some response' });
     const result = await copyCmd.handler(ctx, '5');

@@ -3,6 +3,7 @@ import { palette } from './palette.js';
 import { renderTable } from './formatter.table.js';
 import { renderList } from './formatter.list.js';
 import { renderBlockquote, renderCodeBlock } from './formatter.block.js';
+import { registerArtifact } from './code-block-register.js';
 
 /** Matches a whole codespan text that is a slash command (no surrounding path segments). */
 const SLASH_CODESPAN_RE = /^\/[A-Za-z][\w:-]*$/;
@@ -10,12 +11,39 @@ const SLASH_CODESPAN_RE = /^\/[A-Za-z][\w:-]*$/;
 /** Matches bare slash-command tokens in prose. Avoids filesystem paths by requiring word boundaries. */
 const SLASH_TOKEN_RE = /(?<=\s|^)(\/[A-Za-z][\w:-]*)(?=\s|[,.:;!?]?$|[,.:;!?]\s)/g;
 
+/**
+ * Invariant: CLI_PREFIX_RE matches multi-word backtick spans that look like
+ * shell commands. Single-word tokens are excluded because they are almost
+ * always identifiers or flag names rather than runnable commands.
+ * Common prefixes cover npm/pnpm/yarn, git, docker, curl/wget, package
+ * managers, and the `afk` binary. The leading-word match is word-boundary-safe
+ * because the codespan text has already been stripped of backticks.
+ */
+const CLI_PREFIXES =
+  'npm|pnpm|yarn|git|docker|curl|wget|apt|apt-get|brew|pip|pip3|cargo|afk|cd|mkdir|ls|cat|grep|sed|awk|find|chmod|chown|sudo|make|go|node|npx|python|python3|ruby|bash|sh|zsh|fish';
+
+const CLI_PREFIX_RE = new RegExp(`^(?:${CLI_PREFIXES})\\s+\\S`);
+
+/** Matches a standalone http/https URL (the full token IS the URL). */
+const URL_RE = /^https?:\/\/\S+$/;
+
+/**
+ * Matches a prose line that starts with a shell prompt character (`$` or `>`
+ * followed by a space and at least one non-whitespace character). Captures
+ * the command body after the prompt so the registered text is clean.
+ */
+const SHELL_PROMPT_LINE_RE = /^[$>]\s+(\S.*)$/;
+
 function renderInlineTokens(tokens?: Tokens.Generic[]): string {
   if (!tokens) return '';
   return tokens.map((token) => {
     switch (token.type) {
       case 'codespan': {
         const csText = (token as Tokens.Codespan).text;
+        // Register CLI commands and URLs embedded in backtick spans so
+        // `/copy N` works for inline shell snippets without a fenced block.
+        if (CLI_PREFIX_RE.test(csText)) registerArtifact('command', '', csText);
+        else if (URL_RE.test(csText)) registerArtifact('url', '', csText);
         return SLASH_CODESPAN_RE.test(csText) ? palette.brand(csText) : palette.tool(csText);
       }
       case 'strong': {
@@ -175,6 +203,18 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // paragraph; adding a second '\n' here double-spaced every block
           // boundary in non-streamed rendering. See the heading invariant above.
           const para = token as Tokens.Paragraph;
+          // Scan raw paragraph lines for standalone URLs and shell-prompt
+          // commands not inside backticks (codespan tokens handle backtick-
+          // wrapped text in renderInlineTokens above).
+          for (const rawLine of para.raw.split('\n')) {
+            const trimmed = rawLine.trim();
+            if (URL_RE.test(trimmed)) {
+              registerArtifact('url', '', trimmed);
+            } else {
+              const shellMatch = SHELL_PROMPT_LINE_RE.exec(trimmed);
+              if (shellMatch?.[1]) registerArtifact('command', '', shellMatch[1]);
+            }
+          }
           result = renderInline(para.tokens as Tokens.Generic[]) + '\n';
           break;
         }
