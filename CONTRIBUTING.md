@@ -38,6 +38,22 @@ pass `pnpm lint` (`tsc --noEmit`) before submitting.
 - No source code under `src/` imports from any model SDK directly — only through `src/agent/providers/`.
 - After adding an `@anthropic-ai/sdk` import, run `pnpm audit:sdk:update-lock` and fill in the `reason` field.
 
+## Credibility signals — no download badges
+
+Do **not** add npm download-count badges (e.g. `shields.io/npm/dm/agent-afk`) to
+README.md, the website, or any documentation. The npm download counter is inflated by
+registry mirrors and security scanners and does not reflect real adoption.
+
+Preferred signals (all unfakeable and publicly auditable on GitHub):
+
+- **Merged PRs** — each is a date-stamped public event.
+- **Test file count** — each `*.test.ts` must pass CI.
+- **Published versions** — visible on npmjs.com.
+- **Custom CI audit gates** — project-specific invariant checks under `tests/`.
+
+See [`docs/decisions/0003-credibility-signals-no-download-counts.md`](docs/decisions/0003-credibility-signals-no-download-counts.md)
+for the full rationale.
+
 ## Submitting a pull request
 
 1. Fork the repo and create a branch from `main`.

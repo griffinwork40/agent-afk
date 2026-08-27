@@ -11,6 +11,32 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.153.0] - 2026-08-27
+
+### Added
+- add OBSERVE + BASH_HIGH coverage for outbound curl writes (#1280) (#1302) (d3f3ff7d)
+
+### Changed
+- Merge pull request #1299 from griffinwork40/afk/iso-issue-1281-4-ostjix (c1ec9d64)
+- Merge pull request #1301 from griffinwork40/afk/iso-issue-1282-6-vbnzvj (d99f087f)
+- document credibility signal policy — PR/test counts over npm downloads (#1282) (af122e5e)
+- expand irreversible-action examples for service install and production proxies (#1281) (629cc262)
+
+## [5.152.5] - 2026-08-26
+
+### Fixed
+- guard code-block register with enabled flag (#1289) (#1300) (c9c205d6)
+
+## [5.152.4] - 2026-08-26
+
+### Changed
+- extract watch command handler from bot.ts (#1290) (5b681553)
+
+## [5.152.3] - 2026-08-26
+
+### Changed
+- extract paused-event handler from turn-handler.ts (#1291) (c1666ff6)
+
 ## [5.152.2] - 2026-08-25
 
 ### Fixed
