@@ -45,6 +45,8 @@ import {
 } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
+import { CompletedCache } from './subagent/completed-cache.js';
+import { SubagentLogWriter } from './subagent/log.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -85,6 +87,8 @@ export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
 
 export class SubagentManager {
   private readonly active = new Map<string, SubagentHandleImpl<unknown>>();
+  /** Recently-completed subagent handles for `/tasks:view` memory-first path. */
+  readonly completed = new CompletedCache();
   private readonly parentCanUseTool: CanUseTool | undefined;
   private readonly hookRegistry: HookRegistry | undefined;
   private readonly progressSink: SubagentProgressSink | undefined;
@@ -174,7 +178,7 @@ export class SubagentManager {
   }
 
   get(id: string): SubagentHandle | undefined {
-    return this.active.get(id);
+    return this.active.get(id) ?? this.completed.get(id)?.handle;
   }
 
   /** Subscribe to aborts of any subagent under this manager. */
@@ -429,6 +433,10 @@ export class SubagentManager {
       effectiveAgentType = options.agentType?.trim() || undefined;
       effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
       const effectiveParentId = options.parentId?.trim() || undefined;
+      // Per-subagent conversation log — always on unless AFK_SUBAGENT_LOG=0.
+      const logWriter = SubagentLogWriter.isEnabled() && options.parent.sessionId
+        ? new SubagentLogWriter(options.parent.sessionId, id)
+        : undefined;
       handle = new SubagentHandleImpl<T>(
         id,
         session,
@@ -447,6 +455,7 @@ export class SubagentManager {
           stopOccupancyHeartbeat();
           this.active.delete(id);
           this.abortGraph.dispose(id);
+          void logWriter?.close();
         },
         parentInputStreamRef,
         parentAbortSignal,
@@ -479,6 +488,7 @@ export class SubagentManager {
         // is not set. Runs concurrently with the wall-clock budget above.
         options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
       );
+      if (logWriter) handle._logWriter = logWriter;
       this.active.set(id, handle as SubagentHandleImpl<unknown>);
     } catch (err) {
       // Construction or manager-wiring failed (invalid model, sync init
