@@ -11,6 +11,148 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.155.0] - 2026-08-27
+
+### Added
+- render-time artifact capture for non-code copyable regions (#1287) (#1310) (12ffd199)
+- add /copy plain mode for Slack/email-friendly output (#1286) (#1309) (2997ae66)
+- accept inbound documents with text extraction (#687) (#1306) (67ca3ba4)
+
+### Fixed
+- run microcompaction unconditionally after compaction (#1293) (#1303) (0b5367d3)
+- record verbatim tool args in subagent output capture (#948) (#1308) (c7912731)
+- add edit_file TOCTOU guard and verify grep ENOENT enrichment (#441) (#1307) (4809c097)
+
+## [5.154.0] - 2026-08-27
+
+### Added
+- add sidecar retention sweep with age + count eviction (#1190) (319cb7ec)
+
+### Changed
+- add unit tests for streaming handlers and progress modules (#1305) (16b776d2)
+
+## [5.153.0] - 2026-08-27
+
+### Added
+- add OBSERVE + BASH_HIGH coverage for outbound curl writes (#1280) (#1302) (d3f3ff7d)
+
+### Changed
+- Merge pull request #1299 from griffinwork40/afk/iso-issue-1281-4-ostjix (c1ec9d64)
+- Merge pull request #1301 from griffinwork40/afk/iso-issue-1282-6-vbnzvj (d99f087f)
+- document credibility signal policy — PR/test counts over npm downloads (#1282) (af122e5e)
+- expand irreversible-action examples for service install and production proxies (#1281) (629cc262)
+
+## [5.152.5] - 2026-08-26
+
+### Fixed
+- guard code-block register with enabled flag (#1289) (#1300) (c9c205d6)
+
+## [5.152.4] - 2026-08-26
+
+### Changed
+- extract watch command handler from bot.ts (#1290) (5b681553)
+
+## [5.152.3] - 2026-08-26
+
+### Changed
+- extract paused-event handler from turn-handler.ts (#1291) (c1666ff6)
+
+## [5.152.2] - 2026-08-25
+
+### Fixed
+- cap list_directory output at 500 entries (#1292) (aff2d362)
+
+## [5.152.1] - 2026-08-25
+
+### Fixed
+- skip node_modules in plugin skill discovery walk (#1297) (b086417b)
+
+## [5.152.0] - 2026-08-25
+
+### Added
+- add Steer option to interrupt-picker (post-stop redirect) (#1268) (473cda2f)
+
+## [5.151.1] - 2026-08-25
+
+### Fixed
+- render block-level markdown (tables, code) in verdict cards (#1295) (d26ada64)
+
+## [5.151.0] - 2026-08-25
+
+### Added
+- add /copy slash command with render-time code block capture (#1285) (e4c1844e)
+
+## [5.150.2] - 2026-08-25
+
+### Fixed
+- guard bot.catch and acknowledge unsupported message types (#1178) (b4702a4b)
+
+### Changed
+- add unit tests for streaming watchdog module (#1123) (#1275) (ade4b218)
+
+## [5.150.1] - 2026-08-25
+
+### Fixed
+- resolve autoRoute thread at send time, not tick time (#1271) (#1273) (cab2217b)
+
+## [5.150.0] - 2026-08-25
+
+### Added
+- wire reconcileWaveManifests into session startup paths (#1082) (#1266) (c9fcac8f)
+
+## [5.149.7] - 2026-08-24
+
+### Fixed
+- handle threadId=0 edge case in route normalization (#1271) (#1276) (30bc58ba)
+
+### Changed
+- add unit tests for streaming watchdog and sender (#1123) (#1277) (b7162c70)
+
+## [5.149.6] - 2026-08-24
+
+### Added
+- add OpenAI models to /model picker (#1258) (#1274) (e45e35f9)
+
+### Fixed
+- keep auto-watch routes current (#1270) (7c2ca4b2)
+
+## [5.149.5] - 2026-08-24
+
+### Fixed
+- route auto-subscribe watch output to active topic thread (#1222) (#1267) (9f6c0ba3)
+
+### Changed
+- add unit tests for resolveForkInputs precedence paths (#1269) (#1272) (8cd25c7a)
+
+## [5.149.4] - 2026-08-24
+
+### Fixed
+- UI polish — code lang badge, centered transcript, blockquotes, transitions (#23-30) (#1201) (5f9eafea)
+
+## [5.149.3] - 2026-08-24
+
+### Fixed
+- route auto-subscribe watch output to active topic thread (#1222) (#1262) (a013af50)
+
+## [5.149.2] - 2026-08-24
+
+### Changed
+- extract pure resolution chain from forkSubagent (#1265) (e9951979)
+
+## [5.149.1] - 2026-08-24
+
+### Fixed
+- add xAI/Grok models to /model picker and docs (#1105) (#1263) (77717022)
+
+## [5.149.0] - 2026-08-24
+
+### Added
+- add stats line and context-specific affordances (#1257) (f9bd4c2d)
+
+### Changed
+- add endpoint-layer tests for GrokCliHeaderDeps forwarding (#1244) (#1261) (773624fa)
+- upgrade better-sqlite3 to v13 (#1259) (#1260) (bb4d1461)
+
 ## [5.148.0] - 2026-08-24
 
 ### Added

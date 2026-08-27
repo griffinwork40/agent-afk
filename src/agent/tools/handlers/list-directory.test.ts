@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { listDirectoryHandler } from './list-directory.js';
+import { listDirectoryHandler, MAX_ENTRIES } from './list-directory.js';
 import type { ToolHandlerContext } from '../types.js';
 
 describe('listDirectoryHandler', () => {
@@ -207,6 +207,41 @@ describe('listDirectoryHandler', () => {
     const lines = result.content.split('\n').map((l) => l.trim()).filter(Boolean);
     expect(lines).not.toContain('.');
     expect(lines).not.toContain('..');
+  });
+
+  it('caps output at MAX_ENTRIES and appends a marker', async () => {
+    const total = MAX_ENTRIES + 50;
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < total; i++) {
+      promises.push(fs.writeFile(join(tmpDir, `file-${String(i).padStart(5, '0')}.txt`), ''));
+    }
+    await Promise.all(promises);
+
+    const result = await listDirectoryHandler({ path: tmpDir }, new AbortController().signal);
+
+    expect(result.isError).not.toBe(true);
+    const lines = result.content.split('\n');
+    // MAX_ENTRIES data lines + 1 cap marker line
+    expect(lines).toHaveLength(MAX_ENTRIES + 1);
+    expect(lines[lines.length - 1]).toBe(
+      `[results capped at ${MAX_ENTRIES} entries — ${total} total in directory]`,
+    );
+  });
+
+  it('returns all entries when count equals MAX_ENTRIES', async () => {
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < MAX_ENTRIES; i++) {
+      promises.push(fs.writeFile(join(tmpDir, `f-${String(i).padStart(5, '0')}.txt`), ''));
+    }
+    await Promise.all(promises);
+
+    const result = await listDirectoryHandler({ path: tmpDir }, new AbortController().signal);
+
+    expect(result.isError).not.toBe(true);
+    const lines = result.content.split('\n');
+    expect(lines).toHaveLength(MAX_ENTRIES);
+    // No cap marker
+    expect(result.content).not.toContain('[results capped');
   });
 });
 

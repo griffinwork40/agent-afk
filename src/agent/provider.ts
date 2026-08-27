@@ -148,6 +148,13 @@ export type ProviderEvent =
       /** Raw JSON-serialized tool input object — used by facet derivation for exact field extraction. */
       toolInputRaw?: string;
       /**
+       * Verbatim tool input for CAPTURE purposes only (subagent-output-capture).
+       * Includes `command` (secret-redacted) at a generous CAPTURE_FIELD_CAP byte
+       * ceiling. Do NOT read this in derive.ts or the session sidecar — those
+       * consumers require the strict RAW_INPUT_FIELDS whitelist in toolInputRaw.
+       */
+      toolInputCapture?: string;
+      /**
        * Contract: `true` marks a PENDING paint — the block was announced but its
        * arguments have not finished streaming, so `toolInput` is a placeholder
        * rather than real content. anthropic-direct emits `tool.use.start` twice

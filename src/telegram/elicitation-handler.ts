@@ -70,7 +70,8 @@ function truncateLabel(label: string, maxBytes = 64): string {
  * @param messageHandler - The message handler instance (for `pendingElicitations`).
  * @param bot - The Telegraf bot instance (for `bot.action` registration).
  * @param target - The fallback route to send questions to when no session-specific
- *   route is available. Accepts a bare chatId (General topic) or a TelegramRoute.
+ *   route is available. Accepts a bare chatId (General topic), a TelegramRoute,
+ *   or a resolver for watches whose active topic can change while they run.
  *   When a `sessionId` is provided in the handler's options, the elicitation-route
  *   registry is consulted first and the fallback is only used if no mapping exists.
  * @param opts.ledgerOriginated - When true, every text-intercept entry also
@@ -81,12 +82,15 @@ function truncateLabel(label: string, maxBytes = 64): string {
 export function makeTelegramElicitationHandler(
   messageHandler: MessageHandler,
   bot: Telegraf,
-  target: TelegramRoute | number,
+  target: TelegramRoute | number | (() => TelegramRoute),
   opts?: { ledgerOriginated?: boolean },
 ): ElicitationHandler {
   // Fallback route: used when no session-specific mapping exists in the registry.
   // A bare chatId is that chat's General topic.
-  const fallbackRoute: TelegramRoute = typeof target === 'number' ? { chatId: target } : target;
+  const fallbackRoute = (): TelegramRoute => {
+    if (typeof target === 'function') return target();
+    return typeof target === 'number' ? { chatId: target } : target;
+  };
 
   // Contract: ledgerOriginated elicitations bypass the session-state guard in
   // MessageHandler.handle() — the resolver fires on the next text reply
@@ -154,11 +158,11 @@ export function makeTelegramElicitationHandler(
 
     // Resolve route per-elicitation: if a sessionId is provided, look it up in
     // the route registry (set by SessionManager when the session's SDK id becomes
-    // known). Fall back to the factory's static fallbackRoute (General topic of
-    // the primary chatId) when no mapping exists — preserves pre-topics behaviour.
+    // known). Fall back to the factory's route (General topic of the primary
+    // chatId by default) when no mapping exists — preserves pre-topics behaviour.
     const resolvedRoute: TelegramRoute =
       (options.sessionId !== undefined ? getElicitationRoute(options.sessionId) : undefined)
-      ?? fallbackRoute;
+      ?? fallbackRoute();
     const chatId = resolvedRoute.chatId;
     const key = routeKey(resolvedRoute);
     const threadOpts = sendOptions(resolvedRoute);

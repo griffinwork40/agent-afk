@@ -15,6 +15,7 @@ import {
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
   MODEL_ALIASES_HINT,
+  OPENAI_MODEL_HINTS,
   parseModelsConfig,
   resetSlotBindings,
   resolveBinding,
@@ -188,12 +189,39 @@ describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers,
   });
 });
 
+describe('OPENAI_MODEL_HINTS', () => {
+  it('contains the curated OpenAI wire ids', () => {
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-sol');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-terra');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-luna');
+    expect(OPENAI_MODEL_HINTS).toContain('gpt-5.5');
+  });
+
+  it('all entries start with a known OpenAI pattern', () => {
+    for (const id of OPENAI_MODEL_HINTS) {
+      const ok = id.startsWith('gpt-') || id.startsWith('o') || id.startsWith('codex');
+      expect(ok, `${id} should match a known OpenAI prefix`).toBe(true);
+    }
+  });
+});
+
 describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', () => {
-  it('is derived from the tiers + identity aliases, in the documented order', () => {
+  it('is derived from the tiers + identity aliases + OpenAI hints, in the documented order', () => {
     expect(MODEL_ALIASES_HINT).toEqual([
+      // Capability tiers (SLOT_NAMES)
       'local', 'small', 'medium', 'large',
-      'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable',
+      // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
+      'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
+      // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+      'gpt-5.5',
     ]);
+  });
+
+  it('includes all OPENAI_MODEL_HINTS entries', () => {
+    for (const id of OPENAI_MODEL_HINTS) {
+      expect(MODEL_ALIASES_HINT).toContain(id);
+    }
   });
 });
 
@@ -443,7 +471,7 @@ describe('coerceSlotBindingInput', () => {
     if (!resName.ok) expect(resName.error).toMatch(/control characters/);
   });
   it('rejects names that shadow built-in aliases (slot keys, legacy aliases, auto, direct aliases)', () => {
-    for (const reserved of ['local', 'small', 'medium', 'large', 'haiku', 'sonnet', 'opus', 'auto', 'fable']) {
+    for (const reserved of ['local', 'small', 'medium', 'large', 'haiku', 'sonnet', 'opus', 'auto', 'fable', 'grok']) {
       const res = coerceSlotBindingInput({ id: 'glm-5.2', name: reserved });
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toMatch(/shadow a built-in alias/);

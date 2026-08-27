@@ -87,6 +87,7 @@ import {
   SESSION_GRANTS_KEEP_TAIL_LINES,
 } from '../log-retention.js';
 import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep.js';
+import { sweepSessionSidecars, SESSION_SIDECAR_SWEEP_START_DELAY_MS } from '../session-sidecar-sweep.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -282,6 +283,10 @@ export class AgentSession implements IAgentSession {
         });
       }, WITNESS_SWEEP_START_DELAY_MS);
       witnessSweepTimer.unref();
+      const sidecarSweepTimer = setTimeout(() => {
+        void sweepSessionSidecars({ activeSessionId: this.sessionId });
+      }, SESSION_SIDECAR_SWEEP_START_DELAY_MS);
+      sidecarSweepTimer.unref();
     }
   }
 

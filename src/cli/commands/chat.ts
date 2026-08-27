@@ -37,6 +37,7 @@ import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
 import { jsonDateReplacer } from '../json-date-replacer.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../../agent/trace/emit.js';
+import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -625,6 +626,12 @@ export function registerChatCommand(program: Command): void {
         })), trace?.writer);
 
         boundSession = session;
+
+        // Wave-manifest reconciliation at one-shot chat startup: surface
+        // resumption offers for unfinished work. Non-interactive — requires
+        // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
+        runNonInteractiveReconcile(boundSession?.sessionId ?? '');
+
         // Subagent-success rollup: wire both the root manager and the compose
         // executor so all subagent token/cost data (including compose DAG nodes)
         // accumulates into this session's session_sealed telemetry. Late-bound

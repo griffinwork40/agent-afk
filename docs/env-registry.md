@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**171 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**174 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -169,6 +169,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DUMP_PROMPT` | string |  |  | `/tmp/afk-prompt.txt` | Write the resolved system prompt to a file at startup. Accepts a path or 1 for default location. |
 | `AFK_RUN_RECEIPT_DISABLED` | boolean |  |  | `1` | Disable the post-session run receipt (state/receipts/<label>.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize). |
 | `AFK_SESSION_LEDGER_DISABLED` | boolean |  |  | `1` | Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram /watch command) will report no activity for sessions started while disabled. |
+| `AFK_SESSION_MAX_AGE_DAYS` | number |  | `30` |  | Evict a session sidecar file once it is older than this many days (based on savedAt). Default 30. |
+| `AFK_SESSION_MAX_COUNT` | number |  | `1000` |  | Count-based safety valve: evict oldest session sidecars first once the total exceeds this number. Default 1000. |
+| `AFK_SESSION_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the session sidecar retention sweep entirely, so no state/sessions/*.json file is ever evicted. |
 | `AFK_SKILL_STREAM_VERBOSE` | boolean |  |  |  | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. |
 | `AFK_TELEGRAM_TRACE` | boolean |  |  | `1` | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. |
 | `AFK_TRACE_DISABLED` | boolean |  |  | `1` | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. |

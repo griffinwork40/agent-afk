@@ -3,14 +3,14 @@
  * `compactOpenAIHistory` handler (bail paths + successful in-place splice),
  * driven by a stubbed summarizer so no network is touched.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   compactOpenAIHistory,
   isFreshUserTurn,
   openaiCompactionOps,
   type CompactOpenAIHistoryDeps,
 } from './compact.js';
-import { COMPACT_ACK_TEXT, COMPACT_SUMMARY_HEADER } from '../shared/compaction.js';
+import { COMPACT_ACK_TEXT, COMPACT_SUMMARY_HEADER, isMicrocompactPlaceholder } from '../shared/compaction.js';
 import type { OpenAIMessage } from './messages.js';
 
 describe('openai isFreshUserTurn', () => {
@@ -180,5 +180,71 @@ describe('compactOpenAIHistory', () => {
     const prev = priorTurns[toolIdx - 1] as { role?: string; tool_calls?: Array<{ id?: string }> };
     expect(prev.role).toBe('assistant');
     expect(prev.tool_calls?.some((tc) => tc.id === 't2')).toBe(true);
+  });
+});
+
+describe('compactOpenAIHistory — microcompaction runs after successful compaction', () => {
+  const KEEP = 'AFK_MICROCOMPACT_KEEP_LAST';
+  const BYTES = 'AFK_MICROCOMPACT_TOOL_RESULT_BYTES';
+  beforeEach(() => {
+    delete process.env[KEEP];
+    delete process.env[BYTES];
+  });
+  afterEach(() => {
+    delete process.env[KEEP];
+    delete process.env[BYTES];
+  });
+
+  /**
+   * History with enough fresh user turns for normal compaction to succeed AND
+   * a large tool result in the kept tail that microcompaction should clear.
+   *
+   * Shape (keepLastN=2):
+   *   u1 / a1            — older turn (summarized away)
+   *   u2 / a2 / tool(t1) — sits in the kept tail: t1 is large → microcompact target
+   *   u3                 — second kept fresh turn
+   *
+   * Boundary lands on u2 (index 2), so t1 survives in the tail and is a
+   * microcompaction candidate once microcompact runs after the successful splice.
+   */
+  function historyWithLargeTailResult(): OpenAIMessage[] {
+    const bigContent = 'x'.repeat(20_000);
+    return [
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 't1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+      } as unknown as OpenAIMessage,
+      { role: 'tool', content: bigContent, tool_call_id: 't1' },
+      { role: 'user', content: 'u3' },
+    ];
+  }
+
+  it('clears large tool results in the kept tail even when compaction succeeds', async () => {
+    // keepLast=0 → no results protected → all oversized results are candidates.
+    process.env[KEEP] = '0';
+    // Low threshold so our 20KB content qualifies.
+    process.env[BYTES] = '100';
+
+    const priorTurns = historyWithLargeTailResult();
+    const summarize = vi.fn(async () => 'COMPRESSED');
+    const result = await compactOpenAIHistory(
+      deps({ priorTurns, summarize }),
+    );
+
+    // Normal compaction ran (summarizer was called).
+    expect(summarize).toHaveBeenCalledTimes(1);
+    // The compaction result reports success (turn-granular summarization landed).
+    expect(result.compacted).toBe(true);
+
+    // The large tool result in the kept tail was also cleared by microcompaction.
+    const toolMsg = priorTurns.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    const content = toolMsg!.content;
+    const text = typeof content === 'string' ? content : '';
+    expect(isMicrocompactPlaceholder(text)).toBe(true);
   });
 });

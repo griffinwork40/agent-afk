@@ -687,6 +687,41 @@ export function registerInteractiveCommand(program: Command): void {
               turnState,
               onStop: doStop,
               onCancel: () => { ctx.session.current?.abort('sigint'); ctx.rl.close(); },
+              onSteer: () => {
+                // Fire-and-forget: async readline work begins here; handleSigint
+                // must return synchronously so we void-dispatch the async chain.
+                const steerRead = (async (): Promise<string | null> => {
+                  const steerFn = turnState.steerReadLine;
+                  if (!steerFn) {
+                    // steerReadLine not yet published (surface not fully up) —
+                    // degrade to Stop behavior. The turn was already soft-stopped
+                    // by onStop() firing before onSteer() in showInterruptPicker.
+                    turnState.interruptPickerAbort = null;
+                    return null;
+                  }
+
+                  try {
+                    const text = await steerFn(turnState.interruptPickerAbort?.signal);
+                    return text.trim().length > 0 ? text : null;
+                  } catch {
+                    // Surface disposal / session teardown is an expected way for
+                    // this detached read to end. Convert it to a cancelled steer
+                    // so it can never become an unhandled rejection.
+                    return null;
+                  } finally {
+                    // Always clear — even if steerFn() rejects (e.g. surface disposed
+                    // mid-readline). Without this, interruptPickerAbort stays non-null
+                    // and permanently blocks the second-Ctrl+C hard-cancel safety hatch
+                    // for every subsequent turn until session exit.
+                    // onSteer owns this clear for the 'steer' branch;
+                    // launchInterruptPicker's .then() defers to us here.
+                    turnState.interruptPickerAbort = null;
+                  }
+                })();
+                // Publish synchronously, before the stopped turn can reach its
+                // next loop iteration and attempt an ordinary surface.readLine().
+                turnState.pendingSteerRead = steerRead;
+              },
             });
             return;
           }

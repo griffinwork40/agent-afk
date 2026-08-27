@@ -25,8 +25,9 @@ import type { TerminalState, TerminalKind } from './terminal-state.js';
 import { palette } from '../../palette.js';
 import { displayWidth, padDisplayRight, truncateDisplayWidth } from '../../display.js';
 import { getTerminalWidth } from '../../terminal-size.js';
-import { renderCardLine } from '../../formatter.js';
+import { renderMarkdownToTerminal } from '../../formatter.js';
 import { wrapToWidth } from '../../wrap.js';
+import { formatCost } from '../../format-utils.js';
 
 interface KindStyle {
   color: (s: string) => string;
@@ -72,6 +73,90 @@ const STYLES: Record<TerminalKind, KindStyle> = {
 };
 
 /**
+ * Optional performance/cost metadata to show inside the verdict card.
+ * All fields are optional — omit to render no stats line at all.
+ */
+export interface VerdictMeta {
+  durationMs?: number;
+  totalCostUsd?: number;
+  toolCount?: number;
+}
+
+/** Format milliseconds as a compact human-readable duration string. */
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`;
+}
+
+/**
+ * Build a compact dim stats string from VerdictMeta, or null when nothing
+ * is worth rendering (all fields absent or zero).
+ */
+function buildStatsLine(meta: VerdictMeta): string | null {
+  const parts: string[] = [];
+  if (meta.totalCostUsd !== undefined && meta.totalCostUsd > 0) {
+    parts.push(formatCost(meta.totalCostUsd));
+  }
+  if (meta.durationMs !== undefined && meta.durationMs > 0) {
+    parts.push(formatDuration(meta.durationMs));
+  }
+  if (meta.toolCount && meta.toolCount > 0) {
+    parts.push(`${meta.toolCount} ${meta.toolCount === 1 ? 'tool call' : 'tool calls'}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
+ * Derive a context-specific affordance string from the terminal state.
+ * Returns null to signal "use the static fallback from STYLES".
+ *
+ * Invariant: returned strings must be ASCII-only (same rule as STYLES
+ * affordances — see note at line 37). Use `...` for truncation, NOT `…`.
+ */
+function deriveAffordance(state: TerminalState, innerW: number): string | null {
+  let prefix: string;
+  let body: string | undefined;
+
+  switch (state.kind) {
+    case 'done':
+      if (!state.evidence) return null;
+      prefix = 'Review: ';
+      body = state.evidence;
+      break;
+    case 'blocked':
+      if (!state.unblockCondition) return null;
+      prefix = 'Unblock: ';
+      body = state.unblockCondition;
+      break;
+    case 'asking':
+      if (!state.question) return null;
+      prefix = 'Answer: ';
+      body = state.question;
+      break;
+    case 'interrupted':
+      return null;
+  }
+
+  if (!body) return null;
+
+  // When the source field contains block-level markdown (GFM tables, code
+  // fences), it cannot be meaningfully compressed to a one-line affordance.
+  // Fall back to the static default so the affordance row stays clean.
+  if (/^\|[-| :]+\|$/m.test(body) || /^```/m.test(body)) return null;
+
+  const budget = innerW - prefix.length;
+  if (budget <= 0) return null;
+  const truncated =
+    displayWidth(body) > budget
+      ? truncateDisplayWidth(body, budget - 3) + '...'
+      : body;
+  return prefix + truncated;
+}
+
+/**
  * Render the terminal-state card. Returns a multi-line string (no trailing
  * newline) that the caller writes via the configured Writer / compositor.
  *
@@ -80,7 +165,7 @@ const STYLES: Record<TerminalKind, KindStyle> = {
  * "summary" row containing the trimmed raw body, so the card still carries
  * meaning rather than rendering as an empty chip.
  */
-export function renderVerdictCard(state: TerminalState): string {
+export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): string {
   const style = STYLES[state.kind];
 
   // Invariant: every rendered row is `innerW + 6` columns wide
@@ -125,14 +210,27 @@ export function renderVerdictCard(state: TerminalState): string {
       .slice(0, MAX_FALLBACK_LINES);
     const summary =
       bodyLines.length > 0 ? bodyLines.join('\n') : `${state.kind} (no structured fields)`;
-    const wrapped = wrapToWidth(renderCardLine(summary), innerW).split('\n');
+    // Keep renderCardLine's tolerance for a common malformed bold opener.
+    // `** ` and `__ ` cannot open CommonMark emphasis, so the block renderer
+    // would otherwise display the orphaned marker literally. The whitespace
+    // guard deliberately leaves globs and identifiers untouched.
+    const normalizedSummary = summary.replace(/^(?:\*\*|__)\s/, '');
+    const rendered = renderMarkdownToTerminal(normalizedSummary, { maxWidth: innerW });
+    const wrapped = wrapToWidth(rendered, innerW).split('\n');
     for (const wl of wrapped) {
+      if (wl === '') continue; // drop empty trailing lines from block terminators
       lines.push(pipe + '  ' + padDisplayRight(wl, innerW) + '  ' + pipe);
     }
   } else {
     for (const row of rows) {
       const label = palette.dim(padDisplayRight(row.label, labelW));
-      const wrapped = wrapToWidth(renderCardLine(row.value), valueW).split('\n');
+      const rendered = renderMarkdownToTerminal(row.value, { maxWidth: valueW });
+      const wrapped = wrapToWidth(rendered, valueW).split('\n');
+      // Filter trailing empty lines from block-level markdown terminators
+      // (e.g. tables, paragraphs emit a trailing '\n' that produces an empty
+      // entry after split). Without this the card would show a blank row at
+      // the bottom of every value that contained block-level markup.
+      while (wrapped.length > 0 && wrapped[wrapped.length - 1] === '') wrapped.pop();
       const first = wrapped[0] ?? '';
       lines.push(
         pipe + '  ' + label + '  ' + padDisplayRight(first, valueW) + '  ' + pipe,
@@ -146,9 +244,21 @@ export function renderVerdictCard(state: TerminalState): string {
   }
 
   lines.push(blankRow);
+
+  // Optional stats line — dim, compact, between the structured rows and the
+  // affordance. Skipped entirely when meta is absent or all fields are zero.
+  if (meta) {
+    const statsStr = buildStatsLine(meta);
+    if (statsStr) {
+      const statsLine = palette.dim(truncateDisplayWidth(statsStr, innerW));
+      lines.push(pipe + '  ' + padDisplayRight(statsLine, innerW) + '  ' + pipe);
+    }
+  }
+
   // Affordance row — dim, underneath the structured rows, before the bottom
   // border. This is the one line a user scanning the transcript needs.
-  const affordance = palette.dim(truncateDisplayWidth(style.affordance, innerW));
+  const affordanceText = deriveAffordance(state, innerW) ?? style.affordance;
+  const affordance = palette.dim(truncateDisplayWidth(affordanceText, innerW));
   lines.push(pipe + '  ' + padDisplayRight(affordance, innerW) + '  ' + pipe);
   lines.push(bot);
 

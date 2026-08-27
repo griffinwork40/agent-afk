@@ -158,7 +158,13 @@ function renderList(token: Tokens.List): HTMLElement {
 function renderCode(token: Tokens.Code): HTMLElement {
   const pre = el('pre', 'md-pre');
   const code = el('code');
-  if (token.lang) code.className = `md-lang-${token.lang.split(/\s+/)[0] ?? ''}`;
+  if (token.lang) {
+    const lang = token.lang.split(/\s+/)[0] ?? '';
+    if (lang) {
+      code.className = `md-lang-${lang}`;
+      pre.dataset['lang'] = lang;
+    }
+  }
   code.textContent = token.text;
   pre.appendChild(code);
   return pre;

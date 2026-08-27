@@ -137,6 +137,14 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.whatWasDone).toBe('shipped a long-running feature with parts A, B, and C');
   });
 
+  it('preserves line breaks in block markdown field continuations', () => {
+    const text = `prose\n\nDone\n- What was done: analyzed results\n- Evidence: results:\n  | File | LOC |\n  |------|-----|\n  | a.ts | 100 |`;
+    const v = parseTerminalState(text);
+    expect(v?.evidence).toBe(
+      'results:\n| File | LOC |\n|------|-----|\n| a.ts | 100 |',
+    );
+  });
+
   it('handles asterisk and unicode bullet markers', () => {
     const text = `prose\n\nDone\n* What was done: thing one\n• Evidence: thing two`;
     const v = parseTerminalState(text);

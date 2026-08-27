@@ -9,7 +9,7 @@
  */
 
 import { env } from '../../../config/env.js';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, stat } from 'fs/promises';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
@@ -114,6 +114,15 @@ const editFileImpl = async (
     // protected path (mirrors the write_file guard exactly).
     assertNotDenylisted(file_path, 'edit_file');
 
+    // TOCTOU guard: record mtime before read; re-check before write so a
+    // concurrent external edit is caught rather than silently clobbered.
+    // Contract: both stat calls target the same resolved path so they measure
+    // the same inode. The guard is best-effort on FAT/exFAT (1-second mtime
+    // resolution) but catches the common case of a parallel agent or editor
+    // write that finishes while we computed the replacement string.
+    const statBefore = await stat(file_path);
+    const mtimeBefore = statBefore.mtimeMs;
+
     // Read the file.
     const content = await readFile(file_path, 'utf-8');
 
@@ -143,6 +152,15 @@ const editFileImpl = async (
       // Replace the first (and only) occurrence.
       const firstIndex = content.indexOf(old_string);
       modified = content.slice(0, firstIndex) + new_string + content.slice(firstIndex + old_string.length);
+    }
+
+    // TOCTOU check: fail if the file was modified between our read and write.
+    const statAfter = await stat(file_path);
+    if (statAfter.mtimeMs !== mtimeBefore) {
+      return {
+        content: `edit_file aborted: ${file_path} was modified by another process between read and write (mtime changed). Re-read the file and retry.`,
+        isError: true,
+      };
     }
 
     // Write back to file.

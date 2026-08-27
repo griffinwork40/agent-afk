@@ -34,6 +34,7 @@ import type { InputSurface } from '../../input/input-surface.js';
 import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-block-register.js';
 
 /** Per-handler timeout for the post-turn Stop notification. Tighter than the
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
@@ -212,6 +213,9 @@ export async function runInputLoop(
   bgResultNotifier.onInjectable = () => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
     if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
+    // Don't abort a steer readline — the user is mid-input and aborting would
+    // degrade their redirect to Stop with no feedback (Item 1 fix).
+    if (turnState.pendingSteerRead) return;
     autoResumeCount++;
     // Audible cue (no-op unless AFK_BELL=1 + TTY) before the seeded turn takes
     // over the prompt — the human-facing "your background work resumed" signal.
@@ -222,6 +226,33 @@ export async function runInputLoop(
     // and the drain prepends the result envelope (runText = envelope + directive).
     seedBuffer = { text: AUTO_RESUME_DIRECTIVE, attachments: [] };
     surface.abortPendingRead();
+  };
+
+  try {
+  // Publish steerReadLine on TurnState so interactive.ts's onSteer callback
+  // can invoke surface.readLine without holding a direct surface reference.
+  // Assigned here (inside the try) so the paired finally-clear at the bottom
+  // always fires — placing it before the try would leave the closure set if
+  // anything between assignment and try-entry threw.
+  turnState.steerReadLine = async (signal) => {
+    const cancel = () => surface.abortPendingRead({ clearBuffer: true });
+    signal?.addEventListener('abort', cancel, { once: true });
+    // Per WHATWG spec, addEventListener fires cancel() synchronously when the
+    // signal is already aborted — pendingReadResolve is null at that point so
+    // abortPendingRead is a no-op and the listener is consumed. Guard here so we
+    // degrade to Stop cleanly instead of starting a readLine the abort can't kill.
+    if (signal?.aborted) return '';
+    try {
+      const result = await surface.readLine({
+        promptFn: () => 'Steer the agent → ',
+        // Unlike the ordinary idle prompt, a single Escape cancels this
+        // borrowed read. Discard the redirect draft and degrade to Stop.
+        onEscape: cancel,
+      });
+      return result.text;
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
   };
 
   while (true) {
@@ -283,6 +314,24 @@ export async function runInputLoop(
       // row by verdictLedger itself (started above). No inline writeLine here.
       let text: string;
       let attachments: ReadWithAutocompleteResult['attachments'];
+
+      // Steer drain: if the interrupt-picker's Steer path injected a redirect
+      // message while the previous turn was in flight, promote it to seedBuffer
+      // so it takes the same fast-path as slash-command submit results.
+      // Must sit BEFORE the seedBuffer === undefined plan-exit check so a steer
+      // message is not skipped when a plan exit is also pending.
+      const steerRead = turnState.pendingSteerRead;
+      if (steerRead) {
+        const steerText = await steerRead;
+        if (turnState.pendingSteerRead === steerRead) {
+          turnState.pendingSteerRead = null;
+        }
+        if (steerText?.trim()) turnState.pendingSteerText = steerText;
+      }
+      if (turnState.pendingSteerText) {
+        seedBuffer = { text: turnState.pendingSteerText, attachments: [] };
+        turnState.pendingSteerText = null;
+      }
 
       // Drain any implement-turn queued by an approved `exit_plan_mode` tool
       // call during the previous turn. The session held it (the per-turn tool
@@ -624,6 +673,12 @@ export async function runInputLoop(
       // onTerminalState re-sets these during runTurn when a verdict parses.
       currentTerminalKind = undefined;
       currentDoneHasEvidence = undefined;
+      // Enable and clear the code-block register so `/copy N` indices match
+      // the blocks rendered in THIS turn, not a prior one.  enableCodeBlockRegister()
+      // is idempotent after the first turn; calling it here ensures it is set
+      // before the first runTurn and stays set for every subsequent turn.
+      enableCodeBlockRegister();
+      resetCodeBlockRegister();
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
         // Forward the promotion seam so Ctrl+B can background a running
@@ -828,4 +883,12 @@ export async function runInputLoop(
         }
       }
     }
+  } finally {
+    // Clear the steer-readline accessor so no dangling closure holds a
+    // reference to the disposed InputSurface after runInputLoop exits.
+    turnState.steerReadLine = null;
+    // Prevent stale steer state from replaying on session re-entry (Item 3 fix).
+    turnState.pendingSteerRead = null;
+    turnState.pendingSteerText = null;
+  }
 }

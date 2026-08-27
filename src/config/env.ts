@@ -1330,6 +1330,33 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_SESSION_RETENTION_DISABLE',
+    description:
+      'Disable the session sidecar retention sweep entirely, so no state/sessions/*.json file is ever evicted.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
+    name: 'AFK_SESSION_MAX_AGE_DAYS',
+    description:
+      'Evict a session sidecar file once it is older than this many days (based on savedAt). Default 30.',
+    type: 'number',
+    required: false,
+    default: '30',
+    category: 'debug',
+  },
+  {
+    name: 'AFK_SESSION_MAX_COUNT',
+    description:
+      'Count-based safety valve: evict oldest session sidecars first once the total exceeds this number. Default 1000.',
+    type: 'number',
+    required: false,
+    default: '1000',
+    category: 'debug',
+  },
+  {
     name: 'AFK_WAVE_MANIFEST_DISABLED',
     description:
       'Disable the wave manifest system entirely. When set to 1, no manifest is written ' +
@@ -1885,6 +1912,9 @@ export const env = {
   get AFK_WITNESS_RETENTION_DISABLE(): string | undefined { return process.env['AFK_WITNESS_RETENTION_DISABLE']; },
   get AFK_WITNESS_MAX_AGE_DAYS(): string | undefined { return process.env['AFK_WITNESS_MAX_AGE_DAYS']; },
   get AFK_WITNESS_MAX_BYTES(): string | undefined { return process.env['AFK_WITNESS_MAX_BYTES']; },
+  get AFK_SESSION_RETENTION_DISABLE(): string | undefined { return process.env['AFK_SESSION_RETENTION_DISABLE']; },
+  get AFK_SESSION_MAX_AGE_DAYS(): string | undefined { return process.env['AFK_SESSION_MAX_AGE_DAYS']; },
+  get AFK_SESSION_MAX_COUNT(): string | undefined { return process.env['AFK_SESSION_MAX_COUNT']; },
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
   get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },

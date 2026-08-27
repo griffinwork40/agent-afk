@@ -90,6 +90,11 @@ export interface ToolUseDetailChunk {
   /** Raw JSON-serialized tool input object — used by facet derivation for exact field extraction. */
   toolInputRaw?: string;
   /**
+   * Verbatim tool input for CAPTURE purposes only (subagent-output-capture).
+   * Includes `command` (secret-redacted). Do NOT use in derive.ts or sidecar.
+   */
+  toolInputCapture?: string;
+  /**
    * `true` when this chunk is a pending paint whose `toolInput` is a placeholder
    * (arguments still streaming). Mirrors `pending` on the `tool.use.start`
    * provider event — consumers that PERSIST a record must skip these.

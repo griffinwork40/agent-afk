@@ -236,7 +236,7 @@ export function createSubagentOutputRecorder(
             write(
               buildRecord('tool', {
                 toolName: chunk.toolName,
-                toolInput: chunk.toolInputRaw ?? chunk.toolInput,
+                toolInput: chunk.toolInputCapture ?? chunk.toolInputRaw ?? chunk.toolInput,
               }),
             );
           }

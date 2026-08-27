@@ -24,12 +24,13 @@ import {
 } from './elicitation-telegram.js';
 import { elicitationRouter } from '../agent/elicitation-router.js';
 import { ensurePluginEntrypointsLoaded } from '../agent/tools/skill-bridge.js';
-import { SessionWatchManager, resolveWatchTarget, listWatchableSessions } from './watch.js';
+import { SessionWatchManager } from './watch.js';
+import { handleWatchCommand } from './bot.watch-command.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
 import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
-import { routeFromCtx, sendOptions } from './route.js';
+import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
 
 /**
@@ -88,7 +89,12 @@ export class TelegramBot {
     // usage-limit-pause-aware watchdog that throws a handled StreamTimeoutError.
     // p-timeout short-circuits on Infinity, handing it sole timeout control.
     this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
-    this.sessionManager = new SessionManager(options);
+    // Wire resumption-offer delivery into the session manager so wave manifests
+    // surface as plain messages when a new chat session is created.
+    this.sessionManager = new SessionManager({
+      ...options,
+      onResumptionOffer: (route, text) => { void this.bot.telegram.sendMessage(route.chatId, text, sendOptions(route)).catch(() => undefined); },
+    });
     this.messageHandler = new MessageHandler(
       this.bot,
       this.sessionManager,
@@ -189,35 +195,9 @@ export class TelegramBot {
         await ctx.reply(formatError('Could not identify chat'));
         return;
       }
-      const { chatId } = route;
       // Pin the streamed watch output to the topic /watch was invoked from
       // (General omits message_thread_id → default delivery, byte-identical).
-      const watchThreadOpts = sendOptions(route);
-      const text = (ctx.message && 'text' in ctx.message ? ctx.message.text : '') ?? '';
-      const arg = text.split(/\s+/).slice(1).join(' ').trim();
-      try {
-        if (!arg) {
-          await ctx.reply(await listWatchableSessions());
-          return;
-        }
-        const sessionId = await resolveWatchTarget(arg);
-        if (!sessionId) {
-          await ctx.reply(
-            `No session ledger found for "${arg}". Use /watch with no argument to list watchable sessions.`,
-          );
-          return;
-        }
-        const send = async (msg: string): Promise<void> => {
-          for (const part of splitLongMessage(msg)) {
-            await ctx.telegram.sendMessage(chatId, part, watchThreadOpts);
-          }
-        };
-        this.watchManager.start(chatId, sessionId, send);
-        await ctx.reply(`📡 Watching ${sessionId} — new activity will stream here. /unwatch to stop.`);
-      } catch (error) {
-        this.log('Watch error:', error);
-        await ctx.reply(formatError(error as Error));
-      }
+      await handleWatchCommand(ctx, route, this.watchManager, sendOptions(route), this.log.bind(this));
     });
     this.bot.command('unwatch', async (ctx) => {
       const chatId = ctx.chat?.id;
@@ -299,8 +279,8 @@ export class TelegramBot {
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
     this.bot.on('document', (ctx) => runDetached(this.messageHandler.handleDocument(ctx)));
-    // Note: voice notes, video, and stickers remain unhandled.
-    // They can be added with the same pattern (download → build content blocks → processOne).
+    // Acknowledge unsupported message types so users know why the bot is silent.
+    this.bot.on(['voice', 'video', 'sticker', 'video_note', 'audio'], (ctx) => { if (ctx.chat) void ctx.reply('I can process text, photo, and document messages. Voice and video support is not yet available.').catch((e) => this.log('Failed to send unsupported-type reply:', e)); });
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
     // middleware (registered above) already filters callback_query updates
@@ -351,8 +331,7 @@ export class TelegramBot {
 
     this.bot.catch((err, ctx) => {
       this.log('Bot error:', err);
-      ctx.reply(formatError('An unexpected error occurred. Please try again.'))
-        .catch(e => this.log('Failed to send error message:', e));
+      if (ctx.chat) ctx.reply(formatError('An unexpected error occurred. Please try again.')).catch(e => this.log('Failed to send error message:', e));
     });
   }
 
@@ -614,17 +593,17 @@ export class TelegramBot {
       // one REPL session per operator).
       for (const sessionId of afkSessionIds) {
         if (this.watchManager.watching(chatId) === sessionId) continue; // already watching
-        // Invariant: auto-subscribe has no inbound message context, so the
-        // route defaults to the General topic (no threadId). sendOptions()
-        // returns {} for General, which is byte-identical to the bare send —
-        // non-topic chats are unaffected. Topic-aware chats route to General;
-        // the manual /watch command targets the specific topic instead.
+        // Resolve the complete active route at use time so an existing watch
+        // follows topic changes. When no session data exists, fall back to
+        // General; this preserves pre-topics behavior for non-topic chats.
+        const autoRoute = (): TelegramRoute =>
+          this.sessionManager.getActiveRouteForChat(chatId) ?? { chatId };
         const send = async (msg: string): Promise<void> => {
           for (const part of splitLongMessage(msg)) {
-            await this.bot.telegram.sendMessage(chatId, part, sendOptions({ chatId })); // #1023
+            await this.bot.telegram.sendMessage(chatId, part, sendOptions(autoRoute())); // #1023, #1222
           }
         };
-        this.watchManager.start(chatId, sessionId, send);
+        this.watchManager.start(chatId, sessionId, send, autoRoute);
         this.log(`[auto-subscribe] started watch for ${sessionId} on chat ${chatId}`);
         break; // one session per chat at a time
       }

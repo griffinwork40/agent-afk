@@ -144,7 +144,7 @@ describe('handleDocumentMessage', () => {
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Unsupported'));
   });
 
-  it('returns text document block for a plain text file', async () => {
+  it('returns text block for a plain text file', async () => {
     const content = 'Hello, world!';
     const ctx = makeCtx({
       mimeType: 'text/plain',
@@ -155,18 +155,14 @@ describe('handleDocumentMessage', () => {
     expect(result).not.toBeNull();
     expect(result).toHaveLength(1);
     const block = result![0]!;
-    expect(block.type).toBe('document');
-    if (block.type === 'document') {
-      expect(block.source.type).toBe('text');
-      if (block.source.type === 'text') {
-        expect(block.source.data).toBe(content);
-        expect(block.source.media_type).toBe('text/plain');
-      }
-      expect(block.title).toContain('hello.txt');
+    expect(block.type).toBe('text');
+    if (block.type === 'text') {
+      expect(block.text).toContain('hello.txt');
+      expect(block.text).toContain(content);
     }
   });
 
-  it('returns text document block for a .ts file (extension fallback)', async () => {
+  it('returns text block for a .ts file (extension fallback)', async () => {
     // TypeScript files often get sent as application/octet-stream — classify by extension
     const ctx = makeCtx({
       mimeType: 'application/octet-stream',
@@ -176,9 +172,10 @@ describe('handleDocumentMessage', () => {
     const result = await handleDocumentMessage(ctx, noop);
     expect(result).not.toBeNull();
     const block = result![0]!;
-    expect(block.type).toBe('document');
-    if (block.type === 'document') {
-      expect(block.source.type).toBe('text');
+    expect(block.type).toBe('text');
+    if (block.type === 'text') {
+      expect(block.text).toContain('index.ts');
+      expect(block.text).toContain('export const x = 1;');
     }
   });
 
@@ -218,7 +215,7 @@ describe('handleDocumentMessage', () => {
     if (captionBlock.type === 'text') {
       expect(captionBlock.text).toContain('My important notes');
     }
-    expect(result![1]!.type).toBe('document');
+    expect(result![1]!.type).toBe('text');
   });
 
   it('caps caption at 1024 unicode code points', async () => {
@@ -283,7 +280,7 @@ describe('handleDocumentMessage', () => {
       });
       const result = await handleDocumentMessage(ctx, noop);
       expect(result, `${ext} should be accepted as text`).not.toBeNull();
-      expect(result![result!.length - 1]!.type).toBe('document');
+      expect(result![result!.length - 1]!.type).toBe('text');
     }
   });
 });
