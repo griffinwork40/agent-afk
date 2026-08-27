@@ -1,13 +1,15 @@
 /**
  * /copy (alias /cp) — copy agent output to the system clipboard.
  *
- * Two modes:
- *   - `/copy`     — copies the last assistant turn's raw markdown (the whole
- *                   response, clean of ANSI and tool-lane chrome).
- *   - `/copy N`   — copies the Nth code block from the last turn, using the
- *                   render-time register populated by `renderCodeBlock()`. The
- *                   index matches the dim `/cp N` hint shown on each code block
- *                   header, so users never have to count.
+ * Three modes:
+ *   - `/copy`       — copies the last assistant turn's raw markdown (the whole
+ *                     response, clean of ANSI and tool-lane chrome).
+ *   - `/copy N`     — copies the Nth code block from the last turn, using the
+ *                     render-time register populated by `renderCodeBlock()`. The
+ *                     index matches the dim `/cp N` hint shown on each code block
+ *                     header, so users never have to count.
+ *   - `/copy plain` — strips markdown syntax first; suitable for Slack, email,
+ *                     and other plain-text contexts.
  *
  * Gated on interactive REPL + TTY (same guard as /fork) so Telegram/daemon
  * callers never fire OSC 52 escape bytes at the wrong terminal.
@@ -16,14 +18,15 @@
 import { palette } from '../../palette.js';
 import { copyToClipboard } from '../../clipboard.js';
 import { getCodeBlock, getCodeBlocks } from '../../code-block-register.js';
+import { stripMarkdown } from './copy.strip-markdown.js';
 import type { SlashCommand } from '../types.js';
 
 export const copyCmd: SlashCommand = {
   name: '/copy',
   aliases: ['/cp'],
   summary: 'Copy last response or a code block to clipboard',
-  usage: '/copy [N]',
-  hint: 'When you need to paste agent output into another terminal or editor. Use /cp N to grab a specific code block — the index is shown on each block header.',
+  usage: '/copy [N|plain]',
+  hint: 'When you need to paste agent output into another terminal or editor. Use /cp N to grab a specific code block — the index is shown on each block header. Use /copy plain for Slack/email-friendly output.',
   async handler(ctx, args) {
     const { stats, out } = ctx;
 
@@ -85,9 +88,27 @@ export const copyCmd: SlashCommand = {
       return 'continue';
     }
 
+    // `/copy plain` — strip markdown, then copy.
+    if (trimmed === 'plain') {
+      const plain = stripMarkdown(assistantText);
+      const copied = copyToClipboard(plain);
+      if (copied) {
+        const chars = plain.length;
+        const lines = plain.split('\n').length;
+        out.success(
+          `Copied last response (plain) ` +
+          palette.dim(`(${chars} chars, ${lines} line${lines === 1 ? '' : 's'})`) +
+          palette.dim(' to clipboard'),
+        );
+      } else {
+        out.warn('Clipboard write failed — the full response is in /transcript.');
+      }
+      return 'continue';
+    }
+
     // Unrecognized non-empty arg — help the user.
     if (trimmed) {
-      out.warn(`Unknown argument "${trimmed}". Usage: /copy (whole response) or /copy N (code block N).`);
+      out.warn(`Unknown argument "${trimmed}". Usage: /copy (whole response), /copy N (code block N), or /copy plain (strip markdown).`);
       return 'continue';
     }
 
