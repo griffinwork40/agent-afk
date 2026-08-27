@@ -115,8 +115,12 @@ export function stripMarkdown(input: string): string {
     // --- Unordered list items: - / * / + at start of line ---
     line = line.replace(/^(\s*)[-*+]\s+/, (_m, indent: string) => `${indent}• `);
 
-    // --- Inline code: `…` → content ---
-    line = line.replace(/`([^`]+)`/g, '$1');
+    // --- Inline code: `…` → placeholder (protect content from emphasis transforms) ---
+    const codeSpans: string[] = [];
+    line = line.replace(/`([^`]+)`/g, (_m, content: string) => {
+      codeSpans.push(content);
+      return `\x00CS${codeSpans.length - 1}\x00`;
+    });
 
     // --- Bold: **…** or __…__ ---
     line = line.replace(/\*\*(.+?)\*\*/g, '$1');
@@ -125,6 +129,10 @@ export function stripMarkdown(input: string): string {
     // --- Italic: *…* or _…_ (must not be __ or **) ---
     line = line.replace(/\*([^*]+)\*/g, '$1');
     line = line.replace(/_([^_]+)_/g, '$1');
+
+    // --- Restore inline code placeholders ---
+    // eslint-disable-next-line no-control-regex
+    line = line.replace(/\x00CS(\d+)\x00/g, (_m, idx: string) => codeSpans[Number(idx)] ?? '');
 
     // Trim trailing whitespace.
     out.push(line.trimEnd());

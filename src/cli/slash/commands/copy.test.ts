@@ -251,4 +251,19 @@ describe('stripMarkdown', () => {
     const result = stripMarkdown('> This is a quote.\n> And another line.');
     expect(result).toBe('This is a quote.\nAnd another line.');
   });
+
+  it('preserves underscores inside inline code spans', () => {
+    const result = stripMarkdown('Use `__init__.py` in Python');
+    expect(result).toContain('__init__.py');
+  });
+
+  it('preserves snake_case identifiers inside inline code spans', () => {
+    const result = stripMarkdown('The `snake_case_value` variable');
+    expect(result).toContain('snake_case_value');
+  });
+
+  it('preserves markdown-like content inside inline code spans', () => {
+    const result = stripMarkdown('Run `**bold_cmd**` now');
+    expect(result).toContain('**bold_cmd**');
+  });
 });
