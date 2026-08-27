@@ -129,7 +129,7 @@ const INTERPRETER_DENYLIST =
  * {@link scrubAllowlistedRefs}, so it needs no exception here.
  */
 export const SENSITIVE_PATH_SIGNAL =
-  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.config\/gcloud\b|\.netrc\b|\.password-store\b|\.afk\/config\b|\.npmrc\b|\.docker\/config\.json\b|\.git-credentials\b|\.kube\/config\b|Library\/Application Support\b|\/etc\/shadow\b|\/etc\/sudoers\b|master\.passwd\b/i;
+  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.config\/gcloud\b|\.netrc\b|\.password-store\b|\.afk\/config\b|\.npmrc\b|\.docker\/config\.json\b|\.git-credentials\b|\.kube\/config\b|Library\/Application Support\b|\/etc\/shadow\b|\/etc\/sudoers\b|master\.passwd\b|Library\/LaunchAgents\b|Library\/LaunchDaemons\b|\.config\/systemd\b/i;
 
 export interface BashRestrictionHookOptions {
   /**
@@ -483,6 +483,11 @@ export function builtinBashSensitiveRoots(): readonly string[] {
     path.join(home, 'Library', 'Application Support'),
     path.join(home, '.password-store'),
     path.join(home, '.config', 'gh'),
+    path.join(home, 'Library', 'LaunchAgents'),
+    path.join(home, 'Library', 'LaunchDaemons'),
+    '/Library/LaunchAgents',
+    '/Library/LaunchDaemons',
+    path.join(home, '.config', 'systemd', 'user'),
     ...BUILTIN_READ_DENYLIST,
   ]);
 }

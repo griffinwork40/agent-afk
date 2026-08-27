@@ -95,6 +95,13 @@ const BASH_HIGH: readonly string[] = [
   'curl -F',
   'wget --post-data',
   'wget --post-file',
+  'launchctl load',
+  'launchctl bootstrap',
+  'launchctl submit',
+  'launchctl start',
+  'systemctl enable',
+  'systemctl start',
+  'systemctl daemon-reload',
 ];
 
 /**
