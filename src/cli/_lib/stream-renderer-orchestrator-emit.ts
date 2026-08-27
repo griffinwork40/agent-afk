@@ -8,7 +8,7 @@
 import type { SourceState } from './stream-renderer-source.js';
 import type { Writer } from '../slash/types.js';
 import type { CardSpec } from '../render.js';
-import { card, errorBox } from '../render.js';
+import { card, errorCard } from '../render.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { capToMeasure } from '../render/measure.js';
@@ -383,7 +383,7 @@ export function emitMarkdown(text: string, out: Writer): void {
  * Emit an error box. Splits the rendered box by newlines and emits each line.
  */
 export function emitErrorBox(err: Error, out: Writer): void {
-  const box = errorBox(err.message, err.stack);
+  const box = errorCard({ body: err.message, hint: err.stack });
   for (const line of box.split('\n')) {
     out.line(line);
   }

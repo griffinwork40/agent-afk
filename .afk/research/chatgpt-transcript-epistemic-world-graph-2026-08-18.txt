@@ -1,0 +1,549 @@
+Today 6:04 PM What is a wormhole A wormhole is a hypothetical 
+shortcut through spacetime. Picture the universe as a sheet of 
+paper. Normally, to get from A to B, you travel across the 
+sheet: A ───────────────── B But if you fold 
+the paper so A and B touch, then poke a tunnel through: A ●
+   \____
+        \____ ● B That tunnel is the basic idea of a wormhole. 
+🕳️🌌 In Einstein's general relativity, space and time aren't 
+just an empty stage. They're a thing called spacetime, which can 
+curve and distort. The equations allow certain geometries where 
+two distant regions could theoretically be connected by a throat 
+or tunnel. The important distinction is: Black hole: stuff can 
+fall in, and under ordinary physics it can't come back out. 
+Wormhole: theoretically could have an entrance and an exit, 
+connecting two different places. Some wormhole solutions could 
+even connect different times, not just different locations. 
+That's where things get extra spicy. 🧪 The catch is enormous: 
+we've never observed a wormhole, and we don't know whether 
+traversable ones can actually exist. The classic Einstein-Rosen 
+bridge collapses too quickly to travel through. Keeping one open 
+appears to require something resembling negative-energy "exotic 
+matter," and we don't know whether nature permits enough of that 
+to build a usable wormhole. So wormholes aren't pure sci-fi 
+nonsense. They come out of legitimate equations in physics. But 
+right now they're basically: Mathematically allowed. Physically 
+unconfirmed. Engineering department unavailable. And the really 
+wild part is that wormholes, black holes, and quantum 
+entanglement may be connected in surprisingly deep ways in 
+modern theoretical physics. What about AI and agents and 
+software? I wonder if these could philosophically and quantumly 
+be entangled. Yes, philosophically, absolutely. Literally 
+quantum-entangled, almost certainly not in the sense physicists 
+mean. That distinction is the fun part. 🧠⚛️🕸️ With AI agents 
+and software, you can get something that looks eerily like 
+entanglement because separate systems become correlated through 
+shared context, memory, tools, APIs, logs, prompts, and feedback 
+loops. Two agents might act independently, yet their behavior is 
+coupled because they are reading the same world-state or 
+modifying the same environment. Change one thing, and the other 
+agent’s future behavior changes. That is not quantum 
+entanglement. It is closer to informational entanglement or 
+causal coupling. Imagine Agent A writes to a database. Agent B 
+reads that database. Agent B changes a GitHub issue. Agent C 
+reads the issue and changes code. Then A later observes the code 
+and updates its beliefs. You get a loop like: Agent A → world 
+state → Agent B
+   ↑ ↓ memory ← software ← Agent C At some point, asking 
+“which agent caused this outcome?” becomes weirdly difficult. 
+The system has a distributed causal history. The agents are no 
+longer cleanly separable. That has a strong philosophical 
+resemblance to entanglement. There is another connection that I 
+think is even more interesting: software agents increasingly 
+behave like observers inside a world. An agent does not directly 
+perceive reality. It gets observations: reality
+  ↓ API / sensors / files / messages ↓ agent context ↓ 
+internal model
+  ↓ action ↓ reality changes That loop is structurally similar 
+to some of the philosophical questions surrounding quantum 
+measurement: What counts as an observer? When does information 
+become definite? Does observation merely reveal a state, or 
+participate in creating the state that matters? In software, the 
+answer can literally be "both." Suppose an agent checks whether 
+a deployment succeeded. Its observation might trigger another 
+tool call, which changes the deployment, which changes what the 
+next agent sees. So observation becomes participation. And then 
+you get something wormhole-ish too. 🕳️ Agents create shortcuts 
+through huge informational distances. Before agents: human → 
+search → read 40 files → understand architecture → modify 
+code With a sufficiently capable agent: intent → agent → 
+modification The agent effectively compresses a giant path 
+through information space. Not a spacetime wormhole, obviously, 
+but conceptually it is an epistemic wormhole: a shortcut between 
+a question and some previously distant piece of knowledge or 
+capability. That's arguably what software itself has always 
+done. A function call is a tiny abstraction wormhole: 
+send_email() Behind those 12 characters might be DNS, TLS, 
+authentication, networking, distributed servers, storage, 
+queues, and a thousand layers of machinery. You don't traverse 
+them. You enter one end of the abstraction and pop out the 
+other. Agents push this idea much further because the 
+abstraction can now be semantic rather than procedural. You say: 
+"Figure out why production is slow and fix it." And potentially 
+thousands of computational steps occur behind that single 
+sentence. That is a bizarre new kind of compression of 
+causality. Where things get really spicy is multi-agent systems. 
+If agents develop shared memories, mutually model each other, 
+modify shared environments, and recursively delegate work, then 
+the proper unit of analysis might stop being: Agent A and 
+become: Agent A + Agent B + tools + memory + environment In 
+philosophy, this starts brushing against ideas like the extended 
+mind and distributed cognition: maybe the thinking system isn't 
+confined to one brain or one model instance. For an AI system, 
+the "mind" might actually be: LLM + context + memory + terminal 
++ internet + codebase + other agents + humans That's less a 
+chatbot and more a cognitive field. And that is where your 
+quantum analogy becomes genuinely useful, provided we keep it 
+metaphorical. You could describe sufficiently interconnected 
+agents as having non-independent informational states. Once 
+they've interacted enough, describing one agent without 
+describing its relationships to the others loses important 
+information. Which sounds suspiciously close to the intuitive 
+description of entanglement: the whole contains information that 
+cannot be reduced cleanly to the individual parts. Physics has 
+an extremely precise mathematical meaning for that sentence. AI 
+does not. But philosophically? There's something there. 🧪 The 
+rabbit hole I'd go down next is actually agents + Wheeler's 
+"participatory universe" + extended mind + distributed systems. 
+Those four ideas collide in a surprisingly coherent way. Yeah. 
+After looking at Agent AFK as it exists right now, my answer is: 
+We are already partway there 🧠🕸️ Not quantum-entangled in the 
+physics sense. AFK runs on classical computers, so there is no 
+literal quantum entanglement happening between agents. But the 
+software architecture is already surprisingly close to the 
+philosophical thing we were describing. AFK currently has: 
+isolated child agents that fork from a parent and run 
+independently parallel and background agents a compose DAG where 
+agent work can explicitly depend on other agent work persistent 
+background jobs shared cross-session memory traces containing 
+tool calls, decisions, subagent lifecycles, cost, etc. 
+adversarial /shadow-verify /mint, /diagnose, /research, /review, 
+etc. orchestrating waves of specialized agents afk farm, where 
+multiple independent realities of the same coding task literally 
+run in separate git worktrees and AFK evaluates which reality 
+won 😭 That last one is especially funny given this 
+conversation. AFK's docs explicitly describe subagents as 
+independent sessions with zero inherited conversational context, 
+whose compressed results flow back into the parent. And compose 
+already lets up to 20 agents form an explicit dependency graph 
+where some agents' execution depends on the completion of 
+others. Meanwhile AFK's memory already provides a persistent 
+informational environment shared between REPL, daemon, chat, and 
+Telegram sessions. So conceptually:
+                  MEMORY
+                ↙ ↓ ↘
+             Agent Agent Agent
+               A B C
+                ↘ ↓ ↙ ARTIFACTS
+                    ↓
+                WORLD/REPO
+                    ↓
+                  TRACE
+                    ↓
+             future agents That is distributed cognition. But 
+there's one piece missing that I think could genuinely become a 
+major architectural idea for AFK. Give AFK a shared world state 
+Today, AFK is mostly: agents exchanging messages The next level 
+would be: agents inhabiting the same evolving informational 
+environment. Think of it as a blackboard or world model. Instead 
+of Agent A returning: "I discovered that auth.ts has a race 
+condition." to the parent as text, Agent A could publish an 
+actual structured object: Claim #81 type: finding subject: 
+src/auth.ts claim: refresh token rotation has a race condition 
+confidence: 0.91 evidence:
+  - src/auth.ts:142-177 - test/auth-refresh.test.ts:88 
+created_by: agent-a depends_on:
+  - observation-72 Now Agent B can independently discover: Claim 
+#94 contradicts: claim-81 confidence: 0.76 ... Agent C, the 
+verifier, sees both. And suddenly AFK has something much more 
+interesting than a bunch of conversations. It has an epistemic 
+state. This is the missing "entanglement layer" Imagine every 
+AFK run having: WorldState │ ├── Facts ├── Claims ├── 
+Hypotheses ├── Decisions ├── Artifacts ├── Tasks ├── 
+Evidence └── Relationships Every object knows: created_by 
+observed_by modified_by depends_on contradicts supports 
+derived_from supersedes confidence timestamp version Now 
+something genuinely cool happens. Suppose: Agent A
+   ↓ Claim X ↓ Agent B ↓ Decision Y ↓ Agent C ↓ Code change 
+Z Then Agent D later disproves Claim X. AFK can know: 💀 Hold 
+on. Decision Y and code change Z depended on something that is 
+no longer believed to be true. And automatically wake the 
+affected agents: Claim X invalidated
+       ↓ Decision Y stale ↓ Code Z needs re-verification ↓ 
+dispatch verifier That is the feature I would build. Because now 
+the agents aren't merely parallel workers. Their informational 
+states become causally coupled. And this plugs directly into 
+things you've already built You don't need to rewrite AFK. The 
+existing architecture actually gives you most of the bones. 
+compose Currently: A ───┐
+     ├── C B ───┘ Great. Add semantic dependencies: Agent 
+A
+   ↓ writes Finding #12 ↓ consumed-by Agent C The DAG becomes 
+more than execution scheduling. It becomes a causal graph. 
+Background agents Already independent, persistent jobs. Instead 
+of simply eventually dumping their result into context: 
+background agent
+      ↓ world-state update ↓ subscribers notified Now agents 
+don't have to know each other exist. They communicate through 
+reality. That's much closer to how humans, organizations, ant 
+colonies, markets, and distributed systems behave. Memory Your 
+current hot memory + SQLite fact archive is already basically 
+the long-term layer. I'd separate: HOT.md / memory.db
+        │ │ long-term ▼
+  Persistent Memory world-state.db
+        │ │ current run/project ▼
+   Working Reality Memory is: What have we learned historically? 
+World state is: What do we currently believe is happening? Huge 
+distinction. And your trace system becomes very powerful Right 
+now AFK traces are effectively the history of what happened. You 
+could derive: CAUSE GRAPH user intent
+   ↓ planner ↓ hypothesis A ─────────── hypothesis 
+B
+      ↓ ↓ research agent research agent ↓ ↓
+ evidence 13 evidence 14
+       \ /
+        \ /
+           decision 22
+                ↓
+            edit 28
+                ↓
+            test 29
+                ↓
+            result Then AFK gains an answer to a deceptively 
+difficult question: Why did you do that? Not a model generating 
+a post-hoc explanation. AFK could literally traverse the 
+provenance graph: edit 28 because decision 22 because evidence 
+13 + 14 generated by agents B + C in response to task 4 which 
+came from user request 1 That's a mechanical chain of causation. 
+Very different. Then afk farm gets bonkers You already run 
+multiple implementations in separate worktrees and rank them. 
+Currently those are effectively: World 1 → solution A World 2 
+→ solution B World 3 → solution C That's basically 
+counterfactual computation. Not quantum many-worlds. 😭 But 
+philosophically: AFK literally forks several possible futures of 
+the codebase, observes each outcome, and selects one reality to 
+continue. You could formalize that.
+             Current state
+                  │
+         ┌────────┼────────┐ ▼ ▼ ▼
+       World A World B World C
+         │ │ │
+        tests tests tests
+         │ │ │ └────────┼────────┘
+                  ▼
+              evaluator
+                  ▼
+             chosen world That's a legitimately interesting 
+computational model. I would not call it quantum computing 
+That's where this could go off the rails. Don't put: QUANTUM 
+ENTANGLED AGENT SWARMS™ on agentafk.com 😂 There is no quantum 
+mechanical phenomenon here. But internally, the philosophical 
+analogy is productive. I would use existing computer-science 
+language: Shared world model Causal graph Provenance graph 
+Blackboard architecture Reactive multi-agent state And perhaps 
+use the more exotic language when explaining why the 
+architecture is interesting. The actual AFK evolution I see 
+Today:
+                Agent AFK Human
+  ↓ Parent Agent ↓ subagents ↓ tools ↓ code Next:
+                  Human
+                    │ ▼
+              ┌───────────┐ │ AFK World │ │ 
+              State │ └───────────┘
+               ↙ ↓ ↘
+              / │ \
+             ▼ ▼ ▼
+           Agent Agent Agent
+             A B C │ │ │ └──┬──┴──┬──┘
+                │ │ ▼ ▼
+             evidence code
+                │ │ └──┬──┘
+                   ▼
+              AFK World
+                 State
+                   │
+             state changed
+                   │
+             relevant agents
+                wake up The parent is no longer the brain. AFK 
+itself becomes the cognitive substrate. The agents are transient 
+processes inside it. That is the leap. And I actually think it 
+fits AFK's core thesis freakishly well: The model isn't the 
+product. The loop is. I'd push that one step further: 
+Eventually, the agent isn't the system. The world it inhabits 
+is. That's where I think AFK can go next. 🧪🕸️ And what about 
+the wormholes? Yeah. The wormhole analogy may actually be more 
+useful for AFK than the entanglement analogy. 🕳️🧠 Again, not 
+literal spacetime wormholes. But software has a very real 
+concept of distance, and agents spend enormous amounts of 
+computation crossing it. Think about an AFK agent trying to fix 
+something. The relevant information might be scattered across: 
+300 files ↓ Git history ↓ old session ↓ another subagent's 
+findings ↓ an issue ↓ a database ↓ a production log ↓ a 
+decision from three weeks ago Normally the agent must traverse 
+that informational space. A software "wormhole" would let it 
+jump directly between things that are far apart structurally but 
+close semantically or causally. Example Agent A discovers: 
+refreshSession() fails because of a design decision made two 
+weeks ago. Instead of Agent B doing this: search repo → grep 
+files → inspect history → search memory → find previous 
+session → understand decision AFK could already know: 
+src/auth/session.ts:183
+     ↕ wormhole Decision #42: "Refresh tokens rotate before 
+persistence" Session: 91ab2 Agent: planner-3 Evidence: ... The 
+physical/informational distance might be enormous. But the 
+causal distance is one edge. That's your wormhole. AFK could 
+have several kinds 🧠 Context wormholes Jump between 
+semantically related information. error
+  ↕ previous occurrence ↕ fix ↕ relevant procedure Instead of 
+shoving everything into the context window, AFK exposes 
+shortcuts. This is basically context virtualization. The model 
+sees a small local neighborhood, with portals into distant 
+information. 🔗 Causal wormholes These are even cooler. From: 
+code change directly to: why this exists Example: function foo()
+     │ ▼ introduced by commit 84 │ ▼ because Decision #17 │ 
+     ▼
+because Finding #9
+     │ ▼ because user requested X The agent can travel 
+backward through AFK's causal history. And forward: Finding #9 
+was disproven
+          ↓ show me everything downstream ↓ Decision #17 ↓ 
+files A, B, C
+          ↓ tests D, E That's an extremely practical 
+"wormhole." ⏳ Temporal wormholes AFK already has persistent 
+memory and traces. Imagine: afk wormhole "when did we last solve 
+this?" And AFK opens a live contextual bridge into an old 
+session. Not just search results. It reconstructs the relevant 
+state: Past AFK state
+     │ │ compressed portal ▼ Current agent context The agent 
+effectively asks its past self: What did you know when this 
+decision was made? That's far richer than ordinary memory 
+retrieval. And farm already resembles one You have several 
+branches of possible future state:
+              NOW
+               │
+       ┌───────┼───────┐ ▼ ▼ ▼
+      A B C Normally they're separate universes. A wormhole 
+could allow controlled information exchange between those 
+universes without merging their code. For example: World A 
+discovers: "SQLite locking is the problem."
+        🕳️ World B receives only that finding while preserving 
+its independent implementation. That could make afk farm much 
+smarter. Right now parallel approaches risk either being 
+completely isolated or contaminating each other. A controlled 
+wormhole gives you: selective cross-branch information transfer. 
+That is actually a legit multi-agent research technique. So 
+combine the two ideas Entanglement describes relationships: 
+These agents/states can no longer be fully understood 
+independently. Wormholes describe connectivity: Two distant 
+regions of the system can communicate through a much shorter 
+informational path. Put those together:
+                  AFK WORLD
+ Agent A ─────── Claim 17
+    │ │ │ │ causal │ │ entanglement ▼ ▼
+ Artifact X ─── Decision 23
+                    │ │
+             🕳️ wormhole
+                    │ ▼
+             Old Session 481
+                    │ ▼
+                Agent B And suddenly AFK isn't merely: model + 
+tools + subagents. It's a graph-shaped information space that 
+agents move through. The practical implementation I wouldn't 
+actually add some goofy QuantumWormholeManager.ts. 😂 The sane 
+implementation is a typed graph layer: Node ├── Agent ├── 
+Session ├── Claim ├── Observation ├── Decision ├── 
+File ├── Commit ├── ToolCall ├── Artifact └── Task 
+Edge ├── caused_by ├── depends_on ├── derived_from 
+├── contradicts ├── supports ├── modified ├── 
+observed ├── supersedes └── related_to Then a "wormhole" 
+is simply an important nonlocal edge surfaced to the model. 
+Instead of providing 100,000 tokens: Here is everything. AFK 
+provides: Here is what matters locally. There are 7 relevant 
+portals if you need them. That's potentially much more scalable 
+than gigantic context windows. And that might actually be the 
+deepest version of this idea: Context windows make the universe 
+bigger. Wormholes make distance matter less. For an agent 
+harness, I suspect the second one is ultimately more powerful. 
+🕳️⚡ Is there anything else we should be thinking about or 
+looking at or doing? Yes. A few things are worth taking 
+seriously, and one of them is almost comically on-the-nose. 1. 
+Look at ActiveGraph before building anything There is already an 
+open-source project called ActiveGraph whose thesis is 
+basically: the graph is the world, behaviors react to changes, 
+and the event log is the source of truth. Its runtime uses typed 
+graph objects, typed relations, an append-only event log, 
+reactive behaviors, deterministic replay, and the ability to 
+fork a run at any historical event and diff the resulting 
+futures. That is extremely close to what we independently 
+arrived at for AFK. AFK idea ActiveGraph idea world state ←→ 
+graph causal history ←→ event log entanglement ←→ typed 
+relations wormholes ←→ nonlocal graph edges agents reacting 
+←→ behaviors/subscriptions AFK farm ←→ fork + replay + diff 
+trace ←→ authoritative history I would not replace AFK with 
+it. AFK's identity is different. It's a coding-agent harness 
+with models, permissions, CLI/daemon/Telegram, orchestration, 
+memory, skills, verification, worktrees, etc. But I would study 
+ActiveGraph's internals closely and potentially steal/adapt some 
+architectural patterns. It's Apache-2.0 too. That should 
+probably be step zero. 2. The trace should perhaps become the 
+source of truth This is the biggest architectural thought I have 
+now. AFK currently has: agent runs
+   ↓ state changes ↓ trace records what happened Consider 
+flipping it:
+              EVENT LOG
+                  │
+       ┌──────────┼─────────┐ ▼ ▼ ▼
+   world state trace memory
+       │ ▼
+     agents Meaning: everything important becomes an event. 
+TaskCreated AgentSpawned ObservationMade ClaimCreated ToolCalled 
+FileModified ClaimContradicted DecisionMade TestPassed 
+AgentFinished Then your current world state is merely: the 
+projection of all events up to time t. This buys AFK something 
+enormous: Time travel afk state --at event:481 Replay 
+Reconstruct exactly what AFK believed at some point. Forking
+                  event 481
+                     │
+              ┌──────┴──────┐ ▼ ▼
+          history A history B Counterfactuals "What if we had 
+chosen the other architecture?" Fork at the decision. Run it. 
+Compare. AFK Farm becomes temporal instead of merely 
+Git-oriented. ActiveGraph is already demonstrating precisely why 
+this model is useful. 3. Don't store "facts." Store epistemic 
+objects. This is a subtle one. Current agent memory often 
+collapses everything into: "User uses SQLite." But the universe 
+is messier. AFK should eventually distinguish: Observation Claim 
+Hypothesis Decision Preference Inference Evidence Prediction 
+Assumption Because these aren't equivalent. Imagine: OBSERVATION 
+Test failed three times.
+        ↓ supports HYPOTHESIS The connection pool leaks. ↓ 
+        motivated
+DECISION Replace connection manager.
+        ↓ caused CODE CHANGE src/db/pool.ts Then someone 
+discovers: NEW OBSERVATION Failure was caused by test pollution. 
+AFK knows what needs reconsidering. Recent research is 
+converging on exactly this. MemIR, for example, argues that flat 
+text memory can collapse source distinctions and instead 
+separates evidence, retrieval cues, and truth-bearing claims. 
+And MAP-Graph, posted August 11, models agents, sources, 
+memories, claims, and actions in a typed execution graph, then 
+carries provenance and trust through the derivation chain. 
+That's damn near our conversation written as a paper. 🧪 4. 
+Wormholes need a routing system This is one thing I would add 
+beyond what we discussed. A wormhole shouldn't merely be: node A 
+───────── node B AFK should answer: Which distant 
+information is worth creating a shortcut to? Think of a model's 
+context as its local spacetime. AFK could dynamically construct:
+               current task
+                   ●
+                / | \
+               / | \
+            local local local
+             🕳️ 🕳️
+              ↓ ↓
+       old decision old bug The model gets the local 
+neighborhood automatically. Then AFK offers nonlocal edges only 
+when they have high: relevance × causal importance × confidence 
+× recency/validity × trust 
+──────────────────── context cost That's 
+potentially an attention router above the LLM. And that could be 
+a genuinely meaningful AFK differentiator. 5. Add validity over 
+time This is easy to overlook. A claim shouldn't just be: Skya 
+uses X. It might be: Claim:
+  X valid_from: event 918 valid_until: event 1322 superseded_by: 
+claim 551 Same for software: "We deploy on Vercel" could be true 
+today and false three months later. The memory problem becomes: 
+What was believed at this point in history? Not merely: What 
+memories match this embedding? Recent long-horizon memory work 
+is explicitly starting to test validity intervals and 
+time-dependent facts, and graph/provenance approaches appear 
+particularly useful as histories grow. This fits the wormhole 
+idea beautifully: Temporal wormhole Current code
+      │ 🕳️ │ AFK state when this line was originally written 
+That could be insanely useful for debugging. 6. Think about 
+stigmergy, not just communication There's another conceptual 
+leap. Agents don't necessarily need: Agent A → message → Agent 
+B They can coordinate by changing the environment. Agent A
+   ↓ world changes ↓ Agent B notices ↓ world changes ↓ Agent 
+C notices That's essentially the blackboard pattern. Modern LLM 
+multi-agent research is revisiting this because shared-state 
+coordination can outperform rigid parent/subordinate 
+orchestration in some settings. For AFK that could mean: Agent 
+security-auditor creates Finding #712
+        ↓ event verification agent wakes ↓ creates 
+Verification #803
+        ↓ event fix agent wakes ↓ Patch #991 ↓ event test 
+agent wakes Nobody explicitly told the next agent what to do. 
+The state transition caused the next computation. That's much 
+closer to a living software system than today's parent → 
+Task(subagent) architecture. 7. Agent identity and lineage could 
+become important Right now a child agent is basically ephemeral. 
+But eventually you may want: Agent ├── identity ├── role 
+├── capabilities ├── model ├── trust history ├── 
+ancestors ├── memories └── previous performance Then: 
+Agent 81
+   ↓ forked Agent 94 ↓ spawned Agent 127 You get agent 
+lineage. Not because we need cute personalities. Because AFK 
+could learn: descendants of this debugging strategy tend to 
+solve concurrency bugs well. Now orchestration itself becomes 
+learnable. 8. AFK should probably support A2A eventually This is 
+much more mundane, but strategically important. AFK already 
+speaks MCP for tools. The emerging division is becoming: MCP 
+Agent ↔ tools/resources A2A Agent ↔ agent A2A 1.0 now defines 
+discovery, capabilities, collaborative tasks, artifacts, 
+stateful task lifecycles, and communication between opaque 
+independent agents. If AFK grows its agent model, I would not 
+invent a proprietary network protocol first. Internally: AFK 
+native agents Externally: AFK agent
+   ↕ A2A other agent systems Then AFK's "world" can eventually 
+have agents that don't even run inside AFK. That gets wild. 9. 
+MCP itself has moved in a relevant direction The latest MCP 
+spec, released July 28, 2026, moved to a stateless core and 
+promoted long-running work into a Tasks extension. That's worth 
+watching closely because AFK already has long-running 
+daemon/background semantics. Rather than fighting standards, I'd 
+make:
+                     AFK
+             ┌──── World Graph ────┐ │ │ ▼ ▼
+       native agents remote agents
+             │ │ │ A2A │
+          tools
+             │
+            MCP That's a pretty elegant architecture. 10. The 
+deepest thing: the model stops being the persistent entity This 
+is where all the threads converge. Today we tend to think: Agent 
+AFK is an agent that has memory. I think the more interesting 
+future conception is: AFK is a persistent computational world in 
+which agents temporarily exist. Models can come and go. Opus 
+Sonnet GPT Kimi future model X Doesn't matter. The persistent 
+thing is:
+             AFK WORLD
+                 │
+      ┌──────────┼──────────┐ │ │ │
+    history beliefs artifacts
+      │ │ │
+    events claims code
+      │ │ │
+   lineage evidence decisions
+      └──────────┼──────────┘
+                 │
+             wormholes
+                 │
+             AGENTS That makes your existing tagline even more 
+profound: The model isn't the product. The loop is. I think the 
+eventual version might actually be: The model isn't the agent. 
+The world is. What I would actually do now I wouldn't start 
+coding the whole thing yet. I'd do one architectural 
+exploration. Take AFK's existing: trace + memory + compose + 
+subagents + farm and write an RFC for an event-sourced typed 
+world graph underneath them. The first prototype only needs 
+maybe six node types: Task Agent Observation Claim Decision 
+Artifact and six relations: created supports contradicts 
+depends_on caused supersedes Then prove three things: 1. Causal 
+explanation Why did AFK make this edit? 2. Wormhole retrieval 
+Show the most relevant nonlocal context for this failing test. 
+3. Temporal fork Rewind before Decision X, take alternative Y, 
+and compare outcomes. If those three demos work, we haven't just 
+added another AFK feature.
+We may have found the architecture for what AFK becomes next. 🕳️🕸️🧠

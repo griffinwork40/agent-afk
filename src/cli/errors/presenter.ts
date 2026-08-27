@@ -7,7 +7,7 @@
  * @module cli/errors/presenter
  */
 
-import { errorBox } from '../render.js';
+import { errorCard } from '../render.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 import type { ClassifiedError } from './classifier.js';
 
@@ -25,7 +25,7 @@ export function presentError(
   const write = opts?.write ?? ((s: string) => { process.stderr.write(s); });
 
   if (isTTY) {
-    write(errorBox(classified.userMessage, classified.hint) + '\n');
+    write(errorCard({ body: classified.userMessage, hint: classified.hint }) + '\n');
   } else {
     const hint = classified.hint ? ` (${classified.hint})` : '';
     write(`afk: error: ${classified.userMessage}${hint}\n`);
