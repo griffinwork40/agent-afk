@@ -12,9 +12,8 @@
  */
 
 import { palette } from '../palette.js';
-import { stripAnsi } from '../display.js';
 import { drawBox } from './box.js';
-import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
+import { sanitizeForDisplay, stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -66,7 +65,11 @@ export interface CompactDiffSpec {
 const CONTROL_CHAR_RE = /[\x00-\x08\x0B-\x1F\x7F-\x9F]/g;
 
 function sanitizeDiffText(raw: string): string {
-  return stripAnsi(raw).replace(CONTROL_CHAR_RE, '');
+  // Pass 1: strip all escape sequences including 8-bit C1 CSI (\x9B…) via the
+  // canonical two-pass scrubber's escape regex — without trimming, so leading
+  // diff prefixes ("+", "-", " ") survive.
+  // Pass 2: remove remaining bare control bytes (C0 except TAB/LF, DEL, C1).
+  return stripEscapeSequences(raw).replace(CONTROL_CHAR_RE, '');
 }
 
 // ---------------------------------------------------------------------------
@@ -149,12 +152,20 @@ export function compactDiffView(spec: CompactDiffSpec): string {
   if (!needsTruncation) {
     for (const it of items) bodyLines.push(it.text);
   } else {
-    // Keep all hunk headers, keep the first maxLines body lines.
+    // Keep hunk headers only when at least one of their body lines will render.
+    // Suppress headers whose entire body falls beyond the cap (orphan headers).
     let bodyCount = 0;
+    let pendingHeader: string | null = null;
     for (const it of items) {
       if (it.kind === 'header') {
-        bodyLines.push(it.text);
+        // Defer: only emit if a body line follows within the cap.
+        pendingHeader = it.text;
       } else if (bodyCount < maxLines) {
+        // Flush the deferred header before the first body line in this hunk.
+        if (pendingHeader !== null) {
+          bodyLines.push(pendingHeader);
+          pendingHeader = null;
+        }
         bodyLines.push(it.text);
         bodyCount++;
       }

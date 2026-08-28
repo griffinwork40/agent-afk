@@ -217,6 +217,59 @@ describe('compactDiffView', () => {
     });
   });
 
+  describe('orphan hunk header suppression', () => {
+    it('does not emit a hunk header when all its body lines are beyond the cap', () => {
+      // hunk1 has 2 body lines, hunk2 has 2 body lines; maxLines=2 means
+      // hunk2's body never renders — its header must also be suppressed.
+      const out = strip(
+        compactDiffView(
+          makeSpec({
+            hunks: [
+              { header: '@@ -1,2 +1,2 @@', lines: ['+ hunk1-a', '+ hunk1-b'] },
+              { header: '@@ -10,2 +10,2 @@', lines: ['+ hunk2-a', '+ hunk2-b'] },
+            ],
+            stats: { added: 4, removed: 0 },
+            maxLines: 2,
+          }),
+        ),
+      );
+      // First hunk header and its two body lines appear.
+      expect(out).toContain('@@ -1,2 +1,2 @@');
+      expect(out).toContain('+ hunk1-a');
+      expect(out).toContain('+ hunk1-b');
+      // Second hunk header must NOT appear — its body is entirely past the cap.
+      expect(out).not.toContain('@@ -10,2 +10,2 @@');
+      expect(out).not.toContain('+ hunk2-a');
+      expect(out).not.toContain('+ hunk2-b');
+      // Truncation footer should still appear.
+      expect(out).toContain('... and 2 more');
+    });
+
+    it('emits a hunk header when truncation cuts into (but not past) its body', () => {
+      // hunk1 has 1 body line, hunk2 has 2; maxLines=2 lets hunk2's first line through.
+      const out = strip(
+        compactDiffView(
+          makeSpec({
+            hunks: [
+              { header: '@@ -1,1 +1,1 @@', lines: ['+ hunk1-a'] },
+              { header: '@@ -10,2 +10,2 @@', lines: ['+ hunk2-a', '+ hunk2-b'] },
+            ],
+            stats: { added: 3, removed: 0 },
+            maxLines: 2,
+          }),
+        ),
+      );
+      // Both headers appear because both hunks contribute at least one visible body line.
+      expect(out).toContain('@@ -1,1 +1,1 @@');
+      expect(out).toContain('@@ -10,2 +10,2 @@');
+      expect(out).toContain('+ hunk1-a');
+      expect(out).toContain('+ hunk2-a');
+      // hunk2's second line is cut.
+      expect(out).not.toContain('+ hunk2-b');
+      expect(out).toContain('... and 1 more line');
+    });
+  });
+
   describe('collapsed mode', () => {
     it('shows only the stat header when collapsed: true', () => {
       const out = strip(compactDiffView(makeSpec({ collapsed: true })));
@@ -318,6 +371,24 @@ describe('compactDiffView', () => {
       // Content should be visible but not contain the raw injected ESC sequence
       // (palette's own ANSI codes are fine, but the injected one's payload should be gone)
       expect(strip(out)).toContain('+ injected color');
+    });
+
+    it('strips 8-bit C1 CSI (\\x9B) from diff content', () => {
+      // \x9B is the 8-bit equivalent of \x1b[ — must not reach the terminal.
+      const out = strip(
+        compactDiffView(
+          makeSpec({
+            hunks: [
+              {
+                header: '@@ -1,1 +1,1 @@',
+                lines: ['+ \x9B31msafe text\x9Bm'],
+              },
+            ],
+          }),
+        ),
+      );
+      expect(out).not.toContain('\x9B');
+      expect(out).toContain('+ safe text');
     });
 
     it('strips BEL and other C0 controls from diff content', () => {
