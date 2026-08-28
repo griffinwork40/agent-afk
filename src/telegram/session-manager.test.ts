@@ -889,7 +889,7 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     // (see anthropic-direct/index.ts resumeHistoryToMessages). Guards the bug
     // where the Telegram createSession closure dropped resumeHistory/sessionId.
     expect(lastConfig?.sessionId).toBe('sdk-1');
-    expect(lastConfig?.resumeHistory).toEqual([{ user: 'first convo', assistant: 'a' }]);
+    expect(lastConfig?.resumeHistory).toEqual([{ user: 'first convo', assistant: 'a', inputTokens: 0 }]);
 
     // A subsequent /clear starts fresh — the staged resume is dropped.
     await manager.resetSession(801);

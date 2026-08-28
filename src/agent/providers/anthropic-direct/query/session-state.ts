@@ -132,7 +132,23 @@ export function createSessionState(opts: {
   toolDispatcher: ToolDispatcher;
   initialMessages?: MessageParam[];
   autoCompactThreshold?: number;
+  /**
+   * Conservative token estimate seeded from the last completed turn of a
+   * restored session (#1294). When non-zero, used as the initial `lastUsage`
+   * so the context-overflow guard fires correctly on the first resumed turn
+   * instead of being skipped (the guard skips when `lastUsage` is null,
+   * treating it as a fresh session with no prior context to check against).
+   *
+   * Callers MUST over-estimate rather than under-estimate: a false positive
+   * triggers compaction (recoverable) while a false negative lets an
+   * already-full context reach the wire and get rejected with HTTP 400.
+   */
+  initialUsageInputTokens?: number;
 }): SessionState {
+  const initialLastUsage: ProviderUsage | null =
+    opts.initialUsageInputTokens !== undefined && opts.initialUsageInputTokens > 0
+      ? { inputTokens: opts.initialUsageInputTokens, stopReason: null, resultSubtype: 'success', isError: false }
+      : null;
   return {
     messages: opts.initialMessages ? [...opts.initialMessages] : [],
     currentModel: opts.model,
@@ -140,7 +156,7 @@ export function createSessionState(opts: {
     currentPermissionMode: opts.permissionMode,
     userSystem: opts.userSystem,
     toolDispatcher: opts.toolDispatcher,
-    lastUsage: null,
+    lastUsage: initialLastUsage,
     closed: false,
     autoCompactThreshold: opts.autoCompactThreshold,
   };

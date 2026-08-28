@@ -101,7 +101,7 @@ function categoryColor(cat: ToolCategory): ChalkInstance {
 const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   read: '●',
   write: '✎',
-  shell: '$',
+  shell: '▸',
   subagent: '→',
   skill: '◆',
   // hexagon evokes the "node graph" / DAG shape; distinct from ◆ (skill)
@@ -114,7 +114,7 @@ const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   planning: '▱',
   // calendar icon — evokes cron scheduling; single-cell in standard fonts.
   schedule: '⏲',
-  other: '●',
+  other: '◌',
 };
 
 /**

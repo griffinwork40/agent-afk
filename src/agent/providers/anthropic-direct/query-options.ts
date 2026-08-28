@@ -54,6 +54,17 @@ export interface AnthropicDirectQueryOptions {
   toolDispatcher: ToolDispatcher;
   sessionId?: string;
   initialMessages?: MessageParam[];
+  /**
+   * Conservative token estimate seeded from the last completed turn of a
+   * restored session (#1294). When non-zero, used as the initial `lastUsage`
+   * so the context-overflow guard fires correctly on the first resumed turn
+   * instead of being skipped (the guard skips when `lastUsage` is null,
+   * treating it as a fresh session with no prior context to check against).
+   * Callers MUST over-estimate rather than under-estimate: a false positive
+   * triggers compaction (recoverable) while a false negative lets a full
+   * context reach the wire and get rejected with HTTP 400.
+   */
+  initialUsageInputTokens?: number;
   model: string;
   /**
    * The model the caller requested — a short alias (`opus_1m`, `sonnet`, …)

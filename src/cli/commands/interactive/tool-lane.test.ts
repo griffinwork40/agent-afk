@@ -1244,7 +1244,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     expect(stripped).toMatchInlineSnapshot(`
       "◉ → Agent(overflow-tester) [worker] — 4 tool calls
       │ ├─ … +1 (1 Read)
-      │ ├─ $ Bash("file1.ts") — ✓ result1
+      │ ├─ ▸ Bash("file1.ts") — ✓ result1
       │ ├─ ● Grep("file2.ts") — ✓ result2
       │ ├─ ● Glob("file3.ts") — ✓ result3
       │ ╰─ Done (4 tool calls · 2.5s)"

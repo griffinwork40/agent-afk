@@ -56,10 +56,24 @@ export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Parti
     sessionId: target.resumeId,
     ...(target.stored
       ? {
-          resumeHistory: target.stored.turns.map((turn) => ({
-            user: turn.user,
-            assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
-          })),
+          resumeHistory: target.stored.turns.map((turn, idx, arr) => {
+            const entry: import('../agent/types.js').ResumeHistoryTurn = {
+              user: turn.user,
+              assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
+            };
+            // Seed the last turn's token count so the context-overflow guard
+            // (#1294) fires on the first resumed turn instead of being skipped.
+            // Only the last turn's count matters — it is the most recent (and
+            // largest) context footprint the provider will use as a lower bound.
+            // Conservative: prefer inputTokens (raw billed tokens) over
+            // outputTokens because inputTokens already includes the full
+            // conversation history in the prompt. When absent (legacy sidecars),
+            // the field is omitted and the guard falls back to the null path.
+            if (idx === arr.length - 1 && turn.inputTokens !== undefined) {
+              entry.inputTokens = turn.inputTokens;
+            }
+            return entry;
+          }),
         }
       : {}),
   };

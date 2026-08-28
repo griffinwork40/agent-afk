@@ -156,7 +156,7 @@ describe('interactive REPL — progress banner rendering', () => {
   it('colorizes the via segment by tool category and uses a category-specific glyph', () => {
     const cases: Array<{ tool: string; glyph: string }> = [
       { tool: 'Read', glyph: '●' },        // read
-      { tool: 'Bash', glyph: '$' },        // shell
+      { tool: 'Bash', glyph: '▸' },        // shell
       { tool: 'Agent', glyph: '→' },       // subagent
       { tool: 'mcp__github__create_issue', glyph: '⊡' }, // mcp
     ];

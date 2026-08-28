@@ -30,7 +30,7 @@ describe('formatToolLine', () => {
   it.each([
     { content: 'Read(file.ts)', glyph: '●', name: 'Read' },
     { content: 'Write(out.txt)', glyph: '✎', name: 'Write' },
-    { content: 'Bash(ls -la)', glyph: '$', name: 'Bash' },
+    { content: 'Bash(ls -la)', glyph: '▸', name: 'Bash' },
     { content: 'Agent(research)', glyph: '→', name: 'Agent' },
     { content: 'Skill(/spec)', glyph: '◆', name: 'Skill' },
     { content: 'compose(3 nodes)', glyph: '⬡', name: 'compose' },
@@ -41,7 +41,7 @@ describe('formatToolLine', () => {
     { content: 'read_file(file.ts)', glyph: '●', name: 'read_file' },
     { content: 'write_file(out.txt)', glyph: '✎', name: 'write_file' },
     { content: 'edit_file(f.ts)', glyph: '✎', name: 'edit_file' },
-    { content: 'bash(ls)', glyph: '$', name: 'bash' },
+    { content: 'bash(ls)', glyph: '▸', name: 'bash' },
     { content: 'list_directory(/tmp)', glyph: '●', name: 'list_directory' },
     { content: 'send_telegram(hi)', glyph: '⌖', name: 'send_telegram' },
   ])('renders $name with glyph $glyph', ({ content, glyph, name }) => {
@@ -151,7 +151,7 @@ describe('formatToolLine', () => {
   it('preserves multi-line tool args (the regex captures the full tail with /s)', () => {
     const out = formatToolLine('Bash(echo hi\n  && echo bye)');
     const stripped = strip(out);
-    expect(stripped).toContain('$ Bash');
+    expect(stripped).toContain('▸ Bash');
     expect(stripped).toContain('echo bye');
   });
 

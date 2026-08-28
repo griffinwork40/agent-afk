@@ -58,6 +58,13 @@ export function buildProviderQuery(
   // making the id known earlier.
   const resumedSessionId = resolvedSessionId;
   const initialMessages = resumeHistoryToMessages(config.resumeHistory);
+  // Seed the context-overflow guard from the last stored turn's token count
+  // (#1294). The last turn of resumeHistory carries `inputTokens` when the
+  // session was saved with a recent enough sidecar; absent on legacy sidecars.
+  // Conservative: prefer over-estimate (triggers compaction) over under-estimate
+  // (lets a full context reach the wire and get rejected with HTTP 400).
+  const lastResumedTurn = config.resumeHistory?.at(-1);
+  const initialUsageInputTokens = lastResumedTurn?.inputTokens;
 
   const cwdDependentsFactory = ctx.externalTools
     ? undefined
@@ -116,6 +123,7 @@ export function buildProviderQuery(
     toolDispatcher: queryDispatcher,
     ...(resumedSessionId !== undefined ? { sessionId: resumedSessionId } : {}),
     ...(initialMessages !== undefined ? { initialMessages } : {}),
+    ...(initialUsageInputTokens !== undefined ? { initialUsageInputTokens } : {}),
     model,
     // Preserve the requested alias (e.g. opus_1m) so context-window lookups
     // recover the 1M window. `model` above is the resolved wire id, which is

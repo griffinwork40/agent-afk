@@ -31,6 +31,7 @@ import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
 import { renderTtfbWaitingLine, checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
+import { subagentStatusStack, type SubagentStatusBarSpec } from '../render.js';
 
 const PAUSE_THRESHOLD_MS = 30_000;
 const WAITING_LABEL_PREFIX = ' · waiting ';
@@ -103,11 +104,17 @@ export function registerOverlaySlots(
      */
     getTtfbStartedAt?: () => number | undefined;
     isTtfbDone?: () => boolean;
+    /**
+     * Live accessor for the active subagent status bar specs, keyed by subagentId.
+     * Optional so existing non-TTY callers and tests register slots unchanged;
+     * when absent the subagent-status slot always renders empty.
+     */
+    getActiveSubagents?: () => ReadonlyMap<string, SubagentStatusBarSpec>;
   },
 ): void {
-  // Register overlay slots (thinking-live, markdown-pending, tool-lane,
-  // progress-banner, interrupt). The stage-rail slot has been promoted to a
-  // reserved footer row via LoopStageBar and is no longer part of the overlay.
+  // Register overlay slots (thinking-live, subagent-status, markdown-pending,
+  // tool-lane, progress-banner, interrupt). The stage-rail slot has been promoted
+  // to a reserved footer row via LoopStageBar and is no longer part of the overlay.
   overlayComposer.register({
     key: 'thinking-live',
     render: () => {
@@ -132,6 +139,17 @@ export function registerOverlaySlots(
         cols: getTerminalWidth(),
       });
       return paragraph ?? '';
+    },
+  });
+
+  // Subagent status bars — one line per active subagent dispatch, capped at 3.
+  // Reads live from getActiveSubagents(); renders '' when no subagents are running
+  // (slot occupies no space in the composed frame when all returns are empty).
+  overlayComposer.register({
+    key: 'subagent-status',
+    render: () => {
+      const entries = ctx.getActiveSubagents ? [...ctx.getActiveSubagents().values()] : [];
+      return subagentStatusStack(entries);
     },
   });
 

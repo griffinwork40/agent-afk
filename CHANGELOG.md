@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.157.1] - 2026-08-27
+
+### Fixed
+- seed context-overflow guard from restored session usage (#1294) (#1304) (a210965e)
+
+### Changed
+- add guideline against using emdashes (08550970)
+
 ## [5.157.0] - 2026-08-27
 
 ### Added
