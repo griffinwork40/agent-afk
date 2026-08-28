@@ -46,6 +46,8 @@ export interface AutocompleteHost {
   readonly autocompleteState?: AutocompleteState;
   input: InputCoreState;
   activeGhost: string | null;
+  /** Session-scoped ghost-text pause. Toggled by `/ghost off` / `/ghost on`. */
+  ghostPaused: boolean;
   readonly ghostEngine: SuggestEngine | undefined;
   readonly ghostGetContext: (() => SuggestContext) | undefined;
   /**

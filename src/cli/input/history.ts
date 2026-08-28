@@ -218,6 +218,34 @@ export class ReplHistory {
   get inRecall(): boolean {
     return this._index !== -1;
   }
+
+  /**
+   * Remove the entry at `idx` (0-based, oldest-first — same order as the
+   * internal `_entries` array). Returns `true` when an entry was removed,
+   * `false` when the index is out of range. Fires an async disk rewrite
+   * through the serialized queue so memory and disk stay in sync.
+   */
+  removeAt(idx: number): boolean {
+    if (idx < 0 || idx >= this._entries.length) return false;
+    this._entries.splice(idx, 1);
+    this.resetRecall();
+    rewriteHistory(this._entries).catch((err: Error) => {
+      process.stderr.write(`[afk] history rewrite failed: ${err.message}\n`);
+    });
+    return true;
+  }
+
+  /**
+   * Wipe all history entries — both in-memory and on disk.
+   * Fires an async disk truncate through the serialized queue.
+   */
+  clear(): void {
+    this._entries = [];
+    this.resetRecall();
+    rewriteHistory([]).catch((err: Error) => {
+      process.stderr.write(`[afk] history clear failed: ${err.message}\n`);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +291,30 @@ for (const entry of historyEntries) {
     }
     return new ReplHistory([]);
   }
+}
+
+/**
+ * Rewrite the entire history file from a source-of-truth entries array.
+ * Used by `removeAt()` and `clear()` to keep disk in sync with memory.
+ * Serialized through `_chain` (COR-9) so it orders correctly against
+ * concurrent `appendHistory` calls.
+ */
+function rewriteHistory(entries: readonly string[]): Promise<void> {
+  return serialize(async () => {
+    const path = getReplHistoryPath();
+    await mkdir(dirname(path), { recursive: true });
+    const now = Date.now();
+    const content = entries.length > 0
+      ? entries.map((text) => JSON.stringify({ text, ts: now } satisfies HistoryEntry)).join('\n') + '\n'
+      : '';
+    const fd = await open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o600);
+    try {
+      await fd.writeFile(content);
+    } finally {
+      await fd.close();
+    }
+    _diskEntryCount = entries.length;
+  });
 }
 
 /**

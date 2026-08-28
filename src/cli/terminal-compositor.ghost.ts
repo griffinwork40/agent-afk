@@ -40,6 +40,7 @@ export function primePromptGhost(self: AutocompleteHost): void {
   const engine = self.ghostEngine;
   const getContext = self.ghostGetContext;
   if (!engine || !getContext) return;
+  if (self.ghostPaused) return;
   // Only propose into a genuinely empty prompt.
   if (self.input.buffer.length > 0) return;
 
@@ -105,6 +106,10 @@ export function dismissPromptGhost(self: AutocompleteHost): boolean {
  */
 export function updateGhost(self: AutocompleteHost): void {
   if (!self.ghostEngine || !self.ghostGetContext) return;
+  if (self.ghostPaused) {
+    if (self.activeGhost !== null) { self.activeGhost = null; }
+    return;
+  }
   const buffer = self.input.buffer;
 
   // Stale-invalidation: clear any ghost that no longer extends the buffer.
@@ -160,6 +165,7 @@ export function updateGhost(self: AutocompleteHost): void {
     // misbehaving engine returning a non-prefix string).
     if (
       result !== null &&
+      !self.ghostPaused &&
       self.input.buffer === requestedBuffer &&
       result.startsWith(requestedBuffer) &&
       result.length > requestedBuffer.length

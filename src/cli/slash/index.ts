@@ -37,6 +37,8 @@ import { searchCmd } from './commands/search.js';
 import { diffCmd } from './commands/diff.js';
 import { copyCmd } from './commands/copy.js';
 import { configDoctorCommands } from './commands/config-doctor.js';
+import { ghostCmd } from './commands/ghost.js';
+import { suggestionsCmd } from './commands/suggestions.js';
 import { registerStaticPluginSkillCommands } from './plugin-skills.js';
 import { registerStaticPluginAgentCommands } from './plugin-agents.js';
 import { registerBuiltinSkillCommands } from './builtin-skills.js';
@@ -74,6 +76,8 @@ export function registerAll(): void {
   register(diffCmd);
   register(copyCmd);
   for (const cmd of configDoctorCommands) register(cmd);
+  register(ghostCmd);
+  register(suggestionsCmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
   // `registerPluginSkills(session)` / `registerPluginAgents(session)` in

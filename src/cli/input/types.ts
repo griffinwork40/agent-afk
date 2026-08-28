@@ -40,6 +40,15 @@ export interface IHistoryRing {
    * `typeof push === 'function'` before invoking.
    */
   push?(text: string): void;
+  /**
+   * Remove the entry at `idx` (0-based, oldest-first). Returns true when
+   * removed, false when out of range. Optional — only `ReplHistory` implements.
+   */
+  removeAt?(idx: number): boolean;
+  /** Wipe all history entries (in-memory + disk). Optional — only `ReplHistory` implements. */
+  clear?(): void;
+  /** Number of entries. Optional — only `ReplHistory` implements. */
+  readonly length?: number;
 }
 
 /**
