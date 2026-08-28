@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.160.0] - 2026-08-28
+
+### Added
+- show running/total subagent count (#1342) (#1344) (500c2ff8)
+
 ## [5.159.0] - 2026-08-28
 
 ### Added
