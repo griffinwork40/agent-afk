@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.158.1] - 2026-08-28
+
+### Changed
+- extract hydrateStatsFromStore from session-manager.ts (#1288) (4bbbe465)
+
 ## [5.158.0] - 2026-08-28
 
 ### Added
