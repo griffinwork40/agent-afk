@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.162.0] - 2026-08-28
+
+### Added
+- conversation preview with view-mode before session resume (#1315) (c018cbc5)
+- add CompactDiffView component (#1340) (44e281aa)
+
+### Fixed
+- restore hunks dropped in #1315 squash merge (ed882c31)
+- composer & interaction improvements (#1203) (6be4ae6d)
+
 ## [5.161.0] - 2026-08-28
 
 ### Added
