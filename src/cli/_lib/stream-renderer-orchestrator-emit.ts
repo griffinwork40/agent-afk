@@ -384,7 +384,7 @@ export function emitMarkdown(text: string, out: Writer): void {
  */
 export function emitErrorBox(err: Error, out: Writer): void {
   const stackTrace = err.stack?.split('\n').slice(1).join('\n');
-  const box = errorCard({ body: err.message, hint: stackTrace });
+  const box = errorCard({ body: err.message, stack: stackTrace });
   for (const line of box.split('\n')) {
     out.line(line);
   }
