@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.165.1] - 2026-08-28
+
+### Fixed
+- proactive OAuth token refresh timer (#1296) (#1363) (4e074928)
+
 ## [5.165.0] - 2026-08-28
 
 ### Added
