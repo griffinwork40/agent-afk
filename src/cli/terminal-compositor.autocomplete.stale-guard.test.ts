@@ -56,6 +56,7 @@ function makeHost(ac: AutocompleteState, buffer: string, repaint: () => void): A
     activeGhost: null,
     ghostEngine: undefined,
     ghostGetContext: undefined,
+    ghostPaused: false,
     repaint,
   };
 }

@@ -60,6 +60,7 @@ export const ghostCmd: SlashCommand = {
 
     if (target === 'on') {
       compositor.ghostPaused = false;
+      compositor.repaint();
       ctx.out.success('Ghost text resumed.');
       return 'continue';
     }

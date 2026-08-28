@@ -229,7 +229,7 @@ export class ReplHistory {
     if (idx < 0 || idx >= this._entries.length) return false;
     this._entries.splice(idx, 1);
     this.resetRecall();
-    rewriteHistory(this._entries).catch((err: Error) => {
+    rewriteHistory(this._entries.slice()).catch((err: Error) => {
       process.stderr.write(`[afk] history rewrite failed: ${err.message}\n`);
     });
     return true;
@@ -298,6 +298,11 @@ for (const entry of historyEntries) {
  * Used by `removeAt()` and `clear()` to keep disk in sync with memory.
  * Serialized through `_chain` (COR-9) so it orders correctly against
  * concurrent `appendHistory` calls.
+ *
+ * History: ts values are reset to rewrite time. The in-memory `_entries`
+ * array carries only text strings, so original timestamps cannot be
+ * preserved without a type change. ts serves no runtime purpose —
+ * `loadHistory` discards it. File line order preserves relative ordering.
  */
 function rewriteHistory(entries: readonly string[]): Promise<void> {
   return serialize(async () => {
