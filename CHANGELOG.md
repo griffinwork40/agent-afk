@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.158.2] - 2026-08-28
+
+### Fixed
+- address v2 review follow-ups (#1331, #1332, #1333, #1334, #1335) (#1338) (d1119a45)
+
+### Changed
+- extract formatElapsed + statusBadge shared primitives (#1322) (#1336) (0af763a8)
+
 ## [5.158.1] - 2026-08-28
 
 ### Changed
