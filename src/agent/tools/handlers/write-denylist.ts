@@ -47,6 +47,13 @@ export const BUILTIN_WRITE_DENYLIST: readonly string[] = [
   // S4: npm publish tokens and Docker registry credentials.
   `${homedir()}/.npmrc`,
   `${homedir()}/.docker/config.json`,
+  // S4: LaunchAgent/LaunchDaemon plist dirs — service registration without approval.
+  `${homedir()}/Library/LaunchAgents`,
+  `${homedir()}/Library/LaunchDaemons`,
+  '/Library/LaunchAgents',
+  '/Library/LaunchDaemons',
+  // S4: systemd unit dirs — service registration without approval.
+  `${homedir()}/.config/systemd`,
   // S4-win32: Windows credential/config trees. Gated on both process.platform
   // and the env var: on POSIX, USERPROFILE/APPDATA may be set in CI/Docker
   // but the backslash paths would resolve incorrectly — the platform guard
