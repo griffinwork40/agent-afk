@@ -474,6 +474,17 @@ export class SubagentManager {
           this.active.delete(id);
           this.abortGraph.dispose(id);
           void logWriter?.close();
+          // Populate the completed cache so manager.get(id) keeps working
+          // after the handle leaves the active map. All handle state fields
+          // (_currentStatus, _currentTrace, _lastStopReason) are fully set
+          // by run() before _onTerminal() fires.
+          this.completed.recordHandle(
+            id,
+            handle as SubagentHandle<unknown>,
+            handle._currentStatus,
+            handle._currentTrace,
+            handle._lastStopReason,
+          );
         },
         parentInputStreamRef,
         parentAbortSignal,

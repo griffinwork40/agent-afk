@@ -15,8 +15,8 @@ function makeHandle(id: string): SubagentHandle {
   return { id } as unknown as SubagentHandle;
 }
 
-function makeResult(): Pick<SubagentResult, 'id' | 'status'> {
-  return { id: 'stub-id', status: 'succeeded' };
+function makeResult(): SubagentResult {
+  return { status: 'succeeded', value: null } as unknown as SubagentResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,5 +174,49 @@ describe('CompletedCache', () => {
     expect(tiny.size).toBe(1);
     expect(tiny.get('x')).toBeUndefined();
     expect(tiny.get('y')).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // recordHandle — convenience method used by SubagentManager.forkSubagent
+  // -------------------------------------------------------------------------
+
+  it('recordHandle succeeded — builds a result with status=succeeded and no error', () => {
+    const h = makeHandle('s1');
+    const trace = { toolCalls: [], toolResults: [], thinkingPresent: false, turnCount: 2 };
+    cache.recordHandle('s1', h, 'succeeded', trace, undefined);
+    const entry = cache.get('s1');
+    expect(entry).toBeDefined();
+    expect(entry!.handle).toBe(h);
+    expect(entry!.result.status).toBe('succeeded');
+    expect(entry!.result.error).toBeUndefined();
+    expect(entry!.result.trace).toBe(trace);
+    expect(entry!.result.stopReason).toBeUndefined();
+  });
+
+  it('recordHandle succeeded — attaches stopReason when provided', () => {
+    const h = makeHandle('s2');
+    const trace = { toolCalls: [], toolResults: [], thinkingPresent: false, turnCount: 1 };
+    cache.recordHandle('s2', h, 'succeeded', trace, 'tool_use_loop_capped');
+    const entry = cache.get('s2');
+    expect(entry!.result.stopReason).toBe('tool_use_loop_capped');
+  });
+
+  it('recordHandle failed — builds a result with status=failed and an error', () => {
+    const h = makeHandle('f1');
+    const trace = { toolCalls: [], toolResults: [], thinkingPresent: false, turnCount: 0 };
+    cache.recordHandle('f1', h, 'failed', trace, undefined);
+    const entry = cache.get('f1');
+    expect(entry).toBeDefined();
+    expect(entry!.result.status).toBe('failed');
+    expect(entry!.result.error).toBeInstanceOf(Error);
+  });
+
+  it('recordHandle cancelled — records the entry with status=cancelled', () => {
+    const h = makeHandle('c1');
+    const trace = { toolCalls: [], toolResults: [], thinkingPresent: false, turnCount: 0 };
+    cache.recordHandle('c1', h, 'cancelled', trace, undefined);
+    const entry = cache.get('c1');
+    expect(entry).toBeDefined();
+    expect(entry!.result.status).toBe('cancelled');
   });
 });

@@ -27,10 +27,22 @@ class FakeHost {
   controller: PickerController | null = null;
   enterCalls = 0;
   exitCalls = 0;
+  /**
+   * When true, automatically confirm (press Enter) on every call to
+   * `enterPickerMode` beyond the first. Used by tests that exercise the
+   * two-phase picker→preview flow: the test drives the session-picker phase
+   * manually and lets FakeHost auto-confirm the subsequent resume preview.
+   */
+  autoConfirmPreview = false;
 
   enterPickerMode(controller: PickerController): void {
     this.enterCalls += 1;
     this.controller = controller;
+    // Auto-confirm the preview phase (any enterPickerMode call after the first).
+    if (this.autoConfirmPreview && this.enterCalls > 1) {
+      // Use setImmediate so the controller is fully installed before the key fires.
+      setImmediate(() => this.press('return'));
+    }
   }
   exitPickerMode(): void {
     this.exitCalls += 1;
@@ -223,14 +235,17 @@ describe('/resume interactive picker', () => {
     const { ctx, requestResumeSpy } = makeCtx('sdk-live');
     ctx.stats.cwd = '/proj/pick';
     const host = new FakeHost();
+    // Auto-confirm the preview Enter so the test only drives the picker phase.
+    host.autoConfirmPreview = true;
     ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
 
     const p = resumeCmd.handler(ctx, '');
-    host.press('return'); // select the first (only) entry
+    host.press('return'); // select the first (only) entry in the session picker
     await p;
 
-    expect(host.enterCalls).toBe(1);
-    expect(host.exitCalls).toBe(1);
+    // Two enterPickerMode calls: session picker + conversation preview.
+    expect(host.enterCalls).toBe(2);
+    expect(host.exitCalls).toBe(2);
     expect(requestResumeSpy).toHaveBeenCalledOnce();
   });
 
@@ -288,6 +303,8 @@ describe('/resume interactive picker', () => {
       });
       ctx.stats.cwd = '/proj/dup';
       const host = new FakeHost();
+      // Auto-confirm the preview Enter; test drives only the picker phase.
+      host.autoConfirmPreview = true;
       ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
       const p = resumeCmd.handler(ctx, '');
       for (let i = 0; i < downPresses; i++) host.press('down');
@@ -326,5 +343,133 @@ describe('/resume interactive picker', () => {
 
     expect(lines.join('\n')).toContain('session-txt');
     expect(requestResumeSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resume view-mode preview integration
+// ---------------------------------------------------------------------------
+
+describe('/resume — conversation preview (view-mode)', () => {
+  it('shows preview (enters picker mode) before resuming when using explicit ID on TTY', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/preview';
+    recordTurn(stats, 'what is the plan?', 'here is the plan', {
+      sessionId: 'sdk-preview',
+      totalCostUsd: 0.02,
+      durationMs: 20,
+      usage: { input_tokens: 10, output_tokens: 20 },
+    });
+    stats.name = 'session-preview';
+    const path = saveSession(stats);
+    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+
+    const { ctx, requestResumeSpy } = makeCtx('sdk-live');
+    const host = new FakeHost();
+    ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+
+    // Resume by explicit ID — the only enterPickerMode call is the preview.
+    const p = resumeCmd.handler(ctx, sidecarId);
+    // Wait one tick for showResumePreview to call enterPickerMode, then confirm.
+    await Promise.resolve();
+    host.press('return');
+    await p;
+
+    // One enterPickerMode for the preview, one exitPickerMode.
+    expect(host.enterCalls).toBe(1);
+    expect(host.exitCalls).toBe(1);
+    expect(requestResumeSpy).toHaveBeenCalledOnce();
+  });
+
+  it('cancels resume when user presses Esc on the preview', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/preview-cancel';
+    recordTurn(stats, 'first message', 'first reply', {
+      sessionId: 'sdk-preview-cancel',
+      totalCostUsd: 0.01,
+      durationMs: 10,
+      usage: { input_tokens: 5, output_tokens: 5 },
+    });
+    stats.name = 'session-preview-cancel';
+    const path = saveSession(stats);
+    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+
+    const { ctx, lines, requestResumeSpy } = makeCtx('sdk-other');
+    const host = new FakeHost();
+    // Press Esc on the preview (first and only enterPickerMode call here is the preview).
+    host.autoConfirmPreview = false;
+    ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+
+    // Start the resume with an explicit ID — the preview will enterPickerMode.
+    const p = resumeCmd.handler(ctx, sidecarId);
+    // Wait one tick for the preview enterPickerMode to fire, then press Esc.
+    await Promise.resolve();
+    host.press('escape');
+    await p;
+
+    // requestResume must NOT have been called (user cancelled at the preview).
+    expect(requestResumeSpy).not.toHaveBeenCalled();
+    // A cancellation message should appear.
+    expect(lines.join('\n').toLowerCase()).toMatch(/cancel/);
+  });
+
+  it('skips preview on non-TTY surface (no compositor)', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/no-tty';
+    recordTurn(stats, 'hello', 'world', {
+      sessionId: 'sdk-no-tty',
+      totalCostUsd: 0.01,
+      durationMs: 10,
+      usage: { input_tokens: 5, output_tokens: 5 },
+    });
+    stats.name = 'session-no-tty';
+    const path = saveSession(stats);
+    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+
+    // No getCompositor → non-TTY surface. requestResume IS present.
+    const { ctx, requestResumeSpy } = makeCtx('sdk-other-live');
+    // Explicitly omit getCompositor (ctx has requestResume but no compositor).
+
+    await resumeCmd.handler(ctx, sidecarId);
+
+    // Should proceed directly to resume without a preview gate.
+    expect(requestResumeSpy).toHaveBeenCalledOnce();
+  });
+
+  it('preview Enter flow: renders conversation content in preview rows', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/content-check';
+    recordTurn(stats, 'user message in preview', 'assistant reply in preview', {
+      sessionId: 'sdk-content',
+      totalCostUsd: 0.01,
+      durationMs: 10,
+      usage: { input_tokens: 5, output_tokens: 5 },
+    });
+    stats.name = 'session-content';
+    const path = saveSession(stats);
+    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+
+    const { ctx, requestResumeSpy } = makeCtx('sdk-live-content');
+    let capturedRows: readonly string[] = [];
+    const host = new FakeHost();
+    // Intercept enterPickerMode to capture the rendered preview rows, then confirm.
+    host.enterPickerMode = (controller: PickerController): void => {
+      host.enterCalls += 1;
+      host.controller = controller;
+      capturedRows = controller.renderRows();
+      // Confirm (Enter) asynchronously so the promise can resolve.
+      setImmediate(() => host.press('return'));
+    };
+    ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+
+    await resumeCmd.handler(ctx, sidecarId);
+
+    expect(requestResumeSpy).toHaveBeenCalledOnce();
+    // The preview rows should contain the stored conversation content.
+    const flat = capturedRows.join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+    expect(flat).toContain('user message in preview');
+    expect(flat).toContain('assistant reply in preview');
+    expect(flat).toContain('Enter');
+    expect(flat).toContain('Esc');
   });
 });

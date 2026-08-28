@@ -13,14 +13,11 @@
  */
 
 import type { SubagentHandle } from './handle.js';
-import type { SubagentResult } from './result.js';
+import type { SubagentResult, SubagentStatus, SubagentTrace } from './result.js';
 
 export interface CompletedEntry<T = unknown> {
   readonly handle: SubagentHandle<T>;
-  /** Minimal result stub — only `id` and `status` are populated at eviction
-   *  time. Narrowed from `SubagentResult<T>` to prevent callers from accessing
-   *  fields that were never set. */
-  readonly result: Pick<SubagentResult, 'id' | 'status'>;
+  readonly result: SubagentResult<T>;
   readonly completedAt: number;
 }
 
@@ -35,11 +32,38 @@ export class CompletedCache {
   }
 
   /** Record a completed subagent. Evicts oldest entry when over capacity. */
-  add(id: string, handle: SubagentHandle, result: Pick<SubagentResult, 'id' | 'status'>): void {
+  add(id: string, handle: SubagentHandle, result: SubagentResult): void {
     // Delete first so re-insertion moves to end (Map iteration order = insertion order)
     this.entries.delete(id);
     this.entries.set(id, { handle, result, completedAt: Date.now() });
     this.evictIfNeeded();
+  }
+
+  /**
+   * Build a minimal result from terminal handle state and record it.
+   * Called from the `onTerminal` callback in `SubagentManager.forkSubagent`
+   * so that `manager.get(id)` continues to work after a handle moves out of
+   * the active map. The `message` field is intentionally omitted — full
+   * conversation history is available via `SubagentLogReader` on demand.
+   */
+  recordHandle(
+    id: string,
+    handle: SubagentHandle,
+    status: SubagentStatus,
+    trace: SubagentTrace,
+    stopReason: string | undefined,
+  ): void {
+    const result: SubagentResult =
+      status === 'succeeded'
+        ? { id, status, trace, ...(stopReason !== undefined && { stopReason }) }
+        : {
+            id,
+            status,
+            error: new Error(`subagent terminated with status: ${status}`),
+            trace,
+            ...(stopReason !== undefined && { stopReason }),
+          };
+    this.add(id, handle, result);
   }
 
   /** Retrieve a completed subagent by id. Returns undefined if evicted or unknown. */

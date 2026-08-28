@@ -33,7 +33,6 @@ import {
   enterTaskViewMode,
   type TaskViewEntry,
 } from '../../commands/interactive/task-view-mode.js';
-import type { InteractiveCtx } from '../../commands/interactive/shared.js';
 
 // ---------------------------------------------------------------------------
 // Module-scope registry refs
@@ -41,7 +40,6 @@ import type { InteractiveCtx } from '../../commands/interactive/shared.js';
 
 let managerRef: SubagentManager | undefined;
 let sessionLabelRef: string | undefined;
-let ictxRef: InteractiveCtx | undefined;
 
 /**
  * Wire the SubagentManager and session label into this module.
@@ -52,20 +50,10 @@ export function setTasksRegistry(manager: SubagentManager, sessionLabel: string)
   sessionLabelRef = sessionLabel;
 }
 
-/**
- * Wire the InteractiveCtx so that `/tasks:view` can populate
- * `viewingTaskId` on the active REPL context (#1332).
- * Called once from bootstrapSession after `ctx` is constructed.
- */
-export function setTasksIctx(ictx: InteractiveCtx): void {
-  ictxRef = ictx;
-}
-
 /** Reset refs — used by tests to isolate module-scope state between cases. */
 export function resetTasksRegistry(): void {
   managerRef = undefined;
   sessionLabelRef = undefined;
-  ictxRef = undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,15 +94,14 @@ function resolveId(manager: SubagentManager, raw: string): string | null {
   const handle = manager.get(raw);
   if (handle) return handle.id;
 
-  // Prefix match across BOTH active and completed pools so a running
-  // subagent's 12-char truncated display ID can be resolved.
-  const activeIds = manager.list().map(h => h.id);
-  const completedIds = manager.completed.list().map(e => e.handle.id);
-  const allIds = [...new Set([...activeIds, ...completedIds])];
-  const matches = allIds.filter(id => id.startsWith(raw));
+  // Prefix match against completed cache.
+  const completedMatches = manager.completed
+    .list()
+    .filter(e => e.handle.id.startsWith(raw))
+    .map(e => e.handle.id);
 
-  if (matches.length === 1 && matches[0] !== undefined) {
-    return matches[0];
+  if (completedMatches.length === 1 && completedMatches[0] !== undefined) {
+    return completedMatches[0];
   }
   return null;
 }
@@ -196,10 +183,7 @@ async function collectAllTasks(
   const memoryIds = new Set(entries.map(e => e.id));
   const diskIds   = (await SubagentLogReader.list(sessionLabel)).filter(id => !memoryIds.has(id));
   for (const id of diskIds) {
-    // v1 limitation: terminal status is not persisted to the log filename or
-    // header, so we cannot distinguish succeeded/failed/cancelled from disk
-    // alone. Use 'idle' (renders as '·') as a neutral/unknown indicator.
-    entries.push({ id, status: 'idle', toolCount: 0 });
+    entries.push({ id, status: 'succeeded', toolCount: 0 });
   }
 
   return entries;
@@ -252,21 +236,9 @@ export const tasksCmd: SlashCommand = {
     }
 
     // ── Interactive mode ──────────────────────────────────────────────────────
-    // Invariant: the TerminalCompositor holds the stdin claim during slash
-    // dispatch. We must suspend it before attaching our own 'data' listener
-    // to avoid the dual-consumer phantom-turn bug (#511 class). Resume on
-    // every exit path (Esc, Ctrl-C, Enter→view, soft-stop).
-    const compositor = ctx.getCompositor?.() ?? null;
-    compositor?.suspendInput();
-
     renderList();
 
     await new Promise<void>((resolve) => {
-      const cleanup = (): void => {
-        process.stdin.off('data', onKeypress);
-        compositor?.resumeInput();
-      };
-
       const onKeypress = (chunk: Buffer | string): void => {
         const str = typeof chunk === 'string' ? chunk : chunk.toString();
         if (str === '\x1b[A' || str === '\x1bOA') {
@@ -281,24 +253,21 @@ export const tasksCmd: SlashCommand = {
           // Enter — open the selected task in view mode.
           const selected = tasks[cursor];
           if (selected) {
+            // Wire Esc to resolve this promise (return to main prompt).
             ctx.setSoftStopHandler?.(null);
-            cleanup();
+            process.stdin.off('data', onKeypress);
             const entry: TaskViewEntry = {
               id: selected.id,
               manager,
               sessionLabel,
               ctx,
-              ictx: ictxRef,
             };
-            void enterTaskViewMode(entry).then(resolve).catch((e) => {
-              ctx.out.error?.(`task view error: ${String(e)}`);
-              resolve();
-            });
+            void enterTaskViewMode(entry).then(resolve);
           }
         } else if (str === '\x1b' || str === '\x03') {
           // Esc or Ctrl-C — exit to main prompt.
           ctx.setSoftStopHandler?.(null);
-          cleanup();
+          process.stdin.off('data', onKeypress);
           ctx.ui.clearScreen();
           ctx.ui.repaintStatusLine();
           resolve();
@@ -308,12 +277,15 @@ export const tasksCmd: SlashCommand = {
       // Wire Esc handler via the surface-level soft-stop.
       ctx.setSoftStopHandler?.(() => {
         ctx.setSoftStopHandler?.(null);
-        cleanup();
+        process.stdin.off('data', onKeypress);
         ctx.ui.clearScreen();
         ctx.ui.repaintStatusLine();
         resolve();
       });
 
+      // TODO: route through compositor.enterPickerMode() instead of attaching
+      // directly to process.stdin — direct stdin listeners bypass the
+      // compositor's routing and can conflict with other input consumers.
       process.stdin.on('data', onKeypress);
     });
 
@@ -362,7 +334,6 @@ export const tasksViewCmd: SlashCommand = {
       manager,
       sessionLabel,
       ctx,
-      ictx: ictxRef,
     };
 
     await enterTaskViewMode(entry);

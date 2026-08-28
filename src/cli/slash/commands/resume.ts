@@ -11,6 +11,13 @@
  * With no argument: opens an arrow-key picker of recent saves on a TTY (the
  * hint's long-promised interactive path); on non-TTY surfaces (Telegram,
  * daemon, tests) it prints the read-only table and asks for `/resume <name>`.
+ *
+ * ## Conversation preview (interactive REPL only)
+ *
+ * When a session is selected AND `ctx.requestResume` is available AND a
+ * compositor is armed, shows a conversation preview of the stored turns
+ * (session header + last N turns + Enter/Esc footer) before committing.
+ * Non-interactive surfaces (Telegram, daemon) are unaffected.
  */
 
 import { palette } from '../../palette.js';
@@ -19,8 +26,14 @@ import { findSession, listSessions } from '../../session-store.js';
 import { formatCost } from '../../format-utils.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { runPicker } from '../../render/picker.js';
+import {
+  renderResumeViewHeader,
+  buildResumeFooterLine,
+  renderTurnRecords,
+} from '../../commands/interactive/turn-record-renderer.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import type { SlashCommand, SlashContext } from '../types.js';
+import type { PickerController } from '../../terminal-compositor.js';
 
 type SessionEntry = ReturnType<typeof listSessions>[number];
 
@@ -93,6 +106,97 @@ function uniquePickLabels(entries: readonly SessionEntry[]): string[] {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Conversation preview (interactive REPL only)
+// ---------------------------------------------------------------------------
+
+/** Maximum number of stored turns to render in the preview. */
+const PREVIEW_TURN_LIMIT = 10;
+
+/**
+ * Show a conversation preview of a stored session using the compositor's
+ * `enterPickerMode` infrastructure, and wait for the user to confirm
+ * (Enter) or cancel (Esc).
+ *
+ * Returns `true` when the user pressed Enter (proceed with resume),
+ * or `false` when they pressed Esc (cancel). Always resolves — never throws.
+ *
+ * Guard: only called when `ctx.getCompositor?.()` returns a non-null
+ * compositor, i.e. we are in the interactive REPL on a TTY. Non-interactive
+ * surfaces (Telegram, daemon, tests without a compositor) are unaffected.
+ */
+async function showResumePreview(
+  ctx: SlashContext,
+  found: NonNullable<ReturnType<typeof findSession>>,
+): Promise<boolean> {
+  const compositor = ctx.getCompositor?.() ?? null;
+  if (!compositor) return true; // Non-TTY: skip preview, proceed immediately.
+
+  const stored = found.data;
+  const turns = stored.turns ?? [];
+
+  // Build the rendered conversation lines as an array.
+  const previewLines: string[] = [];
+  const lineWriter = {
+    line: (t = ''): void => { previewLines.push(t); },
+    raw: (t: string): void => { previewLines.push(t); },
+    success: (t: string): void => { previewLines.push(t); },
+    info: (t: string): void => { previewLines.push(t); },
+    warn: (t: string): void => { previewLines.push(t); },
+    error: (t: string): void => { previewLines.push(t); },
+  };
+
+  // Render header.
+  lineWriter.line(renderResumeViewHeader({
+    name: stored.name,
+    id: found.id,
+    totalTurns: stored.totalTurns,
+  }));
+  lineWriter.line('');
+
+  // Render turns (last PREVIEW_TURN_LIMIT).
+  renderTurnRecords(turns, lineWriter, PREVIEW_TURN_LIMIT);
+
+  // Footer prompt.
+  lineWriter.line('');
+  lineWriter.line(buildResumeFooterLine('preview'));
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+
+    const finish = (confirmed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      compositor.exitPickerMode();
+      resolve(confirmed);
+    };
+
+    const controller: PickerController = {
+      renderRows: (): readonly string[] => previewLines,
+      onKey: (
+        _char: string | undefined,
+        key: { name?: string; ctrl?: boolean; shift?: boolean },
+      ): void => {
+        if (settled) return;
+        if (key.name === 'return') {
+          finish(true);
+          return;
+        }
+        if (key.name === 'escape') {
+          finish(false);
+          return;
+        }
+        // Ctrl+C: cancel (safety hatch).
+        if (key.ctrl && key.name === 'c') {
+          finish(false);
+        }
+      },
+    };
+
+    compositor.enterPickerMode(controller);
+  });
+}
+
 /**
  * Resume a resolved session: guard against resuming into the live session,
  * then swap via requestResume, or (when that capability is absent) print the
@@ -120,6 +224,16 @@ async function resumeFound(
       (currentSdkId !== undefined && currentSdkId === found.id);
     if (isSameSession) {
       ctx.out.warn(`Already on session ${label}.`);
+      return;
+    }
+
+    // Show conversation preview before committing to the swap. Only fires
+    // when a compositor is armed (interactive REPL on a TTY). Non-interactive
+    // surfaces (Telegram, daemon) skip this block — getCompositor is absent
+    // or returns null, and showResumePreview() returns true immediately.
+    const confirmed = await showResumePreview(ctx, found);
+    if (!confirmed) {
+      ctx.out.line(buildResumeFooterLine('cancelled'));
       return;
     }
 

@@ -1,32 +1,32 @@
-refactor(cli): extract paused-event handler from turn-handler.ts
+fix(subagent): populate CompletedCache in onTerminal; refactor tasks stdin TODO
 
-The filesize ratchet flagged GREW: `src/cli/commands/interactive/turn-handler.ts`
-grew from its 407-line baseline to 411 lines. This extraction brings it to 365
-code lines, comfortably below the baseline, by pulling the usage-limit pause
-handler into its own sibling file.
+## BLOCKER: CompletedCache never populated
+`SubagentManager.forkSubagent` built a `CompletedCache` and exposed it via
+`manager.completed`, but the `onTerminal` callback only called
+`this.active.delete(id)`, `this.abortGraph.dispose(id)`, and
+`void logWriter?.close()` -- `completed.add()` was never called. After
+`onTerminal` fired, `manager.get(id)` returned `undefined` for every
+completed subagent, making `/tasks:view` unable to locate any finished handle
+from the in-memory path.
 
-## What moved
+Fix: add `CompletedCache.recordHandle()` -- a convenience method that builds
+a lightweight `SubagentResult` from terminal handle-state fields (all
+fully populated by `run()` before `_onTerminal()` fires) and calls `add()`
+internally. `onTerminal` now calls `this.completed.recordHandle(...)`.
+The `message` field is intentionally omitted from the cached result because
+`/tasks:view` uses `SubagentLogReader` for full conversation replay.
 
-`turn-handler.ts` → `turn-handler.paused.ts`:
-- `handlePausedEvent()` — named async helper taking explicit parameters
-- `PausedPickerRef` type (the abort-controller ref object)
-- `PausedEvent` type alias (`Extract<OutputEvent, { type: 'paused' }>`)
-- All option-label constants for the interactive picker
-- Full JSDoc and `// Contract:`, `// Invariant:` comments
+## Medium: subagent.ts file-size ceiling
+Adding the completion-cache wiring pushed `subagent.ts` briefly above the
+350 code-line ceiling. Extracting the result-building logic into
+`CompletedCache.recordHandle()` brings it back to 344 code lines.
 
-`turn-handler.ts` retains:
-- Public call site: `await handlePausedEvent({ event, session, ... })`
-- Unchanged public surface — no importer rewrites required
-- `pickerRef` typed as `PausedPickerRef` (imported from the new file)
-- Removed unused imports: `usageLimitBox`, `runPicker` (both moved)
+## Medium: direct process.stdin access in tasks.ts
+Added a TODO comment on the `process.stdin.on('data', onKeypress)` line,
+noting that direct stdin listeners bypass the compositor's routing and
+should route through `compositor.enterPickerMode()` instead.
 
-## Gates
-
-- `pnpm lint` ✓ (TypeScript noEmit, zero errors)
-- `pnpm audit:filesize:update` ✓ (baseline updated to 365)
-- `pnpm audit:filesize:check` ✓ (all 41 grandfathered files, no new violations)
-- `pnpm audit:funcsize:update` ✓
-- `pnpm test src/cli/commands/interactive/` ✓ (1145 tests passed)
-
-Before: 411 code lines
-After:  365 code lines (−46 from turn-handler.ts, +90 in new file)
+## Tests
+Added 4 tests for `CompletedCache.recordHandle()` covering succeeded,
+succeeded-with-stopReason, failed, and cancelled cases (17 tests total,
+up from 13).

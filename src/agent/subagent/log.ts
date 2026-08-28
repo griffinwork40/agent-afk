@@ -124,9 +124,6 @@ export class SubagentLogWriter {
     }
   }
 
-  // Invariant: bytesWritten tracks bytes ATTEMPTED (queued to the stream),
-  // not bytes confirmed persisted to disk. This matches BgJobLogWriter's
-  // accepted tradeoff — the cap is best-effort, not a durability guarantee.
   private writeLine(line: string): void {
     if (this.errored || !this.stream || this.bytesWritten >= MAX_LOG_BYTES) return;
     this.bytesWritten += Buffer.byteLength(line, 'utf8');
@@ -149,10 +146,12 @@ export class SubagentLogReader {
     subagentId: string,
   ): AsyncGenerator<OutputEvent> {
     const logPath = getSubagentLogPath(sessionLabel, subagentId);
-    // fs.createReadStream doesn't throw synchronously — it emits an 'error'
-    // event. A try/catch here would be dead code; the outer try/catch below
-    // handles all errors (including ENOENT via the rl async iteration).
-    const fileStream = fs.createReadStream(logPath, { encoding: 'utf8' });
+    let fileStream: fs.ReadStream;
+    try {
+      fileStream = fs.createReadStream(logPath, { encoding: 'utf8' });
+    } catch {
+      return;
+    }
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
     try {
       for await (const line of rl) {
