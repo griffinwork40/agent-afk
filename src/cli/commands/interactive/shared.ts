@@ -513,6 +513,13 @@ export interface InteractiveCtx {
    */
   suggestGhostConfig?: boolean;
   /**
+   * When set, the REPL is in task-view mode and this field holds the ID of
+   * the subagent being viewed. `/tasks:view <id>` sets this field; pressing
+   * Esc (via `setSoftStopHandler`) clears it and restores the main view.
+   * Absent (undefined) when in normal REPL mode.
+   */
+  viewingTaskId?: string;
+  /**
    * Hook registry for dispatching harness lifecycle events from the REPL loop.
    * Absent in test stubs that do not exercise hooks. Set by bootstrap.ts from
    * `hookRegistryBundle.registry`. Fires UserPromptSubmit before each runTurn
