@@ -33,6 +33,9 @@ import type { OutputEvent } from '../types/session-types.js';
 /** Maximum bytes per subagent log file (1 MB). Writes beyond this are dropped. */
 const MAX_LOG_BYTES = 1_048_576;
 
+/** Session-log directories already created this process — avoids redundant mkdirSync syscalls. */
+const createdDirs = new Set<string>();
+
 // ---------------------------------------------------------------------------
 // Writer
 // ---------------------------------------------------------------------------
@@ -53,10 +56,14 @@ export class SubagentLogWriter {
     readonly subagentId: string,
   ) {
     this.logPath = getSubagentLogPath(sessionLabel, subagentId);
-    try {
-      fs.mkdirSync(getSubagentLogSessionDir(sessionLabel), { recursive: true });
-    } catch {
-      this.errored = true;
+    const dir = getSubagentLogSessionDir(sessionLabel);
+    if (!createdDirs.has(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        createdDirs.add(dir);
+      } catch {
+        this.errored = true;
+      }
     }
   }
 
