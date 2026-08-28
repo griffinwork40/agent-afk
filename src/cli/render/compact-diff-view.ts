@@ -176,10 +176,13 @@ export function compactDiffView(spec: CompactDiffSpec): string {
     bodyLines.push(palette.dim(`... and ${hidden} more ${noun}`));
   }
 
-  // Wrap body in a box. Width accounts for border + padding overhead (box adds
-  // 4 cols for borders and 2 cols for default padding = 6 total).
+  // Wrap body in a box. BOX_OVERHEAD matches the constant used in utils.ts
+  // (maxInnerBoxWidth): 2 border cols + 2×1 default padding col on each side = 6.
+  // Named here so a change to drawBox's padding default causes a single update
+  // rather than a silent numeric mismatch.
+  const BOX_OVERHEAD = 6; // 2 border + 2×padding(1) on each side — mirrors utils.ts
   const termWidth = spec.width ?? 80;
-  const innerWidth = Math.max(20, termWidth - 6);
+  const innerWidth = Math.max(20, termWidth - BOX_OVERHEAD);
   const boxed = drawBox(bodyLines, { width: innerWidth });
 
   return [statHeader, boxed].join('\n');

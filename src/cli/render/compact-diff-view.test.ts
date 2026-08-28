@@ -350,7 +350,13 @@ describe('compactDiffView', () => {
       // Raw control chars must not appear in the output
       expect(out).not.toContain('\x07');
       expect(out).not.toContain('\r');
-      expect(out).not.toContain('\n\n'); // only the stat/box separator newline is expected
+      // Assert directly that sanitization stripped the raw LF from the
+      // adversarial path: the stat header (first output line) must not contain
+      // an embedded newline. Asserting '\n\n' here would couple the test to
+      // drawBox's trailing-newline behavior rather than to path sanitization.
+      const statLine = strip(out).split('\n')[0];
+      expect(statLine).not.toContain('\x0A');
+      expect(statLine).not.toContain('https://evil.example'); // OSC payload stripped
       // The benign text fragments must survive
       expect(strip(out)).toContain('src/');
       expect(strip(out)).toContain('evil');
