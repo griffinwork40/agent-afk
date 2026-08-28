@@ -21,3 +21,4 @@ export * from './stream-progress.js';
 export * from './error-card.js';
 export * from './status-badge.js';
 export * from './utils.js';
+export * from './interrupt-peek.js';
