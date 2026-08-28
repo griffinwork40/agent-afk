@@ -148,7 +148,7 @@ function buildDiffStat(
   const statWidth = displayWidth(statPlain);
 
   const fileMax = Math.max(1, maxWidth - statWidth);
-  const fileTruncated = truncateDisplayWidth(diff.file, fileMax);
+  const fileTruncated = truncateDisplayWidth(sanitizeForDisplay(diff.file), fileMax);
   const fileStyled = palette.dim(fileTruncated);
 
   return `${addedStr} ${removedStr}  ${fileStyled}`;

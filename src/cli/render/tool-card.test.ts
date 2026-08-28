@@ -210,6 +210,23 @@ describe('toolCard – width truncation', () => {
     const diffLine = stripAnsi(ls.find((l) => l.includes('+1')) ?? '');
     expect(diffLine.trimEnd().length).toBeLessThanOrEqual(62);
   });
+
+  it('sanitizes control characters in diff.file (BEL, ANSI escape)', () => {
+    // diff.file with embedded BEL (\x07) and ANSI escape sequence
+    const maliciousFile = 'src/\x07evil\x1b[31mred\x1b[0m.ts';
+    const out = stripAnsi(
+      toolCard({
+        toolName: 'edit_file',
+        status: 'done',
+        diff: { added: 1, removed: 1, file: maliciousFile },
+      }),
+    );
+    // Control characters must not appear in output
+    expect(out).not.toMatch(/[\x07]/);
+    expect(out).not.toMatch(/\x1b/);
+    // File path is still present in sanitized form
+    expect(out).toContain('evil');
+  });
 });
 
 // ─── Minimal spec ────────────────────────────────────────────────────────────
