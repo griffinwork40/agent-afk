@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.164.1] - 2026-08-28
+
+### Fixed
+- register diagnose, false-completion-gate, fix-pr, polish in update-hash-pins.ts (#1362) (5744d246)
+
 ## [5.164.0] - 2026-08-28
 
 ### Added
