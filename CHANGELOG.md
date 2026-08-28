@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.158.0] - 2026-08-28
+
+### Added
+- live view-mode switching for subagent conversations (v2) (#1313) (d708050b)
+- component library foundation — SubagentStatusBar, StreamProgress, ErrorCard + live overlay integration (#1321) (c5f8f883)
+
 ## [5.157.1] - 2026-08-27
 
 ### Fixed
