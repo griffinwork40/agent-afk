@@ -209,6 +209,54 @@ describe('stream-open-window concurrent writes', () => {
 });
 
 // ---------------------------------------------------------------------------
+// mkdirSync memoization — multiple writers with the same sessionLabel
+// ---------------------------------------------------------------------------
+
+describe('mkdirSync memoization', () => {
+  it('two writers sharing a sessionLabel both produce correct logs', async () => {
+    const session = 'test-memo-session';
+
+    const w1 = new SubagentLogWriter(session, 'sub-memo-1');
+    const w2 = new SubagentLogWriter(session, 'sub-memo-2');
+
+    w1.write(makeChunkEvent('from-w1'));
+    w2.write(makeChunkEvent('from-w2'));
+    await Promise.all([w1.close(), w2.close()]);
+
+    // Both log files must be readable — verifies the memoised path does not
+    // suppress directory creation for the first writer or break the second.
+    const events1: OutputEvent[] = [];
+    for await (const e of SubagentLogReader.readEvents(session, 'sub-memo-1')) {
+      events1.push(e);
+    }
+    const events2: OutputEvent[] = [];
+    for await (const e of SubagentLogReader.readEvents(session, 'sub-memo-2')) {
+      events2.push(e);
+    }
+    expect(events1).toHaveLength(1);
+    expect(events2).toHaveLength(1);
+  });
+
+  it('N writers sharing a sessionLabel all produce correct logs (stress)', async () => {
+    const session = 'test-memo-stress';
+    const N = 8;
+    const writers = Array.from({ length: N }, (_, i) =>
+      new SubagentLogWriter(session, `sub-stress-${i}`),
+    );
+    for (const [i, w] of writers.entries()) w.write(makeChunkEvent(`msg-${i}`));
+    await Promise.all(writers.map(w => w.close()));
+
+    for (let i = 0; i < N; i++) {
+      const events: OutputEvent[] = [];
+      for await (const e of SubagentLogReader.readEvents(session, `sub-stress-${i}`)) {
+        events.push(e);
+      }
+      expect(events).toHaveLength(1);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MAX_LOG_BYTES cap
 // ---------------------------------------------------------------------------
 
