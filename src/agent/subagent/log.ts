@@ -1,14 +1,17 @@
 /**
- * Always-on per-subagent conversation JSONL logger.
+ * Opt-in per-subagent conversation JSONL logger.
  *
  * `SubagentLogWriter` records every `OutputEvent` from a subagent's
  * `sendMessageStream` into a JSONL file at
  * `~/.afk/state/subagent-logs/<sessionLabel>/<subagentId>.jsonl`.
  * This powers the `/tasks:view` replay command.
  *
- * Unlike `BgJobLogWriter` (background-job-only), this fires for ALL
- * subagents (foreground and background) unless opted out via
- * `AFK_SUBAGENT_LOG=0`.
+ * OFF by default. Raw tool arguments (bash commands, file paths, API keys)
+ * are serialised without redaction — consistent with the opt-in posture of
+ * `AFK_CAPTURE_SUBAGENT_PROMPTS` / `AFK_CAPTURE_SUBAGENT_OUTPUT`.
+ * Enable by setting `AFK_SUBAGENT_LOG=1`.
+ *
+ * When enabled, fires for ALL subagents (foreground and background).
  *
  * Design mirrors `BgJobLogWriter` — lazy stream open, pending-line queue,
  * silent error suppression (subagent must never fail due to log IO).
@@ -57,9 +60,9 @@ export class SubagentLogWriter {
     }
   }
 
-  /** Whether subagent logging is enabled (not opted out). */
+  /** Whether subagent logging is enabled (opt-in via AFK_SUBAGENT_LOG=1). */
   static isEnabled(): boolean {
-    return env.AFK_SUBAGENT_LOG !== '0';
+    return env.AFK_SUBAGENT_LOG === '1';
   }
 
   /**

@@ -173,7 +173,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SESSION_MAX_COUNT` | number |  | `1000` |  | Count-based safety valve: evict oldest session sidecars first once the total exceeds this number. Default 1000. |
 | `AFK_SESSION_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the session sidecar retention sweep entirely, so no state/sessions/*.json file is ever evicted. |
 | `AFK_SKILL_STREAM_VERBOSE` | boolean |  |  |  | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. |
-| `AFK_SUBAGENT_LOG` | boolean |  | `1` |  | Always-on per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. ON by default; set to 0 to disable. |
+| `AFK_SUBAGENT_LOG` | boolean |  |  | `1` | Opt-in per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments are written without redaction — consistent with AFK_CAPTURE_SUBAGENT_PROMPTS / AFK_CAPTURE_SUBAGENT_OUTPUT). Set to 1 to enable. |
 | `AFK_TELEGRAM_TRACE` | boolean |  |  | `1` | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. |
 | `AFK_TRACE_DISABLED` | boolean |  |  | `1` | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. |
 | `AFK_WITNESS_MAX_AGE_DAYS` | number |  | `30` |  | Evict a witness session directory once its newest content is older than this many days. Default 30. |
