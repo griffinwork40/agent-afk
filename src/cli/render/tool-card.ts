@@ -1,3 +1,4 @@
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import { displayWidth, truncateDisplayWidth } from '../display.js';
 import { palette } from '../palette.js';
 import { statusBadge } from './status-badge.js';
@@ -47,8 +48,6 @@ export interface ToolCardSpec {
 /** Left indent applied to body lines (keeps them visually below the badge). */
 const INDENT = '  ';
 
-/** Minimum width guard — prevents arithmetic from going negative. */
-const MIN_WIDTH = 20;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -74,7 +73,7 @@ const MIN_WIDTH = 20;
  * @returns Multi-line ANSI string (or single-line when collapsed / no body).
  */
 export function toolCard(spec: ToolCardSpec): string {
-  const width = Math.max(MIN_WIDTH, spec.width ?? 80);
+  const width = Math.max(1, spec.width ?? 80);
   const collapsed = spec.collapsed ?? false;
 
   // ── Header ──────────────────────────────────────────────────────────────────
@@ -87,12 +86,14 @@ export function toolCard(spec: ToolCardSpec): string {
   const bodyWidth = Math.max(1, width - displayWidth(INDENT));
 
   if (spec.inputSummary != null && spec.inputSummary.length > 0) {
-    const truncated = truncateDisplayWidth(spec.inputSummary, bodyWidth);
+    const sanitized = sanitizeForDisplay(spec.inputSummary);
+    const truncated = truncateDisplayWidth(sanitized, bodyWidth);
     body.push(INDENT + palette.dim(truncated));
   }
 
   if (spec.outputPreview != null && spec.outputPreview.length > 0) {
-    const truncated = truncateDisplayWidth(spec.outputPreview, bodyWidth);
+    const sanitized = sanitizeForDisplay(spec.outputPreview);
+    const truncated = truncateDisplayWidth(sanitized, bodyWidth);
     body.push(INDENT + palette.dim(truncated));
   }
 
@@ -124,7 +125,8 @@ function buildHeader(spec: ToolCardSpec, width: number): string {
   const elapsedReserved = displayWidth(elapsedPlain);
 
   const nameMax = Math.max(1, width - badgeReserved - elapsedReserved);
-  const nameTruncated = truncateDisplayWidth(spec.toolName, nameMax);
+  const nameSanitized = sanitizeForDisplay(spec.toolName);
+  const nameTruncated = truncateDisplayWidth(nameSanitized, nameMax);
   const nameStyled = palette.tool(nameTruncated);
 
   return `${badge} ${nameStyled}${elapsedStr}`;

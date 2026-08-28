@@ -232,3 +232,58 @@ describe('toolCard – minimal spec', () => {
     ).not.toThrow();
   });
 });
+
+// ─── Sanitization (P1) ───────────────────────────────────────────────────────
+
+describe('toolCard – sanitization of untrusted input', () => {
+  it('strips ANSI escape sequences from outputPreview', () => {
+    const malicious = '\x1b[2J\x1b[Hinjected';
+    const out = stripAnsi(
+      toolCard({ toolName: 'bash', status: 'done', outputPreview: malicious }),
+    );
+    // The injected payload text may survive but the raw escape sequences must not
+    expect(out).not.toContain('\x1b[2J');
+    expect(out).not.toContain('\x1b[H');
+  });
+
+  it('strips ANSI escape sequences from inputSummary', () => {
+    const malicious = '\x1b]0;evil title\x07normal';
+    const out = stripAnsi(
+      toolCard({ toolName: 'bash', status: 'done', inputSummary: malicious }),
+    );
+    expect(out).not.toContain('\x1b]');
+    expect(out).toContain('normal');
+  });
+
+  it('strips ANSI escape sequences from toolName', () => {
+    const malicious = '\x1b[1mbold\x1b[0m';
+    const out = stripAnsi(toolCard({ toolName: malicious, status: 'done' }));
+    expect(out).not.toContain('\x1b[');
+    expect(out).toContain('bold');
+  });
+});
+
+// ─── Narrow width (P2) ───────────────────────────────────────────────────────
+
+describe('toolCard – narrow terminal width', () => {
+  it('does not widen output beyond a narrow caller budget (width=10)', () => {
+    const out = lines(
+      toolCard({ toolName: 'bash', status: 'done', width: 10 }),
+    )[0]!;
+    // stripAnsi first, then measure visible width
+    expect(stripAnsi(out).length).toBeLessThanOrEqual(12); // 2 col slack for badge+space
+  });
+
+  it('does not widen output beyond a very narrow budget (width=5)', () => {
+    const out = lines(
+      toolCard({ toolName: 'read_file', status: 'done', width: 5 }),
+    )[0]!;
+    expect(stripAnsi(out).length).toBeLessThanOrEqual(7);
+  });
+
+  it('renders without crashing at width=1', () => {
+    expect(() =>
+      toolCard({ toolName: 'bash', status: 'done', inputSummary: 'x', outputPreview: 'y', width: 1 }),
+    ).not.toThrow();
+  });
+});
