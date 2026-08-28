@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.162.1] - 2026-08-28
+
+### Changed
+- gate subagent status ticker flush on second-boundary change (#1330) (#1354) (70520b7c)
+- remove dead renderEventsView export (#1335) (#1352) (183e44b1)
+- add coverage for stream-open-window writes and zero-write close (#1317) (#1349) (596ec25a)
+- add integration tests for subagent status bar processEvent lifecycle (#1329) (#1358) (5106a5e3)
+
 ## [5.162.0] - 2026-08-28
 
 ### Added
