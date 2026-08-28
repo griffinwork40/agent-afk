@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.165.0] - 2026-08-28
+
+### Added
+- add /ghost and /suggestions slash commands (#1365) (e44a5800)
+
 ## [5.164.1] - 2026-08-28
 
 ### Fixed
