@@ -183,6 +183,15 @@ describe('classifyRisk — bash high', () => {
   it('systemctl daemon-reload → high', () => {
     expect(classifyRisk('bash', { command: 'systemctl daemon-reload' }, ctx)).toBe('high');
   });
+
+  // ── false-positive guards (trailing-space convention) ─────────────────────
+  it('launchctl enable-linger → NOT high (trailing space guards enable)', () => {
+    expect(classifyRisk('bash', { command: 'launchctl enable-linger root' }, ctx)).not.toBe('high');
+  });
+
+  it('systemctl enable-linger → NOT high (trailing space guards enable)', () => {
+    expect(classifyRisk('bash', { command: 'systemctl enable-linger root' }, ctx)).not.toBe('high');
+  });
 });
 
 // ---- bash medium-risk patterns -------------------------------------------

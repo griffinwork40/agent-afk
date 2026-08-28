@@ -99,8 +99,12 @@ describe('detectDestructiveCommands', () => {
     ["psql -c 'DROP INDEX idx_name'", 'sql-drop-truncate'],
     ['terraform destroy -auto-approve', 'terraform-destroy'],
     // service-registration patterns (#1311 review)
+    ['launchctl load /Library/LaunchDaemons/com.example.plist', 'launchctl-service-register'],
     ['launchctl bootstrap gui/501 /path/to/com.example.plist', 'launchctl-service-register'],
+    ['launchctl submit -l com.example.service -- /usr/local/bin/mybin', 'launchctl-service-register'],
+    ['launchctl start com.example.service', 'launchctl-service-register'],
     ['launchctl kickstart -k gui/501/com.example.service', 'launchctl-service-register'],
+    ['launchctl enable system/com.example.service', 'launchctl-service-register'],
     ['systemctl enable afk-telegram.service', 'systemctl-service-enable'],
     ['systemctl --user enable --now afk-telegram.service', 'systemctl-service-enable'],
     ['systemctl --type=service enable afk-telegram.service', 'systemctl-service-enable'],

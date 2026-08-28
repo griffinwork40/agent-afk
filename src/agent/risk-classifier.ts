@@ -98,7 +98,7 @@ const BASH_HIGH: readonly string[] = [
   'launchctl load',
   'launchctl bootstrap',
   'launchctl submit',
-  'launchctl start',
+  'launchctl start ',
   'launchctl kickstart',
   'launchctl enable ',
   'systemctl enable ',
