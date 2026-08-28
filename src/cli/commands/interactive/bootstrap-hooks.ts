@@ -8,6 +8,7 @@ import type { CompletionWriter } from './shared.js';
 import { emitSubagentCompletion } from './progress-banner.js';
 import { createTerminalStateGate } from './terminal-state-gate.js';
 import { loadConfig } from '../../config.js';
+import type { DiffPayload } from '../../../utils/diff.js';
 
 /**
  * Build the stable hook registry shared across sessions (including
@@ -36,7 +37,11 @@ export function createReplHookRegistry(a: {
   stats: SessionStats;
   effectiveCwd: string | undefined;
   traceWriter: TraceSink | undefined;
-}): { hookRegistry: HookRegistry; pathApprovalGrantRef: { current: unknown } } {
+}): {
+  hookRegistry: HookRegistry;
+  pathApprovalGrantRef: { current: unknown };
+  addPreviewDiffRef: { current: (toolUseId: string, diff: DiffPayload) => void };
+} {
   const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { emitSubagentCompletion(a.completionWriter, info); },
     'cli',
@@ -48,6 +53,7 @@ export function createReplHookRegistry(a: {
   );
   const hookRegistry = hookRegistryBundle.registry;
   const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
+  const addPreviewDiffRef = hookRegistryBundle.addPreviewDiffRef;
 
   hookRegistry.register(
     'Stop',
@@ -57,5 +63,5 @@ export function createReplHookRegistry(a: {
     }),
   );
 
-  return { hookRegistry, pathApprovalGrantRef };
+  return { hookRegistry, pathApprovalGrantRef, addPreviewDiffRef };
 }

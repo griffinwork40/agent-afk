@@ -526,6 +526,12 @@ export interface InteractiveCtx {
    * call (enabling per-prompt policy hooks) and Stop after each completed turn.
    */
   hookRegistry?: HookRegistry;
+  /**
+   * Mutable ref threaded from `createReplHookRegistry` into the per-turn
+   * StreamRenderer so the edit-preview hook can deliver diff previews to the
+   * tool lane without importing CLI-layer modules. Absent on non-REPL callers.
+   */
+  addPreviewDiffRef?: { current: (toolUseId: string, diff: import('../../../utils/diff.js').DiffPayload) => void };
 }
 
 /**
@@ -760,6 +766,12 @@ export interface TurnHandles {
     stage: import('./loop-stage.js').LoopStage,
     signals?: import('./loop-stage.js').StageSignals,
   ): void;
+  /**
+   * Mutable ref threaded from `createReplHookRegistry` into the per-turn
+   * StreamRenderer so the edit-preview hook can deliver diff previews to the
+   * tool lane without importing CLI-layer modules. Absent on non-REPL callers.
+   */
+  addPreviewDiffRef?: { current: (toolUseId: string, diff: import('../../../utils/diff.js').DiffPayload) => void };
 }
 
 // `discardStdin: false` is load-bearing — ora's default wraps process.stdin

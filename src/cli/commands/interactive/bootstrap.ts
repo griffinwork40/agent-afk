@@ -124,7 +124,7 @@ export async function bootstrapSession(
   // Stable hookRegistry shared across sessions (including swaps), plus the
   // terminal-state Stop gate registered on top of it. `pathApprovalGrantRef`
   // is populated later (wireProviderGrants) once the provider exists.
-  const { hookRegistry, pathApprovalGrantRef } = createReplHookRegistry({
+  const { hookRegistry, pathApprovalGrantRef, addPreviewDiffRef } = createReplHookRegistry({
     completionWriter, memoryStore: sharedMemoryStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
@@ -343,6 +343,7 @@ export async function bootstrapSession(
       ? { suggestGhostConfig: cliConfig.interactive.suggestGhost }
       : {}),
     hookRegistry,
+    addPreviewDiffRef,
   };
 
   // Trusted-skill event subscriptions — emit in-flight + completion badges
