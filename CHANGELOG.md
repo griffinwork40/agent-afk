@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.163.0] - 2026-08-28
+
+### Added
+- reorder model name leftward in status line for visibility (#1343) (#1360) (9410f734)
+
+### Fixed
+- default AFK_SUBAGENT_LOG to off — raw tool args written without redaction (#1318) (#1359) (d85e1f1f)
+
 ## [5.162.1] - 2026-08-28
 
 ### Changed
