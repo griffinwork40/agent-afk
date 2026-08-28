@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.163.2] - 2026-08-28
+
+### Fixed
+- formatTokenCount boundary shows '100.0k' at 99999 (#1328) (#1348) (024c9325)
+
 ## [5.163.1] - 2026-08-28
 
 ### Fixed
