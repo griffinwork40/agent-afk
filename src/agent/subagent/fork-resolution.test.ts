@@ -329,6 +329,37 @@ describe('id and resume', () => {
     expect(resolveForkInputs(args).id).toMatch(/^my-prefix-/);
   });
 
+  it('sanitizes idPrefix by replacing disallowed characters with hyphens (#1319)', () => {
+    // A model-supplied id_prefix containing dots, spaces, or other chars outside
+    // [A-Za-z0-9_-] would cause assertSafeJobId to throw in SubagentLogWriter.
+    // Verify they are replaced with '-' before the id is assembled.
+    const args = makeArgs({
+      options: {
+        parent: { sessionId: 'sid' },
+        config: { model: 'sonnet' },
+        agentType: 'a',
+        idPrefix: 'research.agent',
+      },
+      counter: 1,
+    });
+
+    expect(resolveForkInputs(args).id).toMatch(/^research-agent-/);
+  });
+
+  it('sanitizes idPrefix with spaces', () => {
+    const args = makeArgs({
+      options: {
+        parent: { sessionId: 'sid' },
+        config: { model: 'sonnet' },
+        agentType: 'a',
+        idPrefix: 'my agent',
+      },
+      counter: 1,
+    });
+
+    expect(resolveForkInputs(args).id).toMatch(/^my-agent-/);
+  });
+
   it('defaults to "subagent" when idPrefix is omitted', () => {
     const args = makeArgs({
       options: {
