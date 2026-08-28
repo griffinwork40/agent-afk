@@ -15,6 +15,7 @@
 import { palette } from '../../palette.js';
 import { renderMarkdownToTerminal } from '../../formatter.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { toolCard } from '../../render/tool-card.js';
 import type { Message } from '../../../agent/types/message-types.js';
 
 // ---------------------------------------------------------------------------
@@ -127,15 +128,16 @@ function renderContentBlock(block: unknown): string {
   if (b['type'] === 'tool_use') {
     const name  = typeof b['name'] === 'string' ? b['name'] : '?';
     const input = b['input'] !== undefined ? JSON.stringify(b['input']) : '';
-    return [
-      palette.tool(`  ▶ tool_use: ${name}`),
-      input ? palette.dim(`    ${truncate(input, CONTENT_PREVIEW_CHARS)}`) : '',
-    ].filter(Boolean).join('\n');
+    return toolCard({
+      toolName: name,
+      status: 'running',
+      inputSummary: input ? truncate(input, CONTENT_PREVIEW_CHARS) : undefined,
+      width: Math.min(getTerminalWidth(), 100),
+    });
   }
 
   if (b['type'] === 'tool_result') {
     const isError = b['is_error'] === true;
-    const label   = isError ? palette.error('✗ tool_result') : palette.success('✓ tool_result');
     const content = b['content'];
     let preview   = '';
     if (typeof content === 'string') {
@@ -145,10 +147,14 @@ function renderContentBlock(block: unknown): string {
       const text  = first && typeof first['text'] === 'string' ? first['text'] : '';
       preview     = truncate(text, CONTENT_PREVIEW_CHARS);
     }
-    return [
-      `  ${label}`,
-      preview ? palette.dim(`    ${preview}`) : '',
-    ].filter(Boolean).join('\n');
+    // tool_result blocks don't carry the tool name (it's on the preceding
+    // tool_use block), so use a generic label.
+    return toolCard({
+      toolName: 'result',
+      status: isError ? 'error' : 'done',
+      outputPreview: preview || undefined,
+      width: Math.min(getTerminalWidth(), 100),
+    });
   }
 
   // Fallback: emit the block type as a dim badge.
