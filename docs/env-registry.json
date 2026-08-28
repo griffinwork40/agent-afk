@@ -754,10 +754,10 @@
     },
     {
       "name": "AFK_SUBAGENT_LOG",
-      "description": "Always-on per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. ON by default; set to 0 to disable.",
+      "description": "Opt-in per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments are written without redaction — consistent with AFK_CAPTURE_SUBAGENT_PROMPTS / AFK_CAPTURE_SUBAGENT_OUTPUT). Set to 1 to enable.",
       "type": "boolean",
       "required": false,
-      "default": "1",
+      "example": "1",
       "category": "debug"
     },
     {

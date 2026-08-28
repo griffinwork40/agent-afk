@@ -437,7 +437,7 @@ export class SubagentManager {
       effectiveAgentType = options.agentType?.trim() || undefined;
       effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
       const effectiveParentId = options.parentId?.trim() || undefined;
-      // Per-subagent conversation log — always on unless AFK_SUBAGENT_LOG=0.
+      // Per-subagent conversation log — opt-in via AFK_SUBAGENT_LOG=1 (off by default).
       // Use sessionLabel (the directory key for /tasks) rather than
       // options.parent.sessionId (the SDK runtime ID): writer and reader must
       // agree on the same key so logs are found after the handle is evicted.

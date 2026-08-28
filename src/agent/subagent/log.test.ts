@@ -48,7 +48,7 @@ function makeMessageEvent(): OutputEvent {
 }
 
 // ---------------------------------------------------------------------------
-// isEnabled opt-out
+// isEnabled opt-in (#1318: default changed from on to off)
 // ---------------------------------------------------------------------------
 
 describe('SubagentLogWriter.isEnabled', () => {
@@ -57,9 +57,9 @@ describe('SubagentLogWriter.isEnabled', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns true when AFK_SUBAGENT_LOG is unset', () => {
+  it('returns false when AFK_SUBAGENT_LOG is unset (off by default)', () => {
     delete process.env['AFK_SUBAGENT_LOG'];
-    expect(SubagentLogWriter.isEnabled()).toBe(true);
+    expect(SubagentLogWriter.isEnabled()).toBe(false);
   });
 
   it('returns false when AFK_SUBAGENT_LOG=0', () => {
