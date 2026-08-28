@@ -65,6 +65,13 @@ export class SubagentLogWriter {
   /**
    * Append an OutputEvent as a JSONL line.
    * Silently no-ops on error, after close, or when the file exceeds MAX_LOG_BYTES.
+   *
+   * Invariant: the cap allows a one-line overshoot. The guard fires before
+   * serialization, so the last admitted event may push the file up to
+   * MAX_LOG_BYTES + <size of that serialized line>. writeLine() applies the
+   * same guard, so the overshoot is bounded by the byte length of a single
+   * serialized event (in practice, ≤ a few KB). This is intentional — a
+   * strict hard cap would require a costly split across the line boundary.
    */
   write(event: OutputEvent): void {
     if (this.errored || this.closed || this.bytesWritten >= MAX_LOG_BYTES) return;
