@@ -1,13 +1,13 @@
 /**
  * Error presenter: renders a ClassifiedError to the terminal.
  *
- * TTY surfaces get a full errorBox with borders; non-TTY surfaces get a
+ * TTY surfaces get a full errorCard with borders; non-TTY surfaces get a
  * plain "afk: error:" line on stderr. Debug mode appends the raw stack.
  *
  * @module cli/errors/presenter
  */
 
-import { errorBox } from '../render.js';
+import { errorCard } from '../render.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 import type { ClassifiedError } from './classifier.js';
 
@@ -25,7 +25,7 @@ export function presentError(
   const write = opts?.write ?? ((s: string) => { process.stderr.write(s); });
 
   if (isTTY) {
-    write(errorBox(classified.userMessage, classified.hint) + '\n');
+    write(errorCard({ body: classified.userMessage, hint: classified.hint }) + '\n');
   } else {
     const hint = classified.hint ? ` (${classified.hint})` : '';
     write(`afk: error: ${classified.userMessage}${hint}\n`);

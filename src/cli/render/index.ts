@@ -17,3 +17,6 @@ export * from './card.js';
 export * from './divider.js';
 export * from './progress-bar.js';
 export * from './box.js';
+export * from './subagent-status-bar.js';
+export * from './stream-progress.js';
+export * from './error-card.js';

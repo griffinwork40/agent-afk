@@ -53,6 +53,7 @@ import { makeOrchestratorCtx } from './stream-renderer-contexts.js';
 import { processEvent, type ProcessCtx } from './stream-renderer-process.js';
 import { disposeRenderer, type DisposeCtx } from './stream-renderer-dispose.js';
 import { applyFirstContent } from './stream-renderer-ttfb.js';
+import { type SubagentStatusBarSpec } from '../render.js';
 
 export type { StreamRendererOptions } from './stream-renderer-options.js';
 import type { StreamRendererOptions } from './stream-renderer-options.js';
@@ -157,6 +158,12 @@ export class StreamRenderer {
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
   /** ResizeBus unsubscriber — re-derives the overlay at the new terminal width on resize. */
   private resizeUnsub: (() => void) | null = null;
+  /** Ticker for subagent elapsed-time updates (250ms); cleared in dispose(). */
+  private subagentTickInterval: ReturnType<typeof setInterval> | null = null;
+  /** Live status bars for active subagent dispatches, keyed by subagentId. */
+  private activeSubagents = new Map<string, SubagentStatusBarSpec>();
+  /** Start timestamps (Date.now()) for each active subagent, keyed by subagentId. */
+  private subagentStartedAt = new Map<string, number>();
 
   /** TTFB elapsed timer: start timestamp + done flag. See stream-renderer-ttfb.ts. */
   private readonly ttfbStartedAt: number | undefined;
@@ -314,13 +321,14 @@ export class StreamRenderer {
     // BackgroundStatusBar) and painted independently of the compositor frame.
     this.overlayComposer = new OverlayComposer(compositor, [
       'thinking-live',
+      'subagent-status',    // live status bars for active subagent dispatches
       'markdown-pending',
       'tool-lane',
       'progress-banner',
       'interrupt',
     ]);
 
-    // Register all five slots via the lifecycle module, which preserves
+    // Register all six slots via the lifecycle module, which preserves
     // the exact slot order. Each slot's render() method reads the
     // corresponding live state from the renderer's fields at flush time.
     registerOverlaySlots(this.overlayComposer, {
@@ -336,12 +344,27 @@ export class StreamRenderer {
       getSoftStopping: () => this.softStopping,
       getTtfbStartedAt: () => this.ttfbStartedAt,
       isTtfbDone: () => this.ttfbDone,
+      getActiveSubagents: () => this.activeSubagents,
     });
 
     // Reduced-motion suppresses the spinner ticker at the source. State-transition
     // repaints remain active — only the high-frequency 12.5 Hz animation is gated.
     compositor.setSpinner({ enabled: !this.reducedMotion, rotateVerbEveryMs: 3500 });
-    this.pauseTickInterval = setInterval(() => this.checkPauseAnnotations(), 80);
+    this.pauseTickInterval = setInterval(() => this.checkPauseAnnotations(), 80).unref();
+    // Subagent elapsed-time ticker: updates activeSubagents' elapsedMs fields and
+    // flushes the 'subagent-status' overlay slot every 250ms. Stopped in dispose().
+    this.subagentTickInterval = setInterval(() => {
+      if (this.disposed || this.activeSubagents.size === 0) return;
+      const now = Date.now();
+      for (const [id, spec] of this.activeSubagents) {
+        const startedAt = this.subagentStartedAt.get(id) ?? now;
+        this.activeSubagents.set(id, { ...spec, elapsedMs: now - startedAt });
+      }
+      if (this.overlayComposer) {
+        this.overlayComposer.markDirty('subagent-status');
+        this.overlayComposer.flush();
+      }
+    }, 250).unref();
     // Re-derive the composed overlay (tool lane / thinking / progress) at the
     // current terminal width whenever the window resizes. The markdown stream
     // owns its own resize subscription; this covers the rest of the overlay
@@ -477,6 +500,9 @@ export class StreamRenderer {
       activeSkillName: this.activeSkillName,
       onStageChange: this.onStageChange,
       buildOrchestratorCtx: () => this.buildOrchestratorCtx(),
+      activeSubagents: this.activeSubagents,
+      subagentStartedAt: this.subagentStartedAt,
+      overlayComposerForStatus: this.overlayComposer,
     };
     processEvent(ctx, event, meta);
   }
@@ -488,6 +514,12 @@ export class StreamRenderer {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Clear the subagent elapsed-time ticker immediately — it guards against
+    // `this.disposed` but clearing here is cleaner and avoids one extra tick.
+    if (this.subagentTickInterval !== null) {
+      clearInterval(this.subagentTickInterval);
+      this.subagentTickInterval = null;
+    }
     // Contract: clear softStopping on the class BEFORE building the DisposeCtx
     // snapshot. The overlay's progress-banner slot reads this.softStopping via
     // the getSoftStopping closure registered in arm(), not through the ref
