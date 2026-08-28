@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.164.0] - 2026-08-28
+
+### Added
+- wire toolCard into task-view + fix duplicate barrel export (#1361) (3255790b)
+
 ## [5.163.3] - 2026-08-28
 
 ### Fixed
