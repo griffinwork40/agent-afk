@@ -83,6 +83,8 @@ describe('subagentStatusStack', () => {
   });
 
   it('caps at maxLines and shows overflow', () => {
+    // 5 entries, maxLines=3: reserve 1 slot for overflow → show 2 entries +
+    // 1 overflow line = 3 total lines (respects the cap).
     const entries = [
       { label: 'a', elapsedMs: 1000 },
       { label: 'b', elapsedMs: 2000 },
@@ -93,21 +95,25 @@ describe('subagentStatusStack', () => {
     const result = stripAnsi(subagentStatusStack(entries, 3));
     expect(result).toContain('a');
     expect(result).toContain('b');
-    expect(result).toContain('c');
-    // 'd' and 'e' are in the overflow summary, not rendered individually
+    // 'c', 'd', 'e' are in the overflow summary, not rendered individually
+    expect(result).not.toContain(' c ');
     expect(result).not.toContain(' d ');
     expect(result).not.toContain(' e ');
-    expect(result).toContain('+2 more running');
+    expect(result).toContain('+3 more running');
+    // Total line count must not exceed maxLines (3)
+    expect(result.split('\n')).toHaveLength(3);
   });
 
   it('respects custom maxLines', () => {
+    // 3 entries, maxLines=1: reserve 1 slot for overflow → show 0 entries +
+    // 1 overflow line = 1 total line (respects the cap).
     const entries = [
       { label: 'a', elapsedMs: 1000 },
       { label: 'b', elapsedMs: 2000 },
       { label: 'c', elapsedMs: 3000 },
     ];
     const result = stripAnsi(subagentStatusStack(entries, 1));
-    expect(result).toContain('a');
-    expect(result).toContain('+2 more running');
+    expect(result).toContain('+3 more running');
+    expect(result.split('\n')).toHaveLength(1);
   });
 });

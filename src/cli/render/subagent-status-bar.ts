@@ -1,4 +1,4 @@
-import { displayWidth } from '../display.js';
+import { displayWidth, truncateDisplayWidth } from '../display.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { palette } from '../palette.js';
 
@@ -20,25 +20,40 @@ export function subagentStatusBar(spec: SubagentStatusBarSpec): string {
   const width = Math.min(getTerminalWidth(), 120);
 
   // ── Left: glyph + label ──
-  const glyph = palette.chrome('◉');
-  const label = palette.tool(spec.label);
-  const left = `${glyph} ${label}`;
-  const leftPlain = `◉ ${spec.label}`;
-
-  // ── Center: phase + elapsed ──
-  const elapsed = formatElapsed(spec.elapsedMs);
-  const phase = spec.phase ? palette.dim(spec.phase) : '';
-  const phasePlain = spec.phase ?? '';
-
-  // ── Right: batch badge (optional) ──
-  const batch =
-    spec.batchIndex != null && spec.batchSize != null
-      ? palette.dim(`∥${spec.batchIndex}/${spec.batchSize}`)
-      : '';
-  const batchPlain =
+  // Truncate the label so the assembled row does not exceed `width`. Reserve
+  // space for: glyph(1) + space(1) + separator gap(2) + elapsed(≤5) = 9 chars
+  // minimum, plus optional phase and batch. We compute a conservative label
+  // budget first, then clamp.
+  const glyphWidth = 1; // '◉'
+  const elapsedPlain = formatElapsed(spec.elapsedMs);
+  const phasePlainRaw = spec.phase ?? '';
+  const batchPlainRaw =
     spec.batchIndex != null && spec.batchSize != null
       ? `∥${spec.batchIndex}/${spec.batchSize}`
       : '';
+  const fixedOtherWidth =
+    glyphWidth +
+    1 + // space after glyph
+    2 + // gap between label and fill/phase
+    (phasePlainRaw ? displayWidth(phasePlainRaw) + 2 : 0) +
+    displayWidth(elapsedPlain) +
+    (batchPlainRaw ? 2 + displayWidth(batchPlainRaw) : 0);
+  const labelBudget = Math.max(3, width - fixedOtherWidth);
+  const labelRaw = truncateDisplayWidth(spec.label, labelBudget);
+
+  const glyph = palette.chrome('◉');
+  const label = palette.tool(labelRaw);
+  const left = `${glyph} ${label}`;
+  const leftPlain = `◉ ${labelRaw}`;
+
+  // ── Center: phase + elapsed ──
+  const elapsed = elapsedPlain;
+  const phase = phasePlainRaw ? palette.dim(phasePlainRaw) : '';
+  const phasePlain = phasePlainRaw;
+
+  // ── Right: batch badge (optional) ──
+  const batch = batchPlainRaw ? palette.dim(batchPlainRaw) : '';
+  const batchPlain = batchPlainRaw;
 
   // ── Assemble with fill ──
   const fixedWidth =
@@ -73,8 +88,9 @@ export function subagentStatusStack(
 ): string {
   if (entries.length === 0) return '';
 
-  const visible = entries.slice(0, maxLines);
-  const overflow = entries.length - maxLines;
+  const hasOverflow = entries.length > maxLines;
+  const visible = entries.slice(0, hasOverflow ? maxLines - 1 : maxLines);
+  const overflow = entries.length - visible.length;
 
   const lines = visible.map((e) => subagentStatusBar(e));
 
