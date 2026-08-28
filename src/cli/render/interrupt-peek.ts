@@ -1,3 +1,4 @@
+import { truncateDisplayWidth } from '../display.js';
 import { palette } from '../palette.js';
 
 // ─── InterruptPeek ───────────────────────────────────────────────────────────
@@ -57,12 +58,17 @@ function formatElapsed(ms: number): string {
  */
 export function interruptPeek(spec: InterruptPeekSpec): string {
   const indent = '  ';
+  const width = spec.width ?? 80;
+  // Account for the 2-character indent when computing the usable content width.
+  const contentWidth = Math.max(1, width - indent.length);
   const lines: string[] = [];
 
   // ── Line 1: warning glyph + status text ──
   const statusText =
     spec.status === 'interrupting' ? 'interrupting…' : 'interrupted';
-  lines.push(indent + palette.warning(`⚠ ${statusText}`));
+  lines.push(
+    indent + truncateDisplayWidth(palette.warning(`⚠ ${statusText}`), contentWidth),
+  );
 
   // ── Line 2 (optional): subagent context ──
   if (spec.activeSubagent) {
@@ -71,12 +77,16 @@ export function interruptPeek(spec: InterruptPeekSpec): string {
     const elapsedPart =
       elapsed != null ? ` (${formatElapsed(elapsed)})` : '';
     const contextText = `▸ ${name} — ${activity}${elapsedPart}`;
-    lines.push(indent + palette.meta(contextText));
+    lines.push(
+      indent + truncateDisplayWidth(palette.meta(contextText), contentWidth),
+    );
   }
 
   // ── Line 3: hint ──
   const hintText = spec.hint ?? 'Ctrl+C again to exit';
-  lines.push(indent + palette.dim(hintText));
+  lines.push(
+    indent + truncateDisplayWidth(palette.dim(hintText), contentWidth),
+  );
 
   return lines.join('\n');
 }

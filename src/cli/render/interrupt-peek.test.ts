@@ -105,4 +105,24 @@ describe('interruptPeek', () => {
     const lines = result.split('\n').filter(Boolean);
     expect(lines).toHaveLength(3);
   });
+
+  it('truncates lines to the specified width', () => {
+    const result = stripAnsi(
+      interruptPeek({
+        status: 'interrupting',
+        activeSubagent: {
+          name: 'a-very-long-subagent-name-that-exceeds-limits',
+          currentTool: 'bash',
+          elapsed: 99000,
+        },
+        hint: 'This is a very long hint text that should be truncated by the width option',
+        width: 30,
+      }),
+    );
+    const lines = result.split('\n').filter(Boolean);
+    // Every line must be at most 30 columns wide (including the 2-char indent).
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(30);
+    }
+  });
 });
