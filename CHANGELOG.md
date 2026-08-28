@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.161.0] - 2026-08-28
+
+### Added
+- add ToolCard component (#1341) (03c3b082)
+
 ## [5.160.0] - 2026-08-28
 
 ### Added
