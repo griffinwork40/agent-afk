@@ -137,7 +137,7 @@ describe('StreamRenderer — orchestrator source (no subagentId)', () => {
     expect(output).toContain('Read');
   });
 
-  it('renders error events as errorBox', async () => {
+  it('renders error events as errorCard', async () => {
     const { writer, lines } = makeWriter();
     const r = new StreamRenderer({ out: writer, forceNonTty: true });
     r.process(errorEvent('something went wrong'));

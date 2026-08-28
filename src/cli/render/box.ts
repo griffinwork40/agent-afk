@@ -36,7 +36,7 @@ const V = '│';
  * A low-level, reusable layout primitive: it computes a rectangular inner
  * width, wraps each content line to fit, clamps + pads every line to equal
  * width, and frames the result with a colored border and optional title chip.
- * Mirrors the shape vocabulary of {@link card} / {@link errorBox} (rounded
+ * Mirrors the shape vocabulary of {@link card} / {@link errorCard} (rounded
  * corners, 1-col default padding) so those callers can later be unified onto it.
  *
  * Content wider than the inner width is word-wrapped; an unbreakable token

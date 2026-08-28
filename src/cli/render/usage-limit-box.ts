@@ -9,7 +9,7 @@ import { drawBox } from './box.js';
 /**
  * Render a friendly "Usage paused" card for OAuth subscription limits and
  * API credit exhaustion. Uses `palette.warning` (yellow) for the border and
- * chip — distinguishable from the red `errorBox` and from plain info panels.
+ * chip — distinguishable from the red `errorCard` and from plain info panels.
  *
  * `opts.reason === 'usage-limit'`   — OAuth subscription limit hit.
  * `opts.reason === 'credit-exhausted'` — API key credit balance empty.

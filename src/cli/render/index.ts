@@ -11,7 +11,6 @@
 export * from './status-panel.js';
 export * from './welcome-banner.js';
 export * from './help-table.js';
-export * from './error-box.js';
 export * from './usage-limit-box.js';
 export * from './card.js';
 export * from './divider.js';
