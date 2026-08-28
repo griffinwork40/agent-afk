@@ -103,6 +103,7 @@ describe('detectDestructiveCommands', () => {
     ['launchctl kickstart -k gui/501/com.example.service', 'launchctl-service-register'],
     ['systemctl enable afk-telegram.service', 'systemctl-service-enable'],
     ['systemctl --user enable --now afk-telegram.service', 'systemctl-service-enable'],
+    ['systemctl --type=service enable afk-telegram.service', 'systemctl-service-enable'],
     ['systemctl daemon-reload', 'systemctl-service-enable'],
   ])('BLOCK: flags %j → %s', (command, expectedId) => {
     expect(detectDestructiveCommands(command)).toContain(expectedId);
