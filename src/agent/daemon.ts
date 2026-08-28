@@ -75,6 +75,31 @@ export interface DaemonOptions {
    * service daemon's port file, silently severing live-sync until restart.
    */
   writePortFile?: boolean;
+  /**
+   * Proactive OAuth token refresher (optional).
+   *
+   * When provided, `startDaemon` installs a background timer that calls this
+   * function every `oauthRefreshIntervalMs` (default 4 hours). This prevents
+   * the chicken-and-egg failure where a long-lived daemon tries to use an
+   * expired OAuth token — the token may expire between startup and the first
+   * scheduled task, or between tasks on a long-running daemon, so the
+   * per-request 401-retry path never gets a chance to fire.
+   *
+   * Injected from the CLI layer (`src/cli/commands/daemon.ts`) following the
+   * `doneUnverifiedProbe` injection pattern — `src/agent/` does not import
+   * `src/agent/auth/keychain.ts` unconditionally; the credential plumbing
+   * belongs to the CLI wiring layer.
+   *
+   * The function must never throw; errors are handled internally. Return value
+   * is ignored. Tests may pass a spy to verify timer behaviour without network.
+   */
+  oauthRefresher?: () => Promise<unknown>;
+  /**
+   * Interval (ms) at which `oauthRefresher` is called. Defaults to 4 hours
+   * (14 400 000 ms). Claude Code OAuth tokens typically expire after 8 hours,
+   * so a 4-hour interval refreshes well before the halfway point.
+   */
+  oauthRefreshIntervalMs?: number;
 }
 
 export interface DaemonHandle {
@@ -148,6 +173,35 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     }
   }
 
+  // ── Proactive OAuth token refresh timer (#1296) ──────────────────────────
+  // Problem: a long-lived daemon may hold an OAuth access token that expires
+  // hours into its run. The per-request 401-retry path (auth-retry-tier.ts)
+  // only fires on an actual API call, so if the token expires between tasks
+  // there is no request to trigger a refresh — the next task simply fails
+  // with 401 and the daemon cannot recover.
+  //
+  // Fix: when the caller injects an `oauthRefresher`, install a background
+  // setInterval that calls it periodically. The refresher is a no-op when
+  // the token is still valid (keychain.ts checks `expiresAt + REFRESH_MARGIN_MS`
+  // before hitting the network), so the interval cost is negligible.
+  //
+  // The timer is `unref()`'d so it does not prevent `process.exit()` in
+  // `--once` runs or tests that don't call `stop()`.
+  const DEFAULT_OAUTH_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+  let oauthRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  if (options.oauthRefresher !== undefined) {
+    const refresher = options.oauthRefresher;
+    const intervalMs = options.oauthRefreshIntervalMs ?? DEFAULT_OAUTH_REFRESH_INTERVAL_MS;
+    oauthRefreshTimer = setInterval(() => {
+      void refresher().catch(() => {
+        // Errors are suppressed — the per-request 401 retry remains the
+        // last-resort safety net. A failed proactive refresh is not fatal.
+        process.stderr.write('agent-afk [daemon]: proactive OAuth token refresh failed\n');
+      });
+    }, intervalMs);
+    oauthRefreshTimer.unref();
+  }
+
   return {
     port,
     host,
@@ -165,6 +219,10 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
       return scheduler.fireOnStart();
     },
     async stop() {
+      if (oauthRefreshTimer !== undefined) {
+        clearInterval(oauthRefreshTimer);
+        oauthRefreshTimer = undefined;
+      }
       await scheduler.stop();
       // Delete the port file on graceful shutdown — but only if it still
       // records OUR port. Another daemon instance may have (re)claimed the

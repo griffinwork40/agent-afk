@@ -998,6 +998,99 @@ describe('notifyChat threading in CronScheduler', () => {
   });
 });
 
+describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
+  let handle: DaemonHandle | null = null;
+
+  afterEach(async () => {
+    if (handle) {
+      await handle.stop();
+      handle = null;
+    }
+  });
+
+  it('calls oauthRefresher on the configured interval', async () => {
+    vi.useFakeTimers();
+    const refresher = vi.fn(async () => undefined);
+    handle = await startDaemon({
+      port: 0,
+      writePortFile: false,
+      oauthRefresher: refresher,
+      oauthRefreshIntervalMs: 100,
+    });
+
+    expect(refresher).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    // Flush micro-task queue so the async refresher resolves.
+    await Promise.resolve();
+    expect(refresher).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(200);
+    await Promise.resolve();
+    expect(refresher).toHaveBeenCalledTimes(3);
+
+    vi.useRealTimers();
+  });
+
+  it('stop() clears the refresh timer — no further calls after stop', async () => {
+    vi.useFakeTimers();
+    const refresher = vi.fn(async () => undefined);
+    handle = await startDaemon({
+      port: 0,
+      writePortFile: false,
+      oauthRefresher: refresher,
+      oauthRefreshIntervalMs: 100,
+    });
+    await handle.stop();
+    handle = null;
+
+    vi.advanceTimersByTime(500);
+    await Promise.resolve();
+    expect(refresher).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('a throwing refresher logs to stderr but does not propagate', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let resolve!: () => void;
+    // Use a real short interval so we don't need fake timers. The refresher
+    // rejects on first call; the test resolves as soon as stderr is written.
+    const settled = new Promise<void>((r) => { resolve = r; });
+    const refresher = vi.fn(async () => {
+      throw new Error('network timeout');
+    });
+    handle = await startDaemon({
+      port: 0,
+      writePortFile: false,
+      oauthRefresher: async () => {
+        try { await refresher(); } catch (e) { resolve(); throw e; }
+      },
+      // Very short real interval — 10 ms is enough in CI.
+      oauthRefreshIntervalMs: 10,
+    });
+    await settled;
+    // Let the catch handler in startDaemon run.
+    await new Promise<void>((r) => setImmediate(r));
+
+    expect(refresher).toHaveBeenCalledTimes(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('proactive OAuth token refresh failed'),
+    );
+    stderrSpy.mockRestore();
+  });
+
+  it('no timer is installed when oauthRefresher is omitted', async () => {
+    vi.useFakeTimers();
+    // Should not throw or install any timer. We cannot directly observe the
+    // interval, but we verify that stop() succeeds and the daemon functions
+    // normally — previously the oauthRefreshTimer undefined-check ensured
+    // clearInterval is safely skipped.
+    handle = await startDaemon({ port: 0, writePortFile: false });
+    await handle.stop();
+    handle = null;
+    vi.useRealTimers();
+  });
+});
+
 // SessionFactory return-type indirection — keeps the cast localized so the
 // fake-session shape doesn't need to satisfy the full AgentSession class.
 type SessionFactoryReturn = NonNullable<
