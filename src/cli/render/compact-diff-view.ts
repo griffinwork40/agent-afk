@@ -14,6 +14,7 @@
 import { palette } from '../palette.js';
 import { stripAnsi } from '../display.js';
 import { drawBox } from './box.js';
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -89,7 +90,7 @@ function colorLine(line: string): string {
  *   `src/foo.ts  +12 -5`
  */
 function buildStatHeader(spec: CompactDiffSpec): string {
-  const fp = palette.fileRef(spec.filePath);
+  const fp = palette.fileRef(sanitizeForDisplay(spec.filePath));
   const added = palette.diffAdd(`+${spec.stats.added}`);
   const removed = palette.diffRemove(`-${spec.stats.removed}`);
   return `${fp}  ${added} ${removed}`;

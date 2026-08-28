@@ -290,6 +290,20 @@ describe('compactDiffView', () => {
   });
 
   describe('security / sanitization', () => {
+    it('strips control characters from filePath in the stat header', () => {
+      // A filePath containing BEL, CR, LF, and an OSC escape sequence
+      const adversarialPath = 'src/\x07evil\r\n\x1b]8;;https://evil.example\x07file.ts';
+      const out = compactDiffView(makeSpec({ filePath: adversarialPath }));
+      // Raw control chars must not appear in the output
+      expect(out).not.toContain('\x07');
+      expect(out).not.toContain('\r');
+      expect(out).not.toContain('\n\n'); // only the stat/box separator newline is expected
+      // The benign text fragments must survive
+      expect(strip(out)).toContain('src/');
+      expect(strip(out)).toContain('evil');
+      expect(strip(out)).toContain('file.ts');
+    });
+
     it('strips ANSI codes from raw diff line content', () => {
       const out = compactDiffView(
         makeSpec({
