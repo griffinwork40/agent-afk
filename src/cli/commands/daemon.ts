@@ -39,6 +39,7 @@ import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
+import { providerForModel } from '../../agent/providers/index.js';
 
 /**
  * Options for {@link buildDaemonSessionFactory}.
@@ -451,8 +452,7 @@ export function registerDaemonCommand(program: Command): void {
       // specific repo/worktree without changing cwd before launch.
       const daemonCwd = env.AFK_DAEMON_CWD;
 
-      const daemonModel = getModel();
-      const daemonApiKey = getApiKey();
+      const daemonModel = getModel(), daemonApiKey = getApiKey();
       const daemonCwdResolved = daemonCwd !== undefined && daemonCwd.length > 0 ? daemonCwd : undefined;
 
       // Import any plugin JS entrypoints (manifest `main`) once at daemon
@@ -497,7 +497,7 @@ export function registerDaemonCommand(program: Command): void {
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
           // Proactive OAuth refresh (#1296) — only for OAuth-routed sessions.
-          ...(!daemonApiKey && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN ? { oauthRefresher: async () => { const { refreshClaudeCodeOauthToken } = await import('../../agent/auth/keychain.js'); await refreshClaudeCodeOauthToken(); } } : {}),
+          ...(providerForModel(String(daemonModel)) === 'anthropic-direct' && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN ? { oauthRefresher: async () => { const { refreshClaudeCodeOauthToken } = await import('../../agent/auth/keychain.js'); await refreshClaudeCodeOauthToken(); } } : {}),
           // "Done"-verification probe — see `isDoneUnverified` above.
           doneUnverifiedProbe: isDoneUnverified,
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
