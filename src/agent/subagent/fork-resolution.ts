@@ -92,7 +92,8 @@ export interface ForkResolved {
 export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
   const { options, counter, managerHookRegistry, parentTraceWriter, parentModel } = args;
 
-  const id = `${options.idPrefix ?? 'subagent'}-${Date.now()}-${counter}`;
+  const safePrefix = (options.idPrefix ?? 'subagent').replace(/[^A-Za-z0-9_-]/g, '-');
+  const id = `${safePrefix}-${Date.now()}-${counter}`;
   const resume = options.parent.sessionId;
 
   const registry =
