@@ -75,7 +75,7 @@
 
 import { homedir } from 'os';
 import path from 'path';
-import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
+
 import type { HookContext, HookDecision } from '../../hooks.js';
 import {
   BUILTIN_READ_DENYLIST,
@@ -133,13 +133,12 @@ export const SENSITIVE_PATH_SIGNAL =
 
 export interface BashRestrictionHookOptions {
   /**
-   * Returns the active grant manager (provider). Used to read the current
-   * grant snapshot so the substring check knows which paths are trusted.
-   * Returns undefined during the bootstrap race; in that case the hook
-   * fails open (no bash restriction) because blocking on bootstrap would
-   * leave the user unable to recover.
+   * @deprecated (#528) — use `context.grantManager` (injected per-session by
+   * the dispatcher) instead. This field is a test-only fallback; production
+   * code must NOT populate it. Survives so existing unit tests need not be
+   * rewritten.
    */
-  getGrantManager: () => GrantManager | undefined;
+  getGrantManager?: () => (import('../../../cli/slash/commands/allow-dir.js').GrantManager | undefined);
   /**
    * When true, skip the interpreter-eval denylist (check 1 below). The
    * restricted-root substring check (check 2) is unaffected. Wired from
@@ -188,11 +187,13 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // surfaces (afk chat, daemon, threads, subagents of headless sessions)
     // never wire it.
     //
-    // Prefer the dispatcher-injected grant manager (this session's provider)
-    // over the process-global ref so a forked child's restricted-root view is
-    // derived from ITS own grants, not the top-level session's (#435/#514).
-    // The ref remains the fallback when no dispatcher injected one.
-    const grantManager = context.grantManager ?? opts.getGrantManager();
+    // Use the dispatcher-injected grant manager (this session's provider) so a
+    // forked child's restricted-root view is derived from ITS own grants, not
+    // the top-level session's (#435/#514). The process-global ref has been
+    // retired (#528); `context.grantManager` is the primary source.
+    // `opts.getGrantManager` is a deprecated test-only fallback (never used
+    // in production); see BashRestrictionHookOptions.getGrantManager JSDoc.
+    const grantManager = context.grantManager ?? opts.getGrantManager?.();
     const interactiveSurface = grantManager !== undefined;
 
     // Precompute the sensitive-path view ONCE — both checks below consume it.

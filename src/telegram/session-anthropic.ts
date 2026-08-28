@@ -182,11 +182,10 @@ export async function buildAnthropicTelegramSession(
   // permission mode — flipped by /afk on (handlers/afk.ts).
   telegramSessionForMode = session;
   reportSession(session);
-  // Wire the path-approval grant ref to the provider so elicitation
-  // approvals mutate readRoots / writeRoots on the right backend.
-  telegramHookBundle.pathApprovalGrantRef.current = directProvider;
   // Seed read/write roots from persisted `persist` grants so the
   // prompt's "future sessions inherit it" promise holds. No-op when none.
+  // The former pathApprovalGrantRef.current wiring has been retired (#528):
+  // the path-approval hook reads the grant manager from context.grantManager.
   seedPersistedGrants(directProvider);
   boundSession = session;
   // Subagent-success rollup: wire both the root manager and the compose

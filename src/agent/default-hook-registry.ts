@@ -24,7 +24,6 @@ import {
   type PathApprovalSurface,
 } from './tools/hooks/path-approval-hook.js';
 import { createBashRestrictionHook } from './tools/hooks/bash-restriction-hook.js';
-import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
@@ -40,24 +39,6 @@ export interface SubagentCompleteInfo {
 export interface DefaultHookRegistryResult {
   registry: HookRegistry;
   memoryStore: MemoryStore;
-  /**
-   * Mutable ref the surface bootstrap MUST populate with the active provider
-   * (which implements {@link GrantManager}) after session construction. Path-
-   * approval + bash-restriction hooks dereference this on every PreToolUse;
-   * leaving it null makes the path-approval hook fail OPEN — it skips the
-   * elicitation prompt (the typed-file-tool handler's own resolveAndContain
-   * still enforces containment), and the bash hook's restricted-root substring
-   * check also fails open. (The bash interpreter denylist still hard-blocks
-   * regardless — it runs before the grant-manager gate. See the registration
-   * block below for the full per-surface breakdown.)
-   *
-   * Wiring pattern (see `src/cli/commands/interactive/bootstrap.ts:532`):
-   *   pathApprovalGrantRef.current = provider;
-   *
-   * The same ref drives `setAllowDirDispatcher(provider)` callers — both
-   * read the live provider grant API.
-   */
-  pathApprovalGrantRef: { current: GrantManager | undefined };
 }
 
 /**
@@ -180,10 +161,11 @@ export function createDefaultHookRegistry(
   // path first when both could apply (e.g. an edit_file followed by a bash
   // grep against the same restricted root within one turn).
   //
-  // Invariant: only the REPL and Telegram bootstraps wire
-  // `pathApprovalGrantRef.current` (see bootstrap.ts / telegram bot.start).
-  // Headless surfaces (afk chat, daemon, threads) register these hooks but
-  // never wire the ref, so on those surfaces:
+  // Invariant: path-approval and bash-restriction hooks read the grant manager
+  // from `context.grantManager` (injected per-session by the dispatcher since
+  // #527; the former process-global ref was retired in #528). Headless surfaces
+  // (afk chat, daemon, threads) never wire a sessionGrantManager into the
+  // dispatcher, so on those surfaces:
   //   - path-approval PreToolUse: fails open (no prompt; the typed-tool
   //     handler's own resolveAndContain still enforces containment);
   //   - bash restricted-root substring check: fails open (no backstop);
@@ -193,9 +175,10 @@ export function createDefaultHookRegistry(
   //     blocked with no recourse. Opt headless flows back into the guard with
   //     AFK_FORCE_BASH_INTERPRETER_GUARD=1; disable the whole feature with
   //     AFK_DISABLE_PATH_APPROVAL=1.
-  const pathApprovalGrantRef: { current: GrantManager | undefined } = {
-    current: undefined,
-  };
+  //
+  // The former process-global `pathApprovalGrantRef` has been retired (#528).
+  // Both hooks now read the grant manager exclusively from `context.grantManager`
+  // — injected per-session by the dispatcher since #527.
   const disabled = env.AFK_DISABLE_PATH_APPROVAL === '1';
   if (disabled && !warnedPathApprovalDisabled) {
     warnedPathApprovalDisabled = true;
@@ -207,7 +190,6 @@ export function createDefaultHookRegistry(
   }
   if (!disabled) {
     const pathApproval = createPathApprovalHook({
-      getGrantManager: () => pathApprovalGrantRef.current,
       // Prefer an explicit getCwd callback (REPL/Telegram bootstrap thread a
       // live `extras.cwd`); otherwise fall back to the static cwd carried in
       // main's `agentOptions` (scheduler/chat/threads callers). Both feed the
@@ -233,7 +215,6 @@ export function createDefaultHookRegistry(
     registry.register(
       'PreToolUse',
       createBashRestrictionHook({
-        getGrantManager: () => pathApprovalGrantRef.current,
         // Granular knobs for the interpreter-eval denylist (the rest of
         // path-approval is unaffected; AFK_DISABLE_PATH_APPROVAL=1 short-
         // circuits the whole `if (!disabled)` block above):
@@ -314,7 +295,7 @@ export function createDefaultHookRegistry(
     });
   }
 
-  return { registry, memoryStore: store, pathApprovalGrantRef };
+  return { registry, memoryStore: store };
 }
 
 /**

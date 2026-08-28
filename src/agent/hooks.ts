@@ -216,7 +216,7 @@ export interface PreToolUseContext {
    * cwd/readRoots/writeRoots rather than a process-global ref pinned to the
    * top-level session (the #435/#514 write-confinement gap). When absent
    * (non-dispatcher-originated dispatch, unit tests), those hooks fall back to
-   * their `opts.getGrantManager()` ref, preserving prior behavior.
+   * their per-session closure state, preserving prior behavior.
    */
   grantManager?: GrantManager;
 }

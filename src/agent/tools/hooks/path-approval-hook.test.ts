@@ -81,13 +81,35 @@ function makeMockGrantManager(initial?: {
   };
 }
 
-function preCtx(toolName: string, input: unknown): PreToolUseContext {
-  return { event: 'PreToolUse', toolName, input, sessionId: 'sess-1' };
+function preCtx(
+  toolName: string,
+  input: unknown,
+  grantManager?: ReturnType<typeof makeMockGrantManager>,
+): PreToolUseContext {
+  return {
+    event: 'PreToolUse',
+    toolName,
+    input,
+    sessionId: 'sess-1',
+    ...(grantManager !== undefined ? { grantManager } : {}),
+  };
 }
 
-function postCtx(toolName: string, input: unknown): PostToolUseContext {
-  return { event: 'PostToolUse', toolName, input, sessionId: 'sess-1' };
+function postCtx(
+  toolName: string,
+  input: unknown,
+  grantManager?: ReturnType<typeof makeMockGrantManager>,
+): PostToolUseContext {
+  return {
+    event: 'PostToolUse',
+    toolName,
+    input,
+    sessionId: 'sess-1',
+    ...(grantManager !== undefined ? { grantManager } : {}),
+  };
 }
+
+
 
 beforeEach(() => {
   elicitationRouter.uninstall();

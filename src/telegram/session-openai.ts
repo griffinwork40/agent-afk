@@ -97,10 +97,9 @@ export async function buildOpenAiTelegramSession(
   // reads this session's live permission mode.
   codexSessionForMode = session;
   reportSession(session);
-  // Wire the path-approval grant ref + seed persisted `persist` grants so
-  // the OpenAI Telegram surface gets the same restricted-path prompts and
-  // persisted-grant replay as the Anthropic branch.
-  codexHookBundle.pathApprovalGrantRef.current = codexProvider;
+  // Seed persisted `persist` grants so the OpenAI Telegram surface gets the
+  // same persisted-grant replay as the Anthropic branch. The former
+  // pathApprovalGrantRef.current wiring has been retired (#528).
   seedPersistedGrants(codexProvider);
 
   return session;

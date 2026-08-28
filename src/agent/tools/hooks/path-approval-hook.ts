@@ -85,14 +85,6 @@ export type PathApprovalSurface = 'repl' | 'telegram' | 'web' | 'unknown';
 
 export interface PathApprovalHookOptions {
   /**
-   * Returns the active grant manager (provider instance) or undefined if not
-   * yet wired (e.g. session bootstrap is racing with the first tool call).
-   * When undefined, the hook fails open (skip approval) so headless/one-shot
-   * surfaces without a wire-up step keep working with the existing handler
-   * `resolveAndContain` enforcement.
-   */
-  getGrantManager: () => GrantManager | undefined;
-  /**
    * Returns the current cwd / resolveBase used by the dispatcher. Required to
    * mirror the handler's `resolveAndContain` semantics; without it, the hook
    * cannot reproduce the same containment verdict the handler will reach.
@@ -103,6 +95,15 @@ export interface PathApprovalHookOptions {
    * provenance (`elicit:repl` vs. `elicit:telegram`). Static per session.
    */
   surface: PathApprovalSurface;
+  /**
+   * @deprecated (#528) — use `context.grantManager` (injected per-session by
+   * the dispatcher) instead. This field is ignored on any call that provides
+   * `context.grantManager`; it survives only as a test-only fallback so
+   * existing unit tests can still supply a mock grant manager without being
+   * rewritten to thread it through every `HookContext`. Production code must
+   * NOT pass this — the production path never falls back to it.
+   */
+  getGrantManager?: () => GrantManager | undefined;
 }
 
 /** Shared closure state between the Pre/Post hooks. */
@@ -122,6 +123,14 @@ interface PathApprovalState {
   onceApproved: Map<string, { resolvedPath: string; mode: 'read' | 'write'; capturedCwd: string | undefined }>;
   /** In-flight elicitations — dedupes concurrent prompts for the same path. */
   inFlight: Map<string, Promise<HookDecision>>;
+  /**
+   * The grant manager resolved during the most recent PreToolUse invocation.
+   * Stored so the SessionEnd safety-net can revoke outstanding "Once" grants
+   * without needing a process-global ref: SessionEnd context carries no
+   * `grantManager` field (it is not a tool call), so we cache it here once
+   * the per-session dispatcher injects it via `context.grantManager`.
+   */
+  lastSeenGrantManager: GrantManager | undefined;
 }
 
 export interface PathApprovalHookHandlers {
@@ -157,6 +166,7 @@ export function createPathApprovalHook(
     sessionApproved: new Set<string>(),
     onceApproved: new Map<string, { resolvedPath: string; mode: 'read' | 'write'; capturedCwd: string | undefined }>(),
     inFlight: new Map<string, Promise<HookDecision>>(),
+    lastSeenGrantManager: undefined,
   };
 
   // Forward the turn/dispatch `signal` (second handler arg) into the impl so a
@@ -191,19 +201,24 @@ async function preToolUseImpl(
   // are sampled from the grant manager using the same fresh-snapshot pattern
   // the dispatcher uses on every handler call.
   //
-  // Prefer the grant manager injected by the executing session's dispatcher
-  // (context.grantManager) over the process-global ref: for a forked child the
-  // ref is pinned to the TOP-LEVEL session and blind to the child's own
-  // writeRoots, so a writeRoots-granted sibling write would be auto-denied even
-  // though the child's grants permit it (#435/#514). The ref remains the
-  // fallback for non-dispatcher-originated dispatch (tests, SessionEnd).
-  const grantManager = context.grantManager ?? opts.getGrantManager();
+  // The per-session dispatcher injects `context.grantManager` on every
+  // PreToolUse / PostToolUse call (#527) — this is now the PRIMARY source;
+  // the former process-global `pathApprovalGrantRef` fallback has been
+  // retired (#528). `opts.getGrantManager` survives only as a deprecated
+  // test-only fallback so existing unit tests need not be rewritten; it
+  // must NOT be populated by production code. Cache the resolved manager
+  // in state so the SessionEnd safety-net can reach it without a
+  // process-global ref.
+  const grantManager = context.grantManager ?? opts.getGrantManager?.();
   if (!grantManager) {
-    // Failsafe — no wired grant manager (headless, one-shot, daemon). Skip
-    // the approval pre-check and let the handler's own resolveAndContain
-    // enforce containment as it does today. Documented in module header.
+    // Failsafe — no wired grant manager (headless, one-shot, daemon, or a
+    // test dispatcher constructed without a provider). Skip the approval
+    // pre-check and let the handler's own resolveAndContain enforce
+    // containment as it does today. Documented in module header.
     return {};
   }
+  // Cache for SessionEnd (which carries no grantManager on its context).
+  state.lastSeenGrantManager = grantManager;
   const grants = grantManager.getGrants();
   // Invariant: capture cwd ONCE here and thread it into the onceApproved
   // entry. postToolUseImpl reuses this stored value (not a fresh getCwd())
@@ -335,7 +350,7 @@ async function preToolUseImpl(
 }
 
 function postToolUseImpl(
-  opts: PathApprovalHookOptions,
+  _opts: PathApprovalHookOptions,
   state: PathApprovalState,
   context: HookContext,
 ): HookDecision {
@@ -350,9 +365,13 @@ function postToolUseImpl(
     ? 'write'
     : 'read';
 
-  // Prefer the dispatcher-injected grant manager (same session as PreToolUse)
+  // Use the dispatcher-injected grant manager (same session as PreToolUse)
   // so the "Once"-grant revoke targets the manager the Pre check mutated.
-  const grantManager = context.grantManager ?? opts.getGrantManager();
+  // Fall back to the closure-cached value so a PostToolUse dispatched without
+  // an injected provider (unit tests, SessionEnd) still finds the manager that
+  // was resolved when the Pre handler ran. The deprecated `opts.getGrantManager`
+  // is NOT consulted here — the cache always has priority.
+  const grantManager = context.grantManager ?? state.lastSeenGrantManager;
   if (!grantManager) return {};
   const grants = grantManager.getGrants();
 
@@ -421,12 +440,17 @@ function postToolUseImpl(
  * double-revoke (PostToolUse already ran, then this sweep) is harmless.
  */
 function sessionEndImpl(
-  opts: PathApprovalHookOptions,
+  _opts: PathApprovalHookOptions,
   state: PathApprovalState,
   context: HookContext,
 ): HookDecision {
   if (context.event !== 'SessionEnd') return {};
-  const grantManager = opts.getGrantManager();
+  // SessionEnd context carries no `grantManager` (it is not a tool call).
+  // Use the value cached by the last PreToolUse invocation. If the session
+  // ended without ever running a PreToolUse (empty session, no file reads),
+  // `lastSeenGrantManager` is undefined and onceApproved is already empty —
+  // the clear() below is still correct.
+  const grantManager = state.lastSeenGrantManager;
   if (grantManager) {
     for (const { resolvedPath } of state.onceApproved.values()) {
       grantManager.revokeRoot(resolvedPath, 'tool');
