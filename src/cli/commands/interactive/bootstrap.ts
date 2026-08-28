@@ -23,6 +23,7 @@ import { createReplSlashContext } from './bootstrap-slash-context.js';
 import { wireTrustedSkillEvents, wireProviderGrants, createReplInput } from './bootstrap-wiring.js';
 import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
+import { setTasksIctx } from '../../slash/commands/tasks.js';
 
 // Re-exported so `resume-swap.test.ts` (and the mid-session swap closure
 // below) can resolve `buildAgentSession` from this module — the historical
@@ -351,6 +352,10 @@ export async function bootstrapSession(
   ctx.teardownTrustedSkillEvents = wireTrustedSkillEvents(completionWriter, trustedSkillLedger);
 
   registerAll();
+
+  // Wire the InteractiveCtx into /tasks so viewingTaskId is set correctly
+  // when the user opens a task view (#1332).
+  setTasksIctx(ctx);
 
   // Wire /allow-dir to the startup provider's grant API so the slash command
   // can mutate read/write roots across turns. Must run AFTER registerAll()
