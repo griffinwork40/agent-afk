@@ -487,6 +487,7 @@ export function builtinBashSensitiveRoots(): readonly string[] {
     path.join(home, 'Library', 'LaunchDaemons'),
     '/Library/LaunchAgents',
     '/Library/LaunchDaemons',
+    path.join(home, '.config', 'systemd'),
     path.join(home, '.config', 'systemd', 'user'),
     ...BUILTIN_READ_DENYLIST,
   ]);

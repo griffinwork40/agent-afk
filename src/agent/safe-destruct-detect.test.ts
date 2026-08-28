@@ -98,8 +98,20 @@ describe('detectDestructiveCommands', () => {
     ["psql -c 'DROP SCHEMA public'", 'sql-drop-truncate'],
     ["psql -c 'DROP INDEX idx_name'", 'sql-drop-truncate'],
     ['terraform destroy -auto-approve', 'terraform-destroy'],
+    // service-registration patterns (#1311 review)
+    ['launchctl bootstrap gui/501 /path/to/com.example.plist', 'launchctl-service-register'],
+    ['launchctl kickstart -k gui/501/com.example.service', 'launchctl-service-register'],
+    ['systemctl enable afk-telegram.service', 'systemctl-service-enable'],
+    ['systemctl --user enable --now afk-telegram.service', 'systemctl-service-enable'],
+    ['systemctl daemon-reload', 'systemctl-service-enable'],
   ])('BLOCK: flags %j → %s', (command, expectedId) => {
     expect(detectDestructiveCommands(command)).toContain(expectedId);
+  });
+
+  // ── enable-linger false-positive fix (#1311 Item 3) ──────────────────────
+  it('systemctl enable-linger root → does NOT match systemctl-service-enable', () => {
+    const ids = detectDestructiveCommands('systemctl enable-linger root');
+    expect(ids).not.toContain('systemctl-service-enable');
   });
 
   // ── benign commands — must match nothing ────────────────────────────────────

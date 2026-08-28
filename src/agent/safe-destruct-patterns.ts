@@ -242,14 +242,14 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   },
   {
     id: 'launchctl-service-register',
-    re: /\blaunchctl\s+(load|bootstrap|submit|start)\b/i,
+    re: /\blaunchctl\s+(?:--?\w[\w-]*\s+)*(load|bootstrap|submit|start|kickstart|enable)(?:\s|$)/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
   },
   {
     id: 'systemctl-service-enable',
-    re: /\bsystemctl\s+(enable|start|daemon-reload)\b/i,
+    re: /\bsystemctl\s+(?:--?\w[\w-]*\s+)*(enable|start|daemon-reload)(?:\s|$)/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
