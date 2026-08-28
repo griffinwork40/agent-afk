@@ -16,7 +16,7 @@ import {
   welcomeBanner,
   helpTable,
   divider,
-  errorBox,
+  errorCard,
   card,
   usageLimitBox,
 } from './render.js';
@@ -637,9 +637,9 @@ describe('width-aware boxes and divider', () => {
     expect(maxLine).toBeLessThanOrEqual(48);
   });
 
-  it('errorBox caps inner width at 100 on very wide terminals', () => {
+  it('errorCard caps inner width on very wide terminals', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 200, configurable: true });
-    const out = strip(errorBox('E', 'detail'));
+    const out = strip(errorCard({ body: 'E', hint: 'detail' }));
     const top = out.split('\n')[0] ?? '';
     expect(top.length).toBeLessThanOrEqual(106);
   });
@@ -654,10 +654,10 @@ describe('width-aware boxes and divider', () => {
     expect(strip(divider()).length).toBe(60);
   });
 
-  it('errorBox wraps a very long title across multiple box rows', () => {
+  it('errorCard wraps a very long body across multiple box rows', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 50, configurable: true });
-    const longTitle = 'word '.repeat(20).trim();
-    const out = strip(errorBox(longTitle));
+    const longBody = 'word '.repeat(20).trim();
+    const out = strip(errorCard({ body: longBody }));
     const rowCount = out.split('\n').filter((l) => l.includes('│')).length;
     expect(rowCount).toBeGreaterThan(1);
   });

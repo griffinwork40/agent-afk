@@ -14,7 +14,7 @@
  */
 
 import { palette } from '../src/cli/palette.js';
-import { errorBox, usageLimitBox } from '../src/cli/render.js';
+import { errorCard, usageLimitBox } from '../src/cli/render.js';
 
 /* ─── 1. The error the Anthropic SDK actually throws ──────────────────── */
 /**
@@ -151,7 +151,7 @@ function previewCli(err: Error, label: string): void {
   console.log(HR);
 
   console.log(palette.bold('Before:'));
-  console.log(errorBox(err.message, err.stack?.split('\n').slice(0, 3).join('\n')));
+  console.log(errorCard({ body: err.message, hint: err.stack?.split('\n').slice(0, 3).join('\n') }));
   console.log();
 
   const info = classifyUsageLimit(err);

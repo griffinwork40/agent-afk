@@ -89,7 +89,7 @@ const CARD_DEFAULT_TITLE: Record<Exclude<CardKind, 'user'>, string> = {
  * via color + title chip.
  *
  * Bordered kinds (`plan`, `status`, `checkpoint`, `diagnosis`) follow the
- * same shape vocabulary as {@link errorBox}: a colored border with a bold
+ * same shape vocabulary as {@link errorCard}: a colored border with a bold
  * title chip in the top bar and 2-space inner padding.
  *
  * The `user` kind is a thin chat-bubble variant — a width-capped block of
@@ -211,7 +211,7 @@ function renderBorderedCard(
   const styledLines = bodyLines.map(renderCardLine);
 
   // Inner width: title chip + body content + 4-char padding, capped to the
-  // terminal width (mirrors errorBox math). drawBox re-clamps to
+  // terminal width (mirrors errorCard math). drawBox re-clamps to
   // maxInnerBoxWidth() and guarantees the title chip fits, so a long title in
   // a narrow terminal stays rectangular instead of throwing on a negative dash
   // count (the prior hand-rolled '─'.repeat math did before this unification).
