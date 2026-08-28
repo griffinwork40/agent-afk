@@ -24,7 +24,7 @@
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 
 const AFK_HOME = process.env['AFK_HOME'] || join(homedir(), '.afk');
 const STATE_DIR = process.env['AFK_STATE_DIR'] || join(AFK_HOME, 'state');
