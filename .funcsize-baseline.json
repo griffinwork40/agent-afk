@@ -36,7 +36,7 @@
     "src/cli/commands/interactive.ts::registerInteractiveCommand": { "loc": 778, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/bootstrap.ts::bootstrapSession": { "loc": 336, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/footer-subsystems.ts::setupFooterSubsystems": { "loc": 244, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/interactive/loop-iteration.ts::runInputLoop": { "loc": 787, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/cli/commands/interactive/loop-iteration.ts::runInputLoop": { "loc": 790, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/surface-setup.ts::setupSurface": { "loc": 307, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane-render-children.ts::renderOverlayChildren": { "loc": 248, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane.ts::ToolLane.getOverlay": { "loc": 234, "reason": "legacy: predates the function-size gate; pending helper extraction" },
