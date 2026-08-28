@@ -170,6 +170,45 @@ describe('SubagentLogWriter.close flushes pending lines', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Stream-open-window concurrent writes (#1317)
+// ---------------------------------------------------------------------------
+
+describe('stream-open-window concurrent writes', () => {
+  it('writes queued before the open event all appear in JSONL output', async () => {
+    const subId = 'sub-open-window';
+    const w = new SubagentLogWriter(SESSION, subId);
+
+    // Fire multiple writes in rapid succession — stream exists but `open`
+    // has not fired yet, so all lines land in pendingLines.
+    const eventCount = 5;
+    for (let i = 0; i < eventCount; i++) {
+      w.write(makeChunkEvent(`event-${i}`));
+    }
+
+    await w.close();
+
+    const events: OutputEvent[] = [];
+    for await (const e of SubagentLogReader.readEvents(SESSION, subId)) {
+      events.push(e);
+    }
+
+    // Every event written in the open-window must be flushed and readable.
+    expect(events).toHaveLength(eventCount);
+    for (let i = 0; i < eventCount; i++) {
+      expect(events[i]).toMatchObject({ type: 'chunk' });
+    }
+  });
+
+  it('close() with zero writes resolves without error', async () => {
+    const subId = 'sub-zero-writes';
+    const w = new SubagentLogWriter(SESSION, subId);
+
+    // No writes at all — close() should resolve cleanly.
+    await expect(w.close()).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MAX_LOG_BYTES cap
 // ---------------------------------------------------------------------------
 
