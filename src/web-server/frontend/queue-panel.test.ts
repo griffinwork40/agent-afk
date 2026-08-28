@@ -168,8 +168,9 @@ describe('QueuePanel — one entry per turn', () => {
     await settle();
 
     // ↑ on the second row (index 1) — the control the write-through made dead.
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
     const rowButtons = h.container.querySelectorAll('.queue-row')[1]?.querySelectorAll('button');
-    (rowButtons?.[0] as HTMLButtonElement).click();
+    (rowButtons?.[1] as HTMLButtonElement).click();
     expect(h.rows()).toEqual(['third', 'second']);
 
     h.setTurnActive(false);
@@ -279,8 +280,9 @@ describe('QueuePanel — reorder helpers are wired to the rendered controls', ()
     type(h, 'b');
     await settle();
 
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
     const buttons = h.container.querySelectorAll('.queue-row')[0]?.querySelectorAll('button');
-    (buttons?.[2] as HTMLButtonElement).click();
+    (buttons?.[3] as HTMLButtonElement).click();
     expect(h.rows()).toEqual(['b']);
   });
 
@@ -291,8 +293,9 @@ describe('QueuePanel — reorder helpers are wired to the rendered controls', ()
     type(h, 'b');
     await settle();
 
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
     const buttons = h.container.querySelectorAll('.queue-row')[0]?.querySelectorAll('button');
-    (buttons?.[1] as HTMLButtonElement).click();
+    (buttons?.[2] as HTMLButtonElement).click();
     expect(h.rows()).toEqual(['b', 'a']);
   });
 
@@ -305,5 +308,47 @@ describe('QueuePanel — reorder helpers are wired to the rendered controls', ()
     copy.push('injected');
     expect(h.panel.entries()).toEqual(['a']);
     expect(vi.isMockFunction(h.panel.flush)).toBe(false);
+  });
+});
+
+describe('QueuePanel — inline edit button', () => {
+  /** Click the edit button on row `rowIndex` and return the live <input>. */
+  function openEdit(h: Harness, rowIndex: number): HTMLInputElement {
+    // Button layout per row: [0]=✎ (edit), [1]=↑, [2]=↓, [3]=✕
+    const row = h.container.querySelectorAll('.queue-row')[rowIndex];
+    const editBtn = row?.querySelectorAll('button')[0] as HTMLButtonElement;
+    editBtn.click();
+    return row?.querySelector('input.queue-edit-input') as HTMLInputElement;
+  }
+
+  it('Escape restores the original value and does NOT call editAt', async () => {
+    const h = harness();
+    h.setTurnActive(true);
+    type(h, 'original');
+    await settle();
+
+    const input = openEdit(h, 0);
+    input.value = 'changed';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    // The queue must still hold the untouched original value.
+    expect(h.panel.entries()).toEqual(['original']);
+    // The label span must be back in the DOM, not the edit input.
+    expect(h.container.querySelector('input.queue-edit-input')).toBeNull();
+    expect(h.rows()).toEqual(['original']);
+  });
+
+  it('Enter commits the new value', async () => {
+    const h = harness();
+    h.setTurnActive(true);
+    type(h, 'original');
+    await settle();
+
+    const input = openEdit(h, 0);
+    input.value = 'updated';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(h.panel.entries()).toEqual(['updated']);
+    expect(h.rows()).toEqual(['updated']);
   });
 });

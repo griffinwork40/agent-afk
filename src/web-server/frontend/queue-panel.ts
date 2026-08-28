@@ -12,7 +12,7 @@
  * queue/composer block was the seam with the fewest edges back into it.
  */
 
-import { moveDown, moveUp, removeAt } from './queue-reorder.js';
+import { moveDown, moveUp, removeAt, editAt } from './queue-reorder.js';
 import { notifyValueChanged } from './composer-value.js';
 
 export interface QueuePanelDeps {
@@ -77,10 +77,46 @@ export class QueuePanel {
     this.queue.forEach((text, i) => {
       const row = document.createElement('div');
       row.className = 'queue-row';
+
       const label = document.createElement('span');
       label.className = 'queue-text';
       label.textContent = text;
       row.appendChild(label);
+
+      // Edit button — swaps the span for an inline input.
+      const editBtn = document.createElement('button');
+      editBtn.className = 'queue-btn';
+      editBtn.textContent = '✎';
+      editBtn.title = 'Edit';
+      editBtn.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.className = 'queue-text queue-edit-input';
+        input.value = text;
+        row.replaceChild(input, label);
+        input.focus();
+        // Invariant: blur must not commit when Escape was pressed. Removing a
+        // focused element fires blur synchronously, so without this guard the
+        // Escape handler's replaceChild triggers a commit() call that
+        // overwrites the queue entry the user intended to cancel.
+        let committed = false;
+        const commit = (): void => {
+          if (committed) return;
+          committed = true;
+          this.queue = editAt(this.queue, i, input.value);
+          this.render();
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            committed = true;
+            row.replaceChild(label, input);
+          }
+        });
+        input.addEventListener('blur', commit);
+      });
+      row.appendChild(editBtn);
+
       for (const [glyph, fn] of [
         ['↑', (): void => { this.queue = moveUp(this.queue, i); }],
         ['↓', (): void => { this.queue = moveDown(this.queue, i); }],
