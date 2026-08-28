@@ -613,7 +613,7 @@ describe('StatusLine with cwd field', () => {
     status.stop();
   });
 
-  it('places cwd before model so right-edge truncation preserves it', () => {
+  it('places model before cwd so it is the leftmost informational chip (#1343)', () => {
     const status = new StatusLine({
       stream: stream as unknown as NodeJS.WriteStream,
       throttleMs: 0,
@@ -625,7 +625,8 @@ describe('StatusLine with cwd field', () => {
     const cwdIdx = out.indexOf('/tmp/foo');
     const modelIdx = out.indexOf('sonnet');
     expect(cwdIdx).toBeGreaterThanOrEqual(0);
-    expect(modelIdx).toBeGreaterThan(cwdIdx);
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(modelIdx).toBeLessThan(cwdIdx); // model is leftmost — appears before cwd (#1343)
     status.stop();
   });
 });
@@ -683,7 +684,7 @@ describe('StatusLine with git branch + PR field', () => {
     status.stop();
   });
 
-  it('places the branch after cwd and before the model', () => {
+  it('places model before cwd and branch so it is the leftmost informational chip (#1343)', () => {
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start();
     stream.writes.length = 0;
@@ -693,8 +694,8 @@ describe('StatusLine with git branch + PR field', () => {
     const branchIdx = out.indexOf('feat/x');
     const modelIdx = out.indexOf('sonnet');
     expect(cwdIdx).toBeGreaterThanOrEqual(0);
-    expect(branchIdx).toBeGreaterThan(cwdIdx);
-    expect(modelIdx).toBeGreaterThan(branchIdx);
+    expect(branchIdx).toBeGreaterThan(cwdIdx); // branch still follows cwd
+    expect(modelIdx).toBeLessThan(cwdIdx); // model now precedes cwd and branch (#1343)
     status.stop();
   });
 
