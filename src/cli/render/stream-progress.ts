@@ -1,4 +1,5 @@
 import { palette } from '../palette.js';
+import { formatElapsed } from './utils.js';
 
 // ─── Stream Progress ─────────────────────────────────────────────────────────
 
@@ -72,14 +73,4 @@ function formatCost(cents: number): string {
   if (cents < 1) return `$${(cents / 100).toFixed(4)}`;
   if (cents < 100) return `$${(cents / 100).toFixed(2)}`;
   return `$${(cents / 100).toFixed(0)}`;
-}
-
-/** Format elapsed milliseconds as a compact human string. */
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return '<1s';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
 }

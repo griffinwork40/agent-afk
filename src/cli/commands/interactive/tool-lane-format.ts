@@ -3,6 +3,7 @@ import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import { statusBadge } from '../../render/status-badge.js';
 import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
 import { humanVerbForTool } from '../../tool-category.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
@@ -43,8 +44,8 @@ export {
  * it was benign, and guessing in that direction hides real breakage.
  */
 export function doneGlyph(isError: boolean | undefined, failureClass?: ToolFailureClass): string {
-  if (!isError) return palette.success('✓');
-  return isBenignFailure(failureClass) ? palette.warning('⊘') : palette.error('✗');
+  if (!isError) return statusBadge('done');
+  return isBenignFailure(failureClass) ? statusBadge('blocked') : statusBadge('error');
 }
 
 /**
