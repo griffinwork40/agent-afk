@@ -43,6 +43,36 @@ describe('errorCard', () => {
     expect(stripAnsi(result)).toContain('Oops');
   });
 
+  it('renders stack when provided', () => {
+    const result = stripAnsi(
+      errorCard({
+        body: 'Unexpected failure',
+        stack: 'at foo (bar.ts:10:5)\nat baz (qux.ts:20:3)',
+      }),
+    );
+    expect(result).toContain('Unexpected failure');
+    expect(result).toContain('at foo (bar.ts:10:5)');
+    expect(result).toContain('at baz (qux.ts:20:3)');
+  });
+
+  it('renders hint and stack independently', () => {
+    const result = stripAnsi(
+      errorCard({
+        body: 'Connection refused',
+        hint: 'Check that the server is running',
+        stack: 'at connect (net.ts:5:1)',
+      }),
+    );
+    expect(result).toContain('Connection refused');
+    expect(result).toContain('Check that the server is running');
+    expect(result).toContain('at connect (net.ts:5:1)');
+  });
+
+  it('omits stack section when not provided', () => {
+    const result = stripAnsi(errorCard({ body: 'Oops', hint: 'Try again' }));
+    expect(result).not.toContain('at ');
+  });
+
   it('has bordered output (rounded corners)', () => {
     const result = errorCard({ body: 'test' });
     expect(result).toContain('╭');
