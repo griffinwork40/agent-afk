@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.163.1] - 2026-08-28
+
+### Fixed
+- log errors from enterTaskViewMode instead of swallowing (#1334) (#1357) (fc31c3dd)
+
 ## [5.163.0] - 2026-08-28
 
 ### Added
