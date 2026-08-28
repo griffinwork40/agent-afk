@@ -539,6 +539,9 @@ export class TerminalCompositor {
    */
   activeGhost: string | null = null;
 
+  /** Session-scoped ghost-text pause. Toggled by `/ghost off` / `/ghost on`. */
+  ghostPaused = false;
+
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   debugLog(stage: string, extra: Record<string, unknown> = {}): void {
     if (!this.debugCompositor) return;
