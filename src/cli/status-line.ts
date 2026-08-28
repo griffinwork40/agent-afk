@@ -428,14 +428,16 @@ export class StatusLine {
   }
 
   private formatLine(f: StatusLineFields): string {
-    // Invariant: parts are built in semantic order (cwd/branch, model, plan,
+    // Invariant: parts are built in semantic order (model, cwd/branch, plan,
     // context, cost, tokens), tagged with droppability priority so narrow
     // terminals can shed lower-priority fields before resorting to right-edge
     // truncation that arbitrarily loses model info. Drop order (drop-first →
     // drop-last): tokens → cost → context bar → branch. The branch drops LAST
     // among droppables because it is identity ("which branch am I on?"), like
-    // cwd. Never drop: cwd, model, plan. When cwd and branch are deduped into
-    // one merged segment (see worktreeDedupe below), that segment inherits the
+    // cwd. Never drop: model, cwd, plan. Model is pushed FIRST (#1343) so it
+    // occupies the leftmost slot — the position the eye reaches first when
+    // scanning a narrow tmux pane. When cwd and branch are deduped into one
+    // merged segment (see worktreeDedupe below), that segment inherits the
     // branch's droppablePriority 1 (drop-last among droppables), NOT never-drop:
     // a never-drop location there would stack with the never-drop model and
     // force right-edge truncation to lose model info on a narrow terminal, so
@@ -457,6 +459,14 @@ export class StatusLine {
     // so none of the drop/truncate math below is affected.
     let parts: Part[] = [];
     const maxW = Math.max(4, (this.stream.columns ?? 80) - 2);
+
+    // Model chip is pushed FIRST so it appears at the leftmost informational
+    // position. It is never-drop, so the shed loop never removes it; placing it
+    // first also protects it from right-edge truncation — any right-edge shear
+    // always hits the rightmost fields (tokens, cost, context) first. This moves
+    // the most glanceable identity field to the position the eye hits earliest
+    // when scanning a narrow tmux pane (#1343).
+    parts.push({ text: palette.brand(f.model) }); // never drop
 
     // Invariant: afk-worktree cwd/branch dedupe. `.afk-worktrees/<slug>`
     // directories are named by replacing `/` with `-` in the branch that
@@ -528,8 +538,6 @@ export class StatusLine {
 
     // Trusted-skill in-flight indicator no longer renders on the status line;
     // it is emitted inline via completionWriter (see bootstrap.ts).
-    parts.push({ text: palette.brand(f.model) }); // never drop
-
     if (f.permissionMode === 'plan') {
       parts.push({ text: palette.warning('● plan') }); // never drop
     } else if (f.permissionMode === 'autonomous') {
