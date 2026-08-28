@@ -246,6 +246,25 @@ describe('enterTaskViewMode — completed handle', () => {
     // After completion, viewingTaskId is cleared (completed path)
     expect(ictx.viewingTaskId).toBeUndefined();
   });
+
+  it('clears soft-stop handler after viewing a completed task (#1338)', async () => {
+    // Arrange: completed handle with in-memory history
+    const h = makeHandle('h-1338', 'succeeded');
+    const manager = makeManager([h]);
+
+    const handlerCalls: Array<(() => void) | null> = [];
+    const { ctx } = makeCtx();
+    ctx.setSoftStopHandler = vi.fn().mockImplementation((fn: (() => void) | null) => {
+      handlerCalls.push(fn);
+    });
+
+    await enterTaskViewMode({ id: 'h-1338', manager, sessionLabel: 'lbl', ctx });
+
+    // wireEscapeToExit sets a handler, then the completed path must clear it.
+    expect(handlerCalls.length).toBeGreaterThanOrEqual(2);
+    // Final call must be null — the stale handler must not survive return.
+    expect(handlerCalls[handlerCalls.length - 1]).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

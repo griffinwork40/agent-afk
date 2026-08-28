@@ -202,6 +202,10 @@ export async function enterTaskViewMode(entry: TaskViewEntry): Promise<void> {
   // viewingTaskId is cleared immediately since there's no blocking tail loop.
   if (!isRunning) {
     if (ictx) ictx.viewingTaskId = undefined;
+    // Clear the soft-stop handler we just installed — callers in the
+    // completed (in-memory) path return immediately and never enter a tail
+    // loop, so the handler must not linger as a stale closure (#1338).
+    entry.ctx.setSoftStopHandler?.(null);
     return;
   }
 
