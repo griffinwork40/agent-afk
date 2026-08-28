@@ -1,6 +1,7 @@
 import { displayWidth, truncateDisplayWidth } from '../display.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { palette } from '../palette.js';
+import { formatElapsed } from './utils.js';
 
 // ─── Subagent Status Bar ─────────────────────────────────────────────────────
 
@@ -116,14 +117,4 @@ export interface SubagentStatusBarSpec {
   batchSize?: number;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Format elapsed milliseconds as a compact human string. */
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return '<1s';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
-}
+// ─── Helpers are now imported from utils.ts ──────────────────────────────────

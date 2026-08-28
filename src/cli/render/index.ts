@@ -20,3 +20,5 @@ export * from './box.js';
 export * from './subagent-status-bar.js';
 export * from './stream-progress.js';
 export * from './error-card.js';
+export * from './status-badge.js';
+export * from './utils.js';
