@@ -94,13 +94,24 @@ export class QueuePanel {
         input.value = text;
         row.replaceChild(input, label);
         input.focus();
+        // Invariant: blur must not commit when Escape was pressed. Removing a
+        // focused element fires blur synchronously, so without this guard the
+        // Escape handler's replaceChild triggers a commit() call that
+        // overwrites the queue entry the user intended to cancel.
+        let committed = false;
         const commit = (): void => {
+          if (committed) return;
+          committed = true;
           this.queue = editAt(this.queue, i, input.value);
           this.render();
         };
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') commit();
-          if (e.key === 'Escape') { row.replaceChild(label, input); }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            committed = true;
+            row.replaceChild(label, input);
+          }
         });
         input.addEventListener('blur', commit);
       });

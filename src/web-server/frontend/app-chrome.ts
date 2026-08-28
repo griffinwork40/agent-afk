@@ -50,7 +50,9 @@ export function wireSidebarClose(): void {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
+    // Guard: the queue-edit Escape handler calls e.preventDefault() so that
+    // cancelling an inline edit does not also close the sidebar drawer.
+    if (e.key === 'Escape' && !e.defaultPrevented) {
       sidebar?.classList.remove('is-open');
     }
   });
