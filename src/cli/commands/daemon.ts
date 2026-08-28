@@ -39,6 +39,7 @@ import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
+import { providerForModel } from '../../agent/providers/index.js';
 
 /**
  * Options for {@link buildDaemonSessionFactory}.
@@ -282,6 +283,12 @@ export function formatTaskCompletion(
   return lines.join('\n');
 }
 
+/** "Done"-verification probe for the daemon gate. Pure and total — never throws. */
+const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText: string; successfulToolNames: readonly string[] }): boolean => {
+  const v = parseTerminalState(responseText);
+  return v !== null && v.kind === 'done' && !successfulToolNames.some((n) => DONE_EVIDENCE_TOOLS.has(n));
+};
+
 export function registerDaemonCommand(program: Command): void {
   program
     .command('daemon')
@@ -445,8 +452,7 @@ export function registerDaemonCommand(program: Command): void {
       // specific repo/worktree without changing cwd before launch.
       const daemonCwd = env.AFK_DAEMON_CWD;
 
-      const daemonModel = getModel();
-      const daemonApiKey = getApiKey();
+      const daemonModel = getModel(), daemonApiKey = getApiKey();
       const daemonCwdResolved = daemonCwd !== undefined && daemonCwd.length > 0 ? daemonCwd : undefined;
 
       // Import any plugin JS entrypoints (manifest `main`) once at daemon
@@ -490,20 +496,10 @@ export function registerDaemonCommand(program: Command): void {
           ...(cooldownMs !== undefined ? { cooldownMs } : {}),
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
-          // "Done"-verification probe (opt-in via daemon.verifyDone; computed
-          // every tick, acted on only when the config gate is enabled). Composes
-          // the SAME reusables the REPL uses — `parseTerminalState` +
-          // `doneHasCorroboratingEvidence` semantics — so the daemon flags an
-          // unbacked `Done` identically to the interactive surface. Injected
-          // here (the CLI layer) rather than imported by the scheduler, which
-          // lives in `src/agent/` and must not depend on `src/cli/`. Pure + total
-          // (never throws); the scheduler additionally guards it.
-          doneUnverifiedProbe: ({ responseText, successfulToolNames }) => {
-            const verdict = parseTerminalState(responseText);
-            if (verdict === null || verdict.kind !== 'done') return false;
-            const hasEvidence = successfulToolNames.some((name) => DONE_EVIDENCE_TOOLS.has(name));
-            return !hasEvidence;
-          },
+          // Proactive OAuth refresh (#1296) — only for OAuth-routed sessions.
+          ...(providerForModel(String(daemonModel)) === 'anthropic-direct' && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN ? { oauthRefresher: async () => { const { refreshClaudeCodeOauthToken } = await import('../../agent/auth/keychain.js'); await refreshClaudeCodeOauthToken(); } } : {}),
+          // "Done"-verification probe — see `isDoneUnverified` above.
+          doneUnverifiedProbe: isDoneUnverified,
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
             // markdown:true — task output is agent-authored markdown; render it
             // to Telegram HTML so **bold**/`code`/headers format instead of

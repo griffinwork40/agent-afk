@@ -77,6 +77,7 @@ vi.mock('../errors/index.js', () => ({
 import { startDaemon } from '../../agent/daemon.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { loadConfig, loadTelegramConfig } from '../config.js';
+import { getApiKey, getModel } from '../shared-helpers.js';
 import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget } from './daemon.js';
 import {
   resolveTriggerMode,
@@ -90,6 +91,8 @@ const mockStartDaemon = vi.mocked(startDaemon);
 const mockLoadConfig = vi.mocked(loadConfig);
 const mockPushIfConfigured = vi.mocked(pushIfConfigured);
 const mockLoadTelegramConfig = vi.mocked(loadTelegramConfig);
+const mockGetApiKey = vi.mocked(getApiKey);
+const mockGetModel = vi.mocked(getModel);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -188,6 +191,8 @@ describe('afk daemon (CLI integration)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetApiKey.mockReturnValue(undefined);
+    mockGetModel.mockReturnValue('sonnet');
     consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     // Prevent SIGINT handler registration from persisting across tests
     originalSigint = undefined;
@@ -210,6 +215,22 @@ describe('afk daemon (CLI integration)', () => {
     // robust even if persisted schedules exist on the test machine.
     const tasks = opts?.tasks ?? [];
     expect(tasks.find((t) => t.taskId === COMPILED_DEFAULT_TASK_ID)).toBeUndefined();
+  });
+
+  it('enables proactive OAuth refresh for a keychain-authenticated Anthropic daemon', async () => {
+    mockGetApiKey.mockReturnValue('sk-ant-oat01-keychain-token');
+
+    await runDaemon();
+
+    expect(mockStartDaemon.mock.calls[0]?.[0].oauthRefresher).toBeTypeOf('function');
+  });
+
+  it('does not enable Claude OAuth refresh for a non-Anthropic daemon', async () => {
+    mockGetModel.mockReturnValue('gpt-5');
+
+    await runDaemon();
+
+    expect(mockStartDaemon.mock.calls[0]?.[0].oauthRefresher).toBeUndefined();
   });
 
   it('passes --task through correctly', async () => {
