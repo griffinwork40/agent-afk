@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.163.3] - 2026-08-28
+
+### Fixed
+- harden drawBox width coupling and fragile newline assertion (#1345) (#1355) (10dd79a2)
+- document one-line overshoot contract and tighten cap test (#1316) (#1351) (4c416607)
+- sanitize id_prefix to prevent assertSafeJobId rejection (#1319) (#1350) (8397a6fd)
+
+### Changed
+- memoize mkdirSync per sessionLabel to avoid redundant syscalls (#1320) (#1353) (f7efcda3)
+- separate stack traces from recovery hints in errorCard (#1327) (#1356) (c2814faa)
+
 ## [5.163.2] - 2026-08-28
 
 ### Fixed
