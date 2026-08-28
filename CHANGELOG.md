@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.159.0] - 2026-08-28
+
+### Added
+- add InterruptPeek component (#1339) (e6c6a47b)
+
+## [5.158.3] - 2026-08-28
+
+### Fixed
+- block direct launchctl/systemctl service registration (#1311) (09de4da0)
+
+### Changed
+- migrate errorBox to errorCard, remove old component (#1337) (db0bb911)
+
 ## [5.158.2] - 2026-08-28
 
 ### Fixed

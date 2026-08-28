@@ -16,6 +16,7 @@ import { formatDuration } from '../format-utils.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
 import { palette } from '../palette.js';
+import { interruptPeek } from '../render/interrupt-peek.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 import { syntheticResult, type SourceState } from './stream-renderer-source.js';
@@ -259,11 +260,12 @@ export function registerOverlaySlots(
  * Render the live "interrupting…" overlay affordance, or '' when not
  * interrupting. Extracted as a pure function so the slot's contract is unit
  * testable without constructing the full lifecycle context.
+ *
+ * Delegates to {@link interruptPeek} for richer formatting.
  */
 export function formatInterruptAffordance(interrupting: boolean): string {
-  return interrupting
-    ? '  ' + palette.warning('⚠ interrupting… (Ctrl+C again to exit)')
-    : '';
+  if (!interrupting) return '';
+  return interruptPeek({ status: 'interrupting' });
 }
 
 /**
