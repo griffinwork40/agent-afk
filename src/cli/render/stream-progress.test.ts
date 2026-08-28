@@ -59,6 +59,36 @@ describe('streamProgress', () => {
     expect(result).toContain('42 tokens');
   });
 
+  it('uses .toFixed(1) just below the 10k boundary', () => {
+    const result = stripAnsi(
+      streamProgress({ label: 'test', spinnerFrame: 0, elapsedMs: 1000, tokenCount: 9999 }),
+    );
+    expect(result).toContain('10.0k tokens');
+  });
+
+  it('uses Math.round at exactly the 10k boundary', () => {
+    const result = stripAnsi(
+      streamProgress({ label: 'test', spinnerFrame: 0, elapsedMs: 1000, tokenCount: 10000 }),
+    );
+    expect(result).toContain('10k tokens');
+    expect(result).not.toContain('10.0k');
+  });
+
+  it('renders 99999 as "100k tokens" not "100.0k tokens"', () => {
+    const result = stripAnsi(
+      streamProgress({ label: 'test', spinnerFrame: 0, elapsedMs: 1000, tokenCount: 99999 }),
+    );
+    expect(result).toContain('100k tokens');
+    expect(result).not.toContain('100.0k');
+  });
+
+  it('renders 100000 as "100k tokens"', () => {
+    const result = stripAnsi(
+      streamProgress({ label: 'test', spinnerFrame: 0, elapsedMs: 1000, tokenCount: 100000 }),
+    );
+    expect(result).toContain('100k tokens');
+  });
+
   it('renders M suffix for large counts', () => {
     const result = stripAnsi(
       streamProgress({

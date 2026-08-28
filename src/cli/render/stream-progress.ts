@@ -63,7 +63,7 @@ export interface StreamProgressSpec {
 /** Format token count with k/M suffixes. */
 function formatTokenCount(tokens: number): string {
   if (tokens < 1000) return `${tokens} tokens`;
-  if (tokens < 100_000) return `${(tokens / 1000).toFixed(1)}k tokens`;
+  if (tokens < 10_000) return `${(tokens / 1000).toFixed(1)}k tokens`;
   if (tokens < 1_000_000) return `${Math.round(tokens / 1000)}k tokens`;
   return `${(tokens / 1_000_000).toFixed(1)}M tokens`;
 }
