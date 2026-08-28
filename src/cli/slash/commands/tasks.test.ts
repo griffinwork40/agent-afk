@@ -7,6 +7,7 @@
  *  - /tasks:view with unknown id → no-events info
  *  - /tasks:cancel on a non-running handle → info message
  *  - /tasks:cancel on unknown id → error
+ *  - /tasks interactive Enter path: enterTaskViewMode rejection → error logged, resolves (#1334)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -18,6 +19,16 @@ import * as path from 'node:path';
 const tasksTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-tasks-test-'));
 process.env['AFK_HOME'] = tasksTmpDir;
 
+// Mock task-view-mode so tests can control enterTaskViewMode behaviour without
+// rendering real TUI output or touching disk.
+vi.mock('../../commands/interactive/task-view-mode.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../commands/interactive/task-view-mode.js')>();
+  return {
+    ...actual,
+    enterTaskViewMode: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import {
   tasksCmd,
   tasksViewCmd,
@@ -25,11 +36,14 @@ import {
   setTasksRegistry,
   resetTasksRegistry,
 } from './tasks.js';
+import { enterTaskViewMode } from '../../commands/interactive/task-view-mode.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SubagentHandle } from '../../../agent/subagent/handle.js';
 import type { SubagentStatus } from '../../../agent/subagent/result.js';
 import { CompletedCache } from '../../../agent/subagent/completed-cache.js';
 import type { SlashContext, SessionStats } from '../types.js';
+
+const mockedEnterTaskViewMode = vi.mocked(enterTaskViewMode);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -116,6 +130,7 @@ const SESSION_LABEL = 'test-tasks-session';
 describe('/tasks slash commands', () => {
   beforeEach(() => {
     resetTasksRegistry();
+    mockedEnterTaskViewMode.mockResolvedValue(undefined);
   });
 
   // -------------------------------------------------------------------------
@@ -202,20 +217,16 @@ describe('/tasks slash commands', () => {
       expect(lines.some(l => l.startsWith('INFO:No events found'))).toBe(true);
     });
 
-    it('active handle with history → renders history', async () => {
+    it('active handle with history → calls enterTaskViewMode for the resolved id', async () => {
       const h = makeHandle('sub-history-1', 'running');
-      // Give the handle a non-empty history
-      (h.session as unknown as { getHistory: ReturnType<typeof vi.fn> }).getHistory
-        = vi.fn().mockReturnValue([
-          { role: 'user', content: 'hello from user' },
-          { role: 'assistant', content: 'hello back' },
-        ]);
       const manager = makeManager([h]);
       setTasksRegistry(manager, SESSION_LABEL);
-      const { ctx, lines } = makeCtx();
+      const { ctx } = makeCtx();
+      mockedEnterTaskViewMode.mockResolvedValueOnce(undefined);
       await tasksViewCmd.handler(ctx, 'sub-history-1');
-      const flat = lines.join('\n');
-      expect(flat).toContain('sub-history-1');
+      expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sub-history-1' }),
+      );
     });
   });
 
@@ -263,5 +274,57 @@ describe('/tasks slash commands', () => {
       await tasksCancelCmd.handler(ctx, 'sub-running-1');
       expect(h.cancel).toHaveBeenCalledOnce();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // /tasks interactive Enter path: enterTaskViewMode rejection → error logged (#1334)
+  // -------------------------------------------------------------------------
+
+  describe('/tasks interactive — enterTaskViewMode rejection', () => {
+    it('logs the error and resolves instead of swallowing it silently', async () => {
+      // Arrange: one active handle so the list is non-empty.
+      const h = makeHandle('sub-err-1', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+
+      const errorLines: string[] = [];
+      const ctx: SlashContext = {
+        session: { current: {} } as unknown as SlashContext['session'],
+        stats: {
+          totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
+          sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
+          model: 'sonnet', permissionMode: 'default',
+        },
+        out: {
+          line: vi.fn(),
+          raw: vi.fn(),
+          success: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: (t: string): void => { errorLines.push(t); },
+        },
+        ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+        // Provide setSoftStopHandler to enter interactive mode.
+        setSoftStopHandler: vi.fn(),
+      };
+
+      // Make enterTaskViewMode reject with a known error.
+      mockedEnterTaskViewMode.mockRejectedValueOnce(new Error('boom'));
+
+      // Start the handler — it awaits stdin input after collectAllTasks (async).
+      const handlerPromise = tasksCmd.handler(ctx, '');
+
+      // Wait for the async collectAllTasks + renderList + stdin.on() to complete
+      // before firing the simulated keypress.
+      await new Promise<void>((r) => setTimeout(r, 50));
+      process.stdin.emit('data', '\r');
+
+      // Wait for the handler to settle (enterTaskViewMode rejects → catch logs → resolve).
+      await handlerPromise;
+
+      // The error must have been logged (not swallowed).
+      expect(errorLines.length).toBeGreaterThan(0);
+      expect(errorLines.some(l => l.includes('task view error') && l.includes('boom'))).toBe(true);
+    }, 10_000);
   });
 });
