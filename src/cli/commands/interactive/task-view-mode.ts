@@ -162,7 +162,9 @@ export async function enterTaskViewMode(entry: TaskViewEntry): Promise<void> {
   ctx.out.line('');
 
   // ── Memory-first: render from handle.session.getHistory() ────────────────
-  if (handle) {
+  // getHistory is optional on the interface — some session implementations
+  // don't expose it. Fall through to disk replay when absent.
+  if (handle && typeof handle.session.getHistory === 'function') {
     const history = handle.session.getHistory();
     if (history.length > 0) {
       for (const msg of history) {
