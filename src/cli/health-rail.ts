@@ -78,6 +78,14 @@ export class HealthRail {
   private resizeUnsub: (() => void) | null = null;
   /** Interval that triggers a repaint every second while the rail is running. */
   private tickInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Monotonic high-water mark for total subagents ever dispatched.
+   *
+   * The background registry evicts terminal jobs ~5 minutes after they settle,
+   * so `registry.list().length` can shrink over time. This counter only
+   * ratchets upward, ensuring the displayed total never decreases.
+   */
+  private totalSubsEver = 0;
 
   constructor(opts: HealthRailOptions) {
     this.stream = opts.stream ?? process.stdout;
@@ -136,7 +144,10 @@ export class HealthRail {
   update(stats: SessionStats, contextRatioOverride?: number): void {
     const allJobs = this.registry ? this.registry.list() : [];
     const activeSubs = allJobs.filter((j) => j.status === 'running').length;
-    const totalSubs = allJobs.length;
+    // Ratchet upward: registry evicts terminal jobs after ~5 min, so
+    // list().length can shrink. The high-water mark never decreases.
+    this.totalSubsEver = Math.max(this.totalSubsEver, allJobs.length);
+    const totalSubs = this.totalSubsEver;
 
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(
