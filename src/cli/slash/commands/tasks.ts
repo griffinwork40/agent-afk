@@ -283,6 +283,9 @@ export const tasksCmd: SlashCommand = {
         resolve();
       });
 
+      // TODO: route through compositor.enterPickerMode() instead of attaching
+      // directly to process.stdin — direct stdin listeners bypass the
+      // compositor's routing and can conflict with other input consumers.
       process.stdin.on('data', onKeypress);
     });
 

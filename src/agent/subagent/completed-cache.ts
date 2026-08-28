@@ -13,7 +13,7 @@
  */
 
 import type { SubagentHandle } from './handle.js';
-import type { SubagentResult } from './result.js';
+import type { SubagentResult, SubagentStatus, SubagentTrace } from './result.js';
 
 export interface CompletedEntry<T = unknown> {
   readonly handle: SubagentHandle<T>;
@@ -37,6 +37,33 @@ export class CompletedCache {
     this.entries.delete(id);
     this.entries.set(id, { handle, result, completedAt: Date.now() });
     this.evictIfNeeded();
+  }
+
+  /**
+   * Build a minimal result from terminal handle state and record it.
+   * Called from the `onTerminal` callback in `SubagentManager.forkSubagent`
+   * so that `manager.get(id)` continues to work after a handle moves out of
+   * the active map. The `message` field is intentionally omitted — full
+   * conversation history is available via `SubagentLogReader` on demand.
+   */
+  recordHandle(
+    id: string,
+    handle: SubagentHandle,
+    status: SubagentStatus,
+    trace: SubagentTrace,
+    stopReason: string | undefined,
+  ): void {
+    const result: SubagentResult =
+      status === 'succeeded'
+        ? { id, status, trace, ...(stopReason !== undefined && { stopReason }) }
+        : {
+            id,
+            status,
+            error: new Error(`subagent terminated with status: ${status}`),
+            trace,
+            ...(stopReason !== undefined && { stopReason }),
+          };
+    this.add(id, handle, result);
   }
 
   /** Retrieve a completed subagent by id. Returns undefined if evicted or unknown. */
