@@ -164,6 +164,12 @@ export class StreamRenderer {
   private activeSubagents = new Map<string, SubagentStatusBarSpec>();
   /** Start timestamps (Date.now()) for each active subagent, keyed by subagentId. */
   private subagentStartedAt = new Map<string, number>();
+  /**
+   * Sum of whole elapsed seconds across all active subagents at the last flush.
+   * Drives second-boundary change detection: markDirty + flush only fires when
+   * this value changes, matching the pattern used by checkPauseAnnotations.
+   */
+  private lastSubagentTotalSec = -1;
 
   /** TTFB elapsed timer: start timestamp + done flag. See stream-renderer-ttfb.ts. */
   private readonly ttfbStartedAt: number | undefined;
@@ -353,14 +359,23 @@ export class StreamRenderer {
     this.pauseTickInterval = setInterval(() => this.checkPauseAnnotations(), 80).unref();
     // Subagent elapsed-time ticker: updates activeSubagents' elapsedMs fields and
     // flushes the 'subagent-status' overlay slot every 250ms. Stopped in dispose().
+    // markDirty + flush are gated on a second-boundary change: formatElapsed has
+    // 1-second granularity, so 3 out of 4 ticks would otherwise produce identical
+    // output. We track the sum of whole elapsed seconds across all active subagents
+    // and skip the flush when that sum hasn't changed — matching the pattern used
+    // by checkPauseAnnotations / lastTtfbAnnotation.
     this.subagentTickInterval = setInterval(() => {
       if (this.disposed || this.activeSubagents.size === 0) return;
       const now = Date.now();
+      let totalSec = 0;
       for (const [id, spec] of this.activeSubagents) {
         const startedAt = this.subagentStartedAt.get(id) ?? now;
-        this.activeSubagents.set(id, { ...spec, elapsedMs: now - startedAt });
+        const elapsedMs = now - startedAt;
+        this.activeSubagents.set(id, { ...spec, elapsedMs });
+        totalSec += Math.floor(elapsedMs / 1000);
       }
-      if (this.overlayComposer) {
+      if (this.overlayComposer && totalSec !== this.lastSubagentTotalSec) {
+        this.lastSubagentTotalSec = totalSec;
         this.overlayComposer.markDirty('subagent-status');
         this.overlayComposer.flush();
       }
