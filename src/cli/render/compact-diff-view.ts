@@ -123,7 +123,8 @@ export function compactDiffView(spec: CompactDiffSpec): string {
   const maxLines = spec.maxLines ?? 20;
   const statHeader = buildStatHeader(spec);
 
-  // Collapsed mode: stat header only, no body.
+  // Both collapsed mode and an empty hunk list share the same early return:
+  // neither has body content to render, so the stat header is the entire output.
   if (spec.collapsed === true || spec.hunks.length === 0) {
     return statHeader;
   }
