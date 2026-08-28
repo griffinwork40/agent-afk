@@ -927,6 +927,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
         ...(this.sessionGrantManager !== undefined
           ? { grantManager: this.sessionGrantManager }
           : {}),
+        // Inject the tool-call id so hooks (e.g. edit-preview-hook) can
+        // correlate this PreToolUse event with an in-flight tool-lane entry.
+        ...(call.id !== undefined ? { toolUseId: call.id } : {}),
       };
       try {
         await dispatchPreToolUse(this.hookRegistry, preCtx, {

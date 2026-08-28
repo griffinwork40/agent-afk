@@ -91,6 +91,14 @@ interface ToolEntryFields {
    */
   diff?: DiffPayload;
   /**
+   * Optional pre-execution diff preview attached by the edit-preview hook
+   * at PreToolUse time. Rendered in the live overlay while the call is
+   * in-flight (guarded by `!entry.result`). Never appears in scrollback —
+   * once the tool_result arrives, the post-execution diff (via the existing
+   * `tool_diff` sidecar path) takes over in the flush path.
+   */
+  previewDiff?: DiffPayload;
+  /**
    * Set to `true` by {@link ToolLane.flushSource} the first time it emits
    * this entry's header line eagerly (before the entry's own done-event).
    * When `flush()` later processes the entry, it sees this flag and skips

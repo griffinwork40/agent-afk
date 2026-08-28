@@ -197,6 +197,21 @@ export class ToolLane {
   }
 
   /**
+   * Attach a pre-execution diff preview to an in-flight tool entry. Called by
+   * the edit-preview hook at PreToolUse time, before the edit executes.
+   * No-op if the entry doesn't exist or is not a tool entry.
+   *
+   * The preview is rendered in the live overlay only (while `!entry.result`).
+   * It does NOT appear in scrollback (flush). Once the tool_result arrives
+   * and the post-execution diff sidechannel takes over, the preview is no
+   * longer shown.
+   */
+  addPreviewDiff(toolUseId: string, diff: DiffPayload): void {
+    const entry = this.entries.get(toolUseId);
+    if (entry?.kind === 'tool') entry.previewDiff = diff;
+  }
+
+  /**
    * Create or replace the `text` of a {@link TextEntry} child. Used by the
    * streaming renderer to drive a subagent's live narration under its
    * synthetic Agent entry — each content delta calls this with the
@@ -559,6 +574,14 @@ export class ToolLane {
           // Live elapsed counter: same pattern as the NESTING branch above —
           // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
           lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
+          if (entry.previewDiff) {
+            // Pre-execution diff preview: rendered under the in-flight " …" line,
+            // indented to visually attach to this entry. formatDiffBlock already
+            // returns [] when AFK_SHOW_DIFFS=0, so no extra guard needed.
+            for (const line of formatDiffBlock(entry.previewDiff, 'overlay', '    ')) {
+              lines.push(clamp(line));
+            }
+          }
           if (entry.thinkingTail) {
             // Childless Agent entries (a child just opened its thinking block
             // and hasn't yet emitted content or a tool_use) get the tail right

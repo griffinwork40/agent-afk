@@ -219,6 +219,12 @@ export interface PreToolUseContext {
    * their per-session closure state, preserving prior behavior.
    */
   grantManager?: GrantManager;
+  /**
+   * The tool-call id from the model's request. Injected by
+   * {@link SessionToolDispatcher.runPreDispatchGates} so hooks can correlate
+   * the PreToolUse event with an in-flight tool-lane entry.
+   */
+  toolUseId?: string;
 }
 
 export interface PostToolUseContext {

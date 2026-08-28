@@ -209,6 +209,7 @@ export async function runTurn(
     // before the first streaming content token arrives. The renderer clears
     // the line automatically when notifyFirstContent() is called below.
     ...ttfbRendererOptions(turnTtfb),
+    ...(h.addPreviewDiffRef ? { addPreviewDiffRef: h.addPreviewDiffRef } : {}),
   });
 
   // `let` (not `const`) so the resumed-event handler can swap in a fresh
