@@ -213,19 +213,26 @@ describe('stream-open-window concurrent writes', () => {
 // ---------------------------------------------------------------------------
 
 describe('MAX_LOG_BYTES cap', () => {
-  it('file does not exceed 1 MiB even when many large events are written', async () => {
+  it('file does not exceed MAX_LOG_BYTES + one line (one-line overshoot contract)', async () => {
     const subId = 'sub-overflow';
     const w = new SubagentLogWriter(SESSION, subId);
 
     // Write ~2MB worth of events (each ~2KB) to exceed the 1MB cap
     const payload = 'x'.repeat(2000);
+    // Compute the exact serialized byte length of one event line so the
+    // assertion reflects the documented one-line-overshoot invariant precisely.
+    const oneLineBytes = Buffer.byteLength(
+      JSON.stringify(makeChunkEvent(payload)) + '\n',
+      'utf8',
+    );
     for (let i = 0; i < 1200; i++) {
       w.write(makeChunkEvent(payload));
     }
     await w.close();
 
     const stat = fs.statSync(w.logPath);
-    // File must be ≤ 1 MiB (with some tolerance for the final incomplete line)
-    expect(stat.size).toBeLessThanOrEqual(1_048_576 + 2100);
+    // The cap guard fires before serialization, so the last admitted line may
+    // push the file to MAX_LOG_BYTES + oneLineBytes. Assert the exact bound.
+    expect(stat.size).toBeLessThanOrEqual(1_048_576 + oneLineBytes);
   });
 });
