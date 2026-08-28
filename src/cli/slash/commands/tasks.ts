@@ -33,6 +33,7 @@ import {
   enterTaskViewMode,
   type TaskViewEntry,
 } from '../../commands/interactive/task-view-mode.js';
+import type { InteractiveCtx } from '../../commands/interactive/shared.js';
 
 // ---------------------------------------------------------------------------
 // Module-scope registry refs
@@ -40,6 +41,7 @@ import {
 
 let managerRef: SubagentManager | undefined;
 let sessionLabelRef: string | undefined;
+let ictxRef: InteractiveCtx | undefined;
 
 /**
  * Wire the SubagentManager and session label into this module.
@@ -50,10 +52,20 @@ export function setTasksRegistry(manager: SubagentManager, sessionLabel: string)
   sessionLabelRef = sessionLabel;
 }
 
+/**
+ * Wire the InteractiveCtx so that `/tasks:view` can populate
+ * `viewingTaskId` on the active REPL context (#1332).
+ * Called once from bootstrapSession after `ctx` is constructed.
+ */
+export function setTasksIctx(ictx: InteractiveCtx): void {
+  ictxRef = ictx;
+}
+
 /** Reset refs — used by tests to isolate module-scope state between cases. */
 export function resetTasksRegistry(): void {
   managerRef = undefined;
   sessionLabelRef = undefined;
+  ictxRef = undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,8 +288,12 @@ export const tasksCmd: SlashCommand = {
               manager,
               sessionLabel,
               ctx,
+              ictx: ictxRef,
             };
-            void enterTaskViewMode(entry).then(resolve).catch(() => resolve());
+            void enterTaskViewMode(entry).then(resolve).catch((e) => {
+              ctx.out.error?.(`task view error: ${String(e)}`);
+              resolve();
+            });
           }
         } else if (str === '\x1b' || str === '\x03') {
           // Esc or Ctrl-C — exit to main prompt.
@@ -346,6 +362,7 @@ export const tasksViewCmd: SlashCommand = {
       manager,
       sessionLabel,
       ctx,
+      ictx: ictxRef,
     };
 
     await enterTaskViewMode(entry);
