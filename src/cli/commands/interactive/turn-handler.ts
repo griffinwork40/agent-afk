@@ -555,7 +555,7 @@ export async function runTurn(
         if (event.type === 'error') {
           // Disarm before raw console output so the error box doesn't tear
           // the live overlay. Skip renderer.process (would also emit an
-          // errorBox via the writer — duplicate).
+          // errorCard via the writer — duplicate).
           await disposeRendererOnce();
           presentError(classifyError(event.error));
           streamErrorRendered = true;

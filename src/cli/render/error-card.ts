@@ -13,7 +13,7 @@ import { palette } from '../palette.js';
  *   │  Retrying in 12s…                    │
  *   ╰─────────────────────────────────────╯
  *
- * Replaces ad-hoc `errorBox()` callers with a richer, consistent format.
+ * Replaces the retired `errorBox()` with a richer, consistent format.
  * The hint line (dim, italic) surfaces recovery guidance directly in the
  * error card — reducing the "red box then silence" failure mode.
  *

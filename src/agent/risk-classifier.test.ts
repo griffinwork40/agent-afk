@@ -146,6 +146,52 @@ describe('classifyRisk — bash high', () => {
       classifyRisk('bash', { command: 'curl -H \'Content-Type: application/json\' -X POST https://api.example.com/users -d \'{}\'' }, ctx),
     ).toBe('high');
   });
+
+  // ── service-registration commands (#1311 review) ─────────────────────────
+  it('launchctl load → high', () => {
+    expect(classifyRisk('bash', { command: 'launchctl load ~/Library/LaunchAgents/com.example.plist' }, ctx)).toBe('high');
+  });
+
+  it('launchctl bootstrap → high', () => {
+    expect(classifyRisk('bash', { command: 'launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.example.plist' }, ctx)).toBe('high');
+  });
+
+  it('launchctl submit → high', () => {
+    expect(classifyRisk('bash', { command: 'launchctl submit -l com.example.job -- /usr/bin/example' }, ctx)).toBe('high');
+  });
+
+  it('launchctl start → high', () => {
+    expect(classifyRisk('bash', { command: 'launchctl start com.example.service' }, ctx)).toBe('high');
+  });
+
+  it('launchctl kickstart → high (Item 2)', () => {
+    expect(classifyRisk('bash', { command: 'launchctl kickstart -k gui/501/com.example.service' }, ctx)).toBe('high');
+  });
+
+  it('launchctl enable  (with trailing space) → high (Item 7)', () => {
+    expect(classifyRisk('bash', { command: 'launchctl enable system/com.example.service' }, ctx)).toBe('high');
+  });
+
+  it('systemctl enable  (with trailing space) → high (Item 3)', () => {
+    expect(classifyRisk('bash', { command: 'systemctl enable afk-telegram.service' }, ctx)).toBe('high');
+  });
+
+  it('systemctl start  (with trailing space) → high (Item 3)', () => {
+    expect(classifyRisk('bash', { command: 'systemctl start afk-telegram.service' }, ctx)).toBe('high');
+  });
+
+  it('systemctl daemon-reload → high', () => {
+    expect(classifyRisk('bash', { command: 'systemctl daemon-reload' }, ctx)).toBe('high');
+  });
+
+  // ── false-positive guards (trailing-space convention) ─────────────────────
+  it('launchctl enable-linger → NOT high (trailing space guards enable)', () => {
+    expect(classifyRisk('bash', { command: 'launchctl enable-linger root' }, ctx)).not.toBe('high');
+  });
+
+  it('systemctl enable-linger → NOT high (trailing space guards enable)', () => {
+    expect(classifyRisk('bash', { command: 'systemctl enable-linger root' }, ctx)).not.toBe('high');
+  });
 });
 
 // ---- bash medium-risk patterns -------------------------------------------

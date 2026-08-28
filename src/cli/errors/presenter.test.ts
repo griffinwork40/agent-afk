@@ -32,7 +32,7 @@ afterEach(() => {
 // ─── TTY mode ────────────────────────────────────────────────────────────────
 
 describe('presentError — TTY mode', () => {
-  it('renders errorBox borders (╭─ / ╰─) in TTY mode', () => {
+  it('renders errorCard borders (╭─ / ╰─) in TTY mode', () => {
     const chunks: string[] = [];
     const write = (s: string) => { chunks.push(s); };
     const classified = makeClassified({ userMessage: 'Something went wrong' });
