@@ -1,8 +1,8 @@
 /**
  * Session-health glance-rail — a persistent compact single-line footer row.
  *
- * Shows: turn count | elapsed time | tool calls | active subagents | context %
- * Example: `T3 · 2m14s · 12 calls · 2 subs · ctx 34%`
+ * Shows: turn count | elapsed time | tool calls | running/total subagents | context %
+ * Example: `T3 · 2m14s · 12 calls · 2/5 subs · ctx 34%`
  *
  * Follows the same DECSTBM reserved-row pattern as {@link LoopStageBar} and
  * {@link BackgroundStatusBar}: the rail never touches DECSTBM directly — it
@@ -61,6 +61,8 @@ interface RailSnapshot {
   sessionStartTime: number;
   toolCalls: number;
   activeSubs: number;
+  /** Total background subagent jobs ever dispatched in this session. */
+  totalSubs: number;
   contextRatio: number;
 }
 
@@ -76,6 +78,14 @@ export class HealthRail {
   private resizeUnsub: (() => void) | null = null;
   /** Interval that triggers a repaint every second while the rail is running. */
   private tickInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Monotonic high-water mark for total subagents ever dispatched.
+   *
+   * The background registry evicts terminal jobs ~5 minutes after they settle,
+   * so `registry.list().length` can shrink over time. This counter only
+   * ratchets upward, ensuring the displayed total never decreases.
+   */
+  private totalSubsEver = 0;
 
   constructor(opts: HealthRailOptions) {
     this.stream = opts.stream ?? process.stdout;
@@ -132,9 +142,12 @@ export class HealthRail {
    *   end-of-previous-turn snapshot.
    */
   update(stats: SessionStats, contextRatioOverride?: number): void {
-    const activeSubs = this.registry
-      ? this.registry.list().filter((j) => j.status === 'running').length
-      : 0;
+    const allJobs = this.registry ? this.registry.list() : [];
+    const activeSubs = allJobs.filter((j) => j.status === 'running').length;
+    // Ratchet upward: registry evicts terminal jobs after ~5 min, so
+    // list().length can shrink. The high-water mark never decreases.
+    this.totalSubsEver = Math.max(this.totalSubsEver, allJobs.length);
+    const totalSubs = this.totalSubsEver;
 
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(
@@ -162,6 +175,7 @@ export class HealthRail {
       sessionStartTime: stats.sessionStartTime,
       toolCalls,
       activeSubs,
+      totalSubs,
       contextRatio: Math.max(0, Math.min(1, contextRatio)),
     };
 
@@ -193,6 +207,7 @@ export class HealthRail {
           elapsedMs: Date.now() - snap.sessionStartTime,
           toolCalls: snap.toolCalls,
           activeSubs: snap.activeSubs,
+          totalSubs: snap.totalSubs,
           contextRatio: snap.contextRatio,
         }
       : {
@@ -200,6 +215,7 @@ export class HealthRail {
           elapsedMs: 0,
           toolCalls: 0,
           activeSubs: 0,
+          totalSubs: 0,
           contextRatio: 0,
         };
 

@@ -2,7 +2,7 @@
  * Pure formatter for the session-health glance-rail.
  *
  * Produces a compact single-line summary of session vitals:
- *   `T3 · 2m14s · 12 calls · 2 subs · ctx 34%`
+ *   `T3 · 2m14s · 12 calls · 2/5 subs · ctx 34%`
  *
  * Designed for a tmux-pane glance: the operator can look at any window and
  * immediately know if the session is productive (turns advancing, subs running),
@@ -26,6 +26,8 @@ export interface HealthRailFields {
   toolCalls: number;
   /** Number of currently-running background subagent jobs. */
   activeSubs: number;
+  /** Total background subagent jobs ever dispatched in this session. */
+  totalSubs: number;
   /** Context window fill ratio [0, 1]. */
   contextRatio: number;
 }
@@ -54,14 +56,14 @@ function formatDuration(ms: number): string {
  *   - Turn counter: brand (blue) — session identity
  *   - Elapsed time: dim — background rhythm
  *   - Tool calls: chrome — activity signal
- *   - Active subs: info when > 0, dim when 0 — live work indicator
+ *   - Subs (running/total): info when any dispatched, dim when 0 — live work indicator
  *   - Context %: threshold-toned (chrome ≤ 50%, warning > 50%, error > 80%)
  *
  * All segments are separated by `·` in dim, matching the status line's
  * established visual language.
  */
 export function formatHealthRail(fields: HealthRailFields, maxWidth: number): string {
-  const { totalTurns, elapsedMs, toolCalls, activeSubs, contextRatio } = fields;
+  const { totalTurns, elapsedMs, toolCalls, activeSubs, totalSubs, contextRatio } = fields;
 
   const sep = palette.dim(' · ');
 
@@ -70,8 +72,8 @@ export function formatHealthRail(fields: HealthRailFields, maxWidth: number): st
   const callsText = palette.chrome(`${toolCalls} calls`);
 
   const subsText =
-    activeSubs > 0
-      ? palette.info(`${activeSubs} subs`)
+    totalSubs > 0
+      ? palette.info(`${activeSubs}/${totalSubs} subs`)
       : palette.dim('0 subs');
 
   const pct = Math.round(Math.max(0, Math.min(1, contextRatio)) * 100);
