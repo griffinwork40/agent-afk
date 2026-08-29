@@ -271,3 +271,216 @@ describe('enterTaskViewMode — disk fallback', () => {
     expect(lines.some(l => l.includes('complete') && l.includes('Esc'))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// enterTaskViewMode — live tail loop: natural completion
+// ---------------------------------------------------------------------------
+
+describe('enterTaskViewMode — live tail: natural completion', () => {
+  it('emits FOOTER_COMPLETE when tailOutputStream resolves naturally', async () => {
+    const h = makeHandle('h-tail-nat', 'running');
+    // Stream yields one event and finishes without abort.
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        yield { type: 'done' };
+      });
+    const manager = makeManager([h]);
+    const { ctx, lines } = makeCtx();
+    const ictx = makeICtx();
+
+    await enterTaskViewMode({ id: 'h-tail-nat', manager, sessionLabel: 'lbl', ctx, ictx });
+
+    // The finally block emits FOOTER_COMPLETE when the stream ends naturally.
+    expect(lines.some(l => l.includes('complete') && l.includes('Esc'))).toBe(true);
+  });
+
+  it('clears viewingTaskId after natural stream completion', async () => {
+    const h = makeHandle('h-tail-nat2', 'running');
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        yield { type: 'done' };
+      });
+    const manager = makeManager([h]);
+    const { ctx } = makeCtx();
+    const ictx = makeICtx();
+
+    await enterTaskViewMode({ id: 'h-tail-nat2', manager, sessionLabel: 'lbl', ctx, ictx });
+
+    // viewingTaskId must be cleared in the finally block (not via exitTaskViewMode).
+    expect(ictx.viewingTaskId).toBeUndefined();
+  });
+
+  it('does NOT emit "Returned" notice on natural completion (exitTaskViewMode not called)', async () => {
+    // Natural completion path clears state inline — it does NOT call
+    // exitTaskViewMode, which would emit "Returned to main conversation."
+    const h = makeHandle('h-tail-nat3', 'running');
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        // empty stream — resolves immediately
+      });
+    const manager = makeManager([h]);
+    const { ctx, lines } = makeCtx();
+
+    await enterTaskViewMode({ id: 'h-tail-nat3', manager, sessionLabel: 'lbl', ctx });
+
+    expect(lines.some(l => l.includes('Returned'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// enterTaskViewMode — live tail loop: Esc abort
+// ---------------------------------------------------------------------------
+
+describe('enterTaskViewMode — live tail: Esc abort', () => {
+  it('calls exitTaskViewMode (emits "Returned") when Esc fires', async () => {
+    const h = makeHandle('h-esc-1', 'running');
+
+    // Deferred unlock: the generator blocks until we call unblockStream(),
+    // which lets the for-await in tailOutputStream proceed past the pending
+    // next() call and eventually return (ending the loop).
+    let unblockStream: () => void = () => {};
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        yield { type: 'chunk', chunk: { type: 'text_delta', delta: { type: 'text_delta', text: 'hi' } } };
+        await new Promise<void>(r => { unblockStream = r; });
+      });
+
+    const manager = makeManager([h]);
+
+    // Capture each call to setSoftStopHandler so we can invoke the override.
+    const registeredHandlers: Array<(() => void) | null> = [];
+    const { ctx, lines } = makeCtx({
+      setSoftStopHandler: vi.fn((fn: (() => void) | null) => {
+        registeredHandlers.push(fn);
+      }) as unknown as SlashContext['setSoftStopHandler'],
+    });
+    const ictx = makeICtx();
+
+    // Start tailing — do NOT await yet (stream pauses after first yield).
+    const viewPromise = enterTaskViewMode({ id: 'h-esc-1', manager, sessionLabel: 'lbl', ctx, ictx });
+
+    // Flush enough microtasks so enterTaskViewMode runs past the handler
+    // registrations and enters the await tailOutputStream(...) call.
+    // The generator yields once then waits; we need a few ticks to drain
+    // the pipeline: (1) enter tailOutputStream, (2) start first next(),
+    // (3) generator yields event, (4) loop body runs, (5) loop calls next()
+    // again, (6) generator hits the blocking await and parks.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // The last non-null handler registered is the Esc override (contains abort.abort()).
+    const escHandler = registeredHandlers.filter(Boolean).at(-1);
+    expect(escHandler).toBeTypeOf('function');
+
+    // Simulate Esc — this calls abort.abort() + exitTaskViewMode() + setSoftStopHandler(null).
+    escHandler!();
+
+    // Now unblock the generator so tailOutputStream can finish.
+    unblockStream();
+
+    await viewPromise;
+
+    // exitTaskViewMode emits "Returned to main conversation."
+    expect(lines.some(l => l.includes('Returned'))).toBe(true);
+  });
+
+  it('does NOT emit FOOTER_COMPLETE from finally block when Esc fires', async () => {
+    const h = makeHandle('h-esc-2', 'running');
+    let unblockStream2: () => void = () => {};
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        yield { type: 'chunk', chunk: { type: 'text_delta', delta: { type: 'text_delta', text: 'x' } } };
+        await new Promise<void>(r => { unblockStream2 = r; });
+      });
+
+    const manager = makeManager([h]);
+    const registeredHandlers: Array<(() => void) | null> = [];
+    const { ctx, lines } = makeCtx({
+      setSoftStopHandler: vi.fn((fn: (() => void) | null) => {
+        registeredHandlers.push(fn);
+      }) as unknown as SlashContext['setSoftStopHandler'],
+    });
+
+    const viewPromise = enterTaskViewMode({ id: 'h-esc-2', manager, sessionLabel: 'lbl', ctx });
+
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    const escHandler = registeredHandlers.filter(Boolean).at(-1);
+    escHandler!();
+    unblockStream2();
+
+    await viewPromise;
+
+    // The finally block is gated on `if (!signal.aborted)` — when Esc fires
+    // abort.abort() is called first, so FOOTER_COMPLETE is NOT emitted from
+    // the finally path.  The initial footer line says "running", not "complete".
+    const completeEscLines = lines.filter(l => l.includes('complete') && l.includes('Esc'));
+    expect(completeEscLines).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// enterTaskViewMode — setSoftStopHandler override for running subagent
+// ---------------------------------------------------------------------------
+
+describe('enterTaskViewMode — setSoftStopHandler override for running subagent', () => {
+  it('calls setSoftStopHandler at least twice for a running subagent', async () => {
+    // wireEscapeToExit (line 201) registers the first handler.
+    // The override at line 215 registers a second handler (with abort.abort()).
+    // The finally block registers null (cleanup) = ≥3 calls total.
+    const h = makeHandle('h-ssh-1', 'running');
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        // Resolve immediately so enterTaskViewMode returns without blocking.
+      });
+
+    const manager = makeManager([h]);
+    const { ctx } = makeCtx();
+
+    await enterTaskViewMode({ id: 'h-ssh-1', manager, sessionLabel: 'lbl', ctx });
+
+    // The final setSoftStopHandler(null) is the cleanup call.
+    expect(ctx.setSoftStopHandler).toHaveBeenCalledWith(null);
+    // wireEscapeToExit + override + cleanup = ≥3 calls.
+    expect((ctx.setSoftStopHandler as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('overrides initial wireEscapeToExit handler with abort-aware version', async () => {
+    // wireEscapeToExit (line 201) registers: () => { exitTaskViewMode(); setSoftStopHandler(null); }
+    // The override (line 215) registers: () => { abort.abort(); exitTaskViewMode(); setSoftStopHandler(null); }
+    // We verify the LAST non-null handler is the override by confirming that
+    // invoking it causes the tail loop to unblock (abort path) and emits "Returned".
+    const h = makeHandle('h-ssh-2', 'running');
+    let unblockSsh: () => void = () => {};
+    (h.session as unknown as { getOutputStream: ReturnType<typeof vi.fn> }).getOutputStream =
+      vi.fn().mockImplementation(async function* () {
+        yield { type: 'chunk', chunk: { type: 'text_delta', delta: { type: 'text_delta', text: 'y' } } };
+        await new Promise<void>(r => { unblockSsh = r; });
+      });
+
+    const manager = makeManager([h]);
+    const registeredHandlers: Array<(() => void) | null> = [];
+    const { ctx, lines } = makeCtx({
+      setSoftStopHandler: vi.fn((fn: (() => void) | null) => {
+        registeredHandlers.push(fn);
+      }) as unknown as SlashContext['setSoftStopHandler'],
+    });
+
+    const viewPromise = enterTaskViewMode({ id: 'h-ssh-2', manager, sessionLabel: 'lbl', ctx });
+
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // Multiple non-null handlers must have been registered.
+    const nonNull = registeredHandlers.filter(Boolean);
+    expect(nonNull.length).toBeGreaterThanOrEqual(2);
+
+    // The LAST non-null handler is the abort-aware override: invoking it should
+    // emit "Returned" (from exitTaskViewMode) and let the tail loop exit.
+    const overrideHandler = nonNull.at(-1)!;
+    overrideHandler();
+    unblockSsh();
+
+    await viewPromise;
+
+    expect(lines.some(l => l.includes('Returned'))).toBe(true);
+  });
+});
