@@ -10,6 +10,7 @@ import type { Writer } from '../slash/types.js';
 import type { IHistoryRing } from '../input/types.js';
 import type { AutocompleteState } from '../input/autocomplete-state.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
+import type { PreviewDiffRef } from '../../agent/tools/hooks/edit-preview-hook.js';
 
 export interface StreamRendererOptions {
   /** Where line-based output goes (non-TTY fallback + always-emitted compact lines). */
@@ -157,4 +158,15 @@ export interface StreamRendererOptions {
    * streaming content chunk arrives (see `notifyFirstContent`).
    */
   turnStartedAt?: number;
+  /**
+   * Mutable ref the StreamRenderer arms each turn in {@link StreamRenderer.arm}.
+   * The edit-preview hook calls `addPreviewDiffRef.current(toolUseId, diff)` to
+   * deliver a pre-execution diff preview to the tool lane without importing any
+   * CLI-layer module.
+   *
+   * On non-interactive surfaces (daemon, Telegram, tests) this ref is never
+   * armed and remains a no-op. The REPL bootstrap threads it from
+   * `DefaultHookRegistryResult.addPreviewDiffRef`.
+   */
+  addPreviewDiffRef?: PreviewDiffRef;
 }

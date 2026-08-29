@@ -2,6 +2,7 @@ import * as readline from 'node:readline';
 import { statSync } from 'node:fs';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
+import type { PreviewDiffRef } from '../../../agent/tools/hooks/edit-preview-hook.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { AgentModelInput } from '../../../agent/types.js';
@@ -526,6 +527,12 @@ export interface InteractiveCtx {
    * call (enabling per-prompt policy hooks) and Stop after each completed turn.
    */
   hookRegistry?: HookRegistry;
+  /**
+   * Mutable ref threaded from `createReplHookRegistry` into the per-turn
+   * StreamRenderer so the edit-preview hook can deliver diff previews to the
+   * tool lane without importing CLI-layer modules. Absent on non-REPL callers.
+   */
+  addPreviewDiffRef?: PreviewDiffRef;
 }
 
 /**
@@ -760,6 +767,12 @@ export interface TurnHandles {
     stage: import('./loop-stage.js').LoopStage,
     signals?: import('./loop-stage.js').StageSignals,
   ): void;
+  /**
+   * Mutable ref threaded from `createReplHookRegistry` into the per-turn
+   * StreamRenderer so the edit-preview hook can deliver diff previews to the
+   * tool lane without importing CLI-layer modules. Absent on non-REPL callers.
+   */
+  addPreviewDiffRef?: PreviewDiffRef;
 }
 
 // `discardStdin: false` is load-bearing — ora's default wraps process.stdin

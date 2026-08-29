@@ -8,6 +8,7 @@ import type { CompletionWriter } from './shared.js';
 import { emitSubagentCompletion } from './progress-banner.js';
 import { createTerminalStateGate } from './terminal-state-gate.js';
 import { loadConfig } from '../../config.js';
+import type { PreviewDiffRef } from '../../../agent/tools/hooks/edit-preview-hook.js';
 
 /**
  * Build the stable hook registry shared across sessions (including
@@ -16,9 +17,6 @@ import { loadConfig } from '../../config.js';
  *
  * The hook callbacks close over `stats` and `completionWriter`, which are
  * also stable, so a rebuilt session gets the same routing without re-wiring.
- * `pathApprovalGrantRef` is populated by the caller once the provider
- * exists — the path-approval hook fails open until then (mirroring
- * `setAllowDirDispatcher` wiring order).
  *
  * The terminal-state gate (issue #237) is a post-turn `Stop` hook that
  * bounces a self-certified `Done` with no corroborating evidence back into
@@ -36,7 +34,10 @@ export function createReplHookRegistry(a: {
   stats: SessionStats;
   effectiveCwd: string | undefined;
   traceWriter: TraceSink | undefined;
-}): { hookRegistry: HookRegistry } {
+}): {
+  hookRegistry: HookRegistry;
+  addPreviewDiffRef: PreviewDiffRef;
+} {
   const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { emitSubagentCompletion(a.completionWriter, info); },
     'cli',
@@ -47,6 +48,7 @@ export function createReplHookRegistry(a: {
     () => a.effectiveCwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
+  const addPreviewDiffRef = hookRegistryBundle.addPreviewDiffRef;
 
   hookRegistry.register(
     'Stop',
@@ -56,5 +58,5 @@ export function createReplHookRegistry(a: {
     }),
   );
 
-  return { hookRegistry };
+  return { hookRegistry, addPreviewDiffRef };
 }

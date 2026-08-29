@@ -24,3 +24,4 @@ export * from './utils.js';
 export * from './tool-card.js';
 export * from './interrupt-peek.js';
 export * from './compact-diff-view.js';
+export * from './preview-diff.js';

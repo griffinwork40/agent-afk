@@ -370,13 +370,18 @@ describe('createDefaultHookRegistry integration', () => {
   });
 
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
-    const { registry } = createDefaultHookRegistry();
-    // Built-in handlers exist for SubagentStop and SessionEnd, plus the THREE
+    const bundle = createDefaultHookRegistry();
+    const { registry } = bundle;
+    // Built-in handlers exist for SubagentStop and SessionEnd, plus the FOUR
     // always-on built-in PreToolUse handlers (the ask-question gate, the
-    // observe-only safe-destruct detector, and the observe-only release-boundary
-    // detector), all registered unconditionally. No further PreToolUse hooks
-    // since we passed no hookConfig (path-approval disabled above).
-    expect(registry.count('PreToolUse')).toBe(3);
+    // observe-only safe-destruct detector, the observe-only release-boundary
+    // detector, and the edit-preview hook), all registered unconditionally. No
+    // further PreToolUse hooks since we passed no hookConfig (path-approval
+    // disabled above).
+    expect(registry.count('PreToolUse')).toBe(4);
+    // addPreviewDiffRef must be present on the bundle so the StreamRenderer can
+    // arm it each turn.
+    expect(bundle).toHaveProperty('addPreviewDiffRef');
   });
 
   it('createDefaultHookRegistry with hookConfig → config hooks ARE registered', () => {
@@ -401,9 +406,9 @@ describe('createDefaultHookRegistry integration', () => {
       hookConfig,
       { cwd: projectCwd },
     );
-    // 3 built-ins (ask-question gate + safe-destruct detector + release-boundary
-    // detector) + 1 config hook
-    expect(registry.count('PreToolUse')).toBe(4);
+    // 4 built-ins (ask-question gate + safe-destruct detector + release-boundary
+    // detector + edit-preview hook) + 1 config hook
+    expect(registry.count('PreToolUse')).toBe(5);
   });
 
   it('built-in SubagentStop handler still present when hookConfig is provided', () => {

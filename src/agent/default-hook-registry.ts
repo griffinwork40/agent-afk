@@ -24,6 +24,7 @@ import {
   type PathApprovalSurface,
 } from './tools/hooks/path-approval-hook.js';
 import { createBashRestrictionHook } from './tools/hooks/bash-restriction-hook.js';
+import { createEditPreviewHook, type PreviewDiffRef } from './tools/hooks/edit-preview-hook.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
@@ -39,6 +40,13 @@ export interface SubagentCompleteInfo {
 export interface DefaultHookRegistryResult {
   registry: HookRegistry;
   memoryStore: MemoryStore;
+  /**
+   * Mutable ref the StreamRenderer arms at turn start. The edit-preview hook
+   * calls `addPreviewDiffRef.current(toolUseId, diff)` to deliver previews
+   * to the tool lane. Remains a no-op `() => {}` on non-interactive surfaces
+   * (the ref is never populated outside the REPL bootstrap).
+   */
+  addPreviewDiffRef: PreviewDiffRef;
 }
 
 /**
@@ -150,6 +158,15 @@ export function createDefaultHookRegistry(
       { longRunning: true },
     );
   }
+
+  // Edit-preview hook: computes a diff preview at PreToolUse time for
+  // edit_file calls and delivers it to the tool lane via a mutable callback
+  // ref. Non-blocking, display-only. The ref starts as a no-op; the
+  // StreamRenderer arms it each turn on TTY surfaces.
+  const addPreviewDiffRef: PreviewDiffRef = {
+    current: () => {}, // no-op until StreamRenderer arms it each turn
+  };
+  registry.register('PreToolUse', createEditPreviewHook({ addPreviewDiffRef }));
 
   // Path-approval + bash-restriction hooks. Both share a mutable grant-manager
   // ref that the surface bootstrap populates after the provider exists.
@@ -295,7 +312,7 @@ export function createDefaultHookRegistry(
     });
   }
 
-  return { registry, memoryStore: store };
+  return { registry, memoryStore: store, addPreviewDiffRef };
 }
 
 /**

@@ -2,6 +2,7 @@ import { env } from '../../../config/env.js';
 import type { DiffPayload, DiffLine } from '../../../utils/diff.js';
 import { palette } from '../../palette.js';
 import { stripAnsi } from '../../display.js';
+import { previewDiff } from '../../render/preview-diff.js';
 
 /**
  * Maximum number of diff body lines to render in the live overlay before
@@ -62,7 +63,7 @@ function diffFlushMaxLines(): number {
  * — this only suppresses the render. That keeps the JSON-output / Telegram
  * surfaces unaffected if they choose to surface diffs independently.
  */
-function diffsDisabled(): boolean {
+export function diffsDisabled(): boolean {
   const raw = env.AFK_SHOW_DIFFS;
   if (raw === undefined) return false;
   const v = raw.trim().toLowerCase();
@@ -277,3 +278,13 @@ function _diffBlockCacheStore(diff: DiffPayload, key: string, result: string[]):
   inner.set(key, result);
 }
 
+
+/**
+ * Render a pre-execution diff preview into an array of indented lines for the
+ * live overlay. Returns `[]` when `AFK_SHOW_DIFFS=0` (same gate as
+ * {@link formatDiffBlock}). Each returned line already includes `indent`.
+ */
+export function formatPreviewDiffBlock(diff: DiffPayload, indent: string): string[] {
+  if (diffsDisabled()) return [];
+  return previewDiff(diff).split('\n').map((l) => indent + l);
+}

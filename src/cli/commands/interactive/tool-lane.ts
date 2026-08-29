@@ -1,7 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
-import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
+import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { truncateDisplayWidth, stripAnsi } from '../../display.js';
 import { formatElapsed, ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
@@ -178,7 +178,8 @@ export class ToolLane {
 
   addResult(toolUseId: string, chunk: ToolResultChunk): void {
     const entry = this.entries.get(toolUseId);
-    if (entry?.kind === 'tool') entry.result = chunk;
+    // Clear previewDiff on the same tick as result — preview is now obsolete.
+    if (entry?.kind === 'tool') { entry.result = chunk; entry.previewDiff = undefined; }
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
@@ -194,6 +195,21 @@ export class ToolLane {
   addDiff(toolUseId: string, diff: DiffPayload): void {
     const entry = this.entries.get(toolUseId);
     if (entry?.kind === 'tool') entry.diff = diff;
+  }
+
+  /**
+   * Attach a pre-execution diff preview to an in-flight tool entry. Called by
+   * the edit-preview hook at PreToolUse time, before the edit executes.
+   * No-op if the entry doesn't exist or is not a tool entry.
+   *
+   * The preview is rendered in the live overlay only (while `!entry.result`).
+   * It does NOT appear in scrollback (flush). Once the tool_result arrives
+   * and the post-execution diff sidechannel takes over, the preview is no
+   * longer shown.
+   */
+  addPreviewDiff(toolUseId: string, diff: DiffPayload): void {
+    const entry = this.entries.get(toolUseId);
+    if (entry?.kind === 'tool') entry.previewDiff = diff;
   }
 
   /**
@@ -559,6 +575,13 @@ export class ToolLane {
           // Live elapsed counter: same pattern as the NESTING branch above —
           // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
           lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
+          if (entry.previewDiff) {
+            // Pre-execution diff preview: formatPreviewDiffBlock renders ⟳ Proposed
+            // and applies the AFK_SHOW_DIFFS=0 opt-out (returns [] when disabled).
+            for (const line of formatPreviewDiffBlock(entry.previewDiff, '    ')) {
+              lines.push(clamp(line));
+            }
+          }
           if (entry.thinkingTail) {
             // Childless Agent entries (a child just opened its thinking block
             // and hasn't yet emitted content or a tool_use) get the tail right

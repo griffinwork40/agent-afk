@@ -16,6 +16,7 @@ import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
+import type { DiffPayload } from '../../../utils/diff.js';
 
 function makeResult(content: string, isError = false): ToolResultChunk {
   return {
@@ -3032,5 +3033,63 @@ describe('ToolLane.peekTrailingCompletedRootToolName — cross-flush run gate', 
     lane.addStart('r1', 'Read', '("x.ts")');
     lane.addResult('r1', makeResult('1 line'));
     expect(lane.peekTrailingCompletedRootToolName()).toBe('Read');
+  });
+});
+
+describe('ToolLane.addPreviewDiff — pre-execution diff preview', () => {
+  const sampleDiff: DiffPayload = {
+    addedLines: 1, removedLines: 1,
+    hunks: [{
+      oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+      lines: [{ kind: '-', text: 'before' }, { kind: '+', text: 'after' }],
+    }],
+  };
+
+  it('(a) preview renders in overlay while in-flight (no result yet)', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_pre', 'edit_file', '(foo.ts)');
+    lane.addPreviewDiff('tu_pre', sampleDiff);
+    const overlay = stripAnsi(lane.getOverlay());
+    expect(overlay).toContain('before');
+    expect(overlay).toContain('after');
+  });
+
+  it('(b) preview absent from overlay after result arrives', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_pre', 'edit_file', '(foo.ts)');
+    lane.addPreviewDiff('tu_pre', sampleDiff);
+    lane.addResult('tu_pre', makeResult('Replaced 1 occurrence'));
+    const overlay = stripAnsi(lane.getOverlay());
+    // result branch: shows outcome line, not preview diff
+    expect(overlay).not.toContain('@@ -1,1 +1,1 @@');
+    // positive: outcome line is present
+    expect(overlay).toContain('Replaced 1 occurrence');
+  });
+
+  it('(c) no-op for unknown toolUseId', () => {
+    const lane = new ToolLane();
+    expect(() => lane.addPreviewDiff('ghost_id', sampleDiff)).not.toThrow();
+  });
+
+  it('(d) AFK_SHOW_DIFFS=0 suppresses preview in overlay', () => {
+    process.env['AFK_SHOW_DIFFS'] = '0';
+    try {
+      const lane = new ToolLane();
+      lane.addStart('tu_env', 'edit_file', '(x.ts)');
+      lane.addPreviewDiff('tu_env', sampleDiff);
+      const overlay = stripAnsi(lane.getOverlay());
+      expect(overlay).not.toContain('@@ -1,1 +1,1 @@');
+    } finally {
+      delete process.env['AFK_SHOW_DIFFS'];
+    }
+  });
+
+  it('(e) preview does not appear in flush/scrollback (overlay-only)', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_fl', 'edit_file', '(bar.ts)');
+    lane.addPreviewDiff('tu_fl', sampleDiff);
+    // No addResult — entry stays in-flight; flush should not emit preview
+    const flushed = stripAnsi(lane.flush().join('\n'));
+    expect(flushed).not.toContain('@@ -1,1 +1,1 @@');
   });
 });

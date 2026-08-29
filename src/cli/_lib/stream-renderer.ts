@@ -27,6 +27,7 @@
  */
 
 import type { OutputEvent, SubagentProgressMeta, ProgressEvent } from '../../agent/types.js';
+import type { PreviewDiffRef } from '../../agent/tools/hooks/edit-preview-hook.js';
 import type { Message } from '../../agent/types/message-types.js';
 import type { Writer } from '../slash/types.js';
 import { TerminalCompositor } from '../terminal-compositor.js';
@@ -177,6 +178,9 @@ export class StreamRenderer {
   /** Last annotation string rendered for the TTFB line — drives 1 Hz change detection. */
   private lastTtfbAnnotation = '';
 
+  /** Ref wired in arm() so the edit-preview hook can push diffs to the tool lane. */
+  private readonly addPreviewDiffRef: PreviewDiffRef | undefined;
+
   /**
    * Pre-bound sink — pass directly to `runWithSink(...)` from callers.
    * Equivalent to `(event, meta) => this.process(event, meta)`.
@@ -243,6 +247,7 @@ export class StreamRenderer {
     }
     this.ttfbStartedAt = opts.turnStartedAt;
     this.ttfbDone = opts.turnStartedAt === undefined;
+    this.addPreviewDiffRef = opts.addPreviewDiffRef;
 
     this.sink = (event, meta) => this.process(event, meta);
   }
@@ -316,6 +321,16 @@ export class StreamRenderer {
       await compositor.arm();
     }
     this.compositor = compositor;
+
+    // Wire the edit-preview ref so the hook can push diff previews into the
+    // tool lane during this turn. No-op when ref is absent (non-REPL surfaces).
+    if (this.addPreviewDiffRef) {
+      this.addPreviewDiffRef.current = (toolUseId, diff) => {
+        this.toolLane.addPreviewDiff(toolUseId, diff);
+        this.overlayComposer?.markDirty('tool-lane');
+        this.overlayComposer?.flush();
+      };
+    }
 
     // Construct the OverlayComposer with the five overlay slot types in z-order.
     // The slots read live state at flush time, so there's no initialization
@@ -529,6 +544,9 @@ export class StreamRenderer {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Reset the preview-diff ref to a no-op so the disposed turn's toolLane
+    // reference is released and the hook cannot write into a stale lane.
+    if (this.addPreviewDiffRef) this.addPreviewDiffRef.current = () => {};
     // Clear the subagent elapsed-time ticker immediately — it guards against
     // `this.disposed` but clearing here is cleaner and avoids one extra tick.
     if (this.subagentTickInterval !== null) {
