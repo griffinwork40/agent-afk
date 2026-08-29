@@ -246,6 +246,33 @@ describe('enterTaskViewMode — completed handle', () => {
     // After completion, viewingTaskId is cleared (completed path)
     expect(ictx.viewingTaskId).toBeUndefined();
   });
+
+  it('sets viewingTaskId to the task id before rendering', async () => {
+    // Verify that ictx.viewingTaskId is set to the subagent id while
+    // enterTaskViewMode is executing, not merely that it is cleared afterwards.
+    // Strategy: intercept ctx.ui.clearScreen (called immediately after the
+    // assignment) to snapshot the ictx value at that point in time.
+    const h = makeHandle('h-set-check', 'succeeded');
+    const manager = makeManager([h]);
+
+    let viewingIdAtClearScreen: string | undefined = 'NOT_CAPTURED';
+    const ictx = makeICtx();
+    const { ctx } = makeCtx({
+      ui: {
+        clearScreen: vi.fn().mockImplementation(() => {
+          viewingIdAtClearScreen = ictx.viewingTaskId;
+        }),
+        repaintStatusLine: vi.fn(),
+      },
+    });
+
+    await enterTaskViewMode({ id: 'h-set-check', manager, sessionLabel: 'lbl', ctx, ictx });
+
+    // The id must have been set when clearScreen was called.
+    expect(viewingIdAtClearScreen).toBe('h-set-check');
+    // And cleared by the time the function returns.
+    expect(ictx.viewingTaskId).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

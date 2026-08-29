@@ -34,6 +34,7 @@ import {
   tasksViewCmd,
   tasksCancelCmd,
   setTasksRegistry,
+  setTasksIctx,
   resetTasksRegistry,
 } from './tasks.js';
 import { enterTaskViewMode } from '../../commands/interactive/task-view-mode.js';
@@ -42,6 +43,7 @@ import type { SubagentHandle } from '../../../agent/subagent/handle.js';
 import type { SubagentStatus } from '../../../agent/subagent/result.js';
 import { CompletedCache } from '../../../agent/subagent/completed-cache.js';
 import type { SlashContext, SessionStats } from '../types.js';
+import type { InteractiveCtx } from '../../commands/interactive/shared.js';
 
 const mockedEnterTaskViewMode = vi.mocked(enterTaskViewMode);
 
@@ -226,6 +228,26 @@ describe('/tasks slash commands', () => {
       await tasksViewCmd.handler(ctx, 'sub-history-1');
       expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'sub-history-1' }),
+      );
+    });
+
+    it('setTasksIctx threads ictx into the TaskViewEntry passed to enterTaskViewMode (#1332)', async () => {
+      // Verify that after calling setTasksIctx(ictx), the ictx reference
+      // is included in the TaskViewEntry so enterTaskViewMode can set
+      // viewingTaskId on the live REPL context.
+      const h = makeHandle('sub-ictx-1', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+
+      const fakeIctx = { viewingTaskId: undefined } as unknown as InteractiveCtx;
+      setTasksIctx(fakeIctx);
+
+      const { ctx } = makeCtx();
+      mockedEnterTaskViewMode.mockResolvedValueOnce(undefined);
+      await tasksViewCmd.handler(ctx, 'sub-ictx-1');
+
+      expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sub-ictx-1', ictx: fakeIctx }),
       );
     });
   });
