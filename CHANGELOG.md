@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.166.0] - 2026-08-29
+
+### Added
+- pre-execution diff preview for edit_file (#1366) (07f13a73)
+
 ## [5.165.2] - 2026-08-29
 
 ### Fixed
