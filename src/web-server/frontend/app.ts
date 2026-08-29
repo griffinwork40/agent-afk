@@ -12,6 +12,7 @@ import { readAndScrubToken } from './web-token.js';
 import { SessionStream } from './sse-client.js';
 import { wireComposerAffordances } from './composer-wiring.js';
 import { showToast, wireSidebarClose, toggleNewSessionForm } from './app-chrome.js';
+import { $required as $ } from './dom-utils.js';
 import type { CommandEntry } from '../../cli/input/slash-match.js';
 import {
   renderApprovals,
@@ -52,12 +53,6 @@ let turnActive = false;
 
 /** True while the SSE transport is in a reconnecting state. */
 let sseReconnecting = false;
-
-function $(id: string): HTMLElement {
-  const node = document.getElementById(id);
-  if (!node) throw new Error(`missing #${id}`);
-  return node;
-}
 
 /**
  * Contract: constructed lazily on first use so this module can be imported
