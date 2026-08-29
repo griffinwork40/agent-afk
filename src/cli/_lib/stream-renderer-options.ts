@@ -10,7 +10,7 @@ import type { Writer } from '../slash/types.js';
 import type { IHistoryRing } from '../input/types.js';
 import type { AutocompleteState } from '../input/autocomplete-state.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
-import type { DiffPayload } from '../../utils/diff.js';
+import type { PreviewDiffRef } from '../../agent/tools/hooks/edit-preview-hook.js';
 
 export interface StreamRendererOptions {
   /** Where line-based output goes (non-TTY fallback + always-emitted compact lines). */
@@ -168,5 +168,5 @@ export interface StreamRendererOptions {
    * armed and remains a no-op. The REPL bootstrap threads it from
    * `DefaultHookRegistryResult.addPreviewDiffRef`.
    */
-  addPreviewDiffRef?: { current: (toolUseId: string, diff: DiffPayload) => void };
+  addPreviewDiffRef?: PreviewDiffRef;
 }

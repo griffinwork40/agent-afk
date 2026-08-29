@@ -370,7 +370,8 @@ describe('createDefaultHookRegistry integration', () => {
   });
 
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
-    const { registry } = createDefaultHookRegistry();
+    const bundle = createDefaultHookRegistry();
+    const { registry } = bundle;
     // Built-in handlers exist for SubagentStop and SessionEnd, plus the FOUR
     // always-on built-in PreToolUse handlers (the ask-question gate, the
     // observe-only safe-destruct detector, the observe-only release-boundary
@@ -378,6 +379,9 @@ describe('createDefaultHookRegistry integration', () => {
     // further PreToolUse hooks since we passed no hookConfig (path-approval
     // disabled above).
     expect(registry.count('PreToolUse')).toBe(4);
+    // addPreviewDiffRef must be present on the bundle so the StreamRenderer can
+    // arm it each turn.
+    expect(bundle).toHaveProperty('addPreviewDiffRef');
   });
 
   it('createDefaultHookRegistry with hookConfig → config hooks ARE registered', () => {

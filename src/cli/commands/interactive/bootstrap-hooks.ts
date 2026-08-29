@@ -8,7 +8,7 @@ import type { CompletionWriter } from './shared.js';
 import { emitSubagentCompletion } from './progress-banner.js';
 import { createTerminalStateGate } from './terminal-state-gate.js';
 import { loadConfig } from '../../config.js';
-import type { DiffPayload } from '../../../utils/diff.js';
+import type { PreviewDiffRef } from '../../../agent/tools/hooks/edit-preview-hook.js';
 
 /**
  * Build the stable hook registry shared across sessions (including
@@ -36,7 +36,7 @@ export function createReplHookRegistry(a: {
   traceWriter: TraceSink | undefined;
 }): {
   hookRegistry: HookRegistry;
-  addPreviewDiffRef: { current: (toolUseId: string, diff: DiffPayload) => void };
+  addPreviewDiffRef: PreviewDiffRef;
 } {
   const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { emitSubagentCompletion(a.completionWriter, info); },

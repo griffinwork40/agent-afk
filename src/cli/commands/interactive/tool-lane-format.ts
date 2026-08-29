@@ -23,6 +23,8 @@ export {
   MAX_OVERLAY_DIFF_LINES,
   FLUSH_DIFF_LINES_DEFAULT,
   formatDiffBlock,
+  diffsDisabled,
+  formatPreviewDiffBlock,
 } from './tool-lane-format-diff.js';
 
 /**

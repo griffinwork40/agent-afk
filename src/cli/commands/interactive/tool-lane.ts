@@ -1,7 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
-import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
+import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { truncateDisplayWidth, stripAnsi } from '../../display.js';
 import { formatElapsed, ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
@@ -178,7 +178,8 @@ export class ToolLane {
 
   addResult(toolUseId: string, chunk: ToolResultChunk): void {
     const entry = this.entries.get(toolUseId);
-    if (entry?.kind === 'tool') entry.result = chunk;
+    // Clear previewDiff on the same tick as result — preview is now obsolete.
+    if (entry?.kind === 'tool') { entry.result = chunk; entry.previewDiff = undefined; }
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
@@ -575,10 +576,9 @@ export class ToolLane {
           // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
           lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
           if (entry.previewDiff) {
-            // Pre-execution diff preview: rendered under the in-flight " …" line,
-            // indented to visually attach to this entry. formatDiffBlock already
-            // returns [] when AFK_SHOW_DIFFS=0, so no extra guard needed.
-            for (const line of formatDiffBlock(entry.previewDiff, 'overlay', '    ')) {
+            // Pre-execution diff preview: formatPreviewDiffBlock renders ⟳ Proposed
+            // and applies the AFK_SHOW_DIFFS=0 opt-out (returns [] when disabled).
+            for (const line of formatPreviewDiffBlock(entry.previewDiff, '    ')) {
               lines.push(clamp(line));
             }
           }

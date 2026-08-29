@@ -16,6 +16,9 @@ import type { DiffPayload } from '../../../utils/diff.js';
 // Public types
 // ---------------------------------------------------------------------------
 
+/** Mutable ref type for delivering preview diffs from the hook to the tool lane. */
+export type PreviewDiffRef = { current: (toolUseId: string, diff: DiffPayload) => void };
+
 export interface EditPreviewHookOptions {
   /**
    * Mutable ref populated by the StreamRenderer when it arms. The hook
@@ -25,7 +28,7 @@ export interface EditPreviewHookOptions {
    * Remains a no-op `() => {}` until the StreamRenderer arms it each turn.
    * On non-interactive surfaces (daemon, Telegram) it is never armed.
    */
-  addPreviewDiffRef: { current: (toolUseId: string, diff: DiffPayload) => void };
+  addPreviewDiffRef: PreviewDiffRef;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,8 +61,18 @@ export function createEditPreviewHook(opts: EditPreviewHookOptions): HookHandler
     // No-op edit: mirrors computeLineDiff null-on-identical behavior
     if (oldStr === newStr) return {};
 
-    const diff = computeLineDiff(oldStr, newStr);
-    if (diff === null) return {};
+    // replace_all preview would require reading the file to know how many
+    // occurrences exist and where they are — not available to this hook (no I/O
+    // by design). Skip the preview entirely to avoid a misleading single-hunk
+    // diff that doesn't reflect the full multi-occurrence replacement.
+    if (input['replace_all']) return {};
+
+    // TODO(#1366): preview may diverge from final input when canUseTool returns
+    // updatedInput — requires hook re-fire or post-rewrite preview refresh.
+
+    // computeLineDiff returns non-null for distinct strings; the null case
+    // (identical input) is handled by the oldStr === newStr guard above.
+    const diff = computeLineDiff(oldStr, newStr)!;
 
     opts.addPreviewDiffRef.current(context.toolUseId, diff);
     return {};

@@ -3062,6 +3062,8 @@ describe('ToolLane.addPreviewDiff — pre-execution diff preview', () => {
     const overlay = stripAnsi(lane.getOverlay());
     // result branch: shows outcome line, not preview diff
     expect(overlay).not.toContain('@@ -1,1 +1,1 @@');
+    // positive: outcome line is present
+    expect(overlay).toContain('Replaced 1 occurrence');
   });
 
   it('(c) no-op for unknown toolUseId', () => {

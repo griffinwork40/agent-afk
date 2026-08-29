@@ -6,6 +6,7 @@ import {
   inProgressVerb,
   formatOutcome,
   formatDiffBlock,
+  formatPreviewDiffBlock,
   doneGlyph,
   sanitizeLabel,
 } from './tool-lane-format.js';
@@ -286,6 +287,14 @@ function renderOverlayChildren(
         // connector + tool name). Computed at repaint time from child.startedAt;
         // suppressed under ELAPSED_GRACE_MS (2s) to avoid flicker on fast tools.
         lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' …') + formatElapsed(child.startedAt), cols));
+        if (child.previewDiff) {
+          // Pre-execution diff preview for nested edit_file. formatPreviewDiffBlock
+          // renders ⟳ Proposed and applies the AFK_SHOW_DIFFS=0 opt-out.
+          const previewIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+          for (const line of formatPreviewDiffBlock(child.previewDiff, previewIndent)) {
+            lines.push(clampLineToTerminal(line, cols));
+          }
+        }
         // In-progress / thinking continuation hangs under the prefix at the
         // same "past-connector" column the diff path uses.
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
