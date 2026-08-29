@@ -12,6 +12,7 @@ vi.mock('../../code-block-register.js', () => ({
 import { copyCmd } from './copy.js';
 import { copyToClipboard } from '../../clipboard.js';
 import { getCodeBlock, getCodeBlocks } from '../../code-block-register.js';
+import { stripMarkdown } from './copy.strip-markdown.js';
 import type { SlashContext, SessionStats } from '../types.js';
 
 const mockedCopy = vi.mocked(copyToClipboard);
@@ -153,5 +154,116 @@ describe('/copy slash command', () => {
     const result = await copyCmd.handler(ctx, 'banana');
     expect(result).toBe('continue');
     expect(lines.some((l) => l.includes('Unknown argument'))).toBe(true);
+  });
+
+  it('/copy plain strips markdown before copying', async () => {
+    const text = '# Hello\n\n**bold** and _italic_\n\n```js\nconsole.log("hi");\n```';
+    mockedCopy.mockReturnValue(true);
+    const { ctx, lines } = makeCtx({ assistant: text });
+    const result = await copyCmd.handler(ctx, 'plain');
+    expect(result).toBe('continue');
+    // Should NOT be called with the raw markdown — must be the stripped version.
+    const calledWith = mockedCopy.mock.calls[0]?.[0] ?? '';
+    expect(calledWith).not.toContain('**');
+    expect(calledWith).not.toContain('# Hello');
+    expect(calledWith).toContain('HELLO');
+    expect(lines.some((l) => l.startsWith('SUCCESS:') && l.includes('plain'))).toBe(true);
+  });
+
+  it('/copy plain shows clipboard failure message', async () => {
+    mockedCopy.mockReturnValue(false);
+    const { ctx, lines } = makeCtx({ assistant: '**bold**' });
+    const result = await copyCmd.handler(ctx, 'plain');
+    expect(result).toBe('continue');
+    expect(lines.some((l) => l.includes('Clipboard write failed'))).toBe(true);
+  });
+});
+
+describe('stripMarkdown', () => {
+  it('converts H1 to uppercase', () => {
+    const result = stripMarkdown('# My Title\n\nSome text.');
+    expect(result).toContain('MY TITLE');
+    expect(result).not.toContain('# My Title');
+    expect(result).toContain('Some text.');
+  });
+
+  it('converts H2 to uppercase', () => {
+    const result = stripMarkdown('## Section Header\n\nParagraph.');
+    expect(result).toContain('SECTION HEADER');
+    expect(result).not.toContain('## Section Header');
+    expect(result).toContain('Paragraph.');
+  });
+
+  it('strips bold (**text**) markers', () => {
+    const result = stripMarkdown('This is **important** text.');
+    expect(result).toBe('This is important text.');
+  });
+
+  it('strips italic (*text*) markers', () => {
+    const result = stripMarkdown('This is *emphasized* text.');
+    expect(result).toBe('This is emphasized text.');
+  });
+
+  it('converts fenced code block to indented block with language label', () => {
+    const input = '```python\nprint("hello")\n```';
+    const result = stripMarkdown(input);
+    expect(result).toContain('[python]');
+    expect(result).toContain('  print("hello")');
+    expect(result).not.toContain('```');
+  });
+
+  it('converts fenced code block without language to indented block', () => {
+    const input = '```\nsome code\n```';
+    const result = stripMarkdown(input);
+    expect(result).toContain('  some code');
+    expect(result).not.toContain('```');
+  });
+
+  it('converts unordered list items to bullet •', () => {
+    const result = stripMarkdown('- apple\n- banana\n- cherry');
+    expect(result).toBe('• apple\n• banana\n• cherry');
+  });
+
+  it('strips inline code backticks', () => {
+    const result = stripMarkdown('Run `npm install` first.');
+    expect(result).toBe('Run npm install first.');
+  });
+
+  it('replaces horizontal rules with blank lines', () => {
+    const result = stripMarkdown('Above\n\n---\n\nBelow');
+    expect(result).not.toContain('---');
+  });
+
+  it('collapses 3+ consecutive blank lines to 2', () => {
+    const result = stripMarkdown('A\n\n\n\n\nB');
+    // At most 2 consecutive blank lines between A and B
+    expect(result).not.toMatch(/A\n\n\n\n/);
+    expect(result).toContain('A');
+    expect(result).toContain('B');
+  });
+
+  it('strips ANSI escape sequences', () => {
+    const result = stripMarkdown('\x1b[32mGreen text\x1b[0m');
+    expect(result).toBe('Green text');
+  });
+
+  it('strips blockquote markers', () => {
+    const result = stripMarkdown('> This is a quote.\n> And another line.');
+    expect(result).toBe('This is a quote.\nAnd another line.');
+  });
+
+  it('preserves underscores inside inline code spans', () => {
+    const result = stripMarkdown('Use `__init__.py` in Python');
+    expect(result).toContain('__init__.py');
+  });
+
+  it('preserves snake_case identifiers inside inline code spans', () => {
+    const result = stripMarkdown('The `snake_case_value` variable');
+    expect(result).toContain('snake_case_value');
+  });
+
+  it('preserves markdown-like content inside inline code spans', () => {
+    const result = stripMarkdown('Run `**bold_cmd**` now');
+    expect(result).toContain('**bold_cmd**');
   });
 });
