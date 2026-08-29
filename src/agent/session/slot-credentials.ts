@@ -98,6 +98,20 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   // else resolveOpenAIAuth keeps forcing the ChatGPT token and ignores the
   // tier/env key. The apiKey is still cleared below (route === 'openai-compatible').
   config.forceChatgptOAuth = binding.provider === 'chatgpt-oauth';
+
+  // Warn when a `chatgpt-oauth` slot also carries an explicit `apiKey`.
+  // The per-slot key is silently ignored: `forceChatgptOAuth` causes
+  // `resolveOpenAIAuth` to read from ~/.codex/auth.json instead, and the
+  // `apiKey = undefined` clear below drops the per-slot key. Surfacing this
+  // mismatch at config-load time (once per session, not once per query) gives
+  // the user an actionable pointer without flooding runtime output.
+  if (binding.provider === 'chatgpt-oauth' && binding.apiKey !== undefined) {
+    console.warn(
+      `[afk] slot "${slot}" is configured provider: 'chatgpt-oauth' but also carries an explicit apiKey — ` +
+        'the apiKey is ignored because chatgpt-oauth always reads from ~/.codex/auth.json. ' +
+        "Remove the apiKey from the slot binding or change provider to 'openai'.",
+    );
+  }
   // SuperGrok OAuth vs metered API-key force — mutual exclusive per slot.
   config.forceXaiOAuth = binding.provider === 'xai-oauth';
   config.forceXaiApiKey = binding.provider === 'xai';

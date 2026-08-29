@@ -131,6 +131,11 @@ export function resolveOpenAIAuth(
     if (codexRaw !== null) {
       const parsed = parseCodexAuthJson(codexRaw);
       if (parsed.kind === 'chatgpt' && parsed.accessToken) {
+        // Gate on expiry: an expired token is not usable — the user must
+        // re-run `codex` to refresh it (AFK is read-only on these tokens).
+        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
+          return { apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' };
+        }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
           source: 'chatgpt-oauth',
@@ -188,6 +193,11 @@ export function resolveOpenAIAuth(
       // these tokens (read-only — refresh stays with `codex`). When disabled,
       // surface distinctly so the diagnostic can give a precise next step.
       if (chatGptOAuthEnabled(readEnv) && parsed.accessToken) {
+        // Gate on expiry: an expired token is not usable — the user must
+        // re-run `codex` to refresh it (AFK is read-only on these tokens).
+        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
+          return { apiKey: null, source: 'no-usable-auth-codex-oauth' };
+        }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
           source: 'chatgpt-oauth',

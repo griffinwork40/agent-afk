@@ -325,3 +325,98 @@ describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent
     expect(msg).not.toContain('Found ChatGPT/OAuth credentials');
   });
 });
+
+describe('resolveOpenAIAuth — expiry gate (item 2 fix)', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const nowSec = () => Math.floor(Date.now() / 1000);
+
+  function makeAccessToken(expOffset: number): string {
+    // expOffset seconds relative to now: positive = future, negative = past.
+    const exp = nowSec() + expOffset;
+    return `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'acct_test' },
+      exp,
+    })}.sig`;
+  }
+
+  function chatgptAuthJson(accessToken: string): string {
+    return JSON.stringify({
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: { access_token: accessToken },
+    });
+  }
+
+  // ── Tier 0 (forced / per-slot) ──────────────────────────────────────────
+
+  it('[Tier 0] returns no-usable-auth-forced-chatgpt-oauth for an expired token', () => {
+    const expiredToken = makeAccessToken(-3600); // expired 1h ago
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => chatgptAuthJson(expiredToken) }),
+      true, // forceChatgptOAuth
+    );
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('[Tier 0] returns chatgpt-oauth for a token that expires exactly 1s from now (boundary)', () => {
+    const almostExpiredToken = makeAccessToken(1); // 1 second left
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => chatgptAuthJson(almostExpiredToken) }),
+      true,
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(almostExpiredToken);
+  });
+
+  it('[Tier 0] returns chatgpt-oauth when token has no expiresAt (no expiry info = treat as valid)', () => {
+    // A token without an `exp` claim: expiresAt is undefined in the parse result.
+    // The gate must only reject when `expiresAt <= now`; absence of the field is
+    // treated as "no known expiry" and the token is used as-is.
+    const noExpToken = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'user' })}.sig`;
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => chatgptAuthJson(noExpToken) }),
+      true,
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(noExpToken);
+  });
+
+  // ── Tier 4 (flag-gated / AFK_OPENAI_CHATGPT_OAUTH=1) ───────────────────
+
+  it('[Tier 4] returns no-usable-auth-codex-oauth for an expired token when flag is ON', () => {
+    const expiredToken = makeAccessToken(-1); // expired just now
+    const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: flagOn, readFile: () => chatgptAuthJson(expiredToken) }),
+    );
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('[Tier 4] returns chatgpt-oauth for a valid (future-expiry) token when flag is ON', () => {
+    const validToken = makeAccessToken(3600); // expires in 1h
+    const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: flagOn, readFile: () => chatgptAuthJson(validToken) }),
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(validToken);
+  });
+
+  it('[Tier 4] treats absence of expiresAt as valid (flag path)', () => {
+    const noExpToken = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'user' })}.sig`;
+    const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: flagOn, readFile: () => chatgptAuthJson(noExpToken) }),
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(noExpToken);
+  });
+});

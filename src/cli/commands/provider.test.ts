@@ -104,3 +104,71 @@ describe('diagnose JSON back-compat fields', () => {
     expect(r.message).toMatch(/config/i);
   });
 });
+
+describe('buildProviderAuthDiagnose — slot-aware / forceChatgptOAuth (item 1 fix)', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+  function makeFutureJwt(): string {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    return `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'acct_slot_diag' },
+      exp,
+    })}.sig`;
+  }
+
+  function makePastJwt(): string {
+    const exp = Math.floor(Date.now() / 1000) - 3600;
+    return `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'acct_slot_diag' },
+      exp,
+    })}.sig`;
+  }
+
+  const hermeticDepsWithOAuthToken = (accessToken: string) => ({
+    readEnv: (_k: string) => undefined, // AFK_OPENAI_CHATGPT_OAUTH deliberately OFF
+    homedir: () => '/home/testslot',
+    readFile: (_p: string) =>
+      JSON.stringify({
+        auth_mode: 'chatgpt',
+        OPENAI_API_KEY: null,
+        tokens: { access_token: accessToken },
+      }),
+  });
+
+  it('without forceChatgptOAuth, a chatgpt-oauth token is NOT selected (flag-gated behaviour)', () => {
+    // AFK_OPENAI_CHATGPT_OAUTH is OFF and forceChatgptOAuth=false: the resolver
+    // must return no-usable-auth-codex-oauth, NOT chatgpt-oauth.
+    const r = buildProviderAuthDiagnose(
+      undefined,
+      hermeticDepsWithOAuthToken(makeFutureJwt()),
+      false,
+    );
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('with forceChatgptOAuth=true, selects the chatgpt-oauth token (models --model chatgpt-oauth slot)', () => {
+    // Simulates `afk provider auth diagnose --model medium` when medium is
+    // bound to provider: 'chatgpt-oauth'.
+    const r = buildProviderAuthDiagnose(
+      undefined,
+      hermeticDepsWithOAuthToken(makeFutureJwt()),
+      true, // forceChatgptOAuth
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.exitCode).toBe(0);
+    expect(r.message).toContain('ChatGPT subscription');
+  });
+
+  it('with forceChatgptOAuth=true and expired token, returns no-usable-auth-forced-chatgpt-oauth (exit 1)', () => {
+    const r = buildProviderAuthDiagnose(
+      undefined,
+      hermeticDepsWithOAuthToken(makePastJwt()),
+      true,
+    );
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.exitCode).toBe(1);
+    // The message must give actionable guidance (re-run codex or change the slot).
+    expect(r.message).toMatch(/re-run `codex`|change the slot/i);
+  });
+});

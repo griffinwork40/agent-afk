@@ -28,15 +28,23 @@ import {
   runXaiDeviceCodeLogin,
   runXaiLogout,
 } from './provider-xai-login.js';
+import { resolveBinding } from '../../agent/session/model-slots.js';
 
 /**
  * Build the human-readable result of `afk provider auth diagnose` (OpenAI).
+ *
+ * @param explicitConfigKey - Explicit API key from AgentConfig, if any.
+ * @param deps - Optional env + fs injection point for tests.
+ * @param forceChatgptOAuth - When true (resolved from a `chatgpt-oauth` slot
+ *   via `--model`/`--slot`), threads the flag through to `resolveOpenAIAuth`
+ *   so the diagnose output reflects what the slot-bound session actually sees.
  */
 export function buildProviderAuthDiagnose(
   explicitConfigKey: string | undefined,
   deps?: AuthResolverDeps,
+  forceChatgptOAuth = false,
 ): { source: OpenAIAuthSource; message: string; exitCode: number; last4?: string } {
-  const resolution = resolveOpenAIAuth(explicitConfigKey, deps);
+  const resolution = resolveOpenAIAuth(explicitConfigKey, deps, forceChatgptOAuth);
   const message = formatAuthDiagnostic(resolution);
   const exitCode = resolution.apiKey === null ? 1 : 0;
   const result: { source: OpenAIAuthSource; message: string; exitCode: number; last4?: string } = {
@@ -95,8 +103,23 @@ export function registerProviderCommand(program: Command): void {
       'Exit-code family: openai (default, back-compat), xai, or any',
       'openai',
     )
-    .action((options: { format: string; family: string }) => {
-      const openai = buildProviderAuthDiagnose(undefined);
+    .option(
+      '-m, --model <model>',
+      'Resolve auth as if running with this model slot (e.g. small, medium, large, or a custom name). ' +
+        'When the slot is bound to provider: chatgpt-oauth, the diagnose uses the forced-OAuth path.',
+    )
+    .option(
+      '--slot <slot>',
+      'Alias for --model: resolve auth for the named slot binding.',
+    )
+    .action((options: { format: string; family: string; model?: string; slot?: string }) => {
+      // Resolve per-slot flags from --model / --slot so the diagnose reflects
+      // what the session actually sees for that binding.
+      const modelInput = options.model ?? options.slot;
+      const slotBinding = modelInput ? resolveBinding(modelInput) : undefined;
+      const forceChatgptOAuth = slotBinding?.provider === 'chatgpt-oauth';
+
+      const openai = buildProviderAuthDiagnose(undefined, undefined, forceChatgptOAuth);
       const xai = buildXaiAuthDiagnose(undefined);
       const family = options.family.trim().toLowerCase();
 

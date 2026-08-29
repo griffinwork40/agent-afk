@@ -135,6 +135,16 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
   if (input.client !== undefined) {
     client = input.client;
   } else {
+    // `forceChatgptOAuth` is intentionally NOT threaded through the standalone
+    // one-shot path.  This helper is OAuth-agnostic by design: callers that run
+    // inside a ChatGPT-OAuth session always reach here through `input.client`
+    // (the session's own pre-built client, which already carries the correct
+    // access token + ChatGPT-account-id header). The only callers that reach the
+    // `resolveOpenAIAuth` branch below are entirely out-of-session (e.g.
+    // CLI sub-commands, suggest-model, and tests that set `input.apiKey`).
+    // Those callers have no slot binding in scope, so there is no `chatgpt-oauth`
+    // flag to honour — forcing OAuth here would silently break any caller that
+    // does not have a ChatGPT token but did not pass an explicit key.
     const auth = resolveOpenAIAuth(apiKey);
     if (auth.apiKey === null) {
       throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
