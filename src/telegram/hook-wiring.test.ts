@@ -1,21 +1,19 @@
 /**
- * Telegram hook-wiring contract (PR #202 review H1 + L4).
+ * Telegram hook-wiring contract (PR #202 review H1 + L4, updated #528).
  *
  * Both Telegram session branches in `telegram.ts main()` — the Anthropic-direct
- * branch and the OpenAI-compatible ("codex") branch — MUST wire
- * `pathApprovalGrantRef.current` to their provider and call
- * `seedPersistedGrants`, or path-approval AND the bash interpreter denylist
- * silently fail open for that surface (the hooks are registered but no-op
- * because `getGrantManager()` returns undefined). Before the H1 fix the codex
- * branch built `createDefaultHookRegistry(...).registry` — discarding the
- * bundle, never wiring the ref, never seeding.
+ * branch and the OpenAI-compatible ("codex") branch — MUST call
+ * `seedPersistedGrants` so persisted grants from previous sessions are replayed.
+ * Before the H1 fix the codex branch built `createDefaultHookRegistry(...).registry`
+ * — discarding the bundle, never seeding. After #528, `pathApprovalGrantRef` has
+ * been retired: the hooks read the grant manager exclusively from
+ * `context.grantManager` (per-session, injected by the dispatcher since #527).
  *
- * The literal `createSession` closure in `telegram.ts main()` cannot be reached
- * from a test (see `telegram/construct-session.ts`), so this pins the wiring
- * CONTRACT both branches depend on: each provider must satisfy `GrantManager`,
- * accept assignment to the hook bundle's grant ref, and reflect persisted
- * grants once seeded. A regression that makes the OpenAI-compatible provider
- * unwirable (the H1 class of bug) trips here.
+ * This suite now pins:
+ *   1. Each provider satisfies `GrantManager` (required for seeding to work).
+ *   2. Persisted grants are reflected on the provider after seeding.
+ * The `createDefaultHookRegistry` result no longer contains a `pathApprovalGrantRef`
+ * field — that is the regression guard for the #528 retirement.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -59,7 +57,7 @@ const providerFactories: Record<string, () => GrantManager> = {
   OpenAICompatibleProvider: () => new OpenAICompatibleProvider(),
 };
 
-describe('Telegram hook wiring — path-approval grant ref (PR #202 H1/L4)', () => {
+describe('Telegram hook wiring — grant seeding contract (PR #202 H1/L4, #528)', () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -76,7 +74,7 @@ describe('Telegram hook wiring — path-approval grant ref (PR #202 H1/L4)', () 
   });
 
   for (const [name, make] of Object.entries(providerFactories)) {
-    it(`${name}: grant ref starts unwired, accepts the provider, and reflects seeded grants`, () => {
+    it(`${name}: bundle has no pathApprovalGrantRef (#528) and reflects seeded grants`, () => {
       const bundle = createDefaultHookRegistry(
         undefined,
         'telegram',
@@ -87,16 +85,14 @@ describe('Telegram hook wiring — path-approval grant ref (PR #202 H1/L4)', () 
         () => tmp,
       );
 
-      // Hooks are registered but the ref is unwired until the bootstrap sets it
-      // — the exact fail-open state the codex branch was stuck in (H1).
-      expect(bundle.pathApprovalGrantRef.current).toBeUndefined();
+      // After #528: the bundle no longer contains `pathApprovalGrantRef` —
+      // the hooks read the grant manager from context.grantManager instead.
+      expect((bundle as Record<string, unknown>)['pathApprovalGrantRef']).toBeUndefined();
 
       // Must typecheck: the provider satisfies the GrantManager interface.
       const provider = make();
-      bundle.pathApprovalGrantRef.current = provider;
-      expect(bundle.pathApprovalGrantRef.current).toBe(provider);
 
-      // Seeding a persisted `allow` grant must surface on the wired provider —
+      // Seeding a persisted `allow` grant must surface on the provider —
       // this is what makes the `persist` elicitation choice survive across
       // sessions on this surface.
       const granted = join(tmp, 'granted-dir');

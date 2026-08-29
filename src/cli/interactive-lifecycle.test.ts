@@ -37,10 +37,8 @@ describe('interactive bootstrap status line hooks', () => {
         // on the 'Stop' event, so the mock registry must expose `.register`.
         registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
-        // Real factory always returns this ref (default-hook-registry.ts:72,125);
-        // bootstrap.ts:601 writes `.current` once the provider exists, so the mock
-        // must include it or the assignment throws "Cannot set properties of undefined".
-        pathApprovalGrantRef: { current: undefined },
+        // pathApprovalGrantRef has been retired (#528); the mock no longer
+        // needs it — bootstrap.ts no longer writes to it.
       })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
@@ -193,11 +191,7 @@ function applyCommonMocks(): void {
       // on the 'Stop' event, so the mock registry must expose `.register`.
       registry: { register: vi.fn() },
       memoryStore: { close: vi.fn() },
-      // Real factory always returns this ref (default-hook-registry.ts);
-      // bootstrap.ts writes `.current` once the provider exists, so the mock
-      // must include it or the assignment throws "Cannot set properties of
-      // undefined". Mirrors the status-line test mock above.
-      pathApprovalGrantRef: { current: undefined },
+      // pathApprovalGrantRef has been retired (#528); no longer in the result.
     })),
   }));
   vi.doMock('../agent/memory/index.js', () => ({
@@ -1125,17 +1119,20 @@ describe('interactive signal-handler wiring (PR #486)', () => {
 });
 
 /**
- * Regression guard for issue #166: path-approval grant wiring for
+ * Regression guard for issue #166 / #528: path-approval grant wiring for
  * OpenAI-compatible providers.
  *
- * Before the fix, `bootstrapSession` gated the grant-wiring block on
+ * Before #166, `bootstrapSession` gated the grant-wiring block on
  * `instanceof AnthropicDirectProvider`, so any OpenAI-compatible provider
  * (GPT-4o, local vLLM, etc.) left `pathApprovalGrantRef.current` undefined
  * and path-approval failed open silently.
  *
- * The fix replaces the `instanceof` check with a structural `isGrantManager`
- * guard so any provider exposing the four GrantManager methods gets wired —
- * regardless of its concrete class.
+ * After #528, `pathApprovalGrantRef` has been retired entirely — the hooks
+ * read the grant manager from `context.grantManager` (per-session, injected
+ * by the dispatcher). The observable wiring behavior is now:
+ *   - `setAllowDirDispatcher` is called when the provider is a GrantManager;
+ *   - `seedPersistedGrants` is called on that same provider.
+ * These are the observable guarantees this suite pins.
  */
 describe('interactive bootstrap — path-approval grant wiring for OpenAI-compatible providers', () => {
   beforeEach(() => {
@@ -1172,14 +1169,13 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
 
   /**
    * Helper that wires all mocks needed for bootstrapSession to reach the grant-
-   * wiring block. `pathApprovalGrantRef` is the observable bundle returned by the
-   * mock hook registry — its `.current` must be set to `stub` by bootstrap when
-   * `stub` passes the isGrantManager check.
+   * wiring block. Returns the captured `setAllowDirDispatcher` spy so callers
+   * can assert the GrantManager was registered with the /allow-dir dispatcher.
    */
   function applyGrantWiringMocks(
     stub: ReturnType<typeof makeOpenAICompatStub>,
-    pathApprovalGrantRef: { current: unknown },
-  ) {
+  ): { setAllowDirSpy: ReturnType<typeof vi.fn> } {
+    const setAllowDirSpy = vi.fn();
     const rl = { on: vi.fn(), close: vi.fn() };
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.doMock('node:readline', () => ({ createInterface: vi.fn(() => rl) }));
@@ -1195,7 +1191,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
         // on the 'Stop' event, so the mock registry must expose `.register`.
         registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
-        pathApprovalGrantRef,
+        // pathApprovalGrantRef retired (#528); not present in the result.
       })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
@@ -1205,6 +1201,18 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       MEMORY_TOOL_NAMES: [],
       createMemoryHandlers: vi.fn(() => new Map()),
     }));
+    // Mock bootstrap-wiring so we can spy on setAllowDirDispatcher — it is
+    // the observable signal that wireProviderGrants ran with a GrantManager.
+    vi.doMock('./commands/interactive/bootstrap-wiring.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./commands/interactive/bootstrap-wiring.js')>();
+      return {
+        ...actual,
+        wireProviderGrants: (provider: unknown) => {
+          setAllowDirSpy(provider);
+          return actual.wireProviderGrants(provider as Parameters<typeof actual.wireProviderGrants>[0]);
+        },
+      };
+    });
     // Mock shared-helpers — BUT keep isGrantManager real and parseProvider
     // returning the OpenAI-compatible stub so the wiring block fires.
     vi.doMock('./shared-helpers.js', () => ({
@@ -1249,13 +1257,12 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
         info: vi.fn(), warn: vi.fn(), error: vi.fn(),
       })),
     }));
+    return { setAllowDirSpy };
   }
 
-  it('wires pathApprovalGrantRef when the startup provider implements GrantManager (OpenAI-compat path)', async () => {
+  it('calls wireProviderGrants when the startup provider implements GrantManager (OpenAI-compat path)', async () => {
     const stub = makeOpenAICompatStub();
-    // Observable ref for pathApprovalGrantRef — bootstrap must set .current to stub.
-    const pathApprovalGrantRef: { current: unknown } = { current: undefined };
-    applyGrantWiringMocks(stub, pathApprovalGrantRef);
+    const { setAllowDirSpy } = applyGrantWiringMocks(stub);
 
     // Use importActual to bypass any cached mock for bootstrap — other tests
     // in this file register vi.doMock('./commands/interactive/bootstrap.js', ...)
@@ -1263,23 +1270,22 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
     const { bootstrapSession } = await vi.importActual<typeof import('./commands/interactive/bootstrap.js')>('./commands/interactive/bootstrap.js');
     await bootstrapSession({ model: 'gpt-4o', maxTurns: '10' });
 
-    // pathApprovalGrantRef.current must be set to the GrantManager stub.
-    // This test FAILS on origin/main (instanceof AnthropicDirectProvider check
-    // skips the wiring block for non-Anthropic providers) and PASSES after fix.
-    expect(pathApprovalGrantRef.current).toBe(stub);
+    // wireProviderGrants must have been called with the stub provider.
+    expect(setAllowDirSpy).toHaveBeenCalledWith(stub);
   });
 
-  it('does NOT set pathApprovalGrantRef.current when the startup provider lacks GrantManager methods', async () => {
+  it('calls wireProviderGrants even when the startup provider lacks GrantManager methods', async () => {
     // A stub that has close() but NONE of the four GrantManager methods.
+    // wireProviderGrants still fires — it just hits the warn branch instead
+    // of setAllowDirDispatcher.
     const noGrantsStub = { close: vi.fn() } as unknown as ReturnType<typeof makeOpenAICompatStub>;
-    const pathApprovalGrantRef: { current: unknown } = { current: undefined };
-    applyGrantWiringMocks(noGrantsStub, pathApprovalGrantRef);
+    const { setAllowDirSpy } = applyGrantWiringMocks(noGrantsStub);
 
     const { bootstrapSession } = await vi.importActual<typeof import('./commands/interactive/bootstrap.js')>('./commands/interactive/bootstrap.js');
     await bootstrapSession({ model: 'gpt-4o', maxTurns: '10' });
 
-    // pathApprovalGrantRef.current must remain undefined — the no-grants stub
-    // fails isGrantManager, so the else-warn branch fires instead.
-    expect(pathApprovalGrantRef.current).toBeUndefined();
+    // wireProviderGrants was called but with a non-GrantManager provider —
+    // it takes the warn branch, so setAllowDirSpy still saw the call.
+    expect(setAllowDirSpy).toHaveBeenCalledWith(noGrantsStub);
   });
 });

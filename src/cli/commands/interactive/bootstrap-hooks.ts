@@ -36,7 +36,7 @@ export function createReplHookRegistry(a: {
   stats: SessionStats;
   effectiveCwd: string | undefined;
   traceWriter: TraceSink | undefined;
-}): { hookRegistry: HookRegistry; pathApprovalGrantRef: { current: unknown } } {
+}): { hookRegistry: HookRegistry } {
   const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { emitSubagentCompletion(a.completionWriter, info); },
     'cli',
@@ -47,7 +47,6 @@ export function createReplHookRegistry(a: {
     () => a.effectiveCwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
-  const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
 
   hookRegistry.register(
     'Stop',
@@ -57,5 +56,5 @@ export function createReplHookRegistry(a: {
     }),
   );
 
-  return { hookRegistry, pathApprovalGrantRef };
+  return { hookRegistry };
 }

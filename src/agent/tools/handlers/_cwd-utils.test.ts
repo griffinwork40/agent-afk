@@ -380,3 +380,136 @@ describe('fallbackBase — factory-cwd resolve tier (issue #434)', () => {
     expect(wouldBeRestricted(OUTSIDE, baseless, 'read', undefined).restricted).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gate 1 / Gate 2 containment agreement (#528 regression guard)
+//
+// Gate 1 = `resolveAndContain` (tools/handlers/_cwd-utils.ts) — the throwing
+//           enforcer called by every file-tool handler.
+// Gate 2 = `wouldBeRestricted`  (same module) — the non-throwing pre-check
+//           called by the path-approval PreToolUse hook to decide whether to
+//           prompt before the handler runs.
+//
+// Invariant: both gates MUST agree on containment across ALL cases so the hook
+// never (a) prompts for a path the handler then accepts (over-prompt) or
+// (b) skips a path the handler then rejects (silent containment failure). A
+// drift here is the exact security gap #528 guards against. The matrix below
+// covers every case that has historically drifted or been identified as a risk.
+// ---------------------------------------------------------------------------
+describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
+  const root = '/tmp/workspace';
+  const grantedExtra = '/tmp/extra-root';
+
+  /** Build a ToolHandlerContext that mirrors what path-approval passes to both
+   *  gates: resolveBase + readRoots/writeRoots come from getGrants(). */
+  function mkCtx(overrides: Partial<ToolHandlerContext> = {}): ToolHandlerContext {
+    return {
+      resolveBase: root,
+      cwd: root,
+      readRoots: [root],
+      writeRoots: [root],
+      allowAll: false,
+      ...overrides,
+    } as ToolHandlerContext;
+  }
+
+  /**
+   * Assert both gates agree for a given (inputPath, context, mode) triple.
+   *
+   * The agreement invariant:
+   *   wouldBeRestricted.restricted === false  ↔  resolveAndContain does NOT throw
+   *   wouldBeRestricted.restricted === true   ↔  resolveAndContain throws
+   */
+  function assertAgree(
+    inputPath: string,
+    context: ToolHandlerContext | undefined,
+    mode: 'read' | 'write',
+    label: string,
+  ) {
+    const gate2 = wouldBeRestricted(inputPath, context, mode);
+    if (gate2.restricted) {
+      // Gate 2 says restricted → Gate 1 MUST throw
+      expect(
+        () => resolveAndContain(inputPath, context, mode),
+        `[${label}] Gate 1 should throw when Gate 2 says restricted`,
+      ).toThrow();
+    } else {
+      // Gate 2 says allowed → Gate 1 MUST NOT throw (on the containment check;
+      // it may still throw for the read-denylist floor, which Gate 2 skips by
+      // design — exclude those paths from this matrix).
+      expect(
+        () => resolveAndContain(inputPath, context, mode),
+        `[${label}] Gate 1 should not throw when Gate 2 says allowed`,
+      ).not.toThrow(/outside the allowed/);
+    }
+  }
+
+  it('in-root path: both allow', () => {
+    assertAgree(`${root}/src/foo.ts`, mkCtx(), 'read', 'in-root-read');
+    assertAgree(`${root}/src/foo.ts`, mkCtx(), 'write', 'in-root-write');
+  });
+
+  it('out-of-root path: both restrict', () => {
+    assertAgree('/etc/passwd', mkCtx(), 'read', 'out-of-root-read');
+    assertAgree('/tmp/other/file.ts', mkCtx(), 'write', 'out-of-root-write');
+  });
+
+  it('dot-dot escape: both restrict', () => {
+    assertAgree(`${root}/src/../../etc/passwd`, mkCtx(), 'read', 'dotdot-escape');
+    assertAgree(`${root}/../sibling/file.ts`, mkCtx(), 'write', 'dotdot-escape-write');
+  });
+
+  it('granted extra root: both allow', () => {
+    const ctx = mkCtx({
+      readRoots: [root, grantedExtra],
+      writeRoots: [root, grantedExtra],
+    });
+    assertAgree(`${grantedExtra}/file.ts`, ctx, 'read', 'granted-root-read');
+    assertAgree(`${grantedExtra}/file.ts`, ctx, 'write', 'granted-root-write');
+  });
+
+  it('path in extra root escaping with dotdot: both restrict', () => {
+    const ctx = mkCtx({
+      readRoots: [root, grantedExtra],
+      writeRoots: [root, grantedExtra],
+    });
+    assertAgree(`${grantedExtra}/../file.ts`, ctx, 'read', 'extra-root-dotdot-read');
+    assertAgree(`${grantedExtra}/../file.ts`, ctx, 'write', 'extra-root-dotdot-write');
+  });
+
+  it('unconfined session (resolveBase undefined): both allow unconditionally', () => {
+    const ctx = mkCtx({ resolveBase: undefined, cwd: undefined });
+    assertAgree('/etc/passwd', ctx, 'read', 'unconfined-etc');
+    assertAgree('/tmp/anywhere.ts', ctx, 'write', 'unconfined-tmp');
+  });
+
+  it('bypass mode (allowAll): both allow unconditionally', () => {
+    const ctx = mkCtx({ allowAll: true });
+    assertAgree('/etc/passwd', ctx, 'read', 'bypass-etc');
+    assertAgree('/tmp/anywhere.ts', ctx, 'write', 'bypass-tmp');
+  });
+
+  it('symlink inside root pointing outside: both restrict', () => {
+    // Create a real symlink to test the realpath resolution path.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-gate-sym-'));
+    const symLink = path.join(tmpDir, 'link');
+    try {
+      fs.symlinkSync('/etc', symLink);
+      const ctx = mkCtx({ resolveBase: tmpDir, cwd: tmpDir, readRoots: [tmpDir], writeRoots: [tmpDir] });
+      assertAgree(symLink, ctx, 'read', 'symlink-escape-read');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('relative path inside root: both allow', () => {
+    assertAgree('src/index.ts', mkCtx(), 'read', 'relative-in-root-read');
+    assertAgree('dist/out.js', mkCtx(), 'write', 'relative-in-root-write');
+  });
+
+  it('relative path escaping via dotdot: both restrict', () => {
+    // ../sibling resolves to a sibling of the root → outside.
+    assertAgree('../sibling/file.ts', mkCtx(), 'read', 'relative-dotdot-read');
+    assertAgree('../outside.ts', mkCtx(), 'write', 'relative-dotdot-write');
+  });
+});

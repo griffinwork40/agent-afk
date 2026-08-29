@@ -80,7 +80,7 @@ export async function buildXaiTelegramSession(
 
   sessionForMode = session;
   reportSession(session);
-  hookBundle.pathApprovalGrantRef.current = xaiProvider;
+  // The former pathApprovalGrantRef.current wiring has been retired (#528).
   seedPersistedGrants(xaiProvider);
 
   return session;

@@ -186,11 +186,10 @@ export interface SessionToolDispatcherOptions {
    * The PROVIDER that owns this dispatcher (it implements {@link GrantManager}).
    * The provider's `buildDispatcher` passes `this`; the dispatcher injects it
    * onto every PreToolUse/PostToolUse context as `context.grantManager` so
-   * path-scoped hooks resolve THIS session's live grants instead of the
-   * process-global `pathApprovalGrantRef` — which is pinned to the top-level
-   * session and blind to a forked child's own writeRoots (#435/#514). Optional:
-   * test dispatchers that construct directly leave it unset and the hooks fall
-   * back to their ref, preserving prior behavior.
+   * path-scoped hooks resolve THIS session's live grants rather than a stale
+   * process-global ref (#435/#514, retired in #528). Optional: test dispatchers
+   * that construct directly leave it unset and the hooks fail open (no grant
+   * manager → no containment prompt, handler resolveAndContain still enforces).
    */
   sessionGrantManager?: GrantManager;
   /** Witness-layer trace writer. When provided, every PreToolUse and

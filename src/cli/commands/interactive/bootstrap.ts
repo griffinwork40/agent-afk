@@ -122,9 +122,8 @@ export async function bootstrapSession(
   });
 
   // Stable hookRegistry shared across sessions (including swaps), plus the
-  // terminal-state Stop gate registered on top of it. `pathApprovalGrantRef`
-  // is populated later (wireProviderGrants) once the provider exists.
-  const { hookRegistry, pathApprovalGrantRef } = createReplHookRegistry({
+  // terminal-state Stop gate registered on top of it.
+  const { hookRegistry } = createReplHookRegistry({
     completionWriter, memoryStore: sharedMemoryStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
@@ -360,9 +359,8 @@ export async function bootstrapSession(
   // Wire /allow-dir to the startup provider's grant API so the slash command
   // can mutate read/write roots across turns. Must run AFTER registerAll()
   // (ordering hazard: the dispatcher setter is itself a slash-command module
-  // side effect target) and reads `pathApprovalGrantRef` populated by the
-  // hook bundle above.
-  wireProviderGrants(startupProvider, pathApprovalGrantRef);
+  // side effect target).
+  wireProviderGrants(startupProvider);
 
   const { rl, inputSurfaceRef } = createReplInput();
   ctx.rl = rl;

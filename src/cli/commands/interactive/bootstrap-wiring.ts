@@ -78,19 +78,18 @@ export function wireTrustedSkillEvents(
  * OpenAICompatibleProvider — and any future provider that exposes the
  * GrantManager surface — without naming each.
  *
- * Call AFTER `registerAll()` (ordering hazard #12) and after the hook bundle
- * exists — `pathApprovalGrantRef` is populated here.
+ * Call AFTER `registerAll()` (ordering hazard #12).
+ *
+ * The former `pathApprovalGrantRef` parameter has been retired (#528): the
+ * path-approval and bash-restriction hooks now read the grant manager
+ * exclusively from `context.grantManager` (injected per-session by the
+ * dispatcher since #527), so there is no process-global ref to populate.
  */
 export function wireProviderGrants(
   startupProvider: ModelProvider,
-  pathApprovalGrantRef: { current: unknown },
 ): void {
   if (isGrantManager(startupProvider)) {
     setAllowDirDispatcher(startupProvider);
-    // Wire the same provider into the path-approval + bash-restriction hooks so
-    // they can mutate grants when the user picks Session / Always (persist) on
-    // the elicitation prompt.
-    pathApprovalGrantRef.current = startupProvider;
     // Seed read/write roots from persisted `persist` grants so the prompt's
     // "future sessions inherit it" promise actually holds. No-op when none.
     seedPersistedGrants(startupProvider);
