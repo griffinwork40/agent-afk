@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.165.2] - 2026-08-29
+
+### Fixed
+- retire pathApprovalGrantRef + Gate 1/Gate 2 containment regression test (#1364) (df87736c)
+
 ## [5.165.1] - 2026-08-28
 
 ### Fixed
