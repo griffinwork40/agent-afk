@@ -42,6 +42,7 @@ import type { SubagentHandle } from '../../../agent/subagent/handle.js';
 import type { SubagentStatus } from '../../../agent/subagent/result.js';
 import { CompletedCache } from '../../../agent/subagent/completed-cache.js';
 import type { SlashContext, SessionStats } from '../types.js';
+import type { PickerController } from '../../terminal-compositor.js';
 
 const mockedEnterTaskViewMode = vi.mocked(enterTaskViewMode);
 
@@ -80,6 +81,28 @@ function makeCtx(): { ctx: SlashContext; lines: string[] } {
     ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
   };
   return { ctx, lines };
+}
+
+/**
+ * Minimal mock compositor that captures the PickerController installed by
+ * enterPickerMode so tests can drive the picker via onKey() calls.
+ */
+function makeMockCompositor(): {
+  compositor: ReturnType<NonNullable<SlashContext['getCompositor']>>;
+  getController: () => PickerController | null;
+} {
+  let capturedController: PickerController | null = null;
+  const compositor = {
+    enterPickerMode: (controller: PickerController): void => {
+      capturedController = controller;
+    },
+    exitPickerMode: vi.fn(),
+    repaintPicker: vi.fn(),
+  };
+  return {
+    compositor: compositor as unknown as ReturnType<NonNullable<SlashContext['getCompositor']>>,
+    getController: () => capturedController,
+  };
 }
 
 function makeHandle(id: string, status: SubagentStatus = 'running'): SubagentHandle {
@@ -288,6 +311,7 @@ describe('/tasks slash commands', () => {
       setTasksRegistry(manager, SESSION_LABEL);
 
       const errorLines: string[] = [];
+      const { compositor, getController } = makeMockCompositor();
       const ctx: SlashContext = {
         session: { current: {} } as unknown as SlashContext['session'],
         stats: {
@@ -304,20 +328,26 @@ describe('/tasks slash commands', () => {
           error: (t: string): void => { errorLines.push(t); },
         },
         ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
-        // Provide setSoftStopHandler to enter interactive mode.
         setSoftStopHandler: vi.fn(),
+        // Provide the mock compositor so interactive mode is entered.
+        getCompositor: () => compositor,
       };
 
       // Make enterTaskViewMode reject with a known error.
       mockedEnterTaskViewMode.mockRejectedValueOnce(new Error('boom'));
 
-      // Start the handler — it awaits stdin input after collectAllTasks (async).
+      // Start the handler — it will call compositor.enterPickerMode after
+      // collectAllTasks resolves (async).
       const handlerPromise = tasksCmd.handler(ctx, '');
 
-      // Wait for the async collectAllTasks + renderList + stdin.on() to complete
-      // before firing the simulated keypress.
+      // Wait for the async collectAllTasks + enterPickerMode to complete.
       await new Promise<void>((r) => setTimeout(r, 50));
-      process.stdin.emit('data', '\r');
+
+      // Retrieve the PickerController installed by enterPickerMode and fire
+      // a synthetic Enter key to trigger enterTaskViewMode.
+      const controller = getController();
+      expect(controller).not.toBeNull();
+      controller!.onKey('\r', { name: 'return' });
 
       // Wait for the handler to settle (enterTaskViewMode rejects → catch logs → resolve).
       await handlerPromise;
@@ -326,5 +356,61 @@ describe('/tasks slash commands', () => {
       expect(errorLines.length).toBeGreaterThan(0);
       expect(errorLines.some(l => l.includes('task view error') && l.includes('boom'))).toBe(true);
     }, 10_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // /tasks interactive — compositor picker routing
+  // -------------------------------------------------------------------------
+
+  describe('/tasks interactive — compositor picker routing', () => {
+    it('enters picker mode via compositor when compositor is available', async () => {
+      const h = makeHandle('sub-picker-1', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+
+      const { compositor, getController } = makeMockCompositor();
+      const enterPickerModeSpy = vi.spyOn(compositor as unknown as { enterPickerMode: (c: PickerController) => void }, 'enterPickerMode');
+      const ctx: SlashContext = {
+        session: { current: {} } as unknown as SlashContext['session'],
+        stats: {
+          totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
+          sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
+          model: 'sonnet', permissionMode: 'default',
+        },
+        out: { line: vi.fn(), raw: vi.fn(), success: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+        setSoftStopHandler: vi.fn(),
+        getCompositor: () => compositor,
+      };
+
+      const handlerPromise = tasksCmd.handler(ctx, '');
+      await new Promise<void>((r) => setTimeout(r, 50));
+
+      // enterPickerMode must have been called.
+      expect(enterPickerModeSpy).toHaveBeenCalledOnce();
+
+      // renderRows should return lines containing the handle's id.
+      const controller = getController();
+      expect(controller).not.toBeNull();
+      const rows = controller!.renderRows();
+      expect(rows.join('\n')).toContain('sub-picker-1');
+
+      // Dismiss with Esc so the handler resolves.
+      controller!.onKey('\x1b', { name: 'escape' });
+      await handlerPromise;
+    }, 10_000);
+
+    it('falls back to plain list when no compositor is available', async () => {
+      const h = makeHandle('sub-fallback-1', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+
+      const { ctx, lines } = makeCtx(); // makeCtx has no getCompositor
+      await tasksCmd.handler(ctx, '');
+      const flat = lines.join('\n');
+      // formatHandleLine truncates id to 12 chars, so 'sub-fallback-1' → 'sub-fallback'
+      expect(flat).toContain('sub-fallback');
+      expect(flat).toContain('/tasks:view');
+    });
   });
 });

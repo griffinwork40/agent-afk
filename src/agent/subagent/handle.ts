@@ -81,6 +81,13 @@ export interface SubagentHandle<T = unknown> {
    * resolves; the caller owns delivery of the returned string.
    */
   getLastStopInjectContext(): string | undefined;
+  /**
+   * Wall-clock duration of the most recent completed run in milliseconds.
+   * `undefined` before any run has finished (running, idle, or cancelled before
+   * completion). Surfaced so callers such as `/tasks` can display elapsed time
+   * without reaching into `@internal` implementation fields.
+   */
+  readonly lastDurationMs: number | undefined;
 }
 
 /**
@@ -483,5 +490,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   getLastStopInjectContext(): string | undefined {
     return this._lastStopInjectContext;
+  }
+
+  get lastDurationMs(): number | undefined {
+    return this._lastDurationMs;
   }
 }

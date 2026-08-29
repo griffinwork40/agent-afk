@@ -76,6 +76,59 @@ function makeMinimalSession(overrides: Partial<IAgentSession> = {}): IAgentSessi
 // R1 tests
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// lastDurationMs getter
+// ---------------------------------------------------------------------------
+
+describe('lastDurationMs getter', () => {
+  it('is undefined before any run completes', () => {
+    const abortGraph = new AbortGraph();
+    const controller = new AbortController();
+    abortGraph.register('root', controller);
+    const handle = new SubagentHandleImpl(
+      'test-dur',
+      makeMinimalSession(),
+      controller,
+      abortGraph,
+      undefined,
+      5000,
+      undefined,
+      vi.fn(),
+    );
+    expect(handle.lastDurationMs).toBeUndefined();
+  });
+
+  it('is set after a successful runToResult', async () => {
+    const abortGraph = new AbortGraph();
+    const controller = new AbortController();
+    abortGraph.register('root', controller);
+    const session = makeMinimalSession({
+      async *sendMessageStream(): AsyncIterable<OutputEvent> {
+        yield {
+          type: 'message',
+          message: { role: 'assistant', content: 'ok', timestamp: new Date() },
+        };
+      },
+    });
+    const handle = new SubagentHandleImpl(
+      'test-dur-2',
+      session,
+      controller,
+      abortGraph,
+      undefined,
+      5000,
+      undefined,
+      vi.fn(),
+    );
+    await handle.runToResult('go');
+    expect(handle.lastDurationMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R1 — runInBackground rejection handling
+// ---------------------------------------------------------------------------
+
 describe('R1 — runInBackground unhandled-rejection safety', () => {
   let abortGraph: AbortGraph;
   let controller: AbortController;
