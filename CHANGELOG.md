@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.166.1] - 2026-08-29
+
+### Changed
+- unify duplicate $() helpers with consistent null-safety (#1347) (#1367) (5bbd065d)
+
 ## [5.166.0] - 2026-08-29
 
 ### Added
