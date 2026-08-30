@@ -103,27 +103,61 @@ export async function launchMidTurnTaskView(
     return;
   }
 
-  // Tail live output until Esc or stream ends.
+  // Tail live output until Esc or stream ends. The user can also type
+  // a message and press Enter to send it to the subagent as a new turn.
   const abort = new AbortController();
   const { signal } = abort;
+  let inputBuf = '';
 
-  // Raw stdin listener for Esc. The compositor is suspended so its
-  // keypress listener is detached — we are the sole stdin consumer.
+  const renderPrompt = (): void => {
+    // Overwrite the current line with the input prompt.
+    stdout.write(`\r\x1b[K${palette.dim('> ')}${inputBuf}`);
+  };
+
+  // Raw stdin listener: Esc exits, Enter sends, printable chars accumulate.
   const onData = (data: Buffer): void => {
     const str = data.toString();
-    // Esc = \x1b alone (not part of a longer escape sequence).
     if (str === '\x1b') {
       abort.abort();
+      return;
     }
+    if (str === '\r' || str === '\n') {
+      const msg = inputBuf.trim();
+      if (msg) {
+        handle.sendMessage(msg);
+        stdout.write(`\r\x1b[K${palette.user('you')}: ${msg}\n`);
+        inputBuf = '';
+        renderPrompt();
+      }
+      return;
+    }
+    // Backspace / Delete.
+    if (str === '\x7f' || str === '\b') {
+      if (inputBuf.length > 0) {
+        inputBuf = inputBuf.slice(0, -1);
+        renderPrompt();
+      }
+      return;
+    }
+    // Ignore control characters and escape sequences.
+    if (str.length === 1 && str.charCodeAt(0) < 32) return;
+    if (str.startsWith('\x1b[')) return;
+    inputBuf += str;
+    renderPrompt();
   };
   process.stdin.on('data', onData);
+
+  stdout.write(palette.dim('  Type a message + Enter to send, Esc to return\n'));
+  renderPrompt();
 
   try {
     for await (const event of handle.session.getOutputStream() as AsyncIterable<OutputEvent>) {
       if (signal.aborted) break;
       const text = formatOutputEvent(event);
       if (text !== null) {
-        stdout.write(text + '\n');
+        // Clear the input prompt line, write output, re-render prompt.
+        stdout.write(`\r\x1b[K${text}\n`);
+        renderPrompt();
       }
     }
   } catch {
@@ -131,27 +165,27 @@ export async function launchMidTurnTaskView(
   } finally {
     process.stdin.removeListener('data', onData);
 
-    // Show completion or return notice.
     if (!signal.aborted) {
-      stdout.write('\n' + palette.dim('  Subagent completed. Press Esc to return.') + '\n');
-      // Wait for Esc after natural completion.
-      await new Promise<void>((resolve) => {
-        const onEsc = (data: Buffer): void => {
-          if (data.toString() === '\x1b') {
-            process.stdin.removeListener('data', onEsc);
-            resolve();
-          }
-        };
-        process.stdin.on('data', onEsc);
-      });
+      stdout.write('\r\x1b[K\n' + palette.dim('  Subagent completed. Press Esc to return.') + '\n');
+      await waitForEsc();
     }
 
-    // Restore the compositor. It repaints with the current overlay state
-    // (all streaming updates that arrived while we were viewing have
-    // accumulated internally).
     compositor.resumeInput();
     compositor.repaint();
   }
+}
+
+/** Block until the user presses Esc. */
+function waitForEsc(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const onEsc = (data: Buffer): void => {
+      if (data.toString() === '\x1b') {
+        process.stdin.removeListener('data', onEsc);
+        resolve();
+      }
+    };
+    process.stdin.on('data', onEsc);
+  });
 }
 
 // ---------------------------------------------------------------------------

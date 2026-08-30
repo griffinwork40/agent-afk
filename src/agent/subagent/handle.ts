@@ -81,6 +81,18 @@ export interface SubagentHandle<T = unknown> {
    * resolves; the caller owns delivery of the returned string.
    */
   getLastStopInjectContext(): string | undefined;
+
+  /**
+   * Queue a user message for delivery as the subagent's next turn.
+   * The message is buffered via `pushUserMessage` on the child session's
+   * input stream. It will be consumed by `driveTurns` after the current
+   * tool-use loop completes -- not injected mid-stream.
+   *
+   * If `run()` is configured to drain pending messages (via the
+   * `pendingInput` callback), the subagent will automatically start a
+   * new turn with this message after its current turn resolves.
+   */
+  sendMessage(text: string): void;
 }
 
 /**
@@ -297,8 +309,24 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       const costUsd =
         typeof msg.metadata?.totalCostUsd === 'number' ? msg.metadata.totalCostUsd : undefined;
       this.onSubagentSucceeded?.(this._currentTrace.usage, costUsd);
+
+      // Drain pending user messages queued via sendMessage(). Each
+      // message starts a new turn in the same subagent conversation.
+      // driveTurns already supports multi-turn; we just keep calling
+      // streamToFinalMessage with each queued message. _onTerminal is
+      // deferred so the handle stays in the active map while draining.
+      let lastMsg = msg;
+      while (this._pendingUserMessages.length > 0) {
+        const next = this._pendingUserMessages.shift()!;
+        this._currentStatus = 'running';
+        lastMsg = await streamToFinalMessage(this, next, sinkOverride);
+        this._lastMessage = lastMsg.content;
+        this._currentTrace.turnCount++;
+        this._currentStatus = 'succeeded';
+      }
+
       this._onTerminal();
-      return msg;
+      return lastMsg;
     } catch (err) {
       this._lastDurationMs = Date.now() - startTime;
       // Invariant: own-budget timeouts classify 'failed', inherited (cascaded)
@@ -483,5 +511,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   getLastStopInjectContext(): string | undefined {
     return this._lastStopInjectContext;
+  }
+
+  /** Pending user messages queued via sendMessage(). */
+  readonly _pendingUserMessages: string[] = [];
+
+  sendMessage(text: string): void {
+    this._pendingUserMessages.push(text);
   }
 }
