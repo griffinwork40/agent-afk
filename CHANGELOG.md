@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.168.0] - 2026-08-30
+
+### Added
+- code quality contract, verification evidence classifier, temperature plumbing (#1386) (73542f95)
+
 ## [5.167.4] - 2026-08-30
 
 ### Fixed
