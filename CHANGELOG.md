@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.167.3] - 2026-08-30
+
+### Fixed
+- wire pluginSkill.whenToUse into /skills detail card (#1383) (255ab5d4)
+
 ## [5.167.2] - 2026-08-30
 
 ### Fixed
