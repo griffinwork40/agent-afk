@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS workspace_entries (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ws_session_seq ON workspace_entries(session_id, seq);
 
+-- FTS5 options are fixed when the virtual table is created. If WorkspaceStore
+-- gains persistent-database callers, option changes require a migration that
+-- drops and recreates workspace_fts rather than relying on IF NOT EXISTS.
 CREATE VIRTUAL TABLE IF NOT EXISTS workspace_fts USING fts5(
   subject,
   content,

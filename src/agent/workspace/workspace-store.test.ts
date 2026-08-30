@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import type BetterSqlite3 from 'better-sqlite3';
 import { WorkspaceStore, buildFtsQuery } from './workspace-store.js';
+
+function rawDatabase(store: WorkspaceStore): BetterSqlite3.Database {
+  return Reflect.get(store, 'db') as BetterSqlite3.Database;
+}
 
 describe('WorkspaceStore', () => {
   let store: WorkspaceStore;
@@ -201,6 +206,51 @@ describe('WorkspaceStore', () => {
       expect(() => store.queryRelevant('s', 'NOT this AND that')).not.toThrow();
       expect(() => store.queryRelevant('s', 'prefix* wildcard')).not.toThrow();
       expect(() => store.queryRelevant('s', 'term -excluded')).not.toThrow();
+    });
+  });
+
+  // ── FTS5 synchronization triggers ────────────────────────────────────────
+
+  describe('FTS5 synchronization triggers', () => {
+    it('removes deleted entries from the FTS5 index', () => {
+      const id = store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'obsolete authentication',
+        content: 'Remove this stale token',
+      });
+      const db = rawDatabase(store);
+
+      db.prepare('DELETE FROM workspace_entries WHERE id = ?').run(id);
+
+      const matches = db
+        .prepare('SELECT rowid FROM workspace_fts WHERE workspace_fts MATCH ?')
+        .all('obsolete');
+      expect(matches).toEqual([]);
+    });
+
+    it('replaces old terms with new terms after an entry update', () => {
+      const id = store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'legacy authentication',
+        content: 'The old token flow',
+      });
+      const db = rawDatabase(store);
+
+      db.prepare('UPDATE workspace_entries SET subject = ?, content = ? WHERE id = ?').run(
+        'modern authorization',
+        'The replacement credential flow',
+        id,
+      );
+
+      const findRowIds = (term: string): number[] =>
+        db
+          .prepare('SELECT rowid FROM workspace_fts WHERE workspace_fts MATCH ?')
+          .all(term)
+          .map((row) => Number((row as { rowid: number }).rowid));
+      expect(findRowIds('legacy')).toEqual([]);
+      expect(findRowIds('modern')).toEqual([id]);
     });
   });
 
