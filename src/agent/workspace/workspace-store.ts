@@ -83,6 +83,19 @@ CREATE TABLE IF NOT EXISTS workspace_entries (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ws_session_seq ON workspace_entries(session_id, seq);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS workspace_fts USING fts5(
+  subject,
+  content,
+  content=workspace_entries,
+  content_rowid=id,
+  tokenize='porter',
+  columnsize=0
+);
+
+CREATE TRIGGER IF NOT EXISTS ws_fts_ai AFTER INSERT ON workspace_entries BEGIN
+  INSERT INTO workspace_fts(rowid, subject, content) VALUES (new.id, new.subject, new.content);
+END;
 `;
 
 // ── Store class ───────────────────────────────────────────────────────────────
@@ -150,9 +163,9 @@ export class WorkspaceStore {
   /**
    * Query entries relevant to the given task prompt.
    *
-   * Relevance: subject keyword overlap with `taskPrompt` words (≥3 chars).
-   * Falls back to all entries when no subject matches.
-   * Always ordered by seq descending (most recent first). Capped at `limit`.
+   * Relevance: FTS5 full-text search over `subject` (weighted 10x) and
+   * `content`, ranked by BM25. Falls back to all entries when no FTS match
+   * or on malformed query. Capped at `limit`.
    *
    * When `sessionId` is `null`, the query scans all entries in the store
    * regardless of which child published them. This is the correct mode for
@@ -162,25 +175,30 @@ export class WorkspaceStore {
    * session-filtered query would miss sibling findings.
    */
   queryRelevant(sessionId: string | null, taskPrompt: string, limit = 50): WorkspaceEntry[] {
-    const keywords = extractKeywords(taskPrompt);
+    const ftsQuery = buildFtsQuery(taskPrompt);
 
-    if (keywords.length > 0) {
-      // Build a LIKE filter for subject overlap
-      const conditions = keywords.map(() => `LOWER(COALESCE(subject,'')) LIKE ?`).join(' OR ');
-      const likeParams: unknown[] = keywords.map((k) => `%${k}%`);
-
-      const sessionClause = sessionId !== null ? 'session_id = ? AND' : '';
-      const sql = `
-        SELECT * FROM workspace_entries
-        WHERE ${sessionClause} (${conditions})
-        ORDER BY seq DESC
-        LIMIT ?
-      `;
-      const params = sessionId !== null
-        ? [sessionId, ...likeParams, limit]
-        : [...likeParams, limit];
-      const rows = this.db.prepare(sql).all(...params) as WorkspaceEntry[];
-      if (rows.length > 0) return rows;
+    if (ftsQuery.length > 0) {
+      try {
+        // Invariant: bm25() weights are negative (lower = better match).
+        // Subject is weighted 10x content so subject-matched entries rank first.
+        const sessionClause = sessionId !== null ? 'AND e.session_id = ?' : '';
+        const sql = `
+          SELECT e.*, bm25(workspace_fts, 10.0, 1.0) AS rank
+          FROM workspace_entries e
+          JOIN workspace_fts ON workspace_fts.rowid = e.id
+          WHERE workspace_fts MATCH ?
+          ${sessionClause}
+          ORDER BY rank
+          LIMIT ?
+        `;
+        const params: unknown[] = sessionId !== null
+          ? [ftsQuery, sessionId, limit]
+          : [ftsQuery, limit];
+        const rows = this.db.prepare(sql).all(...params) as WorkspaceEntry[];
+        if (rows.length > 0) return rows;
+      } catch {
+        // FTS5 parse error on malformed query — fall through to recency fallback
+      }
     }
 
     // Fallback: all entries (optionally filtered by session), most recent first
@@ -219,14 +237,22 @@ export class WorkspaceStore {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Contract: FTS5 queries receive agent-generated natural language (tool call
+// arguments), not user-typed FTS5 syntax. We tokenize into bare words joined
+// by OR so any term can match. Double-quoting each token prevents FTS5
+// operators embedded in agent text (AND, OR, NOT, NEAR, *, -) from being
+// interpreted as query syntax.
+
 /**
- * Extract lowercase search keywords (≥3 chars) from a prompt string.
+ * Build an FTS5 query string from a natural-language prompt.
  *
- * Capped at 25 unique keywords to stay well under SQLite's expression-tree
- * depth limit of 1000 (each keyword becomes one LIKE clause in an OR chain).
+ * Tokenizes on non-word boundaries, drops words < 3 chars (stop-word
+ * proxy), deduplicates, caps at 25 terms, and joins with OR. Each term
+ * is double-quoted to neutralize FTS5 operators in agent text.
+ * Returns empty string when no usable terms remain.
  */
-function extractKeywords(prompt: string): string[] {
-  return [
+export function buildFtsQuery(prompt: string): string {
+  const tokens = [
     ...new Set(
       prompt
         .toLowerCase()
@@ -234,4 +260,6 @@ function extractKeywords(prompt: string): string[] {
         .filter((w) => w.length >= 3),
     ),
   ].slice(0, 25);
+  if (tokens.length === 0) return '';
+  return tokens.map((t) => `"${t}"`).join(' OR ');
 }
