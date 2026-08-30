@@ -2,10 +2,11 @@
  * Tests for `extractHintFromDescription` — the "Use when..." sentence parser
  * that powers tooltip hints on plugin-skill passthrough commands.
  *
- * Plugin SKILL.md descriptions don't carry a structured `whenToUse` field, so
- * the dropdown leans on the convention of embedding a "Use when..." sentence
- * in the description body. These cases lock the heuristic against shipped
- * plugin examples and a few adversarial shapes.
+ * `whenToUse` is now a structured field on `DiscoveredSkill` when available
+ * from SKILL.md frontmatter; `extractHintFromDescription` is the fallback for
+ * older plugins that embed a "Use when..." sentence in the description body.
+ * These cases lock the heuristic against shipped plugin examples and a few
+ * adversarial shapes.
  */
 
 import { describe, it, expect } from 'vitest';

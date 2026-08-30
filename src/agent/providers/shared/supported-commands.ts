@@ -38,6 +38,7 @@ export function collectSupportedCommands(): Promise<ProviderCommandInfo[]> {
           description: e.description,
         };
         if (e.argumentHint) info.argumentHint = e.argumentHint;
+        if (e.whenToUse) info.whenToUse = e.whenToUse;
         if (e.source) info.source = e.source;
         return info;
       }),

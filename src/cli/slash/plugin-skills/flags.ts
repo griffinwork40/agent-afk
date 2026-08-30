@@ -149,11 +149,11 @@ export function harvestAllPluginSkillFlags(): Map<string, string[]> {
 /**
  * Best-effort "when to use" extraction from a plugin SKILL.md description.
  *
- * Plugin skills don't carry a structured `whenToUse` field — the convention
- * encoded in nearly every shipped SKILL.md is to embed a "Use when …" /
- * "When to use …" sentence inside the description. Pluck it out so the
- * dropdown tooltip can surface real guidance instead of repeating the
- * one-liner the dropdown summary already shows.
+ * `whenToUse` is now a structured field on `DiscoveredSkill` when available
+ * from SKILL.md frontmatter; `extractHintFromDescription` serves as the
+ * fallback for older plugins that embed the hint in the description body.
+ * Pluck it out so the dropdown tooltip can surface real guidance instead of
+ * repeating the one-liner the dropdown summary already shows.
  *
  * Falls back to `undefined` when no such sentence is detectable. The tooltip
  * row collapses cleanly in that case.
