@@ -123,12 +123,19 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
     }
 
     let provider: import('../../../browser/provider.js').BrowserProvider;
+    let routingBackend: string | undefined;
+    let routingReason: string | undefined;
     try {
       if (opts.getBrowserProvider) {
         provider = await opts.getBrowserProvider();
       } else {
-        const { getBrowserProvider } = await import('../../../browser/registry.js');
+        const { getBrowserProvider, getLastRoutingDecision } = await import('../../../browser/registry.js');
         provider = await getBrowserProvider();
+        const decision = getLastRoutingDecision();
+        if (decision) {
+          routingBackend = decision.backend;
+          routingReason = decision.reason;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -157,6 +164,8 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',
+        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingReason ? { backendReason: routingReason } : {}),
         // screenshot is a non-navigating read — URL is unchanged; we don't
         // have a currentUrl() on the provider so we use null for both fields.
         urlBefore: null,
@@ -194,6 +203,8 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',
+        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,
         status: 'error',

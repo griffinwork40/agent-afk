@@ -89,12 +89,19 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
     }
 
     let provider: import('../../../browser/provider.js').BrowserProvider;
+    let routingBackend: string | undefined;
+    let routingReason: string | undefined;
     try {
       if (opts.getBrowserProvider) {
         provider = await opts.getBrowserProvider();
       } else {
-        const { getBrowserProvider } = await import('../../../browser/registry.js');
+        const { getBrowserProvider, getLastRoutingDecision } = await import('../../../browser/registry.js');
         provider = await getBrowserProvider();
+        const decision = getLastRoutingDecision();
+        if (decision) {
+          routingBackend = decision.backend;
+          routingReason = decision.reason;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -116,6 +123,8 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_observe',
         toolUseId: context?.toolUseId ?? '',
+        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: obs.url,
         urlAfter: obs.url,
         status: 'ok',
@@ -129,6 +138,8 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_observe',
         toolUseId: context?.toolUseId ?? '',
+        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,
         status: 'error',

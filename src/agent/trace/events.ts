@@ -378,6 +378,8 @@ export const BrowserEventPayloadSchema = z.object({
   tool: BrowserEventToolSchema,
   action: BrowserActActionSchema.optional(),
   toolUseId: z.string(),
+  backend: z.enum(['playwright', 'agent-browser']).optional(),
+  backendReason: z.string().optional(),
   target: BrowserEventTargetSchema.optional(),
   urlBefore: z.string().nullable(),
   urlAfter: z.string().nullable(),

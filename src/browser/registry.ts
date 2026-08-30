@@ -1,19 +1,26 @@
 /**
  * Process-wide singleton registry for the BrowserProvider.
  *
- * Constructs a `PlaywrightProvider` lazily on the first `getBrowserProvider()`
- * call. The lazy `import('./playwright/index.js')` boundary ensures Playwright
- * is never loaded into the hot path for users who never call a browser tool.
+ * Selects the optimal backend via `selectBackend()` (Agent Browser when
+ * available, Playwright as fallback) and constructs the provider lazily on
+ * the first `getBrowserProvider()` call. Lazy `import()` boundaries ensure
+ * neither Playwright nor the Agent Browser client are loaded into the hot
+ * path for users who never call a browser tool.
  *
  * Lifecycle:
- *   1. `getBrowserProvider()` — lazily constructs, coalesces concurrent calls.
- *   2. `closeBrowserProvider()` — tears down the provider if active. Idempotent.
- *   3. SIGINT / SIGTERM / exit signal handlers — installed exactly once per
+ *   1. `getBrowserProvider()` -- lazily constructs, coalesces concurrent calls.
+ *   2. `closeBrowserProvider()` -- tears down the provider if active. Idempotent.
+ *   3. SIGINT / SIGTERM / exit signal handlers -- installed exactly once per
  *      process (guarded by `signalHandlersInstalled`). Each handler calls
  *      `closeBrowserProvider()` and then re-exits with the appropriate code.
  *
+ * Routing telemetry:
+ *   The last routing decision is stored in `lastRoutingDecision` and exposed
+ *   via `getLastRoutingDecision()` so tool handlers can include the backend
+ *   in `BrowserEventPayload`.
+ *
  * Test-only:
- *   `__resetBrowserRegistryForTests()` — resets all module-scope state without
+ *   `__resetBrowserRegistryForTests()` -- resets all module-scope state without
  *   calling shutdown. Exported from this file but intentionally NOT re-exported
  *   via `src/browser/index.ts` to keep it out of production imports.
  *
@@ -23,6 +30,7 @@
 import { loadBrowserConfig } from './config.js';
 import type { BrowserProvider } from './provider.js';
 import type { LoadBrowserConfigOptions } from './config.js';
+import { selectBackend, type RoutingDecision } from './routing.js';
 
 // ---------------------------------------------------------------------------
 // Module-scope singleton state
@@ -30,12 +38,15 @@ import type { LoadBrowserConfigOptions } from './config.js';
 
 let provider: BrowserProvider | null = null;
 
-// Coalesces concurrent getBrowserProvider() calls so only one PlaywrightProvider
+// Coalesces concurrent getBrowserProvider() calls so only one provider
 // is ever constructed even when multiple callers race at startup.
 let constructing: Promise<BrowserProvider> | null = null;
 
 // Guards signal-handler installation so we install exactly once per process.
 let signalHandlersInstalled = false;
+
+// Stores the last routing decision for telemetry.
+let lastRouting: RoutingDecision | null = null;
 
 // ---------------------------------------------------------------------------
 // Signal handler references (kept so we can remove them on teardown)
@@ -54,7 +65,7 @@ function handleSignalSIGTERM(): void {
 }
 
 function handleProcessExit(): void {
-  // `exit` fires synchronously — we can only call synchronous cleanup here.
+  // `exit` fires synchronously -- we can only call synchronous cleanup here.
   // Provider shutdown is async; the best we can do is clear the reference so
   // the GC can reclaim it. The launcher.shutdown() in closeBrowserProvider()
   // will be a no-op if the process exits before it resolves.
@@ -93,11 +104,11 @@ function removeSignalHandlers(): void {
  *     promise.
  *   - If construction is in progress, returns the in-flight promise (coalesce).
  *   - Otherwise, kicks off construction:
- *       1. Lazy `await import('./playwright/index.js')` — keeps Playwright out
- *          of the module graph for users who never call a browser tool.
- *       2. `loadBrowserConfig(opts)` — resolves env + JSON config.
- *       3. `new PlaywrightProvider(config)` — synchronous, no chromium yet.
- *       4. Installs SIGINT/SIGTERM/exit handlers exactly once.
+ *       1. `loadBrowserConfig(opts)` -- resolves env + JSON config.
+ *       2. `selectBackend()` -- probes Agent Browser, applies heuristics.
+ *       3. Lazy `import()` of the selected backend module.
+ *       4. Constructs the provider.
+ *       5. Installs SIGINT/SIGTERM/exit handlers exactly once.
  *
  * @param opts  Optional config overrides (surface, env, readFileSync).
  *              Forwarded verbatim to `loadBrowserConfig()`.
@@ -115,9 +126,25 @@ export async function getBrowserProvider(opts?: LoadBrowserConfigOptions): Promi
   // callers that arrive while we are in-flight return the same promise
   // rather than starting a second construction chain.
   constructing = (async (): Promise<BrowserProvider> => {
-    const { PlaywrightProvider } = await import('./playwright/index.js');
     const config = loadBrowserConfig(opts);
-    const newProvider = new PlaywrightProvider(config);
+    const surface = opts?.surface ?? (opts?.env ?? {})['AGENT_SURFACE'];
+
+    const decision = await selectBackend({ config, surface });
+    lastRouting = decision;
+
+    let newProvider: BrowserProvider;
+
+    if (decision.backend === 'agent-browser') {
+      const { AgentBrowserProvider } = await import('./agent-browser/index.js');
+      // availability is guaranteed non-null when backend is agent-browser
+      // (selectBackend either probed or threw).
+      const conn = decision.availability!.connection!;
+      newProvider = new AgentBrowserProvider(config, conn);
+    } else {
+      const { PlaywrightProvider } = await import('./playwright/index.js');
+      newProvider = new PlaywrightProvider(config);
+    }
+
     installSignalHandlers();
     provider = newProvider;
     constructing = null;
@@ -128,7 +155,7 @@ export async function getBrowserProvider(opts?: LoadBrowserConfigOptions): Promi
 }
 
 /**
- * Tear down the provider if any. Idempotent — safe to call when no provider
+ * Tear down the provider if any. Idempotent -- safe to call when no provider
  * has been constructed.
  *
  * Invariant: removes signal handlers after shutdown so a future test or
@@ -165,10 +192,21 @@ export function peekBrowserProvider(): BrowserProvider | null {
 }
 
 /**
+ * Get the last routing decision made by `getBrowserProvider()`.
+ * Returns `null` before the first construction.
+ *
+ * Used by tool handlers to include routing telemetry in
+ * `BrowserEventPayload.backend`.
+ */
+export function getLastRoutingDecision(): RoutingDecision | null {
+  return lastRouting;
+}
+
+/**
  * Test-only: synchronously clear all singleton state without calling shutdown.
  *
  * Invariant: this function is intentionally NOT re-exported from
- * `src/browser/index.ts`. It exists solely for vitest isolation — each test
+ * `src/browser/index.ts`. It exists solely for vitest isolation -- each test
  * that constructs a provider via `getBrowserProvider()` should call this in
  * `afterEach` or `beforeEach` to reset to a clean slate. The test harness is
  * responsible for its own provider teardown.
@@ -176,5 +214,6 @@ export function peekBrowserProvider(): BrowserProvider | null {
 export function __resetBrowserRegistryForTests(): void {
   provider = null;
   constructing = null;
+  lastRouting = null;
   removeSignalHandlers();
 }

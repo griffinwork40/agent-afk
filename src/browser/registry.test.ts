@@ -1,7 +1,8 @@
 /**
  * Unit tests for src/browser/registry.ts
  *
- * Strategy: mock `./playwright/index.js` so no real chromium is launched.
+ * Strategy: mock `./playwright/index.js` and `./routing.js` so no real
+ * chromium is launched and no Agent Browser probing occurs.
  * The fake PlaywrightProvider records calls to `shutdown()` so we can assert
  * on lifecycle behaviour. We also use `__resetBrowserRegistryForTests` in
  * beforeEach to guarantee a clean singleton between tests.
@@ -24,16 +25,12 @@ const mockState = {
 };
 
 // ---------------------------------------------------------------------------
-// Module mock — must be declared before any import that transitively loads
+// Module mocks -- must be declared before any import that transitively loads
 // the target module. vi.mock is hoisted by vitest's transformer.
 // ---------------------------------------------------------------------------
 
 vi.mock('./playwright/index.js', () => {
-  // We can't reference module-scope `let` vars declared AFTER this block
-  // because hoisting runs first. We use the `mockState` object (declared
-  // before) so the factory stays within the hoisted scope constraint.
   function FakePlaywrightProvider(_config: unknown) {
-    // Record that a new instance was created.
     (FakePlaywrightProvider as unknown as { instanceCount: number }).instanceCount =
       ((FakePlaywrightProvider as unknown as { instanceCount: number }).instanceCount ?? 0) + 1;
 
@@ -45,6 +42,7 @@ vi.mock('./playwright/index.js', () => {
       async open(): Promise<never> { throw new Error('stub'); },
       async observe(): Promise<never> { throw new Error('stub'); },
       async act(): Promise<never> { throw new Error('stub'); },
+      async render(): Promise<never> { throw new Error('stub'); },
       async screenshot(): Promise<never> { throw new Error('stub'); },
       async extract(): Promise<never> { throw new Error('stub'); },
       async close(): Promise<void> { /* no-op */ },
@@ -54,8 +52,19 @@ vi.mock('./playwright/index.js', () => {
   return { PlaywrightProvider: FakePlaywrightProvider };
 });
 
+vi.mock('./routing.js', () => {
+  return {
+    selectBackend: async () => ({
+      backend: 'playwright' as const,
+      reason: 'test: mocked routing always selects playwright',
+      probeMs: 0,
+      availability: null,
+    }),
+  };
+});
+
 // ---------------------------------------------------------------------------
-// Import registry AFTER mock is installed
+// Import registry AFTER mocks are installed
 // ---------------------------------------------------------------------------
 
 import {
@@ -63,6 +72,7 @@ import {
   closeBrowserProvider,
   browserProviderActive,
   peekBrowserProvider,
+  getLastRoutingDecision,
   __resetBrowserRegistryForTests,
 } from './registry.js';
 
@@ -125,6 +135,13 @@ describe('getBrowserProvider()', () => {
     const afterSecond = process.listenerCount('SIGINT');
     expect(afterSecond).toBe(afterFirst);
   });
+
+  it('records a routing decision', async () => {
+    await getBrowserProvider();
+    const decision = getLastRoutingDecision();
+    expect(decision).not.toBeNull();
+    expect(decision!.backend).toBe('playwright');
+  });
 });
 
 describe('closeBrowserProvider()', () => {
@@ -157,7 +174,7 @@ describe('closeBrowserProvider()', () => {
     expect(afterClose).toBe(afterGet - 1);
   });
 
-  it('is idempotent — second close is a no-op', async () => {
+  it('is idempotent -- second close is a no-op', async () => {
     await getBrowserProvider();
     await closeBrowserProvider();
     await closeBrowserProvider(); // Should not throw or double-shutdown.
@@ -200,6 +217,29 @@ describe('peekBrowserProvider()', () => {
     await getBrowserProvider();
     await closeBrowserProvider();
     expect(peekBrowserProvider()).toBeNull();
+  });
+});
+
+describe('getLastRoutingDecision()', () => {
+  beforeEach(resetState);
+
+  it('returns null before first construction', () => {
+    expect(getLastRoutingDecision()).toBeNull();
+  });
+
+  it('returns the decision after construction', async () => {
+    await getBrowserProvider();
+    const decision = getLastRoutingDecision();
+    expect(decision).not.toBeNull();
+    expect(decision!.backend).toBe('playwright');
+    expect(decision!.reason).toContain('test');
+  });
+
+  it('is cleared by __resetBrowserRegistryForTests', async () => {
+    await getBrowserProvider();
+    expect(getLastRoutingDecision()).not.toBeNull();
+    __resetBrowserRegistryForTests();
+    expect(getLastRoutingDecision()).toBeNull();
   });
 });
 

@@ -625,6 +625,12 @@ export interface BrowserEventPayload {
   /** Correlates with the surrounding `tool_call` started/completed events. */
   toolUseId: string;
 
+  /** Which backend handled this call. Absent on older traces. */
+  backend?: 'playwright' | 'agent-browser';
+
+  /** Why this backend was selected. Absent on older traces. */
+  backendReason?: string;
+
   /** What the action targeted. Absent for tools that don't take a target
    *  (`browser_open`, `browser_observe`, `browser_close`). */
   target?: BrowserEventTarget;
