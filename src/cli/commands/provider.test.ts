@@ -8,6 +8,11 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildProviderAuthDiagnose, buildXaiAuthDiagnose } from './provider.js';
+import {
+  setSlotBindings,
+  resetSlotBindings,
+  type ModelSlots,
+} from '../../agent/session/model-slots.js';
 
 describe('buildProviderAuthDiagnose', () => {
   const originalEnv = { ...process.env };
@@ -102,5 +107,112 @@ describe('diagnose JSON back-compat fields', () => {
       last4: '1234',
     });
     expect(r.message).toMatch(/config/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slot-aware diagnose tests (#555)
+// ---------------------------------------------------------------------------
+
+/**
+ * Hermetic deps for the slot-aware tests: no env vars, no filesystem.
+ * Provides a fake ~/.codex/auth.json with a ChatGPT OAuth bundle so the
+ * forceChatgptOAuth path can resolve a token without touching the real disk.
+ */
+const hermeticDepsWithChatGptToken = {
+  readEnv: (_key: string) => undefined,
+  homedir: () => '/fake-home',
+  readFile: (path: string) => {
+    if (path.includes('auth.json')) {
+      return JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: { access_token: 'chatgpt-oauth-token-abcd' },
+      });
+    }
+    return null;
+  },
+};
+
+/** Hermetic deps with no auth at all (no token, no API key). */
+const hermeticDepsEmpty = {
+  readEnv: (_key: string) => undefined,
+  homedir: () => '/nonexistent-test-home',
+  readFile: (_path: string) => null,
+};
+
+describe('buildProviderAuthDiagnose — slot-aware (forceChatgptOAuth)', () => {
+  it('resolves chatgpt-oauth source when forceChatgptOAuth is true and token exists', () => {
+    const r = buildProviderAuthDiagnose(undefined, hermeticDepsWithChatGptToken, true);
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.exitCode).toBe(0);
+    expect(r.last4).toBe('abcd');
+    expect(r.message).toMatch(/chatgpt subscription oauth/i);
+    // Never leaks raw token
+    expect(r.message).not.toContain('chatgpt-oauth-token');
+  });
+
+  it('returns no-usable-auth-forced-chatgpt-oauth when forceChatgptOAuth is true but no token', () => {
+    const r = buildProviderAuthDiagnose(undefined, hermeticDepsEmpty, true);
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.exitCode).toBe(1);
+    expect(r.message).toMatch(/chatgpt-oauth/i);
+    expect(r.message).toMatch(/codex/i);
+  });
+
+  it('ignores forceChatgptOAuth=false even when a ChatGPT token exists — falls back to no-usable-auth', () => {
+    // When forceChatgptOAuth is false, the ChatGPT token in auth.json is
+    // ignored because AFK_OPENAI_CHATGPT_OAUTH is not set (hermeticDeps has
+    // readEnv returning undefined for it).
+    const r = buildProviderAuthDiagnose(undefined, hermeticDepsWithChatGptToken, false);
+    // Source should be no-usable-auth-codex-oauth (found OAuth but not using it)
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('is backward-compatible: third param absent behaves like forceChatgptOAuth=false', () => {
+    const withFlag = buildProviderAuthDiagnose(undefined, hermeticDepsEmpty, false);
+    const withoutFlag = buildProviderAuthDiagnose(undefined, hermeticDepsEmpty);
+    expect(withFlag.source).toBe(withoutFlag.source);
+    expect(withFlag.exitCode).toBe(withoutFlag.exitCode);
+  });
+});
+
+describe('diagnose --slot flag slot binding resolution', () => {
+  // A fake ModelSlots table with one chatgpt-oauth slot and one openai slot.
+  const fakeBindings: ModelSlots = {
+    local: { id: '' },
+    small: { id: 'gpt-4o-mini', provider: 'openai' },
+    medium: { id: 'chatgpt-4o-latest', provider: 'chatgpt-oauth' },
+    large: { id: 'gpt-4o', provider: 'openai' },
+  };
+
+  beforeEach(() => {
+    setSlotBindings(fakeBindings);
+  });
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('forceChatgptOAuth=true for chatgpt-oauth slot → resolves ChatGPT token', () => {
+    // Simulate what the CLI action does when --slot medium is passed:
+    // the slot has provider:'chatgpt-oauth', so forceChatgptOAuth should be true.
+    const r = buildProviderAuthDiagnose(undefined, hermeticDepsWithChatGptToken, true);
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('forceChatgptOAuth=false for non-chatgpt-oauth slot → normal API-key resolution', () => {
+    // Simulate --slot small (provider:'openai'): forceChatgptOAuth=false, normal path.
+    const r = buildProviderAuthDiagnose(undefined, hermeticDepsEmpty, false);
+    expect(r.source).toBe('no-usable-auth');
+    expect(r.exitCode).toBe(1);
+  });
+
+  it('forceChatgptOAuth=false for unknown slot name → normal API-key resolution', () => {
+    // A slot name that doesn't exist in bindings → slotForInput returns undefined
+    // → forceChatgptOAuth stays false → normal resolution.
+    const r = buildProviderAuthDiagnose(undefined, hermeticDepsEmpty, false);
+    expect(r.source).toBe('no-usable-auth');
+    expect(r.exitCode).toBe(1);
   });
 });
