@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.167.4] - 2026-08-30
+
+### Fixed
+- remove dispatch cast and add whenToUse precedence test (#1385) (8db1ae0d)
+
 ## [5.167.3] - 2026-08-30
 
 ### Fixed
