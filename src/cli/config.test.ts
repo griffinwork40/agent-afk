@@ -157,7 +157,7 @@ describe('Config Loader', () => {
       expect(config.apiKey).toBe('test-api-key-12345');
       expect(config.model).toBe('sonnet');
       expect(config.maxTokens).toBe(4096);
-      expect(config.temperature).toBe(1.0);
+      expect(config.temperature).toBeUndefined();
     });
 
     it('should override defaults with CLI args', () => {
@@ -206,13 +206,12 @@ describe('Config Loader', () => {
       expect(Number.isNaN(config.maxTokens)).toBe(false);
     });
 
-    it('keeps the default temperature when AFK_TEMPERATURE is non-numeric (no NaN)', () => {
+    it('keeps temperature undefined when AFK_TEMPERATURE is non-numeric (no NaN)', () => {
       process.env.AFK_TEMPERATURE = 'abc';
 
       const config = loadConfig();
 
-      expect(config.temperature).toBe(1.0);
-      expect(Number.isNaN(config.temperature)).toBe(false);
+      expect(config.temperature).toBeUndefined();
     });
 
     it('keeps the default maxTokens when AFK_MAX_TOKENS has trailing garbage (no silent truncation)', () => {
