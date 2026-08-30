@@ -225,6 +225,17 @@ export interface AgentConfig {
    */
   effort?: EffortLevel;
 
+  /**
+   * Sampling temperature forwarded to the model API. Ranges from `0.0` to
+   * `1.0` for Anthropic (higher = more random). When `undefined`, the provider
+   * omits the field and the server applies its own default (typically `1.0`).
+   *
+   * Sourced from `CliConfig.temperature` / `AFK_TEMPERATURE` /
+   * `afk.config.json#temperature` at the CLI surface; threaded through both
+   * the anthropic-direct and openai-compatible providers.
+   */
+  temperature?: number;
+
   /** Tool configuration (optional) */
   tools?: ToolConfig;
 

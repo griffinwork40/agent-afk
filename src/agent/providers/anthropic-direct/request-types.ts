@@ -24,6 +24,8 @@ export interface RunTurnInput {
   softDeadlineMs?: number;
   thinking?: ThinkingConfigParam;
   effort?: import('../../types/sdk-types.js').EffortLevel;
+  /** Sampling temperature forwarded to `messages.create`. Omit for server default. */
+  temperature?: number;
   /** Effective Fast decision captured once at turn start. */
   fastMode?: boolean;
   baseUrl?: string;
@@ -63,6 +65,7 @@ export interface AnthropicMessagesCreateParams {
   tools?: WireToolDef[];
   thinking?: ThinkingConfigParam;
   output_config?: { effort?: import('../../types/sdk-types.js').EffortLevel };
+  temperature?: number;
   speed?: 'fast';
   stream: true;
   metadata?: Record<string, unknown>;

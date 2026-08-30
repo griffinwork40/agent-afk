@@ -19,6 +19,15 @@ describe('renderBudgetPreamble', () => {
     expect(text).toContain('stop gathering and answer now');
   });
 
+  // Code-writing subagents must not interpret "partial answer" as permission
+  // to return knowingly broken or unverified code. The caveat distinguishes
+  // partial research (acceptable) from incomplete engineering (never acceptable).
+  it('distinguishes partial research results from incomplete code output', () => {
+    const text = renderBudgetPreamble(50);
+    expect(text).toContain('internally consistent checkpoint');
+    expect(text).toContain('not knowingly broken');
+  });
+
   it('interpolates the actual cap, not a hardcoded default', () => {
     expect(renderBudgetPreamble(12)).toContain('12 tool-use rounds');
     expect(renderBudgetPreamble(12)).not.toContain('50 tool-use rounds');

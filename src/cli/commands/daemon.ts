@@ -489,7 +489,7 @@ export function registerDaemonCommand(program: Command): void {
             ...(config.baseUrl !== undefined ? { baseUrl: config.baseUrl } : {}),
             ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             ...(thinking !== undefined ? { thinking } : {}),
-            ...(effort !== undefined ? { effort } : {}),
+            ...(effort !== undefined ? { effort } : {}), ...(config.temperature !== 1.0 ? { temperature: config.temperature } : {}),
             ...(daemonCwdResolved !== undefined ? { cwd: daemonCwdResolved } : {}),
           },
           sessionFactory,

@@ -20,6 +20,7 @@ export interface TurnRequestInput {
   baseUrl?: string;
   thinking?: RunTurnInput['thinking'];
   effort?: RunTurnInput['effort'];
+  temperature?: number;
   maxToolUseIterations?: number;
   softDeadlineMs?: number;
   traceWriter?: RunTurnInput['traceWriter'];
@@ -63,6 +64,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ctx: { sessionId: input.sessionId },
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
+      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
       ...(fast ? { fastMode: true } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.maxToolUseIterations !== undefined ? { maxToolUseIterations: input.maxToolUseIterations } : {}),

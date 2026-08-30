@@ -89,6 +89,8 @@ export interface AnthropicDirectQueryOptions {
    * effort beta string via the `withEffort` flag on `buildRequestHeaders`.
    */
   effort?: import('../../types/sdk-types.js').EffortLevel;
+  /** Sampling temperature forwarded to `messages.create`. Omit for server default. */
+  temperature?: number;
   /**
    * Local-server base URL. When set, prompt-cache markers are suppressed
    * across all turns (see `isCacheEnabled({baseUrl})`).

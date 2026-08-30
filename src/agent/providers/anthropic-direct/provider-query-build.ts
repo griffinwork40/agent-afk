@@ -143,6 +143,7 @@ export function buildProviderQuery(
       ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model) }
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+    ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
