@@ -139,7 +139,7 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onShiftTab?: () => void;
   /** @internal Mid-turn Tab handler for task viewing. Per-turn (set/cleared by the turn handler). */
-  onTaskView?: () => void;
+  onTaskView?: () => boolean;
   /**
    * Ctrl+O "open $EDITOR" handler — see
    * {@link TerminalCompositorOptions.onOpenEditor}. Installed once at REPL

@@ -274,7 +274,7 @@ export interface TerminalCompositorOptions {
    * cleared at turn end. Absent between turns so Tab retains its normal
    * autocomplete/ghost-accept behavior.
    */
-  onTaskView?: () => void;
+  onTaskView?: () => boolean;
   /**
    * Fires on Ctrl+O — the "open $EDITOR" chord. Wired by the REPL to the
    * same handoff the /editor slash command runs: seed a temp file with the

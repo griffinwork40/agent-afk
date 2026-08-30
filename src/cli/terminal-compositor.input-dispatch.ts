@@ -148,7 +148,7 @@ export interface KeyDispatchHost {
   /** Submitted-line-during-pause handler — see {@link TerminalCompositorOptions.onPauseInterrupt}. */
   readonly onPauseInterrupt?: () => void;
   readonly onShiftTab?: () => void;
-  readonly onTaskView?: () => void;
+  readonly onTaskView?: () => boolean;
   readonly onOpenEditor?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
 }
@@ -1122,9 +1122,15 @@ function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
   }
   if (key?.name === 'tab') {
     // Precedence: dropdown first, mid-turn task view second, ghost third.
+    // onTaskView returns true when it launched the view (running subagents
+    // found), false when no subagents are running — in which case we fall
+    // through to ghost-accept so Tab still works normally.
     if (!self.applyDropdownSelection()) {
-      if (self.inputMode === 'streaming' && self.onTaskView) self.onTaskView();
-      else self.applyGhostAccept();
+      if (self.inputMode === 'streaming' && self.onTaskView) {
+        if (!self.onTaskView()) self.applyGhostAccept();
+      } else {
+        self.applyGhostAccept();
+      }
     }
     return true;
   }

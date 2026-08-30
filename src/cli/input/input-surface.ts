@@ -264,7 +264,7 @@ export class InputSurface {
    * reconstructing the compositor. Cleared (null) between turns so Tab
    * retains its normal autocomplete/ghost-accept behavior in idle mode.
    */
-  private taskViewHandler: (() => void) | null = null;
+  private taskViewHandler: (() => boolean) | null = null;
 
   /**
    * Mutable pause-interrupt handler ref. The compositor's `onPauseInterrupt`
@@ -360,7 +360,7 @@ export class InputSurface {
       // Task-view handler is mutable — close over the surface's ref so
       // the per-turn turn-handler swap takes effect immediately. Tab in
       // streaming mode fires this instead of ghost-accept when wired.
-      onTaskView: () => { this.taskViewHandler?.(); },
+      onTaskView: () => this.taskViewHandler?.() ?? false,
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       ...(opts.onOpenEditor ? { onOpenEditor: opts.onOpenEditor } : {}),
       history: this.history,
@@ -458,7 +458,7 @@ export class InputSurface {
    * Tab during streaming fires this instead of ghost-accept. Cleared
    * at turn end so Tab retains its normal behavior between turns.
    */
-  setTaskViewHandler(handler: (() => void) | null): void {
+  setTaskViewHandler(handler: (() => boolean) | null): void {
     this.taskViewHandler = handler;
   }
 

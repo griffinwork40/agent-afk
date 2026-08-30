@@ -274,6 +274,32 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this._lastDurationMs = Date.now() - startTime;
       this._currentStatus = 'succeeded';
       this.latestTerminalStatus = 'succeeded';
+
+      // Item 7: Drain pending user messages queued via sendMessage(). Each
+      // message starts a new turn in the same subagent conversation.
+      // driveTurns already supports multi-turn; we just keep calling
+      // streamToFinalMessage with each queued message. _onTerminal is
+      // deferred so the handle stays in the active map while draining.
+      // Status stays 'succeeded' during drain (no flip back to 'running').
+      let lastMsg = msg;
+      try {
+        while (this._pendingUserMessages.length > 0) {
+          // Item 7c: abort-signal guard — stop draining if cancelled.
+          if (this._controller.signal.aborted) break;
+          const next = this._pendingUserMessages.shift()!;
+          lastMsg = await streamToFinalMessage(this, next, sinkOverride);
+          this._lastMessage = lastMsg.content;
+          this._currentTrace.turnCount++;
+        }
+      } catch {
+        // Item 7b: drain error — clear remaining queue and fall through to
+        // lifecycle events, which will use accumulated usage/cost so far.
+        this._pendingUserMessages.length = 0;
+      }
+
+      // Item 7a: Emit lifecycle + propagate usage AFTER all drain turns so
+      // turnCount and cost reflect the full conversation.
+      //
       // Witness layer: subagent_lifecycle.succeeded MUST be awaited before
       // onTerminal(). onTerminal() may trigger the owning session's immediate
       // teardown, which calls writer.seal(); once sealed, writer.write() throws
@@ -286,7 +312,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       await emitSubagentLifecycle(this._traceWriter, {
         transition: 'succeeded',
         subagentId: this.id,
-        durationMs: this._lastDurationMs,
+        durationMs: Date.now() - startTime,
         turnCount: this._currentTrace.turnCount,
         outputBytes: Buffer.byteLength(this._lastMessage, 'utf8'),
         // Record the terminal stop reason so trace forensics can distinguish a
@@ -300,30 +326,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // always captures this subagent's contribution even if onTerminal()
       // triggers an immediate session teardown.
       //
-      // `msg.metadata.totalCostUsd` is populated by the provider's
-      // stream-consumer (turn.completed retroactively mutates the assistant
-      // message's metadata in place — see stream-consumer.ts), so by the time
-      // `run()` reads `msg` here the cost is present for providers that report
-      // it. It is `undefined` for backends without pricing data, which
-      // `recordSubagentCompletion` already tolerates.
+      // `lastMsg` reflects the final drain turn (or the initial turn when no
+      // drain occurred). `lastMsg.metadata.totalCostUsd` is populated by the
+      // provider's stream-consumer (turn.completed retroactively mutates the
+      // assistant message's metadata in place — see stream-consumer.ts), so by
+      // the time `run()` reads `lastMsg` here the cost is present for providers
+      // that report it. It is `undefined` for backends without pricing data,
+      // which `recordSubagentCompletion` already tolerates.
       const costUsd =
-        typeof msg.metadata?.totalCostUsd === 'number' ? msg.metadata.totalCostUsd : undefined;
+        typeof lastMsg.metadata?.totalCostUsd === 'number' ? lastMsg.metadata.totalCostUsd : undefined;
       this.onSubagentSucceeded?.(this._currentTrace.usage, costUsd);
-
-      // Drain pending user messages queued via sendMessage(). Each
-      // message starts a new turn in the same subagent conversation.
-      // driveTurns already supports multi-turn; we just keep calling
-      // streamToFinalMessage with each queued message. _onTerminal is
-      // deferred so the handle stays in the active map while draining.
-      let lastMsg = msg;
-      while (this._pendingUserMessages.length > 0) {
-        const next = this._pendingUserMessages.shift()!;
-        this._currentStatus = 'running';
-        lastMsg = await streamToFinalMessage(this, next, sinkOverride);
-        this._lastMessage = lastMsg.content;
-        this._currentTrace.turnCount++;
-        this._currentStatus = 'succeeded';
-      }
 
       this._onTerminal();
       return lastMsg;
@@ -517,6 +529,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   readonly _pendingUserMessages: string[] = [];
 
   sendMessage(text: string): void {
+    // Item 8: silently drop messages when the subagent has already reached a
+    // terminal state. The task-view UI may call this while the subagent races
+    // to completion; throwing here would surface a confusing error.
+    if (
+      this._currentStatus === 'succeeded' ||
+      this._currentStatus === 'failed' ||
+      this._currentStatus === 'cancelled'
+    ) {
+      return;
+    }
     this._pendingUserMessages.push(text);
   }
 }

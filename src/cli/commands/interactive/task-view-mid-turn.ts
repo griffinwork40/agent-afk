@@ -24,10 +24,14 @@ import {
   buildTaskFooterLine,
 } from './task-view-mode.js';
 import { getTasksManager } from '../../slash/commands/tasks.js';
+import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
 import type { TurnHandles } from './shared.js';
+
+// Item 4: cap for input buffer to prevent unbounded accumulation.
+const MAX_INPUT_BYTES = 8192;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -46,12 +50,13 @@ export interface MidTurnTaskViewOptions {
  * compositor's dispatch chain) and a raw stdin listener handles Esc to
  * exit. The parent turn's streaming continues in the background.
  *
- * Returns a Promise that resolves when the user presses Esc or the
- * subagent finishes.
+ * Returns a Promise that resolves to true when the view was shown, or
+ * false when no running subagents were found (so the caller can fall
+ * through to ghost-accept).
  */
 export async function launchMidTurnTaskView(
   opts: MidTurnTaskViewOptions,
-): Promise<void> {
+): Promise<boolean> {
   const { manager, compositor } = opts;
 
   // Find the most recently dispatched running subagent.
@@ -59,12 +64,13 @@ export async function launchMidTurnTaskView(
   const runningIds = listed
     .filter((h) => h.status === 'running' || h.status === 'idle')
     .map((h) => h.id);
-  if (runningIds.length === 0) return;
+  // Item 6: return false so caller can fall through to ghost-accept.
+  if (runningIds.length === 0) return false;
 
   // Pick the most recent (last in the list) and resolve the full handle.
   const id = runningIds[runningIds.length - 1]!;
   const handle = manager.get(id);
-  if (!handle) return;
+  if (!handle) return false;
   const agentType = (handle as unknown as { _agentType?: string })?._agentType;
 
   const stdout = compositor.stdout;
@@ -74,6 +80,8 @@ export async function launchMidTurnTaskView(
   // turn keep accumulating internally. When we call resumeInput() the
   // compositor repaints with the current (accumulated) overlay state.
   compositor.suspendInput();
+  // Item 1: re-enable raw mode after suspending so keystrokes arrive per-byte.
+  try { process.stdin.setRawMode?.(true); } catch { /* non-TTY */ }
 
   // Clear screen and render the task view header.
   stdout.write('\x1b[2J\x1b[H'); // clear screen + cursor home
@@ -86,9 +94,19 @@ export async function launchMidTurnTaskView(
     for (const msg of history) {
       const role = msg.role === 'user' ? palette.bold('user') : palette.bold('assistant');
       stdout.write(`${role}:\n`);
+      // Item 3: extract text from ContentBlock arrays; fall back to JSON for
+      // other shapes. Item 2: sanitize before writing to stdout.
       const raw = msg.content;
-      const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      for (const l of text.split('\n')) stdout.write(`  ${l}\n`);
+      const text = typeof raw === 'string'
+        ? raw
+        : Array.isArray(raw)
+          ? (raw as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === 'text' && typeof b.text === 'string')
+              .map((b) => b.text!)
+              .join('\n')
+          : JSON.stringify(raw);
+      const safe = stripEscapeSequences(text);
+      for (const l of safe.split('\n')) stdout.write(`  ${l}\n`);
       stdout.write('\n');
     }
   }
@@ -98,9 +116,11 @@ export async function launchMidTurnTaskView(
 
   if (!isRunning) {
     // Already completed — show briefly then return.
+    // Item 1: restore cooked mode before resuming compositor.
+    try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
     compositor.resumeInput();
     compositor.repaint();
-    return;
+    return true;
   }
 
   // Tail live output until Esc or stream ends. The user can also type
@@ -141,7 +161,10 @@ export async function launchMidTurnTaskView(
     }
     // Ignore control characters and escape sequences.
     if (str.length === 1 && str.charCodeAt(0) < 32) return;
-    if (str.startsWith('\x1b[')) return;
+    // Item 5: catch ALL escape sequences (CSI, OSC, SS3, DCS), not just CSI.
+    if (str.startsWith('\x1b')) return;
+    // Item 4: cap the input buffer to avoid unbounded growth.
+    if (Buffer.byteLength(inputBuf + str, 'utf8') > MAX_INPUT_BYTES) return;
     inputBuf += str;
     renderPrompt();
   };
@@ -170,21 +193,40 @@ export async function launchMidTurnTaskView(
       await waitForEsc();
     }
 
+    // Item 1: restore cooked mode before handing terminal back to compositor.
+    try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
     compositor.resumeInput();
     compositor.repaint();
   }
+
+  return true;
 }
 
-/** Block until the user presses Esc. */
+/**
+ * Block until the user presses Esc, the stdin closes, or 30 s elapses.
+ * Item 9: timeout + close-handler prevents the function from leaking
+ * indefinitely when stdin is closed or the process exits.
+ */
 function waitForEsc(): Promise<void> {
   return new Promise<void>((resolve) => {
-    const onEsc = (data: Buffer): void => {
-      if (data.toString() === '\x1b') {
-        process.stdin.removeListener('data', onEsc);
-        resolve();
-      }
+    // Item 1: ensure raw mode is active so the Esc byte arrives immediately.
+    try { process.stdin.setRawMode?.(true); } catch { /* non-TTY */ }
+    const cleanup = (): void => {
+      process.stdin.removeListener('data', onEsc);
+      process.stdin.removeListener('close', cleanup);
+      clearTimeout(timer);
+      // Item 1: restore cooked mode when leaving.
+      try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
+      resolve();
     };
+    const onEsc = (data: Buffer): void => {
+      if (data.toString() === '\x1b') cleanup();
+    };
+    // Item 9: 30 s safety timeout so this never hangs indefinitely.
+    const timer = setTimeout(cleanup, 30_000);
     process.stdin.on('data', onEsc);
+    // Item 9: resolve if stdin closes (e.g. pipe / daemon context).
+    process.stdin.on('close', cleanup);
   });
 }
 
@@ -197,15 +239,25 @@ function waitForEsc(): Promise<void> {
  * when the compositor or manager is unavailable (non-TTY, daemon).
  * Called from turn-handler.ts to keep the wiring boilerplate out of the
  * already-baselined turn handler.
+ *
+ * Item 6: the returned closure returns a boolean — true when the task view
+ * was launched (running subagents exist), false otherwise — so the Tab
+ * dispatch can fall through to ghost-accept when no tasks are running.
  */
 export function createTaskViewHandler(
   h: Pick<TurnHandles, 'getCompositor' | 'setTaskViewHandler'>,
-): (() => void) | null {
+): (() => boolean) | null {
   const compositor = h.getCompositor?.();
   if (!compositor) return null;
   return () => {
     const manager = getTasksManager();
-    if (!manager) return;
+    if (!manager) return false;
+    // Synchronous check: are there running subagents?
+    const hasRunning = manager.list().some(
+      (handle) => handle.status === 'running' || handle.status === 'idle',
+    );
+    if (!hasRunning) return false;
     void launchMidTurnTaskView({ manager, compositor });
+    return true;
   };
 }
