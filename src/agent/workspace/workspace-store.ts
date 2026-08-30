@@ -89,8 +89,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS workspace_fts USING fts5(
   content,
   content=workspace_entries,
   content_rowid=id,
-  tokenize='porter',
-  columnsize=0
+  tokenize='porter'
 );
 
 CREATE TRIGGER IF NOT EXISTS ws_fts_ai AFTER INSERT ON workspace_entries BEGIN
