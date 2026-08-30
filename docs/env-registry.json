@@ -44,10 +44,11 @@
     },
     {
       "name": "AFK_BROWSER_BACKEND",
-      "description": "Select the browser provider backend. Phase 1 supports only `playwright`. Reserved for future `cdp` / `mcp` adapters. Unset defaults to `playwright`.",
+      "description": "Browser provider backend: auto (default, prefer Agent Browser, fall back to Playwright), agent-browser (require Agent Browser), or playwright (headless only).",
       "type": "string",
       "required": false,
-      "example": "playwright",
+      "default": "auto",
+      "example": "agent-browser",
       "category": "browser"
     },
     {

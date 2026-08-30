@@ -100,12 +100,35 @@ async function renderViaBrowser(
 ): Promise<RenderedPage> {
   const { getBrowserProvider } = await import('../browser/registry.js');
   const provider = await getBrowserProvider();
-  return provider.render({
-    url,
-    timeoutMs: opts.timeoutMs,
-    signal: opts.signal,
-    requestGuard: opts.requestGuard,
-  });
+
+  try {
+    return await provider.render({
+      url,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+      requestGuard: opts.requestGuard,
+    });
+  } catch (err) {
+    // Agent Browser does not support render() (no ephemeral contexts).
+    // Fall back to Playwright for one-shot content fetches.
+    if (provider.name === 'agent-browser') {
+      const { PlaywrightProvider } = await import('../browser/playwright/index.js');
+      const { loadBrowserConfig } = await import('../browser/config.js');
+      const config = loadBrowserConfig();
+      const pw = new PlaywrightProvider(config);
+      try {
+        return await pw.render({
+          url,
+          timeoutMs: opts.timeoutMs,
+          signal: opts.signal,
+          requestGuard: opts.requestGuard,
+        });
+      } finally {
+        await pw.shutdown();
+      }
+    }
+    throw err;
+  }
 }
 
 /**

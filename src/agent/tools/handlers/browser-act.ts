@@ -191,12 +191,19 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
     }
 
     let provider: import('../../../browser/provider.js').BrowserProvider;
+    let routingBackend: string | undefined;
+    let routingReason: string | undefined;
     try {
       if (opts.getBrowserProvider) {
         provider = await opts.getBrowserProvider();
       } else {
-        const { getBrowserProvider } = await import('../../../browser/registry.js');
+        const { getBrowserProvider, getLastRoutingDecision } = await import('../../../browser/registry.js');
         provider = await getBrowserProvider();
+        const decision = getLastRoutingDecision();
+        if (decision) {
+          routingBackend = decision.backend;
+          routingReason = decision.reason;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -224,6 +231,8 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
             tool: 'browser_act',
             action: parsed.action,
             toolUseId: context?.toolUseId ?? '',
+            ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+            ...(routingReason ? { backendReason: routingReason } : {}),
             target: targetWitness,
             urlBefore: null,
             urlAfter: null,
@@ -240,6 +249,8 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
             tool: 'browser_act',
             action: parsed.action,
             toolUseId: context?.toolUseId ?? '',
+            ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+            ...(routingReason ? { backendReason: routingReason } : {}),
             target: targetWitness,
             urlBefore: null,
             urlAfter: null,
@@ -259,6 +270,8 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
         tool: 'browser_act',
         action: parsed.action,
         toolUseId: context?.toolUseId ?? '',
+        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingReason ? { backendReason: routingReason } : {}),
         target: targetWitness,
         urlBefore: result.url,
         urlAfter: result.url,
@@ -274,6 +287,8 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
         tool: 'browser_act',
         action: parsed.action,
         toolUseId: context?.toolUseId ?? '',
+        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingReason ? { backendReason: routingReason } : {}),
         target: targetWitness,
         urlBefore: null,
         urlAfter: null,

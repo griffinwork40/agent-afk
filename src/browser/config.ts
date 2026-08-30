@@ -109,10 +109,11 @@ function parseDomainList(raw: string | undefined): readonly string[] {
 // Backend validation
 // ---------------------------------------------------------------------------
 
-function resolveBackend(raw: string | undefined): 'playwright' {
-  if (raw === undefined || raw === '' || raw === 'playwright') return 'playwright';
+function resolveBackend(raw: string | undefined): 'playwright' | 'agent-browser' | 'auto' {
+  if (raw === undefined || raw === '') return 'auto';
+  if (raw === 'playwright' || raw === 'agent-browser' || raw === 'auto') return raw;
   throw new Error(
-    `AFK_BROWSER_BACKEND: only "playwright" is supported in Phase 1, got: ${raw}`,
+    `AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: ${raw}`,
   );
 }
 
@@ -188,11 +189,11 @@ function mergeFileConfig(base: BrowserConfig, fileConfig: Record<string, unknown
   if (typeof fileConfig['domSnapshots'] === 'boolean') {
     result.domSnapshots = fileConfig['domSnapshots'];
   }
-  if (fileConfig['backend'] === 'playwright') {
-    result.backend = 'playwright';
+  if (fileConfig['backend'] === 'playwright' || fileConfig['backend'] === 'agent-browser' || fileConfig['backend'] === 'auto') {
+    result.backend = fileConfig['backend'];
   } else if (fileConfig['backend'] !== undefined) {
     throw new Error(
-      `AFK_BROWSER_BACKEND: only "playwright" is supported in Phase 1, got: ${String(fileConfig['backend'])}`,
+      `AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: ${String(fileConfig['backend'])}`,
     );
   }
   if (typeof fileConfig['defaultProfile'] === 'string') {

@@ -155,9 +155,9 @@ describe('loadBrowserConfig — domain list comma-split + trim', () => {
 // ---------------------------------------------------------------------------
 
 describe('loadBrowserConfig — backend', () => {
-  it('unset backend → "playwright"', () => {
+  it('unset backend → "auto"', () => {
     const cfg = loadBrowserConfig({ env: makeEnv(), readFileSync: noFile });
-    expect(cfg.backend).toBe('playwright');
+    expect(cfg.backend).toBe('auto');
   });
 
   it('AFK_BROWSER_BACKEND=playwright → "playwright"', () => {
@@ -168,13 +168,29 @@ describe('loadBrowserConfig — backend', () => {
     expect(cfg.backend).toBe('playwright');
   });
 
+  it('AFK_BROWSER_BACKEND=agent-browser → "agent-browser"', () => {
+    const cfg = loadBrowserConfig({
+      env: makeEnv({ AFK_BROWSER_BACKEND: 'agent-browser' }),
+      readFileSync: noFile,
+    });
+    expect(cfg.backend).toBe('agent-browser');
+  });
+
+  it('AFK_BROWSER_BACKEND=auto → "auto"', () => {
+    const cfg = loadBrowserConfig({
+      env: makeEnv({ AFK_BROWSER_BACKEND: 'auto' }),
+      readFileSync: noFile,
+    });
+    expect(cfg.backend).toBe('auto');
+  });
+
   it('unknown backend value throws with descriptive message', () => {
     expect(() =>
       loadBrowserConfig({
         env: makeEnv({ AFK_BROWSER_BACKEND: 'cdp' }),
         readFileSync: noFile,
       }),
-    ).toThrow('AFK_BROWSER_BACKEND: only "playwright" is supported in Phase 1, got: cdp');
+    ).toThrow('AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: cdp');
   });
 
   it('unknown backend value "puppeteer" throws', () => {
@@ -183,7 +199,7 @@ describe('loadBrowserConfig — backend', () => {
         env: makeEnv({ AFK_BROWSER_BACKEND: 'puppeteer' }),
         readFileSync: noFile,
       }),
-    ).toThrow('AFK_BROWSER_BACKEND: only "playwright" is supported in Phase 1, got: puppeteer');
+    ).toThrow('AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: puppeteer');
   });
 });
 
