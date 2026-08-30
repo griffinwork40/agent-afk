@@ -108,7 +108,7 @@ export function renderSkillDetail(
     ctx.out.line(`  ${line}`);
   }
 
-  const whenToUse = registrySkill?.whenToUse ?? extractHintFromDescription(description);
+  const whenToUse = registrySkill?.whenToUse ?? pluginSkill?.whenToUse ?? extractHintFromDescription(description);
   if (whenToUse && whenToUse !== description.trim()) {
     ctx.out.line();
     ctx.out.line(`  ${palette.bold('When to use')}`);

@@ -476,6 +476,7 @@ export interface ProviderCommandInfo {
   name: string;
   description?: string;
   argumentHint?: string;
+  whenToUse?: string;
   /**
    * Origin of the underlying skill/command. Inlined literal union (rather
    * than importing `SkillManifestEntry['source']` from
