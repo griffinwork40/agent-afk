@@ -66,6 +66,13 @@ export interface WorkspacePublishInput {
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 
+// Invariant: workspace_entries is append-only. The FTS5 external-content table
+// (workspace_fts) has only synchronization triggers — AFTER INSERT, DELETE, and
+// UPDATE. If the append-only contract ever changes (e.g. adding a DELETE or
+// UPDATE query path on workspace_entries), the FTS triggers below already handle
+// it per SQLite FTS5 docs section 4.4.2. The triggers exist defensively; the
+// absence of mutation methods on WorkspaceStore is the primary guard.
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS workspace_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,10 +102,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS workspace_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS ws_fts_ai AFTER INSERT ON workspace_entries BEGIN
   INSERT INTO workspace_fts(rowid, subject, content) VALUES (new.id, new.subject, new.content);
 END;
+
+CREATE TRIGGER IF NOT EXISTS ws_fts_ad AFTER DELETE ON workspace_entries BEGIN
+  INSERT INTO workspace_fts(workspace_fts, rowid, subject, content)
+    VALUES ('delete', old.id, old.subject, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS ws_fts_au AFTER UPDATE ON workspace_entries BEGIN
+  INSERT INTO workspace_fts(workspace_fts, rowid, subject, content)
+    VALUES ('delete', old.id, old.subject, old.content);
+  INSERT INTO workspace_fts(rowid, subject, content)
+    VALUES (new.id, new.subject, new.content);
+END;
 `;
 
 // ── Store class ───────────────────────────────────────────────────────────────
 
+// Invariant: WorkspaceStore deliberately exposes no update() or delete() method.
+// workspace_entries is append-only by design. The FTS5 DELETE/UPDATE triggers
+// above exist as a defensive safety net, not because mutations are expected.
 export class WorkspaceStore {
   private readonly db: BetterSqlite3.Database;
 
