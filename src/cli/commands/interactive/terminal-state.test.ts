@@ -165,6 +165,35 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.evidence).not.toContain('**');
   });
 
+  // Regression: models wrap the entire bullet in one bold span:
+  //   `- **What changed: some delta**`
+  // After splitting on the colon, the trailing `**` is stranded on the value.
+  it('strips trailing orphaned bold closer from values (**Label: value** form)', () => {
+    const text = `prose\n\nDone\n- **What was done: built the parser**\n- **Evidence: see tests/parse.test.ts**\n- **What changed: terminal verdicts parsed**\n- **Deferred: integrate with renderer**`;
+    const v = parseTerminalState(text);
+    expect(v?.whatWasDone).toBe('built the parser');
+    expect(v?.evidence).toBe('see tests/parse.test.ts');
+    expect(v?.whatChanged).toBe('terminal verdicts parsed');
+    expect(v?.deferred).toBe('integrate with renderer');
+    // No orphaned `**` should survive in any value.
+    expect(v?.whatWasDone).not.toMatch(/\*\*$/);
+    expect(v?.evidence).not.toMatch(/\*\*$/);
+    expect(v?.whatChanged).not.toMatch(/\*\*$/);
+    expect(v?.deferred).not.toMatch(/\*\*$/);
+  });
+
+  // Edge case: model emits `- **Label:** **` (bold label, bare orphaned value).
+  // The parser should yield an empty string, not a literal `**`.
+  it('strips bare orphaned ** from values that are only markup noise', () => {
+    const text = `prose\n\nDone\n- **What was done:** shipped it\n- **What changed:** **\n- **Deferred:** **`;
+    const v = parseTerminalState(text);
+    expect(v?.whatWasDone).toBe('shipped it');
+    // Bare `**` should be stripped to empty — these fields become undefined
+    // because the empty value is trimmed out.
+    expect(v?.whatChanged).toBeUndefined();
+    expect(v?.deferred).toBeUndefined();
+  });
+
   it('preserves balanced bold and globs/paths inside values', () => {
     const text = `prose\n\nDone\n- What was done: touched **all** of src/**/*.ts\n- Evidence: see __init__ wiring`;
     const v = parseTerminalState(text);

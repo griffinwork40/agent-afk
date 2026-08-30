@@ -278,7 +278,14 @@ interface Row {
 function collectRows(state: TerminalState): Row[] {
   const rows: Row[] = [];
   const push = (label: string, value: string | undefined) => {
-    if (value && value.trim().length > 0) rows.push({ label, value: value.trim() });
+    if (!value) return;
+    const trimmed = value.trim();
+    // Skip values that are purely residual markup noise — orphaned bold/
+    // underscore markers (`**`, `****`, `__`, `____`) that survived the
+    // parser's strip pass. They carry no semantic content and would render
+    // as literal asterisks in the card.
+    if (trimmed.length === 0 || /^(?:\*{2,4}|_{2,4})$/.test(trimmed)) return;
+    rows.push({ label, value: trimmed });
   };
   switch (state.kind) {
     case 'done':

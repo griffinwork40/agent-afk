@@ -214,7 +214,15 @@ function extractBullets(bodyLines: string[]): Bullet[] {
       const value = content
         .slice(colonIdx + 1)
         .trim()
-        .replace(/^(?:\*\*|__)\s/, '');
+        // Strip an orphaned bold/underscore opener at the head — the closing
+        // half of a `**Label:** value` split.
+        .replace(/^(?:\*\*|__)\s/, '')
+        // Strip an orphaned bold/underscore closer at the tail — the closing
+        // half of a `**Label: value**` split where the entire bullet was one
+        // bold span. Safe because a trailing `**` at end-of-value is never a
+        // glob (globs have a path component after `**`, e.g. `**/*.ts`).
+        .replace(/(?:\*\*|__)$/, '')
+        .trim();
       out.push({ label, value });
     } else {
       out.push({ label: '', value: content });
@@ -237,7 +245,7 @@ function mapBulletsToFields(
     for (const b of bullets) {
       if (b.label === '') continue;
       for (const n of needles) {
-        if (b.label.includes(n)) return b.value;
+        if (b.label.includes(n)) return b.value || undefined;
       }
     }
     return undefined;
