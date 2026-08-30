@@ -31,6 +31,7 @@ import { loadBrowserConfig } from './config.js';
 import type { BrowserProvider } from './provider.js';
 import type { LoadBrowserConfigOptions } from './config.js';
 import { selectBackend, type RoutingDecision } from './routing.js';
+import { env } from '../config/env.js';
 
 // ---------------------------------------------------------------------------
 // Module-scope singleton state
@@ -127,7 +128,7 @@ export async function getBrowserProvider(opts?: LoadBrowserConfigOptions): Promi
   // rather than starting a second construction chain.
   constructing = (async (): Promise<BrowserProvider> => {
     const config = loadBrowserConfig(opts);
-    const surface = opts?.surface ?? (opts?.env ?? {})['AGENT_SURFACE'];
+    const surface = opts?.surface ?? (opts?.env ?? {})['AGENT_SURFACE'] ?? env.AGENT_SURFACE;
 
     const decision = await selectBackend({ config, surface });
     lastRouting = decision;

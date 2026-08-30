@@ -73,6 +73,27 @@ export function readConnectionFile(
     return null;
   }
 
+  // Validate the URL to ensure it only points to localhost. A tampered
+  // connection file could otherwise redirect API traffic (including the bearer
+  // token) to an attacker-controlled host.
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(obj['url']);
+  } catch {
+    return null;
+  }
+  const { hostname, protocol } = parsedUrl;
+  const isLocalhost =
+    hostname === '127.0.0.1' ||
+    hostname === 'localhost' ||
+    hostname === '::1';
+  if (!isLocalhost || protocol !== 'http:') {
+    throw new Error(
+      `Agent Browser connection file contains an untrusted URL: ${obj['url']}. ` +
+      'Only http://127.0.0.1 or http://localhost is permitted.',
+    );
+  }
+
   return {
     url: obj['url'],
     token: obj['token'],

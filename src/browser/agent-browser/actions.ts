@@ -101,14 +101,17 @@ export async function executeAction(
       await client.select(tabId, elementId, value);
       break;
     case 'hover':
-      // Agent Browser has no hover API; silently degrade.
-      break;
-    case 'scroll_to':
+      throw new Error(
+        'hover is not supported by Agent Browser; use element_id from a prior observation to target clicks instead',
+      );
+    case 'scroll_to': {
+      const safeId = elementId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       await client.evalScript(
         tabId,
-        `document.querySelector('[data-element-id="${elementId}"]')?.scrollIntoView({behavior:'smooth',block:'center'})`,
+        `document.querySelector('[data-element-id="${safeId}"]')?.scrollIntoView({behavior:'smooth',block:'center'})`,
       );
       break;
+    }
     case 'wait_for':
       await client.waitFor(tabId, 'element', {
         value: elementId,

@@ -121,6 +121,7 @@ export class AgentBrowserProvider implements BrowserProvider {
     const readResult = await this.client.read(state.tabId, { mode: 'main' });
     const landedPolicy = enforceDomainPolicy(readResult.url, this.config);
     if (!landedPolicy.allowed) {
+      await this.client.evalScript(state.tabId, `window.location.href = 'about:blank'`).catch(() => {});
       return {
         outcome: 'blocked_by_policy',
         url: readResult.url,
@@ -128,7 +129,7 @@ export class AgentBrowserProvider implements BrowserProvider {
       };
     }
 
-    return this.buildObservation(state, input.sessionId, input.screenshot);
+    return this.buildObservation(state, input.sessionId, input.screenshot, undefined, 'browser_open');
   }
 
   // -------------------------------------------------------------------------
@@ -142,7 +143,7 @@ export class AgentBrowserProvider implements BrowserProvider {
         `No Agent Browser tab open for session ${input.sessionId}. Call browser_open first.`,
       );
     }
-    return this.buildObservation(state, input.sessionId, input.screenshot, input.maxElements);
+    return this.buildObservation(state, input.sessionId, input.screenshot, input.maxElements, 'browser_observe');
   }
 
   // -------------------------------------------------------------------------
@@ -169,7 +170,10 @@ export class AgentBrowserProvider implements BrowserProvider {
         // Otherwise, it succeeded -- update state and build observation.
         state.lastAction = `browser_act:${input.action}`;
         state.lastActionAt = new Date().toISOString();
-        return this.buildObservation(state, input.sessionId, input.screenshot);
+        return this.buildObservation(state, input.sessionId, input.screenshot, undefined, 'browser_act');
+      }
+      if (input.target.kind === 'selector') {
+        throw new Error('selector targets are not supported by Agent Browser; use element_id or semantic targets');
       }
       throw new Error(`Cannot resolve target: ${JSON.stringify(input.target)}`);
     }
@@ -181,6 +185,7 @@ export class AgentBrowserProvider implements BrowserProvider {
     const readResult = await this.client.read(state.tabId, { mode: 'main' });
     const policy = enforceDomainPolicy(readResult.url, this.config);
     if (!policy.allowed) {
+      await this.client.evalScript(state.tabId, `window.location.href = 'about:blank'`).catch(() => {});
       return {
         outcome: 'blocked_by_policy',
         url: readResult.url,
@@ -188,7 +193,7 @@ export class AgentBrowserProvider implements BrowserProvider {
       };
     }
 
-    return this.buildObservation(state, input.sessionId, input.screenshot);
+    return this.buildObservation(state, input.sessionId, input.screenshot, undefined, 'browser_act');
   }
 
   // -------------------------------------------------------------------------
@@ -196,10 +201,7 @@ export class AgentBrowserProvider implements BrowserProvider {
   // -------------------------------------------------------------------------
 
   async render(_input: RenderInput): Promise<RenderResult> {
-    throw new Error(
-      'AgentBrowserProvider does not support render(). ' +
-      'Use PlaywrightProvider for one-shot content fetches.',
-    );
+    throw new Error('AgentBrowserProvider does not support render(). Use PlaywrightProvider for one-shot content fetches.');
   }
 
   // -------------------------------------------------------------------------
@@ -213,14 +215,20 @@ export class AgentBrowserProvider implements BrowserProvider {
         `No Agent Browser tab open for session ${input.sessionId}. Call browser_open first.`,
       );
     }
+    if (input.target !== undefined || input.fullPage) {
+      throw new Error('Agent Browser does not support element or full-page screenshots; omit target and fullPage.');
+    }
     const result = await this.client.screenshot(state.tabId);
     const buf = Buffer.from(result.data, 'base64');
+    // PNG header: bytes 16-19 = width, 20-23 = height (big-endian uint32).
+    const width = buf.length >= 24 ? buf.readUInt32BE(16) : 0;
+    const height = buf.length >= 24 ? buf.readUInt32BE(20) : 0;
     const sidecar = await writeScreenshotSidecar(input.sessionId, buf, 'browser_screenshot');
     return {
       path: sidecar.path,
       bytes: buf.length,
-      width: 0,
-      height: 0,
+      width,
+      height,
       dataBase64: result.data,
       mediaType: 'image/png',
     };
@@ -230,9 +238,7 @@ export class AgentBrowserProvider implements BrowserProvider {
   // extract() -- not yet supported
   // -------------------------------------------------------------------------
 
-  async extract(_input: ExtractInput): Promise<ExtractResult> {
-    throw new Error('AgentBrowserProvider does not support extract() yet.');
-  }
+  async extract(_input: ExtractInput): Promise<ExtractResult> { throw new Error('AgentBrowserProvider does not support extract() yet.'); }
 
   // -------------------------------------------------------------------------
   // close()
@@ -287,6 +293,7 @@ export class AgentBrowserProvider implements BrowserProvider {
     sessionId: string,
     screenshot?: boolean,
     maxElements?: number,
+    callerLabel: 'browser_open' | 'browser_observe' | 'browser_act' | 'browser_screenshot' = 'browser_open',
   ): Promise<BrowserObservation> {
     const [readResult, inspectResult] = await Promise.all([
       this.client.read(state.tabId, { mode: 'main', budget: 4000 }),
@@ -312,7 +319,7 @@ export class AgentBrowserProvider implements BrowserProvider {
       try {
         const ssResult = await this.client.screenshot(state.tabId);
         const buf = Buffer.from(ssResult.data, 'base64');
-        const sidecar = await writeScreenshotSidecar(sessionId, buf, 'browser_open');
+        const sidecar = await writeScreenshotSidecar(sessionId, buf, callerLabel);
         screenshotPath = sidecar.path;
       } catch {
         warnings.push('screenshot capture failed');
