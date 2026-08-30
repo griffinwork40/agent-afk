@@ -39,6 +39,44 @@ export { resolveAutoCompactThreshold } from '../shared/auto-compact.js';
  */
 const warnedTokenClamps = new Set<string>();
 
+/** Module-scope dedupe for temperature-clamp warnings. */
+const warnedTemperatureClamps = new Set<string>();
+
+/** Anthropic Messages API maximum temperature. */
+const ANTHROPIC_MAX_TEMPERATURE = 1.0;
+
+/**
+ * Validate and clamp the sampling temperature for the Anthropic Messages API.
+ *
+ * The Anthropic API accepts `0.0`-`1.0`; values above `1.0` are rejected with
+ * HTTP 400. The shared config layer (`settable-keys.ts`) permits `0`-`2` to
+ * accommodate OpenAI's wider range, so the user can set `1.5` via
+ * `/config set temperature 1.5` and have it silently accepted at the config tier
+ * while the Anthropic wire rejects it at runtime.
+ *
+ * This function mirrors the `resolveMaxTokens` pattern: clamp with a one-time
+ * warning rather than letting the request fail opaquely at the API boundary.
+ * Values at or below `1.0` pass through unchanged. `undefined` stays `undefined`
+ * (server default). Negative or non-finite values are treated as unset.
+ */
+export function resolveAnthropicTemperature(
+  temperature: number | undefined,
+): number | undefined {
+  if (temperature === undefined) return undefined;
+  if (!Number.isFinite(temperature) || temperature < 0) return undefined;
+  if (temperature > ANTHROPIC_MAX_TEMPERATURE) {
+    const key = `temp:${temperature}`;
+    if (!warnedTemperatureClamps.has(key)) {
+      warnedTemperatureClamps.add(key);
+      console.warn(
+        `[afk] temperature ${temperature} exceeds the Anthropic maximum (${ANTHROPIC_MAX_TEMPERATURE}); clamping to ${ANTHROPIC_MAX_TEMPERATURE}.`,
+      );
+    }
+    return ANTHROPIC_MAX_TEMPERATURE;
+  }
+  return temperature;
+}
+
 /**
  * Fraction of `max_tokens` reserved for the visible reply when thinking is
  * explicitly enabled. Thinking tokens share the output budget on the Messages

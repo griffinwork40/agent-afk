@@ -155,13 +155,14 @@ export interface OpenRoundContext {
   stallTimeoutMs: number;
 }
 
-export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'fastMode'>): AnthropicMessagesCreateParams {
+export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'fastMode'>): AnthropicMessagesCreateParams {
   return {
     model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
     ...(input.system !== null ? { system: input.system } : {}),
     ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
     ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
     ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     ...(input.fastMode === true ? { speed: 'fast' as const } : {}),
   };
 }

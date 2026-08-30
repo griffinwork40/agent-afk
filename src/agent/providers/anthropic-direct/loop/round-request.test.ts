@@ -6,8 +6,9 @@
 // so it is pinned directly here.
 
 import { describe, it, expect } from 'vitest';
-import { toWireTool } from './round-request.js';
+import { toWireTool, buildRoundParams } from './round-request.js';
 import type { AnthropicToolDef } from '../types.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources';
 
 const SCHEMA = {
   type: 'object' as const,
@@ -64,5 +65,32 @@ describe('toWireTool', () => {
     toWireTool(internal);
 
     expect(internal).toEqual(snapshot);
+  });
+});
+
+const MESSAGES: MessageParam[] = [{ role: 'user', content: 'hi' }];
+
+describe('buildRoundParams', () => {
+  it('includes temperature in the wire request when set', () => {
+    const params = buildRoundParams({
+      model: 'claude-sonnet-4-20250514',
+      maxTokens: 4096,
+      messages: MESSAGES,
+      system: null,
+      tools: null,
+      temperature: 0.3,
+    });
+    expect(params.temperature).toBe(0.3);
+  });
+
+  it('omits temperature from the wire request when undefined', () => {
+    const params = buildRoundParams({
+      model: 'claude-sonnet-4-20250514',
+      maxTokens: 4096,
+      messages: MESSAGES,
+      system: null,
+      tools: null,
+    });
+    expect('temperature' in params).toBe(false);
   });
 });

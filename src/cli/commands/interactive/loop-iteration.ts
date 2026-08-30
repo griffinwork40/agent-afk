@@ -198,6 +198,7 @@ export async function runInputLoop(
   // Reset before every runTurn so a verdict-less turn never reuses a stale kind.
   let currentTerminalKind: 'done' | 'blocked' | 'asking' | 'interrupted' | undefined;
   let currentDoneHasEvidence: boolean | undefined;
+  let currentDoneClassification: 'no-code-changes' | 'verified' | 'unverified' | undefined;
 
   // Auto-resume: wake an idle prompt when a background subagent result lands so
   // the session continues its work without waiting for a keystroke. Fires only
@@ -671,8 +672,7 @@ export async function runInputLoop(
       // Reset the per-turn verdict capture so a turn that emits no terminal
       // state never carries the previous turn's kind into the Stop dispatch.
       // onTerminalState re-sets these during runTurn when a verdict parses.
-      currentTerminalKind = undefined;
-      currentDoneHasEvidence = undefined;
+      currentTerminalKind = currentDoneHasEvidence = currentDoneClassification = undefined;
       // Enable and clear the code-block register so `/copy N` indices match
       // the blocks rendered in THIS turn, not a prior one.  enableCodeBlockRegister()
       // is idempotent after the first turn; calling it here ensures it is set
@@ -749,6 +749,7 @@ export async function runInputLoop(
           // runTurn, so these are set by the time Stop dispatches at loop tail.
           currentTerminalKind = state.kind;
           currentDoneHasEvidence = meta?.doneHasCorroboratingEvidence;
+          currentDoneClassification = meta?.doneEvidenceClassification;
         },
         setActiveCompositor: (c) => {
           // Publish the active compositor for the SIGINT handler (which
@@ -857,9 +858,8 @@ export async function runInputLoop(
               // the terminal-state gate — can read it. Omitted when the turn
               // emitted no recognizable terminal state.
               ...(currentTerminalKind !== undefined ? { terminalState: currentTerminalKind } : {}),
-              ...(currentDoneHasEvidence !== undefined
-                ? { doneHasCorroboratingEvidence: currentDoneHasEvidence }
-                : {}),
+              ...(currentDoneHasEvidence !== undefined ? { doneHasCorroboratingEvidence: currentDoneHasEvidence } : {}),
+              ...(currentDoneClassification !== undefined ? { doneEvidenceClassification: currentDoneClassification } : {}),
             },
             undefined,
             STOP_HOOK_HANDLER_TIMEOUT_MS,

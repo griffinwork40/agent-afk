@@ -317,12 +317,27 @@ export interface StopContext {
    */
   terminalState?: 'done' | 'blocked' | 'asking' | 'interrupted';
   /**
-   * True when the completed turn produced at least one successful corroborating
-   * tool call — a file write/edit or an executed command (see
-   * `doneHasCorroboratingEvidence` in `afk-push.ts`). Only meaningful when
-   * `terminalState === 'done'`. Absent on surfaces that do not compute it.
+   * True when the completed turn produced observable evidence supporting the
+   * Done claim — at least one successful evidence tool AND, if code changed,
+   * a verification step afterward (see `doneHasCorroboratingEvidence` in
+   * `afk-push.ts`). Only meaningful when `terminalState === 'done'`. Absent
+   * on surfaces that do not compute it.
    */
   doneHasCorroboratingEvidence?: boolean;
+  /**
+   * Code-verification classification for the completed turn. Three states:
+   *   - `'no-code-changes'` — no successful edit/write; verification N/A
+   *   - `'verified'` — code changed AND verification succeeded afterward
+   *   - `'unverified'` — code changed but no verification afterward
+   *
+   * Distinct from {@link doneHasCorroboratingEvidence}: the boolean answers
+   * "is there any evidence behind this Done?"; this field answers "if code
+   * changed, was it verified?" The terminal-state gate uses this field to
+   * decide whether to inject a code-verification correction (only on
+   * `'unverified'`), while the Telegram push uses the boolean for the broader
+   * "Done (unverified)" label.
+   */
+  doneEvidenceClassification?: 'no-code-changes' | 'verified' | 'unverified';
 }
 
 export interface UserPromptSubmitContext {

@@ -26,7 +26,7 @@ import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { joinAtRoundSeam } from './turn-text-seam.js';
 import { renderVerdictCard } from './verdict-card.js';
-import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
+import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
 import { loadTelegramConfig } from '../../config.js';
 import { printTurnFooter } from './turn-handler.footer.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
@@ -708,15 +708,15 @@ export async function runTurn(
           toolCount: toolEvents.length,
         }));
         writeAbove('');
-        // One evidence check, two consumers: (1) the onTerminalState callback
-        // forwards it onto the post-turn `Stop` hook's StopContext so the
-        // terminal-state gate can bounce a self-certified `Done` with nothing
-        // behind it (see terminal-state-gate.ts); (2) the Telegram
-        // "Done (unverified)" relabel below. Computed once, here.
+        // Evidence: two values, two consumers. The boolean (did evidence back
+        // this Done?) drives the Telegram push relabel. The three-state code
+        // classifier (was changed code verified?) drives the terminal-state
+        // gate's correction injection. Both forward onto StopContext.
+        const evidenceClassification = classifyDoneEvidence(toolEvents);
         const hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
         if (h.onTerminalState) {
           try {
-            h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence });
+            h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence, doneEvidenceClassification: evidenceClassification });
           } catch { /* ledger update is best-effort */ }
         }
         // AFK mode: the operator is away and the transcript is unwatched, so

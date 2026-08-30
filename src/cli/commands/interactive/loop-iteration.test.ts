@@ -731,7 +731,7 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
       async (_input: unknown, _session: unknown, _stats: unknown, handlers: unknown) => {
         (handlers as { onTerminalState?: (s: unknown, m?: unknown) => void }).onTerminalState?.(
           { kind: 'done', rawBody: '' },
-          { doneHasCorroboratingEvidence: false },
+          { doneHasCorroboratingEvidence: false, doneEvidenceClassification: 'unverified' },
         );
       },
     );
@@ -750,6 +750,7 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
       event: 'Stop',
       terminalState: 'done',
       doneHasCorroboratingEvidence: false,
+      doneEvidenceClassification: 'unverified',
     });
   });
 
@@ -893,16 +894,16 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
   /**
    * Make a turn self-certify `Done` with no corroborating evidence, exactly as
    * the real turn-handler does when it parses an unbacked Done: it invokes the
-   * loop's `onTerminalState` callback with a `done` verdict and
-   * `doneHasCorroboratingEvidence: false`. The loop carries those onto the Stop
-   * context the gate reads.
+   * loop's `onTerminalState` callback with a `done` verdict,
+   * `doneHasCorroboratingEvidence: false`, and `doneEvidenceClassification: 'unverified'`.
+   * The loop carries those onto the Stop context the gate reads.
    */
   function mockUnbackedDoneTurn(): void {
     vi.mocked(runTurn).mockImplementationOnce(
       async (_input: unknown, _session: unknown, _stats: unknown, handlers: unknown) => {
         (handlers as { onTerminalState?: (s: unknown, m?: unknown) => void }).onTerminalState?.(
           { kind: 'done', rawBody: '' },
-          { doneHasCorroboratingEvidence: false },
+          { doneHasCorroboratingEvidence: false, doneEvidenceClassification: 'unverified' },
         );
       },
     );

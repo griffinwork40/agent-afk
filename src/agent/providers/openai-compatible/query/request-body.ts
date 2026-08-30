@@ -31,6 +31,8 @@ export interface RequestBodyInputs {
   activeTools: OpenAIFunctionTool[] | undefined;
   maxOutputTokens: number | undefined;
   effort: EffortLevel | undefined;
+  /** Sampling temperature forwarded to the API. Omit for server default. */
+  temperature: number | undefined;
 }
 
 /**
@@ -70,6 +72,7 @@ export function buildResponsesRequestBody(
   if (responsesEffort !== undefined) {
     requestBody['reasoning'] = { effort: responsesEffort };
   }
+  if (args.temperature !== undefined) requestBody['temperature'] = args.temperature;
   return requestBody;
 }
 
@@ -97,5 +100,6 @@ export function buildChatCompletionsRequestBody(args: RequestBodyInputs): Record
   if (chatEffort !== undefined) {
     requestBody['reasoning_effort'] = chatEffort;
   }
+  if (args.temperature !== undefined) requestBody['temperature'] = args.temperature;
   return requestBody;
 }

@@ -46,6 +46,8 @@ export interface BuildAgentSessionDeps {
   /** Initial session permission mode (e.g. 'bypassPermissions'). Omit for 'default'. */
   permissionMode?: PermissionMode;
   baseUrl?: string;
+  /** Sampling temperature when explicitly set by the user. */
+  temperature?: number;
   /**
    * CLI `--provider` value when set. Threaded into credential resolution so
    * `afk i --provider xai` does not inject Anthropic material for a Claude
@@ -77,6 +79,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.systemPromptSource !== undefined ? { systemPromptSource: deps.systemPromptSource } : {}),
     ...(deps.thinking !== undefined ? { thinking: deps.thinking } : {}),
     ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
+    ...(deps.temperature !== undefined ? { temperature: deps.temperature } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
     ...deps.resumeConfig,
@@ -126,6 +129,7 @@ export function buildSharedDeps(a: {
     maxOutputTokens: a.maxOutputTokens,
     maxToolUseIterations: a.maxToolUseIterations,
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
+    ...(a.cliConfig.temperature !== undefined ? { temperature: a.cliConfig.temperature } : {}),
     providerFactory: a.providerFactory,
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,

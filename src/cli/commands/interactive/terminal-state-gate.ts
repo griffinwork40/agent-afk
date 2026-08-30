@@ -57,17 +57,23 @@ export const DEFAULT_MAX_TERMINAL_STATE_INJECTIONS = 3;
  * corroborating evidence. Framework note, not user text — it names the failure
  * shape and the two acceptable resolutions (substantiate or downgrade), and
  * explicitly forbids simply re-asserting `Done`.
+ *
+ * History: the original correction (pre-classifyDoneEvidence) fired on any
+ * `Done` with zero successful write/edit/bash. `doneHasCorroboratingEvidence`
+ * now returns false for TWO shapes: (a) no evidence tools at all (empty turn,
+ * subagent-only coordinator, pure conversation), and (b) unverified code
+ * changes. This correction only fires for shape (b) — code was modified but
+ * no verification command succeeded afterward — because for shape (a) the
+ * gate cannot prescribe a corrective action (the fix is to do the work, not
+ * to verify it).
  */
 export const TERMINAL_STATE_GATE_CORRECTION =
-  '[terminal-state gate] The previous turn ended in **Done**, but this turn ' +
-  'recorded no corroborating evidence — no successful file write/edit or ' +
-  'executed command. In AFK mode a `Done` with nothing behind it is the ' +
-  'highest-cost failure: the operator is pinged "finished" and acts on it while ' +
-  'away from the trace. Before ending again, do ONE of:\n' +
-  '  (a) produce and cite the concrete artifact that backs the completion — the ' +
-  'file written, the command run and its result, or the test that passed; or\n' +
+  '[terminal-state gate] The previous turn modified source files but ended in ' +
+  '**Done** without running a verification step afterward (test, lint, or ' +
+  'type-check). Before ending again, do ONE of:\n' +
+  '  (a) run the relevant verification command and cite the result; or\n' +
   '  (b) if the work is not actually complete, correct the terminal state to ' +
-  'Blocked or Asking with the accurate status and the real blocker/question.\n' +
+  'Blocked or Asking with the accurate status.\n' +
   'Do not simply re-assert Done.';
 
 export interface TerminalStateGateOptions {
@@ -128,9 +134,15 @@ export function createTerminalStateGate(opts: TerminalStateGateOptions): HookHan
     if (!opts.isEnabled()) return {};
     if (opts.getPermissionMode() !== 'autonomous') return {};
     if (context.terminalState !== 'done') return {};
-    // Fire ONLY on an explicit `false` — evidence computed and absent. `undefined`
-    // (surface didn't compute it) and `true` (evidence present) both pass.
-    if (context.doneHasCorroboratingEvidence !== false) return {};
+    // Fire ONLY when code was changed but not verified — the one shape where
+    // the correction ("run a verification step") is actionable. Other shapes:
+    //   - 'no-code-changes' → no code mutation, correction text is misleading
+    //   - 'verified' → verification already ran, nothing to correct
+    //   - undefined → surface didn't compute it; no signal to act on
+    // The broader doneHasCorroboratingEvidence boolean also catches zero-evidence
+    // turns, but the gate's correction text specifically references "modified
+    // source files", so we use the classifier, not the boolean.
+    if (context.doneEvidenceClassification !== 'unverified') return {};
     // Loop-guard: bounded corrections per session. Once spent, let the Done
     // stand rather than re-injecting forever.
     if (injections >= cap) {
