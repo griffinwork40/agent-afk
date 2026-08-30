@@ -8,6 +8,7 @@
  */
 
 import type { AgentSession } from '../../../agent/session.js';
+import type { ProviderCommandInfo } from '../../../agent/provider.js';
 import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../../skills/index.js';
 import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
@@ -236,13 +237,18 @@ export async function registerPluginSkills(
     if (!harvestedCategories.has(name)) harvestedCategories.set(name, cat);
   }
 
-  const discovered: DiscoveredSkill[] = commands.map((c) => {
+  // Cast to ProviderCommandInfo[] — session.supportedCommands() returns
+  // SlashCommand[] for the REPL registry, but the underlying objects are
+  // ProviderCommandInfo-shaped (produced by collectSupportedCommands) and
+  // carry fields like `whenToUse` that are not on SlashCommand.
+  const discovered: DiscoveredSkill[] = (commands as unknown as ProviderCommandInfo[]).map((c) => {
     const bare = bareName(c.name);
     const cat = harvestedCategories.get(bare);
     return {
       name: c.name,
       description: c.description ?? '',
       ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
+      ...(c.whenToUse ? { whenToUse: c.whenToUse } : {}),
       ...(c.source ? { source: c.source } : {}),
       ...(cat ? { category: cat } : {}),
     };
