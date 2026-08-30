@@ -123,6 +123,28 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('Halted with state preserved');
   });
 
+  // Regression: when the model wraps the entire bullet in one bold span or
+  // emits `**Label:** **`, the parser can leave residual `**` as the field
+  // value. The card must suppress these noise-only rows rather than rendering
+  // literal asterisks.
+  it('done: suppresses fields whose values are only markup noise (**, ****)', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'shipped feature X',
+      evidence: 'tests pass',
+      whatChanged: '**',
+      deferred: '****',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('shipped feature X');
+    expect(out).toContain('tests pass');
+    // Noise-only fields must not appear as rows.
+    expect(out).not.toContain('changed');
+    expect(out).not.toContain('deferred');
+    expect(out).not.toContain('**');
+  });
+
   it('falls back to rawBody when no labelled fields are present', () => {
     const state: TerminalState = {
       kind: 'done',
