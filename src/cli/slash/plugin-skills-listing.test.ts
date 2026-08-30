@@ -221,4 +221,25 @@ describe('/skills listing UX (Phase 1)', () => {
     const { ctx } = makeCtx();
     await expect(initialSkillsCmd.handler(ctx, '')).resolves.toBe('continue');
   });
+
+  it('detail card uses pluginSkill.whenToUse when registrySkill.whenToUse is absent', async () => {
+    // A plugin-only skill (not in the registry) whose whenToUse comes from
+    // SKILL.md frontmatter — verifies the pluginSkill?.whenToUse fallback
+    // added in listing-detail.ts (issue #1373).
+    const cmd = makeDynamicSkillsCmd([
+      {
+        name: 'fix-pr',
+        description: 'Fix pull-request review comments automatically.',
+        whenToUse: 'Use when a PR has blocking review comments you want resolved.',
+        source: 'plugin',
+      },
+    ]);
+
+    const { ctx, lines } = makeCtx();
+    await cmd.handler(ctx, 'fix-pr');
+    const out = stripAnsi(lines.join('\n'));
+
+    expect(out).toContain('When to use');
+    expect(out).toContain('blocking review comments');
+  });
 });
