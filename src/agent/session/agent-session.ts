@@ -14,11 +14,9 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
 import { captureSubagentPrompt } from './subagent-prompt-capture.js';
-import {
-  createSubagentOutputRecorder,
-  type SubagentOutputRecorder,
-} from './subagent-output-capture.js';
+import { createSubagentOutputRecorder, type SubagentOutputRecorder } from './subagent-output-capture.js';
 import { AbortError } from '../../utils/errors.js';
+import { OutputBroadcast } from './output-broadcast.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/writer.js';
 import type { HookRegistry } from '../hooks.js';
@@ -198,6 +196,7 @@ export class AgentSession implements IAgentSession {
    * after close. Lifecycle glue lives in {@link LedgerLifecycle}.
    */
   private readonly ledger = new LedgerLifecycle();
+  private readonly outputBroadcast = new OutputBroadcast();
 
   constructor(config: AgentConfig, ownedTraceWriter?: TraceWriter) {
     // Invariant: seal ownership requires the caller to explicitly supply the
@@ -778,6 +777,7 @@ export class AgentSession implements IAgentSession {
             this.sawProviderError = true;
           }
           this.ledger.recordEvent(output);
+          this.outputBroadcast.push(output);
           yield output;
           if (output.type === 'done' || output.type === 'error') break;
         }
@@ -1251,9 +1251,7 @@ export class AgentSession implements IAgentSession {
   }
 
   getOutputStream(): AsyncIterable<OutputEvent> {
-    throw new Error(
-      'getOutputStream() is not supported — use sendMessageStream() instead',
-    );
+    return this.outputBroadcast.subscribe();
   }
 
   /**
@@ -1307,6 +1305,7 @@ export class AgentSession implements IAgentSession {
   async close(): Promise<void> {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed';
+    this.outputBroadcast.close();
     await this.ledger.seal('close');
     if (!this.abortController.signal.aborted) {
       this.abortController.abort('closed');
