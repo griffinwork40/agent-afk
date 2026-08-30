@@ -202,6 +202,17 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.whatWasDone).toBe('touched **all** of src/**/*.ts');
     expect(v?.evidence).toBe('see __init__ wiring');
   });
+
+  // Regression: trailing `**` strip must not corrupt balanced inline bold at
+  // the end of a value (e.g. `see **foo.ts**`). The strip fires only when the
+  // marker count is odd (genuinely orphaned), not when even (every opener has
+  // a closer). Cf. PR #1375 review finding 1.
+  it('preserves balanced bold at the end of a value', () => {
+    const text = `prose\n\nDone\n- Evidence: see **foo.ts**\n- What was done: check **bar** and **baz**`;
+    const v = parseTerminalState(text);
+    expect(v?.evidence).toBe('see **foo.ts**');
+    expect(v?.whatWasDone).toBe('check **bar** and **baz**');
+  });
 });
 
 describe('parseTerminalState — tail-anchored window', () => {

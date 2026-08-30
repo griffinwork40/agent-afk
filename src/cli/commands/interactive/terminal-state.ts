@@ -219,9 +219,14 @@ function extractBullets(bodyLines: string[]): Bullet[] {
         .replace(/^(?:\*\*|__)\s/, '')
         // Strip an orphaned bold/underscore closer at the tail — the closing
         // half of a `**Label: value**` split where the entire bullet was one
-        // bold span. Safe because a trailing `**` at end-of-value is never a
-        // glob (globs have a path component after `**`, e.g. `**/*.ts`).
-        .replace(/(?:\*\*|__)$/, '')
+        // bold span. Only strip when the marker count is odd (genuinely
+        // orphaned); an even count means every opener has a closer and the
+        // trailing marker is legitimate (e.g. `see **foo.ts**`).
+        .replace(/(?:\*\*|__)$/, (m, _offset, s) => {
+          const pat = m === '**' ? /\*\*/g : /__/g;
+          const count = (s.match(pat) ?? []).length;
+          return count % 2 === 1 ? '' : m;
+        })
         .trim();
       out.push({ label, value });
     } else {
