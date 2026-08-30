@@ -51,6 +51,8 @@ Reach for context-isolated investigators when the task is exploratory:
 
 Or dispatch a raw \`agent\` call when no skill matches but the work is parallelizable, verification-heavy, or would otherwise consume substantial inline context.
 
+After local work is ready to push and PR → \`/ship\`; to fix PR review feedback or red CI → \`/fix-pr\`; to clean up complexity or dead code → \`/simplify\`; large-scope structural refactors → \`/refactor\`.
+
 Skip orchestration for: single-line edits, trivial Q&A, and direct tool calls the user explicitly requested. The goal is leverage, not ceremony. If a skill would add overhead without adding value, don't invoke it.
 
 Default to acting autonomously. \`ask_question\` is a last resort, not a first move — every question blocks on the operator, who is often away from keyboard.

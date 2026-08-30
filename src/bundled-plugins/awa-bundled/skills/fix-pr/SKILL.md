@@ -1,6 +1,7 @@
 ---
 name: fix-pr
 description: "One-verb pipeline for the operator's highest-frequency manual loop: fetch a PR's unresolved reviewer feedback (inline review comments, review-summary bodies, and issue-level conversation comments) and failing CI checks, fix them in an isolated managed worktree via a budget-bounded subagent, verify with the project's test gates, and push the fix back to the PR branch. Replaces the retyped recipe 'send a subagent in a worktree to fix <PR feedback>, then push.' Use when a PR has review comments or red CI that needs addressing — e.g. 'fix pr 286', 'address the review on #215', 'CI is red on the worktree-sweep PR'. Never force-pushes, never touches main, fails closed on missing gh auth or un-pushable fork PRs."
+when-to-use: "A PR has review feedback or red CI that needs fixing."
 argument-hint: "<PR-number-or-URL> [--repo <path>] [--no-push] [--re-review]"
 surface: "afk"
 failure_modes:
