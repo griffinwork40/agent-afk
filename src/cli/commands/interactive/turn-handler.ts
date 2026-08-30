@@ -712,7 +712,8 @@ export async function runTurn(
         // this Done?) drives the Telegram push relabel. The three-state code
         // classifier (was changed code verified?) drives the terminal-state
         // gate's correction injection. Both forward onto StopContext.
-        const evidenceClassification = classifyDoneEvidence(toolEvents), hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
+        const evidenceClassification = classifyDoneEvidence(toolEvents);
+        const hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
         if (h.onTerminalState) {
           try {
             h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence, doneEvidenceClassification: evidenceClassification });

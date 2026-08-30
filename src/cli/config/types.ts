@@ -49,7 +49,7 @@ export interface CliConfig {
    */
   models?: ModelSlots;
   maxTokens: number;
-  temperature: number;
+  temperature?: number;
   /**
    * OpenAI-compatible endpoint override. Sourced from `AFK_OPENAI_BASE_URL`.
    * Threaded into `OpenAICompatibleProvider({ baseURL })` so local shims
@@ -408,7 +408,6 @@ export interface ConfigFileSchema {
 export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {
   model: 'sonnet',
   maxTokens: 4096,
-  temperature: 1.0,
   updatePolicy: 'notify',
 };
 

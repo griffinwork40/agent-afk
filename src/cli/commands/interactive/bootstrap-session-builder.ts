@@ -129,7 +129,7 @@ export function buildSharedDeps(a: {
     maxOutputTokens: a.maxOutputTokens,
     maxToolUseIterations: a.maxToolUseIterations,
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
-    ...(a.cliConfig.temperature !== 1.0 ? { temperature: a.cliConfig.temperature } : {}),
+    ...(a.cliConfig.temperature !== undefined ? { temperature: a.cliConfig.temperature } : {}),
     providerFactory: a.providerFactory,
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
