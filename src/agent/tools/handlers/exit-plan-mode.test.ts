@@ -189,21 +189,99 @@ describe('exit_plan_mode handler', () => {
   });
 });
 
-describe('AgentSession plan-exit seed bridge', () => {
-  /** Wrap a mock provider to capture the AgentConfig the session passes down. */
-  function capturingProvider(): { provider: ModelProvider; getControls: () => PlanExitControls | undefined } {
-    const base = createMockProvider();
-    let captured: PlanExitControls | undefined;
-    const provider: ModelProvider = {
-      name: 'capture',
-      query: (args: ProviderQueryArgs): ProviderQuery => {
-        captured = args.config.planExitControls;
-        return base.query(args);
-      },
-    };
-    return { provider, getControls: () => captured };
-  }
+describe('exit_plan_mode skips picker when user has queued message', () => {
+  it('returns early with queue-deferral message when hasPendingUserMessage returns true', async () => {
+    installPicker(0); // would approve if the picker ran
+    const { controls, modeCalls, seeds } = makeControls();
+    controls.hasPendingUserMessage = () => true;
+    const handler = createExitPlanModeHandler(controls);
 
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    // No picker, no mode flip, no seed — the queued message takes priority.
+    expect(modeCalls).toEqual([]);
+    expect(seeds).toEqual([]);
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('queued message');
+    expect(res.content).toContain('End your turn');
+  });
+
+  it('falls through to the picker when hasPendingUserMessage returns false', async () => {
+    installPicker(0); // approve/default
+    const { controls, seeds } = makeControls();
+    controls.hasPendingUserMessage = () => false;
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    // Picker ran normally — seed is produced.
+    expect(seeds).toHaveLength(1);
+    expect(res.content).toContain('mode=default');
+  });
+
+  it('falls through to the picker when hasPendingUserMessage is not set', async () => {
+    installPicker(0); // approve/default
+    const { controls, seeds } = makeControls();
+    // hasPendingUserMessage is undefined (default)
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    // Picker ran normally — seed is produced.
+    expect(seeds).toHaveLength(1);
+    expect(res.content).toContain('mode=default');
+  });
+});
+
+describe('AgentSession.setPlanExitQueueCheck', () => {
+  it('wires hasPendingUserMessage onto the auto-created planExitControls', async () => {
+    const { provider, getControls } = capturingProvider();
+    const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider });
+    await session.waitForInitialization();
+
+    const controls = getControls();
+    expect(controls).toBeDefined();
+    // Before wiring — no predicate.
+    expect(controls!.hasPendingUserMessage).toBeUndefined();
+
+    session.setPlanExitQueueCheck(() => true);
+    expect(controls!.hasPendingUserMessage?.()).toBe(true);
+
+    await session.close();
+  });
+
+  it('no-ops when planExitControls is absent (subagent session)', async () => {
+    const base = createMockProvider();
+    const session = new AgentSession({
+      model: 'sonnet',
+      apiKey: 'test-key',
+      provider: base,
+      parentSessionId: 'parent-1',
+    });
+    await session.waitForInitialization();
+
+    // Should not throw.
+    session.setPlanExitQueueCheck(() => true);
+
+    await session.close();
+  });
+});
+
+/** Wrap a mock provider to capture the AgentConfig the session passes down. */
+function capturingProvider(): { provider: ModelProvider; getControls: () => PlanExitControls | undefined } {
+  const base = createMockProvider();
+  let captured: PlanExitControls | undefined;
+  const provider: ModelProvider = {
+    name: 'capture',
+    query: (args: ProviderQueryArgs): ProviderQuery => {
+      captured = args.config.planExitControls;
+      return base.query(args);
+    },
+  };
+  return { provider, getControls: () => captured };
+}
+
+describe('AgentSession plan-exit seed bridge', () => {
   it('top-level session: injects controls wired to a single-shot seed slot; drain applies the deferred mode flip', async () => {
     const { provider, getControls } = capturingProvider();
     const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider });

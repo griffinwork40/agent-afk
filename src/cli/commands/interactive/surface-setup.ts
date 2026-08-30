@@ -198,6 +198,17 @@ export async function setupSurface(
   // back to the numbered-text path — preserving the pre-picker behaviour
   // for surfaces that can't render a live frame.
   const armedCompositor = surface.getCompositor();
+
+  // Wire the plan-exit queue check: when the user has typed ahead a queued
+  // message, the exit_plan_mode tool handler skips the elicitation picker so
+  // the queued message is delivered first. The predicate is stored on ctx
+  // (so resume-swap can re-wire it) and installed on the session via
+  // setPlanExitQueueCheck. Only armed when a compositor exists (TTY mode).
+  if (armedCompositor) {
+    ctx.hasPendingUserMessage = () => armedCompositor.peekQueuedText() !== undefined;
+    ctx.session.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
+  }
+
   const stdinElicitationHandler = makeReplElicitationHandler({
     // Elicitation / form / MCP-question sub-prompts deliberately omit
     // `primePromptSuggestion` (defaults false): the user is answering a

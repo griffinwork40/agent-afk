@@ -83,6 +83,16 @@ export interface PlanExitControls {
    * not restorable by a bare flip); callers fall back to 'default'.
    */
   getPrePlanMode(): PermissionMode | undefined;
+  /**
+   * Optional predicate wired by the REPL layer to check whether the user has
+   * typed ahead a queued message while the current turn is still running. When
+   * this returns `true`, the `exit_plan_mode` handler skips the elicitation
+   * picker and tells the model to end its turn — so the queued message is
+   * delivered first and the model sees it before deciding whether to exit plan
+   * mode. Wired post-construction via
+   * {@link import('../../session/agent-session.js').AgentSession.setPlanExitQueueCheck}.
+   */
+  hasPendingUserMessage?: () => boolean;
 }
 
 /** Agent session configuration */

@@ -1021,6 +1021,11 @@ export class AgentSession implements IAgentSession {
    * (which has no try/catch around this drain) and crash it. The model stays in
    * plan mode and can retry `exit_plan_mode`.
    */
+  // Invariant: called by the REPL after construction to wire a queue-check
+  // predicate into exit_plan_mode — when it returns true the handler skips the
+  // elicitation picker so the queued user message drains first.
+  setPlanExitQueueCheck(fn: () => boolean): void { if (this.config.planExitControls) this.config.planExitControls.hasPendingUserMessage = fn; }
+
   async takePendingPlanExitSeed(): Promise<{ message: string; mode: PermissionMode } | undefined> {
     const seed = this.planExit.takeSeed();
     if (seed === undefined) return undefined;
