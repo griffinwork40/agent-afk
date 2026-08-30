@@ -70,7 +70,7 @@ const PINNED_HASHES = {
   'false-completion-gate':
     '9b0d90e150a9a4690c713d1063dd1901ce5b659d33b6c9f12b74e44b3d0163ce',
   'fix-pr':
-    '07ae5b92882c42a94426b182ee3226a7d0271388478874e87b76816ac59aec02',
+    'c89030fd9ab9200d9676ee503ae3db7e06fcb862d52a55eb67cb85786e585ff9',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -101,7 +101,7 @@ const PINNED_HASHES = {
   // (`pnpm test <file>` / `pnpm test -t "AuthService"`) plus a note to never emit
   // the `--` form. Bundled-only — mirror into the user-scope /refactor at
   // ~/.afk/skills/ if it drifts back.
-  refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
+  refactor: '816bcc71c185cf0fe511c67424986ae08b45364d00bb790c1b972c3d562d099e',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit
@@ -127,10 +127,10 @@ const PINNED_HASHES = {
   // git/gh ran, failing the call or recording a mangled/truncated body. The
   // file-based form matches the safe convention already used in src/agent/gh.ts.
   // BACK-PORT GAP: the same fix should still land in the upstream /ship skill.
-  ship: '4b082cdcbfe51453a20edd03231b473812775a7cc452b661bb786ff9735f0066',
+  ship: 'c74ef9e83e115ac34e32b188b909f39f87abb41933abc7e5c88fa9a0a35af102',
   // simplify is bundled-only (no upstream counterpart).
   simplify:
-    'ce720df16e81eff5e6022db38067d376f2177e08a9783fc377e04cf520c7bf3c',
+    'a984a507872949e17c87ab72979cb089524ba1da899f38af80fd0e725ebff667',
   spec: '167e7cbb84de5b716efa11bb9f20a6e4b940f6f9a6d1812a7fbd735dae4f67dd',
 } as const;
 
