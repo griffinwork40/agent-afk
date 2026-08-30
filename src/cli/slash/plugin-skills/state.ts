@@ -18,6 +18,8 @@ export interface DiscoveredSkill {
   source?: SkillManifestEntry['source'];
   /** Job-to-be-done category authored in SKILL.md frontmatter. */
   category?: string;
+  /** Job-to-be-done hint authored in SKILL.md frontmatter `when-to-use` field. */
+  whenToUse?: string;
 }
 
 /** Track collisions detected at registration time so /skills can render alts and boot can notify. */
