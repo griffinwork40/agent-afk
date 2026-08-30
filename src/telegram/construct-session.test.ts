@@ -104,6 +104,30 @@ describe('constructTelegramSession', () => {
     expect(captured?.traceWriter).toBeUndefined();
   });
 
+  it('forwards temperature to newSession when set to a non-default value', () => {
+    let captured: AgentConfig | undefined;
+    constructTelegramSession(
+      { model: 'sonnet', temperature: 0.7 },
+      {
+        traceWriter: null,
+        newSession: (c): AgentSession => { captured = c; return {} as unknown as AgentSession; },
+      },
+    );
+    expect(captured?.temperature).toBe(0.7);
+  });
+
+  it('omits temperature from newSession config when undefined', () => {
+    let captured: AgentConfig | undefined;
+    constructTelegramSession(
+      { model: 'sonnet' },
+      {
+        traceWriter: null,
+        newSession: (c): AgentSession => { captured = c; return {} as unknown as AgentSession; },
+      },
+    );
+    expect(captured?.temperature).toBeUndefined();
+  });
+
   it('preserves openaiBaseUrl on the config handed to newSession (parity with baseUrl/surface)', () => {
     // Regression guard: telegram.ts is the only surface that must NOT drop
     // config.openaiBaseUrl when constructing the top-level session — see

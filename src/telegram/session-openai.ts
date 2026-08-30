@@ -82,6 +82,7 @@ export async function buildOpenAiTelegramSession(
       ? { resumeHistory: sessionConfig.resumeHistory }
       : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(config.temperature !== 1.0 ? { temperature: config.temperature } : {}),
     maxTurns: 100,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),

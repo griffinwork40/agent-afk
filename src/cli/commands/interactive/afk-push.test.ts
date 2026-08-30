@@ -320,16 +320,18 @@ describe('classifyDoneEvidence', () => {
 });
 
 describe('doneHasCorroboratingEvidence', () => {
-  it('is true for no tool events (no code changes, nothing to verify)', () => {
-    expect(doneHasCorroboratingEvidence([])).toBe(true);
+  // General corroboration: did observable work happen?
+  it('is false for no tool events (no evidence at all)', () => {
+    expect(doneHasCorroboratingEvidence([])).toBe(false);
   });
 
-  it('is true when the turn only read (no code changes)', () => {
+  it('is false when the turn only read (read-only tools are not evidence)', () => {
     expect(
       doneHasCorroboratingEvidence([tool('read_file'), tool('grep'), tool('glob'), tool('list_directory')]),
-    ).toBe(true);
+    ).toBe(false);
   });
 
+  // Code verification: code changed but not verified
   it('is false for edit_file without verification (unverified code)', () => {
     expect(doneHasCorroboratingEvidence([tool('edit_file')])).toBe(false);
     expect(doneHasCorroboratingEvidence([tool('write_file')])).toBe(false);
@@ -342,12 +344,12 @@ describe('doneHasCorroboratingEvidence', () => {
     ])).toBe(true);
   });
 
-  it('is true for bash-only turns (no code mutation)', () => {
+  it('is true for bash-only turns (evidence tool present, no code mutation)', () => {
     expect(doneHasCorroboratingEvidence([tool('bash')])).toBe(true);
   });
 
-  it('does NOT count a failed corroborating tool call', () => {
-    expect(doneHasCorroboratingEvidence([tool('write_file', true)])).toBe(true); // failed edit = no mutation
+  it('is false when all evidence tools failed', () => {
+    expect(doneHasCorroboratingEvidence([tool('write_file', true)])).toBe(false);
     expect(doneHasCorroboratingEvidence([
       tool('edit_file'),
       tool('bash', true, ' pnpm test'),
@@ -361,6 +363,11 @@ describe('doneHasCorroboratingEvidence', () => {
       ]),
     ).toBe(true);
   });
+
+  // Subagent-only coordinator: no tool events from DONE_EVIDENCE_TOOLS
+  it('is false for subagent-only coordinator turn (delegation tools are not evidence)', () => {
+    expect(doneHasCorroboratingEvidence([tool('agent'), tool('compose')])).toBe(false);
+  });
 });
 
 describe('formatTerminalStateForTelegram — verification downgrade', () => {
@@ -370,7 +377,7 @@ describe('formatTerminalStateForTelegram — verification downgrade', () => {
     // The structured field still appears — downgrade annotates, never hides.
     expect(msg).toContain('shipped');
     // A caveat line explains the downgrade.
-    expect(msg.toLowerCase()).toContain('no file write');
+    expect(msg.toLowerCase()).toContain('no recognized successful verification');
   });
 
   it('keeps the standard done label when unverified is false or absent', () => {

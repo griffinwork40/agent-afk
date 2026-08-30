@@ -13,6 +13,7 @@
 import type { ProviderQuery, ProviderQueryArgs } from '../../provider.js';
 import { AnthropicDirectQuery } from './query-runtime.js';
 import {
+  resolveAnthropicTemperature,
   resolveAutoCompactThreshold,
   resolveEffort,
   resolveThinkingParam,
@@ -143,7 +144,7 @@ export function buildProviderQuery(
       ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model) }
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-    ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
+    ...(config.temperature !== undefined ? { temperature: resolveAnthropicTemperature(config.temperature) } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),

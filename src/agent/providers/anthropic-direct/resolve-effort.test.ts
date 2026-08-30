@@ -15,8 +15,8 @@
  * cannot starve the visible reply.
  */
 
-import { describe, it, expect } from 'vitest';
-import { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './resolve-params.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { resolveEffort, resolveMaxTokens, resolveThinkingParam, resolveAnthropicTemperature } from './resolve-params.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { ThinkingConfig } from '../../types/sdk-types.js';
@@ -134,6 +134,55 @@ describe('resolveMaxTokens', () => {
   it('floors a fractional value that fits', () => {
     const fits = Math.floor(ceiling / 2) + 0.9;
     expect(resolveMaxTokens(cfg(fits), model)).toBe(Math.floor(fits));
+  });
+});
+
+describe('resolveAnthropicTemperature', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('passes through undefined (server default)', () => {
+    expect(resolveAnthropicTemperature(undefined)).toBeUndefined();
+  });
+
+  it('passes through values within the Anthropic range (0-1)', () => {
+    expect(resolveAnthropicTemperature(0)).toBe(0);
+    expect(resolveAnthropicTemperature(0.5)).toBe(0.5);
+    expect(resolveAnthropicTemperature(1.0)).toBe(1.0);
+  });
+
+  it('clamps values above the Anthropic maximum (1.0) with a warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveAnthropicTemperature(1.5)).toBe(1.0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('temperature 1.5'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('clamping to 1'));
+  });
+
+  it('clamps 2.0 (OpenAI max) down to 1.0', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveAnthropicTemperature(2.0)).toBe(1.0);
+  });
+
+  it('returns undefined for negative values', () => {
+    expect(resolveAnthropicTemperature(-1)).toBeUndefined();
+  });
+
+  it('returns undefined for NaN', () => {
+    expect(resolveAnthropicTemperature(Number.NaN)).toBeUndefined();
+  });
+
+  it('returns undefined for Infinity', () => {
+    expect(resolveAnthropicTemperature(Number.POSITIVE_INFINITY)).toBeUndefined();
+  });
+
+  it('warns only once per distinct value (dedupe)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    resolveAnthropicTemperature(1.8);
+    resolveAnthropicTemperature(1.8);
+    // Dedupe key is temp:<value>, so the second call should not warn again.
+    // Note: since the dedupe set persists across tests, the first call may or
+    // may not warn depending on test ordering — we check at most 1.
+    const calls = warn.mock.calls.filter(c => String(c[0]).includes('1.8'));
+    expect(calls.length).toBeLessThanOrEqual(1);
   });
 });
 

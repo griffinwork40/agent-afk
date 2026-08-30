@@ -59,10 +59,13 @@ export const DEFAULT_MAX_TERMINAL_STATE_INJECTIONS = 3;
  * explicitly forbids simply re-asserting `Done`.
  *
  * History: the original correction (pre-classifyDoneEvidence) fired on any
- * `Done` with zero successful write/edit/bash. Since classifyDoneEvidence
- * now distinguishes no-code-changes (passes) from unverified code (fails),
- * this correction only fires when code WAS modified but no verification
- * command succeeded afterward — a narrower and more actionable signal.
+ * `Done` with zero successful write/edit/bash. `doneHasCorroboratingEvidence`
+ * now returns false for TWO shapes: (a) no evidence tools at all (empty turn,
+ * subagent-only coordinator, pure conversation), and (b) unverified code
+ * changes. This correction only fires for shape (b) — code was modified but
+ * no verification command succeeded afterward — because for shape (a) the
+ * gate cannot prescribe a corrective action (the fix is to do the work, not
+ * to verify it).
  */
 export const TERMINAL_STATE_GATE_CORRECTION =
   '[terminal-state gate] The previous turn modified source files but ended in ' +
@@ -131,9 +134,15 @@ export function createTerminalStateGate(opts: TerminalStateGateOptions): HookHan
     if (!opts.isEnabled()) return {};
     if (opts.getPermissionMode() !== 'autonomous') return {};
     if (context.terminalState !== 'done') return {};
-    // Fire ONLY on an explicit `false` — evidence computed and absent. `undefined`
-    // (surface didn't compute it) and `true` (evidence present) both pass.
-    if (context.doneHasCorroboratingEvidence !== false) return {};
+    // Fire ONLY when code was changed but not verified — the one shape where
+    // the correction ("run a verification step") is actionable. Other shapes:
+    //   - 'no-code-changes' → no code mutation, correction text is misleading
+    //   - 'verified' → verification already ran, nothing to correct
+    //   - undefined → surface didn't compute it; no signal to act on
+    // The broader doneHasCorroboratingEvidence boolean also catches zero-evidence
+    // turns, but the gate's correction text specifically references "modified
+    // source files", so we use the classifier, not the boolean.
+    if (context.doneEvidenceClassification !== 'unverified') return {};
     // Loop-guard: bounded corrections per session. Once spent, let the Done
     // stand rather than re-injecting forever.
     if (injections >= cap) {

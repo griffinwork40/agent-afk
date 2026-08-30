@@ -80,6 +80,18 @@ describe('buildChatCompletionsRequestBody', () => {
     });
     expect('temperature' in body).toBe(false);
   });
+
+  it('forwards temperature above 1.0 without clamping (OpenAI accepts 0-2)', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: 1.5,
+    });
+    expect(body['temperature']).toBe(1.5);
+  });
 });
 
 describe('buildResponsesRequestBody', () => {
@@ -116,5 +128,18 @@ describe('buildResponsesRequestBody', () => {
     // A non-empty instructions is required on this backend.
     expect(typeof body['instructions']).toBe('string');
     expect((body['instructions'] as string).length).toBeGreaterThan(0);
+  });
+
+  it('forwards temperature above 1.0 without clamping (OpenAI Responses API)', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: 1.8,
+      isChatGptBackend: false,
+    });
+    expect(body['temperature']).toBe(1.8);
   });
 });

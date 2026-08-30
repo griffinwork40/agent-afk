@@ -92,9 +92,10 @@ const KIND_FIELDS: Record<TerminalKind, ReadonlyArray<readonly [string, keyof Te
 // (agent/compose/skill) also do NOT count: a subagent's internal write/command
 // streams to the CHILD session and never reaches the parent's tool events (the
 // `tool.use.start` → `tool_use_detail` emit in stream-consumer.ts is per-session),
-// so a `Done` turn whose work happened entirely inside a subagent is flagged
-// "unverified" by design — the parent has no observable artifact standing behind
-// the claim. This is the conservative default; the operator can still confirm.
+// so a parent that only dispatched subagents has an empty toolEvents array and
+// doneHasCorroboratingEvidence returns false — the parent has no observable
+// artifact standing behind the claim. This is the conservative default; the
+// operator can still confirm.
 // Extend this set rather than loosening the success check.
 export const DONE_EVIDENCE_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
@@ -198,17 +199,36 @@ export function classifyDoneEvidence(
 }
 
 /**
- * True when at least one of this turn's tool events is a successful
- * ({@link ToolEvent.isError} not `true`) corroborating tool call — see
- * {@link DONE_EVIDENCE_TOOLS}. Pure: the caller owns the policy decision of
- * whether to act on the result (gated behind `telegram.verifyDone`).
+ * True when this turn has observable evidence supporting the Done claim.
  *
- * Implemented in terms of {@link classifyDoneEvidence}: code changes with no
- * verification are NOT corroborated; no-code-change turns and verified turns
- * are. This is a behavior change from the original binary check — `bash: ls`
- * after `edit_file` no longer counts as corroborating evidence.
+ * Two concepts are checked independently:
+ *
+ *   1. **General corroboration** — did observable work happen at all? A turn
+ *      with zero tool events from {@link DONE_EVIDENCE_TOOLS} (no successful
+ *      write, edit, or executed command) has no artifact backing the claim.
+ *      This catches subagent-only coordinator turns, pure-conversation
+ *      answers, and completely empty turns.
+ *
+ *   2. **Code verification** — if code was changed, was it verified afterward?
+ *      Delegated to {@link classifyDoneEvidence}: an `'unverified'` result
+ *      means code mutated without a post-mutation verification step.
+ *
+ * Returns `false` when EITHER check fails: no evidence at all, or unverified
+ * code changes. Returns `true` only when the turn has evidence tools AND is
+ * not in the `'unverified'` code state.
+ *
+ * Pure: the caller owns the policy decision of whether to act on the result
+ * (gated behind `telegram.verifyDone` / `enforceDoneEvidence`).
  */
 export function doneHasCorroboratingEvidence(toolEvents: readonly ToolEvent[]): boolean {
+  // A turn with no evidence tools at all — no file mutation, no executed
+  // command — has nothing behind the Done claim regardless of classification.
+  const hasAnyEvidence = toolEvents.some(
+    (e) => e.isError !== true && DONE_EVIDENCE_TOOLS.has(e.toolName),
+  );
+  if (!hasAnyEvidence) return false;
+
+  // Evidence tools exist; check whether code changes (if any) were verified.
   return classifyDoneEvidence(toolEvents) !== 'unverified';
 }
 
@@ -220,7 +240,9 @@ export function doneHasCorroboratingEvidence(toolEvents: readonly ToolEvent[]): 
  * When `opts.unverified` is true AND the kind is `done`, the header is
  * downgraded to "⚠️ Done (unverified)" and a trailing caveat line is appended —
  * the caller sets this only when `telegram.verifyDone` is on and the turn
- * produced no corroborating evidence ({@link doneHasCorroboratingEvidence}).
+ * produced no corroborating evidence ({@link doneHasCorroboratingEvidence}):
+ * either no evidence tools fired at all, or code changed without a subsequent
+ * verification step.
  */
 export function formatTerminalStateForTelegram(
   state: TerminalState,
@@ -250,7 +272,7 @@ export function formatTerminalStateForTelegram(
   }
   if (downgraded) {
     lines.push(
-      '• ⚠️ Unverified: no file write/edit or successful command recorded this turn — confirm before relying on this.',
+      '• ⚠️ Unverified: no recognized successful verification was observed backing this Done claim — confirm before relying on this.',
     );
   }
 
