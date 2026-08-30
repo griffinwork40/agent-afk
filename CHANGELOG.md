@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.167.0] - 2026-08-30
+
+### Added
+- skill when-to-use frontmatter + routing hints (Claude Code compat) (#1368) (7fbf0853)
+- replace LIKE search with FTS5 full-text search (#1370) (613dcaec)
+- first-class browser routing -- Agent Browser preferred, Playwright fallback (#1369) (b87d6de7)
+
+### Fixed
+- add missing setPlanExitQueueCheck to repl-loop-wiring mock (#1376) (64f31f26)
+- skip exit_plan_mode picker when user has a queued message (4767128a)
+
 ## [5.166.1] - 2026-08-29
 
 ### Changed
