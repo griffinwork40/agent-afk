@@ -587,6 +587,7 @@ export const auditFitSkill: SkillMetadata = {
   // End users have no use for the brief output, so the skill is hidden unless
   // `AFK_INTERNAL=1` unlocks it.
   audience: 'internal',
+  category: 'Review & verify',
 };
 
 registerSkill(auditFitSkill);
