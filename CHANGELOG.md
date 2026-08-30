@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.167.2] - 2026-08-30
+
+### Fixed
+- restore BM25 normalization and add FTS5 DELETE/UPDATE triggers (#1381) (0cefed00)
+
+### Changed
+- add disk-scan coverage for whenToUse frontmatter parsing (#1374) (#1384) (36b61b6d)
+
 ## [5.167.1] - 2026-08-30
 
 ### Fixed
