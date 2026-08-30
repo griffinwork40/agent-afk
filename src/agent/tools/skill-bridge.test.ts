@@ -229,7 +229,14 @@ describe('buildSkillManifest', () => {
     const manifest = buildSkillManifest();
 
     expect(manifest).toContain('minimal-skill: Minimal skill');
-    expect(manifest).not.toMatch(/When to use:/);
+    // The minimal-skill entry itself must not have a When to use: line.
+    // Other bundled skills in the manifest may legitimately have one.
+    const lines = manifest.split('\n');
+    const idx = lines.findIndex((l) => l.includes('minimal-skill: Minimal skill'));
+    expect(idx).toBeGreaterThan(-1);
+    // The next line after the entry should NOT be a When to use: line
+    const nextLine = lines[idx + 1] ?? '';
+    expect(nextLine).not.toMatch(/^\s+When to use:/);
   });
 
   it('handles mixed skills with and without optional fields', () => {

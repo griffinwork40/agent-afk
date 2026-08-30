@@ -1,6 +1,7 @@
 ---
 name: refactor
 description: "Orchestrates safe, large-scale structural changes across a codebase — symbol renames, API migrations, pattern standardizations, layer restructurings. Enumerates all affected sites, groups them into dependency layers via the DAG executor, applies changes in parallel per layer with worktree isolation, and verifies behavioral preservation at each layer boundary before proceeding. Exits immediately on first regression, surfacing the exact site, diff, and behavioral delta before any commit."
+when-to-use: "Large-scope structural refactors across multiple files or layers."
 argument-hint: "<refactor goal> [--scope <glob-or-path>]"
 failure_modes:
   - bad decomposition

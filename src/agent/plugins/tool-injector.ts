@@ -42,6 +42,12 @@ export interface PluginSkillMetadata {
   description?: string;
   argumentHint?: string;
   /**
+   * When the model should reach for this skill. Parsed from `when-to-use`
+   * (or `whenToUse`) in SKILL.md frontmatter — matches the Claude Code
+   * `when_to_use` field. Surfaced as `When to use:` in the skill manifest.
+   */
+  whenToUse?: string;
+  /**
    * Which plugin directory this artifact came from. `'command'` marks a
    * Claude Code `commands/*.md` file (see `command-files.ts`); absent means
    * the default `skills/**\/SKILL.md` form. Read by `buildSkillManifest` to
@@ -354,6 +360,8 @@ export function parseSkillMetadata(
         // files were silently dropped while `user-skills.ts` (which reads both)
         // handled the identical file correctly.
         metadata.argumentHint = value.replace(/^["']|["']$/g, '');
+      } else if (key === 'when-to-use' || key === 'whenToUse' || key === 'when_to_use') {
+        metadata.whenToUse = value.replace(/^["']|["']$/g, '');
       } else if (key === 'tools') {
         // Collect the lines after this one to handle YAML list form
         const remainingLines = lines.slice(i + 1);
