@@ -276,6 +276,7 @@ export function collectSkillEntries(
         description: skill.description ?? `Skill from plugin at ${plugin.path}`,
         source: skill.origin === 'command' ? 'command' : 'plugin',
         argumentHint: skill.argumentHint,
+        whenToUse: skill.whenToUse,
       });
       seen.add(skill.name);
     }

@@ -49,6 +49,7 @@ interface ParsedSkillMd {
   name: string;
   description: string;
   argumentHint?: string;
+  whenToUse?: string;
   flags?: readonly string[];
   body: string;
   /** Absolute path of the skill's root directory (e.g. `~/.afk/skills/<name>/`). */
@@ -129,10 +130,12 @@ function parseUserSkillMd(content: string, dirname: string): ParsedSkillMd | nul
   }
 
   const argumentHint = parsed.frontmatter['argument-hint'] ?? parsed.frontmatter['argumentHint'];
+  const whenToUse = parsed.frontmatter['when-to-use'] ?? parsed.frontmatter['whenToUse'] ?? parsed.frontmatter['when_to_use'];
   const flags = harvestFlagsFromSkillMd(content);
 
   const out: ParsedSkillMd = { name, description, body, dir: '' };
   if (argumentHint && argumentHint.length > 0) out.argumentHint = argumentHint;
+  if (whenToUse && whenToUse.length > 0) out.whenToUse = whenToUse;
   if (flags.length > 0) out.flags = flags;
   // Only accept the three well-known modes; an unknown value (typo) falls
   // through to the default (load) rather than silently mis-routing.
@@ -333,6 +336,7 @@ export function scanSkillsFromDir(
       origin,
     };
     if (parsed.argumentHint) meta.argumentHint = parsed.argumentHint;
+    if (parsed.whenToUse) meta.whenToUse = parsed.whenToUse;
     if (parsed.flags && parsed.flags.length > 0) meta.flags = parsed.flags;
     // Narrow the raw frontmatter string to the SkillCategory union. OOV values
     // are dropped (undefined) — the listing's F1 clamping only helps at render
