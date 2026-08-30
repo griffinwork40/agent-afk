@@ -608,6 +608,7 @@ export function registerChatCommand(program: Command): void {
           ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
           ...(thinking !== undefined ? { thinking } : {}),
           ...(effort !== undefined ? { effort } : {}),
+          ...(cliConfig.temperature !== undefined ? { temperature: cliConfig.temperature } : {}),
           ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
           ...(taskBudget !== undefined ? { taskBudget } : {}),
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

@@ -490,6 +490,7 @@ export function registerDaemonCommand(program: Command): void {
             ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             ...(thinking !== undefined ? { thinking } : {}),
             ...(effort !== undefined ? { effort } : {}),
+            ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
             ...(daemonCwdResolved !== undefined ? { cwd: daemonCwdResolved } : {}),
           },
           sessionFactory,

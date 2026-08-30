@@ -32,10 +32,15 @@ import type { AgentConfig } from '../types/config-types.js';
  * Contract: the text frames `maxRounds` as a CEILING to finish well under, not
  * an allowance to spend. That framing is load-bearing — disclosing a budget
  * without it risks the opposite failure ("I have 50 rounds, let me use them"),
- * and a wide-scope task will exhaust any budget it is told about. The final
- * sentence is the cheapest available substitute for the non-convergence
- * detector the runtime still lacks: nothing today terminates a child whose
- * queries keep varying while its conclusion stops changing.
+ * and a wide-scope task will exhaust any budget it is told about. The
+ * convergence sentence is the cheapest available substitute for the
+ * non-convergence detector the runtime still lacks: nothing today terminates a
+ * child whose queries keep varying while its conclusion stops changing.
+ *
+ * The code-quality caveat ("internally consistent checkpoint") distinguishes
+ * partial research results (acceptable — summarize what you have) from
+ * knowingly broken code (never acceptable — a partial code result should
+ * compile and be coherent with the surrounding system).
  */
 export function renderBudgetPreamble(maxRounds: number): string {
   return [
@@ -50,6 +55,8 @@ export function renderBudgetPreamble(maxRounds: number): string {
     'spent you get one final reply with tools removed and must answer from what you already',
     'gathered, so a partial answer delivered early beats a complete one you never get to give.',
     'If new evidence has stopped changing your conclusion, stop gathering and answer now.',
+    'When writing code, a partial result should be an internally consistent checkpoint --',
+    'not knowingly broken, unverified, or incoherent code returned merely to finish early.',
   ].join('\n');
 }
 

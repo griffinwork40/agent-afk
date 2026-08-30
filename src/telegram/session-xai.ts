@@ -67,6 +67,7 @@ export async function buildXaiTelegramSession(
       ? { resumeHistory: sessionConfig.resumeHistory }
       : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),

@@ -24,9 +24,9 @@ function armedGate(over: Partial<Parameters<typeof createTerminalStateGate>[0]> 
 }
 
 describe('createTerminalStateGate', () => {
-  it('injects a correction on an unbacked Done (autonomous + enabled)', async () => {
+  it('injects a correction on unverified code changes (autonomous + enabled)', async () => {
     const gate = armedGate();
-    const decision = await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const decision = await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
     expect(decision.injectContext).toBe(TERMINAL_STATE_GATE_CORRECTION);
   });
 
@@ -35,7 +35,7 @@ describe('createTerminalStateGate', () => {
       getPermissionMode: () => AUTONOMOUS,
       isEnabled: () => false,
     });
-    const decision = await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const decision = await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
     expect(decision.injectContext).toBeUndefined();
   });
 
@@ -44,19 +44,24 @@ describe('createTerminalStateGate', () => {
       getPermissionMode: () => DEFAULT,
       isEnabled: () => true,
     });
-    const decision = await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const decision = await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
     expect(decision.injectContext).toBeUndefined();
   });
 
-  it('stays silent when Done HAS corroborating evidence', async () => {
+  it('stays silent when code changes are verified', async () => {
     const gate = armedGate();
-    const decision = await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: true }));
+    const decision = await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'verified' }));
     expect(decision.injectContext).toBeUndefined();
   });
 
-  it('stays silent when evidence was not computed (undefined, not false)', async () => {
+  it('stays silent for no-code-changes (nothing to verify)', async () => {
     const gate = armedGate();
-    // undefined must NOT be treated as "no evidence" — only an explicit false fires.
+    const decision = await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'no-code-changes' }));
+    expect(decision.injectContext).toBeUndefined();
+  });
+
+  it('stays silent when classification was not computed (undefined)', async () => {
+    const gate = armedGate();
     const decision = await gate(stop({ terminalState: 'done' }));
     expect(decision.injectContext).toBeUndefined();
   });
@@ -64,7 +69,7 @@ describe('createTerminalStateGate', () => {
   it('stays silent for non-Done terminal states', async () => {
     const gate = armedGate();
     for (const kind of ['blocked', 'asking', 'interrupted'] as const) {
-      const decision = await gate(stop({ terminalState: kind, doneHasCorroboratingEvidence: false }));
+      const decision = await gate(stop({ terminalState: kind, doneEvidenceClassification: 'unverified' }));
       expect(decision.injectContext).toBeUndefined();
     }
   });
@@ -78,7 +83,7 @@ describe('createTerminalStateGate', () => {
   it('loop-guard: stops injecting after the per-session cap', async () => {
     const cap = 2;
     const gate = armedGate({ maxInjectionsPerSession: cap });
-    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const unbacked = () => gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
 
     for (let i = 0; i < cap; i++) {
       expect((await unbacked()).injectContext).toBe(TERMINAL_STATE_GATE_CORRECTION);
@@ -90,7 +95,7 @@ describe('createTerminalStateGate', () => {
 
   it('defaults the cap to DEFAULT_MAX_TERMINAL_STATE_INJECTIONS', async () => {
     const gate = armedGate();
-    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const unbacked = () => gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
     for (let i = 0; i < DEFAULT_MAX_TERMINAL_STATE_INJECTIONS; i++) {
       expect((await unbacked()).injectContext).toBe(TERMINAL_STATE_GATE_CORRECTION);
     }
@@ -104,7 +109,7 @@ describe('createTerminalStateGate', () => {
       getPermissionMode: () => mode,
       isEnabled: () => enabled,
     });
-    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const unbacked = () => gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
 
     expect((await unbacked()).injectContext).toBeUndefined();
     enabled = true;
@@ -129,8 +134,8 @@ describe('createTerminalStateGate — firing observability (#565)', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const gate = armedGate({ maxInjectionsPerSession: 3 });
 
-    await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
-    await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
+    await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
 
     // One log per injection, tagged + carrying the sessionId; the budget
     // position (n/cap) advances across calls so an operator can see the count.
@@ -148,7 +153,7 @@ describe('createTerminalStateGate — firing observability (#565)', () => {
     process.env['AFK_DEBUG'] = '1';
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const gate = armedGate({ maxInjectionsPerSession: 1 });
-    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const unbacked = () => gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
 
     await unbacked(); // spends the single-slot budget (logs the injection)
     log.mockClear();
@@ -166,7 +171,7 @@ describe('createTerminalStateGate — firing observability (#565)', () => {
     delete process.env['AFK_DEBUG'];
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const gate = armedGate({ maxInjectionsPerSession: 1 });
-    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    const unbacked = () => gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
 
     await unbacked(); // injection
     await unbacked(); // exhaustion
@@ -180,7 +185,7 @@ describe('createTerminalStateGate — firing observability (#565)', () => {
       getPermissionMode: () => AUTONOMOUS,
       isEnabled: () => false,
     });
-    await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    await gate(stop({ terminalState: 'done', doneEvidenceClassification: 'unverified' }));
     expect(log).not.toHaveBeenCalled();
   });
 });

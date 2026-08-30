@@ -13,6 +13,7 @@
 import type { ProviderQuery, ProviderQueryArgs } from '../../provider.js';
 import { AnthropicDirectQuery } from './query-runtime.js';
 import {
+  resolveAnthropicTemperature,
   resolveAutoCompactThreshold,
   resolveEffort,
   resolveThinkingParam,
@@ -103,6 +104,9 @@ export function buildProviderQuery(
       });
 
   const resolvedEffort = resolveEffort(config.effort, model);
+  const resolvedTemperature = config.temperature !== undefined
+    ? resolveAnthropicTemperature(config.temperature)
+    : undefined;
   // Use requestedModel (the alias, e.g. sonnet_1m) rather than the resolved
   // wire id so safeAutoCompactThresholdFor sees the full 1M window when
   // the alias carries that budget. Extracted to avoid calling
@@ -143,6 +147,7 @@ export function buildProviderQuery(
       ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model) }
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+    ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),

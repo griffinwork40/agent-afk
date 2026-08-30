@@ -26,6 +26,7 @@ import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import type {
+  ProviderCommandInfo,
   ProviderCompactResult,
   ProviderEvent,
   ProviderQuery,
@@ -62,7 +63,6 @@ import type {
   SessionIdentity,
   SessionMetadata,
   SessionState,
-  SlashCommand,
   StructuredMessageOptions,
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
@@ -1152,8 +1152,8 @@ export class AgentSession implements IAgentSession {
     return this.providerQuery;
   }
 
-  supportedCommands(): Promise<SlashCommand[]> {
-    return this.providerQuery.supportedCommands() as Promise<SlashCommand[]>;
+  supportedCommands(): Promise<ProviderCommandInfo[]> {
+    return this.providerQuery.supportedCommands();
   }
 
   supportedModels(): Promise<ModelInfo[]> {

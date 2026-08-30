@@ -27,6 +27,7 @@ describe('buildChatCompletionsRequestBody', () => {
       activeTools: undefined,
       maxOutputTokens: 1024,
       effort: undefined,
+      temperature: undefined,
     });
     expect(body['model']).toBe('gpt-4o');
     expect(body['messages']).toBe(MESSAGES);
@@ -41,6 +42,7 @@ describe('buildChatCompletionsRequestBody', () => {
       activeTools: TOOLS,
       maxOutputTokens: undefined,
       effort: undefined,
+      temperature: undefined,
     });
     expect(withTools['tools']).toBe(TOOLS);
 
@@ -50,8 +52,45 @@ describe('buildChatCompletionsRequestBody', () => {
       activeTools: [],
       maxOutputTokens: undefined,
       effort: undefined,
+      temperature: undefined,
     });
     expect('tools' in noTools).toBe(false);
+  });
+
+  it('forwards temperature when set', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: 0.5,
+    });
+    expect(body['temperature']).toBe(0.5);
+  });
+
+  it('omits temperature when undefined', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+    });
+    expect('temperature' in body).toBe(false);
+  });
+
+  it('forwards temperature above 1.0 without clamping (OpenAI accepts 0-2)', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: 1.5,
+    });
+    expect(body['temperature']).toBe(1.5);
   });
 });
 
@@ -63,6 +102,7 @@ describe('buildResponsesRequestBody', () => {
       activeTools: undefined,
       maxOutputTokens: 2048,
       effort: undefined,
+      temperature: undefined,
       isChatGptBackend: false,
     });
     expect(body['stream']).toBe(true);
@@ -79,6 +119,7 @@ describe('buildResponsesRequestBody', () => {
       activeTools: undefined,
       maxOutputTokens: 2048,
       effort: undefined,
+      temperature: undefined,
       isChatGptBackend: true,
     });
     // The subscription backend 400s on every output-cap param — must be absent.
@@ -87,5 +128,18 @@ describe('buildResponsesRequestBody', () => {
     // A non-empty instructions is required on this backend.
     expect(typeof body['instructions']).toBe('string');
     expect((body['instructions'] as string).length).toBeGreaterThan(0);
+  });
+
+  it('forwards temperature above 1.0 without clamping (OpenAI Responses API)', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: 1.8,
+      isChatGptBackend: false,
+    });
+    expect(body['temperature']).toBe(1.8);
   });
 });

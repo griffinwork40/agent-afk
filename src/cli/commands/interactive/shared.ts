@@ -646,7 +646,10 @@ export interface TurnHandles {
    */
   onTerminalState?(
     state: import('./terminal-state.js').TerminalState,
-    meta?: { doneHasCorroboratingEvidence?: boolean },
+    meta?: {
+      doneHasCorroboratingEvidence?: boolean;
+      doneEvidenceClassification?: 'no-code-changes' | 'verified' | 'unverified';
+    },
   ): void;
   /**
    * Publishes the in-flight turn's active TerminalCompositor (or null when

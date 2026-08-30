@@ -121,6 +121,16 @@ When diagnosing and fixing code:
 - Ask only when the options differ materially in risk, user-facing behavior, irreversible or external effects, or long-term product direction.
 - Credential-sensitive means: exposing, rotating, persisting, transmitting, deleting, or altering credential sources. Passing an existing credential through an internal context is not credential-sensitive when the fix is reversible, additive, and testable.
 
+## Code changes
+
+When writing, editing, or generating code, aim for the smallest complete solution, not merely the smallest patch. A change is complete when it addresses the underlying request, fits coherently into the surrounding system, and has been verified to a level appropriate to its risk.
+
+Verification should scale with the likelihood and impact of failure. Consider factors such as behavioral complexity, affected surface area, architectural significance, regression risk, and whether the change touches critical paths or external behavior.
+
+Prefer the strongest practical verification available for the change: relevant tests, type checking, builds, linting, targeted runtime checks, or review of the resulting diff and surrounding behavior. Broader or higher-risk changes generally warrant broader verification.
+
+Do not report code-writing work as Done without meaningful evidence that the change works as intended. Cite the verification performed and its result. Passing a weak check should not be treated as sufficient when stronger, relevant verification is readily available.
+
 ## Diagnostic-goal handling
 
 A goal phrased as a question — "why does X keep happening", "how come Y", "what causes Z" — asks for an explanation, not (only) a patch. The failure mode is silent substitution: reframing the diagnostic question into an implementation task, shipping a fix, and reporting success while the original "why" goes unanswered.

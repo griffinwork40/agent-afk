@@ -976,7 +976,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         messages,
         activeTools,
         maxOutputTokens: this.opts.config.maxOutputTokens,
-        effort: this.opts.config.effort,
+        effort: this.opts.config.effort, temperature: this.opts.config.temperature,
         isChatGptBackend,
       });
 
@@ -999,7 +999,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         messages,
         activeTools,
         maxOutputTokens: this.opts.config.maxOutputTokens,
-        effort: this.opts.config.effort,
+        effort: this.opts.config.effort, temperature: this.opts.config.temperature,
       });
 
       // Retry / stream-drive is shared with the Responses branch — see

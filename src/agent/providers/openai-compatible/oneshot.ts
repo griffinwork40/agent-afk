@@ -255,6 +255,7 @@ export async function oneShotResponses(input: OpenAIResponsesOneShotInput): Prom
     // No reasoning on a summarize — cheaper/faster, and a compaction summary
     // needs none. resolveReasoningEffort(undefined, ...) yields no reasoning key.
     effort: undefined,
+    temperature: undefined,
     isChatGptBackend,
   });
 

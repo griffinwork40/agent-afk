@@ -177,7 +177,7 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
   const config: CliConfig = {
     model: merged.model ?? DEFAULT_CONFIG.model,
     maxTokens: merged.maxTokens ?? DEFAULT_CONFIG.maxTokens,
-    temperature: merged.temperature ?? DEFAULT_CONFIG.temperature,
+    ...(merged.temperature !== undefined ? { temperature: merged.temperature } : {}),
     updatePolicy: merged.updatePolicy ?? DEFAULT_CONFIG.updatePolicy,
     ...(merged.apiKey !== undefined ? { apiKey: merged.apiKey } : {}),
     ...(merged.baseUrl !== undefined ? { baseUrl: merged.baseUrl } : {}),

@@ -157,6 +157,7 @@ export async function buildAnthropicTelegramSession(
       ? { resumeHistory: sessionConfig.resumeHistory }
       : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
     // Cascade-abort and drain in-flight children before the writer seals, so a
     // wave still running when this session ends emits real `cancelled` rows
