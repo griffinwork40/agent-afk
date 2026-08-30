@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.167.1] - 2026-08-30
+
+### Fixed
+- strip orphaned trailing ** from parsed field values (#1375) (859793f6)
+
 ## [5.167.0] - 2026-08-30
 
 ### Added
