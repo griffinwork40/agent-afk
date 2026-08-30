@@ -67,6 +67,35 @@ This is a test skill.
     });
   });
 
+  it('should extract whenToUse from a SKILL.md with when-to-use frontmatter', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    const skillPath = join(skillDir, 'SKILL.md');
+    writeFileSync(
+      skillPath,
+      `---
+name: wtu-skill
+description: A skill with when-to-use
+when-to-use: "When something important happens"
+---
+# WTU Skill
+
+Body text.
+`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toEqual({
+      name: 'wtu-skill',
+      description: 'A skill with when-to-use',
+      whenToUse: 'When something important happens',
+      body: '# WTU Skill\n\nBody text.',
+    });
+  });
+
   it('should handle SKILL.md without frontmatter', () => {
     const skillDir = join(tmpDir, 'skills');
     const fs = require('fs');
