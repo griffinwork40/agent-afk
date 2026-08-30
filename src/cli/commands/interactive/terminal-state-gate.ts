@@ -57,17 +57,20 @@ export const DEFAULT_MAX_TERMINAL_STATE_INJECTIONS = 3;
  * corroborating evidence. Framework note, not user text — it names the failure
  * shape and the two acceptable resolutions (substantiate or downgrade), and
  * explicitly forbids simply re-asserting `Done`.
+ *
+ * History: the original correction (pre-classifyDoneEvidence) fired on any
+ * `Done` with zero successful write/edit/bash. Since classifyDoneEvidence
+ * now distinguishes no-code-changes (passes) from unverified code (fails),
+ * this correction only fires when code WAS modified but no verification
+ * command succeeded afterward — a narrower and more actionable signal.
  */
 export const TERMINAL_STATE_GATE_CORRECTION =
-  '[terminal-state gate] The previous turn ended in **Done**, but this turn ' +
-  'recorded no corroborating evidence — no successful file write/edit or ' +
-  'executed command. In AFK mode a `Done` with nothing behind it is the ' +
-  'highest-cost failure: the operator is pinged "finished" and acts on it while ' +
-  'away from the trace. Before ending again, do ONE of:\n' +
-  '  (a) produce and cite the concrete artifact that backs the completion — the ' +
-  'file written, the command run and its result, or the test that passed; or\n' +
+  '[terminal-state gate] The previous turn modified source files but ended in ' +
+  '**Done** without running a verification step afterward (test, lint, or ' +
+  'type-check). Before ending again, do ONE of:\n' +
+  '  (a) run the relevant verification command and cite the result; or\n' +
   '  (b) if the work is not actually complete, correct the terminal state to ' +
-  'Blocked or Asking with the accurate status and the real blocker/question.\n' +
+  'Blocked or Asking with the accurate status.\n' +
   'Do not simply re-assert Done.';
 
 export interface TerminalStateGateOptions {

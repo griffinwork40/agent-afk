@@ -3,6 +3,8 @@ import {
   formatTerminalStateForTelegram,
   pushTerminalStateToTelegram,
   doneHasCorroboratingEvidence,
+  classifyDoneEvidence,
+  isVerificationCommand,
   resetAfkPushBudget,
   afkPushCount,
   MAX_PUSHES_PER_SESSION,
@@ -15,9 +17,9 @@ function done(extra: Partial<TerminalState> = {}): TerminalState {
 }
 
 let toolSeq = 0;
-function tool(toolName: string, isError?: boolean): ToolEvent {
+function tool(toolName: string, isError?: boolean, input = ''): ToolEvent {
   toolSeq += 1;
-  return { toolName, toolUseId: `tu-${toolSeq}`, input: '', ...(isError !== undefined && { isError }) };
+  return { toolName, toolUseId: `tu-${toolSeq}`, input, ...(isError !== undefined && { isError }) };
 }
 
 describe('formatTerminalStateForTelegram', () => {
@@ -124,36 +126,239 @@ describe('pushTerminalStateToTelegram — rate limiting', () => {
   });
 });
 
-describe('doneHasCorroboratingEvidence', () => {
-  it('is false for no tool events', () => {
-    expect(doneHasCorroboratingEvidence([])).toBe(false);
+describe('isVerificationCommand', () => {
+  it.each([
+    // Package-manager test/lint/check scripts
+    ['pnpm test', true],
+    ['pnpm run test', true],
+    ['pnpm lint', true],
+    ['pnpm run lint', true],
+    ['npm test', true],
+    ['npm run check', true],
+    ['yarn test', true],
+    ['yarn typecheck', true],
+    ['bun test', true],
+    ['pnpm run typecheck', true],
+    ['pnpm run type-check', true],
+    ['pnpm build', true],
+    ['npm run build', true],
+    ['pnpm run verify', true],
+    // pnpm exec / npx + runner
+    ['pnpm exec vitest run src/foo.test.ts', true],
+    ['npx jest --coverage', true],
+    ['npx tsc --noEmit', true],
+    // Direct test runners
+    ['vitest run', true],
+    ['jest', true],
+    ['pytest', true],
+    ['mocha', true],
+    // Compilers / type-checkers
+    ['tsc --noEmit', true],
+    ['tsc', true],
+    ['gcc -o main main.c', true],
+    ['rustc main.rs', true],
+    ['javac Main.java', true],
+    // Make / cargo / go
+    ['make test', true],
+    ['make check', true],
+    ['cargo test', true],
+    ['cargo check', true],
+    ['cargo clippy', true],
+    ['cargo build', true],
+    ['go test ./...', true],
+    ['go vet ./...', true],
+    ['go build', true],
+    // Swift / dotnet / ruby
+    ['swift test', true],
+    ['swift build', true],
+    ['dotnet test', true],
+    ['dotnet build', true],
+    ['rake test', true],
+    ['bundle exec rspec', true],
+    // Python
+    ['python -m pytest', true],
+    ['python3 -m unittest', true],
+    // NON-verification commands
+    ['ls -la', false],
+    ['cat src/foo.ts', false],
+    ['grep -rn "test" src/', false],
+    ['git status', false],
+    ['git diff', false],
+    ['git log --oneline', false],
+    ['git add .', false],
+    ['git commit -m "fix"', false],
+    ['pnpm install', false],
+    ['npm install', false],
+    ['yarn add lodash', false],
+    ['cd src && pwd', false],
+    ['echo "hello"', false],
+    ['mkdir -p dist', false],
+    ['rm -rf dist', false],
+    ['node server.js', false],
+    ['pnpm dev', false],
+    ['npm start', false],
+    ['pnpm format', false],
+    ['prettier --write .', false],
+    ['', false],
+  ])('%s -> %s', (cmd, expected) => {
+    expect(isVerificationCommand(cmd)).toBe(expected);
+  });
+});
+
+describe('classifyDoneEvidence', () => {
+  it('returns no-code-changes when no tool events', () => {
+    expect(classifyDoneEvidence([])).toBe('no-code-changes');
   });
 
-  it('is false when the turn only read (read_file/grep/glob/list_directory)', () => {
+  it('returns no-code-changes for read-only tools', () => {
+    expect(classifyDoneEvidence([
+      tool('read_file'), tool('grep'), tool('glob'),
+    ])).toBe('no-code-changes');
+  });
+
+  it('returns no-code-changes for bash-only turns (no code mutation)', () => {
+    expect(classifyDoneEvidence([
+      tool('bash', false, ' ls -la'),
+      tool('bash', false, ' git status'),
+    ])).toBe('no-code-changes');
+  });
+
+  it('returns unverified for edit_file with no verification', () => {
+    expect(classifyDoneEvidence([tool('edit_file')])).toBe('unverified');
+  });
+
+  it('returns unverified for write_file with no verification', () => {
+    expect(classifyDoneEvidence([tool('write_file')])).toBe('unverified');
+  });
+
+  it('returns unverified when edit followed by non-verification bash', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' ls -la'),
+    ])).toBe('unverified');
+  });
+
+  it('returns verified when edit followed by successful test', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' pnpm test'),
+    ])).toBe('verified');
+  });
+
+  it('returns verified when edit followed by successful lint', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' pnpm lint'),
+    ])).toBe('verified');
+  });
+
+  it('returns verified when edit followed by successful typecheck', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' tsc --noEmit'),
+    ])).toBe('verified');
+  });
+
+  it('returns unverified when test ran BEFORE edit (stale verification)', () => {
+    expect(classifyDoneEvidence([
+      tool('bash', false, ' pnpm test'),
+      tool('edit_file'),
+    ])).toBe('unverified');
+  });
+
+  it('returns unverified when edit -> test -> edit (stale verification)', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' pnpm test'),
+      tool('edit_file'),
+    ])).toBe('unverified');
+  });
+
+  it('returns unverified when test failed after edit', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', true, ' pnpm test'),
+    ])).toBe('unverified');
+  });
+
+  it('returns no-code-changes when edit_file itself failed', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file', true),
+    ])).toBe('no-code-changes');
+  });
+
+  it('returns verified for multiple mutations followed by one verification', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('write_file'),
+      tool('edit_file'),
+      tool('bash', false, ' pnpm exec vitest run src/foo.test.ts'),
+    ])).toBe('verified');
+  });
+
+  it('returns verified for edit followed by cargo test', () => {
+    expect(classifyDoneEvidence([
+      tool('write_file'),
+      tool('bash', false, ' cargo test'),
+    ])).toBe('verified');
+  });
+
+  it('returns verified for edit followed by go test', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' go test ./...'),
+    ])).toBe('verified');
+  });
+
+  it('ignores non-verification bash between edit and verification', () => {
+    expect(classifyDoneEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' git diff'),
+      tool('bash', false, ' pnpm test'),
+    ])).toBe('verified');
+  });
+});
+
+describe('doneHasCorroboratingEvidence', () => {
+  it('is true for no tool events (no code changes, nothing to verify)', () => {
+    expect(doneHasCorroboratingEvidence([])).toBe(true);
+  });
+
+  it('is true when the turn only read (no code changes)', () => {
     expect(
       doneHasCorroboratingEvidence([tool('read_file'), tool('grep'), tool('glob'), tool('list_directory')]),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it('is true for a successful write_file / edit_file / bash', () => {
-    expect(doneHasCorroboratingEvidence([tool('write_file')])).toBe(true);
-    expect(doneHasCorroboratingEvidence([tool('edit_file')])).toBe(true);
-    expect(doneHasCorroboratingEvidence([tool('bash')])).toBe(true);
+  it('is false for edit_file without verification (unverified code)', () => {
+    expect(doneHasCorroboratingEvidence([tool('edit_file')])).toBe(false);
+    expect(doneHasCorroboratingEvidence([tool('write_file')])).toBe(false);
   });
 
-  it('treats isError:false and omitted isError as success', () => {
-    expect(doneHasCorroboratingEvidence([tool('write_file', false)])).toBe(true);
+  it('is true for edit_file followed by successful test', () => {
+    expect(doneHasCorroboratingEvidence([
+      tool('edit_file'),
+      tool('bash', false, ' pnpm test'),
+    ])).toBe(true);
+  });
+
+  it('is true for bash-only turns (no code mutation)', () => {
     expect(doneHasCorroboratingEvidence([tool('bash')])).toBe(true);
   });
 
   it('does NOT count a failed corroborating tool call', () => {
-    expect(doneHasCorroboratingEvidence([tool('write_file', true)])).toBe(false);
-    expect(doneHasCorroboratingEvidence([tool('bash', true)])).toBe(false);
+    expect(doneHasCorroboratingEvidence([tool('write_file', true)])).toBe(true); // failed edit = no mutation
+    expect(doneHasCorroboratingEvidence([
+      tool('edit_file'),
+      tool('bash', true, ' pnpm test'),
+    ])).toBe(false); // real edit, failed test
   });
 
-  it('is true when at least one corroborating call succeeded amid failures/reads', () => {
+  it('is true when edit + verification succeeded amid failures/reads', () => {
     expect(
-      doneHasCorroboratingEvidence([tool('read_file'), tool('bash', true), tool('write_file')]),
+      doneHasCorroboratingEvidence([
+        tool('read_file'), tool('bash', true), tool('edit_file'), tool('bash', false, ' pnpm lint'),
+      ]),
     ).toBe(true);
   });
 });
