@@ -267,6 +267,11 @@ export async function bootstrapSession(
         composeExecutor.setTraceWriter(pendingTraceWriter);
         rootManager.setTraceWriter(pendingTraceWriter);
         backgroundRegistry.setTraceWriter(pendingTraceWriter);
+        // Re-wire the plan-exit queue check on the resumed session so
+        // exit_plan_mode still skips the picker when the user has queued text.
+        if (ctx.hasPendingUserMessage) {
+          sessionRef.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
+        }
       },
       buildSession: (t) => {
         // Resuming session X appends to X's own trace directory, matching how

@@ -533,6 +533,15 @@ export interface InteractiveCtx {
    * tool lane without importing CLI-layer modules. Absent on non-REPL callers.
    */
   addPreviewDiffRef?: PreviewDiffRef;
+  /**
+   * Predicate wired by surface-setup once the TerminalCompositor is armed.
+   * Returns true when the user has a typed-ahead message queued for delivery.
+   * Used by the `exit_plan_mode` tool handler (via
+   * `AgentSession.setPlanExitQueueCheck`) to skip the elicitation picker when
+   * a queued message should be delivered first. Absent until surface-setup
+   * runs (non-TTY surfaces never set it).
+   */
+  hasPendingUserMessage?: () => boolean;
 }
 
 /**

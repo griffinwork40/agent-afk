@@ -120,6 +120,18 @@ export const exitPlanModeTool: AnthropicToolDef = {
  */
 export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandler {
   return async (_input, signal, context) => {
+    // If the user has typed a queued message while this turn is running, skip the
+    // elicitation picker entirely. Delivering the queued message first lets the
+    // model see the user's input before deciding whether to exit plan mode — and
+    // prevents the picker from interrupting the user mid-thought.
+    if (controls.hasPendingUserMessage?.()) {
+      return {
+        content:
+          'The user has a queued message waiting to be delivered. End your turn now so ' +
+          'the message is delivered first. You can call exit_plan_mode again afterward.',
+      };
+    }
+
     // Restore the mode the user was in before plan mode (falls back to 'default'
     // when none was captured). This is the PRIMARY approve choice.
     const prevMode: PermissionMode = controls.getPrePlanMode() ?? 'default';
