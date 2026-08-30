@@ -241,7 +241,7 @@ export async function registerPluginSkills(
     const cat = harvestedCategories.get(bare);
     return {
       name: c.name,
-      description: c.description,
+      description: c.description ?? '',
       ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
       ...(c.source ? { source: c.source } : {}),
       ...(cat ? { category: cat } : {}),

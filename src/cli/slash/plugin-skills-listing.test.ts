@@ -242,4 +242,30 @@ describe('/skills listing UX (Phase 1)', () => {
     expect(out).toContain('When to use');
     expect(out).toContain('blocking review comments');
   });
+
+  it('registry whenToUse wins over plugin whenToUse for the same bare skill name', async () => {
+    // Locks the precedence of the `??` chain at listing-detail.ts:111:
+    //   registrySkill?.whenToUse ?? pluginSkill?.whenToUse ?? extractHintFromDescription(…)
+    // The `registerSkill` in beforeEach already registers 'mint' with
+    //   whenToUse: 'When a novel multi-day feature genuinely benefits from a spec.'
+    // Supply a plugin skill with the same bare name and a different whenToUse;
+    // the registry value must win.
+    const cmd = makeDynamicSkillsCmd([
+      {
+        name: 'mint',
+        description: 'Plugin mint description.',
+        whenToUse: 'Plugin when-to-use text',
+        source: 'plugin',
+      },
+    ]);
+
+    const { ctx, lines } = makeCtx();
+    await cmd.handler(ctx, 'mint');
+    const out = stripAnsi(lines.join('\n'));
+
+    // The registry skill's whenToUse (registered in beforeEach) must appear.
+    expect(out).toContain('novel multi-day feature');
+    // The plugin skill's whenToUse must NOT override the registry value.
+    expect(out).not.toContain('Plugin when-to-use text');
+  });
 });

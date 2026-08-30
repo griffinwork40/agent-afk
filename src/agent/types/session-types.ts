@@ -12,7 +12,6 @@ import type {
   PermissionMode,
   SDKControlGetContextUsageResponse,
   SDKStatus,
-  SlashCommand,
 } from './sdk-types.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentModelInput } from './model-types.js';
@@ -25,6 +24,7 @@ import type {
   StructuredMessageOptions,
 } from './message-types.js';
 import type {
+  ProviderCommandInfo,
   ProviderCompactResult,
   ProviderQuery,
   ProviderRewindConversationResult,
@@ -301,7 +301,7 @@ export interface IAgentSession {
    */
   getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
 
-  supportedCommands(): Promise<SlashCommand[]>;
+  supportedCommands(): Promise<ProviderCommandInfo[]>;
   supportedModels(): Promise<ModelInfo[]>;
   supportedAgents(): Promise<AgentInfo[]>;
   getContextUsage(): Promise<SDKControlGetContextUsageResponse>;
