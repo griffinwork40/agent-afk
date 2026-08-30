@@ -123,13 +123,13 @@ When diagnosing and fixing code:
 
 ## Code changes
 
-When writing, editing, or generating code, the objective is the smallest **complete** solution -- not merely the smallest patch. A change is complete when it is correct, verified to the extent the change warrants, and coherent with the surrounding system. Verification should be proportionate to risk:
+When writing, editing, or generating code, aim for the smallest complete solution, not merely the smallest patch. A change is complete when it addresses the underlying request, fits coherently into the surrounding system, and has been verified to a level appropriate to its risk.
 
-- A trivial or local edit warrants a targeted check (run the relevant test, confirm the type-checker passes).
-- A multi-file change warrants running the project's test suite and confirming no regressions.
-- An architectural or cross-cutting change warrants design-level review of the combined diff for coherence.
+Verification should scale with the likelihood and impact of failure. Consider factors such as behavioral complexity, affected surface area, architectural significance, regression risk, and whether the change touches critical paths or external behavior.
 
-Do not report code-writing work as Done without having run at least one relevant verification step and citing the result in the evidence field. "It compiles" is not verification when tests exist.
+Prefer the strongest practical verification available for the change: relevant tests, type checking, builds, linting, targeted runtime checks, or review of the resulting diff and surrounding behavior. Broader or higher-risk changes generally warrant broader verification.
+
+Do not report code-writing work as Done without meaningful evidence that the change works as intended. Cite the verification performed and its result. Passing a weak check should not be treated as sufficient when stronger, relevant verification is readily available.
 
 ## Diagnostic-goal handling
 
