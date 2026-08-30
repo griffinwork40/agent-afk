@@ -1162,6 +1162,15 @@ describe('collectSkillEntries — disk-scan regression (user + project skills)',
     expect(entry?.argumentHint).toBe('<plan>');
   });
 
+  it('preserves whenToUse from a disk-scanned user skill', () => {
+    writeUserSkill('wtu-skill', 'Skill with wtu', 'when-to-use: "When something happens"\n');
+
+    const entries = collectSkillEntries([]);
+    const entry = entries.find((e) => e.name === 'wtu-skill');
+
+    expect(entry?.whenToUse).toBe('When something happens');
+  });
+
   it('includes user skill in buildSkillManifest() output', () => {
     writeUserSkill('manifest-user-skill', 'Appears in manifest');
 
