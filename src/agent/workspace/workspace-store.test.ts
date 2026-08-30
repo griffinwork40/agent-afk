@@ -1,9 +1,9 @@
 /**
- * Tests for WorkspaceStore: publish, queryRelevant, queryAll.
+ * Tests for WorkspaceStore: publish, queryRelevant (FTS5), queryAll, buildFtsQuery.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { WorkspaceStore } from './workspace-store.js';
+import { WorkspaceStore, buildFtsQuery } from './workspace-store.js';
 
 describe('WorkspaceStore', () => {
   let store: WorkspaceStore;
@@ -95,28 +95,65 @@ describe('WorkspaceStore', () => {
     });
   });
 
-  // ── queryRelevant ──────────────────────────────────────────────────────────
+  // ── queryRelevant (FTS5) ──────────────────────────────────────────────────
 
   describe('queryRelevant', () => {
-    it('returns subject-matched entries when keywords overlap', () => {
+    it('matches entries by subject keywords', () => {
       store.publish({ session_id: 's', type: 'finding', subject: 'auth refresh', content: 'A' });
       store.publish({ session_id: 's', type: 'finding', subject: 'database schema', content: 'B' });
       store.publish({ session_id: 's', type: 'finding', subject: 'auth token', content: 'C' });
 
       const results = store.queryRelevant('s', 'check the auth flow');
-      // Should match 'auth refresh' and 'auth token' but not 'database schema'
       const contents = results.map((e) => e.content);
       expect(contents).toContain('A');
       expect(contents).toContain('C');
       expect(contents).not.toContain('B');
     });
 
-    it('falls back to all session entries when no subject matches', () => {
+    it('matches entries by content when subject has no overlap', () => {
+      store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'module overview',
+        content: 'The SwiftUI observable pattern handles state propagation',
+      });
+      store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'unrelated topic',
+        content: 'Nothing relevant here at all',
+      });
+
+      const results = store.queryRelevant('s', 'SwiftUI observable state');
+      expect(results).toHaveLength(1);
+      expect(results[0]?.subject).toBe('module overview');
+    });
+
+    it('ranks subject matches above content matches', () => {
+      store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'performance optimization',
+        content: 'General tips for speed',
+      });
+      store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'unrelated module',
+        content: 'This mentions performance in passing',
+      });
+
+      const results = store.queryRelevant('s', 'performance tuning');
+      // Subject-matched entry should rank first (bm25 weights subject 10x)
+      expect(results[0]?.subject).toBe('performance optimization');
+    });
+
+    it('falls back to all session entries when no FTS match', () => {
       store.publish({ session_id: 's', type: 'finding', subject: 'payments', content: 'P' });
       store.publish({ session_id: 's', type: 'status', content: 'S' });
 
-      // taskPrompt has no overlapping keywords with any subject
-      const results = store.queryRelevant('s', 'xyz-qrs-mno');
+      // taskPrompt has no overlapping keywords with any subject or content
+      const results = store.queryRelevant('s', 'xyzqrsmno aaabbb');
       expect(results.length).toBeGreaterThan(0);
     });
 
@@ -132,17 +169,76 @@ describe('WorkspaceStore', () => {
       for (let i = 0; i < 60; i++) {
         store.publish({ session_id: 's', type: 'finding', content: `Entry ${i}` });
       }
-      const results = store.queryRelevant('s', 'xyz-no-match');
+      const results = store.queryRelevant('s', 'xyzxyz-no-match');
       expect(results.length).toBe(50);
     });
 
-    it('returns entries ordered by seq descending (most recent first)', () => {
-      store.publish({ session_id: 's', type: 'finding', subject: 'auth', content: 'Older' });
-      store.publish({ session_id: 's', type: 'finding', subject: 'auth', content: 'Newer' });
+    it('handles null sessionId (cross-sibling query)', () => {
+      store.publish({ session_id: 'child-1', type: 'finding', subject: 'auth', content: 'From child 1' });
+      store.publish({ session_id: 'child-2', type: 'finding', subject: 'auth', content: 'From child 2' });
 
-      const results = store.queryRelevant('s', 'auth session check');
-      expect(results[0]?.content).toBe('Newer');
-      expect(results[1]?.content).toBe('Older');
+      const results = store.queryRelevant(null, 'auth module');
+      expect(results).toHaveLength(2);
+    });
+
+    it('uses porter stemming (searching finds searched)', () => {
+      store.publish({
+        session_id: 's',
+        type: 'finding',
+        subject: 'connection pooling',
+        content: 'Database connections are pooled',
+      });
+
+      // "connecting" should stem-match "connection" and "connections"
+      const results = store.queryRelevant('s', 'connecting to databases');
+      expect(results).toHaveLength(1);
+    });
+
+    it('gracefully handles queries with FTS5 operator characters', () => {
+      store.publish({ session_id: 's', type: 'finding', content: 'some data' });
+
+      // These would break raw FTS5 — buildFtsQuery double-quotes them
+      expect(() => store.queryRelevant('s', 'NOT this AND that')).not.toThrow();
+      expect(() => store.queryRelevant('s', 'prefix* wildcard')).not.toThrow();
+      expect(() => store.queryRelevant('s', 'term -excluded')).not.toThrow();
+    });
+  });
+
+  // ── buildFtsQuery ─────────────────────────────────────────────────────────
+
+  describe('buildFtsQuery', () => {
+    it('joins tokens with OR and double-quotes each', () => {
+      expect(buildFtsQuery('auth refresh token')).toBe('"auth" OR "refresh" OR "token"');
+    });
+
+    it('drops words shorter than 3 chars', () => {
+      expect(buildFtsQuery('a to the auth in')).toBe('"the" OR "auth"');
+    });
+
+    it('deduplicates tokens', () => {
+      expect(buildFtsQuery('auth auth auth token')).toBe('"auth" OR "token"');
+    });
+
+    it('lowercases all tokens', () => {
+      expect(buildFtsQuery('SwiftUI Observable')).toBe('"swiftui" OR "observable"');
+    });
+
+    it('returns empty string for no usable tokens', () => {
+      expect(buildFtsQuery('a b c')).toBe('');
+      expect(buildFtsQuery('')).toBe('');
+      expect(buildFtsQuery('  ')).toBe('');
+    });
+
+    it('caps at 25 tokens', () => {
+      const long = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+      const tokens = buildFtsQuery(long).split(' OR ');
+      expect(tokens).toHaveLength(25);
+    });
+
+    it('neutralizes FTS5 operators via quoting', () => {
+      const q = buildFtsQuery('NOT something AND another');
+      // NOT, AND are quoted as regular tokens, not interpreted as operators
+      expect(q).toBe('"not" OR "something" OR "and" OR "another"');
     });
   });
 
