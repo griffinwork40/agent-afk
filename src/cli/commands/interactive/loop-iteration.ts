@@ -3,13 +3,7 @@ import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
 import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
-import {
-  runPreflight,
-  getPreflight,
-  getSkillPreflightDir,
-  stitchForwardManifest,
-  type SkillInvocation,
-} from '../../slash/preflight/index.js';
+import { runPreflight, getPreflight, getSkillPreflightDir, stitchForwardManifest, type SkillInvocation } from '../../slash/preflight/index.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
@@ -782,6 +776,7 @@ export async function runInputLoop(
         // set*Handler calls are benign mutations of null refs).
         getCompositor: () => surface.getCompositor(),
         setBackgroundHandler: (handler) => surface.setBackgroundHandler(handler),
+        setTaskViewHandler: (handler) => surface.setTaskViewHandler(handler),
         setSoftStopHandler: installSoftStop,
         setPausedState: (paused) => surface.setPausedState(paused),
         setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),

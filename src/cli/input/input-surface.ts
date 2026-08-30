@@ -258,6 +258,15 @@ export class InputSurface {
   private softStopHandler: (() => void) | null = null;
 
   /**
+   * Mutable task-view handler ref. The compositor's `onTaskView` closure
+   * dereferences this on Tab during streaming mode, so the per-turn
+   * turn-handler can install a mid-turn task-view launcher without
+   * reconstructing the compositor. Cleared (null) between turns so Tab
+   * retains its normal autocomplete/ghost-accept behavior in idle mode.
+   */
+  private taskViewHandler: (() => void) | null = null;
+
+  /**
    * Mutable pause-interrupt handler ref. The compositor's `onPauseInterrupt`
    * closure dereferences this when the user submits a line during a
    * usage-limit pause (compositor `paused === true`), so the per-turn
@@ -348,6 +357,10 @@ export class InputSurface {
       // the per-turn turn-handler swap takes effect immediately. Fires when
       // the user submits a line during a usage-limit pause.
       onPauseInterrupt: () => { this.pauseInterruptHandler?.(); },
+      // Task-view handler is mutable — close over the surface's ref so
+      // the per-turn turn-handler swap takes effect immediately. Tab in
+      // streaming mode fires this instead of ghost-accept when wired.
+      onTaskView: () => { this.taskViewHandler?.(); },
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       ...(opts.onOpenEditor ? { onOpenEditor: opts.onOpenEditor } : {}),
       history: this.history,
@@ -405,6 +418,7 @@ export class InputSurface {
     this.armedStdout = null;
     this.backgroundHandler = null;
     this.softStopHandler = null;
+    this.taskViewHandler = null;
     this.pauseInterruptHandler = null;
   }
 
@@ -437,6 +451,15 @@ export class InputSurface {
    */
   setSoftStopHandler(handler: (() => void) | null): void {
     this.softStopHandler = handler;
+  }
+
+  /**
+   * Install or clear the per-turn Tab task-view handler. When wired,
+   * Tab during streaming fires this instead of ghost-accept. Cleared
+   * at turn end so Tab retains its normal behavior between turns.
+   */
+  setTaskViewHandler(handler: (() => void) | null): void {
+    this.taskViewHandler = handler;
   }
 
   /**

@@ -734,6 +734,12 @@ export interface TurnHandles {
    */
   setSoftStopHandler?(handler: (() => void) | null): void;
   /**
+   * Install/clear the per-turn Tab task-view handler on the surface's
+   * persistent compositor. When wired, Tab during streaming opens a
+   * mid-turn task view instead of ghost-accept. Cleared at turn end.
+   */
+  setTaskViewHandler?(handler: (() => void) | null): void;
+  /**
    * Toggle the compositor's `paused` flag for the duration of a usage-limit
    * pause (set true on the `paused` provider event, false on `resumed` / turn
    * end). While true, a submitted line fires the pause-interrupt handler below

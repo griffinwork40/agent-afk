@@ -27,12 +27,7 @@ import { env } from '../config/env.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
-import type {
-  CompositorInputMode,
-  KeyInfo,
-  PickerController,
-  SubmissionPayload,
-} from './terminal-compositor.types.js';
+import type { CompositorInputMode, KeyInfo, PickerController, SubmissionPayload } from './terminal-compositor.types.js';
 
 /**
  * Max gap (ms) between the two Escapes of a double-Esc rewind trigger at an
@@ -153,6 +148,7 @@ export interface KeyDispatchHost {
   /** Submitted-line-during-pause handler — see {@link TerminalCompositorOptions.onPauseInterrupt}. */
   readonly onPauseInterrupt?: () => void;
   readonly onShiftTab?: () => void;
+  readonly onTaskView?: () => void;
   readonly onOpenEditor?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
 }
@@ -1125,11 +1121,10 @@ function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
   if (key?.name === 'tab') {
-    // Precedence: dropdown first (existing behaviour), ghost second.
-    // `applyDropdownSelection` returns false when the dropdown is closed,
-    // so we fall through to ghost-accept only when the dropdown was absent.
+    // Precedence: dropdown first, mid-turn task view second, ghost third.
     if (!self.applyDropdownSelection()) {
-      self.applyGhostAccept();
+      if (self.inputMode === 'streaming' && self.onTaskView) self.onTaskView();
+      else self.applyGhostAccept();
     }
     return true;
   }
