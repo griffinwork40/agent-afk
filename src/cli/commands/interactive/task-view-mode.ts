@@ -18,6 +18,9 @@
  */
 
 import { palette } from '../../palette.js';
+import { divider } from '../../render/divider.js';
+import { statusBadge } from '../../render/status-badge.js';
+import type { BadgeStatus } from '../../render/status-badge.js';
 import { formatOutputEvent } from '../../output-event-format.js';
 import { SubagentLogReader } from '../../../agent/subagent/log.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
@@ -58,19 +61,13 @@ const FOOTER_RETURN   = palette.dim('  Returned to main conversation.');
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Format the status badge for a given subagent status string. */
-function statusBadge(status: string): string {
-  if (status === 'succeeded' || status === 'completed') return palette.success(status);
-  if (status === 'failed')    return palette.error(status);
-  if (status === 'running')   return palette.info(status);
-  if (status === 'cancelled') return palette.dim(status);
-  return palette.dim(status);
-}
-
-/** Separator line sized to terminal width (max 100). */
-function sep(width = 80): string {
-  const w = Math.min(width, 100);
-  return palette.dim('─'.repeat(w));
+/** Map a raw subagent status string to a canonical BadgeStatus. */
+function taskStatusToBadge(status: string): BadgeStatus {
+  if (status === 'succeeded' || status === 'completed') return 'done';
+  if (status === 'failed')    return 'error';
+  if (status === 'running')   return 'running';
+  if (status === 'cancelled') return 'blocked';
+  return 'warn';
 }
 
 /** Render the header for a task view panel. */
@@ -82,9 +79,9 @@ export function renderTaskViewHeader(
   const parts: string[] = [
     palette.bold(`Subagent: ${id.slice(0, 20)}`),
     ...(agentType ? [palette.dim(`type: ${agentType}`)] : []),
-    `status: ${statusBadge(status)}`,
+    `status: ${statusBadge(taskStatusToBadge(status))}`,
   ];
-  return [sep(), parts.join('  '), sep()].join('\n');
+  return [divider(undefined, 80), parts.join('  '), divider(undefined, 80)].join('\n');
 }
 
 /** Build the footer line shown under the conversation body. */

@@ -18,6 +18,7 @@
  */
 
 import type { AgentSession } from '../../agent/session.js';
+import { divider } from '../render/divider.js';
 import { palette } from '../palette.js';
 import { registerOrReplace, register } from './registry.js';
 import type { SlashCommand } from './types.js';
@@ -58,7 +59,7 @@ function makeDynamicAgentsCmd(agents: DiscoveredAgent[]): SlashCommand {
         return 'continue';
       }
       ctx.out.line(palette.bold('Plugin agents') + palette.dim(`  (${agents.length} loaded)`));
-      ctx.out.line(palette.dim('─'.repeat(60)));
+      ctx.out.line(divider(undefined, 60));
       const maxName = agents.reduce((m, a) => Math.max(m, a.name.length), 0) + 2;
       for (const a of agents) {
         const nameCell = palette.warning(a.name.padEnd(maxName));

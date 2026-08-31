@@ -5,9 +5,9 @@
  * to available display width.
  */
 
-import { palette } from './palette.js';
-import { formatTokens } from './format-utils.js';
-import { displayWidth, truncateDisplayWidth } from './display.js';
+import { palette } from '../palette.js';
+import { formatTokens } from '../format-utils.js';
+import { displayWidth, truncateDisplayWidth } from '../display.js';
 
 export interface ContextBarOpts {
   ratio: number;           // [0, 1]; clamp out-of-range
