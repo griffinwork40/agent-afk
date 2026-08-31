@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.0] - 2026-08-31
+
+### Added
+- mid-turn task view + user-to-subagent interaction (#1387) (f1df4fa4)
+
+### Changed
+- add tests for live tail loop, natural completion, and Esc abort (#1333) (#1391) (f63ffec4)
+- align README and LICENSING with website positioning (#1392) (ea73aeed)
+
 ## [5.168.2] - 2026-08-31
 
 ### Fixed
