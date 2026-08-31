@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.5] - 2026-08-31
+
+### Fixed
+- handle chatgpt-oauth in standalone oneshot auth path (#555) (#1393) (85c38f31)
+
 ## [5.169.4] - 2026-08-31
 
 ### Fixed
