@@ -59,8 +59,13 @@ export function modelAvailability(model: string | undefined, bindings?: ModelSlo
     // no OAuth token is mislabeled available (no sign-in hint) while the next
     // real request fails for missing ChatGPT sign-in.
     if (b.provider === 'chatgpt-oauth') {
-      const ok = resolveOpenAIAuth(undefined, {}, true).apiKey != null;
-      return { available: ok, needs: 'chatgpt-oauth', hint: ok ? undefined : 'needs ChatGPT sign-in (~/.codex/auth.json)' };
+      const res = resolveOpenAIAuth(undefined, {}, true);
+      const ok = res.apiKey != null;
+      const hint = ok ? undefined
+        : res.source === 'chatgpt-oauth-expired'
+          ? 'ChatGPT token expired — re-run `codex` to refresh'
+          : 'needs ChatGPT sign-in (~/.codex/auth.json)';
+      return { available: ok, needs: 'chatgpt-oauth', hint };
     }
     if (b.provider === 'xai-oauth') {
       const ok = resolveXaiAuth(undefined, 'oauth').apiKey != null;
