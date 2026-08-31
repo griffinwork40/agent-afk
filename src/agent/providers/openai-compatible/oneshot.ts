@@ -96,6 +96,14 @@ export interface OpenAIOneShotInput {
    * `apiKey` / `baseURL` / `clientFactory`.
    */
   client?: OpenAI;
+  /**
+   * When true, resolve the ChatGPT-subscription OAuth token from
+   * `~/.codex/auth.json` ahead of every other auth tier and WITHOUT the global
+   * `AFK_OPENAI_CHATGPT_OAUTH` flag — mirrors the `provider: 'chatgpt-oauth'`
+   * slot semantics in `resolveOpenAIAuth`. Ignored when `client` is provided
+   * (the pre-built client already carries the correct credentials).
+   */
+  forceChatgptOAuth?: boolean;
 }
 
 /**
@@ -135,7 +143,7 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
   if (input.client !== undefined) {
     client = input.client;
   } else {
-    const auth = resolveOpenAIAuth(apiKey);
+    const auth = resolveOpenAIAuth(apiKey, {}, input.forceChatgptOAuth ?? false);
     if (auth.apiKey === null) {
       throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
     }
