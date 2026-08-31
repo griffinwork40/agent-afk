@@ -1,6 +1,6 @@
 import { resumeConfigFor, type ResolvedResumeTarget } from '../../resume-session.js';
 import { autoRegisterPluginPassthroughs } from '../../slash/plugin-skills.js';
-import { formatCost, formatTokens } from '../../format-utils.js';
+import { costTokenLine } from '../../render/session-summary.js';
 import { palette } from '../../palette.js';
 import { formatStatusFields, printResumeBanner, reseedStatsFromStored, type ResumeSwapResult, type CompletionWriter } from './shared.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
@@ -225,8 +225,8 @@ export async function performResumeSwap(
   // Step 11 — Print a "Resuming…" line.
   const resumingParts: string[] = [`↪ Resumed ${target.id}`];
   if (deps.stats.totalTurns > 0) resumingParts.push(`${deps.stats.totalTurns} prior turn${deps.stats.totalTurns === 1 ? '' : 's'}`);
-  if (deps.stats.totalCostUsd > 0) resumingParts.push(formatCost(deps.stats.totalCostUsd));
-  if (deps.stats.totalTokens > 0) resumingParts.push(formatTokens(deps.stats.totalTokens) + ' tokens');
+  const ct = costTokenLine({ costUsd: deps.stats.totalCostUsd, tokens: deps.stats.totalTokens });
+  if (ct) resumingParts.push(ct);
   deps.completionWriter.fn(palette.brand(resumingParts.join('  ·  ')));
 
   // Step 11b — Surface a brief "where was I" cue under the resume line
