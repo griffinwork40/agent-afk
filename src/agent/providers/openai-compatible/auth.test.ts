@@ -325,3 +325,103 @@ describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent
     expect(msg).not.toContain('Found ChatGPT/OAuth credentials');
   });
 });
+
+describe('resolveOpenAIAuth — expiry gate (#555)', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const NOW_S = Math.floor(Date.now() / 1000);
+  const EXPIRED_S = NOW_S - 1;
+  const VALID_S = NOW_S + 3600;
+
+  function makeJwt(exp: number): string {
+    return `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ exp })}.sig`;
+  }
+
+  function authJson(exp: number): string {
+    return JSON.stringify({
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: { access_token: makeJwt(exp) },
+    });
+  }
+
+  const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
+
+  // ── Tier 0 (forced per-slot) ──────────────────────────────────────────────
+
+  it('Tier 0: rejects an expired token and returns no-usable-auth-forced-chatgpt-oauth', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => authJson(EXPIRED_S) }),
+      true,
+    );
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('Tier 0: accepts a not-yet-expired token', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => authJson(VALID_S) }),
+      true,
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).not.toBeNull();
+  });
+
+  it('Tier 0: passes through a token with no expiresAt (unknown expiry is optimistic)', () => {
+    // A token bag with no exp claim in the JWT — should still resolve.
+    const noExpJwt = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'u' })}.sig`;
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({
+        readFile: () =>
+          JSON.stringify({
+            auth_mode: 'chatgpt',
+            OPENAI_API_KEY: null,
+            tokens: { access_token: noExpJwt },
+          }),
+      }),
+      true,
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.expiresAt).toBeUndefined();
+  });
+
+  // ── Tier 4 flag-gated ─────────────────────────────────────────────────────
+
+  it('flag-gated: rejects an expired token and returns no-usable-auth-forced-chatgpt-oauth', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: flagOn, readFile: () => authJson(EXPIRED_S) }),
+    );
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('flag-gated: accepts a not-yet-expired token', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: flagOn, readFile: () => authJson(VALID_S) }),
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).not.toBeNull();
+  });
+
+  it('flag-gated: passes through a token with no expiresAt (unknown expiry is optimistic)', () => {
+    const noExpJwt = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'u' })}.sig`;
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({
+        readEnv: flagOn,
+        readFile: () =>
+          JSON.stringify({
+            auth_mode: 'chatgpt',
+            OPENAI_API_KEY: null,
+            tokens: { access_token: noExpJwt },
+          }),
+      }),
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.expiresAt).toBeUndefined();
+  });
+});
