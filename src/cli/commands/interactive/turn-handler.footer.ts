@@ -12,8 +12,7 @@
 
 import type { SessionStats } from '../../slash/types.js';
 import { palette } from '../../palette.js';
-import { formatDuration, formatTokens } from '../../format-utils.js';
-import { costTokenLine } from '../../render/session-summary.js';
+import { formatDuration, formatCost, formatTokens } from '../../format-utils.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
@@ -74,10 +73,10 @@ export function printTurnFooter(
   if (!meta) return;
   const parts: string[] = [];
   if (meta.durationMs) parts.push(formatDuration(meta.durationMs));
+  if (meta.totalCostUsd !== undefined) parts.push(formatCost(meta.totalCostUsd));
   const inTok = Number(meta.usage?.['input_tokens'] ?? 0);
   const outTok = Number(meta.usage?.['output_tokens'] ?? 0);
-  const ct = costTokenLine({ costUsd: meta.totalCostUsd, tokens: inTok + outTok || undefined });
-  if (ct) parts.push(ct);
+  if (inTok + outTok > 0) parts.push(formatTokens(inTok + outTok) + ' tokens');
   if (parts.length > 0) {
     write(palette.dim('  ◦ ' + parts.join('  ·  ')));
   }

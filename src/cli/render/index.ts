@@ -27,4 +27,3 @@ export * from './compact-diff-view.js';
 export * from './preview-diff.js';
 export * from './context-bar.js';
 export * from './context-sparkline.js';
-export * from './session-summary.js';
