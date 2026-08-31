@@ -81,6 +81,8 @@ export interface SubagentHandle<T = unknown> {
    * resolves; the caller owns delivery of the returned string.
    */
   getLastStopInjectContext(): string | undefined;
+  /** Wall-clock duration of the most recent completed run in ms; `undefined` before any run finishes. */
+  readonly durationMs: number | undefined;
 
   /**
    * Queue a user message for delivery as the subagent's next turn.
@@ -216,6 +218,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   get status(): SubagentStatus {
     return this._currentStatus;
+  }
+
+  get durationMs(): number | undefined {
+    return this._lastDurationMs;
   }
 
   async run(prompt: string | ContentBlockParam[], sinkOverride?: SubagentProgressSink): Promise<Message> {

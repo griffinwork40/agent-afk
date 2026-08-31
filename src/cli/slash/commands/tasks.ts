@@ -26,6 +26,7 @@
 import { palette } from '../../palette.js';
 import { formatDuration } from '../../format-utils.js';
 import type { SlashCommand } from '../types.js';
+import type { PickerController } from '../../terminal-compositor.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SubagentStatus } from '../../../agent/subagent/result.js';
 import { SubagentLogReader } from '../../../agent/subagent/log.js';
@@ -185,13 +186,12 @@ async function collectAllTasks(
     const impl = entry.handle as unknown as {
       _agentType?: string;
       _currentTrace?: { toolCalls: unknown[] };
-      _lastDurationMs?: number;
     };
     entries.push({
       id: entry.handle.id,
       status: entry.handle.status,
       agentType: impl._agentType,
-      durationMs: impl._lastDurationMs,
+      durationMs: entry.handle.durationMs,
       toolCount: impl._currentTrace?.toolCalls.length ?? 0,
     });
   }
@@ -253,62 +253,126 @@ export const tasksCmd: SlashCommand = {
     }
 
     // ── Interactive mode ──────────────────────────────────────────────────────
-    renderList();
+    const compositor = ctx.getCompositor?.() ?? null;
 
-    await new Promise<void>((resolve) => {
-      const onKeypress = (chunk: Buffer | string): void => {
-        const str = typeof chunk === 'string' ? chunk : chunk.toString();
-        if (str === '\x1b[A' || str === '\x1bOA') {
-          // Up arrow
-          cursor = Math.max(0, cursor - 1);
-          renderList();
-        } else if (str === '\x1b[B' || str === '\x1bOB') {
-          // Down arrow
-          cursor = Math.min(tasks.length - 1, cursor + 1);
-          renderList();
-        } else if (str === '\r' || str === '\n') {
-          // Enter — open the selected task in view mode.
-          const selected = tasks[cursor];
-          if (selected) {
-            // Wire Esc to resolve this promise (return to main prompt).
-            ctx.setSoftStopHandler?.(null);
-            process.stdin.off('data', onKeypress);
-            const entry: TaskViewEntry = {
-              id: selected.id,
-              manager,
-              sessionLabel,
-              ctx,
-              ictx: ictxRef,
-            };
-            void enterTaskViewMode(entry).then(resolve).catch((e) => {
+    if (compositor) {
+      // ── Compositor path: route all input through enterPickerMode ────────────
+      // The compositor owns stdin routing in picker mode; `renderRows` is called
+      // by the compositor on every repaint, so mutating `cursor` and calling
+      // `repaintPicker()` is all that's needed to update the display.
+      await new Promise<void>((resolve) => {
+        let settled = false;
+
+        const finish = (openView?: TaskViewEntry): void => {
+          if (settled) return;
+          settled = true;
+          ctx.setSoftStopHandler?.(null);
+          compositor.exitPickerMode();
+          if (openView) {
+            void enterTaskViewMode(openView).then(resolve).catch((e) => {
               ctx.out.error?.(`task view error: ${String(e)}`);
               resolve();
             });
+          } else {
+            ctx.ui.clearScreen();
+            ctx.ui.repaintStatusLine();
+            resolve();
           }
-        } else if (str === '\x1b' || str === '\x03') {
-          // Esc or Ctrl-C — exit to main prompt.
+        };
+
+        const controller: PickerController = {
+          renderRows: (): readonly string[] => {
+            const rows: string[] = [];
+            rows.push(palette.dim(`  Subagent list — ↑/↓ navigate  Enter view  Esc return`));
+            rows.push('');
+            for (let i = 0; i < tasks.length; i++) {
+              const t = tasks[i]!;
+              rows.push(formatHandleLine(t.id, t.status, t.agentType, t.durationMs, t.toolCount, i === cursor));
+            }
+            rows.push('');
+            return rows;
+          },
+          onKey: (
+            _char: string | undefined,
+            key: { name?: string; ctrl?: boolean; shift?: boolean },
+          ): void => {
+            if (settled) return;
+            if (key.name === 'up') {
+              cursor = Math.max(0, cursor - 1);
+              compositor.repaintPicker();
+            } else if (key.name === 'down') {
+              cursor = Math.min(tasks.length - 1, cursor + 1);
+              compositor.repaintPicker();
+            } else if (key.name === 'return') {
+              const selected = tasks[cursor];
+              if (selected) {
+                finish({ id: selected.id, manager, sessionLabel, ctx, ictx: ictxRef });
+              }
+            } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+              finish();
+            }
+          },
+        };
+
+        ctx.setSoftStopHandler?.(() => { finish(); });
+        compositor.enterPickerMode(controller);
+      });
+    } else {
+      // ── Stdin fallback: attach directly when no compositor is available ──────
+      // Render the initial list here — the compositor path uses its own
+      // renderRows() inside enterPickerMode, so renderList() is only needed
+      // for the raw-stdin branch.
+      renderList();
+      await new Promise<void>((resolve) => {
+        const onKeypress = (chunk: Buffer | string): void => {
+          const str = typeof chunk === 'string' ? chunk : chunk.toString();
+          if (str === '\x1b[A' || str === '\x1bOA') {
+            // Up arrow
+            cursor = Math.max(0, cursor - 1);
+            renderList();
+          } else if (str === '\x1b[B' || str === '\x1bOB') {
+            // Down arrow
+            cursor = Math.min(tasks.length - 1, cursor + 1);
+            renderList();
+          } else if (str === '\r' || str === '\n') {
+            // Enter — open the selected task in view mode.
+            const selected = tasks[cursor];
+            if (selected) {
+              ctx.setSoftStopHandler?.(null);
+              process.stdin.off('data', onKeypress);
+              const entry: TaskViewEntry = {
+                id: selected.id,
+                manager,
+                sessionLabel,
+                ctx,
+                ictx: ictxRef,
+              };
+              void enterTaskViewMode(entry).then(resolve).catch((e) => {
+                ctx.out.error?.(`task view error: ${String(e)}`);
+                resolve();
+              });
+            }
+          } else if (str === '\x1b' || str === '\x03') {
+            // Esc or Ctrl-C — exit to main prompt.
+            ctx.setSoftStopHandler?.(null);
+            process.stdin.off('data', onKeypress);
+            ctx.ui.clearScreen();
+            ctx.ui.repaintStatusLine();
+            resolve();
+          }
+        };
+
+        ctx.setSoftStopHandler?.(() => {
           ctx.setSoftStopHandler?.(null);
           process.stdin.off('data', onKeypress);
           ctx.ui.clearScreen();
           ctx.ui.repaintStatusLine();
           resolve();
-        }
-      };
+        });
 
-      // Wire Esc handler via the surface-level soft-stop.
-      ctx.setSoftStopHandler?.(() => {
-        ctx.setSoftStopHandler?.(null);
-        process.stdin.off('data', onKeypress);
-        ctx.ui.clearScreen();
-        ctx.ui.repaintStatusLine();
-        resolve();
+        process.stdin.on('data', onKeypress);
       });
-
-      // TODO: route through compositor.enterPickerMode() instead of attaching
-      // directly to process.stdin — direct stdin listeners bypass the
-      // compositor's routing and can conflict with other input consumers.
-      process.stdin.on('data', onKeypress);
-    });
+    }
 
     return 'continue';
   },
