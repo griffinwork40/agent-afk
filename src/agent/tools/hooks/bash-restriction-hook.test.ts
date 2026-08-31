@@ -461,6 +461,79 @@ describe('deriveRestrictedSubstrings — no coverage regression from sharing the
   });
 });
 
+describe('deriveRestrictedSubstrings — Option A (#740): resolveBase can drop a builtin credential root', () => {
+  // Decision: resolveBase containment intentionally drops a builtin credential
+  // root from the bash restriction list with no explicit /allow-dir required.
+  // Rationale (see deriveRestrictedSubstrings Invariant:):
+  //   - The bash gate is advisory, not a sandbox (module header).
+  //   - Typed file tools are unconditionally floored regardless — the hard
+  //     security boundary is never the one being relaxed here.
+  //   - #579 reports the floors as too broad; Option B would widen them.
+  //   - The user working inside a credential dir (e.g. ~/.ssh) must not self-block.
+  // Changing to Option B would break the test: resolveBase drops MUST hold.
+  const home = homedir();
+  const sshRoot = join(home, '.ssh');
+  const awsRoot = join(home, '.aws');
+
+  it('resolveBase = ~/.ssh drops .ssh from restriction (user working in that dir)', () => {
+    const result = deriveRestrictedSubstrings({
+      resolveBase: sshRoot,
+      readRoots: [],
+      writeRoots: [],
+    });
+    expect(result).not.toContain(sshRoot);
+  });
+
+  it('resolveBase = ~/.aws drops .aws from restriction', () => {
+    const result = deriveRestrictedSubstrings({
+      resolveBase: awsRoot,
+      readRoots: [],
+      writeRoots: [],
+    });
+    expect(result).not.toContain(awsRoot);
+  });
+
+  it('resolveBase ancestor drop is equivalent to an explicit readRoot grant', () => {
+    // resolveBase and readRoots must produce the same dropped set for the same path.
+    const viaResolveBase = deriveRestrictedSubstrings({
+      resolveBase: sshRoot,
+      readRoots: [],
+      writeRoots: [],
+    });
+    const viaReadRoot = deriveRestrictedSubstrings({
+      resolveBase: undefined,
+      readRoots: [sshRoot],
+      writeRoots: [],
+    });
+    expect(viaResolveBase).toEqual(viaReadRoot);
+  });
+
+  it('resolveBase drop is ancestor-scoped: a sibling credential root stays restricted', () => {
+    // ~/.ssh drop must not accidentally un-gate ~/.aws or ~/.gnupg.
+    const result = deriveRestrictedSubstrings({
+      resolveBase: sshRoot,
+      readRoots: [],
+      writeRoots: [],
+    });
+    expect(result).toContain(awsRoot);
+    expect(result).toContain(join(home, '.gnupg'));
+  });
+
+  it('resolveBase = /tmp/repo (unrelated to any credential root) drops nothing from the floor', () => {
+    const baseline = deriveRestrictedSubstrings({
+      resolveBase: undefined,
+      readRoots: [],
+      writeRoots: [],
+    });
+    const withBase = deriveRestrictedSubstrings({
+      resolveBase: '/tmp/repo',
+      readRoots: [],
+      writeRoots: [],
+    });
+    expect(withBase).toEqual(baseline);
+  });
+});
+
 describe('deriveRestrictedSubstrings — a cross-drive grant cannot empty the floor (#852)', () => {
   // Invariant: `path.win32.relative` returns a DRIVE-QUALIFIED ABSOLUTE string
   // (`C:\Users\me\.ssh`) when the two paths sit on different drives, never a
