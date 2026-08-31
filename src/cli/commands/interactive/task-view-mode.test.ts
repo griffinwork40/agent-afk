@@ -132,25 +132,34 @@ async function* finiteStream(): AsyncGenerator<OutputEvent> {
  * iteration — so once the signal fires, the loop breaks on the NEXT yield.
  * Using setImmediate between yields ensures the abort has time to propagate.
  *
- * The returned factory closes over `shouldStop` so tests can make the stream
- * terminate without an abort (for the "Esc stops the loop" assertion).
+ * The stream records when its iterator is closed so tests can verify that Esc
+ * actually makes the consumer stop it, rather than ending the fixture first.
  */
 function makePollingStream(): {
   streamFactory: () => AsyncIterable<OutputEvent>;
-  stop: () => void;
+  closed: Promise<void>;
+  yielded: () => number;
 } {
-  let stopped = false;
+  let resolveClosed: () => void;
+  const closed = new Promise<void>(resolve => { resolveClosed = resolve; });
+  let yielded = 0;
+
   async function* gen(): AsyncGenerator<OutputEvent> {
-    let i = 0;
-    while (!stopped) {
-      yield { type: 'chunk', chunk: { type: 'content', content: `tick-${i++}` } } as OutputEvent;
-      // Yield the microtask queue so the event loop can fire the abort handler.
-      await new Promise<void>(r => setImmediate(r));
+    try {
+      while (true) {
+        yield { type: 'chunk', chunk: { type: 'content', content: `tick-${yielded++}` } } as OutputEvent;
+        // Yield the microtask queue so the event loop can fire the abort handler.
+        await new Promise<void>(r => setImmediate(r));
+      }
+    } finally {
+      resolveClosed();
     }
   }
+
   return {
     streamFactory: () => gen(),
-    stop: () => { stopped = true; },
+    closed,
+    yielded: () => yielded,
   };
 }
 
@@ -223,7 +232,7 @@ describe('enterTaskViewMode — natural completion', () => {
 
 describe('enterTaskViewMode — Esc abort', () => {
   it('aborts the stream and calls exitTaskViewMode when Esc fires', async () => {
-    const { streamFactory, stop } = makePollingStream();
+    const { streamFactory, closed, yielded } = makePollingStream();
     const handle  = makeRunningHandle('esc-1', streamFactory);
     const manager = makeManager([handle]);
     const { ctx, fireSoftStop } = makeCtx();
@@ -236,17 +245,19 @@ describe('enterTaskViewMode — Esc abort', () => {
 
     // Fire Esc — this calls abort.abort() internally AND exitTaskViewMode.
     fireSoftStop();
-    // Stop the generator too so it doesn't keep yielding after the test.
-    stop();
 
     await viewPromise;
 
+    // The iterator must yield again after Esc so tailOutputStream observes the
+    // abort, breaks its loop, and closes the otherwise-unbounded generator.
+    await expect(closed).resolves.toBeUndefined();
+    expect(yielded()).toBeGreaterThan(1);
     // exitTaskViewMode calls repaintStatusLine.
     expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
   });
 
   it('does NOT emit FOOTER_COMPLETE when Esc fires', async () => {
-    const { streamFactory, stop } = makePollingStream();
+    const { streamFactory } = makePollingStream();
     const handle  = makeRunningHandle('esc-2', streamFactory);
     const manager = makeManager([handle]);
     const { ctx, lines, fireSoftStop } = makeCtx();
@@ -254,7 +265,6 @@ describe('enterTaskViewMode — Esc abort', () => {
     const viewPromise = enterTaskViewMode({ id: 'esc-2', manager, sessionLabel: 'lbl', ctx });
     await ticks(3);
     fireSoftStop();
-    stop();
     await viewPromise;
 
     // FOOTER_COMPLETE is only emitted by the non-aborted finally branch.
@@ -264,7 +274,7 @@ describe('enterTaskViewMode — Esc abort', () => {
   });
 
   it('clears viewingTaskId on ictx when Esc fires', async () => {
-    const { streamFactory, stop } = makePollingStream();
+    const { streamFactory } = makePollingStream();
     const handle  = makeRunningHandle('esc-3', streamFactory);
     const manager = makeManager([handle]);
     const { ctx, fireSoftStop } = makeCtx();
@@ -273,7 +283,6 @@ describe('enterTaskViewMode — Esc abort', () => {
     const viewPromise = enterTaskViewMode({ id: 'esc-3', manager, sessionLabel: 'lbl', ctx, ictx });
     await ticks(3);
     fireSoftStop();
-    stop();
     await viewPromise;
 
     expect(ictx.viewingTaskId).toBeUndefined();
