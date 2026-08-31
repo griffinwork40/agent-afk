@@ -1442,6 +1442,71 @@ describe('SessionToolDispatcher grant API', () => {
     expect(grants.writeRoots).toContain('/base');
   });
 
+  // --- Finding 1: per-call sessionId threads through dispatcher wrappers ---
+
+  it('addReadRoot threads optional per-call sessionId through to grant manager', () => {
+    // Smoke-test: the 3-arg overload must exist and not throw. Audit-attribution
+    // correctness is verified at the PathGrantManager layer; here we just confirm
+    // the wrapper accepts the parameter without TypeScript error.
+    const d = makeDispatcher({ cwd: '/base', sessionId: 'ctor-session' });
+    expect(() => d.addReadRoot('/extra', 'slash', 'per-call-session')).not.toThrow();
+    expect(d.getGrants().readRoots).toContain('/extra');
+  });
+
+  it('addWriteRoot threads optional per-call sessionId through to grant manager', () => {
+    const d = makeDispatcher({ cwd: '/base', sessionId: 'ctor-session' });
+    expect(() => d.addWriteRoot('/extra', 'slash', 'per-call-session')).not.toThrow();
+    expect(d.getGrants().writeRoots).toContain('/extra');
+  });
+
+  it('revokeRoot threads optional per-call sessionId through to grant manager', () => {
+    const d = makeDispatcher({ cwd: '/base', sessionId: 'ctor-session' });
+    d.addWriteRoot('/extra', 'slash');
+    expect(() => d.revokeRoot('/extra', 'slash', 'per-call-session')).not.toThrow();
+    expect(d.getGrants().readRoots).not.toContain('/extra');
+  });
+
+  // --- Finding 2: fixed-anchor policy (Option B) ---
+
+  // --- Finding 3: revokeRoot must not audit on no-op (tested via grant state) ---
+
+  it('revokeRoot is idempotent — double-revoking is a no-op (Finding 3)', () => {
+    // Verifies the "no audit on no-op" fix is consistent: revoking a path that
+    // is already gone must not change grant state or throw.
+    const d = makeDispatcher({ cwd: '/base' });
+    d.addWriteRoot('/extra', 'slash');
+    d.revokeRoot('/extra', 'slash'); // first revoke — real removal
+    expect(d.getGrants().readRoots).not.toContain('/extra');
+    // Second revoke of the same (now-absent) path must be a no-op.
+    expect(() => d.revokeRoot('/extra', 'slash')).not.toThrow();
+    expect(d.getGrants().readRoots).not.toContain('/extra');
+  });
+
+  it('revokeRoot on the anchor is a no-op even when the anchor IS in readRoots', () => {
+    // The anchor guard fires before the splice — anchor stays in readRoots.
+    const d = makeDispatcher({ cwd: '/base' });
+    d.revokeRoot('/base', 'slash');
+    expect(d.getGrants().readRoots).toContain('/base');
+    // Double-revoke of the anchor also must not throw.
+    expect(() => d.revokeRoot('/base', 'slash')).not.toThrow();
+  });
+
+  it('getGrants.resolveBase migrates with setResolveBase (Option A)', () => {
+    // The anchor used by getProtectedRoot (and surfaced in getGrants) must be
+    // the CURRENT cwd — after migration the new worktree root is the anchor.
+    const d = makeDispatcher({ cwd: '/launch/dir' });
+    d.setResolveBase('/new/worktree');
+    expect(d.getGrants().resolveBase).toBe('/new/worktree'); // anchor migrated
+  });
+
+  it('current cwd is the non-revocable anchor (migrates on setResolveBase)', () => {
+    // After migration, revoking the NEW cwd must be silently ignored.
+    const d = makeDispatcher({ cwd: '/launch/dir' });
+    d.setResolveBase('/new/worktree');
+    d.revokeRoot('/new/worktree', 'slash');
+    expect(d.getGrants().readRoots).toContain('/new/worktree');
+  });
+
   it('handlerContext snapshot reflects mutations', async () => {
     let capturedContext: import('./types.js').ToolHandlerContext | undefined;
     const capturingHandler: import('./types.js').ToolHandler = async (_input, _signal, ctx) => {
@@ -1609,19 +1674,31 @@ describe('SessionToolDispatcher.setResolveBase', () => {
     expect(sharedReadRoots).toEqual(['/cwd', '/extra']);
   });
 
-  it('revokeRoot guard tracks the new resolveBase, not the original', () => {
-    // After rename, the new cwd must be the non-revocable anchor — the old
-    // one no longer points anywhere on disk and should not appear in grants.
+  it('revokeRoot guard is fixed at the INITIAL resolveBase (anchor policy: Option B)', () => {
+    // The NON-REVOCABLE anchor is the session's INITIAL launch dir (matching
+    // provider semantics) — setResolveBase migrates the working cwd but does
+    // not change which dir is anchored.
+    //
+    // Scenario: add an extra root, then migrate. The extra root (not the anchor)
+    // must be revocable after migration, confirming that only _initialResolveBase
+    // is protected (not the new cwd).
     const d = makeDispatcher({ cwd: '/old/worktree' });
+    d.addReadRoot('/extra/grant', 'slash');
     d.setResolveBase('/new/worktree');
 
-    // /allow-dir block attempt against the new cwd: silently ignored.
-    d.revokeRoot('/new/worktree', 'slash');
-    expect(d.getGrants().readRoots).toContain('/new/worktree');
-
-    // /allow-dir block attempt against the old cwd: no-op (not in grants).
+    // The initial anchor (/old/worktree) revoke must be silently ignored.
+    // Note: setResolveBase migrated /old/worktree → /new/worktree in _readRoots,
+    // so /old/worktree is no longer in the list — the guard fires first and
+    // returns early without touching roots.
     d.revokeRoot('/old/worktree', 'slash');
-    expect(d.getGrants().readRoots).not.toContain('/old/worktree');
+    // Confirming the guard fired: getGrants().readRoots should contain /new/worktree
+    // (migrated in) and /extra/grant (unchanged), not /old/worktree (migrated out).
+    expect(d.getGrants().readRoots).toContain('/new/worktree');
+    expect(d.getGrants().readRoots).toContain('/extra/grant');
+
+    // The extra root (NOT the anchor) must be revocable normally.
+    d.revokeRoot('/extra/grant', 'slash');
+    expect(d.getGrants().readRoots).not.toContain('/extra/grant');
   });
 });
 

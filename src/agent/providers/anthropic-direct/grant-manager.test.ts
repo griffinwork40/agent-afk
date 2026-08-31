@@ -203,4 +203,40 @@ describe('AnthropicDirectProvider GrantManager', () => {
       expect(e['sessionId']).toBeNull();
     });
   });
+
+  // --- Finding 3: revokeRoot must NOT audit on no-op ---
+
+  describe('revokeRoot audit gate (Finding 3)', () => {
+    it('does NOT emit an audit entry when the path was never granted', () => {
+      const provider = new AnthropicDirectProvider();
+      const before = readAuditEntries().length;
+      // Revoke a path that was never added — no-op (not found in roots).
+      provider.revokeRoot('/never/added', 'slash');
+      const after = readAuditEntries().length;
+      expect(after).toBe(before); // zero new entries
+    });
+
+    it('DOES emit an audit entry when an existing grant is removed', () => {
+      const provider = new AnthropicDirectProvider();
+      provider.addReadRoot('/x/y', 'slash', 'sess-grant');
+      const before = readAuditEntries().length;
+      provider.revokeRoot('/x/y', 'slash', 'sess-revoke');
+      const entries = readAuditEntries();
+      expect(entries.length).toBe(before + 1);
+      const last = entries[entries.length - 1];
+      expect(last['action']).toBe('revoke');
+      expect(last['path']).toBe('/x/y');
+    });
+
+    it('does NOT emit duplicate audit entries when same path is revoked twice', () => {
+      // Second revoke is a no-op (already removed) — must not emit another entry.
+      const provider = new AnthropicDirectProvider();
+      provider.addReadRoot('/x/y', 'slash', 'sess-grant');
+      provider.revokeRoot('/x/y', 'slash', 'sess-1'); // first revoke — real removal
+      const before = readAuditEntries().length;
+      provider.revokeRoot('/x/y', 'slash', 'sess-2'); // second revoke — no-op
+      const after = readAuditEntries().length;
+      expect(after).toBe(before); // no new entry for the no-op
+    });
+  });
 });

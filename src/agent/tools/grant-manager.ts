@@ -16,13 +16,11 @@
  *      owns eager arrays from construction. Parameterized via
  *      `getReadRoots`/`getWriteRoots` (may return `undefined` = uninitialized)
  *      plus the optional `ensureInitialized` pre-add hook.
- *   2. Non-revocable anchor — the dispatcher protects its CURRENT
- *      `resolveBase` (which `setResolveBase()` migrates on worktree rename),
- *      the providers protect the session's INITIAL resolveBase (fixed at
- *      session start, preserved across renames). Parameterized via
- *      `getProtectedRoot`, which also supplies the `resolveBase` field of
- *      `getGrants()` — both anchors double as the displayed base in their
- *      original copies.
+ *   2. Non-revocable anchor — all consumers use Option A (migrating anchor):
+ *      `getProtectedRoot` returns the CURRENT `resolveBase`, so after a
+ *      `setResolveBase` / `setCwd` call the new worktree root becomes the
+ *      protected root. Parameterized via `getProtectedRoot`, which also
+ *      supplies the `resolveBase` field of `getGrants()`.
  *   3. Audit sessionId sourcing — the dispatcher binds a sessionId at
  *      construction (`this.sessionId ?? null`), the providers thread a
  *      per-call `sessionId?` argument (`entry.sessionId ?? null`).
@@ -82,11 +80,19 @@ export interface PathGrantManagerHooks {
    */
   ensureInitialized?(): void;
   /**
-   * The non-revocable root at revoke time, doubling as the `resolveBase`
-   * reported by `getGrants()`. Dispatcher: current `resolveBase` (migrates on
-   * rename). Providers: initial resolveBase (fixed at session start).
+   * The non-revocable root — used as the equality guard in `revokeRoot()` to
+   * prevent callers from revoking the current working directory.
+   * All consumers: current `resolveBase` (migrates on `setResolveBase` /
+   * `setCwd` so the active worktree root is always protected — Option A).
+   * Also supplies the `resolveBase` field of `getGrants()`.
    */
   getProtectedRoot(): string | undefined;
+  /**
+   * Optional override for the `resolveBase` value surfaced by `getGrants()`.
+   * Defaults to `getProtectedRoot()` when absent. Kept for back-compat;
+   * no current consumer overrides it under Option A.
+   */
+  getDisplayResolveBase?(): string | undefined;
   /** The `allowAll` value reported by `getGrants()` (see module header). */
   getAllowAll(): boolean;
   /**
@@ -165,21 +171,30 @@ export class PathGrantManager {
     if (protectedRoot !== undefined && p === protectedRoot) return;
 
     const rIdx = readRoots.indexOf(p);
-    if (rIdx !== -1) readRoots.splice(rIdx, 1);
+    const rRemoved = rIdx !== -1;
+    if (rRemoved) readRoots.splice(rIdx, 1);
 
     const writeRoots = this.hooks.getWriteRoots();
+    let wRemoved = false;
     if (writeRoots) {
       const wIdx = writeRoots.indexOf(p);
-      if (wIdx !== -1) writeRoots.splice(wIdx, 1);
+      wRemoved = wIdx !== -1;
+      if (wRemoved) writeRoots.splice(wIdx, 1);
     }
 
-    this.appendAuditLog({ action: 'revoke', path: p, source, sessionId });
+    // Only audit when something was actually removed — no-op revokes must not
+    // emit spurious audit entries (mirrors the 196x-dedup gate on grant paths).
+    if (rRemoved || wRemoved) {
+      this.appendAuditLog({ action: 'revoke', path: p, source, sessionId });
+    }
   }
 
   /** Returns a snapshot of current grant state (for /allow-dir display). */
   getGrants(): GrantSnapshot {
     return {
-      resolveBase: this.hooks.getProtectedRoot(),
+      resolveBase: this.hooks.getDisplayResolveBase
+        ? this.hooks.getDisplayResolveBase()
+        : this.hooks.getProtectedRoot(),
       readRoots: this.hooks.getReadRoots()?.slice() ?? [],
       writeRoots: this.hooks.getWriteRoots()?.slice() ?? [],
       allowAll: this.hooks.getAllowAll(),

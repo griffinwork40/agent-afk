@@ -36,16 +36,11 @@ export class ProviderGrantState {
   private _readRoots: string[] | undefined;
   /** Mutable write-root list — same shared-reference pattern as {@link _readRoots}. */
   private _writeRoots: string[] | undefined;
-  /** The first cwd ever seen — non-revocable, mirrors the dispatcher-level guard. */
-  private _initialResolveBase: string | undefined;
   /**
    * Tracks the most recently-set cwd (initial from `ensureInitialized`,
-   * updated by `cwdDependentsFactory` on each `setCwd` call). Used to find
-   * the prior cwd entry in the root arrays so it can be swapped in place
-   * instead of accumulating stale entries.
-   *
-   * Distinct from {@link _initialResolveBase}, which is fixed at session start
-   * and preserved as the /allow-dir non-revocable anchor even across renames.
+   * updated by `cwdDependentsFactory` on each `setCwd` call). Doubles as the
+   * non-revocable anchor (Option A / migrating): after a `setCwd` call the
+   * new worktree root is protected rather than the session's launch dir.
    */
   private _currentCwd: string | undefined;
   /**
@@ -57,17 +52,16 @@ export class ProviderGrantState {
 
   /**
    * Shared grant-state machine (issues #361/#362). Hooks bind provider
-   * semantics: lazy `ensureInitialized` init, the session's INITIAL
-   * resolveBase as the non-revocable anchor (fixed across worktree renames),
-   * `allowAll` derived from the current permission mode, and per-call
-   * sessionId threading (no construction-bound default). See
-   * grant-manager.ts for the divergence catalogue.
+   * semantics: lazy `ensureInitialized` init, the CURRENT cwd as the
+   * non-revocable anchor (Option A — migrates on `setCwd`), `allowAll` derived
+   * from the current permission mode, and per-call sessionId threading.
+   * See grant-manager.ts for the divergence catalogue.
    */
   readonly manager = new PathGrantManager({
     getReadRoots: () => this._readRoots,
     getWriteRoots: () => this._writeRoots,
     ensureInitialized: () => this.ensureInitialized(),
-    getProtectedRoot: () => this._initialResolveBase,
+    getProtectedRoot: () => this._currentCwd,
     getAllowAll: () => pathContainmentBypassed(this._permissionMode),
   });
 
@@ -106,14 +100,7 @@ export class ProviderGrantState {
       const defaultRoots = cwd ? [cwd] : [];
       this._readRoots = defaultRoots.slice();
       this._writeRoots = defaultRoots.slice();
-      // Capture the first non-empty cwd as the non-revocable resolveBase.
-      // Mirrors SessionToolDispatcher's resolveBase guard so /allow-dir can't
-      // strip containment from the session's original working directory.
-      if (cwd && !this._initialResolveBase) {
-        this._initialResolveBase = cwd;
-      }
-      // Track the current cwd for in-place migration on subsequent
-      // `cwdDependentsFactory` calls (worktree rename / setCwd path).
+      // Track the current cwd — doubles as the non-revocable anchor (Option A).
       if (cwd && !this._currentCwd) {
         this._currentCwd = cwd;
       }
