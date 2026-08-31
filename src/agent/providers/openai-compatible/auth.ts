@@ -56,6 +56,7 @@ export type OpenAIAuthSource =
   | 'env'
   | 'codex-cli'
   | 'chatgpt-oauth'
+  | 'chatgpt-oauth-expired'
   | 'no-usable-auth'
   | 'no-usable-auth-codex-oauth'
   | 'no-usable-auth-forced-chatgpt-oauth';
@@ -74,7 +75,7 @@ export interface OpenAIAuthResolution {
   envVar?: 'OPENAI_API_KEY' | 'CODEX_API_KEY';
   /** ChatGPT account id (source === 'chatgpt-oauth') — sent as the `chatgpt-account-id` header. */
   accountId?: string;
-  /** Access-token expiry as epoch SECONDS (source === 'chatgpt-oauth'), decoded from the JWT `exp` claim. */
+  /** Access-token expiry as epoch SECONDS (source === 'chatgpt-oauth' | 'chatgpt-oauth-expired'), decoded from the JWT `exp` claim. */
   expiresAt?: number;
 }
 
@@ -131,6 +132,11 @@ export function resolveOpenAIAuth(
     if (codexRaw !== null) {
       const parsed = parseCodexAuthJson(codexRaw);
       if (parsed.kind === 'chatgpt' && parsed.accessToken) {
+        // Gate expiry: treat an expired token as unusable so the diagnostic fires
+        // rather than passing an opaque 401 to OpenAI.
+        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
+          return { apiKey: null, source: 'chatgpt-oauth-expired', expiresAt: parsed.expiresAt };
+        }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
           source: 'chatgpt-oauth',
@@ -188,6 +194,11 @@ export function resolveOpenAIAuth(
       // these tokens (read-only — refresh stays with `codex`). When disabled,
       // surface distinctly so the diagnostic can give a precise next step.
       if (chatGptOAuthEnabled(readEnv) && parsed.accessToken) {
+        // Gate expiry: treat an expired token as unusable so the diagnostic fires
+        // rather than passing an opaque 401 to OpenAI.
+        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
+          return { apiKey: null, source: 'chatgpt-oauth-expired', expiresAt: parsed.expiresAt };
+        }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
           source: 'chatgpt-oauth',
@@ -346,6 +357,11 @@ export function formatAuthDiagnostic(resolution: OpenAIAuthResolution): string {
       const expiry = formatExpiry(resolution.expiresAt);
       return `using ChatGPT subscription OAuth from ~/.codex/auth.json (account ${acct}${expiry})`;
     }
+    case 'chatgpt-oauth-expired':
+      return (
+        'ChatGPT subscription token from ~/.codex/auth.json is EXPIRED — re-run `codex` to refresh. ' +
+        '(read-only; AFK does not refresh the token itself.)'
+      );
     case 'no-usable-auth-codex-oauth':
       return (
         'Found ChatGPT/OAuth credentials in ~/.codex/auth.json but the OpenAI provider is in API-key mode. ' +

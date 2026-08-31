@@ -105,6 +105,18 @@ describe('modelAvailability', () => {
       });
     });
 
+    it('is unavailable with an expiry-specific hint when the ChatGPT OAuth token is expired', () => {
+      resolveOpenAIAuth.mockReturnValue({ apiKey: null, source: 'chatgpt-oauth-expired', expiresAt: 1 });
+      const bindings = slots({ medium: { id: 'gpt-5', provider: 'chatgpt-oauth' } });
+      const result = modelAvailability('medium', bindings);
+      expect(result).toEqual({
+        available: false,
+        needs: 'chatgpt-oauth',
+        hint: 'ChatGPT token expired — re-run `codex` to refresh',
+      });
+      expect(resolveOpenAIAuth).toHaveBeenCalledWith(undefined, {}, true);
+    });
+
     it('does NOT let a per-slot apiKey mask a missing ChatGPT OAuth token', () => {
       // Runtime forces the OAuth path for a chatgpt-oauth slot and ignores any
       // per-slot/explicit key (resolveOpenAIAuth(..., true) reads ~/.codex only),
