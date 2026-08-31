@@ -719,12 +719,12 @@ describe('ToolLane.getOverlay — MAX_OVERLAY_ROOTS sliding cap', () => {
       lane.addStart(`t-${i}`, 'read_file', `("f${i}.ts")`);
       lane.addResult(`t-${i}`, makeResult(`${i} lines`));
     }
-    const overlay = lane.getOverlay();
+    const overlay = stripAnsi(lane.getOverlay());
+    const lines = overlay.split('\n');
     expect(overlay).not.toContain('done');  // no summary line
-    // All six files should appear individually.
-    for (let i = 1; i <= 6; i++) {
-      expect(overlay).toContain(`f${i}.ts`);
-    }
+    // All six roots should appear — collapsed cards show tool name, not args.
+    const readRows = lines.filter((l) => /read_file/.test(l));
+    expect(readRows.length).toBe(6);
   });
 
   it('elides oldest completed roots with "… +N done" suffix when over cap', () => {
@@ -742,21 +742,16 @@ describe('ToolLane.getOverlay — MAX_OVERLAY_ROOTS sliding cap', () => {
     expect(summaryLines.length).toBe(1);
     expect(summaryLines[0]).toMatch(/^\s*…/);
 
-    // The 6 most recently completed files (f9..f14) survive; older ones don't.
-    expect(overlay).not.toContain('f1.ts');
-    expect(overlay).not.toContain('f8.ts');
-    expect(overlay).toContain('f9.ts');
-    expect(overlay).toContain('f14.ts');
-
-    // Total visible root-level read_file rows = 6.
+    // Collapsed toolCard shows tool name only (not args). Verify by row count:
+    // 14 completed roots, cap=6, so 6 read_file rows + 1 summary line.
     const readRows = lines.filter((l) => /read_file/.test(l));
     expect(readRows.length).toBe(6);
 
     // Positional assertion: summary line must appear *after* the last visible
-    // root row, not before the first.
+    // root row (i.e. after the last read_file line).
     const summaryIdx = lines.findIndex((l) => /\+8 done/.test(l));
-    const firstVisibleIdx = lines.findIndex((l) => /f9\.ts/.test(l));
-    expect(summaryIdx).toBeGreaterThan(firstVisibleIdx);
+    const lastVisibleIdx = lines.reduce((acc, l, idx) => /read_file/.test(l) ? idx : acc, -1);
+    expect(summaryIdx).toBeGreaterThan(lastVisibleIdx);
   });
 
   it('always shows in-flight roots — they bypass the cap', () => {
@@ -780,10 +775,10 @@ describe('ToolLane.getOverlay — MAX_OVERLAY_ROOTS sliding cap', () => {
 
     // Done budget = 6 - 3 active = 3 done slots. Oldest 2 done get hidden.
     expect(overlay).toMatch(/\+2 done/);
-    expect(overlay).not.toContain('done1.ts');
-    expect(overlay).not.toContain('done2.ts');
-    expect(overlay).toContain('done3.ts');
-    expect(overlay).toContain('done5.ts');
+    // Collapsed toolCard shows tool name only (not file args) — verify by
+    // counting visible completed read_file rows (should be 3, not 5).
+    const readRows = stripAnsi(overlay).split('\n').filter((l) => /read_file/.test(l));
+    expect(readRows.length).toBe(3);
   });
 
   it('caps active-only overflow without losing any active row', () => {

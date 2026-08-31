@@ -3060,10 +3060,11 @@ describe('ToolLane.addPreviewDiff — pre-execution diff preview', () => {
     lane.addPreviewDiff('tu_pre', sampleDiff);
     lane.addResult('tu_pre', makeResult('Replaced 1 occurrence'));
     const overlay = stripAnsi(lane.getOverlay());
-    // result branch: shows outcome line, not preview diff
+    // result branch: preview diff is gone (toolCard collapsed shows no diff)
     expect(overlay).not.toContain('@@ -1,1 +1,1 @@');
-    // positive: outcome line is present
-    expect(overlay).toContain('Replaced 1 occurrence');
+    // positive: completion badge + tool name are present (collapsed toolCard)
+    expect(overlay).toContain('✓');
+    expect(overlay).toContain('edit_file');
   });
 
   it('(c) no-op for unknown toolUseId', () => {

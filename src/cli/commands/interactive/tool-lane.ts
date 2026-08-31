@@ -18,6 +18,7 @@ import {
   type TextEntry,
   type Entry,
 } from './tool-lane-render.js';
+import { formatFlatRootCompletion } from './tool-lane-overlay-completion.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -563,7 +564,12 @@ export class ToolLane {
         }
       } else {
         if (entry.result) {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
+          // Completed flat-root: render via toolCard (collapsed) so the badge,
+          // tool name, elapsed, and batch badge share the component's layout
+          // contract. The flatRootLead is prepended by the caller (this site)
+          // so the lead stays outside the component's width budget.
+          const elapsedMs = Date.now() - entry.startedAt;
+          lines.push(clamp(flatRootLead + formatFlatRootCompletion(entry.toolName, entry.result, elapsedMs, batchBadge(entry.result), cols)));
           if (entry.diff && !entry.result.isError) {
             // Diff hangs under the outcome line, indented one level deeper
             // (4 spaces) so it visually attaches to this tool entry.

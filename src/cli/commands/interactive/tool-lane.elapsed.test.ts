@@ -101,8 +101,9 @@ describe('completed root row — no elapsed counter', () => {
     vi.setSystemTime(BASE_TIME + 30_000);
     lane.addResult('t1', makeResult('5 matches'));
     const overlay = rawOverlay(lane);
-    // Completed row ends with "✓ 5 matches", no "…" with trailing digits.
-    expect(overlay).toContain('5 matches');
+    // Completed row: collapsed toolCard shows badge + tool name, not outcome.
+    // The key invariant: no in-progress " … <digits>" suffix.
+    expect(overlay).toContain('grep');
     expect(overlay).not.toMatch(/… \d/);
   });
 });

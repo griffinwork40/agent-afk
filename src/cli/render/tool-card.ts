@@ -35,6 +35,15 @@ export interface ToolCardSpec {
    */
   collapsed?: boolean;
   /**
+   * Pre-styled batch badge appended to the header after the elapsed field.
+   *
+   * The value is an already-styled ANSI string produced by the caller (e.g.
+   * `batchBadge(chunk)` from tool-lane-format.ts). Passed through verbatim
+   * so the component does not need to know the batch-badge colour rules.
+   * When undefined or empty, nothing extra is rendered.
+   */
+  batchBadge?: string;
+  /**
    * Terminal column width used for truncation.
    *
    * Defaults to 80.  The component never reads `process.stdout.columns`
@@ -124,12 +133,14 @@ function buildHeader(spec: ToolCardSpec, width: number): string {
   const elapsedPlain = spec.elapsed != null ? '  ' + formatElapsed(spec.elapsed) : '';
   const elapsedReserved = displayWidth(elapsedPlain);
 
+  const batchStr = spec.batchBadge ?? '';
+
   const nameMax = Math.max(1, width - badgeReserved - elapsedReserved);
   const nameSanitized = sanitizeForDisplay(spec.toolName);
   const nameTruncated = truncateDisplayWidth(nameSanitized, nameMax);
   const nameStyled = palette.tool(nameTruncated);
 
-  return `${badge} ${nameStyled}${elapsedStr}`;
+  return `${badge} ${nameStyled}${elapsedStr}${batchStr}`;
 }
 
 /**
