@@ -271,7 +271,7 @@ describe('welcomeBanner', () => {
       expect(out).toContain('Agent AFK');
     });
 
-    it('surfaces the docs + github links in the footer', () => {
+    it('surfaces the docs + github + newsletter links in the footer', () => {
       Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
       const out = strip(welcomeBanner({
         mode: 'Interactive Mode',
@@ -281,6 +281,7 @@ describe('welcomeBanner', () => {
       }));
       expect(out).toContain('docs.agentafk.com');
       expect(out).toContain('github.com/griffinwork40/agent-afk');
+      expect(out).toContain('griffinlong.substack.com');
     });
 
     it('keeps the banner links in sync with package.json (drift guard)', () => {

@@ -245,6 +245,10 @@ With containment on (`default`), a file tool (read/write/edit/list/glob/grep) ta
 
 Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/changelog`.
 
+## Follow Along
+
+Building this in public at **[The Goblin Files](https://griffinlong.substack.com)** -- field notes from running an autonomous coding agent at full tilt.
+
 ## License
 
 Agent AFK is **open source**, licensed under **[Apache-2.0](LICENSE)** (SPDX: `Apache-2.0`).
