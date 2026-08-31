@@ -582,9 +582,26 @@ export async function runTurn(
 
     // Invariant: strip the terminal-state prose from the pending buffer
     // BEFORE dispose flushes it — the verdict card is the sole rendering.
+    //
+    // History: when the model emits trailing \n\n after the terminal-state
+    // block, the markdown renderer detects a block boundary during streaming
+    // and commits that block to scrollback before this strip runs. In that
+    // case getPendingBuffer() returns '' and findTerminalStateHeadingOffset
+    // returns -1 — the strip is skipped, but the prose is already in
+    // scrollback. The verdict card would then render on top of the committed
+    // prose, producing a double render. The else branch below catches that
+    // case: if the pending buffer had nothing to strip but responseText still
+    // contains a terminal-state block, the committed prose IS the sole output
+    // — suppress the verdict card to avoid duplication. See #1407.
+    let suppressVerdictCard = false;
     if (doneFired && !softStopRequested && !pauseInterruptRequested) {
       const off = findTerminalStateHeadingOffset(renderer.getPendingBuffer());
-      if (off >= 0) renderer.stripPendingTerminalState(off);
+      if (off >= 0) {
+        renderer.stripPendingTerminalState(off);
+      } else if (parseTerminalState(responseText) !== null) {
+        // Block was already committed to scrollback — prose is the sole output.
+        suppressVerdictCard = true;
+      }
     }
 
     // Stage 3e — mid-stream queued buffer is now handled natively by the
@@ -706,7 +723,7 @@ export async function runTurn(
       // the format doesn't match, so the worst case is the previous status
       // quo (just the prose).
       const verdict: TerminalState | null = parseTerminalState(responseText);
-      if (verdict) {
+      if (verdict && !suppressVerdictCard) {
         writeAbove(renderVerdictCard(verdict, {
           durationMs: doneMeta?.durationMs,
           totalCostUsd: doneMeta?.totalCostUsd,
