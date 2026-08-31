@@ -18,7 +18,13 @@ export const readWitnessTool: AnthropicToolDef = {
     'Read and filter events from a session\'s witness trace (the durable record of ' +
     'everything the agent did). Returns structured trace events in chronological order. ' +
     'Use to inspect tool calls, errors, subagent lifecycles, costs, and session phases ' +
-    'from a specific session. Defaults to the most recent session.',
+    'from a specific session. Defaults to the most recent session.\n\n' +
+    'SCOPE: trace events contain operational metadata only — which tools fired, ' +
+    'timing, byte counts, error/success, session phases. They do NOT contain ' +
+    'conversation text, user messages, assistant replies, tool arguments, or tool ' +
+    'output. To find a session by what was *discussed*, search transcripts ' +
+    '(~/.afk/state/transcripts/) or session events (~/.afk/state/sessions/) via bash. ' +
+    'To recall cross-session context by topic, use memory_search.',
   input_schema: {
     type: 'object',
     properties: {
@@ -63,7 +69,13 @@ export const searchWitnessTool: AnthropicToolDef = {
     'trace events grouped by session. Use to find patterns across sessions — recurring errors, ' +
     'specific tool usage, cost spikes, or any text that appears in trace event payloads. ' +
     'Scans the N most recent sessions (default 20). Results are capped at 200 total matches ' +
-    'across all scanned sessions.',
+    'across all scanned sessions.\n\n' +
+    'SCOPE: searches trace event METADATA only — tool names, session phases, subagent IDs, ' +
+    'error classes, timing. Does NOT search conversation content, user/assistant messages, ' +
+    'tool arguments, or tool output (those are not stored in the trace). ' +
+    'To find a prior session by topic or what was said, search transcripts ' +
+    '(~/.afk/state/transcripts/) or session events (~/.afk/state/sessions/) via bash, ' +
+    'or use memory_search for cross-session topic recall.',
   input_schema: {
     type: 'object',
     properties: {
