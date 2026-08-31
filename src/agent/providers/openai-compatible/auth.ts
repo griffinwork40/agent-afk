@@ -75,7 +75,7 @@ export interface OpenAIAuthResolution {
   envVar?: 'OPENAI_API_KEY' | 'CODEX_API_KEY';
   /** ChatGPT account id (source === 'chatgpt-oauth') — sent as the `chatgpt-account-id` header. */
   accountId?: string;
-  /** Access-token expiry as epoch SECONDS (source === 'chatgpt-oauth'), decoded from the JWT `exp` claim. */
+  /** Access-token expiry as epoch SECONDS (source === 'chatgpt-oauth' | 'chatgpt-oauth-expired'), decoded from the JWT `exp` claim. */
   expiresAt?: number;
 }
 
