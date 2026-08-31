@@ -248,8 +248,6 @@ export const tasksCmd: SlashCommand = {
     }
 
     // ── Interactive mode ──────────────────────────────────────────────────────
-    renderList();
-
     const compositor = ctx.getCompositor?.() ?? null;
 
     if (compositor) {
@@ -316,6 +314,10 @@ export const tasksCmd: SlashCommand = {
       });
     } else {
       // ── Stdin fallback: attach directly when no compositor is available ──────
+      // Render the initial list here — the compositor path uses its own
+      // renderRows() inside enterPickerMode, so renderList() is only needed
+      // for the raw-stdin branch.
+      renderList();
       await new Promise<void>((resolve) => {
         const onKeypress = (chunk: Buffer | string): void => {
           const str = typeof chunk === 'string' ? chunk : chunk.toString();
