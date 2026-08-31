@@ -282,6 +282,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // deferred so the handle stays in the active map while draining.
       // Status stays 'succeeded' during drain (no flip back to 'running').
       let lastMsg = msg;
+      // FIX-2: Open the drain window so sendMessage() can still accept
+      // pushes while status is 'succeeded'.
+      this._drainingMessages = true;
       try {
         while (this._pendingUserMessages.length > 0) {
           // Item 7c: abort-signal guard — stop draining if cancelled.
@@ -296,6 +299,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // lifecycle events, which will use accumulated usage/cost so far.
         this._pendingUserMessages.length = 0;
       }
+      // FIX-2: Close the drain window — subsequent sendMessage() calls after
+      // the drain loop completes are dropped as normal terminal-state messages.
+      this._drainingMessages = false;
 
       // Item 7a: Emit lifecycle + propagate usage AFTER all drain turns so
       // turnCount and cost reflect the full conversation.
@@ -527,15 +533,25 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   /** Pending user messages queued via sendMessage(). */
   readonly _pendingUserMessages: string[] = [];
+  /**
+   * FIX-2: True while the drain loop is executing so sendMessage() can
+   * still accept pushes even though _currentStatus is already 'succeeded'.
+   */
+  private _drainingMessages = false;
 
   sendMessage(text: string): void {
+    // FIX-4: Discard empty/whitespace-only messages before any other check.
+    if (!text.trim()) return;
     // Item 8: silently drop messages when the subagent has already reached a
     // terminal state. The task-view UI may call this while the subagent races
     // to completion; throwing here would surface a confusing error.
+    // FIX-2: Allow pushes while the drain loop is running (_drainingMessages),
+    // even though _currentStatus has already flipped to 'succeeded'.
     if (
-      this._currentStatus === 'succeeded' ||
-      this._currentStatus === 'failed' ||
-      this._currentStatus === 'cancelled'
+      (this._currentStatus === 'succeeded' ||
+        this._currentStatus === 'failed' ||
+        this._currentStatus === 'cancelled') &&
+      !this._drainingMessages
     ) {
       return;
     }

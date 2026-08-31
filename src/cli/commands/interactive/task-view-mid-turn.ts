@@ -33,6 +33,10 @@ import type { TurnHandles } from './shared.js';
 // Item 4: cap for input buffer to prevent unbounded accumulation.
 const MAX_INPUT_BYTES = 8192;
 
+// FIX-1: Reentrancy guard — prevents double-Tab from launching two concurrent
+// task views, each installing their own stdin listener.
+let midTurnViewActive = false;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -74,6 +78,10 @@ export async function launchMidTurnTaskView(
   const agentType = (handle as unknown as { _agentType?: string })?._agentType;
 
   const stdout = compositor.stdout;
+
+  // FIX-1: Mark the view as active AFTER all early-return guards so the
+  // flag is never stuck true when no subagent is found or handle is null.
+  midTurnViewActive = true;
 
   // Suspend the compositor's input handling so we own stdin directly.
   // The compositor remains armed; setOverlay() calls from the streaming
@@ -118,6 +126,7 @@ export async function launchMidTurnTaskView(
     // Already completed — show briefly then return.
     // Item 1: restore cooked mode before resuming compositor.
     try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
+    midTurnViewActive = false;
     compositor.resumeInput();
     compositor.repaint();
     return true;
@@ -145,7 +154,8 @@ export async function launchMidTurnTaskView(
       const msg = inputBuf.trim();
       if (msg) {
         handle.sendMessage(msg);
-        stdout.write(`\r\x1b[K${palette.user('you')}: ${msg}\n`);
+        // FIX-3: Sanitize echo to prevent ANSI injection from paste content.
+        stdout.write(`\r\x1b[K${palette.user('you')}: ${stripEscapeSequences(msg)}\n`);
         inputBuf = '';
         renderPrompt();
       }
@@ -195,6 +205,8 @@ export async function launchMidTurnTaskView(
 
     // Item 1: restore cooked mode before handing terminal back to compositor.
     try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
+    // FIX-1: Clear the reentrancy guard so a subsequent Tab is accepted.
+    midTurnViewActive = false;
     compositor.resumeInput();
     compositor.repaint();
   }
@@ -250,6 +262,9 @@ export function createTaskViewHandler(
   const compositor = h.getCompositor?.();
   if (!compositor) return null;
   return () => {
+    // FIX-1: Suppress double-Tab — if a view is already active, fall through
+    // to ghost-accept rather than launching a second concurrent instance.
+    if (midTurnViewActive) return false;
     const manager = getTasksManager();
     if (!manager) return false;
     // Synchronous check: are there running subagents?

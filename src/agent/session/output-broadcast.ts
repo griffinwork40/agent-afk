@@ -76,6 +76,13 @@ export class OutputBroadcast {
         return new Promise((resolve) => { sub.resolve = resolve; });
       },
       return(): Promise<IteratorResult<OutputEvent>> {
+        // FIX-5: Resolve any pending next() before removing the subscriber,
+        // otherwise a caller awaiting next() will hang indefinitely.
+        if (sub.resolve) {
+          const r = sub.resolve;
+          sub.resolve = null;
+          r({ value: undefined as unknown as OutputEvent, done: true });
+        }
         self.subscribers.delete(sub);
         return Promise.resolve({ value: undefined as unknown as OutputEvent, done: true });
       },
