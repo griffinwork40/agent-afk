@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.1] - 2026-08-31
+
+### Fixed
+- surface durationMs via public handle API and route stdin through compositor (#1346) (#1390) (cec9a458)
+
 ## [5.169.0] - 2026-08-31
 
 ### Added
