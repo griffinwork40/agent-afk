@@ -2,8 +2,8 @@
  * Tests for AnthropicDirectProvider's GrantManager implementation.
  *
  * These cover the bug-fix patch that:
- *   1. Adds a non-revocable guard for the initial resolveBase at the provider
- *      level (mirrors SessionToolDispatcher.revokeRoot).
+ *   1. Adds a non-revocable guard on _currentCwd (Option A / migrating anchor)
+ *      at the provider level (mirrors SessionToolDispatcher.revokeRoot).
  *   2. Includes sessionId in the provider's audit log entries.
  *
  * The provider's GrantManager methods are exercised directly (not via /allow-dir)
@@ -57,8 +57,8 @@ describe('AnthropicDirectProvider GrantManager', () => {
     return [];
   }
 
-  describe('non-revocable initial resolveBase guard', () => {
-    it('refuses to revoke the initial resolveBase captured by ensureSharedRoots', () => {
+  describe('non-revocable _currentCwd anchor (Option A / migrating)', () => {
+    it('refuses to revoke _currentCwd (migrating anchor) captured by ensureSharedRoots', () => {
       const provider = new AnthropicDirectProvider();
       // Prime ensureSharedRoots via addReadRoot which calls it internally.
       // To set initialResolveBase we need to call buildDispatcher OR trigger
@@ -86,12 +86,14 @@ describe('AnthropicDirectProvider GrantManager', () => {
       // a no-op getGrants then a manual initial-cwd grant via the dispatcher
       // build path. Easiest path: call a helper that ensureSharedRoots seeds.
       // We use a public seam: addReadRoot is fine but doesn't pass cwd, so
-      // _initialResolveBase stays undefined. The only public route that DOES
-      // set _initialResolveBase is buildDispatcher — which is gated by query().
-      // For deterministic testing, we use the documented behavioural property:
-      // once _initialResolveBase is set, revokeRoot must refuse to remove it.
-      // We trigger this via the buildDispatcher seam by calling .query() with
-      // a stub; failing that, we drive it via the dispatcher-options path.
+      // _currentCwd stays undefined. The only public route that DOES seed
+      // _currentCwd is ensureSharedRoots (called by query() setup), which is
+      // gated by query(). For deterministic testing, we use the documented
+      // behavioural property: once _currentCwd is set, revokeRoot must refuse
+      // to remove it (Option A / migrating anchor: the current cwd is always
+      // protected). We trigger this via the buildDispatcher seam by calling
+      // .query() with a stub; failing that, we drive it via the
+      // dispatcher-options path.
 
       // Use the buildDispatcher escape hatch: cast to access the private method
       // is unappealing. Instead, we drive ensureSharedRoots(cwd) via the only
@@ -101,7 +103,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
       // To keep this test focused on the guard and avoid the full query loop,
       // we rely on the structural property documented in the patch:
       //
-      //   if (cwd && !this._initialResolveBase) { this._initialResolveBase = cwd; }
+      //   if (cwd && !this._currentCwd) { this._currentCwd = cwd; }
       //
       // Verify the absence-side: with no cwd ever provided, the field stays
       // undefined and revokeRoot has no special path to guard.

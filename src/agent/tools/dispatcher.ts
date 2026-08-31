@@ -449,10 +449,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
-   * Remove `absPath` from both root lists. The INITIAL `resolveBase` (captured
-   * at construction) is non-revocable: attempts to revoke it are silently
-   * ignored. This matches provider semantics — the session's launch dir stays
-   * protected even after a `setResolveBase` cwd migration.
+   * Remove `absPath` from both root lists. The CURRENT `resolveBase` is
+   * non-revocable: attempts to revoke it are silently ignored. After a
+   * `setResolveBase` call the new cwd becomes the protected root (Option A /
+   * migrating anchor), matching provider semantics. See grant-manager.ts
+   * module header and the `getProtectedRoot` hook at `grantManager` construction.
    */
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.grantManager.revokeRoot(absPath, source, sessionId);

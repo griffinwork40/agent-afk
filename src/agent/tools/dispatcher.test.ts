@@ -1466,7 +1466,7 @@ describe('SessionToolDispatcher grant API', () => {
     expect(d.getGrants().readRoots).not.toContain('/extra');
   });
 
-  // --- Finding 2: fixed-anchor policy (Option B) ---
+  // --- Finding 2: migrating-anchor policy (Option A) ---
 
   // --- Finding 3: revokeRoot must not audit on no-op (tested via grant state) ---
 
@@ -1504,6 +1504,25 @@ describe('SessionToolDispatcher grant API', () => {
     const d = makeDispatcher({ cwd: '/launch/dir' });
     d.setResolveBase('/new/worktree');
     d.revokeRoot('/new/worktree', 'slash');
+    expect(d.getGrants().readRoots).toContain('/new/worktree');
+  });
+
+  it('old cwd becomes revocable after setResolveBase migrates the anchor (Option A)', () => {
+    // Option A invariant: after setResolveBase('/new'), the OLD cwd is no longer
+    // the protected anchor. revokeRoot on the old dir must succeed, proving the
+    // anchor migrated away from it.
+    //
+    // Counterpart to the test above: that test proves NEW cwd is protected;
+    // this test proves OLD cwd is no longer protected.
+    const d = makeDispatcher({ cwd: '/old/worktree' });
+    d.setResolveBase('/new/worktree');
+    // setResolveBase spliced /old/worktree out of _readRoots. Re-grant it so
+    // revokeRoot has something to remove (simulates a grant added after migration).
+    d.addReadRoot('/old/worktree', 'slash');
+    // Revoke must succeed — /old/worktree is no longer the anchor.
+    d.revokeRoot('/old/worktree', 'slash');
+    expect(d.getGrants().readRoots).not.toContain('/old/worktree');
+    // New anchor remains intact.
     expect(d.getGrants().readRoots).toContain('/new/worktree');
   });
 
@@ -1674,25 +1693,24 @@ describe('SessionToolDispatcher.setResolveBase', () => {
     expect(sharedReadRoots).toEqual(['/cwd', '/extra']);
   });
 
-  it('revokeRoot guard is fixed at the INITIAL resolveBase (anchor policy: Option B)', () => {
-    // The NON-REVOCABLE anchor is the session's INITIAL launch dir (matching
-    // provider semantics) — setResolveBase migrates the working cwd but does
-    // not change which dir is anchored.
+  it('revokeRoot guard tracks the CURRENT resolveBase (anchor policy: Option A — migrating)', () => {
+    // The NON-REVOCABLE anchor is the CURRENT resolveBase (Option A: migrating
+    // anchor). After setResolveBase the new cwd becomes the protected root —
+    // provider semantics match (_currentCwd migrates the same way via setCwd).
     //
-    // Scenario: add an extra root, then migrate. The extra root (not the anchor)
-    // must be revocable after migration, confirming that only _initialResolveBase
-    // is protected (not the new cwd).
+    // Scenario: add an extra root, then migrate. After migration:
+    //   - revoking /old/worktree is a no-op: setResolveBase already spliced it
+    //     out of _readRoots, so there is nothing to remove (the anchor guard
+    //     does NOT fire here — /old/worktree no longer matches resolveBase).
+    //   - the extra root (not the anchor) must still be revocable normally.
     const d = makeDispatcher({ cwd: '/old/worktree' });
     d.addReadRoot('/extra/grant', 'slash');
     d.setResolveBase('/new/worktree');
 
-    // The initial anchor (/old/worktree) revoke must be silently ignored.
-    // Note: setResolveBase migrated /old/worktree → /new/worktree in _readRoots,
-    // so /old/worktree is no longer in the list — the guard fires first and
-    // returns early without touching roots.
+    // /old/worktree was migrated out of _readRoots by setResolveBase — revoking
+    // it is a structural no-op (path not in list). The anchor is now /new/worktree.
     d.revokeRoot('/old/worktree', 'slash');
-    // Confirming the guard fired: getGrants().readRoots should contain /new/worktree
-    // (migrated in) and /extra/grant (unchanged), not /old/worktree (migrated out).
+    // /new/worktree (migrated in) and /extra/grant (unchanged) remain in readRoots.
     expect(d.getGrants().readRoots).toContain('/new/worktree');
     expect(d.getGrants().readRoots).toContain('/extra/grant');
 

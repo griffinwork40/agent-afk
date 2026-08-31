@@ -269,7 +269,7 @@ export function providerForModel(
  *
  * **Per-session isolation:** both bundled providers construct a *fresh*
  * instance on every call. They hold mutable per-session state (the
- * `_sharedReadRoots` / `_sharedWriteRoots` / `_initialResolveBase` arrays
+ * `_readRoots` / `_writeRoots` / `_currentCwd` fields
  * used by the `/allow-dir` GrantManager interface) that MUST NOT be shared
  * across concurrent sessions. Sharing a module-scope singleton previously
  * caused cross-session root leakage under `afk farm new N` (N > 1).
