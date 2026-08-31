@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.3] - 2026-08-31
+
+### Fixed
+- reconcile 3 dispatcher/provider behavior divergences (#500) (#1396) (ce143232)
+
 ## [5.169.2] - 2026-08-31
 
 ### Fixed
