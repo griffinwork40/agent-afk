@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.2] - 2026-08-31
+
+### Fixed
+- resolve open issues #740, #654, #555 (bash grant policy, openai-compat test debt, chatgpt-oauth follow-ups) (#1395) (31aba866)
+
 ## [5.169.1] - 2026-08-31
 
 ### Fixed
