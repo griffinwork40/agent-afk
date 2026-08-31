@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.168.2] - 2026-08-31
+
+### Fixed
+- make auth diagnose slot-aware for chatgpt-oauth (#555) (#1389) (21cafcf4)
+
 ## [5.168.1] - 2026-08-31
 
 ### Fixed
