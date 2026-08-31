@@ -371,6 +371,29 @@ export class StreamingMarkdownRenderer {
   }
 
   /**
+   * Strip a suffix from the pending buffer, starting at `offset`.
+   * Content from `buffer[offset]` onward is dropped without committing.
+   * Leading/trailing whitespace around the truncation point is trimmed
+   * so no orphan blank lines remain.
+   *
+   * Returns `true` if anything was stripped, `false` otherwise.
+   *
+   * Used to remove the terminal-state prose block (Done/Blocked/…) from
+   * the pending buffer before flush commits it to scrollback — so the
+   * verdict card is the sole visible rendering.
+   *
+   * Contract: this ONLY operates on the pending buffer. Content already
+   * committed to scrollback (past a `\n\n` boundary during streaming) is
+   * unreachable — the terminal-state block is expected to be the last
+   * block in the response, with no trailing `\n\n`, so it stays pending.
+   */
+  stripPendingFrom(offset: number): boolean {
+    if (offset < 0 || offset >= this.buffer.length) return false;
+    this.buffer = this.buffer.slice(0, offset).trimEnd();
+    return true;
+  }
+
+  /**
    * Discard the pending (uncommitted) buffer WITHOUT committing it to
    * scrollback, and clear the live overlay. Counterpart to {@link
    * commitPending} (which COMMITS the buffer) and distinct from {@link

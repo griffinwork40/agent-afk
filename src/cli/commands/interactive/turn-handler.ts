@@ -18,7 +18,7 @@ import {
   formatTerminalTitle,
 } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
-import { parseTerminalState, type TerminalState } from './terminal-state.js';
+import { parseTerminalState, findTerminalStateHeadingOffset, type TerminalState } from './terminal-state.js';
 import { joinAtRoundSeam } from './turn-text-seam.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
@@ -580,6 +580,13 @@ export async function runTurn(
       }
     });
 
+    // Invariant: strip the terminal-state prose from the pending buffer
+    // BEFORE dispose flushes it — the verdict card is the sole rendering.
+    if (doneFired && !softStopRequested && !pauseInterruptRequested) {
+      const off = findTerminalStateHeadingOffset(renderer.getPendingBuffer());
+      if (off >= 0) renderer.stripPendingTerminalState(off);
+    }
+
     // Stage 3e — mid-stream queued buffer is now handled natively by the
     // persistent compositor: dispose() flips to idle mode, which (per
     // the widened setInputMode flush invariant) fires the surface's
@@ -614,8 +621,10 @@ export async function runTurn(
     // here; doing so sent users down a dead-end. See the onSoftStop doc in
     // terminal-compositor.types.ts: "next Enter starts a new turn in the
     // same session.")
+    // Shared writer for soft-stop and pause-interrupt notices below.
+    const writeNotice = completionWriter ? completionWriter.fn : console.log;
+
     if (softStopRequested) {
-      const write = completionWriter ? completionWriter.fn : console.log;
       // Surface how many type-ahead messages are still queued (Enter-committed
       // pendingSubmissions preserved across the soft-stop per the ESC contract).
       // The authoritative count is the persistent compositor's getPendingCount()
@@ -630,27 +639,24 @@ export async function runTurn(
       // trailing blank line. The predecessor (last committed paragraph
       // or tool block) already emitted its own trailing blank, so a
       // leading blank here would double-up. See docs/tui-rhythm.md.
-      write(palette.warning(`⏸ Stopped${queuedSuffix} — work so far kept.`) +
+      writeNotice(palette.warning(`⏸ Stopped${queuedSuffix} — work so far kept.`) +
         palette.dim('  Send a message to continue.'));
-      write('');
+      writeNotice('');
     }
 
     // Pause-interrupt: the user submitted a line during a usage-limit pause to
     // end the wait. The queued buffer flushes as the next turn at the next
     // readLine (idle-transition flush). Gentle note, distinct from ESC's stop.
     if (pauseInterruptRequested) {
-      const write = completionWriter ? completionWriter.fn : console.log;
       // Owns one trailing blank (TUI rhythm contract — see docs/tui-rhythm.md).
-      write(palette.dim('▶ Ending wait — running your next command…'));
-      write('');
+      writeNotice(palette.dim('▶ Ending wait — running your next command…'));
+      writeNotice('');
     }
 
     if (doneFired && !softStopRequested && !pauseInterruptRequested) {
       recordTurn(stats, historyText, responseText, doneMeta, toolEvents);
 
-      if (h.onTurnComplete) {
-        await h.onTurnComplete(historyText, responseText).catch(() => { /* best-effort */ });
-      }
+      await h.onTurnComplete?.(historyText, responseText).catch(() => { /* best-effort */ });
 
       // Ring the terminal bell on turn completion when enabled (AFK_BELL=1,
       // TTY-only) — an away-from-keyboard completion cue. No-op otherwise.
