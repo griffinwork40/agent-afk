@@ -284,6 +284,16 @@ describe('welcomeBanner', () => {
       expect(out).toContain('griffinlong.substack.com');
     });
 
+    it('preserves the newsletter URL at the common 80-col width', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        cwd: '/tmp',
+      }));
+      expect(out).toContain('griffinlong.substack.com');
+    });
+
     it('keeps the banner links in sync with package.json (drift guard)', () => {
       const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as {

@@ -402,7 +402,10 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   // ellipsis instead of overflowing the row. Single-middot ( · ) to match the
   // tagline, mode, and hint rhythm.
   lines.push(
-    LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL} · ${REPO_URL} · ${NEWSLETTER_URL}`), headerMaxW),
+    LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL} · ${REPO_URL}`), headerMaxW),
+  );
+  lines.push(
+    LEFT_PAD + truncateDisplay(palette.dim(`newsletter: ${NEWSLETTER_URL}`), headerMaxW),
   );
 
   // Hint line sits flush-left below the whole composition. Wrapped to

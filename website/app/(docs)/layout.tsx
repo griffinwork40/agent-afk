@@ -64,31 +64,29 @@ export default function Layout({ children }: { children: ReactNode }) {
         sidebar={{
           defaultOpenLevel: 1,
         }}
-        footer={
-          <footer
-            style={{
-              padding: '2rem 1.5rem',
-              borderTop: '1px solid var(--fd-border)',
-              textAlign: 'center',
-              fontSize: '0.85rem',
-              color: 'var(--fd-muted-foreground)',
-            }}
-          >
-            Building in public at{' '}
-            <a
-              href="https://griffinlong.substack.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--fd-primary)' }}
-            >
-              The Goblin Files
-            </a>
-            {' '}&mdash; field notes from running an autonomous coding agent.
-          </footer>
-        }
       >
         {children}
       </DocsLayout>
+      <footer
+        style={{
+          padding: '2rem 1.5rem',
+          borderTop: '1px solid var(--fd-border)',
+          textAlign: 'center',
+          fontSize: '0.85rem',
+          color: 'var(--fd-muted-foreground)',
+        }}
+      >
+        Building in public at{' '}
+        <a
+          href="https://griffinlong.substack.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: 'var(--fd-primary)' }}
+        >
+          The Goblin Files
+        </a>
+        {' '}&mdash; field notes from running an autonomous coding agent.
+      </footer>
     </RootProvider>
   );
 }
