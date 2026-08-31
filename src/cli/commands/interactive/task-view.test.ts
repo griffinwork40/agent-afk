@@ -131,9 +131,10 @@ describe('renderTaskViewHeader', () => {
     expect(header).toContain('background');
   });
 
-  it('includes status text', () => {
+  it('includes status badge', () => {
     const header = renderTaskViewHeader('abc-123', 'failed');
-    expect(header).toContain('failed');
+    // statusBadge renders '✗' for error status, not the raw string 'failed'
+    expect(header).toContain('✗');
   });
 });
 
