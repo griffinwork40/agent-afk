@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.6] - 2026-08-31
+
+### Fixed
+- deduplicate terminal-state rendering -- verdict card only (#1405) (81e64720)
+
 ## [5.169.5] - 2026-08-31
 
 ### Fixed
