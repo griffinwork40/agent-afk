@@ -239,16 +239,18 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly classifier: ConcurrencyClassifier;
   /** Ceiling on simultaneously in-flight concurrency-safe calls per batch. */
   private readonly maxConcurrentSafeCalls: number;
-  // Invariant: `resolveBase` is the dispatcher's anchor for relative-path
-  // resolution AND the value emitted as `ToolHandlerContext.resolveBase` /
-  // `.cwd` on every dispatch. Mutated only via `setResolveBase()` so the
-  // /allow-dir non-revocable guard remains correct (revokeRoot still uses
-  // `this.resolveBase` for the equality check; updates land atomically).
-  // Made mutable in 2026-05-26 to fix the worktree-rename race: when a
-  // session's worktree is moved mid-turn, the in-flight `runInput.toolDispatcher`
+  // `resolveBase` tracks the CURRENT working directory — mutated only via
+  // `setResolveBase()`. Used for `ToolHandlerContext.resolveBase`/`.cwd` and
+  // for the `_readRoots`/`_writeRoots` migration in `setResolveBase`. Made
+  // mutable in 2026-05-26 to fix the worktree-rename race: when a session's
+  // worktree is moved mid-turn, the in-flight `runInput.toolDispatcher`
   // reference (captured by `loop.ts`) must observe the new cwd on its NEXT
   // `handlerContext` read so bash/grep/glob spawn with the post-rename path
   // instead of the deleted old one.
+  //
+  // The NON-REVOCABLE anchor is `resolveBase` itself (Option A / migrating
+  // anchor). After a `setResolveBase` call the anchor migrates with the cwd
+  // so the NEW worktree root is protected, matching provider semantics.
   private resolveBase: string | undefined;
   /** Mutable read-root list. Mutated in place by `addReadRoot`/`revokeRoot`/`setResolveBase`. */
   private readonly _readRoots: string[];
@@ -376,9 +378,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.grantManager = new PathGrantManager({
       getReadRoots: () => this._readRoots,
       getWriteRoots: () => this._writeRoots,
-      // Dispatcher semantics: the CURRENT resolveBase is the non-revocable
-      // anchor (and the getGrants() display base) — after a setResolveBase
-      // migration the NEW cwd is protected, not the launch dir.
+      // Option A (migrating anchor): the non-revocable anchor is the CURRENT
+      // resolveBase — it migrates with `setResolveBase` so the active worktree
+      // root is always protected. Providers use the same semantics.
+      // See grant-manager-divergence.md §Finding 2.
       getProtectedRoot: () => this.resolveBase,
       getAllowAll: () => this._allowAll,
       getDefaultSessionId: () => this.sessionId,
@@ -432,8 +435,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * Invariant: the audit append fires ONLY when the path is newly added —
    * see {@link PathGrantManager.addReadRoot} for the 196x dedup rationale.
    */
-  addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    this.grantManager.addReadRoot(absPath, source);
+  addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
+    this.grantManager.addReadRoot(absPath, source, sessionId);
   }
 
   /**
@@ -441,19 +444,19 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * Audits `grant-write` only when the path is newly added to `_writeRoots` —
    * see {@link PathGrantManager.addWriteRoot}.
    */
-  addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    this.grantManager.addWriteRoot(absPath, source);
+  addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
+    this.grantManager.addWriteRoot(absPath, source, sessionId);
   }
 
   /**
    * Remove `absPath` from both root lists. The CURRENT `resolveBase` is
-   * non-revocable: attempts to revoke it are silently ignored. (Note: after a
-   * `setResolveBase` migration the protected anchor is the NEW cwd — this
-   * differs from the providers, which protect the session's INITIAL
-   * resolveBase; see grant-manager.ts module header, divergence #2.)
+   * non-revocable: attempts to revoke it are silently ignored. After a
+   * `setResolveBase` call the new cwd becomes the protected root (Option A /
+   * migrating anchor), matching provider semantics. See grant-manager.ts
+   * module header and the `getProtectedRoot` hook at `grantManager` construction.
    */
-  revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    this.grantManager.revokeRoot(absPath, source);
+  revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
+    this.grantManager.revokeRoot(absPath, source, sessionId);
   }
 
   /** Returns a snapshot of current grant state (for /allow-dir display). */
@@ -475,8 +478,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
   /**
    * Update the dispatcher's resolveBase to `newCwd`, propagating to:
-   *   1. `this.resolveBase` (used by the `handlerContext` getter, /allow-dir
-   *      non-revocable guard, and grant-API equality checks).
+   *   1. `this.resolveBase` (used by the `handlerContext` getter and grant-API
+   *      containment checks). The non-revocable anchor migrates with this update
+   *      (Option A) — the new cwd becomes the protected root.
    *   2. `_readRoots` / `_writeRoots` — any entry that equals the prior
    *      resolveBase is replaced in place with `newCwd`. Other grants
    *      (added via /allow-dir) are preserved.

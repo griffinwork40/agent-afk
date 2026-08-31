@@ -110,8 +110,9 @@ export function setUpQuerySession(
 
   // Initialise the shared root arrays on first query. Subsequent queries
   // reuse the same array references so /allow-dir grants survive across turns.
-  // Route through ensureSharedRoots so _initialResolveBase is captured for
-  // the non-revocable guard in revokeRoot.
+  // Route through ensureSharedRoots so _currentCwd is seeded on the first
+  // query; the non-revocable guard in revokeRoot reads _currentCwd (Option A:
+  // migrates with each setCwd call, so the active worktree root is protected).
   ctx.ensureSharedRoots(config.cwd);
   // Invariant: a cached provider instance is reused across `/model` swaps, and
   // ProviderRouter.buildInner injects the router's live cwd into each new

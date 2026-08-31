@@ -157,7 +157,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * the path-approval hook's `allowAll` matches the per-query dispatcher's.
    */
   private _currentPermissionMode = 'default';
-  private _initialResolveBase: string | undefined;
+  /** Tracks the most recently seen cwd — doubles as the migrating non-revocable anchor (Option A). */
+  private _sharedCurrentCwd: string | undefined;
   /**
    * Presence-registration guard — same semantics as
    * `AnthropicDirectProvider._presenceSessionId`. `null` = not yet registered.
@@ -457,6 +458,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // string with no further plumbing.
     const rebuildEnvironmentBlock = (newCwd: string): void => {
       _currentCwd = newCwd;
+      this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
       patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment());
     };
     buildOpts.onCwdChange = rebuildEnvironmentBlock;
@@ -664,7 +666,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       const defaultRoots = cwd ? [cwd] : [];
       this._sharedReadRoots = defaultRoots.slice();
       this._sharedWriteRoots = defaultRoots.slice();
-      if (cwd && !this._initialResolveBase) this._initialResolveBase = cwd;
+      // Track current cwd — doubles as the migrating non-revocable anchor (Option A).
+      if (cwd && !this._sharedCurrentCwd) this._sharedCurrentCwd = cwd;
     }
   }
 
@@ -683,14 +686,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
   /**
    * Shared grant-state machine (issues #361/#362) — same hook bindings as
    * `AnthropicDirectProvider.grantManager`: lazy `ensureSharedRoots` init,
-   * INITIAL resolveBase as the non-revocable anchor, mode-derived `allowAll`,
-   * per-call sessionId threading. See grant-manager.ts.
+   * CURRENT cwd as the non-revocable anchor (Option A — migrates on cwd
+   * change), mode-derived `allowAll`, per-call sessionId threading.
+   * See grant-manager.ts.
    */
   private readonly grantManager = new PathGrantManager({
     getReadRoots: () => this._sharedReadRoots,
     getWriteRoots: () => this._sharedWriteRoots,
     ensureInitialized: () => this.ensureSharedRoots(),
-    getProtectedRoot: () => this._initialResolveBase,
+    getProtectedRoot: () => this._sharedCurrentCwd,
     getAllowAll: () => pathContainmentBypassed(this._currentPermissionMode),
   });
 
