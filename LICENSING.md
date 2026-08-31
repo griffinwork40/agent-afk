@@ -1,6 +1,6 @@
 # Licensing
 
-Agent AFK is **open core**.
+Agent AFK is **open source**.
 
 ## The core is Apache-2.0
 
@@ -21,14 +21,13 @@ There is **no copyleft** and **no dual-license** on the core. You do **not** nee
 a separate commercial license to use Agent AFK inside a company or a closed
 product. The code is yours to build on.
 
-## Pro & Team (separate products)
+## Paid support
 
-Premium skill packs, team features, managed/hosted runners, and priority support
-are **separate commercial products** under their own terms. They are additive
-add-ons (delivered as private plugins) — they are **not** part of the Apache-2.0
-core and do not change its license. The core is, and will stay, free and open.
+The runtime is free. Paid plans are monthly support from the maintainer -- setup,
+custom skills, ongoing tuning, and direct access -- not feature gates. Every
+feature ships in the open-source repo.
 
-Interested in Pro/Team or a support arrangement? **sales@graisol.com**
+Interested? **griffin@graisol.com**
 
 ## Trademarks
 
@@ -47,10 +46,6 @@ there is no CLA. Sign off your commits with `git commit -s`; by doing so you
 certify the [DCO](https://developercertificate.org/) and agree your contribution
 is licensed under Apache-2.0 (inbound = outbound). See
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-## Pro / Commercial features
-
-Autonomous skill-generation (`forge`) and the calibrated skill-qualification rubric (`qualify`) are reserved for the Agent AFK Pro and commercial layer and are not included in this open-source build.
 
 ---
 *This document is a plain-language summary, not legal advice. The text of
