@@ -2,18 +2,13 @@ import type { AgentSession } from '../../../agent/session.js';
 import type { SessionStats, ToolEvent } from '../../slash/types.js';
 import type { ResponseMetadata } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
-import type { ImageAttachment } from '../../input/attachments.js';
+import { describeForHistory, type ImageAttachment } from '../../input/attachments.js';
 import type { InputSurfaceRefs } from '../../input/input-surface.js';
-import { describeForHistory } from '../../input/attachments.js';
 import { recordTurn } from '../../slash/session-stats.js';
 import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
 import { classifyError, presentError } from '../../errors/index.js';
-import {
-  type CompletionWriter,
-  type ThinkingUiMode,
-  type TurnHandles,
-} from './shared.js';
+import { type CompletionWriter, type ThinkingUiMode, type TurnHandles } from './shared.js';
 import { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { createConsoleWriter } from '../../slash/writer.js';
 import {
@@ -28,6 +23,7 @@ import { joinAtRoundSeam } from './turn-text-seam.js';
 import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
 import { loadTelegramConfig } from '../../config.js';
+import { createTaskViewHandler } from './task-view-mid-turn.js';
 import { printTurnFooter } from './turn-handler.footer.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
@@ -358,6 +354,9 @@ export async function runTurn(
     if (h.setBackgroundHandler && h.subagentControl) {
       h.setBackgroundHandler(handleBackgroundKey);
     }
+
+    // Install the per-turn Tab task-view handler (mid-turn subagent peek).
+    h.setTaskViewHandler?.(createTaskViewHandler(h));
 
     // Expand `@<path>` tokens in the user's text into file-content blocks
     // (tilde/absolute/relative, size+binary+secret guarded — see
@@ -803,6 +802,9 @@ export async function runTurn(
     // Per-turn Ctrl+B handler is cleared so between-turn presses don't
     // re-trigger backgrounding into a no-longer-existing turn.
     h.setBackgroundHandler?.(null);
+    // Per-turn Tab task-view handler is cleared so Tab between turns
+    // retains its normal autocomplete/ghost-accept behavior.
+    h.setTaskViewHandler?.(null);
     // Per-turn ESC soft-stop handler is cleared so between-turn ESC
     // presses are a no-op (compositor mode gate already drops them in
     // idle; this is a defense-in-depth clear).

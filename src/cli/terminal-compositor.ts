@@ -138,6 +138,8 @@ export class TerminalCompositor {
   onPauseInterrupt?: () => void;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onShiftTab?: () => void;
+  /** @internal Mid-turn Tab handler for task viewing. Per-turn (set/cleared by the turn handler). */
+  onTaskView?: () => boolean;
   /**
    * Ctrl+O "open $EDITOR" handler — see
    * {@link TerminalCompositorOptions.onOpenEditor}. Installed once at REPL
@@ -563,6 +565,7 @@ export class TerminalCompositor {
     this.onBackground = opts.onBackground;
     this.onPauseInterrupt = opts.onPauseInterrupt;
     this.onShiftTab = opts.onShiftTab;
+    this.onTaskView = opts.onTaskView;
     this.onOpenEditor = opts.onOpenEditor;
     // Normalize promptText to a function: string → constant closure;
     // function → use as-is; falsy → dim-chevron fallback.
