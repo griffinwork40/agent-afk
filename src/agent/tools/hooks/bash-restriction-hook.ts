@@ -551,13 +551,32 @@ function withEtcAliases(roots: readonly string[]): string[] {
  * read denylist, whose floor is unconditional. Bash's gate exists to stop the
  * ACCIDENTAL `cat`, and an explicit `/allow-dir ~/.ssh` is the user saying they
  * want that path in this session; the typed tools stay floored regardless, so
- * the strict boundary is never the one being relaxed here. This is not limited
- * to explicit grants, though: `granted` below also seeds from
- * `grants.resolveBase` (the session's cwd anchor, always implicitly readable —
- * see `dispatcher.ts`), so a candidate whose ancestor IS the session's
- * resolveBase drops out of restriction with no `/allow-dir` call at all — the
- * containment check (`path.relative`) cannot distinguish an implicit
- * resolveBase root from an explicit `readRoots`/`writeRoots` grant.
+ * the strict boundary is never the one being relaxed here.
+ *
+ * Decision (Option A, #740): `resolveBase` containment CAN drop a builtin
+ * credential root from the bash restriction list, with no `/allow-dir` call
+ * required. `granted` below also seeds from `grants.resolveBase` (the
+ * session's cwd anchor, always implicitly readable — see `dispatcher.ts`), so
+ * a candidate whose ancestor IS the session's resolveBase drops out of
+ * restriction with no `/allow-dir` call at all — the containment check
+ * (`path.relative`) cannot distinguish an implicit resolveBase root from an
+ * explicit `readRoots`/`writeRoots` grant. This is intentional:
+ *   1. The bash gate is advisory, not a sandbox (see module header threat
+ *      model). Stopping an implicit resolveBase drop would not raise the actual
+ *      security bar.
+ *   2. The typed file tools (read_file, grep, glob) are unconditionally floored
+ *      regardless of any grant — the hard boundary is never the one being
+ *      relaxed here. Only the shell surface is in scope.
+ *   3. #579 already reports the floors as too broad. Option B (exempt builtins
+ *      from resolveBase drops) would widen them on the bash surface, making
+ *      a user working inside a credential dir (e.g. ~/.ssh) self-block.
+ *   4. The sharpest edge — `resolveBase = $HOME` via a permissive `cwd` arg —
+ *      is being closed separately via cwd input validation in
+ *      `subagent/input-parse.ts`, which rejects home-breadth `cwd` values.
+ * Changing this to Option B means splitting `candidates` by provenance and
+ * filtering `BUILTIN_READ_DENYLIST`-derived entries against `readRoots`/
+ * `writeRoots` only — which would reintroduce the ergonomic footgun the
+ * resolveBase seeding was added to prevent.
  */
 export function deriveRestrictedSubstrings(grants: {
   resolveBase: string | undefined;
