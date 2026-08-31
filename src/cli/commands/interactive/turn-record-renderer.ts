@@ -29,7 +29,7 @@
  */
 
 import { palette } from '../../palette.js';
-import { getTerminalWidth } from '../../terminal-size.js';
+import { divider } from '../../render/divider.js';
 import { summarizeToolEvents } from '../../summarize-tool-events.js';
 import type { TurnRecord } from '../../slash/types.js';
 import type { Writer } from '../../slash/types.js';
@@ -47,8 +47,7 @@ const MAX_CONTENT_CHARS = 600;
 
 /** Separator line sized to terminal width (max 100). */
 function sep(): string {
-  const w = Math.min(getTerminalWidth(), 100);
-  return palette.dim('─'.repeat(w));
+  return divider(undefined, 100);
 }
 
 /**
@@ -102,8 +101,7 @@ export function renderResumeViewHeader(opts: {
   id: string;
   totalTurns: number;
 }): string {
-  const w = Math.min(getTerminalWidth(), 100);
-  const hr = palette.dim('─'.repeat(w));
+  const hr = divider(undefined, 100);
   const label = opts.name ? `${opts.name}  ${palette.dim(`(${opts.id.slice(0, 12)})`)}` : opts.id.slice(0, 20);
   const turns = `${opts.totalTurns} turn${opts.totalTurns === 1 ? '' : 's'}`;
   const title = palette.bold(`Session: ${label}`) + '  ' + palette.dim(turns);

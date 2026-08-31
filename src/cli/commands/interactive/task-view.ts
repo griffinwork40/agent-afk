@@ -16,6 +16,7 @@ import { palette } from '../../palette.js';
 import { renderMarkdownToTerminal } from '../../formatter.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { toolCard } from '../../render/tool-card.js';
+import { divider } from '../../render/divider.js';
 import type { Message } from '../../../agent/types/message-types.js';
 
 // ---------------------------------------------------------------------------
@@ -55,8 +56,7 @@ const CONTENT_PREVIEW_CHARS = 200;
  * Width is clamped to the current terminal width.
  */
 function buildHeader(h: TaskViewHeader): string {
-  const width = Math.min(getTerminalWidth(), 100);
-  const sep = palette.dim('─'.repeat(width));
+  const sep = divider(undefined, 100);
 
   const statusColor =
     h.status === 'completed' ? palette.success :
@@ -84,8 +84,7 @@ function buildHeader(h: TaskViewHeader): string {
 
 /** Build the footer separator. */
 function buildFooter(): string {
-  const width = Math.min(getTerminalWidth(), 100);
-  return palette.dim('─'.repeat(width));
+  return divider(undefined, 100);
 }
 
 /** Format milliseconds as a compact human duration. */

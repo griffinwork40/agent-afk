@@ -15,6 +15,7 @@ import {
   parseCommits,
   updateChangelog,
 } from '../../../changelog.js';
+import { divider } from '../../render/divider.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand } from '../types.js';
 
@@ -60,7 +61,7 @@ export const changelogCmd: SlashCommand = {
     }
 
     ctx.out.line(palette.heading('Preview:'));
-    ctx.out.line(palette.dim('─'.repeat(60)));
+    ctx.out.line(divider(undefined, 60));
     for (const line of formatted.split('\n')) {
       if (line.startsWith('### ')) {
         ctx.out.line(palette.bold(line));
@@ -70,7 +71,7 @@ export const changelogCmd: SlashCommand = {
         ctx.out.line(line);
       }
     }
-    ctx.out.line(palette.dim('─'.repeat(60)));
+    ctx.out.line(divider(undefined, 60));
 
     if (dryRun) {
       ctx.out.info('Dry run — CHANGELOG.md not modified.');

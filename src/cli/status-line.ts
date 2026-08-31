@@ -17,7 +17,7 @@ import type { PermissionMode } from '../agent/types/sdk-types.js';
 import { truncateDisplayWidth, displayWidth } from './display.js';
 import { palette } from './palette.js';
 import { ResizeBus } from './terminal-size.js';
-import { formatContextBar } from './context-bar.js';
+import { formatContextBar } from './render/context-bar.js';
 import { formatQuotaIndicator, type QuotaWindows } from './quota-indicator.js';
 import { formatCwd } from './format-cwd.js';
 import { isPlainOutputRequested } from '../config/env.js';

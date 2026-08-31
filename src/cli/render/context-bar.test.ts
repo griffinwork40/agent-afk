@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import chalk from 'chalk';
 import { formatContextBar } from './context-bar.js';
-import { palette } from './palette.js';
+import { palette } from '../palette.js';
 
 /** Strip ANSI escape sequences from output. */
 function stripAnsi(s: string): string {

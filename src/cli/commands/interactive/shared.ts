@@ -17,7 +17,7 @@ import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
 import type { GitStatusSampler } from '../../git-status-sampler.js';
-import { formatTurnSparkline } from '../../context-sparkline.js';
+import { formatTurnSparkline } from '../../render/context-sparkline.js';
 import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { palette } from '../../palette.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';

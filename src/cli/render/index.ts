@@ -25,3 +25,5 @@ export * from './tool-card.js';
 export * from './interrupt-peek.js';
 export * from './compact-diff-view.js';
 export * from './preview-diff.js';
+export * from './context-bar.js';
+export * from './context-sparkline.js';
