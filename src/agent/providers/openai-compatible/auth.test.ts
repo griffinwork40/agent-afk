@@ -348,14 +348,15 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
 
   // ── Tier 0 (forced per-slot) ──────────────────────────────────────────────
 
-  it('Tier 0: rejects an expired token and returns no-usable-auth-forced-chatgpt-oauth', () => {
+  it('Tier 0: rejects an expired token and returns chatgpt-oauth-expired with expiresAt', () => {
     const r = resolveOpenAIAuth(
       undefined,
       deps({ readFile: () => authJson(EXPIRED_S) }),
       true,
     );
-    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.source).toBe('chatgpt-oauth-expired');
     expect(r.apiKey).toBeNull();
+    expect(r.expiresAt).toBe(EXPIRED_S);
   });
 
   it('Tier 0: accepts a not-yet-expired token', () => {
@@ -389,13 +390,14 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
 
   // ── Tier 4 flag-gated ─────────────────────────────────────────────────────
 
-  it('flag-gated: rejects an expired token and returns no-usable-auth-codex-oauth', () => {
+  it('flag-gated: rejects an expired token and returns chatgpt-oauth-expired with expiresAt', () => {
     const r = resolveOpenAIAuth(
       undefined,
       deps({ readEnv: flagOn, readFile: () => authJson(EXPIRED_S) }),
     );
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.source).toBe('chatgpt-oauth-expired');
     expect(r.apiKey).toBeNull();
+    expect(r.expiresAt).toBe(EXPIRED_S);
   });
 
   it('flag-gated: accepts a not-yet-expired token', () => {
@@ -433,28 +435,33 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
       deps({ readFile: () => authJson(NOW_S) }),
       true,
     );
-    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.source).toBe('chatgpt-oauth-expired');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('flag-gated: treats exp === now as expired (boundary contract: exp <= now)', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: flagOn, readFile: () => authJson(NOW_S) }),
+    );
+    expect(r.source).toBe('chatgpt-oauth-expired');
     expect(r.apiKey).toBeNull();
   });
 
   // ── formatAuthDiagnostic: expired-token actionable text ──────────────────────
 
-  it('formatAuthDiagnostic: chatgpt-oauth with past expiresAt includes EXPIRED and re-run language', () => {
+  it('formatAuthDiagnostic: chatgpt-oauth-expired includes EXPIRED and re-run language', () => {
     const pastExp = NOW_S - 3600; // 1 hour ago
-    const msg = formatAuthDiagnostic({ apiKey: null, source: 'chatgpt-oauth', expiresAt: pastExp });
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'chatgpt-oauth-expired', expiresAt: pastExp });
     expect(msg).toMatch(/expired/i);
     expect(msg).toContain('re-run');
     expect(msg).toContain('codex');
   });
 
-  it('formatAuthDiagnostic: no-usable-auth-codex-oauth includes re-run language for expiry context', () => {
-    const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
-    expect(msg).toContain('re-run');
-    expect(msg).toContain('codex');
-  });
-
-  it('formatAuthDiagnostic: no-usable-auth-forced-chatgpt-oauth includes re-run language', () => {
-    const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
+  it('formatAuthDiagnostic: chatgpt-oauth with past expiresAt still includes EXPIRED suffix', () => {
+    const pastExp = NOW_S - 3600;
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'chatgpt-oauth', expiresAt: pastExp });
+    expect(msg).toMatch(/expired/i);
     expect(msg).toContain('re-run');
     expect(msg).toContain('codex');
   });
