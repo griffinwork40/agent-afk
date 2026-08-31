@@ -2,6 +2,7 @@
 name: diagnose
 description: "Parallel root-cause analysis for bugs and failing tests. Use when a test fails, a bug is reported, or behavior is unexplained — dispatches sub-agents to form and validate hypotheses in isolated worktrees."
 context: fork
+category: Debug & fix
 ---
 
 Gather context: read the failing test or bug description, relevant error output, and recent git changes. If no failing test exists yet, write a minimal reproducer test (or identify a concrete verification command) before proceeding — hypotheses need a pass/fail signal to validate against. Dispatch two sub-agents in parallel — one to search the codebase for code paths involved in the failure (`subagent_type: research-agent`, read-only), and one to check recent commits and diffs that could have introduced the regression (`subagent_type: general-purpose` — requires Bash for `git log`/`git diff`/`git show`). When both return, synthesize findings into 2–4 ranked hypotheses, each with a specific code location and proposed cause.

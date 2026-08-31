@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.168.2] - 2026-08-31
+
+### Fixed
+- make auth diagnose slot-aware for chatgpt-oauth (#555) (#1389) (21cafcf4)
+
+## [5.168.1] - 2026-08-31
+
+### Fixed
+- add missing category annotations to audit-fit and diagnose (#12) (#1388) (2fe82bf0)
+
+### Changed
+- bump next from 16.3.2 to 16.3.3 in /website (#1380) (33a4bc38)
+- bump @types/node from 26.2.0 to 26.4.0 in /website (#1379) (6568916e)
+- bump @types/react-dom from 19.2.4 to 19.2.5 in /website (#1378) (f2ddc308)
+- bump the fumadocs group in /website with 3 updates (#1377) (0bb4d1a1)
+
 ## [5.168.0] - 2026-08-30
 
 ### Added

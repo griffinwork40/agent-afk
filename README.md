@@ -1,10 +1,8 @@
 # Agent AFK
 
-> **Claude Code decides how the agent behaves. Agent AFK lets you edit the rules.**
+**Start a task and walk away.** AFK builds the feature, verifies its own work, and texts you when it's done. You come back to a receipt of every step, every decision, and what's waiting on you.
 
-**Agent AFK** is an open-source coding-agent harness you can actually change. Run long coding tasks while you're away, use any model, and edit the rules that decide what the agent can touch, when it stops, and how it proves the work.
-
-> Agent AFK isn't "smarter than Claude Code." It's *yours* in a way Claude Code can't be.
+Open source. Runs locally. Works with any model provider, including local models. Your keys, your machine, your rules.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
 [![CI](https://github.com/griffinwork40/agent-afk/actions/workflows/ci.yml/badge.svg)](https://github.com/griffinwork40/agent-afk/actions/workflows/ci.yml)
@@ -19,18 +17,7 @@
   </video>
 </p>
 
-> ⭐ **Like the idea of an agent loop you fully own? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the fastest way to help other people find it.
-
-## Claude Code vs. Agent AFK
-
-| | Claude Code | Agent AFK |
-|---|---|---|
-| Harness | Closed binary | Apache-2.0, editable |
-| The loop | You configure *around* it | You edit *the loop* |
-| Behavior | Mostly fixed | Prompts, gates, routing, skills are code |
-| Result | A great default agent | An agent system you own |
-
-The model isn't the product — the loop is. Agent AFK hands you the loop as code: prompts, gates, routing, skills, traces, providers, terminal states. Edit any of them.
+> ⭐ **Like the idea of an agent you can walk away from? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** -- it's the fastest way to help other people find it.
 
 ## Install
 
@@ -57,10 +44,19 @@ afk chat "hello"
 - **Read the trace** — every run writes an append-only record of what the agent did. `afk trace show` prints it back as a human-readable receipt — tool calls, gate decisions, subagent lifecycles, cost — so you can audit a run without reaching for `jq`.
 - **Message Claude from Telegram** — `afk telegram setup` walks you through bot token + allowlist. After that you have a private chat surface backed by the same session manager as the REPL.
 - **Built-in orchestrators** — `/mint`, `/diagnose`, `/spec`, `/research`, `/ship`, `/review` dispatch subagent waves. `/mint` takes a feature idea and runs spec → research → plan → parallelize → build → verify → ship. `/diagnose` forks parallel root-cause hypotheses for failing tests and bugs.
-
-> **Agent AFK Pro:** Autonomous skill-generation (`/forge`) and the calibrated skill-qualification rubric (`/qualify`) are reserved for Agent AFK Pro and are not part of the open-source build.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
 - **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
+
+## How it compares
+
+| | Claude Code | Agent AFK |
+|---|---|---|
+| Harness | Closed binary | Apache-2.0, editable |
+| The loop | You configure *around* it | You edit *the loop* |
+| Behavior | Mostly fixed | Prompts, gates, routing, skills are code |
+| Result | A great default agent | An agent system you own |
+
+The model isn't the product -- the loop is. Agent AFK hands you the loop as code: prompts, gates, routing, skills, traces, providers, terminal states. Edit any of them.
 
 ## Four surfaces, one session manager
 | Command | Surface |
@@ -251,15 +247,15 @@ Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/c
 
 ## License
 
-Agent AFK is **open core**, licensed under **[Apache-2.0](LICENSE)** (SPDX: `Apache-2.0`).
-Use it, modify it, fork it, embed it in commercial or closed-source products — the
+Agent AFK is **open source**, licensed under **[Apache-2.0](LICENSE)** (SPDX: `Apache-2.0`).
+Use it, modify it, fork it, embed it in commercial or closed-source products -- the
 standard Apache conditions apply (keep the license and [`NOTICE`](NOTICE), note
 significant changes, and don't use the "Agent AFK" name or marks to imply
-endorsement). No copyleft, no CLA.
+endorsement). No copyleft, no CLA. Every feature ships in the open-source repo --
+there are no paid unlocks.
 
-**Pro & Team add-ons** (premium skill packs, team features, priority support) are
-separate commercial products under their own terms — see [`LICENSING.md`](LICENSING.md).
-The core harness is, and will stay, free and open.
+Paid plans are monthly support from the maintainer (setup, custom skills, tuning),
+not feature gates. See [`LICENSING.md`](LICENSING.md).
 
 Contributions are accepted under the [DCO](https://developercertificate.org/)
-(`git commit -s`). "Agent AFK" is a trademark of Griffin Long. © Griffin Long.
+(`git commit -s`). "Agent AFK" is a trademark of Griffin Long. (c) Griffin Long.

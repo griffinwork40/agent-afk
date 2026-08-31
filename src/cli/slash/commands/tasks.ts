@@ -62,6 +62,11 @@ export function setTasksIctx(ictx: InteractiveCtx): void {
   ictxRef = ictx;
 }
 
+/** Return the SubagentManager ref if wired (used by mid-turn task view). */
+export function getTasksManager(): SubagentManager | undefined {
+  return managerRef;
+}
+
 /** Reset refs — used by tests to isolate module-scope state between cases. */
 export function resetTasksRegistry(): void {
   managerRef = undefined;

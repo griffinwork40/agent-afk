@@ -269,6 +269,13 @@ export interface TerminalCompositorOptions {
    */
   onShiftTab?: () => void;
   /**
+   * Fires on plain Tab during streaming mode when a task-view handler is
+   * wired. Per-turn: installed at turn start when subagents are available,
+   * cleared at turn end. Absent between turns so Tab retains its normal
+   * autocomplete/ghost-accept behavior.
+   */
+  onTaskView?: () => boolean;
+  /**
    * Fires on Ctrl+O — the "open $EDITOR" chord. Wired by the REPL to the
    * same handoff the /editor slash command runs: seed a temp file with the
    * current buffer, hand the terminal to $VISUAL/$EDITOR, and load the result
