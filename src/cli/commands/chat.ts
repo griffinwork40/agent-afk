@@ -14,7 +14,8 @@ import { env } from '../../config/env.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
-import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
+import { formatDuration } from '../format-utils.js';
+import { costTokenParts } from '../render/session-summary.js';
 import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
@@ -757,10 +758,13 @@ export function registerChatCommand(program: Command): void {
           if (responseMeta) {
             const chatParts: string[] = [];
             if (responseMeta.durationMs) chatParts.push(formatDuration(responseMeta.durationMs));
-            if (responseMeta.totalCostUsd !== undefined) chatParts.push(formatCost(responseMeta.totalCostUsd));
             const chatInputTokens = Number(responseMeta.usage?.['input_tokens'] ?? 0);
             const chatOutputTokens = Number(responseMeta.usage?.['output_tokens'] ?? 0);
-            if (chatInputTokens + chatOutputTokens > 0) chatParts.push(formatTokens(chatInputTokens + chatOutputTokens) + ' tokens');
+            chatParts.push(...costTokenParts({
+              costUsd: responseMeta.totalCostUsd,
+              tokens: chatInputTokens + chatOutputTokens,
+              includeZeroCost: responseMeta.totalCostUsd !== undefined,
+            }));
             if (chatParts.length > 0) {
               console.log(palette.dim('  · ' + chatParts.join(' · ')));
             }

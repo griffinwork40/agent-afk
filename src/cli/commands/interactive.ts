@@ -5,7 +5,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { welcomeBanner, divider } from '../render.js';
-import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
+import { formatDuration } from '../format-utils.js';
+import { costTokenParts } from '../render/session-summary.js';
 import { registerCleanup, runCleanupFunctions } from '../../utils/cleanupRegistry.js';
 import { getModel } from '../shared-helpers.js';
 import { palette } from '../palette.js';
@@ -1006,8 +1007,7 @@ function printExitSummary(
     `${ctx.stats.totalTurns} turn${ctx.stats.totalTurns === 1 ? '' : 's'}`,
     formatDuration(Date.now() - ctx.stats.sessionStartTime),
   ];
-  if (ctx.stats.totalCostUsd > 0) parts.push(formatCost(ctx.stats.totalCostUsd));
-  if (ctx.stats.totalTokens > 0) parts.push(formatTokens(ctx.stats.totalTokens) + ' tokens');
+  parts.push(...costTokenParts({ costUsd: ctx.stats.totalCostUsd, tokens: ctx.stats.totalTokens }));
   console.log(palette.dim('  ' + parts.join(' · ')));
 
   // Line 2: model · worktree name (or 'none')
