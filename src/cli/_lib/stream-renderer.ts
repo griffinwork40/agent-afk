@@ -457,6 +457,37 @@ export class StreamRenderer {
     }
   }
 
+  /**
+   * Strip the terminal-state prose block (Done/Blocked/Asking/Interrupted)
+   * from the markdown renderer's pending buffer so the verdict card is the
+   * sole visible rendering. Call BEFORE dispose — dispose flushes the pending
+   * buffer to scrollback.
+   *
+   * `headingOffset` is the character offset within the pending buffer where
+   * the terminal-state heading starts (from `findTerminalStateHeadingOffset`
+   * applied to the buffer, NOT to `responseText`).
+   *
+   * Returns `true` if the strip succeeded. No-op when the markdown renderer
+   * is not alive or the offset is out of bounds.
+   */
+  stripPendingTerminalState(headingOffset: number): boolean {
+    if (this.disposed) return false;
+    const md = this.streamingMarkdownRef.current;
+    if (!md) return false;
+    return md.stripPendingFrom(headingOffset);
+  }
+
+  /**
+   * Read the raw pending (uncommitted) buffer from the orchestrator's
+   * markdown renderer. Returns '' when disposed or no renderer is alive.
+   * Used by the turn handler to locate the terminal-state heading within
+   * the buffer rather than the full responseText.
+   */
+  getPendingBuffer(): string {
+    if (this.disposed) return '';
+    return this.streamingMarkdownRef.current?.getPendingBuffer() ?? '';
+  }
+
   /** Signal first streaming content — clears the TTFB waiting indicator. Idempotent. */
   notifyFirstContent(): void {
     if (this.disposed) return;

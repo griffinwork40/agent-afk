@@ -76,6 +76,41 @@ export interface TerminalState {
 const TAIL_LINES = 40;
 
 /**
+ * Find the character offset in `text` where the terminal-state heading
+ * starts (the `**Done**`, `### Blocked`, etc. line). Returns -1 when no
+ * terminal state heading is found in the tail region.
+ *
+ * Used by the markdown stream to strip the terminal-state prose block
+ * from the pending buffer before flush, so the verdict card is the sole
+ * visible rendering (eliminating the double-render).
+ *
+ * The search is tail-anchored like `parseTerminalState` — it scans the
+ * last `TAIL_LINES` lines and walks backward for the heading.
+ */
+export function findTerminalStateHeadingOffset(text: string): number {
+  if (!text) return -1;
+
+  const lines = text.split('\n');
+  const tailStart = Math.max(0, lines.length - TAIL_LINES);
+  const tail = lines.slice(tailStart);
+
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const line = tail[i] ?? '';
+    if (lineToKind(line)) {
+      // Compute the character offset in the original text. Sum lengths of
+      // all lines before `tailStart + i`, plus `tailStart + i` newlines.
+      const absoluteIdx = tailStart + i;
+      let offset = 0;
+      for (let j = 0; j < absoluteIdx; j++) {
+        offset += (lines[j]?.length ?? 0) + 1; // +1 for the '\n'
+      }
+      return offset;
+    }
+  }
+  return -1;
+}
+
+/**
  * Attempt to parse a terminal-state declaration from the assistant's final
  * text. Returns `null` when the trailing region does not look like a verdict.
  *

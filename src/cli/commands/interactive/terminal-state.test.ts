@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseTerminalState } from './terminal-state.js';
+import { parseTerminalState, findTerminalStateHeadingOffset } from './terminal-state.js';
 
 describe('parseTerminalState — recognition', () => {
   it('returns null on empty input', () => {
@@ -228,5 +228,66 @@ describe('parseTerminalState — tail-anchored window', () => {
     const text = `Done\n- What was done: built it\n${filler}`;
     // Buried 10 lines deep, still within the 40-line tail.
     expect(parseTerminalState(text)?.kind).toBe('done');
+  });
+});
+
+describe('findTerminalStateHeadingOffset', () => {
+  it('returns -1 on empty input', () => {
+    expect(findTerminalStateHeadingOffset('')).toBe(-1);
+  });
+
+  it('returns -1 when no terminal heading is present', () => {
+    expect(findTerminalStateHeadingOffset('just some prose\nand more')).toBe(-1);
+  });
+
+  it('returns the character offset of a plain Done heading', () => {
+    const text = 'I fixed the bug.\n\nDone\n- What was done: fixed it';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('Done'));
+    expect(text.slice(offset)).toMatch(/^Done\n/);
+  });
+
+  it('returns the character offset of a bold **Done** heading', () => {
+    const text = 'prose here\n\n**Done**\n- What was done: shipped';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('**Done**'));
+  });
+
+  it('returns the character offset of a markdown ### Done heading', () => {
+    const text = 'prose\n\n### Done\n- What was done: shipped';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('### Done'));
+  });
+
+  it('returns the offset of a Blocked heading', () => {
+    const text = 'tried stuff\n\n**Blocked**\n- What blocks: no key';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('**Blocked**'));
+  });
+
+  it('returns the offset of an Asking heading', () => {
+    const text = 'looked around\n\nAsking\n- Question: which branch?';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('Asking'));
+  });
+
+  it('returns the offset of an Interrupted heading', () => {
+    const text = 'mid-work\n\nInterrupted\n- What you were doing: building';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('Interrupted'));
+  });
+
+  it('handles text with no preceding prose (heading is the first line)', () => {
+    const text = '**Done**\n- What was done: quick fix';
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(0);
+  });
+
+  it('slicing at the offset gives the terminal state block', () => {
+    const prose = 'I investigated the issue and found the root cause.\n\n';
+    const heading = '**Done**\n- What was done: patched auth.ts\n- Evidence: tests pass';
+    const text = prose + heading;
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(text.slice(offset)).toBe(heading);
   });
 });

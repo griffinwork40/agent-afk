@@ -1166,4 +1166,69 @@ describe('StreamingMarkdownRenderer', () => {
       expect(output).toContain('other: val');
     });
   });
+
+  describe('stripPendingFrom', () => {
+    it('strips content from offset to end of pending buffer', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      renderer.push('prose here\n\n**Done**\n- What was done: fixed it');
+      // After push, 'prose here\n\n' was committed as a block.
+      // The pending buffer should contain the Done block.
+      const pending = renderer.getPendingBuffer();
+      expect(pending).toContain('**Done**');
+
+      const offset = pending.indexOf('**Done**');
+      expect(renderer.stripPendingFrom(offset)).toBe(true);
+      expect(renderer.getPendingBuffer()).not.toContain('Done');
+    });
+
+    it('returns false when offset is out of bounds', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      renderer.push('some text');
+      expect(renderer.stripPendingFrom(999)).toBe(false);
+      expect(renderer.stripPendingFrom(-1)).toBe(false);
+    });
+
+    it('stripped content does not appear in committed output after flush', async () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      // Push prose + terminal state in one go. The \n\n commits prose; Done stays pending.
+      renderer.push('I fixed the bug.\n\n**Done**\n- What was done: fixed it');
+
+      const pending = renderer.getPendingBuffer();
+      const offset = pending.indexOf('**Done**');
+      renderer.stripPendingFrom(offset);
+
+      await renderer.flush();
+
+      const output = renderer.getCommittedOutput();
+      expect(output).toContain('I fixed the bug');
+      expect(output).not.toContain('**Done**');
+      expect(output).not.toContain('What was done');
+    });
+
+    it('preserves content before the terminal state heading', async () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      renderer.push('Some important context.\n\n**Done**\n- What was done: shipped');
+
+      const pending = renderer.getPendingBuffer();
+      const offset = pending.indexOf('**Done**');
+      renderer.stripPendingFrom(offset);
+
+      await renderer.flush();
+
+      const output = renderer.getCommittedOutput();
+      expect(output).toContain('Some important context');
+    });
+
+    it('handles Done block as the only content (offset 0)', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      renderer.push('**Done**\n- What was done: quick fix');
+
+      const pending = renderer.getPendingBuffer();
+      expect(pending).toContain('**Done**');
+
+      const offset = pending.indexOf('**Done**');
+      expect(renderer.stripPendingFrom(offset)).toBe(true);
+      expect(renderer.getPendingBuffer().trim()).toBe('');
+    });
+  });
 });
