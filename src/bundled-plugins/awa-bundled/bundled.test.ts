@@ -64,7 +64,7 @@ const PINNED_HASHES = {
   // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
-  diagnose: '9a54f97470dce8adec5f1456f881aebe1bb550ee6f201ab9d63cccfd8a316096',
+  diagnose: '9d9751315bbae5a5411b034f6b311f9e9d7e8069a71e46384fa683da5915a090',
   // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
