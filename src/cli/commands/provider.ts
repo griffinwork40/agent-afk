@@ -28,15 +28,21 @@ import {
   runXaiDeviceCodeLogin,
   runXaiLogout,
 } from './provider-xai-login.js';
+import { getSlotBindings, slotForInput } from '../../agent/session/model-slots.js';
 
 /**
  * Build the human-readable result of `afk provider auth diagnose` (OpenAI).
+ *
+ * @param forceChatgptOAuth - When true (slot configured `provider: 'chatgpt-oauth'`),
+ *   resolves the ChatGPT-subscription token ahead of every other tier, without
+ *   the global `AFK_OPENAI_CHATGPT_OAUTH` flag. The slot declaration is the opt-in.
  */
 export function buildProviderAuthDiagnose(
   explicitConfigKey: string | undefined,
   deps?: AuthResolverDeps,
+  forceChatgptOAuth?: boolean,
 ): { source: OpenAIAuthSource; message: string; exitCode: number; last4?: string } {
-  const resolution = resolveOpenAIAuth(explicitConfigKey, deps);
+  const resolution = resolveOpenAIAuth(explicitConfigKey, deps, forceChatgptOAuth ?? false);
   const message = formatAuthDiagnostic(resolution);
   const exitCode = resolution.apiKey === null ? 1 : 0;
   const result: { source: OpenAIAuthSource; message: string; exitCode: number; last4?: string } = {
@@ -95,8 +101,23 @@ export function registerProviderCommand(program: Command): void {
       'Exit-code family: openai (default, back-compat), xai, or any',
       'openai',
     )
-    .action((options: { format: string; family: string }) => {
-      const openai = buildProviderAuthDiagnose(undefined);
+    .option(
+      '--slot <name>',
+      'Model slot name (local|small|medium|large or custom name) to resolve auth as that slot',
+    )
+    .action((options: { format: string; family: string; slot?: string }) => {
+      // Resolve whether the named slot is configured as chatgpt-oauth so the
+      // OpenAI diagnostic uses the correct auth path (forced ChatGPT OAuth vs.
+      // the normal API-key precedence chain). Falls back to false when --slot is
+      // absent or when the slot doesn't exist / isn't a chatgpt-oauth slot.
+      const forceChatgptOAuth: boolean = (() => {
+        if (!options.slot) return false;
+        const bindings = getSlotBindings();
+        const slotName = slotForInput(options.slot, bindings);
+        if (!slotName) return false;
+        return bindings[slotName].provider === 'chatgpt-oauth';
+      })();
+      const openai = buildProviderAuthDiagnose(undefined, undefined, forceChatgptOAuth);
       const xai = buildXaiAuthDiagnose(undefined);
       const family = options.family.trim().toLowerCase();
 
