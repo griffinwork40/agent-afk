@@ -102,6 +102,14 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   config.forceXaiOAuth = binding.provider === 'xai-oauth';
   config.forceXaiApiKey = binding.provider === 'xai';
 
+  // Contract (#555 nit): a `provider: 'chatgpt-oauth'` slot that also carries an
+  // explicit `apiKey` will have `config.apiKey` set below, but `resolveOpenAIAuth`
+  // Tier 0 short-circuits on `forceChatgptOAuth` before it ever reaches the
+  // explicit-key tier — so the key is effectively ignored and OAuth wins.
+  // Behavior is intentional and safe (the slot declared OAuth). A config-load
+  // warning when both are present is the right UX fix, but this module has no
+  // warning channel today. The redundant assignment is left in place so the
+  // clear-branch below does not need a `chatgpt-oauth` carve-out.
   if (binding.apiKey !== undefined) {
     config.apiKey = binding.apiKey;
   } else if (
