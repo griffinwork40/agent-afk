@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.170.0] - 2026-08-31
+
+### Added
+- extract costTokenParts into shared component (#1401) (#1409) (7b418e8a)
+
 ## [5.169.6] - 2026-08-31
 
 ### Fixed
