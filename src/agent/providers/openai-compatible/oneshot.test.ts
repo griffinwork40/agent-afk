@@ -30,7 +30,7 @@ import type { OpenAIAuthResolution } from './auth.js';
 import type { ResponsesStreamEvent } from './responses-translate.js';
 
 // ── Auth mock ───────────────────────────────────────────────────────────────
-// `oneShotChatCompletion` calls `resolveOpenAIAuth(apiKey)` without deps, so we
+// `oneShotChatCompletion` calls `resolveOpenAIAuth(apiKey, {}, forceChatgptOAuth)`,
 // mock the module to control the resolution outcome deterministically.
 const { mockResolveAuth } = vi.hoisted(() => ({ mockResolveAuth: vi.fn() }));
 vi.mock('./auth.js', () => ({ resolveOpenAIAuth: mockResolveAuth }));
@@ -292,7 +292,19 @@ describe('oneShotChatCompletion', () => {
       user: 'msg',
       clientFactory: () => makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] })),
     });
-    expect(mockResolveAuth).toHaveBeenCalledWith('sk-explicit');
+    expect(mockResolveAuth).toHaveBeenCalledWith('sk-explicit', {}, false);
+  });
+
+  it('forwards forceChatgptOAuth=true to resolveOpenAIAuth as third arg', async () => {
+    mockResolveAuth.mockReturnValueOnce({ apiKey: 'oauth-token', source: 'chatgpt-oauth' });
+    await oneShotChatCompletion({
+      model: 'gpt-4o',
+      system: 'sys',
+      user: 'msg',
+      forceChatgptOAuth: true,
+      clientFactory: () => makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] })),
+    });
+    expect(mockResolveAuth).toHaveBeenCalledWith(undefined, {}, true);
   });
 
   // ── factory precedence ──────────────────────────────────────────────────────
