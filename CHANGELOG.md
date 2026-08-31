@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.169.4] - 2026-08-31
+
+### Fixed
+- add SCOPE paragraphs to tool descriptions to prevent misuse (#1397) (d0ff7251)
+
+### Changed
+- wire component library -- kill shadows, promote context components, migrate separators (#1398) (34323467)
+
 ## [5.169.3] - 2026-08-31
 
 ### Fixed
