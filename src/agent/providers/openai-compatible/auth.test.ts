@@ -389,12 +389,12 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
 
   // ── Tier 4 flag-gated ─────────────────────────────────────────────────────
 
-  it('flag-gated: rejects an expired token and returns no-usable-auth-forced-chatgpt-oauth', () => {
+  it('flag-gated: rejects an expired token and returns no-usable-auth-codex-oauth', () => {
     const r = resolveOpenAIAuth(
       undefined,
       deps({ readEnv: flagOn, readFile: () => authJson(EXPIRED_S) }),
     );
-    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
     expect(r.apiKey).toBeNull();
   });
 
@@ -423,5 +423,39 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
     );
     expect(r.source).toBe('chatgpt-oauth');
     expect(r.expiresAt).toBeUndefined();
+  });
+
+  // ── Boundary: exp === now is treated as expired (contract: <=) ─────────────
+
+  it('Tier 0: treats exp === now as expired (boundary contract: exp <= now)', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => authJson(NOW_S) }),
+      true,
+    );
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  // ── formatAuthDiagnostic: expired-token actionable text ──────────────────────
+
+  it('formatAuthDiagnostic: chatgpt-oauth with past expiresAt includes EXPIRED and re-run language', () => {
+    const pastExp = NOW_S - 3600; // 1 hour ago
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'chatgpt-oauth', expiresAt: pastExp });
+    expect(msg).toMatch(/expired/i);
+    expect(msg).toContain('re-run');
+    expect(msg).toContain('codex');
+  });
+
+  it('formatAuthDiagnostic: no-usable-auth-codex-oauth includes re-run language for expiry context', () => {
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
+    expect(msg).toContain('re-run');
+    expect(msg).toContain('codex');
+  });
+
+  it('formatAuthDiagnostic: no-usable-auth-forced-chatgpt-oauth includes re-run language', () => {
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
+    expect(msg).toContain('re-run');
+    expect(msg).toContain('codex');
   });
 });

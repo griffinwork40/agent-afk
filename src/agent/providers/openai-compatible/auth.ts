@@ -196,7 +196,7 @@ export function resolveOpenAIAuth(
         // Gate expiry: treat an expired token as unusable so the diagnostic fires
         // rather than passing an opaque 401 to OpenAI.
         if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
-          return { apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' };
+          return { apiKey: null, source: 'no-usable-auth-codex-oauth' };
         }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
