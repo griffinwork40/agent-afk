@@ -19,11 +19,12 @@ export const readWitnessTool: AnthropicToolDef = {
     'everything the agent did). Returns structured trace events in chronological order. ' +
     'Use to inspect tool calls, errors, subagent lifecycles, costs, and session phases ' +
     'from a specific session. Defaults to the most recent session.\n\n' +
-    'SCOPE: trace events contain operational metadata only — which tools fired, ' +
-    'timing, byte counts, error/success, session phases. They do NOT contain ' +
-    'conversation text, user messages, assistant replies, tool arguments, or tool ' +
-    'output. To find a session by what was *discussed*, search transcripts ' +
-    '(~/.afk/state/transcripts/) or session events (~/.afk/state/sessions/) via bash. ' +
+    'SCOPE: trace events record which tools fired, timing, byte counts, ' +
+    'error/success, session phases, and some semantic snippets (e.g. subagent ' +
+    'promptHead, compaction summaries, claims). They do NOT contain full ' +
+    'conversation text, user/assistant messages, complete tool arguments, or ' +
+    'tool output. To find a session by what was *discussed*, search transcripts ' +
+    'or session events via bash (paths vary with AFK_STATE_DIR). ' +
     'To recall cross-session context by topic, use memory_search.',
   input_schema: {
     type: 'object',
@@ -70,11 +71,12 @@ export const searchWitnessTool: AnthropicToolDef = {
     'specific tool usage, cost spikes, or any text that appears in trace event payloads. ' +
     'Scans the N most recent sessions (default 20). Results are capped at 200 total matches ' +
     'across all scanned sessions.\n\n' +
-    'SCOPE: searches trace event METADATA only — tool names, session phases, subagent IDs, ' +
-    'error classes, timing. Does NOT search conversation content, user/assistant messages, ' +
-    'tool arguments, or tool output (those are not stored in the trace). ' +
+    'SCOPE: searches trace event payloads — tool names, session phases, subagent IDs, ' +
+    'error classes, timing, and semantic snippets like subagent promptHead (first 80 ' +
+    'chars), compaction summaries, and claims. Does NOT contain full conversation ' +
+    'text, user/assistant messages, complete tool arguments, or tool output. ' +
     'To find a prior session by topic or what was said, search transcripts ' +
-    '(~/.afk/state/transcripts/) or session events (~/.afk/state/sessions/) via bash, ' +
+    'or session events via bash (paths vary with AFK_STATE_DIR), ' +
     'or use memory_search for cross-session topic recall.',
   input_schema: {
     type: 'object',
