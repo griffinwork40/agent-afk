@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.170.1] - 2026-08-31
+
+### Fixed
+- gate expired chatgpt-oauth tokens instead of passing opaque 401 (#555) (#1394) (6fea8329)
+
 ## [5.170.0] - 2026-08-31
 
 ### Added
