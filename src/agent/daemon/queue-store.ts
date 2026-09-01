@@ -20,6 +20,9 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
+import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
+
+export { recoverExpiredLeases };
 
 export interface QueuedTask {
   /** Unique task identifier, e.g. `q-1716000000000-abc123`. */
@@ -160,9 +163,12 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       quarantinePoisonEntry(queueDir, filename, err);
       continue;
     }
-    // ORDERING INVARIANT: remove from disk BEFORE returning task.
+    // ORDERING INVARIANT: acquire a durable lease BEFORE returning task.
+    // leaseTask moves the queue file to leased/ and writes a TaskRecord —
+    // the file is no longer in the queue dir after this call. On daemon
+    // restart, recoverExpiredLeases re-enqueues any orphaned lease files.
     // See JSDoc above — do NOT move this after the return.
-    unlinkSync(filePath);
+    _leaseTask(task, filePath, undefined, queueDir);
     return task;
   }
   return null;

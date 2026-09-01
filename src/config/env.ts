@@ -1754,6 +1754,17 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '24',
     category: 'misc',
   },
+  {
+    name: 'AFK_LEASE_TTL_MS',
+    description:
+      'Lease TTL in milliseconds for durable task execution (issue #1411). ' +
+      'A leased task whose lease expires before it completes is recovered and re-enqueued ' +
+      '(or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes).',
+    type: 'number',
+    required: false,
+    example: '600000',
+    category: 'misc',
+  },
 ];
 
 /**
@@ -1985,6 +1996,7 @@ export const env = {
   get AFK_WAVE_MANIFEST_DISABLED(): string | undefined { return process.env['AFK_WAVE_MANIFEST_DISABLED']; },
   get AFK_WAVE_MANIFEST_TTL_HOURS(): string | undefined { return process.env['AFK_WAVE_MANIFEST_TTL_HOURS']; },
   get AFK_WAVE_RESUME_UNATTENDED(): string | undefined { return process.env['AFK_WAVE_RESUME_UNATTENDED']; },
+  get AFK_LEASE_TTL_MS(): string | undefined { return process.env['AFK_LEASE_TTL_MS']; },
 } as const; // `as const` narrows getter return types — it does NOT call Object.freeze; the object is mutable at runtime.
 
 /**

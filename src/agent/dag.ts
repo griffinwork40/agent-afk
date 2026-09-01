@@ -13,6 +13,14 @@
 
 import { TimeoutError } from '../utils/errors.js';
 import { settleWithConcurrencyLimit, resolveMaxConcurrentSubagentCalls } from './concurrency-pool.js';
+import {
+  computeDAGHash,
+  saveCheckpoint,
+  loadCheckpoint,
+  clearCheckpoint,
+  serializeOutput,
+  type DAGCheckpoint,
+} from './dag-checkpoint.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +42,15 @@ export interface DAGGraph {
 }
 
 export interface DAGRunOptions {
+  /**
+   * Optional stable identifier for this DAG execution.
+   * When provided, the executor checkpoints completed layers to
+   * `~/.afk/state/dag-checkpoints/<dagId>.json` so a restart can resume
+   * from the last durable layer without re-running completed nodes.
+   * The dagId must match `[A-Za-z0-9_-]+` (the isSafeLedgerSessionId charset).
+   * Omit to disable checkpointing (default, no behavioural change).
+   */
+  dagId?: string;
   /** Cancel unstarted + in-flight nodes on first failure. Default: true. */
   failFast?: boolean;
   /**
@@ -160,7 +177,7 @@ export async function runDAG(
 
   validateDAG(graph);
 
-  const { failFast = true, nodeTimeoutMs, maxConcurrency = resolveMaxConcurrentSubagentCalls() } = options;
+  const { dagId, failFast = true, nodeTimeoutMs, maxConcurrency = resolveMaxConcurrentSubagentCalls() } = options;
   const nodeTimeoutEnabled =
     nodeTimeoutMs !== undefined && Number.isFinite(nodeTimeoutMs) && nodeTimeoutMs > 0;
   const adj = buildAdjacency(graph);
@@ -170,6 +187,28 @@ export async function runDAG(
   const skipped = new Set<string>();
   const completed = new Set<string>();
   const inDegree = new Map(adj.inDegree);
+
+  // Checkpoint: attempt to resume from a previous partial run.
+  const dagHash = dagId !== undefined ? computeDAGHash(graph) : '';
+  if (dagId !== undefined) {
+    const prior = await loadCheckpoint(dagId, dagHash);
+    if (prior !== null) {
+      // Re-hydrate state from the checkpoint so completed layers are skipped.
+      for (const nodeId of prior.completedNodes) {
+        const storedOutput = prior.nodeOutputs[nodeId];
+        outputs[nodeId] = storedOutput;
+        completed.add(nodeId);
+        inDegree.delete(nodeId);
+        for (const downId of adj.downstream.get(nodeId) ?? []) {
+          inDegree.set(downId, inDegree.get(downId)! - 1);
+        }
+      }
+      for (const nodeId of prior.failedNodes) {
+        completed.add(nodeId);
+        inDegree.delete(nodeId);
+      }
+    }
+  }
 
   // Use a named abort handler so we can remove it in the finally block,
   // preventing a listener leak when the DAG completes before the outer
@@ -280,10 +319,30 @@ export async function runDAG(
           if (failFast) dagController.abort('fail-fast');
         }
       }
+
+      // Checkpoint after each layer so a restart can skip completed work.
+      if (dagId !== undefined && !dagController.signal.aborted) {
+        const checkpoint: DAGCheckpoint = {
+          dagHash,
+          completedNodes: Array.from(completed).filter((id) => !failed.some((f) => f.id === id)),
+          nodeOutputs: Object.fromEntries(
+            Object.entries(outputs).map(([id, val]) => [id, serializeOutput(val)]),
+          ),
+          failedNodes: failed.map((f) => f.id),
+          skippedNodes: Array.from(skipped),
+          timestamp: Date.now(),
+        };
+        await saveCheckpoint(dagId, checkpoint).catch(() => { /* non-fatal */ });
+      }
     }
   } finally {
     // Always remove the forwarding listener; safe to call even if already fired.
     signal.removeEventListener('abort', forwardAbort);
+  }
+
+  // On complete success (no failures), clear the checkpoint.
+  if (dagId !== undefined && failed.length === 0) {
+    await clearCheckpoint(dagId).catch(() => { /* non-fatal */ });
   }
 
   return { outputs, failed, skipped: Array.from(skipped) };

@@ -71,15 +71,23 @@ describe('dequeueNext', () => {
     expect(result).toBeNull();
   });
 
-  it('removes the file from disk and returns the parsed task', () => {
+  it('moves the queue file to leased/ (not deleted) and returns the parsed task', () => {
     enqueue('/forge', {}, tmpDir);
     expect(readdirSync(tmpDir)).toHaveLength(1);
 
     const task = dequeueNext(tmpDir);
     expect(task).not.toBeNull();
     expect(task!.command).toBe('/forge');
-    // File must be removed after dequeue
-    expect(readdirSync(tmpDir)).toHaveLength(0);
+    // Queue file is moved to leased/ — no .json files remain at root.
+    const rootJsonFiles = readdirSync(tmpDir).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(rootJsonFiles).toHaveLength(0);
+    // A lease record is written in leased/ for crash recovery.
+    const leasedFiles = readdirSync(join(tmpDir, 'leased')).filter(
+      (f) => f.endsWith('.json'),
+    );
+    expect(leasedFiles).toHaveLength(1);
   });
 
   it('respects FIFO order for two queued tasks', () => {
