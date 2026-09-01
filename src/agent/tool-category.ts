@@ -63,6 +63,8 @@ const READ_TOOLS = new Set([
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',
   'write_file', 'edit_file',
+  // patch_apply applies unified diffs to files on disk — a write operation.
+  'patch_apply',
   // memory-tools.ts — both mutate persistent state on disk (the fact
   // archive / HOT.md and ~/.afk/procedures/<name>.md respectively), so
   // they belong in the write bucket alongside file edits.
@@ -86,6 +88,8 @@ const WRITE_TOOLS = new Set([
 const SHELL_TOOLS = new Set([
   'Bash', 'BashOutput', 'KillBash',
   'bash',
+  'test_run',
+  'wait_for',
 ]);
 export const SUBAGENT_TOOLS = new Set([
   'Agent', 'Task',
