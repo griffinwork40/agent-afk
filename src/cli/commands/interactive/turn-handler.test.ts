@@ -2626,3 +2626,80 @@ describe('printTurnFooter — subscription-quota line', () => {
     expect(quotaIdx).toBeGreaterThan(contextIdx);
   });
 });
+
+describe('runTurn — terminal-state dedup: trailing \\n\\n committed-block case (#1407)', () => {
+  // When the model emits a trailing \n\n after the terminal-state block the
+  // markdown renderer detects a block boundary DURING streaming and commits
+  // that block to scrollback before the strip logic runs. getPendingBuffer()
+  // then returns '' so findTerminalStateHeadingOffset returns -1 and the
+  // strip is skipped. Without the fix the verdict card would render on top
+  // of the already-committed prose — a double render.
+  //
+  // The fix: when off === -1 but parseTerminalState(responseText) succeeds,
+  // suppressVerdictCard is set to true and the renderVerdictCard call is
+  // skipped. The committed prose is the sole output.
+  //
+  // This test verifies that under the trailing-\n\n scenario the verdict
+  // card string does NOT appear in the completionWriter calls.
+
+  function makeStubCompositor() {
+    const commitAboveCalls: string[] = [];
+    return {
+      commitAboveCalls,
+      stub: {
+        isArmed: () => true,
+        commitAbove: (line: string) => { commitAboveCalls.push(line); },
+        setInputMode: vi.fn(),
+        setSpinner: vi.fn(),
+        setOverlay: vi.fn(),
+        getPendingCount: () => 0,
+      },
+    };
+  }
+
+  it('suppresses the verdict card when the terminal-state block was already committed to scrollback', async () => {
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+    const { stub } = makeStubCompositor();
+
+    // The content chunk ends with \n\n — the markdown renderer commits the
+    // block to scrollback during streaming, leaving getPendingBuffer() == ''.
+    // parseTerminalState on the full responseText still finds the Done block.
+    const events: OutputEvent[] = [
+      {
+        type: 'chunk',
+        chunk: {
+          type: 'content',
+          content: 'some prose\n\nDone\n- What was done: wrote the fix\n- Evidence: tests pass\n\n',
+        },
+      },
+      {
+        type: 'done',
+        metadata: { durationMs: 50, totalCostUsd: 0.001, usage: { input_tokens: 10, output_tokens: 20 } },
+      },
+    ];
+
+    const session = streamFrom(events);
+    const { h } = makeHandles();
+    const handles: TurnHandles = {
+      ...h,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getCompositor: () => stub as any,
+    };
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      session,
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
+    );
+
+    // The verdict card top border always contains '╮' (renderVerdictCard
+    // builds it with '─'.repeat(...)+'╮'). If the card were rendered at
+    // least one writerCalls entry would contain that glyph.
+    const cardRendered = writerCalls.some((l) => l.includes('╮'));
+    expect(cardRendered).toBe(false);
+  });
+});
