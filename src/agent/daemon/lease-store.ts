@@ -391,17 +391,34 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
   // of the task.  Future recovery silently skips it (the main loop filters
   // !f.startsWith('.claim-')), causing permanent task loss.  We handle them
   // here so no task is ever permanently orphaned.
+  //
+  // Invariant: each .claim-* file is atomically claimed via renameSync to a
+  // .process-<random>.json scratch name before processing.  If two daemon
+  // processes run this loop concurrently, only the winner's rename succeeds;
+  // the loser gets ENOENT and skips — same single-winner primitive used in
+  // the first pass and in leaseTask.  Without this gate, both processes
+  // would read, re-enqueue, and produce a double-fire.
   const claimFiles = readdirSync(dir).filter(
     (f) => f.endsWith('.json') && f.startsWith('.claim-'),
   );
   for (const claimFilename of claimFiles) {
     const claimFilePath = join(dir, claimFilename);
+
+    // Atomic claim: rename to a process-private scratch name so concurrent
+    // recovery skips this file.  Same pattern as the first-pass claim.
+    const processPath = join(dir, `.process-${randomBytes(4).toString('hex')}.json`);
+    try {
+      renameSync(claimFilePath, processPath);
+    } catch {
+      continue; // ENOENT: another process already claimed this file — skip.
+    }
+
     let claimRecord: TaskRecord;
     try {
-      claimRecord = JSON.parse(readFileSync(claimFilePath, 'utf-8')) as TaskRecord;
+      claimRecord = JSON.parse(readFileSync(processPath, 'utf-8')) as TaskRecord;
     } catch {
-      // Unreadable — remove and skip.
-      try { unlinkSync(claimFilePath); } catch { /* ignore */ }
+      // Unreadable — remove the scratch file and skip.
+      try { unlinkSync(processPath); } catch { /* ignore */ }
       continue;
     }
 
@@ -431,7 +448,7 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
       atomicWriteJson(deadLetterPath(queueDir, claimRecord.id), claimRecord);
     }
 
-    try { unlinkSync(claimFilePath); } catch { /* ignore */ }
+    try { unlinkSync(processPath); } catch { /* ignore */ }
     recovered.push(claimRecord);
   }
 
@@ -474,7 +491,7 @@ export function listActiveTasks(queueDir: string = getQueueDir()): TaskRecord[] 
   const dir = leasedDir(queueDir);
   if (!existsSync(dir)) return [];
   const result: TaskRecord[] = [];
-  for (const f of readdirSync(dir).filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))) {
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-') && !f.startsWith('.claim-') && !f.startsWith('.process-'))) {
     try {
       result.push(JSON.parse(readFileSync(join(dir, f), 'utf-8')) as TaskRecord);
     } catch { /* skip corrupt */ }
