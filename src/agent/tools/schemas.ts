@@ -13,6 +13,7 @@ import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
 import { cancelBackgroundJobTool, patchApplyTool } from './schemas.orchestration.js';
 import { waitForTool } from './schemas.wait-for.js';
 export { waitForTool } from './schemas.wait-for.js';
+import { testRunTool } from './schemas.test-run.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -1304,7 +1305,7 @@ export const browserCloseTool: AnthropicToolDef = {
 };
 
 /**
- * The 19 always-on built-in tool definitions (14 existing + 5 browser),
+ * The 20 always-on built-in tool definitions (14 existing + 5 browser + 1 test_run),
  * ready to pass as `tools` to `messages.create`.
  *
  * Does NOT include `agentTool`, `skillTool`, or `composeTool` — those are
@@ -1340,7 +1341,9 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserObserveTool,
   browserActTool,
   browserScreenshotTool,
+<<<<<<< HEAD
   browserCloseTool, patchApplyTool,
+  testRunTool,
 ];
 
 /** Tool names in the always-on built-in set. */

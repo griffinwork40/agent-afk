@@ -138,5 +138,6 @@ export function buildToolCallCompletedPayload(args: {
       ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
       : {}),
     ...(subagentId !== undefined ? { subagentId } : {}),
+    ...(result.testResult !== undefined ? { testResult: result.testResult } : {}),
   };
 }
