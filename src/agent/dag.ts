@@ -221,8 +221,11 @@ export async function runDAG(
       // record them in the failed array so callers see the same outcome as the
       // original run. This is necessary for failFast:false runs where multiple
       // nodes may have failed before the checkpoint was written.
+      // Use the stored error message when available; fall back to the generic
+      // sentinel only for checkpoints written before nodeErrors was added.
       for (const nodeId of prior.failedNodes) {
-        failed.push({ id: nodeId, error: new Error('restored from checkpoint') });
+        const msg = prior.nodeErrors?.[nodeId] ?? 'restored from checkpoint';
+        failed.push({ id: nodeId, error: new Error(msg) });
         completed.add(nodeId);
         inDegree.delete(nodeId);
       }
@@ -353,6 +356,7 @@ export async function runDAG(
             Object.entries(outputs).map(([id, val]) => [id, serializeOutput(val)]),
           ),
           failedNodes: failed.map((f) => f.id),
+          nodeErrors: Object.fromEntries(failed.map((f) => [f.id, f.error.message])),
           skippedNodes: Array.from(skipped),
           timestamp: Date.now(),
         };

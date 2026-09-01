@@ -54,6 +54,12 @@ export interface DAGCheckpoint {
   nodeOutputs: Record<string, string>;
   /** Node IDs that failed in the checkpointed run. */
   failedNodes: string[];
+  /**
+   * Original error messages for failed nodes.
+   * Populated by saveCheckpoint so restored runs surface the original error
+   * rather than the generic 'restored from checkpoint' fallback.
+   */
+  nodeErrors?: Record<string, string>;
   /** Node IDs that were skipped (due to upstream failure + failFast). */
   skippedNodes: string[];
   /** Epoch ms when this checkpoint was written. */
@@ -169,10 +175,24 @@ export async function clearCheckpoint(dagId: string): Promise<void> {
  * Serialize a node output value to a truncated string for checkpoint storage.
  *
  * Strings are used as-is (then truncated); other values are JSON-encoded.
- * Truncation uses a simple byte-based cutoff — not a UTF-8 grapheme split.
+ * `undefined` (JSON.stringify returns undefined, not a string) is stored as ''.
+ * Truncation uses Buffer.byteLength so the constant MAX_OUTPUT_BYTES_PER_NODE
+ * is honoured as a true byte limit (UTF-8), not a UTF-16 code-unit count.
+ *
+ * Multi-byte code points at the cut boundary are handled by converting back to
+ * a string (which may replace incomplete sequences with U+FFFD), then trimming
+ * the result down until its UTF-8 byte count is within the limit.
  */
 export function serializeOutput(value: unknown): string {
+  // JSON.stringify(undefined) returns undefined (not a string), so handle explicitly.
+  if (value === undefined) return '';
   const str = typeof value === 'string' ? value : JSON.stringify(value) ?? '';
-  if (str.length <= MAX_OUTPUT_BYTES_PER_NODE) return str;
-  return str.slice(0, MAX_OUTPUT_BYTES_PER_NODE);
+  if (Buffer.byteLength(str, 'utf8') <= MAX_OUTPUT_BYTES_PER_NODE) return str;
+  // Slice at the byte boundary. Buffer.toString may introduce a U+FFFD replacement
+  // character (3 bytes) for a cut multi-byte sequence, so trim until we fit.
+  let result = Buffer.from(str).subarray(0, MAX_OUTPUT_BYTES_PER_NODE).toString('utf8');
+  while (Buffer.byteLength(result, 'utf8') > MAX_OUTPUT_BYTES_PER_NODE) {
+    result = result.slice(0, -1);
+  }
+  return result;
 }

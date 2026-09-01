@@ -825,4 +825,62 @@ describe('runDAG — checkpoint resume', () => {
     // The key invariant: failed array must include a (restored from checkpoint).
     expect(result.failed.map((f) => f.id)).toContain('a');
   });
+
+  it('restores original error message from nodeErrors on resume', async () => {
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => { throw new Error('original error msg'); }) };
+    const bNode: DAGNode = { id: 'b', run: vi.fn(async () => 'b-out') };
+    const graph = { nodes: [aNode, bNode], edges: [] };
+    const dagId = `resume-err-test-${randomBytes(4).toString('hex')}`;
+
+    const hash = computeDAGHash(graph);
+    // Simulate checkpoint with nodeErrors populated (as saveCheckpoint now writes).
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: ['b'],
+      nodeOutputs: { b: 'b-out' },
+      failedNodes: ['a'],
+      nodeErrors: { a: 'original error msg' },
+      skippedNodes: [],
+      timestamp: Date.now(),
+    });
+
+    const resumeGraph = {
+      nodes: [
+        { id: 'a', run: vi.fn(async () => 'a-new') },
+        { id: 'b', run: vi.fn(async () => 'b-new') },
+      ],
+      edges: [],
+    };
+    const result = await runDAG(resumeGraph, new AbortController().signal, { dagId, failFast: false });
+
+    const aFailed = result.failed.find((f) => f.id === 'a');
+    expect(aFailed).toBeDefined();
+    // Must restore the original message, not the generic fallback.
+    expect(aFailed!.error.message).toBe('original error msg');
+  });
+
+  it('falls back to generic sentinel when nodeErrors is absent (old checkpoint format)', async () => {
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => { throw new Error('some error'); }) };
+    const graph = { nodes: [aNode], edges: [] };
+    const dagId = `resume-no-errs-test-${randomBytes(4).toString('hex')}`;
+
+    const hash = computeDAGHash(graph);
+    // Old checkpoint format without nodeErrors field.
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: [],
+      nodeOutputs: {},
+      failedNodes: ['a'],
+      // nodeErrors intentionally absent — tests backward-compat fallback
+      skippedNodes: [],
+      timestamp: Date.now(),
+    });
+
+    const resumeGraph = { nodes: [{ id: 'a', run: vi.fn(async () => 'a-new') }], edges: [] };
+    const result = await runDAG(resumeGraph, new AbortController().signal, { dagId, failFast: false });
+
+    const aFailed = result.failed.find((f) => f.id === 'a');
+    expect(aFailed).toBeDefined();
+    expect(aFailed!.error.message).toBe('restored from checkpoint');
+  });
 });

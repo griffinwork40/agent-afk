@@ -4,7 +4,7 @@
  * Lease flow:
  *   1. `leaseTask`             — move file from queue/ to leased/, write TaskRecord
  *   2. `renewLease`            — heartbeat: update leaseExpiry in leased/<id>.json
- *   3. `completeTask`          — move from leased/ to completed/ with terminal state
+ *   3. `completeTask`          — succeeded/exhausted-failed → completed/ or dead-letter/; retrying → re-enqueue
  *   4. `recoverExpiredLeases`  — scan leased/ for expired entries; re-enqueue or dead-letter
  *
  * Directory layout under queueDir:
@@ -191,10 +191,11 @@ export function renewLease(
 /**
  * Mark a task as terminal (succeeded or failed) and archive it.
  *
- * Moves the lease file from leased/ to completed/ with the final state.
- * On failure with attempts < maxAttempts, the task would be re-enqueued
- * separately via recoverExpiredLeases (not here — completeTask is called
- * by the runner on a known outcome, not a crash/expiry path).
+ * On success: moves lease file to completed/.
+ * On failure with attempts >= maxAttempts: moves to dead-letter/.
+ * On failure with attempts < maxAttempts: re-enqueues into queue/ (state →
+ * 'retrying') and removes the lease file — does NOT archive to completed/.
+ * Only terminal states (succeeded, failed) are written to completed/.
  *
  * @param taskId   - Task ID to complete.
  * @param status   - Terminal state: 'succeeded' or 'failed'.
@@ -232,7 +233,17 @@ export function completeTask(
   delete record.leaseExpiry;
   if (error !== undefined) record.lastError = error;
 
-  // Determine archive destination.
+  if (finalState === 'retrying') {
+    // Re-enqueue for retry — only terminal states go to completed/.
+    reEnqueue(record, queueDir);
+    // Clean up the lease file now that the queue entry is written.
+    if (existsSync(src)) {
+      try { unlinkSync(src); } catch { /* ignore */ }
+    }
+    return;
+  }
+
+  // Archive terminal states (succeeded → completed/, failed → dead-letter/).
   const dest =
     finalState === 'failed'
       ? deadLetterPath(queueDir, taskId)

@@ -181,10 +181,33 @@ describe('serializeOutput', () => {
     expect(serializeOutput(null)).toBe('null');
   });
 
-  it('truncates strings longer than 10 KB', () => {
+  it('returns empty string for undefined (not the string "undefined")', () => {
+    // JSON.stringify(undefined) returns undefined (not a string);
+    // the explicit early return must produce '' so JSON.parse on restore does not throw.
+    expect(serializeOutput(undefined)).toBe('');
+  });
+
+  it('truncates strings longer than 10 KB by byte count (ASCII)', () => {
     const big = 'x'.repeat(20_000);
     const result = serializeOutput(big);
-    expect(result.length).toBe(10_240); // 10 * 1024
+    expect(Buffer.byteLength(result, 'utf8')).toBe(10_240); // 10 * 1024
     expect(result).toBe('x'.repeat(10_240));
+  });
+
+  it('truncates multi-byte UTF-8 strings to the byte limit without splitting a code point', () => {
+    // Each '€' is 3 UTF-8 bytes. 10240 / 3 = 3413 full chars = 10239 bytes — under the limit.
+    // 3414 chars = 10242 bytes — over the limit; the 3414th char must be dropped.
+    const euro = '€'; // U+20AC, 3 bytes in UTF-8
+    const atLimit = euro.repeat(3413); // 10239 bytes — fits
+    const overLimit = euro.repeat(3414); // 10242 bytes — must truncate
+
+    const resultAtLimit = serializeOutput(atLimit);
+    expect(Buffer.byteLength(resultAtLimit, 'utf8')).toBeLessThanOrEqual(10_240);
+    expect(resultAtLimit).toBe(atLimit); // under limit — unchanged
+
+    const resultOverLimit = serializeOutput(overLimit);
+    expect(Buffer.byteLength(resultOverLimit, 'utf8')).toBeLessThanOrEqual(10_240);
+    // Must not end mid-codepoint (Buffer.toString('utf8') handles this gracefully).
+    expect(resultOverLimit).toBe(euro.repeat(3413));
   });
 });

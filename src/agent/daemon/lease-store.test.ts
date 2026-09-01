@@ -136,6 +136,37 @@ describe('completeTask', () => {
     // Should not throw even if lease file never existed.
     expect(() => completeTask('ghost-id', 'succeeded', undefined, queueDir)).not.toThrow();
   });
+
+  it('re-enqueues (not archives) when status=failed and attempts < maxAttempts', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    // Lease with maxAttempts=3 so first failure is retryable.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    leaseTask(task, srcPath, undefined, queueDir);
+    // Patch lease file to set maxAttempts=3 (attempts is already 1).
+    const leasedFilePath = path.join(queueDir, 'leased', `${task.id}.json`);
+    const record = JSON.parse(fs.readFileSync(leasedFilePath, 'utf-8'));
+    record.maxAttempts = 3;
+    fs.writeFileSync(leasedFilePath, JSON.stringify(record));
+
+    completeTask(task.id, 'failed', 'transient error', queueDir);
+
+    // Must NOT be in completed/ or dead-letter/.
+    expect(existsSync(path.join(queueDir, 'completed', `${task.id}.json`))).toBe(false);
+    expect(existsSync(path.join(queueDir, 'dead-letter', `${task.id}.json`))).toBe(false);
+    // Lease file must be removed.
+    expect(existsSync(leasedFilePath)).toBe(false);
+    // A new queue file must exist (re-enqueued for retry).
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles.length).toBeGreaterThan(0);
+    // The re-enqueued file must carry the retry state.
+    const requeued = JSON.parse(fs.readFileSync(path.join(queueDir, queueFiles[0]), 'utf-8'));
+    expect(requeued.maxAttempts).toBe(3);
+    expect(requeued.attempts).toBe(1); // carried from the TaskRecord (attempt 1 just finished)
+  });
 });
 
 describe('recoverExpiredLeases', () => {
