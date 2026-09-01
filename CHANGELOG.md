@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.172.1] - 2026-09-01
+
+### Fixed
+- lazy-load playwright to fix Next.js standalone import (#1428) (#1429) (db9a2fc9)
+
 ## [5.172.0] - 2026-09-01
 
 ### Added
