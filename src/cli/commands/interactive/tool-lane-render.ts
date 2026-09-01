@@ -122,6 +122,13 @@ interface ToolEntryFields {
    * ({@link ToolLane.getOverlay}); never consulted during flush().
    */
   startedAt: number;
+  /**
+   * Timestamp (Date.now()) when this entry's result arrived — set by
+   * {@link ToolLane.addResult} the moment the tool_result chunk is stored.
+   * Used by the overlay to freeze the elapsed display on completed entries
+   * so it doesn't drift upward on every repaint. Undefined while in-flight.
+   */
+  finishedAt?: number;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };
