@@ -35,6 +35,7 @@ import {
   type TaskRecord,
   type TaskState,
   DEFAULT_LEASE_TTL_MS,
+  computeBackoffMs,
 } from './task-lifecycle.js';
 
 // ---------------------------------------------------------------------------
@@ -519,6 +520,10 @@ function buildFallbackRecord(taskId: string, status: 'succeeded' | 'failed'): Ta
 /**
  * Write a new queue file for a recovered task so it re-enters the FIFO.
  * The new queue file carries the same id so downstream telemetry can correlate.
+ *
+ * Backoff: computes an eligibleAfter timestamp using computeBackoffMs so the
+ * task is not immediately dequeued on the next poll tick, preventing retry
+ * storms when many tasks fail concurrently.
  */
 function reEnqueue(record: TaskRecord, queueDir: string): void {
   mkdirSync(queueDir, { recursive: true });
@@ -527,6 +532,19 @@ function reEnqueue(record: TaskRecord, queueDir: string): void {
   const seq = String(sequence).padStart(4, '0');
   // Re-use the same id so audit can correlate attempts.
   const filename = `${seq}-${record.id}.json`;
+
+  // Compute backoff delay from the record's retry policy.  record.attempts is
+  // the count of attempts already made (1-based after the first failure), so
+  // computeBackoffMs(record.attempts, policy) gives the correct delay for this
+  // retry interval.  The result is epoch ms — dequeueNext skips the task until
+  // Date.now() >= eligibleAfter, preventing immediate re-dequeue after failure.
+  const backoffMs = computeBackoffMs(record.attempts, {
+    maxAttempts: record.maxAttempts,
+    backoffStrategy: record.backoffStrategy ?? 'fixed',
+    backoffBaseMs: record.backoffBaseMs ?? 30_000,
+  });
+  const eligibleAfter = Date.now() + backoffMs;
+
   const queuedTask: QueuedTask = {
     id: record.id,
     command: record.command,
@@ -543,6 +561,7 @@ function reEnqueue(record: TaskRecord, queueDir: string): void {
     maxAttempts: record.maxAttempts,
     ...(record.backoffStrategy !== undefined ? { backoffStrategy: record.backoffStrategy } : {}),
     ...(record.backoffBaseMs !== undefined ? { backoffBaseMs: record.backoffBaseMs } : {}),
+    eligibleAfter,
   };
   atomicWriteJson(join(queueDir, filename), queuedTask);
 }
