@@ -38,6 +38,16 @@ export interface QueuedTask {
    * Mirrors `ScheduledTask.notifyOn`. Omitted means "always notify".
    */
   notifyOn?: 'failure' | 'always' | 'never';
+  /**
+   * Retry fields — present only on tasks that were re-enqueued by
+   * recoverExpiredLeases after a lease expiry.  leaseTask reads these
+   * fields back so the TaskRecord preserves the attempt count and retry
+   * policy across recoveries.
+   */
+  attempts?: number;
+  maxAttempts?: number;
+  backoffStrategy?: 'fixed' | 'exponential';
+  backoffBaseMs?: number;
 }
 
 export interface EnqueueOptions {
@@ -168,7 +178,21 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
     // the file is no longer in the queue dir after this call. On daemon
     // restart, recoverExpiredLeases re-enqueues any orphaned lease files.
     // See JSDoc above — do NOT move this after the return.
-    _leaseTask(task, filePath, undefined, queueDir);
+    //
+    // FALLBACK: if leaseTask fails (e.g. renameSync unavailable in a
+    // permission-restricted environment), fall back to unlinkSync so the
+    // file is still removed from the queue and the task is returned.
+    // This preserves the pre-lease atomicity invariant: queue file is
+    // gone before the task is handed to the caller.
+    try {
+      _leaseTask(task, filePath, undefined, queueDir);
+    } catch {
+      // Best-effort unlink so the queue file is cleared even when the
+      // lease record cannot be written.  A missing lease file means this
+      // task will NOT appear in recoverExpiredLeases, which is acceptable:
+      // the caller already has the task in hand and can process it.
+      try { unlinkSync(filePath); } catch { /* ignore */ }
+    }
     return task;
   }
   return null;

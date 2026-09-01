@@ -261,3 +261,102 @@ describe('dequeueNext integration — lease behaviour preserved', () => {
     expect(dequeueNext(queueDir)).toBeNull();
   });
 });
+
+describe('leaseTask — retry state carry-through (P2 fix)', () => {
+  it('uses defaults (attempts:1, maxAttempts:1) for a fresh task without retry fields', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    const record = leaseTask(task, srcPath, undefined, queueDir);
+    expect(record.attempts).toBe(1);
+    expect(record.maxAttempts).toBe(1);
+    expect(record.backoffStrategy).toBe('fixed');
+    expect(record.backoffBaseMs).toBe(30_000);
+  });
+
+  it('increments attempts and preserves maxAttempts from a re-enqueued task', () => {
+    const queueDir = tmpQueueDir();
+    // Simulate a task re-enqueued by recoverExpiredLeases by adding retry fields.
+    const task = enqueue('/retry-cmd', {}, queueDir);
+    // Manually read and patch the queue file to add retry fields
+    const fs = require('node:fs');
+    const files = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    let srcPath = '';
+    for (const f of files) {
+      const p = require('node:path').join(queueDir, f);
+      try {
+        const t = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        if (t.id === task.id) { srcPath = p; break; }
+      } catch { /* skip */ }
+    }
+    // Patch the queue file to carry retry fields (as reEnqueue would write them).
+    const queuedWithRetry = {
+      ...JSON.parse(fs.readFileSync(srcPath, 'utf-8')),
+      attempts: 1,
+      maxAttempts: 3,
+      backoffStrategy: 'exponential',
+      backoffBaseMs: 5_000,
+    };
+    fs.writeFileSync(srcPath, JSON.stringify(queuedWithRetry));
+
+    const record = leaseTask(queuedWithRetry, srcPath, undefined, queueDir);
+
+    // attempts should be prior (1) + 1 = 2
+    expect(record.attempts).toBe(2);
+    expect(record.maxAttempts).toBe(3);
+    expect(record.backoffStrategy).toBe('exponential');
+    expect(record.backoffBaseMs).toBe(5_000);
+  });
+
+  it('recoverExpiredLeases re-enqueues with retry fields that leaseTask reads back', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    // Create initial lease with maxAttempts=3
+    const leasedFilePath = require('node:path').join(queueDir, 'leased', `${task.id}.json`);
+    leaseTask(task, srcPath, undefined, queueDir);
+    // Patch to allow retry and expire the lease
+    const fs = require('node:fs');
+    const record = JSON.parse(fs.readFileSync(leasedFilePath, 'utf-8'));
+    record.leaseExpiry = Date.now() - 1;
+    record.maxAttempts = 3;
+    record.backoffStrategy = 'exponential';
+    record.backoffBaseMs = 2_000;
+    fs.writeFileSync(leasedFilePath, JSON.stringify(record));
+
+    const recovered = recoverExpiredLeases(queueDir);
+    expect(recovered[0]!.state).toBe('retrying');
+
+    // The re-enqueued file must carry the retry state.
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles.length).toBeGreaterThan(0);
+    const requeued = JSON.parse(
+      fs.readFileSync(require('node:path').join(queueDir, queueFiles[0]), 'utf-8'),
+    );
+    expect(requeued.attempts).toBe(record.attempts); // carried from the TaskRecord
+    expect(requeued.maxAttempts).toBe(3);
+    expect(requeued.backoffStrategy).toBe('exponential');
+
+    // Now lease again — attempts should be prior+1
+    const newRecord = leaseTask(requeued, require('node:path').join(queueDir, queueFiles[0]), undefined, queueDir);
+    expect(newRecord.attempts).toBe(record.attempts + 1);
+    expect(newRecord.maxAttempts).toBe(3);
+  });
+});
+
+describe('leaseTask — unlinkSync error propagates (P2 fix)', () => {
+  it('throws when srcPath does not exist (no silent swallow)', () => {
+    const queueDir = tmpQueueDir();
+    const task: import('./queue-store.js').QueuedTask = {
+      id: 'ghost-id',
+      command: '/test',
+      enqueuedAt: new Date().toISOString(),
+      sequence: 1,
+    };
+    // srcPath does not exist — unlinkSync will throw ENOENT.
+    const ghostPath = require('node:path').join(queueDir, '0001-ghost-id.json');
+    expect(() => leaseTask(task, ghostPath, undefined, queueDir)).toThrow();
+  });
+});

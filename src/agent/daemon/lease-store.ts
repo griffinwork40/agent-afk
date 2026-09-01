@@ -119,17 +119,23 @@ export function leaseTask(
 ): TaskRecord {
   const ttl = resolveLeaseTtlMs(leaseTtlMs);
   const now = Date.now();
+  // Restore retry state from the QueuedTask when present (set by reEnqueue
+  // on recovered tasks).  A re-enqueued task already had attempt N; the new
+  // lease increments to N+1 so exhaustion is tracked correctly.  For a
+  // fresh task (no retry fields) the defaults (attempts:1, maxAttempts:1)
+  // preserve the existing no-retry behaviour.
+  const priorAttempts = task.attempts ?? 0;
   const record: TaskRecord = {
     id: task.id,
     command: task.command,
     state: 'leased',
-    attempts: 1,
-    maxAttempts: 1,
+    attempts: priorAttempts + 1,
+    maxAttempts: task.maxAttempts ?? 1,
     leaseExpiry: now + ttl,
     createdAt: now,
     updatedAt: now,
-    backoffStrategy: 'fixed',
-    backoffBaseMs: 30_000,
+    backoffStrategy: task.backoffStrategy ?? 'fixed',
+    backoffBaseMs: task.backoffBaseMs ?? 30_000,
     meta: {
       enqueuedAt: task.enqueuedAt,
       sequence: task.sequence,
@@ -141,16 +147,13 @@ export function leaseTask(
   const dest = leasedPath(queueDir, task.id);
   atomicWriteJson(dest, record);
 
-  // Move queue file to leased dir. Queue file is named <seq>-<id>.json;
-  // the lease record itself is named <id>.json in leased/.
-  // We already wrote the record; now remove the source queue file.
-  try {
-    unlinkSync(srcPath);
-  } catch {
-    // Best-effort: if unlink fails the queue file stays but the lease file
-    // is the authoritative record. The queue file will be treated as a
-    // duplicate on next scan and quarantined by dequeueNext's poison logic.
-  }
+  // Remove the source queue file now that the lease record is written.
+  // NOT best-effort: if unlink fails, the caller must know leasing did not
+  // complete cleanly — the original queue entry would remain intact and
+  // dequeueNext could process the same task again (double-fire).  The
+  // caller (dequeueNext) catches this error and falls back to a direct
+  // unlinkSync so the file is always removed before the task is returned.
+  unlinkSync(srcPath);
 
   return record;
 }
@@ -384,6 +387,14 @@ function reEnqueue(record: TaskRecord, queueDir: string): void {
     ...(record.meta?.['notifyOn'] !== undefined
       ? { notifyOn: record.meta['notifyOn'] as QueuedTask['notifyOn'] }
       : {}),
+    // Carry retry state through re-enqueue so leaseTask can restore the
+    // attempt count and retry policy in the new TaskRecord.  Without this,
+    // every recovered task looks like a fresh attempt (attempts:1 / maxAttempts:1)
+    // and exhausted-retry detection in completeTask is broken.
+    attempts: record.attempts,
+    maxAttempts: record.maxAttempts,
+    ...(record.backoffStrategy !== undefined ? { backoffStrategy: record.backoffStrategy } : {}),
+    ...(record.backoffBaseMs !== undefined ? { backoffBaseMs: record.backoffBaseMs } : {}),
   };
   atomicWriteJson(join(queueDir, filename), queuedTask);
 }

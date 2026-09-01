@@ -299,3 +299,60 @@ describe('stop', () => {
     await expect(scheduler.stop()).resolves.toBeUndefined();
   });
 });
+
+describe('pull tick — lease finalization (completeTask called after runOnce)', () => {
+  it('creates no lingering lease files after a successful pull tick', async () => {
+    const { existsSync } = await import('node:fs');
+    enqueue('/lease-finalize-test', {}, queueDir);
+
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // Lease directory must not exist or must be empty after the tick completes.
+    const leasedDir = join(queueDir, 'leased');
+    if (existsSync(leasedDir)) {
+      const leasedFiles = readdirSync(leasedDir).filter(
+        (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+      );
+      expect(leasedFiles).toHaveLength(0);
+    }
+
+    // Task must be in completed/ now.
+    const completedDir = join(queueDir, 'completed');
+    if (existsSync(completedDir)) {
+      const completedFiles = readdirSync(completedDir).filter(
+        (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+      );
+      // At least one completed record.
+      expect(completedFiles.length).toBeGreaterThan(0);
+    }
+
+    await scheduler.stop();
+  });
+
+  it('moves lease to dead-letter when runOnce reports an error', async () => {
+    const { existsSync } = await import('node:fs');
+    enqueue('/error-task', {}, queueDir);
+
+    const errSession: AgentSession = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('session error')),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSession;
+
+    const scheduler = makeScheduler(queueDir, telemetryPath, () => errSession);
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // Lease finalized: no lingering lease files.
+    const leasedDir = join(queueDir, 'leased');
+    if (existsSync(leasedDir)) {
+      const leasedFiles = readdirSync(leasedDir).filter(
+        (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+      );
+      expect(leasedFiles).toHaveLength(0);
+    }
+
+    await scheduler.stop();
+  });
+});

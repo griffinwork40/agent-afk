@@ -24,6 +24,7 @@ import type { ExecFileFn, SweepResult } from '../worktree-sweep.js';
 import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
+import { completeTask } from './lease-store.js';
 import { getQueueDir } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
@@ -379,7 +380,21 @@ export class CronScheduler {
         trigger: 'pull',
         ...(queued.notifyOn !== undefined ? { notifyOn: queued.notifyOn } : {}),
       };
-      await this.runOnce(syntheticTask, 'pull');
+      const record = await this.runOnce(syntheticTask, 'pull');
+      // Finalize the lease: move the leased/<id>.json to completed/ so the task
+      // does not appear as an expired lease on the next daemon restart.
+      // Best-effort: a completeTask failure must never crash the pull loop.
+      try {
+        completeTask(
+          queued.id,
+          record.status === 'error' ? 'failed' : 'succeeded',
+          record.errorMessage,
+          this.queueDir,
+        );
+      } catch {
+        // Non-fatal — the lease recovery path (recoverExpiredLeases on next
+        // startup) will re-enqueue or dead-letter based on the record's attempts.
+      }
     } catch (err) {
       // Errors thrown INSIDE runOnce are captured there and written to
       // telemetry. Errors reaching here come from the dequeue path (now

@@ -196,16 +196,40 @@ export async function runDAG(
       // Re-hydrate state from the checkpoint so completed layers are skipped.
       for (const nodeId of prior.completedNodes) {
         const storedOutput = prior.nodeOutputs[nodeId];
-        outputs[nodeId] = storedOutput;
+        // Deserialize: serializeOutput JSON-stringifies objects so a stored
+        // value may be a JSON string that represents the original object.
+        // Try to parse it back; fall back to the raw string for values that
+        // were already strings when serialized (no double-parse risk because
+        // valid JSON strings are quoted, so JSON.parse would return them
+        // without the outer quotes, which is wrong — hence the try/catch).
+        let deserialized: unknown = storedOutput;
+        if (storedOutput !== undefined) {
+          try {
+            deserialized = JSON.parse(storedOutput);
+          } catch {
+            deserialized = storedOutput; // Was a plain string — use as-is.
+          }
+        }
+        outputs[nodeId] = deserialized;
         completed.add(nodeId);
         inDegree.delete(nodeId);
         for (const downId of adj.downstream.get(nodeId) ?? []) {
           inDegree.set(downId, inDegree.get(downId)! - 1);
         }
       }
+      // Restore failed nodes: mark them completed (so they are not re-run) and
+      // record them in the failed array so callers see the same outcome as the
+      // original run. This is necessary for failFast:false runs where multiple
+      // nodes may have failed before the checkpoint was written.
       for (const nodeId of prior.failedNodes) {
+        failed.push({ id: nodeId, error: new Error('restored from checkpoint') });
         completed.add(nodeId);
         inDegree.delete(nodeId);
+      }
+      // Restore skipped nodes: repopulate the skipped set so the downstream
+      // skip propagation is consistent with the checkpointed run.
+      for (const nodeId of prior.skippedNodes) {
+        skipped.add(nodeId);
       }
     }
   }
