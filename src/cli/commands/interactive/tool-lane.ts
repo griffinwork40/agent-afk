@@ -3,7 +3,7 @@ import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
-import { truncateDisplayWidth, stripAnsi } from '../../display.js';
+import { truncateDisplayWidth, stripAnsi, displayWidth } from '../../display.js';
 import { formatElapsed, ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
 import {
   renderOverlayChildren,
@@ -18,6 +18,7 @@ import {
   type TextEntry,
   type Entry,
 } from './tool-lane-render.js';
+import { formatFlatRootCompletion } from './tool-lane-overlay-completion.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -179,7 +180,9 @@ export class ToolLane {
   addResult(toolUseId: string, chunk: ToolResultChunk): void {
     const entry = this.entries.get(toolUseId);
     // Clear previewDiff on the same tick as result — preview is now obsolete.
-    if (entry?.kind === 'tool') { entry.result = chunk; entry.previewDiff = undefined; }
+    // Stamp finishedAt so the overlay can freeze the elapsed display for
+    // completed entries instead of letting it drift on every repaint.
+    if (entry?.kind === 'tool') { entry.result = chunk; entry.previewDiff = undefined; entry.finishedAt = Date.now(); }
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
@@ -563,7 +566,17 @@ export class ToolLane {
         }
       } else {
         if (entry.result) {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
+          // Completed flat-root: render via toolCard (collapsed) so the badge,
+          // tool name, elapsed, and batch badge share the component's layout
+          // contract. The flatRootLead is prepended by the caller (this site)
+          // so the lead stays outside the component's width budget — subtract
+          // its display width from the card's column budget to prevent overflow.
+          // Use finishedAt (frozen at result-arrival time) so elapsed doesn't
+          // drift on every repaint; fall back to Date.now() for entries that
+          // pre-date the finishedAt field (should not occur in practice).
+          const elapsedMs = (entry.finishedAt ?? Date.now()) - entry.startedAt;
+          const cardWidth = cols - displayWidth(flatRootLead);
+          lines.push(clamp(flatRootLead + formatFlatRootCompletion(entry.toolName, entry.result, elapsedMs, batchBadge(entry.result), cardWidth)));
           if (entry.diff && !entry.result.isError) {
             // Diff hangs under the outcome line, indented one level deeper
             // (4 spaces) so it visually attaches to this tool entry.

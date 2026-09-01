@@ -1,5 +1,5 @@
 import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
-import { displayWidth, truncateDisplayWidth } from '../display.js';
+import { displayWidth, truncateDisplayWidth, stripAnsi } from '../display.js';
 import { palette } from '../palette.js';
 import { statusBadge } from './status-badge.js';
 import { formatElapsed } from './utils.js';
@@ -34,6 +34,15 @@ export interface ToolCardSpec {
    * have already been acknowledged, reducing vertical noise.
    */
   collapsed?: boolean;
+  /**
+   * Pre-styled batch badge appended to the header after the elapsed field.
+   *
+   * The value is an already-styled ANSI string produced by the caller (e.g.
+   * `batchBadge(chunk)` from tool-lane-format.ts). Passed through verbatim
+   * so the component does not need to know the batch-badge colour rules.
+   * When undefined or empty, nothing extra is rendered.
+   */
+  batchBadge?: string;
   /**
    * Terminal column width used for truncation.
    *
@@ -119,17 +128,20 @@ function buildHeader(spec: ToolCardSpec, width: number): string {
 
   const elapsedStr =
     spec.elapsed != null ? '  ' + palette.dim(formatElapsed(spec.elapsed)) : '';
-  // Measure plain-text width of elapsed (ANSI stripped by formatElapsed,
-  // but the leading two spaces are unstyled so we measure the raw string).
+  // Measure plain-text width of elapsed — formatElapsed returns unstyled text,
+  // palette.dim() adds ANSI above.
   const elapsedPlain = spec.elapsed != null ? '  ' + formatElapsed(spec.elapsed) : '';
   const elapsedReserved = displayWidth(elapsedPlain);
 
-  const nameMax = Math.max(1, width - badgeReserved - elapsedReserved);
+  const batchStr = sanitizeForDisplay(spec.batchBadge ?? '');
+  const batchReserved = displayWidth(stripAnsi(batchStr));
+
+  const nameMax = Math.max(1, width - badgeReserved - elapsedReserved - batchReserved);
   const nameSanitized = sanitizeForDisplay(spec.toolName);
   const nameTruncated = truncateDisplayWidth(nameSanitized, nameMax);
   const nameStyled = palette.tool(nameTruncated);
 
-  return `${badge} ${nameStyled}${elapsedStr}`;
+  return `${badge} ${nameStyled}${elapsedStr}${batchStr}`;
 }
 
 /**
