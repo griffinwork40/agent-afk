@@ -334,6 +334,7 @@ async function preToolUseImpl(
   const promptPromise = promptForApproval({
     toolName: context.toolName,
     resolvedPath: result.resolved,
+    allPaths: extractAllPaths(context.toolName, input),
     capturedCwd: cwd,
     mode,
     grantManager,
@@ -492,8 +493,9 @@ function extractCandidatePath(
   }
   // patch_apply has a `changes` array; each element has a `path` field.
   // Path containment is enforced per-change by patch-validate.ts
-  // (resolveAndContain), so the approval prompt only needs a representative
-  // path to anchor the containment check and grant flow.
+  // (resolveAndContain). Return the first path to anchor the containment
+  // check and grant flow; the full file list is shown in the approval prompt
+  // via promptForApproval (which receives all paths via extractAllPaths).
   if (toolName === 'patch_apply') {
     const changes = input['changes'];
     if (Array.isArray(changes) && changes.length > 0) {
@@ -507,12 +509,36 @@ function extractCandidatePath(
 }
 
 /**
+ * Extract all paths from a patch_apply input for display in the approval
+ * prompt. For other tools, returns a single-element array (or empty).
+ */
+function extractAllPaths(
+  toolName: string,
+  input: Record<string, unknown>,
+): string[] {
+  if (toolName === 'patch_apply') {
+    const changes = input['changes'];
+    if (!Array.isArray(changes)) return [];
+    const paths: string[] = [];
+    for (const change of changes) {
+      const c = change as Record<string, unknown>;
+      if (typeof c['path'] === 'string') paths.push(c['path']);
+    }
+    return paths;
+  }
+  const candidate = extractCandidatePath(toolName, input);
+  return candidate !== undefined ? [candidate] : [];
+}
+
+/**
  * Issue the elicitation prompt and translate the response into a hook
  * decision + grant mutation.
  */
 async function promptForApproval(args: {
   toolName: string;
   resolvedPath: string;
+  /** All paths in the patch (patch_apply only); used to build the prompt message. */
+  allPaths?: string[];
   /** cwd captured at PreToolUse time; stored in the onceApproved entry. */
   capturedCwd: string | undefined;
   mode: 'read' | 'write';
@@ -528,7 +554,7 @@ async function promptForApproval(args: {
    */
   sessionId?: string;
 }): Promise<HookDecision> {
-  const { toolName, resolvedPath, capturedCwd, mode, grantManager, state, surface, signal, sessionId } =
+  const { toolName, resolvedPath, allPaths, capturedCwd, mode, grantManager, state, surface, signal, sessionId } =
     args;
 
   // Show the symlink-resolved target when it differs from the displayed path so
@@ -538,10 +564,19 @@ async function promptForApproval(args: {
   // nearest existing ancestor for not-yet-created write targets).
   const realTarget = realpathSafe(resolvedPath);
   const realTargetSuffix = realTarget !== resolvedPath ? `\n  (resolves to: ${realTarget})` : '';
+
+  // For patch_apply, show the full list of files being written so the operator
+  // knows the complete scope of the operation, not just the first path.
+  const pathsForDisplay =
+    allPaths && allPaths.length > 1
+      ? allPaths.map((p) => `  ${p}`).join('\n')
+      : `  ${resolvedPath}${realTargetSuffix}`;
   const message =
-    `Tool \`${toolName}\` wants to ${mode === 'write' ? 'WRITE to' : 'read'} a path ` +
-    `outside this session's granted roots:\n\n  ${resolvedPath}${realTargetSuffix}\n\n` +
-    `Choose how to handle this and future requests for this path.`;
+    `Tool \`${toolName}\` wants to ${mode === 'write' ? 'WRITE to' : 'read'} ` +
+    (allPaths && allPaths.length > 1
+      ? `${allPaths.length} paths outside this session's granted roots:\n\n${pathsForDisplay}`
+      : `a path outside this session's granted roots:\n\n${pathsForDisplay}`) +
+    `\n\nChoose how to handle this and future requests for this path.`;
 
   // Form-mode elicitation with a single enum field, four choices. The REPL
   // and Telegram handlers know how to render this (REPL: numbered prompt;

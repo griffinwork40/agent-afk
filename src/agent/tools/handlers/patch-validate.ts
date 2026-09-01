@@ -46,8 +46,12 @@ export interface ValidationError {
 export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
-  /** Current file contents, keyed by resolved path, for rollback. */
-  fileContents: Map<string, string>;
+  /**
+   * Current file contents keyed by resolved path, for rollback.
+   * `null` means the file did not exist before the patch (new file);
+   * `''` means the file existed and was empty.
+   */
+  fileContents: Map<string, string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +96,7 @@ export async function validatePatchChanges(
   context?: ToolHandlerContext,
 ): Promise<ValidationResult> {
   const errors: ValidationError[] = [];
-  const fileContents = new Map<string, string>();
+  const fileContents = new Map<string, string | null>();
 
   for (const change of changes) {
     const rawPath = change.path;
@@ -119,7 +123,7 @@ export async function validatePatchChanges(
         error: 'write_denied',
         detail: err instanceof Error ? err.message : String(err),
       });
-      // Keep going — collect all errors.
+      continue; // Cannot validate further for a denied path (matches path_containment pattern).
     }
 
     // 3. Mutual exclusion: edits and content are mutually exclusive.
@@ -158,12 +162,17 @@ export async function validatePatchChanges(
         });
         continue;
       }
-      // New file with `content` only — that's fine; record empty string.
+      // New file with `content` only — that's fine; record null as the
+      // sentinel meaning "did not exist before the patch" so the engine can
+      // distinguish a new file (null) from an existing empty file ('').
+      fileContents.set(resolvedPath, null);
       currentContent = '';
     }
 
-    // Store content for rollback — use the resolved path as the key.
-    fileContents.set(resolvedPath, currentContent);
+    // Store content for rollback (only when not already set by the new-file branch above).
+    if (!fileContents.has(resolvedPath)) {
+      fileContents.set(resolvedPath, currentContent);
+    }
 
     // 6. Hash verification (if expected_hash provided).
     if (change.expected_hash !== undefined) {
@@ -174,18 +183,19 @@ export async function validatePatchChanges(
           error: 'invalid_hash_format',
           detail: `expected_hash must start with "sha256:". Got: "${change.expected_hash}"`,
         });
-      } else {
-        const expectedHex = change.expected_hash.slice(prefix.length);
-        const actualHex = sha256Hex(currentContent);
-        if (actualHex !== expectedHex) {
-          errors.push({
-            path: rawPath,
-            error: 'hash_mismatch',
-            detail:
-              `File hash mismatch. Expected sha256:${expectedHex}, ` +
-              `got sha256:${actualHex}. The file may have been modified.`,
-          });
-        }
+        continue; // Cannot meaningfully validate edits on a file with a bad hash format.
+      }
+      const expectedHex = change.expected_hash.slice(prefix.length);
+      const actualHex = sha256Hex(currentContent);
+      if (actualHex !== expectedHex) {
+        errors.push({
+          path: rawPath,
+          error: 'hash_mismatch',
+          detail:
+            `File hash mismatch. Expected sha256:${expectedHex}, ` +
+            `got sha256:${actualHex}. The file may have been modified.`,
+        });
+        continue; // File is in a different state than expected; skip edit validation.
       }
     }
 
@@ -203,7 +213,10 @@ export async function validatePatchChanges(
             error: 'edit_not_found',
             detail: `Edit #${i + 1}: \`old\` string not found in file.`,
           });
-          // Continue checking subsequent edits against the unmodified running content.
+          // Stop validating further edits for this file: the content state is
+          // now uncertain, so subsequent edits would be validated against
+          // incorrect content (producing false edit_not_found errors).
+          break;
         } else if (occurrences > 1) {
           errors.push({
             path: rawPath,

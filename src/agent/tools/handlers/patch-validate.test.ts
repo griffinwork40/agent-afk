@@ -203,4 +203,72 @@ describe('validatePatchChanges', () => {
     const result = await validatePatchChanges(changes, tempDir, makeCtx());
     expect(result.valid).toBe(true);
   });
+
+  it('multi-file batch with denied path produces exactly one write_denied error (no spurious errors)', async () => {
+    // changes[0] is valid; changes[1] targets a denied path.
+    const validFile = await writeTemp('m.txt', 'hello\n');
+    const deniedPath = '/etc/passwd';
+    const changes: PatchFileChange[] = [
+      { path: validFile, content: 'world\n' },          // valid
+      { path: deniedPath, content: 'evil\n' },           // denied
+    ];
+    const result = await validatePatchChanges(changes, tempDir, {
+      resolveBase: tempDir,
+      writeRoots: [tempDir, '/etc'],  // grant containment so denylist is what fires
+      allowAll: false,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.error).toBe('write_denied');
+    expect(result.errors[0]!.path).toBe(deniedPath);
+  });
+
+  it('sets null sentinel for new file (content-only, no existing file)', async () => {
+    const newFilePath = path.join(tempDir, 'new-sentinel.txt');
+    // Don't create the file — validate a content-only change for a new file.
+    const changes: PatchFileChange[] = [{ path: newFilePath, content: 'fresh\n' }];
+    const result = await validatePatchChanges(changes, tempDir, makeCtx());
+    expect(result.valid).toBe(true);
+    // Sentinel: null means the file did not exist before the patch.
+    expect(result.fileContents.has(newFilePath)).toBe(true);
+    expect(result.fileContents.get(newFilePath)).toBeNull();
+  });
+
+  it('edit_not_found stops further edit validation for that file', async () => {
+    // If edit #1 is not found, edit #2 should NOT be validated (break, not continue).
+    const filePath = await writeTemp('n.txt', 'hello world\n');
+    const changes: PatchFileChange[] = [
+      {
+        path: filePath,
+        edits: [
+          { old: 'nothere', new: 'x' },    // #1: not found → should break
+          { old: 'world', new: 'earth' },  // #2: would be valid, but should be skipped
+        ],
+      },
+    ];
+    const result = await validatePatchChanges(changes, tempDir, makeCtx());
+    expect(result.valid).toBe(false);
+    // Only one error (edit #1); edit #2 should NOT generate an additional error.
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.error).toBe('edit_not_found');
+    expect(result.errors[0]!.detail).toContain('Edit #1');
+  });
+
+  it('hash_mismatch skips edit validation', async () => {
+    const content = 'actual content\n';
+    const filePath = await writeTemp('o.txt', content);
+    const wrongHash = sha256('completely different\n');
+    const changes: PatchFileChange[] = [
+      {
+        path: filePath,
+        expected_hash: `sha256:${wrongHash}`,
+        edits: [{ old: 'nothere', new: 'x' }],  // would also fail, but should be skipped
+      },
+    ];
+    const result = await validatePatchChanges(changes, tempDir, makeCtx());
+    expect(result.valid).toBe(false);
+    // Only hash_mismatch; no spurious edit_not_found error.
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.error).toBe('hash_mismatch');
+  });
 });

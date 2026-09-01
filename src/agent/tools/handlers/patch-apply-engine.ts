@@ -115,7 +115,7 @@ function tempPath(targetPath: string): string {
  */
 export async function applyPatch(
   changes: PatchFileChange[],
-  fileContents: Map<string, string>,
+  fileContents: Map<string, string | null>,
   resolveBase: string,
   dryRun: boolean,
 ): Promise<PatchApplyResult> {
@@ -125,7 +125,7 @@ export async function applyPatch(
     originalContent: string;
     newContent: string;
     diffBlock: string;
-    /** True when the file did not exist before the patch (originalContent is ''). */
+    /** True when the file did not exist before the patch (null sentinel in fileContents). */
     isNewFile: boolean;
   }> = [];
 
@@ -137,11 +137,11 @@ export async function applyPatch(
       ? change.path
       : resolve(resolveBase, change.path);
 
-    const originalContent = fileContents.get(resolvedPath) ?? '';
-    // A file is "new" when the validator stored an empty string because the
-    // file didn't exist on disk. Use has() to distinguish missing key (new
-    // file) from an existing empty file (the validator always sets the key).
-    const isNewFile = !fileContents.has(resolvedPath);
+    // null sentinel = new file (did not exist before the patch).
+    // '' = existing empty file. Both come from the validator.
+    const storedContent = fileContents.get(resolvedPath);
+    const isNewFile = storedContent === null;
+    const originalContent = storedContent ?? '';
 
     let newContent: string;
     if (change.content !== undefined) {
@@ -276,6 +276,7 @@ export async function applyPatch(
       }
     }
     // Also clean up remaining temp files.
+    // ENOENT expected for temp paths already renamed; catch {} is intentional.
     for (const tf of tempFiles) {
       try {
         await unlink(tf.tempPath);

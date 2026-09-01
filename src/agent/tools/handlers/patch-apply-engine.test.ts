@@ -2,7 +2,7 @@
  * Tests for patch-apply-engine.ts
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { writeFile, readFile, mkdir, rm } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -134,11 +134,12 @@ describe('applyPatch (live write)', () => {
     expect(result.diff).toContain('+world');
   });
 
-  it('handles new-file creation (empty originalContent)', async () => {
+  it('handles new-file creation (null sentinel in fileContents)', async () => {
     const newFilePath = path.join(tempDir, 'newfile.txt');
     await mkdir(tempDir, { recursive: true });
     const changes: PatchFileChange[] = [{ path: newFilePath, content: 'brand new\n' }];
-    const fileContents = new Map([[newFilePath, '']]);
+    // null = new file (did not exist before); '' = existing empty file.
+    const fileContents = new Map<string, string | null>([[newFilePath, null]]);
 
     const result = await applyPatch(changes, fileContents, tempDir, false);
 
@@ -147,12 +148,35 @@ describe('applyPatch (live write)', () => {
     expect(actual).toBe('brand new\n');
   });
 
-  it('reports partial_failure when rename cannot succeed', async () => {
+  it('rollback unlinks new file on rename failure (null sentinel)', async () => {
+    // Two changes: a new file (null sentinel) and an existing dir that will fail rename.
+    const newFilePath = path.join(tempDir, 'will-be-unlinked.txt');
+    const targetPath = path.join(tempDir, 'is-a-dir');
+    await mkdir(tempDir, { recursive: true });
+    await mkdir(targetPath, { recursive: true });
+
+    const changes: PatchFileChange[] = [
+      { path: newFilePath, content: 'new\n' },
+      { path: targetPath, content: 'new content\n' },
+    ];
+    const fileContents = new Map<string, string | null>([
+      [newFilePath, null],       // new file — rollback should UNLINK, not write ''
+      [targetPath, 'original\n'], // existing file
+    ]);
+
+    const result = await applyPatch(changes, fileContents, tempDir, false);
+
+    // rename(tmpFile, directory) → EISDIR on POSIX.
+    expect(result.status).toBe('partial_failure');
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it('reports partial_failure when rename cannot succeed (existing file)', async () => {
     // Make the target path a directory so rename fails with EISDIR.
     const targetPath = path.join(tempDir, 'is-a-dir');
     await mkdir(targetPath, { recursive: true });
-    // The fileContents map stores '' so the engine doesn't fail on the temp write.
-    const fileContents = new Map([[targetPath, '']]);
+    // '' = existing empty file (not a new file — no null sentinel).
+    const fileContents = new Map<string, string | null>([[targetPath, '']]);
     const changes: PatchFileChange[] = [{ path: targetPath, content: 'new content\n' }];
 
     const result = await applyPatch(changes, fileContents, tempDir, false);
