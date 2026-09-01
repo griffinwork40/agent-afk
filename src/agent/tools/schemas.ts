@@ -1341,7 +1341,6 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserObserveTool,
   browserActTool,
   browserScreenshotTool,
-<<<<<<< HEAD
   browserCloseTool, patchApplyTool,
   testRunTool,
 ];
