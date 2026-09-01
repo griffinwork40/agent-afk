@@ -20,6 +20,9 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
+import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
+
+export { recoverExpiredLeases };
 
 export interface QueuedTask {
   /** Unique task identifier, e.g. `q-1716000000000-abc123`. */
@@ -35,6 +38,16 @@ export interface QueuedTask {
    * Mirrors `ScheduledTask.notifyOn`. Omitted means "always notify".
    */
   notifyOn?: 'failure' | 'always' | 'never';
+  /**
+   * Retry fields — present only on tasks that were re-enqueued by
+   * recoverExpiredLeases after a lease expiry.  leaseTask reads these
+   * fields back so the TaskRecord preserves the attempt count and retry
+   * policy across recoveries.
+   */
+  attempts?: number;
+  maxAttempts?: number;
+  backoffStrategy?: 'fixed' | 'exponential';
+  backoffBaseMs?: number;
 }
 
 export interface EnqueueOptions {
@@ -160,9 +173,26 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       quarantinePoisonEntry(queueDir, filename, err);
       continue;
     }
-    // ORDERING INVARIANT: remove from disk BEFORE returning task.
+    // ORDERING INVARIANT: acquire a durable lease BEFORE returning task.
+    // leaseTask moves the queue file to leased/ and writes a TaskRecord —
+    // the file is no longer in the queue dir after this call. On daemon
+    // restart, recoverExpiredLeases re-enqueues any orphaned lease files.
     // See JSDoc above — do NOT move this after the return.
-    unlinkSync(filePath);
+    //
+    // FALLBACK: if leaseTask fails (e.g. renameSync unavailable in a
+    // permission-restricted environment), fall back to unlinkSync so the
+    // file is still removed from the queue and the task is returned.
+    // This preserves the pre-lease atomicity invariant: queue file is
+    // gone before the task is handed to the caller.
+    try {
+      _leaseTask(task, filePath, undefined, queueDir);
+    } catch {
+      // Best-effort unlink so the queue file is cleared even when the
+      // lease record cannot be written.  A missing lease file means this
+      // task will NOT appear in recoverExpiredLeases, which is acceptable:
+      // the caller already has the task in hand and can process it.
+      try { unlinkSync(filePath); } catch { /* ignore */ }
+    }
     return task;
   }
   return null;

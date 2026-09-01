@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { runDAG, validateDAG, type DAGNode } from './dag.js';
+import { saveCheckpoint, computeDAGHash } from './dag-checkpoint.js';
 import { TimeoutError } from '../utils/errors.js';
 import { DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } from './concurrency-pool.js';
 
@@ -689,5 +694,193 @@ describe('runDAG — maxConcurrency', () => {
     expect(result.failed).toEqual([]);
     expect(result.outputs['a']).toBe('a');
     expect(result.outputs['b']).toBe('b');
+  });
+});
+
+
+
+// ---------------------------------------------------------------------------
+// runDAG — checkpoint resume (output type preservation + failed/skipped restore)
+// ---------------------------------------------------------------------------
+
+describe('runDAG — checkpoint resume', () => {
+  let stateDir: string;
+  let savedStateDir: string | undefined;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), `afk-dag-resume-test-${randomBytes(4).toString('hex')}-`));
+    savedStateDir = process.env['AFK_STATE_DIR'];
+    process.env['AFK_STATE_DIR'] = stateDir;
+  });
+
+  afterEach(() => {
+    if (savedStateDir === undefined) delete process.env['AFK_STATE_DIR'];
+    else process.env['AFK_STATE_DIR'] = savedStateDir;
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it('restores object outputs correctly (does not return them as raw JSON strings)', async () => {
+    // A node that outputs a plain object.
+    const aOut = { answer: 42, nested: { x: true } };
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => aOut) };
+    const bNode: DAGNode = { id: 'b', run: vi.fn(async () => 'string-output') };
+
+    const graph = { nodes: [aNode, bNode], edges: [{ from: 'a', to: 'b' }] };
+    const dagId = `resume-obj-test-${randomBytes(4).toString('hex')}`;
+
+    // First run: a completes, b completes, checkpoint saved then cleared.
+    const result1 = await runDAG(graph, new AbortController().signal, { dagId });
+    expect(result1.failed).toHaveLength(0);
+
+    // Manually save a checkpoint simulating a mid-run crash after a completed.
+    const hash = computeDAGHash(graph);
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: ['a'],
+      nodeOutputs: { a: JSON.stringify(aOut) }, // as serializeOutput stores it
+      failedNodes: [],
+      skippedNodes: [],
+      timestamp: Date.now(),
+    });
+
+    // Second run resumes: a should be skipped; b runs with deserialized input.
+    const bInputs: Record<string, unknown>[] = [];
+    const resumeB: DAGNode = {
+      id: 'b',
+      run: vi.fn(async (inputs) => { bInputs.push(inputs); return 'b-out'; }),
+    };
+    const resumeGraph = { nodes: [aNode, resumeB], edges: [{ from: 'a', to: 'b' }] };
+    const result2 = await runDAG(resumeGraph, new AbortController().signal, { dagId });
+
+    expect(result2.failed).toHaveLength(0);
+    // a must not have run again (checkpoint skipped it).
+    expect(aNode.run).toHaveBeenCalledTimes(1); // only the first run
+    // b ran once during resume and received the deserialized object — not a string.
+    expect(bInputs).toHaveLength(1);
+    expect(bInputs[0]!['a']).toEqual(aOut); // deep-equal object, not the JSON string
+  });
+
+  it('restores string outputs as strings (not double-parsed)', async () => {
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => 'hello') };
+    const bNode: DAGNode = { id: 'b', run: vi.fn(async () => 'world') };
+    const graph = { nodes: [aNode, bNode], edges: [{ from: 'a', to: 'b' }] };
+    const dagId = `resume-str-test-${randomBytes(4).toString('hex')}`;
+
+    const hash = computeDAGHash(graph);
+    // serializeOutput('hello') = 'hello' (not quoted JSON)
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: ['a'],
+      nodeOutputs: { a: 'hello' },
+      failedNodes: [],
+      skippedNodes: [],
+      timestamp: Date.now(),
+    });
+
+    const bInputs: Record<string, unknown>[] = [];
+    const resumeB: DAGNode = {
+      id: 'b',
+      run: vi.fn(async (inputs) => { bInputs.push(inputs); return 'world'; }),
+    };
+    const resumeGraph = { nodes: [aNode, resumeB], edges: [{ from: 'a', to: 'b' }] };
+    await runDAG(resumeGraph, new AbortController().signal, { dagId });
+
+    expect(bInputs[0]!['a']).toBe('hello'); // plain string, not further parsed
+  });
+
+  it('restores failed nodes on resume (failFast:false) — they are not re-run', async () => {
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => { throw new Error('a failed'); }) };
+    const bNode: DAGNode = { id: 'b', run: vi.fn(async () => 'b-out') };
+    const cNode: DAGNode = { id: 'c', run: vi.fn(async (inputs) => inputs) };
+    // a→c, b→c so c runs only when both a and b are done
+    const graph = { nodes: [aNode, bNode, cNode], edges: [{ from: 'a', to: 'c' }, { from: 'b', to: 'c' }] };
+    const dagId = `resume-fail-test-${randomBytes(4).toString('hex')}`;
+
+    const hash = computeDAGHash(graph);
+    // Simulate checkpoint after a failed, b succeeded, c was skipped
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: ['b'],
+      nodeOutputs: { b: 'b-out' },
+      failedNodes: ['a'],
+      skippedNodes: ['c'],
+      timestamp: Date.now(),
+    });
+
+    const resumeA: DAGNode = { id: 'a', run: vi.fn(async () => 'a-new') };
+    const resumeB: DAGNode = { id: 'b', run: vi.fn(async () => 'b-new') };
+    const resumeC: DAGNode = { id: 'c', run: vi.fn(async (inputs) => inputs) };
+    const resumeGraph = {
+      nodes: [resumeA, resumeB, resumeC],
+      edges: [{ from: 'a', to: 'c' }, { from: 'b', to: 'c' }],
+    };
+
+    const result = await runDAG(resumeGraph, new AbortController().signal, { dagId, failFast: false });
+
+    // a and b were in checkpoint — neither should have run during resume.
+    expect(resumeA.run).not.toHaveBeenCalled();
+    expect(resumeB.run).not.toHaveBeenCalled();
+    // c was skipped in checkpoint; with a still failed and c's upstream not all
+    // completed-successfully it should remain skipped or not re-run.
+    // The key invariant: failed array must include a (restored from checkpoint).
+    expect(result.failed.map((f) => f.id)).toContain('a');
+  });
+
+  it('restores original error message from nodeErrors on resume', async () => {
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => { throw new Error('original error msg'); }) };
+    const bNode: DAGNode = { id: 'b', run: vi.fn(async () => 'b-out') };
+    const graph = { nodes: [aNode, bNode], edges: [] };
+    const dagId = `resume-err-test-${randomBytes(4).toString('hex')}`;
+
+    const hash = computeDAGHash(graph);
+    // Simulate checkpoint with nodeErrors populated (as saveCheckpoint now writes).
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: ['b'],
+      nodeOutputs: { b: 'b-out' },
+      failedNodes: ['a'],
+      nodeErrors: { a: 'original error msg' },
+      skippedNodes: [],
+      timestamp: Date.now(),
+    });
+
+    const resumeGraph = {
+      nodes: [
+        { id: 'a', run: vi.fn(async () => 'a-new') },
+        { id: 'b', run: vi.fn(async () => 'b-new') },
+      ],
+      edges: [],
+    };
+    const result = await runDAG(resumeGraph, new AbortController().signal, { dagId, failFast: false });
+
+    const aFailed = result.failed.find((f) => f.id === 'a');
+    expect(aFailed).toBeDefined();
+    // Must restore the original message, not the generic fallback.
+    expect(aFailed!.error.message).toBe('original error msg');
+  });
+
+  it('falls back to generic sentinel when nodeErrors is absent (old checkpoint format)', async () => {
+    const aNode: DAGNode = { id: 'a', run: vi.fn(async () => { throw new Error('some error'); }) };
+    const graph = { nodes: [aNode], edges: [] };
+    const dagId = `resume-no-errs-test-${randomBytes(4).toString('hex')}`;
+
+    const hash = computeDAGHash(graph);
+    // Old checkpoint format without nodeErrors field.
+    await saveCheckpoint(dagId, {
+      dagHash: hash,
+      completedNodes: [],
+      nodeOutputs: {},
+      failedNodes: ['a'],
+      // nodeErrors intentionally absent — tests backward-compat fallback
+      skippedNodes: [],
+      timestamp: Date.now(),
+    });
+
+    const resumeGraph = { nodes: [{ id: 'a', run: vi.fn(async () => 'a-new') }], edges: [] };
+    const result = await runDAG(resumeGraph, new AbortController().signal, { dagId, failFast: false });
+
+    const aFailed = result.failed.find((f) => f.id === 'a');
+    expect(aFailed).toBeDefined();
+    expect(aFailed!.error.message).toBe('restored from checkpoint');
   });
 });

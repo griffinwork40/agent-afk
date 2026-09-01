@@ -315,6 +315,14 @@
       "category": "routing"
     },
     {
+      "name": "AFK_LEASE_TTL_MS",
+      "description": "Lease TTL in milliseconds for durable task execution (issue #1411). A leased task whose lease expires before it completes is recovered and re-enqueued (or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes).",
+      "type": "number",
+      "required": false,
+      "example": "600000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_LOCAL_API_KEY",
       "description": "Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured.",
       "type": "string",

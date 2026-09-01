@@ -23,7 +23,8 @@ import { runSweep } from '../worktree-sweep.js';
 import type { ExecFileFn, SweepResult } from '../worktree-sweep.js';
 import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
-import { dequeueNext } from './queue-store.js';
+import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
+import { completeTask } from './lease-store.js';
 import { getQueueDir } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
@@ -337,6 +338,27 @@ export class CronScheduler {
     if (this.pullPollTimer !== undefined) return;
     const interval = this.options.pullPollIntervalMs;
     if (!interval || interval <= 0) return;
+
+    // On startup, recover any leases that expired while the daemon was down.
+    // Tasks with remaining attempts are re-enqueued; exhausted tasks are dead-lettered.
+    try {
+      const recovered = recoverExpiredLeases(this.queueDir);
+      for (const record of recovered) {
+        if (record.state === 'retrying') {
+          // eslint-disable-next-line no-console
+          console.error(`[daemon] lease-recovery: re-enqueued expired lease task ${record.id} (attempt ${record.attempts}/${record.maxAttempts})`);
+        } else {
+          // eslint-disable-next-line no-console
+          console.error(`[daemon] lease-recovery: dead-lettered task ${record.id} (exhausted ${record.maxAttempts} attempt(s))`);
+        }
+      }
+    } catch (err) {
+      // Recovery is best-effort — a failure must not prevent the pull loop from starting.
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.error(`[daemon] lease-recovery: failed to recover expired leases: ${msg}`);
+    }
+
     this.pullPollTimer = setInterval(() => {
       void this.pullTick();
     }, interval).unref();
@@ -358,7 +380,21 @@ export class CronScheduler {
         trigger: 'pull',
         ...(queued.notifyOn !== undefined ? { notifyOn: queued.notifyOn } : {}),
       };
-      await this.runOnce(syntheticTask, 'pull');
+      const record = await this.runOnce(syntheticTask, 'pull');
+      // Finalize the lease: move the leased/<id>.json to completed/ so the task
+      // does not appear as an expired lease on the next daemon restart.
+      // Best-effort: a completeTask failure must never crash the pull loop.
+      try {
+        completeTask(
+          queued.id,
+          record.status === 'error' ? 'failed' : 'succeeded',
+          record.errorMessage,
+          this.queueDir,
+        );
+      } catch {
+        // Non-fatal — the lease recovery path (recoverExpiredLeases on next
+        // startup) will re-enqueue or dead-letter based on the record's attempts.
+      }
     } catch (err) {
       // Errors thrown INSIDE runOnce are captured there and written to
       // telemetry. Errors reaching here come from the dequeue path (now
