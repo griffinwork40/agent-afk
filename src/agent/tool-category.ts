@@ -88,6 +88,7 @@ const WRITE_TOOLS = new Set([
 const SHELL_TOOLS = new Set([
   'Bash', 'BashOutput', 'KillBash',
   'bash',
+  // test_run discovers and spawns test runners via child_process.
   'test_run',
   'wait_for',
 ]);

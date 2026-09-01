@@ -40,6 +40,7 @@ import { browserScreenshotHandler } from './browser-screenshot.js';
 import { browserCloseHandler } from './browser-close.js';
 import { waitForHandler } from './wait-for.js';
 import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
+import { testRunHandler } from './test-run.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -108,6 +109,7 @@ export function createBuiltinHandlers(
     ['browser_screenshot', browserScreenshotHandler],
     ['browser_close', browserCloseHandler],
     ['patch_apply', patchApply],
+    ['test_run', testRunHandler],
   ]);
 }
 
@@ -138,4 +140,5 @@ export {
   browserActHandler,
   browserScreenshotHandler,
   browserCloseHandler,
+  testRunHandler,
 };

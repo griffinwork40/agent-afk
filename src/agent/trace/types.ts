@@ -211,6 +211,13 @@ export interface ToolCallCompletedPayload {
   batchIndex?: number;
   batchSize?: number;
   subagentId?: string;
+  /**
+   * Structured test-runner result when the tool result carries one (e.g.
+   * `test_run` or a `bash` test invocation that `detectTestResult` parsed).
+   * Lets trace consumers react to pass/fail counts without scanning `content`.
+   * Absent on non-test tool calls.
+   */
+  testResult?: import('../tools/handlers/test-runner-detector.js').TestResult;
 }
 
 export type ToolCallPayload = ToolCallStartedPayload | ToolCallCompletedPayload;
