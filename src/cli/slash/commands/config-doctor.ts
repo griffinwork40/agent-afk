@@ -15,7 +15,7 @@
 
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
-import { divider } from '../../render.js';
+import { divider, healthCheckRows, healthCheckSummary } from '../../render.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { resolveCliPermissionMode, loadConfig } from '../../config.js';
 import { runDoctorChecks } from '../../commands/doctor-checks.js';
@@ -290,37 +290,13 @@ const doctorCmd: SlashCommand = {
     }
 
     for (const check of checks) {
-      let icon: string;
-      if (check.state === 'pass') {
-        icon = palette.success('✓');
-      } else if (check.state === 'warn') {
-        icon = palette.warning('⚠');
-      } else {
-        icon = palette.error('✗');
-      }
-
-      let line = `  ${icon} ${check.name}`;
-      if (check.detail) {
-        line += `  — ${palette.dim(check.detail)}`;
-      }
-      out.line(line);
-
-      if (check.state !== 'pass' && check.fix) {
-        out.line(palette.dim(`      Fix: ${check.fix}`));
+      for (const line of healthCheckRows(check)) {
+        out.line(line);
       }
     }
 
-    const passed = checks.filter((c) => c.state === 'pass').length;
-    const warned = checks.filter((c) => c.state === 'warn').length;
-    const failed = checks.filter((c) => c.state === 'fail').length;
-
     out.line();
-    const summaryParts: string[] = [
-      palette.success(`${passed} passed`),
-      warned > 0 ? palette.warning(`${warned} warned`) : palette.dim(`${warned} warned`),
-      failed > 0 ? palette.error(`${failed} failed`) : palette.dim(`${failed} failed`),
-    ];
-    out.line(`  Summary: ${summaryParts.join(palette.dim('  ·  '))}`);
+    out.line(healthCheckSummary(checks));
     out.line();
 
     return 'continue';
