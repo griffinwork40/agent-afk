@@ -33,6 +33,7 @@ import type { AnthropicToolDef, ToolHandler } from '../../tools/types.js';
 import type { CustomToolDef } from '../../tools/custom-tool.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
+import type { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
@@ -97,6 +98,14 @@ export interface BuildDispatcherOptions {
    * `permissionMode === 'plan'`, the handler + schema are registered.
    */
   planExitControls?: PlanExitControls;
+  /**
+   * Session-scoped PID registry. When present, the `wait_for` process
+   * condition restricts PID probing to session-owned child processes (#1430).
+   * Top-level sessions always supply one (created once per session in
+   * `AnthropicDirectProvider`). Forked children inherit their parent's
+   * restrictions via their own dispatcher and do not share the registry.
+   */
+  spawnedPidRegistry?: SpawnedPidRegistry;
 }
 
 /**
@@ -293,5 +302,7 @@ export function buildDispatcher(
     // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a
     // read-only skill's forked child can't run mutating shell commands.
     readOnlyBash: deps.readOnlyBash,
+    // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
+    ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
   });
 }

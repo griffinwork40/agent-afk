@@ -242,6 +242,69 @@ describe('waitForHandler — body_contains defaults method to GET', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #1430: PID registry wiring through the handler context
+// ---------------------------------------------------------------------------
+
+describe('waitForHandler — #1430 PID registry wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckEgress.mockResolvedValue({ allowed: true });
+  });
+
+  it('passes context.spawnedPidRegistry to evaluateProcess', async () => {
+    const { evaluateProcess } = await import('./wait-for-conditions.js');
+    const mockEvalProcess = vi.mocked(evaluateProcess);
+    let capturedRegistry: unknown;
+    mockEvalProcess.mockImplementationOnce((_cond, registry) => {
+      capturedRegistry = registry;
+      return { met: true, detail: 'pid 12345 has exited' };
+    });
+
+    const fakeRegistry = { has: () => true, register: () => undefined, clear: () => undefined, size: 1 };
+    await waitForHandler(
+      { type: 'process', pid: 12345 },
+      neverSignal,
+      { spawnedPidRegistry: fakeRegistry } as never,
+    );
+
+    expect(capturedRegistry).toBe(fakeRegistry);
+  });
+
+  it('passes undefined registry when context has none', async () => {
+    const { evaluateProcess } = await import('./wait-for-conditions.js');
+    const mockEvalProcess = vi.mocked(evaluateProcess);
+    let registryArg: unknown = 'NOT_SET';
+    mockEvalProcess.mockImplementationOnce((_cond, registry) => {
+      registryArg = registry;
+      return { met: true, detail: 'pid 12345 has exited' };
+    });
+
+    await waitForHandler({ type: 'process', pid: 12345 }, neverSignal); // no context
+    expect(registryArg).toBeUndefined();
+  });
+
+  it('registry-blocked result (met:false, blocked:true) still produces a non-error summary', async () => {
+    // The handler should NOT surface blocked:true as isError — it returns the
+    // poll summary (succeeded / timed_out). A registry rejection is a met:false
+    // on each poll, and the test lets it time out at timeout_ms:0.
+    const { evaluateProcess } = await import('./wait-for-conditions.js');
+    vi.mocked(evaluateProcess).mockReturnValue({
+      met: false,
+      detail: 'pid 12345 is not a session-owned process (not in spawned PID registry)',
+      data: { pid: 12345, blocked: true },
+    });
+
+    const result = await waitForHandler(
+      { type: 'process', pid: 12345, timeout_ms: 0 } as never,
+      neverSignal,
+    );
+    // timeout_ms:0 → timed_out verdict, which is NOT an error
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('timed_out');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // P5: relative file path → resolved against context.cwd / resolveBase
 // ---------------------------------------------------------------------------
 

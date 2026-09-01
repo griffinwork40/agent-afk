@@ -59,6 +59,7 @@ import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { MemoryStore } from '../../memory/index.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
+import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
 import type { ProviderQueryContext } from './provider-context.js';
@@ -152,6 +153,14 @@ export class AnthropicDirectProvider implements ModelProvider {
    */
   private _mintedSessionId: string | null = null;
 
+  /**
+   * Session-scoped registry of child process PIDs spawned by the bash tool.
+   * Created once on construction and threaded into every per-query dispatcher
+   * via {@link buildDispatcher} so the `wait_for` process condition can restrict
+   * probing to session-owned PIDs (#1430).
+   */
+  private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
+
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
     this.workspaceStore = opts.workspaceStore;
@@ -229,7 +238,9 @@ export class AnthropicDirectProvider implements ModelProvider {
         setMcpHandlersCache: (v) => { this._mcpHandlersCache = v; },
       },
       permissionMode,
-      opts,
+      // Inject the session-scoped PID registry into every per-query dispatcher
+      // so bash can register spawned PIDs and wait_for can gate on them (#1430).
+      { ...opts, spawnedPidRegistry: this._spawnedPidRegistry },
     );
   }
 
