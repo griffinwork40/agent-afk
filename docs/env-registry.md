@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**175 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**176 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -222,6 +222,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DIFF_LINES` | number |  |  | `50` | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. |
 | `AFK_GOBLIN_MASCOT` | boolean |  |  | `1` | Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in. |
 | `AFK_GOBLIN_SPINNER` | boolean |  |  | `0` | Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner. |
+| `AFK_LEASE_TTL_MS` | number |  |  | `600000` | Lease TTL in milliseconds for durable task execution (issue #1411). A leased task whose lease expires before it completes is recovered and re-enqueued (or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes). |
 | `AFK_MEMORY_EVIDENCE_GATE` | boolean |  |  | `1` | Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an `evidence` citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. Default off — memory behaves identically to legacy when unset. |
 | `AFK_NOTIFY` | boolean |  |  | `1` | Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only. |
 | `AFK_PLAIN_OUTPUT` | boolean |  |  | `1` | Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the TerminalCompositor live overlay (both the persistent between-turn compositor AND the per-turn StreamRenderer overlay), AND the input surface downgrades to the simple non-TTY line reader instead of the fancy compositor-backed input box. Same code path already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior (live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true (case-insensitive). |
