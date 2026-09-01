@@ -15,8 +15,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { chromium } from 'playwright';
 import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
+import type { BrowserType } from 'playwright';
 import type { BrowserConfig } from '../types.js';
 import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
@@ -213,20 +213,38 @@ export class BrowserLauncher {
       return this.launchPromise;
     }
 
-    this.launchPromise = chromium
-      .launch({ headless: this.config.headless })
-      .then((b) => {
-        this.browser = b;
+    // Invariant: load playwright LAZILY, not at module top-level. The package
+    // loads `browsers.json` via a dynamic filesystem read at init time, which
+    // Next.js standalone file tracers (@vercel/nft) miss — producing an
+    // incomplete copy that throws MODULE_NOT_FOUND on import (issue #1428). A
+    // top-level `import { chromium } from 'playwright'` would force every
+    // `import('agent-afk')` consumer to pay that init cost even when browser
+    // tools are never used. Importing here confines the resolution to the
+    // first browser launch and lets a missing package flow through the same
+    // decoratePlaywrightLaunchError + latch path as a missing binary.
+    this.launchPromise = (async (): Promise<Browser> => {
+      let chromium: BrowserType;
+      try {
+        ({ chromium } = await import('playwright'));
+      } catch (err: unknown) {
+        // Import failure (package absent) — decorate + latch the same way a
+        // launch failure would, so the fast-fail path carries the install hint.
+        const decorated = decoratePlaywrightLaunchError(err, this.config.headless, true);
+        this.latchLaunchFailure(decorated);
         this.launchPromise = undefined;
+        throw decorated;
+      }
+
+      try {
+        const b = await chromium.launch({ headless: this.config.headless });
+        this.browser = b;
         // A success must never leave a latch behind. Nothing can set one while
         // this launch is in flight (the latch short-circuits before we get
         // here), but clearing unconditionally keeps "browser live ⇒ no latch"
         // true by construction rather than by argument.
         this.clearLaunchFailure();
         return b;
-      })
-      .catch((err: unknown) => {
-        this.launchPromise = undefined;
+      } catch (err: unknown) {
         // Headed and headless need DIFFERENT chromium downloads, and only this
         // frame knows which one was requested — a handler catch sees just a
         // string. Passing it through lets the hint name the missing artifact.
@@ -239,7 +257,10 @@ export class BrowserLauncher {
         // carry the same install remediation as this first failure.
         this.latchLaunchFailure(decorated);
         throw decorated;
-      });
+      } finally {
+        this.launchPromise = undefined;
+      }
+    })();
 
     return this.launchPromise;
   }
