@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.171.0] - 2026-09-01
+
+### Added
+- wire newsletter funnel links across README, CLI, and docs (#1406) (522a20bb)
+
 ## [5.170.1] - 2026-08-31
 
 ### Fixed
