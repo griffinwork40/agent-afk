@@ -130,6 +130,9 @@ function parseInput(
       const condition: WaitCondition = {
         type: 'file',
         path: resolvedPath,
+        // H-2: Pass the workspace root so evaluateFile can apply containment
+        // and the read-denylist floor, matching read_file's containment model.
+        workspaceRoot: base,
         ...(input.content_contains !== undefined ? { content_contains: String(input.content_contains) } : {}),
       };
       return { condition, timeoutMs, pollIntervalMs, backoff };
@@ -179,7 +182,10 @@ export const waitForHandler: ToolHandler = async (
 
   const { condition, timeoutMs, pollIntervalMs, backoff } = parsed;
 
-  // Eager SSRF check for URL type — fail fast before entering the poll loop.
+  // Eager SSRF pre-flight for URL type — fast-fail on obviously private targets
+  // before entering the poll loop. The real per-hop SSRF gate is guardedFetch
+  // inside evaluateUrl, which re-validates on every redirect hop and closes the
+  // TOCTOU gap where a public URL 302s to a private IP after this check.
   if (condition.type === 'url') {
     const verdict = await checkEgressTarget(condition.url);
     if (!verdict.allowed) {
@@ -194,7 +200,10 @@ export const waitForHandler: ToolHandler = async (
   const evaluate = (pollSignal: AbortSignal) => {
     switch (condition.type) {
       case 'url':    return evaluateUrl(condition, pollSignal);
-      case 'file':   return evaluateFile(condition);
+      // M-2: Pass pollSignal to evaluateFile so a stalled readFile call is
+      // aborted by the per-poll deadline rather than blocking past the overall
+      // timeout.
+      case 'file':   return evaluateFile(condition, pollSignal);
       case 'process': return Promise.resolve(evaluateProcess(condition));
       case 'command': return Promise.resolve(evaluateCommand(condition));
     }

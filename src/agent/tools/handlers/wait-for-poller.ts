@@ -16,7 +16,7 @@ export const MAX_TIMEOUT_MS = 600_000;
 export const DEFAULT_POLL_INTERVAL_MS = 5_000;
 export const MIN_POLL_INTERVAL_MS = 1_000;
 
-/** Heartbeat log interval — one console.error line every 60 s of waiting. */
+/** Heartbeat log interval — one debug log line every 60 s of waiting. */
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
 export interface PollOptions {
@@ -101,10 +101,30 @@ export async function pollUntil(
     try {
       result = await evaluate(perPollSignal);
     } catch (err) {
-      // If the per-poll signal fired (timeout or abort), propagate to the
-      // outer-loop checks that handle those cases gracefully.
+      // Session-level abort takes priority — surface as cancelled.
       if (signal.aborted) {
         return { status: 'cancelled', elapsed_ms: Date.now() - (deadline - timeout_ms), attempts };
+      }
+      // H-3: Per-poll timeout (AbortSignal.timeout on perPollSignal) throws an
+      // AbortError. This means the evaluator was slow for ONE poll interval but
+      // the session is still live. Treat it as a missed poll and continue the
+      // loop rather than permanently failing — a slow-but-reachable server that
+      // responds in slightly more than poll_interval_ms should not kill the whole
+      // wait. Check the deadline first so a missed poll at expiry still surfaces
+      // as timed_out rather than silently looping forever.
+      if (err instanceof Error && err.name === 'AbortError') {
+        if (Date.now() >= deadline) {
+          return {
+            status: 'timed_out',
+            elapsed_ms: Date.now() - (deadline - timeout_ms),
+            attempts,
+            result: lastResult,
+          };
+        }
+        // Missed poll — continue to next attempt without incrementing the
+        // success-attempt counter or advancing backoff (the evaluator never
+        // returned a result this round).
+        continue;
       }
       const error = err instanceof Error ? err.message : String(err);
       return {
@@ -130,20 +150,29 @@ export async function pollUntil(
     const now = Date.now();
     if (now >= deadline) {
       return {
+        // L-1: Report actual elapsed time instead of the requested timeout_ms
+        // so callers see how long the loop actually ran (may be slightly more
+        // than timeout_ms due to evaluator overhead).
         status: 'timed_out',
-        elapsed_ms: timeout_ms,
+        elapsed_ms: now - (deadline - timeout_ms),
         attempts,
         result: lastResult,
       };
     }
 
-    // Heartbeat every 60 s so long waits leave a trace in logs.
+    // L-3: Heartbeat every 60 s — emit to a conditional debug path rather than
+    // console.error so the poller does not pollute structured output in
+    // production. Use process.stderr.write only when DEBUG is set so CI and
+    // daemon surfaces stay clean; tool output goes through the tool result, not
+    // stderr.
     if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
-      console.error(
-        `[wait_for] still waiting — attempt ${attempts}, ` +
-          `${Math.round((deadline - now) / 1000)}s remaining. ` +
-          `Last: ${lastResult.detail}`,
-      );
+      if (process.env['DEBUG']) {
+        process.stderr.write(
+          `[wait_for] still waiting — attempt ${attempts}, ` +
+            `${Math.round((deadline - now) / 1000)}s remaining. ` +
+            `Last: ${lastResult?.detail ?? 'n/a'}\n`,
+        );
+      }
       lastHeartbeat = now;
     }
 

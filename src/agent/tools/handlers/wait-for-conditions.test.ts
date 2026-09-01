@@ -43,17 +43,27 @@ vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
 }));
 
+// ---------------------------------------------------------------------------
+// Mock _cwd-utils so evaluateFile containment tests are deterministic.
+// Default: resolveAndContain is a pass-through (returns the path unchanged).
+// ---------------------------------------------------------------------------
+vi.mock('./_cwd-utils.js', () => ({
+  resolveAndContain: vi.fn((p: string) => p),
+}));
+
 import { evaluateUrl, evaluateFile, evaluateProcess, evaluateCommand } from './wait-for-conditions.js';
 import { guardedFetch, EgressBlockedError } from '../../../web/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import * as fsPromises from 'node:fs/promises';
 import { execSync } from 'node:child_process';
+import { resolveAndContain } from './_cwd-utils.js';
 
 const mockGuardedFetch = vi.mocked(guardedFetch);
 const mockClassifyRisk = vi.mocked(classifyRisk);
 const mockStat = vi.mocked(fsPromises.stat);
 const mockReadFile = vi.mocked(fsPromises.readFile);
 const mockExecSync = vi.mocked(execSync);
+const mockResolveAndContain = vi.mocked(resolveAndContain);
 
 // A never-aborting signal for tests that don't test cancellation.
 const neverSignal = new AbortController().signal;
@@ -173,6 +183,12 @@ describe('evaluateUrl', () => {
 // ---------------------------------------------------------------------------
 
 describe('evaluateFile', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: pass-through (path allowed)
+    mockResolveAndContain.mockImplementation((p: string) => p);
+  });
+
   afterEach(() => vi.restoreAllMocks());
 
   it('returns met:true when file exists', async () => {
@@ -208,6 +224,63 @@ describe('evaluateFile', () => {
     expect(miss.met).toBe(false);
     expect(miss.detail).toContain('does not contain');
   });
+
+  // H-2: denylist and containment enforcement
+  it('H-2: returns met:false when resolveAndContain rejects the path (denylist hit)', async () => {
+    mockResolveAndContain.mockImplementation(() => {
+      throw new Error('is a protected credential/secret path (read-denylist entry: ~/.ssh)');
+    });
+    const result = await evaluateFile({ type: 'file', path: '/home/user/.ssh/id_rsa' });
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('path rejected');
+    expect(result.data?.blocked).toBe(true);
+    // fs.stat must NOT have been called after a denylist hit
+    expect(mockStat).not.toHaveBeenCalled();
+  });
+
+  it('H-2: returns met:false when path is outside workspace root (containment failure)', async () => {
+    mockResolveAndContain.mockImplementation(() => {
+      throw new Error('is outside the allowed read roots');
+    });
+    const result = await evaluateFile({
+      type: 'file',
+      path: '/etc/passwd',
+      workspaceRoot: '/home/user/project',
+    });
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('path rejected');
+    expect(result.data?.blocked).toBe(true);
+    expect(mockStat).not.toHaveBeenCalled();
+  });
+
+  it('H-2: calls resolveAndContain with workspaceRoot as context resolveBase', async () => {
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), size: 5 } as ReturnType<typeof fsPromises.stat> extends Promise<infer T> ? T : never);
+    await evaluateFile({
+      type: 'file',
+      path: '/home/user/project/dist/out.js',
+      workspaceRoot: '/home/user/project',
+    });
+    expect(mockResolveAndContain).toHaveBeenCalledWith(
+      '/home/user/project/dist/out.js',
+      expect.objectContaining({ resolveBase: '/home/user/project' }),
+      'read',
+    );
+  });
+
+  // M-2: AbortSignal is passed to fs.readFile
+  it('M-2: passes the signal to fs.readFile when content_contains is set', async () => {
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), size: 10 } as ReturnType<typeof fsPromises.stat> extends Promise<infer T> ? T : never);
+    mockReadFile.mockResolvedValue('needle' as unknown as Buffer);
+    const ac = new AbortController();
+    await evaluateFile(
+      { type: 'file', path: '/tmp/f.txt', content_contains: 'needle' },
+      ac.signal,
+    );
+    expect(mockReadFile).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ signal: ac.signal }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -235,8 +308,30 @@ describe('evaluateProcess', () => {
   it('returns met:false on EPERM (process exists but no permission)', () => {
     const err = Object.assign(new Error('EPERM'), { code: 'EPERM' });
     const spy = vi.spyOn(process, 'kill').mockImplementation(() => { throw err; });
+    // Use PID > 1 to avoid the M-1 guard
+    const result = evaluateProcess({ type: 'process', pid: 2 });
+    expect(result.met).toBe(false);
+    spy.mockRestore();
+  });
+
+  // M-1: Reject special PIDs 0 and 1
+  it('M-1: rejects PID 0 without calling process.kill', () => {
+    const spy = vi.spyOn(process, 'kill');
+    const result = evaluateProcess({ type: 'process', pid: 0 });
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('not a valid target');
+    expect(result.data?.blocked).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('M-1: rejects PID 1 without calling process.kill', () => {
+    const spy = vi.spyOn(process, 'kill');
     const result = evaluateProcess({ type: 'process', pid: 1 });
     expect(result.met).toBe(false);
+    expect(result.detail).toContain('not a valid target');
+    expect(result.data?.blocked).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 });
@@ -289,11 +384,33 @@ describe('evaluateCommand', () => {
     );
   });
 
-  it('passes medium-risk commands through to execSync', () => {
+  // H-1: Medium-risk commands must now be blocked (only 'safe' is allowed)
+  it('H-1: blocks medium-risk commands before execSync is called', () => {
     mockClassifyRisk.mockReturnValue('medium');
-    mockExecSync.mockReturnValue(Buffer.from(''));
     const result = evaluateCommand({ type: 'command', command: 'git status' });
-    expect(mockExecSync).toHaveBeenCalledOnce();
-    expect(result.met).toBe(true);
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('blocked by risk classifier (medium risk)');
+    expect(result.data?.blocked).toBe(true);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('H-1: blocks unknown-risk commands (defaults to medium) before execSync is called', () => {
+    mockClassifyRisk.mockReturnValue('unknown' as 'safe');
+    const result = evaluateCommand({ type: 'command', command: 'some-unknown-cmd' });
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('blocked by risk classifier');
+    expect(result.data?.blocked).toBe(true);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  // L-2: Detect SIGTERM timeout and report 'command timed out'
+  it('L-2: reports "command timed out" when execSync is killed by SIGTERM', () => {
+    mockExecSync.mockImplementation(() => {
+      throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', status: null });
+    });
+    const result = evaluateCommand({ type: 'command', command: 'sleep 60' });
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('command timed out (30s limit)');
+    expect(result.data?.timedOut).toBe(true);
   });
 });

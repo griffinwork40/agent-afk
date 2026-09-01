@@ -208,6 +208,51 @@ describe('pollUntil', () => {
     expect(sleepCalls[2]![0]).toBe(4_000);
   });
 
+  // M-3: Per-poll AbortError (slow evaluator) must NOT permanently fail
+  it('M-3: treats per-poll AbortError as a missed poll and continues the loop', async () => {
+    // Simulate: first call throws AbortError (per-poll timeout fires), second
+    // call succeeds. Session signal is never aborted. The loop should continue
+    // after the first abort and eventually succeed.
+    let calls = 0;
+    const evaluate = vi.fn(async (_sig: AbortSignal) => {
+      calls++;
+      if (calls === 1) {
+        // Simulate per-poll timeout: AbortError with name 'AbortError'
+        const err = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+        throw err;
+      }
+      return makeMet();
+    });
+    const ac = new AbortController();
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    // Should have continued past the AbortError and succeeded on attempt 2
+    expect(result.status).toBe('succeeded');
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(result.result?.met).toBe(true);
+  });
+
+  it('M-3: per-poll AbortError at deadline returns timed_out, not failed', async () => {
+    // Simulate: evaluator always throws AbortError and deadline is already past
+    // after the first miss. Should return timed_out, not failed.
+    const evaluate = vi.fn(async (_sig: AbortSignal) => {
+      const err = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+      throw err;
+    });
+    const ac = new AbortController();
+    const result = await pollUntil(evaluate, {
+      timeout_ms: 0, // deadline immediately in the past
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    expect(result.status).toBe('timed_out');
+  });
+
   it('exponential backoff is capped at 60000ms', async () => {
     // Start at 10s; after 3 doublings: 80s > 60s → capped at 60s.
     let calls = 0;
