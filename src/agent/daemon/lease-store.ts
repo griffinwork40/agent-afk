@@ -104,12 +104,26 @@ function atomicWriteJson(dest: string, data: unknown): void {
 /**
  * Create a TaskRecord from a QueuedTask and move the queue file to leased/.
  *
+ * Multi-process safety: the queue file is atomically claimed via
+ * `renameSync(srcPath → leased/<id>.json)` as the FIRST write operation.
+ * POSIX rename(2) is atomic on the same filesystem — when two processes race
+ * to lease the same task, the rename is the single-winner gate:
+ *   - The winner's rename succeeds; the queue file is gone from the FIFO.
+ *   - The loser's rename throws ENOENT (src is already gone); leaseTask
+ *     propagates that error so the caller knows it did NOT win the race.
+ * The lease record (TaskRecord JSON) is written AFTER the atomic claim so the
+ * file content reflects the winner's process ID / timestamp. This is safe:
+ * after the rename, the winner is the sole owner of leased/<id>.json and can
+ * overwrite it without a further race.
+ *
  * @param task       - The QueuedTask dequeued from queue-store.
  * @param srcPath    - Absolute path to the queue file (before deletion).
  *                     Caller must NOT have deleted it yet.
  * @param leaseTtlMs - Override the lease TTL (defaults to AFK_LEASE_TTL_MS or 10 min).
  * @param queueDir   - Queue root directory.
  * @returns The newly created TaskRecord in state 'leased'.
+ * @throws If srcPath does not exist (ENOENT) — signals that another process
+ *         already claimed this task and the caller must not proceed.
  */
 export function leaseTask(
   task: QueuedTask,
@@ -145,15 +159,19 @@ export function leaseTask(
 
   mkdirSync(leasedDir(queueDir), { recursive: true });
   const dest = leasedPath(queueDir, task.id);
-  atomicWriteJson(dest, record);
 
-  // Remove the source queue file now that the lease record is written.
-  // NOT best-effort: if unlink fails, the caller must know leasing did not
-  // complete cleanly — the original queue entry would remain intact and
-  // dequeueNext could process the same task again (double-fire).  The
-  // caller (dequeueNext) catches this error and falls back to a direct
-  // unlinkSync so the file is always removed before the task is returned.
-  unlinkSync(srcPath);
+  // Invariant: renameSync is the single-winner atomic claim for multi-process
+  // safety. It MUST execute before atomicWriteJson so that a concurrent
+  // process racing to lease the same task gets ENOENT here and aborts,
+  // rather than overwriting the winner's lease record after the fact.
+  // Do NOT reorder: write-then-rename loses the atomicity guarantee.
+  renameSync(srcPath, dest);
+
+  // We are now the sole owner of leased/<id>.json.  Overwrite it with the
+  // proper TaskRecord content.  A crash between the rename and this write
+  // leaves the file with stale QueuedTask JSON, which recoverExpiredLeases
+  // will parse successfully (all fields it needs are present) and recover.
+  atomicWriteJson(dest, record);
 
   return record;
 }
@@ -269,6 +287,14 @@ export function completeTask(
  *
  * Returns the list of recovered TaskRecords for logging.
  *
+ * Multi-process safety: before re-enqueueing or dead-lettering, the lease
+ * file is atomically claimed by renaming it to a `.claim-<random>.json`
+ * scratch file.  If two daemon processes run recoverExpiredLeases
+ * concurrently, both may enumerate the same expired file; but only the one
+ * whose `renameSync` succeeds actually owns the recovery — the loser gets
+ * ENOENT and skips that entry.  This prevents the double-enqueue that would
+ * otherwise occur when both processes call `reEnqueue` for the same task.
+ *
  * @param queueDir - Queue root directory.
  * @returns Array of TaskRecords that were processed (re-enqueued or dead-lettered).
  */
@@ -280,19 +306,40 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
   const recovered: TaskRecord[] = [];
 
   const files = readdirSync(dir)
-    .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'));
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-') && !f.startsWith('.claim-'));
 
   for (const filename of files) {
     const filePath = join(dir, filename);
+
+    // Invariant: claim the lease file via atomic rename BEFORE reading its
+    // content or acting on it.  If two processes race to recover the same
+    // expired lease, only the winner's rename succeeds; the loser gets ENOENT
+    // and skips.  This is the same single-winner primitive used in leaseTask.
+    // The claim file is a scratch name in the same directory so the rename is
+    // guaranteed to be on the same filesystem (no EXDEV).
+    const claimPath = join(dir, `.claim-${randomBytes(4).toString('hex')}.json`);
+    try {
+      renameSync(filePath, claimPath);
+    } catch {
+      continue; // ENOENT: another process already claimed this file — skip.
+    }
+
     let record: TaskRecord;
     try {
-      record = JSON.parse(readFileSync(filePath, 'utf-8')) as TaskRecord;
+      record = JSON.parse(readFileSync(claimPath, 'utf-8')) as TaskRecord;
     } catch {
-      continue; // Unreadable — skip.
+      // Claim file is unreadable (corrupt) — remove the scratch file and skip.
+      try { unlinkSync(claimPath); } catch { /* ignore */ }
+      continue;
     }
 
     const expiry = record.leaseExpiry ?? 0;
-    if (expiry > now) continue; // Lease still valid.
+    if (expiry > now) {
+      // Lease is not actually expired — rename it back so the running task
+      // keeps its lease file in the expected location.
+      try { renameSync(claimPath, filePath); } catch { /* ignore */ }
+      continue;
+    }
 
     // Lease expired — recover.
     record.updatedAt = now;
@@ -310,8 +357,8 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
       atomicWriteJson(deadLetterPath(queueDir, record.id), record);
     }
 
-    // Remove from leased/ regardless of outcome.
-    try { unlinkSync(filePath); } catch { /* ignore */ }
+    // Remove the claim scratch file now that recovery is complete.
+    try { unlinkSync(claimPath); } catch { /* ignore */ }
     recovered.push(record);
   }
 
