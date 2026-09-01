@@ -174,6 +174,7 @@ const BANNER_TAGLINE = 'run coding agents without babysitting them';
  */
 const DOCS_URL = 'docs.agentafk.com';
 const REPO_URL = 'github.com/griffinwork40/agent-afk';
+const NEWSLETTER_URL = 'griffinlong.substack.com';
 
 /**
  * The block-art hero rendered beside the goblin. Just the acronym — "AFK" is
@@ -402,6 +403,9 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   // tagline, mode, and hint rhythm.
   lines.push(
     LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL} · ${REPO_URL}`), headerMaxW),
+  );
+  lines.push(
+    LEFT_PAD + truncateDisplay(palette.dim(`newsletter: ${NEWSLETTER_URL}`), headerMaxW),
   );
 
   // Hint line sits flush-left below the whole composition. Wrapped to
