@@ -174,23 +174,28 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       continue;
     }
     // ORDERING INVARIANT: acquire a durable lease BEFORE returning task.
-    // leaseTask moves the queue file to leased/ and writes a TaskRecord —
-    // the file is no longer in the queue dir after this call. On daemon
-    // restart, recoverExpiredLeases re-enqueues any orphaned lease files.
-    // See JSDoc above — do NOT move this after the return.
+    // leaseTask atomically claims the queue file via rename(filePath →
+    // leased/<id>.json) and then writes a TaskRecord over it — the file is
+    // no longer in the queue dir after this call.  The rename is the
+    // single-winner gate: if two daemon processes race, only the winner's
+    // rename succeeds; the loser gets ENOENT and leaseTask throws, so
+    // dequeueNext skips that task and moves to the next entry in `sorted`.
+    // On daemon restart, recoverExpiredLeases re-enqueues any orphaned
+    // lease files.  See JSDoc above — do NOT move this after the return.
     //
-    // FALLBACK: if leaseTask fails (e.g. renameSync unavailable in a
-    // permission-restricted environment), fall back to unlinkSync so the
-    // file is still removed from the queue and the task is returned.
-    // This preserves the pre-lease atomicity invariant: queue file is
-    // gone before the task is handed to the caller.
+    // FALLBACK: if leaseTask fails before the rename completes (e.g. the
+    // leased/ directory cannot be created due to a permission error), the
+    // queue file is still present at filePath and the fallback unlinkSync
+    // removes it.  If the rename succeeded but the TaskRecord overwrite
+    // failed, filePath is already gone (the rename moved it) so the
+    // fallback unlinkSync gets ENOENT and is silently ignored — the file is
+    // correctly claimed in leased/ and recoverExpiredLeases will recover it.
     try {
       _leaseTask(task, filePath, undefined, queueDir);
     } catch {
-      // Best-effort unlink so the queue file is cleared even when the
-      // lease record cannot be written.  A missing lease file means this
-      // task will NOT appear in recoverExpiredLeases, which is acceptable:
-      // the caller already has the task in hand and can process it.
+      // Best-effort unlink covers the case where leaseTask failed before
+      // or during the rename.  If the rename already completed (file moved
+      // to leased/), this unlink gets ENOENT — silently ignored.
       try { unlinkSync(filePath); } catch { /* ignore */ }
     }
     return task;
