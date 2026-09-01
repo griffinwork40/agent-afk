@@ -11,6 +11,8 @@
 import type { AnthropicToolDef } from './types.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
 import { cancelBackgroundJobTool } from './schemas.orchestration.js';
+import { waitForTool } from './schemas.wait-for.js';
+export { waitForTool } from './schemas.wait-for.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -1330,13 +1332,10 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   listSchedulesTool,
   getScheduleHistoryTool,
   cancelScheduleTool, cancelBackgroundJobTool,
-  readWitnessTool,
-  searchWitnessTool,
-  worktreeTool,
-  terminalFontSizeTool,
-  configGetTool,
-  configSetTool,
-  askQuestionTool,
+  readWitnessTool, searchWitnessTool,
+  worktreeTool, terminalFontSizeTool,
+  configGetTool, configSetTool,
+  askQuestionTool, waitForTool,
   browserOpenTool,
   browserObserveTool,
   browserActTool,

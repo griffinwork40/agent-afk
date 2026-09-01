@@ -1,0 +1,207 @@
+/**
+ * Tests for wait-for-poller.ts pollUntil.
+ *
+ * Uses fake timers (vi.useFakeTimers) so tests don't actually sleep.
+ * Mocks sleepWithAbort to resolve immediately, advancing the poll loop
+ * without real wall-clock delay.
+ *
+ * @module agent/tools/handlers/wait-for-poller.test
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock sleepWithAbort to resolve instantly — tests advance time by
+// controlling evaluator calls, not actual delays.
+vi.mock('../../providers/shared/sleep-with-abort.js', () => ({
+  sleepWithAbort: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { pollUntil, DEFAULT_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS } from './wait-for-poller.js';
+import type { WaitResult } from './wait-for-conditions.js';
+import { sleepWithAbort } from '../../providers/shared/sleep-with-abort.js';
+
+const mockSleep = vi.mocked(sleepWithAbort);
+
+function makeMet(): WaitResult {
+  return { met: true, detail: 'condition met' };
+}
+function makeMiss(): WaitResult {
+  return { met: false, detail: 'not yet' };
+}
+
+describe('pollUntil', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns succeeded immediately when evaluator returns met:true on first call', async () => {
+    const evaluate = vi.fn().mockResolvedValue(makeMet());
+    const ac = new AbortController();
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    expect(result.status).toBe('succeeded');
+    expect(result.attempts).toBe(1);
+    expect(result.result?.met).toBe(true);
+    expect(mockSleep).not.toHaveBeenCalled();
+  });
+
+  it('retries until condition is met', async () => {
+    const evaluate = vi.fn()
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMet());
+    const ac = new AbortController();
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    expect(result.status).toBe('succeeded');
+    expect(result.attempts).toBe(3);
+    expect(mockSleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns cancelled when signal is aborted before first poll', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const evaluate = vi.fn().mockResolvedValue(makeMiss());
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    expect(result.status).toBe('cancelled');
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it('returns timed_out when timeout_ms is 0 and condition is not met', async () => {
+    const evaluate = vi.fn().mockResolvedValue(makeMiss());
+    const ac = new AbortController();
+    const result = await pollUntil(evaluate, {
+      timeout_ms: 0,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    expect(result.status).toBe('timed_out');
+  });
+
+  it('returns failed when evaluator throws', async () => {
+    const evaluate = vi.fn().mockRejectedValue(new Error('network down'));
+    const ac = new AbortController();
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('network down');
+  });
+
+  it('none backoff always uses same interval', async () => {
+    const evaluate = vi.fn()
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValue(makeMet());
+    const ac = new AbortController();
+    await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: 2_000,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+    // Both sleep calls should use the same interval (up to capping).
+    const calls = mockSleep.mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // First two sleeps should be same value (none = fixed).
+    expect(calls[0]![0]).toBe(calls[1]![0]);
+  });
+
+  it('linear backoff increases interval by 1000ms each attempt', async () => {
+    const evaluate = vi.fn()
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValue(makeMet());
+    const ac = new AbortController();
+    await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: 2_000,
+      backoff: 'linear',
+      signal: ac.signal,
+    });
+    const calls = mockSleep.mock.calls;
+    // After attempt 0: 2000 + 0*1000 = 2000
+    // After attempt 1: 2000 + 1*1000 = 3000
+    expect(calls[0]![0]).toBe(2_000);
+    expect(calls[1]![0]).toBe(3_000);
+  });
+
+  it('exponential backoff doubles interval each attempt, capped at 60s', async () => {
+    const evaluate = vi.fn()
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValue(makeMet());
+    const ac = new AbortController();
+    await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: 1_000,
+      backoff: 'exponential',
+      signal: ac.signal,
+    });
+    const calls = mockSleep.mock.calls;
+    // 1000*2^0=1000, 1000*2^1=2000, 1000*2^2=4000
+    expect(calls[0]![0]).toBe(1_000);
+    expect(calls[1]![0]).toBe(2_000);
+    expect(calls[2]![0]).toBe(4_000);
+  });
+
+  it('exponential backoff is capped at 60000ms', async () => {
+    // Start at 10s; after 3 doublings: 80s > 60s → capped at 60s.
+    const evaluate = vi.fn()
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValue(makeMet());
+    const ac = new AbortController();
+    await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: 10_000,
+      backoff: 'exponential',
+      signal: ac.signal,
+    });
+    const calls = mockSleep.mock.calls;
+    // 10000, 20000, 40000 — all below cap
+    expect(calls[0]![0]).toBe(10_000);
+    expect(calls[1]![0]).toBe(20_000);
+    expect(calls[2]![0]).toBe(40_000);
+
+    // Verify cap: with base=40000, attempt 2 → 40000*4=160000 → capped at 60000
+    const evaluate2 = vi.fn()
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValueOnce(makeMiss())
+      .mockResolvedValue(makeMet());
+    vi.clearAllMocks();
+    await pollUntil(evaluate2, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: 40_000,
+      backoff: 'exponential',
+      signal: ac.signal,
+    });
+    const calls2 = mockSleep.mock.calls;
+    // 40000*2^1=80000 → capped at 60000
+    expect(calls2[1]![0]).toBe(60_000);
+  });
+});

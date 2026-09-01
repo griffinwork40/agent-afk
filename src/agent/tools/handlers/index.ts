@@ -38,6 +38,7 @@ import { browserObserveHandler } from './browser-observe.js';
 import { browserActHandler } from './browser-act.js';
 import { browserScreenshotHandler } from './browser-screenshot.js';
 import { browserCloseHandler } from './browser-close.js';
+import { waitForHandler } from './wait-for.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -98,6 +99,7 @@ export function createBuiltinHandlers(
     ['config_get', configGetHandler],
     ['config_set', configSetHandler],
     ['ask_question', askQuestionHandler],
+    ['wait_for', waitForHandler],
     ['browser_open', browserOpenHandler],
     ['browser_observe', browserObserveHandler],
     ['browser_act', browserActHandler],
@@ -126,6 +128,7 @@ export {
   configGetHandler,
   configSetHandler,
   askQuestionHandler,
+  waitForHandler,
   browserOpenHandler,
   browserObserveHandler,
   browserActHandler,
