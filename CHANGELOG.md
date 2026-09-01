@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.174.0] - 2026-09-01
+
+### Added
+- wave 1 parallel issues — #1402, #1404, #1407, #1431, #1433 (#1434) (24d18857)
+
 ## [5.173.0] - 2026-09-01
 
 ### Added
