@@ -10,6 +10,7 @@
  * @module agent/tools/handlers/wait-for
  */
 
+import path from 'node:path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { checkEgressTarget } from '../../../web/egress-guard.js';
 import {
@@ -97,7 +98,11 @@ function parseInput(
       if (typeof input.url !== 'string' || input.url.trim() === '') {
         throw new Error('"url" is required for type "url"');
       }
-      const method = input.method ?? 'HEAD';
+      // When body_contains is supplied and the caller did not explicitly set a
+      // method, default to GET: HEAD responses have no body, so body_contains
+      // can never match against a HEAD response.
+      const hasBodyContains = input.body_contains !== undefined;
+      const method = input.method ?? (hasBodyContains ? 'GET' : 'HEAD');
       if (method !== 'HEAD' && method !== 'GET') {
         throw new Error('"method" must be "HEAD" or "GET"');
       }
@@ -106,7 +111,7 @@ function parseInput(
         url: input.url,
         method: method as 'HEAD' | 'GET',
         ...(input.expected_status !== undefined ? { expected_status: Number(input.expected_status) } : {}),
-        ...(input.body_contains !== undefined ? { body_contains: String(input.body_contains) } : {}),
+        ...(hasBodyContains ? { body_contains: String(input.body_contains) } : {}),
       };
       return { condition, timeoutMs, pollIntervalMs, backoff };
     }
@@ -114,9 +119,17 @@ function parseInput(
       if (typeof input.path !== 'string' || input.path.trim() === '') {
         throw new Error('"path" is required for type "file"');
       }
+      // Resolve relative paths against the session's working directory rather
+      // than process.cwd() (which reflects the AFK daemon's CWD, not the
+      // project root the model is operating in).
+      const base = context?.resolveBase ?? context?.cwd;
+      const resolvedPath =
+        base !== undefined && !path.isAbsolute(input.path)
+          ? path.resolve(base, input.path)
+          : input.path;
       const condition: WaitCondition = {
         type: 'file',
-        path: input.path,
+        path: resolvedPath,
         ...(input.content_contains !== undefined ? { content_contains: String(input.content_contains) } : {}),
       };
       return { condition, timeoutMs, pollIntervalMs, backoff };
@@ -175,9 +188,12 @@ export const waitForHandler: ToolHandler = async (
   }
 
   // Build evaluator closure for this condition.
-  const evaluate = () => {
+  // The poller passes a per-poll AbortSignal (races session signal vs. deadline)
+  // so each evaluator can abort a stalled I/O call rather than blocking past
+  // the overall timeout.
+  const evaluate = (pollSignal: AbortSignal) => {
     switch (condition.type) {
-      case 'url':    return evaluateUrl(condition, signal);
+      case 'url':    return evaluateUrl(condition, pollSignal);
       case 'file':   return evaluateFile(condition);
       case 'process': return Promise.resolve(evaluateProcess(condition));
       case 'command': return Promise.resolve(evaluateCommand(condition));

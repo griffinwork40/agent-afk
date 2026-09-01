@@ -10,7 +10,8 @@
 
 import * as fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
-import { checkEgressTarget } from '../../../web/egress-guard.js';
+import { guardedFetch } from '../../../web/egress-guard.js';
+import { classifyRisk } from '../../risk-classifier.js';
 
 /** Union of all condition shapes. */
 export type WaitCondition =
@@ -62,19 +63,20 @@ export async function evaluateUrl(
   cond: UrlCondition,
   signal: AbortSignal,
 ): Promise<WaitResult> {
-  // Eagerly reject private/loopback hosts (SSRF guard).
-  const verdict = await checkEgressTarget(cond.url);
-  if (!verdict.allowed) {
-    return { met: false, detail: `SSRF blocked: ${verdict.reason}`, data: { blocked: true } };
-  }
-
+  // guardedFetch validates the URL before the first request AND re-validates
+  // every redirect hop, closing the TOCTOU gap where a public URL 302s to a
+  // private IP after the initial check. The separate assertEgressAllowed call
+  // is intentionally removed: guardedFetch performs that check internally.
   const method = cond.method ?? 'HEAD';
   let response: Response;
   try {
-    response = await fetch(cond.url, { method, signal });
+    response = await guardedFetch(globalThis.fetch, cond.url, { method, signal });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { met: false, detail: `fetch error: ${msg}` };
+    // EgressBlockedError surfaces as "SSRF blocked:" to preserve the existing
+    // detail prefix callers may match on.
+    const detail = msg.startsWith('refusing to') ? `SSRF blocked: ${msg}` : `fetch error: ${msg}`;
+    return { met: false, detail, data: msg.startsWith('refusing to') ? { blocked: true } : undefined };
   }
 
   const { status } = response;
@@ -163,6 +165,19 @@ export function evaluateProcess(cond: ProcessCondition): WaitResult {
 // ---------------------------------------------------------------------------
 
 export function evaluateCommand(cond: CommandCondition): WaitResult {
+  // Apply the same risk classification used for bash commands so that commands
+  // routed through wait_for are subject to the same security gates as the bash
+  // tool. HIGH-risk commands (rm -rf, sudo, eval, pipe-to-shell, etc.) are
+  // blocked before execSync is ever called.
+  const risk = classifyRisk('bash', { command: cond.command }, { cwd: cond.cwd ?? process.cwd() });
+  if (risk === 'high') {
+    return {
+      met: false,
+      detail: `command blocked by risk classifier (high risk): ${cond.command}`,
+      data: { command: cond.command, blocked: true },
+    };
+  }
+
   try {
     execSync(cond.command, {
       cwd: cond.cwd,

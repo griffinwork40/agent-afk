@@ -186,3 +186,124 @@ describe('waitForHandler — cancelled outcome', () => {
     expect(result.content).toContain('cancelled');
   });
 });
+
+// ---------------------------------------------------------------------------
+// P4: body_contains → GET default
+// ---------------------------------------------------------------------------
+
+describe('waitForHandler — body_contains defaults method to GET', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckEgress.mockResolvedValue({ allowed: true });
+  });
+
+  it('uses GET when body_contains is set and method is not explicit', async () => {
+    const { evaluateUrl } = await import('./wait-for-conditions.js');
+    const mockEvalUrl = vi.mocked(evaluateUrl);
+    // Capture the condition passed to evaluateUrl
+    let capturedCond: unknown;
+    mockEvalUrl.mockImplementationOnce((cond, _sig) => {
+      capturedCond = cond;
+      return Promise.resolve({ met: true, detail: 'HTTP 200' });
+    });
+
+    await waitForHandler(
+      { type: 'url', url: 'https://example.com', body_contains: 'ready' },
+      neverSignal,
+    );
+
+    expect((capturedCond as { method?: string })?.method).toBe('GET');
+  });
+
+  it('respects explicit HEAD when body_contains is set', async () => {
+    // This is an edge case — the user explicitly opted into HEAD even with
+    // body_contains; the handler honours the explicit method.
+    const result = await waitForHandler(
+      { type: 'url', url: 'https://example.com', method: 'HEAD', body_contains: 'ready' },
+      neverSignal,
+    );
+    // Validation passes (no error about method).
+    // The mock evaluator resolves to met:true regardless.
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('uses HEAD by default when body_contains is not set', async () => {
+    const { evaluateUrl } = await import('./wait-for-conditions.js');
+    const mockEvalUrl = vi.mocked(evaluateUrl);
+    let capturedCond: unknown;
+    mockEvalUrl.mockImplementationOnce((cond, _sig) => {
+      capturedCond = cond;
+      return Promise.resolve({ met: true, detail: 'HTTP 200' });
+    });
+
+    await waitForHandler({ type: 'url', url: 'https://example.com' }, neverSignal);
+    expect((capturedCond as { method?: string })?.method).toBe('HEAD');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P5: relative file path → resolved against context.cwd / resolveBase
+// ---------------------------------------------------------------------------
+
+describe('waitForHandler — relative path resolution for file type', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckEgress.mockResolvedValue({ allowed: true });
+  });
+
+  it('resolves a relative path against context.cwd', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    const mockEvalFile = vi.mocked(evaluateFile);
+    let capturedCond: unknown;
+    mockEvalFile.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
+    });
+
+    await waitForHandler(
+      { type: 'file', path: 'dist/server.js' },
+      neverSignal,
+      { cwd: '/home/user/myproject', resolveBase: undefined } as never,
+    );
+
+    expect((capturedCond as { path: string })?.path).toBe('/home/user/myproject/dist/server.js');
+  });
+
+  it('prefers context.resolveBase over context.cwd', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    const mockEvalFile = vi.mocked(evaluateFile);
+    let capturedCond: unknown;
+    mockEvalFile.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
+    });
+
+    await waitForHandler(
+      { type: 'file', path: 'dist/server.js' },
+      neverSignal,
+      { cwd: '/home/user/myproject', resolveBase: '/home/user/myproject/packages/app' } as never,
+    );
+
+    expect((capturedCond as { path: string })?.path).toBe(
+      '/home/user/myproject/packages/app/dist/server.js',
+    );
+  });
+
+  it('passes absolute paths through unchanged', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    const mockEvalFile = vi.mocked(evaluateFile);
+    let capturedCond: unknown;
+    mockEvalFile.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
+    });
+
+    await waitForHandler(
+      { type: 'file', path: '/absolute/path/to/file.txt' },
+      neverSignal,
+      { cwd: '/home/user/myproject' } as never,
+    );
+
+    expect((capturedCond as { path: string })?.path).toBe('/absolute/path/to/file.txt');
+  });
+});

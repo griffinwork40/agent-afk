@@ -10,11 +10,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
-// Mock the egress guard so tests don't hit DNS.
+// Mock guardedFetch so tests don't hit DNS or real HTTP.
 // ---------------------------------------------------------------------------
 vi.mock('../../../web/egress-guard.js', () => ({
+  guardedFetch: vi.fn(),
   checkEgressTarget: vi.fn().mockResolvedValue({ allowed: true }),
   assertEgressAllowed: vi.fn().mockResolvedValue(undefined),
+  EgressBlockedError: class EgressBlockedError extends Error {
+    constructor(msg: string) { super(msg); this.name = 'EgressBlockedError'; }
+  },
+}));
+
+// ---------------------------------------------------------------------------
+// Mock the risk classifier so command-gate tests are deterministic.
+// ---------------------------------------------------------------------------
+vi.mock('../../risk-classifier.js', () => ({
+  classifyRisk: vi.fn().mockReturnValue('safe'),
 }));
 
 // ---------------------------------------------------------------------------
@@ -33,11 +44,13 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { evaluateUrl, evaluateFile, evaluateProcess, evaluateCommand } from './wait-for-conditions.js';
-import { checkEgressTarget } from '../../../web/egress-guard.js';
+import { guardedFetch, EgressBlockedError } from '../../../web/egress-guard.js';
+import { classifyRisk } from '../../risk-classifier.js';
 import * as fsPromises from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 
-const mockCheckEgress = vi.mocked(checkEgressTarget);
+const mockGuardedFetch = vi.mocked(guardedFetch);
+const mockClassifyRisk = vi.mocked(classifyRisk);
 const mockStat = vi.mocked(fsPromises.stat);
 const mockReadFile = vi.mocked(fsPromises.readFile);
 const mockExecSync = vi.mocked(execSync);
@@ -51,75 +64,82 @@ const neverSignal = new AbortController().signal;
 
 describe('evaluateUrl', () => {
   beforeEach(() => {
-    mockCheckEgress.mockResolvedValue({ allowed: true });
+    vi.clearAllMocks();
+    mockClassifyRisk.mockReturnValue('safe');
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('returns met:true on HTTP 200', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  it('returns met:true on HTTP 200 using guardedFetch', async () => {
+    mockGuardedFetch.mockResolvedValue({
       status: 200,
       body: { cancel: vi.fn().mockResolvedValue(undefined) },
-    }));
+    } as unknown as Response);
     const result = await evaluateUrl({ type: 'url', url: 'https://example.com' }, neverSignal);
     expect(result.met).toBe(true);
     expect(result.detail).toContain('200');
-    vi.unstubAllGlobals();
+    expect(mockGuardedFetch).toHaveBeenCalledWith(
+      globalThis.fetch,
+      'https://example.com',
+      expect.objectContaining({ method: 'HEAD' }),
+    );
   });
 
   it('returns met:false on HTTP 503', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    mockGuardedFetch.mockResolvedValue({
       status: 503,
       body: { cancel: vi.fn().mockResolvedValue(undefined) },
-    }));
+    } as unknown as Response);
     const result = await evaluateUrl({ type: 'url', url: 'https://example.com' }, neverSignal);
     expect(result.met).toBe(false);
     expect(result.data?.status).toBe(503);
-    vi.unstubAllGlobals();
   });
 
   it('respects expected_status', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    mockGuardedFetch.mockResolvedValue({
       status: 201,
       body: { cancel: vi.fn().mockResolvedValue(undefined) },
-    }));
+    } as unknown as Response);
     const result = await evaluateUrl(
       { type: 'url', url: 'https://example.com', expected_status: 200 },
       neverSignal,
     );
     expect(result.met).toBe(false);
-    vi.unstubAllGlobals();
   });
 
   it('checks body_contains when present', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    mockGuardedFetch.mockResolvedValue({
       status: 200,
       text: vi.fn().mockResolvedValue('Hello world'),
       body: { cancel: vi.fn() },
-    }));
+    } as unknown as Response);
     const hit = await evaluateUrl(
       { type: 'url', url: 'https://example.com', method: 'GET', body_contains: 'world' },
       neverSignal,
     );
     expect(hit.met).toBe(true);
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    mockGuardedFetch.mockResolvedValue({
       status: 200,
       text: vi.fn().mockResolvedValue('Hello world'),
       body: { cancel: vi.fn() },
-    }));
+    } as unknown as Response);
     const miss = await evaluateUrl(
       { type: 'url', url: 'https://example.com', method: 'GET', body_contains: 'goodbye' },
       neverSignal,
     );
     expect(miss.met).toBe(false);
-    vi.unstubAllGlobals();
   });
 
-  it('returns met:false and blocked detail when SSRF guard blocks', async () => {
-    mockCheckEgress.mockResolvedValueOnce({ allowed: false, reason: 'private IP' });
+  it('returns met:false and blocked detail when SSRF guard blocks via guardedFetch', async () => {
+    // guardedFetch throws EgressBlockedError when a private target is detected
+    // on any hop (including redirect chains). The evaluator converts this to a
+    // structured "SSRF blocked:" detail so callers can pattern-match on it.
+    mockGuardedFetch.mockRejectedValue(
+      new EgressBlockedError('refusing to fetch — internal/private address 127.0.0.1'),
+    );
     const result = await evaluateUrl({ type: 'url', url: 'http://127.0.0.1' }, neverSignal);
     expect(result.met).toBe(false);
     expect(result.detail).toContain('SSRF blocked');
@@ -127,11 +147,24 @@ describe('evaluateUrl', () => {
   });
 
   it('returns met:false on network error', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    mockGuardedFetch.mockRejectedValue(new Error('ECONNREFUSED'));
     const result = await evaluateUrl({ type: 'url', url: 'https://example.com' }, neverSignal);
     expect(result.met).toBe(false);
     expect(result.detail).toContain('fetch error');
-    vi.unstubAllGlobals();
+  });
+
+  it('passes signal through to guardedFetch', async () => {
+    mockGuardedFetch.mockResolvedValue({
+      status: 200,
+      body: { cancel: vi.fn().mockResolvedValue(undefined) },
+    } as unknown as Response);
+    const ac = new AbortController();
+    await evaluateUrl({ type: 'url', url: 'https://example.com' }, ac.signal);
+    expect(mockGuardedFetch).toHaveBeenCalledWith(
+      globalThis.fetch,
+      'https://example.com',
+      expect.objectContaining({ signal: ac.signal }),
+    );
   });
 });
 
@@ -213,6 +246,10 @@ describe('evaluateProcess', () => {
 // ---------------------------------------------------------------------------
 
 describe('evaluateCommand', () => {
+  beforeEach(() => {
+    mockClassifyRisk.mockReturnValue('safe');
+  });
+
   afterEach(() => vi.restoreAllMocks());
 
   it('returns met:true when command exits 0', () => {
@@ -229,5 +266,34 @@ describe('evaluateCommand', () => {
     const result = evaluateCommand({ type: 'command', command: 'false' });
     expect(result.met).toBe(false);
     expect(result.detail).toContain('exited 1');
+  });
+
+  it('blocks high-risk commands before execSync is called', () => {
+    // Simulate the classifier flagging a dangerous command (rm -rf, sudo, etc.)
+    mockClassifyRisk.mockReturnValue('high');
+    const result = evaluateCommand({ type: 'command', command: 'rm -rf /' });
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('blocked by risk classifier');
+    expect(result.data?.blocked).toBe(true);
+    // execSync must NOT have been called
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('classifies using the bash tool name so the same bash rule table applies', () => {
+    mockExecSync.mockReturnValue(Buffer.from(''));
+    evaluateCommand({ type: 'command', command: 'echo hello', cwd: '/tmp' });
+    expect(mockClassifyRisk).toHaveBeenCalledWith(
+      'bash',
+      { command: 'echo hello' },
+      expect.objectContaining({ cwd: '/tmp' }),
+    );
+  });
+
+  it('passes medium-risk commands through to execSync', () => {
+    mockClassifyRisk.mockReturnValue('medium');
+    mockExecSync.mockReturnValue(Buffer.from(''));
+    const result = evaluateCommand({ type: 'command', command: 'git status' });
+    expect(mockExecSync).toHaveBeenCalledOnce();
+    expect(result.met).toBe(true);
   });
 });

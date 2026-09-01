@@ -64,11 +64,16 @@ function nextInterval(
  * Poll `evaluate` until it returns `{ met: true }`, the timeout is reached,
  * or the signal is aborted.
  *
+ * The evaluator receives a per-poll AbortSignal that fires at the earlier of
+ * (a) the session-level signal or (b) the remaining time to the overall
+ * deadline, so a hung evaluator (e.g. a server that accepts the TCP connection
+ * but never sends a response) cannot block the loop past the deadline.
+ *
  * The function NEVER throws — all outcomes are expressed in the returned
  * `PollResult.status`. Callers should surface `failed` as an error only.
  */
 export async function pollUntil(
-  evaluate: () => Promise<WaitResult>,
+  evaluate: (signal: AbortSignal) => Promise<WaitResult>,
   options: PollOptions,
 ): Promise<PollResult> {
   const { timeout_ms, poll_interval_ms, backoff, signal } = options;
@@ -83,11 +88,24 @@ export async function pollUntil(
       return { status: 'cancelled', elapsed_ms: Date.now() - (deadline - timeout_ms), attempts };
     }
 
-    // Evaluate condition.
+    // Evaluate condition with a per-poll deadline signal so a stalled
+    // evaluator (e.g. a server that accepts connections but never responds)
+    // is aborted no later than the remaining time to the overall deadline.
+    // AbortSignal.any races the session signal against the per-poll timeout.
+    const remaining = deadline - Date.now();
+    const perPollSignal = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(Math.max(1, Math.min(poll_interval_ms, remaining))),
+    ]);
     let result: WaitResult;
     try {
-      result = await evaluate();
+      result = await evaluate(perPollSignal);
     } catch (err) {
+      // If the per-poll signal fired (timeout or abort), propagate to the
+      // outer-loop checks that handle those cases gracefully.
+      if (signal.aborted) {
+        return { status: 'cancelled', elapsed_ms: Date.now() - (deadline - timeout_ms), attempts };
+      }
       const error = err instanceof Error ? err.message : String(err);
       return {
         status: 'failed',

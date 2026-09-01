@@ -415,6 +415,36 @@ export function classifyRisk(
     return 'medium';
   }
 
+  // ---- wait_for ------------------------------------------------------------
+  // wait_for condition types differ significantly in risk:
+  //
+  //   url     — issues outbound HTTP; same risk profile as web_scrape ('medium').
+  //   file    — read-only fs.stat / readFile; 'safe'.
+  //   process — read-only process.kill(pid, 0); 'safe'.
+  //   command — runs a shell command via execSync. The command string is
+  //             classified using the same bash rule table (classifyBash) as the
+  //             bash tool, but that logic lives inside evaluateCommand so we
+  //             cannot call it here without the command string. We therefore
+  //             use the bash classifier directly when the type is 'command'.
+  //             For other types fall through to the type-specific rules above.
+  //
+  // A missing or unknown `type` field is treated conservatively as 'medium'.
+  if (tool === 'wait_for') {
+    const obj =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>)
+        : {};
+    const condType = typeof obj['type'] === 'string' ? obj['type'] : '';
+    if (condType === 'command') {
+      const cmd =
+        typeof obj['command'] === 'string' ? obj['command'] : '';
+      return classifyBash(cmd);
+    }
+    if (condType === 'file' || condType === 'process') return 'safe';
+    // url or unknown: treat as medium (outbound network).
+    return 'medium';
+  }
+
   // ---- unknown tool -------------------------------------------------------
   // Don't gate things we haven't classified — default to safe so the
   // classifier never blocks novel tools without an explicit rule.
