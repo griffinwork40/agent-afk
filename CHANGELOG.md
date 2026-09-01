@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.173.0] - 2026-09-01
+
+### Added
+- test_run tool with discovery and structured results (#1426) (d2d0b0a1)
+- patch_apply tool with atomic multi-file changes (#1425) (deeaab29)
+- wait_for tool with poll-based condition waiting (#1424) (53f5d726)
+- durable task lifecycle with lease recovery and DAG checkpointing (#1427) (a2596639)
+
 ## [5.172.1] - 2026-09-01
 
 ### Fixed
