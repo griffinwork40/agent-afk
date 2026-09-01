@@ -10,7 +10,7 @@
 
 import type { AnthropicToolDef } from './types.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
-import { cancelBackgroundJobTool } from './schemas.orchestration.js';
+import { cancelBackgroundJobTool, patchApplyTool } from './schemas.orchestration.js';
 import { waitForTool } from './schemas.wait-for.js';
 export { waitForTool } from './schemas.wait-for.js';
 
@@ -1340,7 +1340,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserObserveTool,
   browserActTool,
   browserScreenshotTool,
-  browserCloseTool,
+  browserCloseTool, patchApplyTool,
 ];
 
 /** Tool names in the always-on built-in set. */

@@ -39,6 +39,7 @@ import { browserActHandler } from './browser-act.js';
 import { browserScreenshotHandler } from './browser-screenshot.js';
 import { browserCloseHandler } from './browser-close.js';
 import { waitForHandler } from './wait-for.js';
+import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -77,6 +78,7 @@ export function createBuiltinHandlers(
   const listDirectory = cwd !== undefined ? createListDirectoryHandler(cwd) : listDirectoryHandler;
   const terminalFontSize = createTerminalFontSizeHandler();
   const worktree = createWorktreeHandler(cwd);
+  const patchApply = cwd !== undefined ? createPatchApplyHandler(cwd) : patchApplyHandler;
   return new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFile],
@@ -105,6 +107,7 @@ export function createBuiltinHandlers(
     ['browser_act', browserActHandler],
     ['browser_screenshot', browserScreenshotHandler],
     ['browser_close', browserCloseHandler],
+    ['patch_apply', patchApply],
   ]);
 }
 
@@ -129,6 +132,7 @@ export {
   configSetHandler,
   askQuestionHandler,
   waitForHandler,
+  patchApplyHandler,
   browserOpenHandler,
   browserObserveHandler,
   browserActHandler,

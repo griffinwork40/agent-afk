@@ -63,7 +63,7 @@ const READ_TOOLS = new Set([
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',
   'write_file', 'edit_file',
-  // patch_apply applies unified diffs to files on disk — a write operation.
+  // patch_apply atomically writes structured multi-file changes to disk.
   'patch_apply',
   // memory-tools.ts — both mutate persistent state on disk (the fact
   // archive / HOT.md and ~/.afk/procedures/<name>.md respectively), so

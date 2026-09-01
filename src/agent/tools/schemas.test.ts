@@ -41,6 +41,7 @@ describe('builtinToolSchemas', () => {
       'browser_act',
       'browser_screenshot',
       'browser_close',
+      'patch_apply',
     ]);
   });
 

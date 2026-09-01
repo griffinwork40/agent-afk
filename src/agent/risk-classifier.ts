@@ -322,6 +322,27 @@ export function classifyRisk(
     return classifyFilePath(filePath, ctx);
   }
 
+  // ---- patch_apply ---------------------------------------------------------
+  // patch_apply atomically writes multiple files; classify by the highest-risk
+  // path across the entire changes array. An empty changes array is safe.
+  if (tool === 'patch_apply') {
+    const obj =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>)
+        : {};
+    const changes = Array.isArray(obj['changes']) ? obj['changes'] : [];
+    let highest: RiskLevel = 'safe';
+    for (const change of changes) {
+      if (typeof change !== 'object' || change === null) continue;
+      const p = (change as Record<string, unknown>)['path'];
+      const filePath = typeof p === 'string' ? p : '';
+      const level = classifyFilePath(filePath, ctx);
+      if (level === 'high') return 'high';
+      if (level === 'medium') highest = 'medium';
+    }
+    return highest;
+  }
+
   // ---- read-class tools ---------------------------------------------------
   // Derive from tool-category taxonomy rather than a local hand-maintained list.
   // Previously this was a 5-entry if-chain that diverged from tool-category.ts
