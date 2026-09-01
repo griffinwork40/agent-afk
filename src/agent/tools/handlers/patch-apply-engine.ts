@@ -9,7 +9,7 @@
  */
 
 import { createHash, randomBytes } from 'crypto';
-import { writeFile, rename, mkdir, unlink } from 'fs/promises';
+import { writeFile, rename, mkdir, unlink, chmod, stat } from 'fs/promises';
 import { dirname, join, isAbsolute, resolve } from 'path';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { PatchFileChange, ValidationError } from './patch-validate.js';
@@ -125,26 +125,23 @@ export async function applyPatch(
     originalContent: string;
     newContent: string;
     diffBlock: string;
+    /** True when the file did not exist before the patch (originalContent is ''). */
+    isNewFile: boolean;
   }> = [];
 
   for (const change of changes) {
-    // Derive the resolved path. fileContents is keyed by resolved path, so we
-    // need to find the matching key. The validator stored entries by resolved
-    // path; changes.path may be relative. We reconstruct the resolved path the
-    // same way the validator did: normalise via the resolveBase.
-    const resolvedPath = (() => {
-      // fileContents keys ARE the resolved paths set by the validator.
-      // Find the key matching this change's path.
-      for (const key of fileContents.keys()) {
-        if (key === change.path || key.endsWith(`/${change.path}`)) return key;
-      }
-      // Fallback: reconstruct from resolveBase (same logic as validator).
-      return isAbsolute(change.path)
-        ? change.path
-        : resolve(resolveBase, change.path);
-    })();
+    // Derive the resolved path using the same logic as the validator:
+    // path.resolve(resolveBase, changePath) handles both absolute and relative
+    // paths without suffix-collision ambiguity (e.g. "dir/foo.ts" vs "foo.ts").
+    const resolvedPath = isAbsolute(change.path)
+      ? change.path
+      : resolve(resolveBase, change.path);
 
     const originalContent = fileContents.get(resolvedPath) ?? '';
+    // A file is "new" when the validator stored an empty string because the
+    // file didn't exist on disk. Use has() to distinguish missing key (new
+    // file) from an existing empty file (the validator always sets the key).
+    const isNewFile = !fileContents.has(resolvedPath);
 
     let newContent: string;
     if (change.content !== undefined) {
@@ -158,7 +155,7 @@ export async function applyPatch(
 
     const diffBlock = formatUnifiedDiff(change.path, originalContent, newContent);
 
-    planned.push({ resolvedPath, originalContent, newContent, diffBlock });
+    planned.push({ resolvedPath, originalContent, newContent, diffBlock, isNewFile });
   }
 
   // Build combined diff string.
@@ -184,16 +181,32 @@ export async function applyPatch(
   // Phase 2: atomic apply via temp files.
   // Write each new content to a temp file (same directory — ensures same mount
   // point for an atomic rename). Collect temp paths for rollback.
-  const tempFiles: Array<{ tempPath: string; targetPath: string }> = [];
+  const tempFiles: Array<{ tempPath: string; targetPath: string; originalMode: number | undefined }> = [];
   const writeErrors: ValidationError[] = [];
 
   for (const plan of planned) {
     const tmp = tempPath(plan.resolvedPath);
     try {
+      // Preserve original file permissions for existing files. Capture the
+      // mode BEFORE writing the temp so the original is still on disk.
+      let originalMode: number | undefined;
+      if (!plan.isNewFile) {
+        try {
+          const s = await stat(plan.resolvedPath);
+          originalMode = s.mode;
+        } catch {
+          // If we can't stat (e.g. race condition), proceed without chmod.
+        }
+      }
       // Ensure the parent directory exists (for new files).
       await mkdir(dirname(plan.resolvedPath), { recursive: true });
       await writeFile(tmp, plan.newContent, 'utf-8');
-      tempFiles.push({ tempPath: tmp, targetPath: plan.resolvedPath });
+      // Restore original permissions on the temp file before rename so the
+      // final file inherits the correct mode, not the process umask.
+      if (originalMode !== undefined) {
+        await chmod(tmp, originalMode);
+      }
+      tempFiles.push({ tempPath: tmp, targetPath: plan.resolvedPath, originalMode });
     } catch (err) {
       writeErrors.push({
         path: plan.resolvedPath,
@@ -222,7 +235,11 @@ export async function applyPatch(
 
   // Commit point: rename all temp files to their targets atomically.
   const renameErrors: ValidationError[] = [];
-  const completedRenames: Array<{ targetPath: string; originalContent: string }> = [];
+  const completedRenames: Array<{
+    targetPath: string;
+    originalContent: string;
+    isNewFile: boolean;
+  }> = [];
 
   for (let i = 0; i < tempFiles.length; i++) {
     const tf = tempFiles[i]!;
@@ -231,6 +248,7 @@ export async function applyPatch(
       completedRenames.push({
         targetPath: tf.targetPath,
         originalContent: planned[i]!.originalContent,
+        isNewFile: planned[i]!.isNewFile,
       });
     } catch (err) {
       renameErrors.push({
@@ -243,9 +261,16 @@ export async function applyPatch(
 
   if (renameErrors.length > 0) {
     // Partial failure: roll back successfully-renamed files.
+    // For files that didn't exist before the patch, unlink the newly created
+    // file (there is no original content to restore). For existing files,
+    // overwrite with the original content.
     for (const completed of completedRenames) {
       try {
-        await writeFile(completed.targetPath, completed.originalContent, 'utf-8');
+        if (completed.isNewFile) {
+          await unlink(completed.targetPath);
+        } else {
+          await writeFile(completed.targetPath, completed.originalContent, 'utf-8');
+        }
       } catch {
         // Best-effort rollback — log but continue.
       }

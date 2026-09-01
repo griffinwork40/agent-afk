@@ -75,10 +75,11 @@ const TYPED_FILE_TOOLS = new Set([
   'list_directory',
   'glob',
   'grep',
+  'patch_apply',
 ]);
 
 /** Tools that write — used to pick read-vs-write containment + grant mode. */
-const WRITE_TOOLS = new Set(['write_file', 'edit_file']);
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'patch_apply']);
 
 /** Surface label threaded into the persisted grant for audit. */
 export type PathApprovalSurface = 'repl' | 'telegram' | 'web' | 'unknown';
@@ -488,6 +489,19 @@ function extractCandidatePath(
   if (toolName === 'glob' || toolName === 'grep') {
     const p = input['path'];
     return typeof p === 'string' ? p : undefined;
+  }
+  // patch_apply has a `changes` array; each element has a `path` field.
+  // Path containment is enforced per-change by patch-validate.ts
+  // (resolveAndContain), so the approval prompt only needs a representative
+  // path to anchor the containment check and grant flow.
+  if (toolName === 'patch_apply') {
+    const changes = input['changes'];
+    if (Array.isArray(changes) && changes.length > 0) {
+      const first = changes[0] as Record<string, unknown>;
+      const p = first['path'];
+      return typeof p === 'string' ? p : undefined;
+    }
+    return undefined;
   }
   return undefined;
 }
