@@ -169,8 +169,10 @@ export function leaseTask(
 
   // We are now the sole owner of leased/<id>.json.  Overwrite it with the
   // proper TaskRecord content.  A crash between the rename and this write
-  // leaves the file with stale QueuedTask JSON, which recoverExpiredLeases
-  // will parse successfully (all fields it needs are present) and recover.
+  // leaves the file with raw QueuedTask JSON (no leaseExpiry/attempts/
+  // maxAttempts).  recoverExpiredLeases detects this case (undefined fields)
+  // and reconstructs a valid TaskRecord so the task is re-enqueued rather
+  // than dead-lettered.
   atomicWriteJson(dest, record);
 
   return record;
@@ -311,34 +313,55 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
   for (const filename of files) {
     const filePath = join(dir, filename);
 
-    // Invariant: claim the lease file via atomic rename BEFORE reading its
-    // content or acting on it.  If two processes race to recover the same
-    // expired lease, only the winner's rename succeeds; the loser gets ENOENT
-    // and skips.  This is the same single-winner primitive used in leaseTask.
-    // The claim file is a scratch name in the same directory so the rename is
-    // guaranteed to be on the same filesystem (no EXDEV).
+    // Read-before-claim: read the record first to check expiry before we
+    // rename.  This eliminates the TOCTOU window where a live lease gets
+    // claimed and then the rename-back fails silently, permanently removing
+    // the lease file from under the running task.
+    //   - If the read fails (corrupt / concurrent removal): skip this file.
+    //   - If leaseExpiry > now: not expired — leave it in place, no rename.
+    //   - If expired (or crash-window artifact): claim via atomic rename, then
+    //     recover.  Two processes racing on the same expired lease: only the
+    //     winner's rename succeeds; the loser gets ENOENT and skips — same
+    //     single-winner primitive used in leaseTask.
+    let record: TaskRecord;
+    try {
+      record = JSON.parse(readFileSync(filePath, 'utf-8')) as TaskRecord;
+    } catch {
+      // Unreadable (corrupt or concurrently removed) — skip.
+      continue;
+    }
+
+    // Crash-window artifact: if the process crashed between the rename (line
+    // ~168) and the atomicWriteJson overwrite (~174), the file contains raw
+    // QueuedTask JSON with no leaseExpiry, attempts, or maxAttempts.
+    // Without this guard: leaseExpiry ?? 0 → 0 (expired); attempts <
+    // maxAttempts → undefined < undefined → false → dead-lettered silently.
+    // Fix: reconstruct a minimal valid TaskRecord so the task is re-enqueued.
+    if (record.attempts === undefined || record.maxAttempts === undefined) {
+      record = {
+        ...record,
+        state: 'leased',
+        attempts: 0,
+        maxAttempts: 1,
+        leaseExpiry: 0, // treat as expired so recovery proceeds below
+        createdAt: record.createdAt ?? now,
+        updatedAt: now,
+      } as TaskRecord;
+    }
+
+    const expiry = record.leaseExpiry ?? 0;
+    if (expiry > now) {
+      // Lease is not expired — leave the file in place for the running task.
+      continue;
+    }
+
+    // Lease is expired (or crash-window artifact with leaseExpiry:0): claim
+    // it via atomic rename so concurrent recovery processes skip it.
     const claimPath = join(dir, `.claim-${randomBytes(4).toString('hex')}.json`);
     try {
       renameSync(filePath, claimPath);
     } catch {
       continue; // ENOENT: another process already claimed this file — skip.
-    }
-
-    let record: TaskRecord;
-    try {
-      record = JSON.parse(readFileSync(claimPath, 'utf-8')) as TaskRecord;
-    } catch {
-      // Claim file is unreadable (corrupt) — remove the scratch file and skip.
-      try { unlinkSync(claimPath); } catch { /* ignore */ }
-      continue;
-    }
-
-    const expiry = record.leaseExpiry ?? 0;
-    if (expiry > now) {
-      // Lease is not actually expired — rename it back so the running task
-      // keeps its lease file in the expected location.
-      try { renameSync(claimPath, filePath); } catch { /* ignore */ }
-      continue;
     }
 
     // Lease expired — recover.
@@ -360,6 +383,56 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
     // Remove the claim scratch file now that recovery is complete.
     try { unlinkSync(claimPath); } catch { /* ignore */ }
     recovered.push(record);
+  }
+
+  // Second pass: recover stale .claim-* files left by an interrupted recovery
+  // run.  If recovery crashed after renaming a lease to .claim-*.json but
+  // before re-enqueueing or dead-lettering, the claim file is the only copy
+  // of the task.  Future recovery silently skips it (the main loop filters
+  // !f.startsWith('.claim-')), causing permanent task loss.  We handle them
+  // here so no task is ever permanently orphaned.
+  const claimFiles = readdirSync(dir).filter(
+    (f) => f.endsWith('.json') && f.startsWith('.claim-'),
+  );
+  for (const claimFilename of claimFiles) {
+    const claimFilePath = join(dir, claimFilename);
+    let claimRecord: TaskRecord;
+    try {
+      claimRecord = JSON.parse(readFileSync(claimFilePath, 'utf-8')) as TaskRecord;
+    } catch {
+      // Unreadable — remove and skip.
+      try { unlinkSync(claimFilePath); } catch { /* ignore */ }
+      continue;
+    }
+
+    // Apply same crash-window reconstruction as above.
+    if (claimRecord.attempts === undefined || claimRecord.maxAttempts === undefined) {
+      claimRecord = {
+        ...claimRecord,
+        state: 'leased',
+        attempts: 0,
+        maxAttempts: 1,
+        leaseExpiry: 0,
+        createdAt: claimRecord.createdAt ?? now,
+        updatedAt: now,
+      } as TaskRecord;
+    }
+
+    claimRecord.updatedAt = now;
+
+    if (claimRecord.attempts < claimRecord.maxAttempts) {
+      claimRecord.state = 'retrying';
+      reEnqueue(claimRecord, queueDir);
+    } else {
+      claimRecord.state = 'dead-letter';
+      claimRecord.lastError = claimRecord.lastError ?? 'lease expired';
+      delete claimRecord.leaseExpiry;
+      mkdirSync(deadLetterDir(queueDir), { recursive: true });
+      atomicWriteJson(deadLetterPath(queueDir, claimRecord.id), claimRecord);
+    }
+
+    try { unlinkSync(claimFilePath); } catch { /* ignore */ }
+    recovered.push(claimRecord);
   }
 
   return recovered;

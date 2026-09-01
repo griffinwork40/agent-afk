@@ -24,6 +24,15 @@ import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js'
 
 export { recoverExpiredLeases };
 
+/** Returns true if err is a Node.js ENOENT filesystem error. */
+function isEnoent(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
 export interface QueuedTask {
   /** Unique task identifier, e.g. `q-1716000000000-abc123`. */
   id: string;
@@ -183,20 +192,22 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
     // On daemon restart, recoverExpiredLeases re-enqueues any orphaned
     // lease files.  See JSDoc above — do NOT move this after the return.
     //
-    // FALLBACK: if leaseTask fails before the rename completes (e.g. the
-    // leased/ directory cannot be created due to a permission error), the
-    // queue file is still present at filePath and the fallback unlinkSync
-    // removes it.  If the rename succeeded but the TaskRecord overwrite
-    // failed, filePath is already gone (the rename moved it) so the
-    // fallback unlinkSync gets ENOENT and is silently ignored — the file is
-    // correctly claimed in leased/ and recoverExpiredLeases will recover it.
+    // ERROR HANDLING: on any leaseTask error the lease was NOT successfully
+    // acquired, so we must NOT return the task.  Two sub-cases:
+    //   ENOENT (race-loss): another process already claimed this file — skip.
+    //   Other errors: the queue file may still be present; best-effort
+    //   unlinkSync removes it so it does not block FIFO ordering.  Either
+    //   way, continue to the next entry instead of returning the task.
     try {
       _leaseTask(task, filePath, undefined, queueDir);
-    } catch {
-      // Best-effort unlink covers the case where leaseTask failed before
-      // or during the rename.  If the rename already completed (file moved
-      // to leased/), this unlink gets ENOENT — silently ignored.
-      try { unlinkSync(filePath); } catch { /* ignore */ }
+    } catch (err: unknown) {
+      // Race-loss (ENOENT): another process already claimed this file — skip.
+      // Other errors: the lease was not acquired; clean up the queue file
+      // (if it still exists) and skip to the next entry.
+      if (!isEnoent(err)) {
+        try { unlinkSync(filePath); } catch { /* ignore */ }
+      }
+      continue;
     }
     return task;
   }
