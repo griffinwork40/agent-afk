@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.172.0] - 2026-09-01
+
+### Added
+- wire toolCard into primary tool-lane rendering (#1403) (#1410) (55278d54)
+
+### Fixed
+- handle committed terminal-state block in dedup (#1407) (#1408) (1d0894cb)
+
 ## [5.171.0] - 2026-09-01
 
 ### Added
