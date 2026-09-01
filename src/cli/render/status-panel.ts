@@ -9,6 +9,72 @@ import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
 /** Indicator kind controls the coloured dot shown next to a value. */
 export type StatusKind = 'ok' | 'warn' | 'error' | 'info';
 
+// ─── Health Check Rows ────────────────────────────────────────────────────────
+
+/**
+ * Structural interface for a health check result.
+ *
+ * Invariant: intentionally structurally compatible with the `Check` type in
+ * `src/cli/commands/doctor-checks.ts` — both doctor surfaces (CLI command and
+ * slash command) share this renderer without a hard dependency on that module.
+ */
+export interface HealthCheck {
+  name: string;
+  state: 'pass' | 'warn' | 'fail';
+  detail?: string;
+  fix?: string;
+}
+
+/**
+ * Render a single health-check result as 1–2 formatted lines.
+ *
+ * Line 1: `  <icon> <name>  — <detail>` (detail omitted when absent)
+ * Line 2: `      Fix: <fix>` (only when state is not pass AND fix is set)
+ *
+ * Invariant: palette calls are deferred to call time (not captured at import)
+ * for the same reason as `dot()` above — a `light` theme swap must not leave
+ * stale dark-theme colours on screen.
+ */
+export function healthCheckRows(check: HealthCheck): string[] {
+  let icon: string;
+  if (check.state === 'pass') {
+    icon = palette.success('✓');
+  } else if (check.state === 'warn') {
+    icon = palette.warning('⚠');
+  } else {
+    icon = palette.error('✗');
+  }
+
+  let line = `  ${icon} ${check.name}`;
+  if (check.detail) {
+    line += `  — ${palette.dim(check.detail)}`;
+  }
+
+  const lines = [line];
+  if (check.state !== 'pass' && check.fix) {
+    lines.push(palette.dim(`      Fix: ${check.fix}`));
+  }
+  return lines;
+}
+
+/**
+ * Render the passed / warned / failed tally for a set of health checks.
+ *
+ * Example: `  Summary: 5 passed  ·  1 warned  ·  2 failed`
+ */
+export function healthCheckSummary(checks: HealthCheck[]): string {
+  const passed = checks.filter((c) => c.state === 'pass').length;
+  const warned = checks.filter((c) => c.state === 'warn').length;
+  const failed = checks.filter((c) => c.state === 'fail').length;
+
+  const parts: string[] = [
+    palette.success(`${passed} passed`),
+    warned > 0 ? palette.warning(`${warned} warned`) : palette.dim(`${warned} warned`),
+    failed > 0 ? palette.error(`${failed} failed`) : palette.dim(`${failed} failed`),
+  ];
+  return `  Summary: ${parts.join(palette.dim('  ·  '))}`;
+}
+
 /**
  * Render the coloured indicator glyph for a status kind.
  *

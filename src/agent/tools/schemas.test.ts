@@ -7,8 +7,8 @@ import {
 import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 28 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(28);
+  it('contains exactly 30 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(30);
   });
 
   it('exports the expected tool names', () => {
@@ -42,6 +42,7 @@ describe('builtinToolSchemas', () => {
       'browser_screenshot',
       'browser_close',
       'patch_apply',
+      'test_run',
     ]);
   });
 
@@ -63,6 +64,8 @@ describe('builtinToolSchemas', () => {
     //   `browser_observe`   — all 3 fields are optional knobs.
     //   `browser_screenshot`— `target` and `full_page` are both optional.
     //   `browser_close`     — no inputs at all.
+    //   `test_run`          — all 4 fields (file, name, timeout_ms, coverage)
+    //                         are optional; required is [].
     // All other built-ins have non-empty required arrays.
     const noRequired = new Set([
       'web_scrape',
@@ -71,6 +74,7 @@ describe('builtinToolSchemas', () => {
       'browser_observe',
       'browser_screenshot',
       'browser_close',
+      'test_run',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();

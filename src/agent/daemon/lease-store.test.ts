@@ -377,8 +377,8 @@ describe('leaseTask — retry state carry-through (P2 fix)', () => {
   });
 });
 
-describe('leaseTask — unlinkSync error propagates (P2 fix)', () => {
-  it('throws when srcPath does not exist (no silent swallow)', () => {
+describe('leaseTask — multi-process safety (rename-as-claim)', () => {
+  it('throws when srcPath does not exist (atomic claim via rename guards double-dequeue)', () => {
     const queueDir = tmpQueueDir();
     const task: import('./queue-store.js').QueuedTask = {
       id: 'ghost-id',
@@ -386,8 +386,148 @@ describe('leaseTask — unlinkSync error propagates (P2 fix)', () => {
       enqueuedAt: new Date().toISOString(),
       sequence: 1,
     };
-    // srcPath does not exist — unlinkSync will throw ENOENT.
+    // srcPath does not exist — renameSync(srcPath → dest) throws ENOENT,
+    // which is the signal that another process already claimed this task.
     const ghostPath = require('node:path').join(queueDir, '0001-ghost-id.json');
     expect(() => leaseTask(task, ghostPath, undefined, queueDir)).toThrow();
+  });
+
+  it('second leaseTask on same srcPath throws (rename is single-winner)', () => {
+    // Simulate two processes racing to lease the same queue file.
+    // The first call succeeds; the second gets ENOENT from renameSync.
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+
+    // First caller wins — succeeds.
+    expect(() => leaseTask(task, srcPath, undefined, queueDir)).not.toThrow();
+
+    // Second caller loses — srcPath is gone; must throw, not silently skip.
+    expect(() => leaseTask(task, srcPath, undefined, queueDir)).toThrow();
+  });
+});
+
+describe('recoverExpiredLeases — stale .claim-* file recovery (second pass)', () => {
+  it('recovers a stale .claim-* file left by an interrupted prior recovery', () => {
+    const queueDir = tmpQueueDir();
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+
+    // Simulate a crash-interrupted recovery: a .claim-<hex>.json file sits in
+    // leased/ with a valid expired TaskRecord — left behind because the prior
+    // recovery process crashed after renaming but before re-enqueueing.
+    const record = {
+      id: 'q-stale-claim-test',
+      command: '/stale-cmd',
+      state: 'leased',
+      attempts: 1,
+      maxAttempts: 2,
+      leaseExpiry: Date.now() - 60_000,
+      createdAt: Date.now() - 120_000,
+      updatedAt: Date.now() - 60_000,
+    };
+    const claimFile = join(leasedDir, '.claim-deadbeef.json');
+    writeFileSync(claimFile, JSON.stringify(record));
+
+    const recovered = recoverExpiredLeases(queueDir);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]!.id).toBe('q-stale-claim-test');
+    expect(recovered[0]!.state).toBe('retrying');
+
+    // The claim file must be gone.
+    expect(existsSync(claimFile)).toBe(false);
+
+    // Exactly one re-enqueued file in the queue dir.
+    const fs = require('node:fs');
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles).toHaveLength(1);
+  });
+
+  it('removes a corrupt .claim-* file without crashing', () => {
+    const queueDir = tmpQueueDir();
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+
+    const claimFile = join(leasedDir, '.claim-corrupt01.json');
+    writeFileSync(claimFile, 'NOT VALID JSON!!!');
+
+    // Must not throw and must produce zero recoveries.
+    const recovered = recoverExpiredLeases(queueDir);
+    expect(recovered).toHaveLength(0);
+
+    // The corrupt file should be cleaned up.
+    expect(existsSync(claimFile)).toBe(false);
+  });
+
+  it('concurrent second-pass recovery on the same .claim-* file produces exactly one re-enqueue', () => {
+    // Simulates the race: two sequential calls where the first claims the
+    // .claim-* file via rename; the second should find it gone and skip.
+    const queueDir = tmpQueueDir();
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+
+    const record = {
+      id: 'q-race-claim-test',
+      command: '/race-cmd',
+      state: 'leased',
+      attempts: 1,
+      maxAttempts: 2,
+      leaseExpiry: Date.now() - 60_000,
+      createdAt: Date.now() - 120_000,
+      updatedAt: Date.now() - 60_000,
+    };
+    writeFileSync(join(leasedDir, '.claim-racetest1.json'), JSON.stringify(record));
+
+    const first = recoverExpiredLeases(queueDir);
+    expect(first).toHaveLength(1);
+
+    // Second call: .claim-* file is gone (renamed by first call).
+    const second = recoverExpiredLeases(queueDir);
+    expect(second).toHaveLength(0);
+
+    // Exactly one queue file.
+    const fs = require('node:fs');
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles).toHaveLength(1);
+  });
+});
+
+describe('recoverExpiredLeases — multi-process safety (claim-rename)', () => {
+  it('concurrent recoverExpiredLeases on the same expired lease produces exactly one re-enqueue', () => {
+    // This test verifies that the rename-based claim prevents double-enqueue
+    // when two daemon processes run recoverExpiredLeases concurrently.
+    // We simulate concurrency by running two sequential calls on a queue
+    // where the first call has already claimed the lease file (the file is
+    // gone from leased/ after the first call).
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, undefined, queueDir);
+
+    // Expire the lease and set maxAttempts=2 so recovery re-enqueues.
+    const leasedPath = join(queueDir, 'leased', `${task.id}.json`);
+    const record = JSON.parse(readFileSync(leasedPath, 'utf-8'));
+    record.leaseExpiry = Date.now() - 1;
+    record.maxAttempts = 2;
+    writeFileSync(leasedPath, JSON.stringify(record));
+
+    // First call: claims and re-enqueues.
+    const first = recoverExpiredLeases(queueDir);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.state).toBe('retrying');
+
+    // Second call: lease file is gone (claimed by first call); should produce
+    // zero recoveries — NOT a second re-enqueue for the same task.
+    const second = recoverExpiredLeases(queueDir);
+    expect(second).toHaveLength(0);
+
+    // Exactly one queue file must exist.
+    const fs = require('node:fs');
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles).toHaveLength(1);
   });
 });
