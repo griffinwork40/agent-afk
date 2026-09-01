@@ -17,7 +17,7 @@ export const DEFAULT_POLL_INTERVAL_MS = 5_000;
 export const MIN_POLL_INTERVAL_MS = 1_000;
 
 /** Heartbeat log interval — one debug log line every 60 s of waiting. */
-const HEARTBEAT_INTERVAL_MS = 60_000;
+
 
 export interface PollOptions {
   /** Maximum time to wait before returning `timed_out`. Default 120 000 ms. */
@@ -80,7 +80,7 @@ export async function pollUntil(
   const deadline = Date.now() + timeout_ms;
   let attempts = 0;
   let lastResult: WaitResult | undefined;
-  let lastHeartbeat = Date.now();
+
 
   while (true) {
     // Check abort first (covers the case where signal was pre-aborted).
@@ -158,22 +158,6 @@ export async function pollUntil(
         attempts,
         result: lastResult,
       };
-    }
-
-    // L-3: Heartbeat every 60 s — emit to a conditional debug path rather than
-    // console.error so the poller does not pollute structured output in
-    // production. Use process.stderr.write only when DEBUG is set so CI and
-    // daemon surfaces stay clean; tool output goes through the tool result, not
-    // stderr.
-    if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
-      if (process.env['DEBUG']) {
-        process.stderr.write(
-          `[wait_for] still waiting — attempt ${attempts}, ` +
-            `${Math.round((deadline - now) / 1000)}s remaining. ` +
-            `Last: ${lastResult?.detail ?? 'n/a'}\n`,
-        );
-      }
-      lastHeartbeat = now;
     }
 
     // Sleep, capped to remaining time.
