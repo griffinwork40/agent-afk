@@ -18,6 +18,11 @@
  *     the SAME best-effort classifier that gates read-only skill phases (the
  *     dispatcher's `readOnlyBash` path), so the mutation rules live in one place
  *     and the two consumers cannot drift apart.
+ *   - `test_run` — blocked when `coverage: true` is set; coverage writes artifact
+ *     files to disk (`coverage.out`, `lcov.info`, `/coverage/` directories) which
+ *     are a state mutation indistinguishable from a write_file call. Without
+ *     coverage, test_run is read-only: it spawns a child process and returns
+ *     structured results, with no filesystem side-effects.
  *
  * The bash check is an honesty guardrail, NOT a security boundary. Because bash
  * is Turing-complete, no classifier is exhaustive — obfuscated writes
@@ -74,6 +79,25 @@ export function createPlanModeGate(
           reason:
             `plan mode: worktree "${action}" is refused (mutates the worktree ` +
             `registry). Only action "list" is allowed in plan mode. Use /plan off to act.`,
+        };
+      }
+    }
+
+    // `test_run` is input-gated on the `coverage` flag: running tests without
+    // coverage is read-only (spawn + return structured output); with coverage,
+    // the runner writes artifact files to disk (coverage.out, lcov.info,
+    // /coverage/ directories). Block the disk-write path; allow plain test runs.
+    if (toolName === 'test_run') {
+      const hasCoverage =
+        typeof context.input === 'object' && context.input !== null
+          ? (context.input as Record<string, unknown>)['coverage'] === true
+          : false;
+      if (hasCoverage) {
+        return {
+          decision: 'block',
+          reason:
+            'plan mode: test_run with coverage=true is refused — coverage writes ' +
+            'artifact files to disk. Run without coverage, or use /plan off to act.',
         };
       }
     }

@@ -159,4 +159,46 @@ describe('createPlanModeGate', () => {
     const result = gate({ event: 'PreToolUse', toolName: 'write_file', input: {} });
     expect(result.decision).toBe('block');
   });
+
+  // test_run coverage guard (issue #1431)
+  it('blocks test_run with coverage=true in plan mode (writes artifact files)', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { coverage: true },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('coverage');
+  });
+
+  it('allows test_run without coverage in plan mode (read-only spawn)', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { file: 'src/foo.test.ts' },
+    });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('allows test_run with coverage=false in plan mode', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { coverage: false },
+    });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('allows test_run with coverage=true in default mode', () => {
+    const { gate } = makeGate('default');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { coverage: true },
+    });
+    expect(result.decision).toBeUndefined();
+  });
 });
