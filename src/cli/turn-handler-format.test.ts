@@ -217,8 +217,9 @@ describe('ToolLane', () => {
     lane.addStart('tu_1', 'Read', ' file.ts');
     lane.addResult('tu_1', makeResult({ toolUseId: 'tu_1', lineCount: 77 }));
     const overlay = strip(lane.getOverlay());
+    // Collapsed toolCard shows badge + tool name, not args or outcome text.
     expect(overlay).toContain('Read');
-    expect(overlay).toContain('77 lines');
+    expect(overlay).toContain('✓');
     expect(overlay).not.toContain('…');
   });
 
@@ -411,8 +412,9 @@ describe('ToolLane', () => {
 
       const overlay = strip(lane.getOverlay());
       const lines = overlay.split('\n');
+      // Completed flat-root: collapsed toolCard shows tool name, not args.
       expect(lines[0]).toContain('Read');
-      expect(lines[0]).toContain('root.ts');
+      expect(lines[0]).toContain('✓');
       expect(lines[1]).toContain('nested');
       expect(lines[2]).toContain('deep');
       expect(lines[3]).toContain('Bash');
