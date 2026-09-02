@@ -102,6 +102,15 @@ describe('waitForHandler — input validation', () => {
     expect(result.content).toMatch(/pid/);
   });
 
+  // #1443: parseInput and evaluateProcess must share the same PID=1 threshold.
+  // PID 1 (init/launchd) is a reserved system process and must be rejected at
+  // the input-validation layer, not allowed through to evaluateProcess.
+  it('returns error when process pid is 1 (reserved system PID)', async () => {
+    const result = await waitForHandler({ type: 'process', pid: 1 }, neverSignal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/pid/);
+  });
+
   it('returns error when timeout_ms is not a number', async () => {
     const result = await waitForHandler({ type: 'command', command: 'true', timeout_ms: 'long' }, neverSignal);
     expect(result.isError).toBe(true);
