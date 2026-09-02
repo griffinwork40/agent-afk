@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.176.2] - 2026-09-02
+
+### Changed
+- remove dead TTFB code after double-spinner fix (#1448) (bc9790e5)
+
 ## [5.176.1] - 2026-09-02
 
 ### Fixed
