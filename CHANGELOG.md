@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.175.1] - 2026-09-02
+
+### Changed
+- generate env getters from ENV_REGISTRY instead of hand-maintaining (#830) (#1441) (9aa94132)
+
 ## [5.175.0] - 2026-09-02
 
 ### Added
