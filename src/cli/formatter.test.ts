@@ -907,6 +907,49 @@ describe('renderMarkdownToTerminal', () => {
     });
   });
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Code block width capping (HIGH-severity fix): renderCodeBlock must use
+  // maxTableWidth to hard-wrap body lines so that wide code lines do not cause
+  // the terminal to auto-wrap at col 0, losing the │ gutter on continuation rows.
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('code block width capping', () => {
+    it('wraps a line wider than maxTableWidth and stamps gutter on every physical row', () => {
+      // maxWidth 20 → contentWidth 18 (20 - 2 for "│ " gutter).
+      // A 36-char line should split into two 18-char rows, each prefixed with │.
+      const longLine = 'x'.repeat(36);
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`\`\`\`\n${longLine}\n\`\`\`\n`, { maxWidth: 20 }),
+      );
+      const lines = out.split('\n').filter((l) => l.startsWith('│ ') && l.trim() !== '│');
+      // Expect two gutter body rows (not one overflowing row).
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      // Each row must not exceed maxTableWidth (20) display columns.
+      for (const l of lines) {
+        expect(stringWidth(l)).toBeLessThanOrEqual(20);
+      }
+    });
+
+    it('leaves short lines unaffected when maxTableWidth is set', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal('```bash\ngit status\n```\n', { maxWidth: 80 }),
+      );
+      // The short line must appear verbatim (single gutter row).
+      const bodyLines = out.split('\n').filter((l) => l.startsWith('│ ') && l.includes('git'));
+      expect(bodyLines.length).toBe(1);
+      expect(bodyLines[0]).toBe('│ git status');
+    });
+
+    it('does not wrap when maxTableWidth is undefined', () => {
+      // Without maxWidth, renderMarkdownToTerminal does not pass maxTableWidth,
+      // so the long line must pass through unsplit.
+      const longLine = 'z'.repeat(200);
+      const out = stripAnsi(renderMarkdownToTerminal(`\`\`\`\n${longLine}\n\`\`\`\n`));
+      const bodyLines = out.split('\n').filter((l) => l.startsWith('│ ') && l.includes('z'));
+      expect(bodyLines.length).toBe(1);
+      expect(bodyLines[0]).toBe(`│ ${longLine}`);
+    });
+  });
+
   describe('headings', () => {
     it('H2 emits a trailing newline so the next block does not glue onto it', () => {
       const input = '## State reality-check\n\nSome text.\n';

@@ -1,5 +1,5 @@
 import { type Token, type Tokens } from 'marked';
-import { wrapToWidth } from './wrap.js';
+import { wrapToWidth, hardWrapToWidth } from './wrap.js';
 import { highlightCode } from './syntax-highlight.js';
 import { palette } from './palette.js';
 import { registerCodeBlock } from './code-block-register.js';
@@ -75,10 +75,6 @@ export function renderCodeBlock(
   code: Tokens.Code,
   maxTableWidth: number | undefined,
 ): string {
-  // maxTableWidth is accepted but not currently used — reserved for a future
-  // hard-wrap pass on code blocks, and accepted here so the signature is
-  // forward-compatible without a breaking API change.
-  void maxTableWidth;
   const lang = code.lang || 'text';
   // Loud-fail empty fences. Without this guard, a model emitting
   // "```bash\n```" (open + language + close with no body) renders as
@@ -101,10 +97,30 @@ export function renderCodeBlock(
   const blockIndex = registerCodeBlock(lang, code.text);
 
   const highlighted = highlightCode(code.text, lang);
-  const bodyLines = highlighted.split('\n');
+  const rawBodyLines = highlighted.split('\n');
   // Drop trailing empty line so adjacent blocks don't double-space.
-  if (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') bodyLines.pop();
+  if (rawBodyLines.length > 0 && rawBodyLines[rawBodyLines.length - 1] === '') rawBodyLines.pop();
   const gutter = palette.dim('│ ');
+  // Invariant: gutter is "│ " — exactly 2 display columns (box-draw char + space).
+  // When maxTableWidth is provided, hard-wrap each body line to the available
+  // content width (maxTableWidth - 2) so that lines wider than the terminal do
+  // not cause the terminal to auto-wrap at column 0 and lose the gutter prefix
+  // on continuation rows. hardWrapToWidth is character-level (not word-aware),
+  // matching terminal behavior for code, and preserves ANSI styling across rows.
+  // When maxTableWidth is undefined (non-streaming path), leave behavior unchanged.
+  const gutterCols = 2; // fixed — do not use displayWidth; the string is ASCII
+  const contentWidth = maxTableWidth !== undefined ? Math.max(1, maxTableWidth - gutterCols) : undefined;
+  const bodyLines: string[] = [];
+  for (const line of rawBodyLines) {
+    if (contentWidth !== undefined) {
+      const wrapped = hardWrapToWidth(line, contentWidth);
+      for (const row of wrapped.split('\n')) {
+        bodyLines.push(row);
+      }
+    } else {
+      bodyLines.push(line);
+    }
+  }
   const body = bodyLines.map((line) => gutter + line).join('\n');
   // Language tag + copy hint. The `/cp N` hint tells the user which index
   // to pass to `/copy` to grab this block. When there is no explicit
