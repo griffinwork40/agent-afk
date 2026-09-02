@@ -18,7 +18,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getAfkStateDir } from '../../paths.js';
+import { getAfkStateDir, getFacetCacheDir } from '../../paths.js';
 import { TraceEventSchema } from '../../agent/trace/events.js';
 import { listSessionIds, getOrDeriveFacet } from '../../agent/facets/index.js';
 import type { InsightsOptions, TraceAggregates } from '../types.js';
@@ -77,7 +77,7 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     : getAfkStateDir();
   const witnessRoot = join(stateDir, 'witness');
   const sessionsDir = join(stateDir, 'sessions');
-  const cacheDir = join(stateDir, 'facets');
+  const cacheDir = options.afkHome ? join(options.afkHome, 'agent-framework', 'facets') : getFacetCacheDir();
 
   const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;
 
@@ -105,7 +105,8 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     // The trace path only writes: toolDurationsMs, compactionCount,
     // closureReasons, totalInputTokens, totalOutputTokens, totalCacheReadTokens,
     // totalCacheCreationTokens, totalCostUsd, sessionsWithCost.
-    const tracePath = join(witnessRoot, sessionId, 'trace.jsonl');
+    const traceSessionId = facet.session_id;
+    const tracePath = join(witnessRoot, traceSessionId, 'trace.jsonl');
     if (!existsSync(tracePath)) continue;
     let raw: string | null = null;
     try {

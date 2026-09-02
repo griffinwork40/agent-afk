@@ -314,10 +314,6 @@ describe('deriveSessionFacet', () => {
     });
     expect(facet.token_breakdown).toBeDefined();
     expect(facet.token_breakdown?.cost_usd).toBe(0.05);
-    expect(facet.token_breakdown?.input).toBe(0);
-    expect(facet.token_breakdown?.output).toBe(0);
-    expect(facet.token_breakdown?.cache_read).toBe(0);
-    expect(facet.token_breakdown?.cache_creation).toBe(0);
   });
 
   it('token_breakdown absent when neither totalCostUsd nor totalTokens set', () => {
@@ -327,6 +323,20 @@ describe('deriveSessionFacet', () => {
       startedAt: 0,
       savedAt: 60_000,
       totalTurns: 0,
+      turns: [],
+    });
+    expect(facet.token_breakdown).toBeUndefined();
+  });
+
+  it('token_breakdown absent when only totalTokens is set (no cost data)', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'tokens-only',
+      model: 'opus',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 0,
+      totalCostUsd: undefined,
+      totalTokens: 500,
       turns: [],
     });
     expect(facet.token_breakdown).toBeUndefined();

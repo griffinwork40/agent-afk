@@ -267,14 +267,10 @@ export function deriveSessionFacet(
     evidence_pointers: evidencePointers,
   };
 
-  // Populate token_breakdown when cost or token data is available.
-  if (session.totalCostUsd != null || session.totalTokens != null) {
-    (facet as Record<string, unknown>)['token_breakdown'] = {
-      input: 0,
-      output: 0,
-      cache_read: 0,
-      cache_creation: 0,
-      cost_usd: session.totalCostUsd ?? 0,
+  // Populate token_breakdown when cost data is available.
+  if (session.totalCostUsd != null) {
+    facet.token_breakdown = {
+      cost_usd: session.totalCostUsd,
     };
   }
 

@@ -114,10 +114,10 @@ export const WorldChangesSchema = z.object({
 
 /** Token and cost breakdown for a session (populated when available). */
 export const TokenBreakdownSchema = z.object({
-  input: z.number(),
-  output: z.number(),
-  cache_read: z.number(),
-  cache_creation: z.number(),
+  input: z.number().optional(),
+  output: z.number().optional(),
+  cache_read: z.number().optional(),
+  cache_creation: z.number().optional(),
   cost_usd: z.number(),
 });
 export type TokenBreakdown = z.infer<typeof TokenBreakdownSchema>;
