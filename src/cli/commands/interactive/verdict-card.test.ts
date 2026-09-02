@@ -899,3 +899,107 @@ describe('renderVerdictCard — block-level markdown rendering', () => {
     expect(plain).not.toContain('`pnpm test`');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Long unbreakable token geometry (breakLongWords regression)
+//
+// An unbreakable token (URL, file path, commit SHA) wider than the inner card
+// width must be character-split by wrapToWidth({ breakLongWords: true }) so
+// that every rendered row stays within the terminal width and the right border
+// (│) remains aligned. Without the fix, wrapToWidth defaulted to
+// breakLongWords: false, letting the token overflow past innerW — padDisplayRight
+// returned the overflowed text unchanged (pad=0), and the box geometry broke.
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — long unbreakable token geometry', () => {
+  // A URL wide enough to exceed valueW at 80 cols (valueW ≈ innerW - labelW - 2).
+  const LONG_URL =
+    'https://github.com/example-org/very-long-repository-name/pull/1234/files#diff-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+
+  // A raw commit SHA that cannot be word-wrapped (no spaces).
+  const LONG_SHA =
+    'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12';
+
+  const urlState: TerminalState = {
+    kind: 'done',
+    whatWasDone: 'merged PR',
+    evidence: LONG_URL,
+    rawBody: '',
+  };
+
+  const shaState: TerminalState = {
+    kind: 'done',
+    whatWasDone: 'merged PR',
+    evidence: LONG_SHA,
+    rawBody: '',
+  };
+
+  const fallbackUrlState: TerminalState = {
+    kind: 'done',
+    rawBody: LONG_URL,
+  };
+
+  for (const cols of [40, 80]) {
+    it(`structured rows: all rows ≤ ${cols} cols with a long URL in evidence`, () => {
+      withCols(cols, () => {
+        const lines = renderVerdictCard(urlState).split('\n');
+        const widths = lines.map((l) => displayWidth(l));
+
+        for (const [i, w] of widths.entries()) {
+          expect(
+            w,
+            `line ${i} (${displayStripAnsi(lines[i] ?? '')}) exceeds ${cols} cols (width=${w})`,
+          ).toBeLessThanOrEqual(cols);
+        }
+
+        // All rows must share the same display width — borders aligned.
+        expect(new Set(widths).size, `row widths not uniform: ${widths.join(',')}`).toBe(1);
+      });
+    });
+
+    it(`structured rows: right border │ on every row at ${cols} cols with a long URL`, () => {
+      withCols(cols, () => {
+        const lines = renderVerdictCard(urlState).split('\n');
+        for (const [i, line] of lines.entries()) {
+          const plain = displayStripAnsi(line);
+          if (plain.includes('│')) {
+            expect(plain.startsWith('│'), `line ${i} missing left │`).toBe(true);
+            expect(plain.endsWith('│'), `line ${i} missing right │`).toBe(true);
+          }
+        }
+      });
+    });
+
+    it(`structured rows: all rows ≤ ${cols} cols with an unbreakable SHA in evidence`, () => {
+      withCols(cols, () => {
+        const lines = renderVerdictCard(shaState).split('\n');
+        const widths = lines.map((l) => displayWidth(l));
+
+        for (const [i, w] of widths.entries()) {
+          expect(
+            w,
+            `line ${i} (${displayStripAnsi(lines[i] ?? '')}) exceeds ${cols} cols`,
+          ).toBeLessThanOrEqual(cols);
+        }
+
+        expect(new Set(widths).size, `row widths not uniform: ${widths.join(',')}`).toBe(1);
+      });
+    });
+
+    it(`fallback body: all rows ≤ ${cols} cols with a long URL in rawBody`, () => {
+      withCols(cols, () => {
+        const lines = renderVerdictCard(fallbackUrlState).split('\n');
+        const widths = lines.map((l) => displayWidth(l));
+
+        for (const [i, w] of widths.entries()) {
+          expect(
+            w,
+            `line ${i} (${displayStripAnsi(lines[i] ?? '')}) exceeds ${cols} cols`,
+          ).toBeLessThanOrEqual(cols);
+        }
+
+        expect(new Set(widths).size, `row widths not uniform: ${widths.join(',')}`).toBe(1);
+      });
+    });
+  }
+});
