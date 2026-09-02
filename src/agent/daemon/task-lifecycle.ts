@@ -93,6 +93,12 @@ export interface RetryPolicy {
   maxAttempts: number;
   backoffStrategy: 'fixed' | 'exponential';
   backoffBaseMs: number;
+  /**
+   * Hard ceiling on the computed backoff delay in ms.
+   * Prevents unbounded growth on exponential strategies at high attempt counts.
+   * Defaults to DEFAULT_MAX_BACKOFF_MS (5 minutes) when omitted.
+   */
+  maxBackoffMs?: number;
 }
 
 /**
@@ -104,6 +110,15 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   backoffStrategy: 'fixed',
   backoffBaseMs: 30_000,
 };
+
+/**
+ * Maximum backoff delay: 5 minutes.
+ * Applied as a hard ceiling in computeBackoffMs when policy.maxBackoffMs is
+ * not explicitly set. Prevents exponential strategies from producing
+ * multi-hour delays at high attempt counts (e.g. attempts=20 with
+ * backoffBaseMs=1000 would otherwise compute ~145 hours).
+ */
+export const DEFAULT_MAX_BACKOFF_MS = 5 * 60 * 1_000; // 5 minutes
 
 // ---------------------------------------------------------------------------
 // Lease TTL
@@ -124,10 +139,12 @@ export const DEFAULT_LEASE_TTL_MS = 10 * 60 * 1_000; // 10 minutes
  *
  * @param attempts - Number of attempts already made (1-based after first fail).
  * @param policy   - RetryPolicy governing the backoff.
+ * @returns Delay in ms, capped at policy.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS.
  */
 export function computeBackoffMs(attempts: number, policy: RetryPolicy): number {
+  const cap = policy.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
   if (policy.backoffStrategy === 'exponential') {
-    return policy.backoffBaseMs * Math.pow(2, Math.max(0, attempts - 1));
+    return Math.min(policy.backoffBaseMs * Math.pow(2, Math.max(0, attempts - 1)), cap);
   }
-  return policy.backoffBaseMs;
+  return Math.min(policy.backoffBaseMs, cap);
 }
