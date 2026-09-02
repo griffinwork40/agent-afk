@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.175.0] - 2026-09-02
+
+### Added
+- wire streamProgress into live overlay spinner (#1399) (#1438) (76c64ec5)
+- restrict evaluateProcess PID probing to session-owned PIDs (#1430) (#1436) (109d635c)
+- wire computeBackoffMs into re-enqueue path (#1432) (#1435) (03764fa1)
+
+### Changed
+- remove orphaned progressBar component (#1400) (#1437) (3b4b5340)
+
 ## [5.174.0] - 2026-09-01
 
 ### Added
