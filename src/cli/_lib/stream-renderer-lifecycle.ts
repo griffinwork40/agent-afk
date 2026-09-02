@@ -30,7 +30,7 @@ import type { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
-import { renderTtfbWaitingProgress, checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
+import { checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
 import { subagentStatusStack, type SubagentStatusBarSpec } from '../render.js';
 
 const PAUSE_THRESHOLD_MS = 30_000;
@@ -95,21 +95,14 @@ export function registerOverlaySlots(
      */
     getSoftStopping: () => boolean;
     /**
-     * Live TTFB state accessors. When `getTtfbStartedAt()` returns a number and
-     * `isTtfbDone()` returns false, the progress-banner slot renders the elapsed
-     * waiting line in place of an empty banner (no progress events yet). Cleared
-     * by `notifyFirstContent()` on the StreamRenderer once the first content
-     * chunk arrives. Optional so existing non-TTY callers and tests are
-     * unchanged; when absent the waiting line is never shown.
+     * Live TTFB state accessors. Used by `checkTtfbAnnotation` to drive the
+     * 1 Hz dirty-mark cycle that keeps the overlay fresh during the pre-first-
+     * byte window. The SpinnerController is the visible TTFB indicator; these
+     * accessors support the annotation-change tick, not a rendered line.
+     * Optional so existing non-TTY callers and tests are unchanged.
      */
     getTtfbStartedAt?: () => number | undefined;
     isTtfbDone?: () => boolean;
-    /**
-     * Current braille spinner frame for the TTFB waiting indicator. Incremented
-     * once per second by `checkTtfbAnnotation` so the glyph animates at ~1 Hz.
-     * Optional — when absent the frame defaults to 0 (static first glyph).
-     */
-    getTtfbSpinnerFrame?: () => number;
     /**
      * Live accessor for the active subagent status bar specs, keyed by subagentId.
      * Optional so existing non-TTY callers and tests register slots unchanged;
@@ -241,18 +234,12 @@ export function registerOverlaySlots(
           ),
         );
       }
-      // TTFB waiting progress: no progress events yet and no content has arrived.
-      // Delegates to renderTtfbWaitingProgress (stream-renderer-ttfb.ts) which
-      // returns '' when the timer is inactive, done, or inside the grace period.
-      // Uses streamProgress so the overlay spinner is driven uniformly.
-      if (bannerLines.length === 0 && !stopping) {
-        const waiting = renderTtfbWaitingProgress(
-          ctx.getTtfbStartedAt,
-          ctx.isTtfbDone,
-          ctx.getTtfbSpinnerFrame,
-        );
-        if (waiting) bannerLines.push(waiting);
-      }
+      // TTFB waiting progress: suppressed. The SpinnerController already
+      // renders a braille spinner + elapsed timer during this same window,
+      // so the TTFB "Generating…" line was redundant — both appeared in the
+      // frame simultaneously (double-spinner bug). The spinner is the
+      // canonical TTFB indicator; this slot stays empty until real
+      // ProgressEvent data arrives.
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';
     },
   });
