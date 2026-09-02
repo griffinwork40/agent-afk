@@ -137,3 +137,117 @@ function makeHost(
     ...overrides,
   } as never;
 }
+
+// ---------------------------------------------------------------------------
+// Width clamping — launchMidTurnTaskView content writes
+// ---------------------------------------------------------------------------
+
+describe('launchMidTurnTaskView width clamping', () => {
+  it('clamps long subagent history lines to terminal width', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    // Collect every chunk written to our fake stdout.
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 40,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    // A history line that is far wider than 40 columns.
+    const longLine = 'A'.repeat(200);
+
+    // Minimal fake session: non-empty history, immediate-complete stream.
+    const fakeSession = {
+      getHistory: () => [
+        { role: 'assistant' as const, content: longLine },
+      ],
+      getOutputStream: async function* () {
+        // yield nothing — subagent already done
+      },
+    };
+
+    // Fake handle — already completed so the view returns immediately.
+    const fakeHandle = {
+      status: 'succeeded' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+
+    const fakeManager = {
+      list: () => [{ id: 'sub-1', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    // Every non-ANSI-only line written must be ≤ 40 visible characters.
+    // We join all written chunks and split by newline, then check each line.
+    const allOutput = written.join('');
+    const lines = allOutput.split('\n');
+
+    // Strip ANSI escape sequences for width measurement (CSI + OSC patterns).
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+
+    // Cursor-positioning sequences like \r\x1b[K (erase line) are fine —
+    // they should not be clamped. Only visible content lines must be ≤ cols.
+    for (const line of lines) {
+      const visible = stripAnsi(line);
+      // Skip empty lines and bare CR (cursor movement remnants).
+      if (visible.replace(/\r/g, '').trim() === '') continue;
+      // Skip the clear-screen line (\x1b[2J\x1b[H).
+      if (line.includes('\x1b[2J')) continue;
+      expect(visible.length).toBeLessThanOrEqual(40);
+    }
+  });
+
+  it('does not clamp cursor-movement ANSI sequences (CSI codes)', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 40,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {},
+    };
+    const fakeHandle = {
+      status: 'succeeded' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+    const fakeManager = {
+      list: () => [{ id: 'sub-2', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    const allOutput = written.join('');
+    // Cursor-movement sequences must still be present in the raw output.
+    // The clear-screen + cursor-home sequence (\x1b[2J\x1b[H) is always written first.
+    expect(allOutput).toContain('\x1b[2J\x1b[H');
+  });
+});

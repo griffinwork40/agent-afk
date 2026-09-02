@@ -25,6 +25,7 @@ import {
 } from './task-view-mode.js';
 import { getTasksManager } from '../../slash/commands/tasks.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { truncateDisplayWidth } from '../../display.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
@@ -78,6 +79,12 @@ export async function launchMidTurnTaskView(
   const agentType = (handle as unknown as { _agentType?: string })?._agentType;
 
   const stdout = compositor.stdout;
+  // Contract: clamp any user-visible content line to terminal width.
+  // `truncateDisplayWidth` is ANSI-aware — it preserves color codes while
+  // clamping display width. Cursor-movement ANSI sequences (CSI codes) are
+  // NOT passed through this helper; they bypass clamp() entirely.
+  const clamp = (s: string): string =>
+    truncateDisplayWidth(s, stdout.columns || 80);
 
   // FIX-1: Mark the view as active AFTER all early-return guards so the
   // flag is never stuck true when no subagent is found or handle is null.
@@ -94,7 +101,7 @@ export async function launchMidTurnTaskView(
   // Clear screen and render the task view header.
   stdout.write('\x1b[2J\x1b[H'); // clear screen + cursor home
   const status = handle.status ?? 'running';
-  stdout.write(renderTaskViewHeader(id, status, agentType) + '\n\n');
+  stdout.write(clamp(renderTaskViewHeader(id, status, agentType)) + '\n\n');
 
   // Render in-memory history if available.
   if (typeof handle.session.getHistory === 'function') {
@@ -114,13 +121,13 @@ export async function launchMidTurnTaskView(
               .join('\n')
           : JSON.stringify(raw);
       const safe = stripEscapeSequences(text);
-      for (const l of safe.split('\n')) stdout.write(`  ${l}\n`);
+      for (const l of safe.split('\n')) stdout.write(clamp(`  ${l}`) + '\n');
       stdout.write('\n');
     }
   }
 
   const isRunning = status === 'running' || status === 'idle';
-  stdout.write(buildTaskFooterLine(isRunning) + '\n');
+  stdout.write(clamp(buildTaskFooterLine(isRunning)) + '\n');
 
   if (!isRunning) {
     // Already completed — show briefly then return.
@@ -155,7 +162,7 @@ export async function launchMidTurnTaskView(
       if (msg) {
         handle.sendMessage(msg);
         // FIX-3: Sanitize echo to prevent ANSI injection from paste content.
-        stdout.write(`\r\x1b[K${palette.user('you')}: ${stripEscapeSequences(msg)}\n`);
+        stdout.write(`\r\x1b[K${clamp(palette.user('you') + ': ' + stripEscapeSequences(msg))}\n`);
         inputBuf = '';
         renderPrompt();
       }
@@ -180,7 +187,7 @@ export async function launchMidTurnTaskView(
   };
   process.stdin.on('data', onData);
 
-  stdout.write(palette.dim('  Type a message + Enter to send, Esc to return\n'));
+  stdout.write(clamp(palette.dim('  Type a message + Enter to send, Esc to return')) + '\n');
   renderPrompt();
 
   try {
@@ -189,7 +196,7 @@ export async function launchMidTurnTaskView(
       const text = formatOutputEvent(event);
       if (text !== null) {
         // Clear the input prompt line, write output, re-render prompt.
-        stdout.write(`\r\x1b[K${text}\n`);
+        stdout.write(`\r\x1b[K${clamp(text)}\n`);
         renderPrompt();
       }
     }
@@ -199,7 +206,7 @@ export async function launchMidTurnTaskView(
     process.stdin.removeListener('data', onData);
 
     if (!signal.aborted) {
-      stdout.write('\r\x1b[K\n' + palette.dim('  Subagent completed. Press Esc to return.') + '\n');
+      stdout.write('\r\x1b[K\n' + clamp(palette.dim('  Subagent completed. Press Esc to return.')) + '\n');
       await waitForEsc();
     }
 
