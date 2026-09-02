@@ -204,7 +204,7 @@ export const waitForHandler: ToolHandler = async (
       // aborted by the per-poll deadline rather than blocking past the overall
       // timeout.
       case 'file':   return evaluateFile(condition, pollSignal);
-      case 'process': return Promise.resolve(evaluateProcess(condition));
+      case 'process': return Promise.resolve(evaluateProcess(condition, context?.spawnedPidRegistry));
       case 'command': return Promise.resolve(evaluateCommand(condition));
     }
   };

@@ -57,6 +57,7 @@ import { classifyRisk } from '../../risk-classifier.js';
 import * as fsPromises from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { resolveAndContain } from './_cwd-utils.js';
+import { SpawnedPidRegistry } from './pid-registry.js';
 
 const mockGuardedFetch = vi.mocked(guardedFetch);
 const mockClassifyRisk = vi.mocked(classifyRisk);
@@ -330,6 +331,67 @@ describe('evaluateProcess', () => {
     const result = evaluateProcess({ type: 'process', pid: 1 });
     expect(result.met).toBe(false);
     expect(result.detail).toContain('not a valid target');
+    expect(result.data?.blocked).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  // #1430: PID registry gate tests
+  it('#1430: rejects PID not in registry (blocked: true, no process.kill)', () => {
+    const registry = new SpawnedPidRegistry();
+    // Register a DIFFERENT pid — 12345 is NOT registered
+    registry.register(99999);
+    const spy = vi.spyOn(process, 'kill');
+    const result = evaluateProcess({ type: 'process', pid: 12345 }, registry);
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('not a session-owned process');
+    expect(result.data?.blocked).toBe(true);
+    // Must NOT call process.kill — no probing of unregistered PIDs
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('#1430: allows registered PID — probes liveness (alive case)', () => {
+    const registry = new SpawnedPidRegistry();
+    registry.register(12345);
+    // kill(pid, 0) returns without throwing → process alive
+    const spy = vi.spyOn(process, 'kill').mockReturnValue(true as unknown as boolean);
+    const result = evaluateProcess({ type: 'process', pid: 12345 }, registry);
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('still alive');
+    expect(result.data?.blocked).toBeUndefined();
+    expect(spy).toHaveBeenCalledWith(12345, 0);
+    spy.mockRestore();
+  });
+
+  it('#1430: allows registered PID — probes liveness (exited / ESRCH case)', () => {
+    const registry = new SpawnedPidRegistry();
+    registry.register(77777);
+    const err = Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => { throw err; });
+    const result = evaluateProcess({ type: 'process', pid: 77777 }, registry);
+    expect(result.met).toBe(true);
+    expect(result.detail).toContain('exited');
+    spy.mockRestore();
+  });
+
+  it('#1430: back-compat — no registry supplied, PID > 1 is probed normally', () => {
+    // When no registry is provided (legacy callers), the pre-registry behaviour
+    // is preserved: any PID > 1 is probed via process.kill.
+    const spy = vi.spyOn(process, 'kill').mockReturnValue(true as unknown as boolean);
+    const result = evaluateProcess({ type: 'process', pid: 5000 }); // no registry
+    expect(result.met).toBe(false);
+    expect(result.detail).toContain('still alive');
+    expect(result.data?.blocked).toBeUndefined();
+    expect(spy).toHaveBeenCalledWith(5000, 0);
+    spy.mockRestore();
+  });
+
+  it('#1430: empty registry rejects any PID > 1', () => {
+    const registry = new SpawnedPidRegistry(); // no PIDs registered
+    const spy = vi.spyOn(process, 'kill');
+    const result = evaluateProcess({ type: 'process', pid: 12345 }, registry);
+    expect(result.met).toBe(false);
     expect(result.data?.blocked).toBe(true);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();

@@ -30,6 +30,7 @@ import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { PathGrantManager } from '../../tools/grant-manager.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
+import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import {
   exitPlanModeTool,
   createExitPlanModeHandler,
@@ -172,6 +173,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * under the presence file the Telegram watcher is following.
    */
   private _mintedSessionId: string | null = null;
+
+  /**
+   * Session-scoped PID registry — mirrors AnthropicDirectProvider._spawnedPidRegistry.
+   * Threaded into every per-query dispatcher so wait_for can gate on session-owned
+   * PIDs (#1430).
+   */
+  private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     this.providerOpts = opts;
@@ -657,6 +665,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // session's live grants (a forked child's own writeRoots), not the
     // process-global ref pinned to the top-level session (#435/#514).
     dispatcherOpts.sessionGrantManager = this;
+
+    // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
+    // Parity with AnthropicDirectProvider.buildDispatcher.
+    dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
 
     return new SessionToolDispatcher(dispatcherOpts);
   }

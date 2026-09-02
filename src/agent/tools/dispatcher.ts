@@ -27,6 +27,7 @@ import type { SubagentExecutor } from './subagent-executor.js';
 import type { SkillExecutor } from './skill-executor.js';
 import type { ComposeExecutor } from './compose-executor.js';
 import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './types.js';
+import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
@@ -225,6 +226,13 @@ export interface SessionToolDispatcherOptions {
    * containing the class at the child dispatcher is the narrow, high-value fix.
    */
   maxOutputBytes?: number;
+  /**
+   * Session-scoped PID registry. When provided, the `wait_for` process
+   * condition restricts probing to PIDs registered here (i.e. child processes
+   * the bash tool actually spawned in this session). Optional for back-compat;
+   * new session construction paths should always supply one.
+   */
+  spawnedPidRegistry?: SpawnedPidRegistry;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -283,6 +291,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * children so the whole tool-output-overflow crash class is contained (#661).
    */
   private readonly maxOutputBytes: number | undefined;
+  /** Session-scoped PID registry for wait_for process condition gating (#1430). */
+  private readonly spawnedPidRegistry: SpawnedPidRegistry | undefined;
   /**
    * Repeat-loop circuit breaker state. The dispatcher is built per `query()`,
    * so this naturally tracks CONSECUTIVE byte-identical calls within a single
@@ -367,6 +377,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         ? opts.maxOutputBytes
         : undefined;
     this._allowAll = opts.allowAll === true;
+    this.spawnedPidRegistry = opts.spawnedPidRegistry;
 
     // When caller passes arrays by reference (provider sharing pattern), use
     // them directly so mutations are visible without rebuilding. Otherwise
@@ -408,6 +419,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // Lets human-blocking handlers tell the elicitation router WHICH session's
       // presence file to mark as waiting-on-a-human.
       ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
+      // #1430: PID registry gates wait_for process condition to session-owned PIDs.
+      ...(this.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: this.spawnedPidRegistry } : {}),
     };
   }
 

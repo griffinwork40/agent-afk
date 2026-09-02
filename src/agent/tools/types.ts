@@ -15,6 +15,7 @@ export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatch
 
 import type { ToolResult } from '../providers/shared/tool-result.js';
 import type { TraceSink } from '../trace/index.js';
+import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -107,6 +108,19 @@ export interface ToolHandlerContext {
    * without a session id, in which case the blocked marker is simply not written.
    */
   sessionId?: string;
+  /**
+   * Session-scoped registry of PIDs spawned by the bash tool.
+   *
+   * When present, `evaluateProcess` in the `wait_for` handler restricts PID
+   * probing to PIDs that appear in this registry — i.e. child processes that
+   * this session actually spawned. Any PID not in the registry is rejected
+   * with `blocked: true` so the model cannot probe arbitrary host processes.
+   *
+   * When absent (e.g. legacy call sites, subagents that do not carry a
+   * registry), the old behaviour is preserved: any PID > 1 is probed. New
+   * session construction paths should always supply this field.
+   */
+  spawnedPidRegistry?: SpawnedPidRegistry;
 }
 
 /**

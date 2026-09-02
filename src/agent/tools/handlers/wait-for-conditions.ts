@@ -13,6 +13,7 @@ import { execSync } from 'node:child_process';
 import { guardedFetch } from '../../../web/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import type { SpawnedPidRegistry } from './pid-registry.js';
 
 /** Union of all condition shapes. */
 export type WaitCondition =
@@ -168,17 +169,42 @@ export async function evaluateFile(cond: FileCondition, signal?: AbortSignal): P
 // Process evaluator
 // ---------------------------------------------------------------------------
 
-export function evaluateProcess(cond: ProcessCondition): WaitResult {
+/**
+ * Evaluate whether a process condition is met (the target PID has exited).
+ *
+ * @param cond - The process condition, containing the PID to probe.
+ * @param registry - Optional session-scoped PID registry. When supplied,
+ *   only PIDs registered in it (i.e. processes spawned by this session's
+ *   bash tool) are probed. Any PID not in the registry is rejected with
+ *   `blocked: true` to prevent the model from leaking process-liveness
+ *   information for arbitrary host PIDs (#1430).
+ *   When absent (legacy / unconfined callers), any PID > 1 is probed —
+ *   the pre-registry behaviour is preserved for back-compat.
+ */
+export function evaluateProcess(
+  cond: ProcessCondition,
+  registry?: SpawnedPidRegistry,
+): WaitResult {
   // M-1: Restrict PIDs to positive integers > 1. PID 0 and PID 1 are special
   // system processes (PID 0 = scheduler, PID 1 = init/launchd). Probing them
   // via kill(pid, 0) is an information-disclosure channel and serves no
-  // legitimate wait_for use case. Restricting PID > 1 is a pragmatic boundary;
-  // full child-process scoping is a known limitation deferred to a PID registry
-  // (plan-mode classification can block this condition type if needed).
+  // legitimate wait_for use case.
   if (!Number.isInteger(cond.pid) || cond.pid <= 1) {
     return {
       met: false,
       detail: `pid ${cond.pid} is not a valid target (must be integer > 1)`,
+      data: { pid: cond.pid, blocked: true },
+    };
+  }
+
+  // #1430: Registry gate — reject PIDs the session did not spawn.
+  // When a registry is provided (all new session paths supply one), the PID
+  // must appear in it. An unregistered PID returns blocked:true so the model
+  // gets a clear, stable signal rather than silently receiving stale info.
+  if (registry !== undefined && !registry.has(cond.pid)) {
+    return {
+      met: false,
+      detail: `pid ${cond.pid} is not a session-owned process (not in spawned PID registry)`,
       data: { pid: cond.pid, blocked: true },
     };
   }
