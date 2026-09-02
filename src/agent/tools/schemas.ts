@@ -356,6 +356,70 @@ export const webScrapeTool: AnthropicToolDef = {
   },
 };
 
+export const webRequestTool: AnthropicToolDef = {
+  name: 'web_request',
+  category: 'web',
+  concurrencySafe: true,
+  description:
+    'Make a structured HTTP request with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS). ' +
+    'Unlike `web_scrape` (GET-only read), `web_request` supports mutating methods and returns a ' +
+    'structured `{ status, headers, body, timing_ms }` response. ' +
+    'SSRF-guarded: all private/internal IP ranges blocked by default (see AFK_WEB_ALLOW_PRIVATE_HOSTS). ' +
+    'Respects AFK_BROWSER_ALLOWED_DOMAINS / BLOCKED_DOMAINS when domain policy is configured.\n\n' +
+    'Risk levels: GET/HEAD/OPTIONS = low; POST/PUT/PATCH = medium; DELETE = high. ' +
+    'Only idempotent methods (GET, HEAD, OPTIONS, PUT, DELETE) are auto-retried on transient failures; ' +
+    'POST and PATCH are NEVER auto-retried.\n\n' +
+    'Body is auto-serialized: objects/arrays → JSON with Content-Type: application/json; ' +
+    'strings → text/plain. Caller-supplied Content-Type overrides inference.\n\n' +
+    'Response body is truncated to `max_response_bytes` (default 100KB, ceiling 1MB). ' +
+    'JSON responses are auto-parsed when not truncated.\n\n' +
+    'Credential injection: pass `credential: "ENV_VAR_NAME"` to resolve an env var at runtime ' +
+    'and inject it as a Bearer token. The raw value is never logged or returned to the model.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      url: {
+        type: 'string',
+        description: 'Absolute http(s) URL.',
+      },
+      method: {
+        type: 'string',
+        enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
+        description: 'HTTP method. GET/HEAD/OPTIONS = low risk; POST/PUT/PATCH = medium; DELETE = high.',
+      },
+      body: {
+        description:
+          'Request body. Strings are sent as text/plain; objects/arrays are JSON-serialized ' +
+          'with Content-Type: application/json. Ignored for GET, HEAD, OPTIONS.',
+      },
+      headers: {
+        type: 'object',
+        description:
+          'Request headers as a string-keyed object. Secret values (Authorization, token patterns) ' +
+          'are redacted from traces but sent on the wire.',
+      },
+      timeout_ms: {
+        type: 'number',
+        description: 'Request timeout in milliseconds (default 30000, clamped to 120000).',
+      },
+      max_response_bytes: {
+        type: 'number',
+        description:
+          'Maximum response body bytes (default 100000, clamped to 1000000). ' +
+          'Content over the cap is truncated head+tail with a marker.',
+      },
+      credential: {
+        type: 'string',
+        description:
+          'Name of an environment variable whose value is injected as a Bearer token ' +
+          '(Authorization: Bearer <value>). Use instead of hardcoding secrets in headers. ' +
+          'Returns an error if the env var is not set.',
+      },
+    },
+    required: ['url', 'method'],
+  },
+};
+
 export const agentTool: AnthropicToolDef = {
   name: 'agent',
   category: 'subagent',
@@ -1329,6 +1393,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   listDirectoryTool,
   sendTelegramTool,
   webScrapeTool,
+  webRequestTool,
   createScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,

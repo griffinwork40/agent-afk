@@ -406,6 +406,95 @@ describe('leaseTask — multi-process safety (rename-as-claim)', () => {
   });
 });
 
+describe('recoverExpiredLeases — stale .claim-* file recovery (second pass)', () => {
+  it('recovers a stale .claim-* file left by an interrupted prior recovery', () => {
+    const queueDir = tmpQueueDir();
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+
+    // Simulate a crash-interrupted recovery: a .claim-<hex>.json file sits in
+    // leased/ with a valid expired TaskRecord — left behind because the prior
+    // recovery process crashed after renaming but before re-enqueueing.
+    const record = {
+      id: 'q-stale-claim-test',
+      command: '/stale-cmd',
+      state: 'leased',
+      attempts: 1,
+      maxAttempts: 2,
+      leaseExpiry: Date.now() - 60_000,
+      createdAt: Date.now() - 120_000,
+      updatedAt: Date.now() - 60_000,
+    };
+    const claimFile = join(leasedDir, '.claim-deadbeef.json');
+    writeFileSync(claimFile, JSON.stringify(record));
+
+    const recovered = recoverExpiredLeases(queueDir);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]!.id).toBe('q-stale-claim-test');
+    expect(recovered[0]!.state).toBe('retrying');
+
+    // The claim file must be gone.
+    expect(existsSync(claimFile)).toBe(false);
+
+    // Exactly one re-enqueued file in the queue dir.
+    const fs = require('node:fs');
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles).toHaveLength(1);
+  });
+
+  it('removes a corrupt .claim-* file without crashing', () => {
+    const queueDir = tmpQueueDir();
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+
+    const claimFile = join(leasedDir, '.claim-corrupt01.json');
+    writeFileSync(claimFile, 'NOT VALID JSON!!!');
+
+    // Must not throw and must produce zero recoveries.
+    const recovered = recoverExpiredLeases(queueDir);
+    expect(recovered).toHaveLength(0);
+
+    // The corrupt file should be cleaned up.
+    expect(existsSync(claimFile)).toBe(false);
+  });
+
+  it('concurrent second-pass recovery on the same .claim-* file produces exactly one re-enqueue', () => {
+    // Simulates the race: two sequential calls where the first claims the
+    // .claim-* file via rename; the second should find it gone and skip.
+    const queueDir = tmpQueueDir();
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+
+    const record = {
+      id: 'q-race-claim-test',
+      command: '/race-cmd',
+      state: 'leased',
+      attempts: 1,
+      maxAttempts: 2,
+      leaseExpiry: Date.now() - 60_000,
+      createdAt: Date.now() - 120_000,
+      updatedAt: Date.now() - 60_000,
+    };
+    writeFileSync(join(leasedDir, '.claim-racetest1.json'), JSON.stringify(record));
+
+    const first = recoverExpiredLeases(queueDir);
+    expect(first).toHaveLength(1);
+
+    // Second call: .claim-* file is gone (renamed by first call).
+    const second = recoverExpiredLeases(queueDir);
+    expect(second).toHaveLength(0);
+
+    // Exactly one queue file.
+    const fs = require('node:fs');
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles).toHaveLength(1);
+  });
+});
+
 describe('recoverExpiredLeases — multi-process safety (claim-rename)', () => {
   it('concurrent recoverExpiredLeases on the same expired lease produces exactly one re-enqueue', () => {
     // This test verifies that the rename-based claim prevents double-enqueue
@@ -440,5 +529,145 @@ describe('recoverExpiredLeases — multi-process safety (claim-rename)', () => {
       (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
     );
     expect(queueFiles).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backoff wiring tests (#1432)
+// ---------------------------------------------------------------------------
+
+describe('reEnqueue — backoff wiring via computeBackoffMs (#1432)', () => {
+  it('re-enqueued task from completeTask carries eligibleAfter > now (fixed backoff)', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, undefined, queueDir);
+
+    // Patch lease to allow retry and set a 30s fixed backoff.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const leasedFilePath = path.join(queueDir, 'leased', `${task.id}.json`);
+    const record = JSON.parse(fs.readFileSync(leasedFilePath, 'utf-8'));
+    record.maxAttempts = 3;
+    record.backoffStrategy = 'fixed';
+    record.backoffBaseMs = 30_000;
+    fs.writeFileSync(leasedFilePath, JSON.stringify(record));
+
+    const before = Date.now();
+    completeTask(task.id, 'failed', 'transient', queueDir);
+
+    // Find the re-enqueued queue file.
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles.length).toBeGreaterThan(0);
+    const requeued = JSON.parse(fs.readFileSync(path.join(queueDir, queueFiles[0]), 'utf-8'));
+
+    // eligibleAfter must be set and >= before + 30_000ms.
+    expect(requeued.eligibleAfter).toBeDefined();
+    expect(requeued.eligibleAfter).toBeGreaterThanOrEqual(before + 30_000);
+  });
+
+  it('re-enqueued task from completeTask carries eligibleAfter using exponential backoff', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, undefined, queueDir);
+
+    // Patch lease to simulate second attempt (attempts=2) with exponential backoff.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const leasedFilePath = path.join(queueDir, 'leased', `${task.id}.json`);
+    const record = JSON.parse(fs.readFileSync(leasedFilePath, 'utf-8'));
+    record.attempts = 2;  // second attempt already made
+    record.maxAttempts = 5;
+    record.backoffStrategy = 'exponential';
+    record.backoffBaseMs = 1_000;
+    fs.writeFileSync(leasedFilePath, JSON.stringify(record));
+
+    const before = Date.now();
+    completeTask(task.id, 'failed', 'transient', queueDir);
+
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    const requeued = JSON.parse(fs.readFileSync(path.join(queueDir, queueFiles[0]), 'utf-8'));
+
+    // For attempts=2, exponential: 1000 * 2^(2-1) = 2000ms
+    expect(requeued.eligibleAfter).toBeGreaterThanOrEqual(before + 2_000);
+  });
+
+  it('re-enqueued task from recoverExpiredLeases carries eligibleAfter', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, undefined, queueDir);
+
+    // Expire the lease and configure retry with 5s fixed backoff.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const leasedFilePath = path.join(queueDir, 'leased', `${task.id}.json`);
+    const record = JSON.parse(fs.readFileSync(leasedFilePath, 'utf-8'));
+    record.leaseExpiry = Date.now() - 1;
+    record.maxAttempts = 3;
+    record.backoffStrategy = 'fixed';
+    record.backoffBaseMs = 5_000;
+    fs.writeFileSync(leasedFilePath, JSON.stringify(record));
+
+    const before = Date.now();
+    recoverExpiredLeases(queueDir);
+
+    // Find the re-enqueued queue file.
+    const queueFiles = fs.readdirSync(queueDir).filter(
+      (f: string) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueFiles.length).toBeGreaterThan(0);
+    const requeued = JSON.parse(fs.readFileSync(path.join(queueDir, queueFiles[0]), 'utf-8'));
+
+    expect(requeued.eligibleAfter).toBeDefined();
+    expect(requeued.eligibleAfter).toBeGreaterThanOrEqual(before + 5_000);
+  });
+
+  it('dequeueNext skips a re-enqueued task during its backoff window', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, undefined, queueDir);
+
+    // Re-enqueue with a far-future eligibleAfter (simulating a long backoff).
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const leasedFilePath = path.join(queueDir, 'leased', `${task.id}.json`);
+    const record = JSON.parse(fs.readFileSync(leasedFilePath, 'utf-8'));
+    record.maxAttempts = 3;
+    record.backoffStrategy = 'fixed';
+    record.backoffBaseMs = 60_000; // 60s — will not elapse during this test
+    fs.writeFileSync(leasedFilePath, JSON.stringify(record));
+
+    completeTask(task.id, 'failed', 'transient', queueDir);
+
+    // The re-enqueued task must NOT be returned by dequeueNext (backoff active).
+    const dequeued = dequeueNext(queueDir);
+    expect(dequeued).toBeNull();
+  });
+
+  it('dequeueNext returns a re-enqueued task once its eligibleAfter has passed', () => {
+    const queueDir = tmpQueueDir();
+
+    // Write a queue file directly with an eligibleAfter already in the past.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const pastTask = {
+      id: 'q-backoff-past-test',
+      command: '/past-test',
+      enqueuedAt: new Date().toISOString(),
+      sequence: 1,
+      attempts: 1,
+      maxAttempts: 3,
+      backoffStrategy: 'fixed',
+      backoffBaseMs: 30_000,
+      eligibleAfter: Date.now() - 1, // already past — immediately dequeue-able
+    };
+    fs.writeFileSync(path.join(queueDir, '0001-q-backoff-past-test.json'), JSON.stringify(pastTask));
+
+    const dequeued = dequeueNext(queueDir);
+    expect(dequeued).not.toBeNull();
+    expect(dequeued?.id).toBe('q-backoff-past-test');
   });
 });

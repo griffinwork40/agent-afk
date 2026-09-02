@@ -15,7 +15,6 @@ import { createStageTracker } from '../commands/interactive/loop-stage.js';
 import { formatDuration } from '../format-utils.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
-import { palette } from '../palette.js';
 import { interruptPeek } from '../render/interrupt-peek.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
@@ -31,7 +30,7 @@ import type { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
-import { renderTtfbWaitingLine, checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
+import { renderTtfbWaitingProgress, checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
 import { subagentStatusStack, type SubagentStatusBarSpec } from '../render.js';
 
 const PAUSE_THRESHOLD_MS = 30_000;
@@ -105,6 +104,12 @@ export function registerOverlaySlots(
      */
     getTtfbStartedAt?: () => number | undefined;
     isTtfbDone?: () => boolean;
+    /**
+     * Current braille spinner frame for the TTFB waiting indicator. Incremented
+     * once per second by `checkTtfbAnnotation` so the glyph animates at ~1 Hz.
+     * Optional — when absent the frame defaults to 0 (static first glyph).
+     */
+    getTtfbSpinnerFrame?: () => number;
     /**
      * Live accessor for the active subagent status bar specs, keyed by subagentId.
      * Optional so existing non-TTY callers and tests register slots unchanged;
@@ -236,11 +241,16 @@ export function registerOverlaySlots(
           ),
         );
       }
-      // TTFB waiting line: no progress events yet and no content has arrived.
-      // Delegates to renderTtfbWaitingLine (stream-renderer-ttfb.ts) which
+      // TTFB waiting progress: no progress events yet and no content has arrived.
+      // Delegates to renderTtfbWaitingProgress (stream-renderer-ttfb.ts) which
       // returns '' when the timer is inactive, done, or inside the grace period.
+      // Uses streamProgress so the overlay spinner is driven uniformly.
       if (bannerLines.length === 0 && !stopping) {
-        const waiting = renderTtfbWaitingLine(ctx.getTtfbStartedAt, ctx.isTtfbDone, palette);
+        const waiting = renderTtfbWaitingProgress(
+          ctx.getTtfbStartedAt,
+          ctx.isTtfbDone,
+          ctx.getTtfbSpinnerFrame,
+        );
         if (waiting) bannerLines.push(waiting);
       }
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';

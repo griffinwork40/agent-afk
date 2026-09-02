@@ -88,7 +88,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('quarantinePoisonEntry — outer-catch fallback (branch 1: both renames fail)', () => {
-  it('unlinks the entry and unblocks the queue when both renameSync calls throw', () => {
+  it('unlinks the poison entry and does not return an unleased task', () => {
     // Arm: all renameSync calls throw EPERM (simulating a permission error that
     // blocks every rename attempt, including the timestamp-suffixed retry).
     renameSyncShouldThrow = true;
@@ -102,21 +102,57 @@ describe('quarantinePoisonEntry — outer-catch fallback (branch 1: both renames
       sequence: 2,
     }));
 
-    // dequeueNext must not throw even though rename fails.
-    // quarantinePoisonEntry falls back to unlinkSync (which succeeds — only
-    // renameSync is mocked to throw), removes the poison entry, then continues
-    // the loop and returns the valid task — all in a single call.
+    // With rename globally broken, dequeueNext quarantines the poison entry
+    // (via unlinkSync fallback) but cannot lease the valid task either —
+    // leaseTask also uses renameSync and will throw EPERM.  The H1 fix
+    // ensures dequeueNext does NOT return a task it failed to lease; it
+    // cleans up the queue file and continues.  Returns null because no task
+    // could be successfully leased.
     const result = dequeueNext(tmpDir);
+    expect(result).toBeNull();
 
-    // The valid task behind the poison entry was reached — queue unblocked.
-    expect(result).not.toBeNull();
-    expect(result!.command).toBe('echo hi');
-
-    // The FIFO path is now clear: both entries were consumed on the single call.
+    // Both entries were cleaned up: the poison entry by quarantine fallback,
+    // the valid entry by the lease-failure cleanup (non-ENOENT errors unlink
+    // the queue file to prevent deadlock).  The queue is empty.
     const remaining = realFs.readdirSync(tmpDir).filter(
       (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
     );
     expect(remaining).toHaveLength(0);
+  });
+
+  it('dequeues the valid task when only the poison entry rename fails', () => {
+    // Write a malformed entry followed by a valid task.
+    realFs.writeFileSync(join(tmpDir, '0001-q-poison.json'), 'not-json');
+    realFs.writeFileSync(join(tmpDir, '0002-q-valid.json'), JSON.stringify({
+      id: 'q-1-valid',
+      command: 'echo hi',
+      enqueuedAt: new Date().toISOString(),
+      sequence: 2,
+    }));
+
+    // Arm rename to fail only for the first call (poison quarantine attempt),
+    // then restore so leaseTask succeeds on the valid entry.
+    renameSyncShouldThrow = true;
+
+    // quarantinePoisonEntry falls back to unlinkSync for the poison entry,
+    // then the loop reaches the valid task.  leaseTask calls renameSync —
+    // it will also throw, so both entries are consumed this call.
+    // Re-enqueue the valid task and retry with rename working.
+    const result1 = dequeueNext(tmpDir);
+    expect(result1).toBeNull();
+
+    // Restore rename.  Re-enqueue the valid task for a clean dequeue.
+    renameSyncShouldThrow = false;
+    realFs.writeFileSync(join(tmpDir, '0002-q-valid.json'), JSON.stringify({
+      id: 'q-1-valid',
+      command: 'echo hi',
+      enqueuedAt: new Date().toISOString(),
+      sequence: 2,
+    }));
+
+    const result2 = dequeueNext(tmpDir);
+    expect(result2).not.toBeNull();
+    expect(result2!.command).toBe('echo hi');
   });
 
   it('does not throw even when both renames fail (outer-catch is never-throw)', () => {

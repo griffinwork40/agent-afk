@@ -37,11 +37,13 @@
  *
  * ## Adding a new env var
  *
- *   1. Add a getter to the `env` object.
- *   2. Add a matching entry to `ENV_REGISTRY` — name, description, type, required.
- *   3. The `env-registry.test.ts` test enforces that every getter has a registry
- *      entry and vice versa.
- *   4. Run `pnpm scan:env` to regenerate `docs/env-registry.{json,md}`.
+ *   1. Add an entry to `ENV_REGISTRY` — name, description, type, required, etc.
+ *   2. Run `pnpm scan:env` to regenerate `docs/env-registry.{json,md}`.
+ *
+ * The `env` object is generated dynamically from `ENV_REGISTRY` at module load
+ * time (see the `Object.defineProperty` loop below), so no manual getter is
+ * needed. The `EnvObject` mapped type and `EnvVarName` union are derived from
+ * the registry, preserving full autocomplete and `tsc --noEmit` type safety.
  */
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
@@ -95,7 +97,7 @@ export interface EnvVarMeta {
  * `describedTodo: true` marks entries that need a human-written description.
  * Backfill them as you touch the relevant code path.
  */
-export const ENV_REGISTRY: readonly EnvVarMeta[] = [
+export const ENV_REGISTRY = [
   // ── Model / agent runtime ─────────────────────────────────────────────────
   {
     name: 'AFK_COMPACT_KEEP_LAST_TURNS',
@@ -1765,239 +1767,49 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '600000',
     category: 'misc',
   },
-];
+] as const satisfies readonly EnvVarMeta[];
 
 /**
- * Single read-point for every env var the runtime touches. Getter on every
- * property — lazy, no caching, sees live `process.env` mutations.
+ * Typed map of every registered env var name to `string | undefined`.
+ * Secret entries are non-enumerable (see secret-hardening below).
+ *
+ * Derived directly from `ENV_REGISTRY` so adding a new env var is a
+ * **one-step change**: add an entry to `ENV_REGISTRY`; the getter,
+ * type, and secret-hardening are all generated automatically.
+ */
+export type EnvObject = { readonly [K in (typeof ENV_REGISTRY)[number]['name']]: string | undefined };
+
+/**
+ * Single read-point for every env var the runtime touches. One lazy getter
+ * per registry entry — derived dynamically from `ENV_REGISTRY`. Reads
+ * `process.env` on every access (no caching; tests mutate `process.env`
+ * per-case, and dotenv loads AFTER module import).
  *
  * Migration: every `process.env['X']` outside `src/config/env.ts` should be
  * `env.X`. CI enforces via `pnpm audit:env:check`.
  *
- * The shape of `env` mirrors `ENV_REGISTRY` 1:1 (verified by
- * `env-registry.test.ts`). When adding a new var: add a getter here, add a
- * registry entry above.
+ * Secret entries (`entry.secret === true`) are made non-enumerable so that
+ * `Object.keys(env)`, `for...in env`, and `JSON.stringify(env)` do NOT
+ * surface credentials. Direct property access (`env.ANTHROPIC_API_KEY`) is
+ * unaffected — non-enumerable blocks accidental serialization only.
+ *
+ * ## Adding a new env var
+ *   1. Add an entry to `ENV_REGISTRY` above (name, description, type, …).
+ *   2. Run `pnpm scan:env` to regenerate `docs/env-registry.{json,md}`.
+ *   That's it — no manual getter needed.
  */
-export const env = {
-  // Model / agent runtime
-  get AFK_COMPACT_KEEP_LAST_TURNS(): string | undefined { return process.env['AFK_COMPACT_KEEP_LAST_TURNS']; },
-  get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
-  get AFK_COMPACT_SHRINK_FRACTION(): string | undefined { return process.env['AFK_COMPACT_SHRINK_FRACTION']; },
-  get AFK_COMPANION_PRIMER(): string | undefined { return process.env['AFK_COMPANION_PRIMER']; },
-  get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
-  get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
-  get AFK_DISABLE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_DISABLE_BASH_INTERPRETER_GUARD']; },
-  get AFK_DISABLE_PATH_APPROVAL(): string | undefined { return process.env['AFK_DISABLE_PATH_APPROVAL']; },
-  get AFK_DISABLE_PROMPT_CACHE(): string | undefined { return process.env['AFK_DISABLE_PROMPT_CACHE']; },
-  get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
-  get AFK_FORCE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_FORCE_BASH_INTERPRETER_GUARD']; },
-  get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
-  get AFK_MAX_CONCURRENT_BACKGROUND_JOBS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_BACKGROUND_JOBS']; },
-  get AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS']; },
-  get AFK_MAX_CONCURRENT_SUBAGENT_CALLS(): string | undefined { return process.env['AFK_MAX_CONCURRENT_SUBAGENT_CALLS']; },
-  get AFK_MAX_NESTING_DEPTH(): string | undefined { return process.env['AFK_MAX_NESTING_DEPTH']; },
-  get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
-  get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
-  get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
-  get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
-  get AFK_MICROCOMPACT_KEEP_LAST(): string | undefined { return process.env['AFK_MICROCOMPACT_KEEP_LAST']; },
-  get AFK_MICROCOMPACT_TOOL_RESULT_BYTES(): string | undefined { return process.env['AFK_MICROCOMPACT_TOOL_RESULT_BYTES']; },
-  get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
-  get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
-  get AFK_MODEL_STALL_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_STALL_TIMEOUT_MS']; },
-  get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
-  get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },
-  get AFK_MODEL_LARGE_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LARGE_BASE_URL']; },
-  get AFK_MODEL_LOCAL(): string | undefined { return process.env['AFK_MODEL_LOCAL']; },
-  get AFK_MODEL_LOCAL_API_KEY(): string | undefined { return process.env['AFK_MODEL_LOCAL_API_KEY']; },
-  get AFK_MODEL_LOCAL_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LOCAL_BASE_URL']; },
-  get AFK_MODEL_MEDIUM(): string | undefined { return process.env['AFK_MODEL_MEDIUM']; },
-  get AFK_MODEL_MEDIUM_API_KEY(): string | undefined { return process.env['AFK_MODEL_MEDIUM_API_KEY']; },
-  get AFK_MODEL_MEDIUM_BASE_URL(): string | undefined { return process.env['AFK_MODEL_MEDIUM_BASE_URL']; },
-  get AFK_MODEL_SMALL(): string | undefined { return process.env['AFK_MODEL_SMALL']; },
-  get AFK_MODEL_SMALL_API_KEY(): string | undefined { return process.env['AFK_MODEL_SMALL_API_KEY']; },
-  get AFK_MODEL_SMALL_BASE_URL(): string | undefined { return process.env['AFK_MODEL_SMALL_BASE_URL']; },
-  get AFK_VISION_MODELS(): string | undefined { return process.env['AFK_VISION_MODELS']; },
-  get AFK_OVERLOAD_PAUSE_MS(): string | undefined { return process.env['AFK_OVERLOAD_PAUSE_MS']; },
-  get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
-  get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
-  get AFK_SUGGEST_PROMPT(): string | undefined { return process.env['AFK_SUGGEST_PROMPT']; },
-  get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
-  get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
-  get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
-  get AFK_SUBAGENT_IDLE_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_IDLE_TIMEOUT_MS']; },
-  get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
-  get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
-  get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
-  get AFK_THINKING_UI(): string | undefined { return process.env['AFK_THINKING_UI']; },
-  get AFK_TIMEOUT_MS(): string | undefined { return process.env['AFK_TIMEOUT_MS']; },
-  get AFK_WORKSPACE_DISABLED(): string | undefined { return process.env['AFK_WORKSPACE_DISABLED']; },
-  get CLAUDE_MODEL(): string | undefined { return process.env['CLAUDE_MODEL']; },
+const _envBase = {} as EnvObject;
+for (const _entry of ENV_REGISTRY) {
+  const _name = _entry.name; // close over name for the getter
+  Object.defineProperty(_envBase, _name, {
+    // process.env reads stay in src/config/env.ts per audit-env-access.ts constraint.
+    get(): string | undefined { return process.env[_name]; },
+    enumerable: !('secret' in _entry && _entry.secret), // secrets: non-enumerable (hidden from serialization)
+    configurable: true,
+  });
+}
 
-  // System prompt
-  get AFK_SYSTEM_PROMPT(): string | undefined { return process.env['AFK_SYSTEM_PROMPT']; },
-  get AFK_DUMP_PROMPT(): string | undefined { return process.env['AFK_DUMP_PROMPT']; },
-
-  // Auth
-  get ANTHROPIC_API_KEY(): string | undefined { return process.env['ANTHROPIC_API_KEY']; },
-  get CLAUDE_CODE_OAUTH_TOKEN(): string | undefined { return process.env['CLAUDE_CODE_OAUTH_TOKEN']; },
-  get OPENAI_API_KEY(): string | undefined { return process.env['OPENAI_API_KEY']; },
-  get CODEX_API_KEY(): string | undefined { return process.env['CODEX_API_KEY']; },
-  get XAI_API_KEY(): string | undefined { return process.env['XAI_API_KEY']; },
-  get AFK_XAI_BASE_URL(): string | undefined { return process.env['AFK_XAI_BASE_URL']; },
-  get AFK_XAI_GROK_CLIENT_VERSION(): string | undefined { return process.env['AFK_XAI_GROK_CLIENT_VERSION']; },
-  get AFK_XAI_OAUTH_BASE_URL(): string | undefined { return process.env['AFK_XAI_OAUTH_BASE_URL']; },
-  get AFK_LOCAL_API_KEY(): string | undefined { return process.env['AFK_LOCAL_API_KEY']; },
-  get AFK_LOCAL_BASE_URL(): string | undefined { return process.env['AFK_LOCAL_BASE_URL']; },
-  get AFK_OPENAI_BASE_URL(): string | undefined { return process.env['AFK_OPENAI_BASE_URL']; },
-  get AFK_OPENAI_USE_RESPONSES(): string | undefined { return process.env['AFK_OPENAI_USE_RESPONSES']; },
-  get AFK_OPENAI_CHATGPT_OAUTH(): string | undefined { return process.env['AFK_OPENAI_CHATGPT_OAUTH']; },
-  get AFK_PROVIDER(): string | undefined { return process.env['AFK_PROVIDER']; },
-  get EXA_API_KEY(): string | undefined { return process.env['EXA_API_KEY']; },
-
-  // Telegram
-  get TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['TELEGRAM_BOT_TOKEN']; },
-  get AFK_TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['AFK_TELEGRAM_BOT_TOKEN']; },
-  get AFK_TELEGRAM_ALLOWED_CHAT_IDS(): string | undefined { return process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS']; },
-  get AFK_TELEGRAM_TAG_ONLY_CHAT_IDS(): string | undefined { return process.env['AFK_TELEGRAM_TAG_ONLY_CHAT_IDS']; },
-  get AFK_TELEGRAM_PRIMARY_CHAT_ID(): string | undefined { return process.env['AFK_TELEGRAM_PRIMARY_CHAT_ID']; },
-  get AFK_TELEGRAM_NOTIFY_MODE(): string | undefined { return process.env['AFK_TELEGRAM_NOTIFY_MODE']; },
-  get TELEGRAM_DATA_DIR(): string | undefined { return process.env['TELEGRAM_DATA_DIR']; },
-  get TELEGRAM_VERBOSE(): string | undefined { return process.env['TELEGRAM_VERBOSE']; },
-  get TMUX(): string | undefined { return process.env['TMUX']; },
-  get AFK_TELEGRAM_TRACE(): string | undefined { return process.env['AFK_TELEGRAM_TRACE']; },
-  get AFK_TELEGRAM_CWD(): string | undefined { return process.env['AFK_TELEGRAM_CWD']; },
-
-  // Paths
-  get AFK_HOME(): string | undefined { return process.env['AFK_HOME']; },
-  get AFK_STATE_DIR(): string | undefined { return process.env['AFK_STATE_DIR']; },
-  get AFK_FRAMEWORK_DIR(): string | undefined { return process.env['AFK_FRAMEWORK_DIR']; },
-
-  get HOME(): string | undefined { return process.env['HOME']; },
-  get PATH(): string | undefined { return process.env['PATH']; },
-  get APPDATA(): string | undefined { return process.env['APPDATA']; },
-  get LOCALAPPDATA(): string | undefined { return process.env['LOCALAPPDATA']; },
-  get USERPROFILE(): string | undefined { return process.env['USERPROFILE']; },
-
-  // Daemon
-  get AFK_DAEMON_CWD(): string | undefined { return process.env['AFK_DAEMON_CWD']; },
-  get AFK_DAEMON_TASK(): string | undefined { return process.env['AFK_DAEMON_TASK']; },
-  get AFK_DAEMON_TASK_ID(): string | undefined { return process.env['AFK_DAEMON_TASK_ID']; },
-  get AFK_DAEMON_HOST(): string | undefined { return process.env['AFK_DAEMON_HOST']; },
-  get AFK_SESSIONSTART_COOLDOWN_MS(): string | undefined { return process.env['AFK_SESSIONSTART_COOLDOWN_MS']; },
-
-  // Web UI
-  get AFK_WEB_PORT(): string | undefined { return process.env['AFK_WEB_PORT']; },
-  get AFK_WEB_HOST(): string | undefined { return process.env['AFK_WEB_HOST']; },
-  get AFK_WEB_TOKEN(): string | undefined { return process.env['AFK_WEB_TOKEN']; },
-
-  // Worktree
-  get AFK_WORKTREE_AUTONAME(): string | undefined { return process.env['AFK_WORKTREE_AUTONAME']; },
-  get AFK_WORKTREE_BRANCH_PREFIX(): string | undefined { return process.env['AFK_WORKTREE_BRANCH_PREFIX']; },
-  get AFK_WORKTREE_BASE(): string | undefined { return process.env['AFK_WORKTREE_BASE']; },
-  get AFK_WORKTREE_ON_EXIT(): string | undefined { return process.env['AFK_WORKTREE_ON_EXIT']; },
-  get AFK_WORKTREE_BOOT_PRUNE(): string | undefined { return process.env['AFK_WORKTREE_BOOT_PRUNE']; },
-  get AFK_WORKTREE_PRUNE_DISABLE(): string | undefined { return process.env['AFK_WORKTREE_PRUNE_DISABLE']; },
-  get AFK_WORKTREE_MAX_AGE_CLEAN(): string | undefined { return process.env['AFK_WORKTREE_MAX_AGE_CLEAN']; },
-  get AFK_WORKTREE_MAX_AGE_DIRTY(): string | undefined { return process.env['AFK_WORKTREE_MAX_AGE_DIRTY']; },
-  get AFK_WORKTREE_SWEEP_ROOT(): string | undefined { return process.env['AFK_WORKTREE_SWEEP_ROOT']; },
-
-
-  // MCP
-  get AFK_ALLOW_PROJECT_MCP(): string | undefined { return process.env['AFK_ALLOW_PROJECT_MCP']; },
-
-  // Routing
-  get AFK_AUTO_ROUTING(): string | undefined { return process.env['AFK_AUTO_ROUTING']; },
-  get AFK_INTERNAL(): string | undefined { return process.env['AFK_INTERNAL']; },
-  get AFK_SHELL_PASSTHROUGH(): string | undefined { return process.env['AFK_SHELL_PASSTHROUGH']; },
-  get AFK_BG_AUTO_DELIVER(): string | undefined { return process.env['AFK_BG_AUTO_DELIVER']; },
-
-  // UI / output
-  get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },
-  get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
-  get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
-  get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
-  get AFK_GOBLIN_MASCOT(): string | undefined { return process.env['AFK_GOBLIN_MASCOT']; },
-  get AFK_TERM_TITLE(): string | undefined { return process.env['AFK_TERM_TITLE']; },
-  get AFK_NOTIFY(): string | undefined { return process.env['AFK_NOTIFY']; },
-  get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
-  get AFK_SKILL_STREAM_VERBOSE(): string | undefined { return process.env['AFK_SKILL_STREAM_VERBOSE']; },
-  get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
-  get NO_COLOR(): string | undefined { return process.env['NO_COLOR']; },
-  get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
-  get AFK_TEXT_MEASURE(): string | undefined { return process.env['AFK_TEXT_MEASURE']; },
-  get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
-  get COLORTERM(): string | undefined { return process.env['COLORTERM']; },
-
-  // Debug
-  get AFK_DEBUG(): string | undefined { return process.env['AFK_DEBUG']; },
-  get AFK_DEBUG_CLIPBOARD(): string | undefined { return process.env['AFK_DEBUG_CLIPBOARD']; },
-  get AFK_DEBUG_COMPOSITOR(): string | undefined { return process.env['AFK_DEBUG_COMPOSITOR']; },
-  get AFK_TRACE_DISABLED(): string | undefined { return process.env['AFK_TRACE_DISABLED']; },
-  get AFK_WITNESS_RETENTION_DISABLE(): string | undefined { return process.env['AFK_WITNESS_RETENTION_DISABLE']; },
-  get AFK_WITNESS_MAX_AGE_DAYS(): string | undefined { return process.env['AFK_WITNESS_MAX_AGE_DAYS']; },
-  get AFK_WITNESS_MAX_BYTES(): string | undefined { return process.env['AFK_WITNESS_MAX_BYTES']; },
-  get AFK_SESSION_RETENTION_DISABLE(): string | undefined { return process.env['AFK_SESSION_RETENTION_DISABLE']; },
-  get AFK_SESSION_MAX_AGE_DAYS(): string | undefined { return process.env['AFK_SESSION_MAX_AGE_DAYS']; },
-  get AFK_SESSION_MAX_COUNT(): string | undefined { return process.env['AFK_SESSION_MAX_COUNT']; },
-  get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
-  get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
-  get AFK_CAPTURE_SUBAGENT_PROMPTS(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_PROMPTS']; },
-  get AFK_CAPTURE_SUBAGENT_OUTPUT(): string | undefined { return process.env['AFK_CAPTURE_SUBAGENT_OUTPUT']; },
-  get AFK_SUBAGENT_LOG(): string | undefined { return process.env['AFK_SUBAGENT_LOG']; },
-  get DEBUG(): string | undefined { return process.env['DEBUG']; },
-  get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
-
-  // Process / runtime
-  get AGENT_SURFACE(): string | undefined { return process.env['AGENT_SURFACE']; },
-  get CI(): string | undefined { return process.env['CI']; },
-  get NODE_ENV(): string | undefined { return process.env['NODE_ENV']; },
-  get VITEST(): string | undefined { return process.env['VITEST']; },
-  get NO_UPDATE_NOTIFIER(): string | undefined { return process.env['NO_UPDATE_NOTIFIER']; },
-
-  // Session identity
-  get AFK_SESSION_ID(): string | undefined { return process.env['AFK_SESSION_ID']; },
-
-  // Browser-control tools
-  get AFK_BROWSER_HEADLESS(): string | undefined { return process.env['AFK_BROWSER_HEADLESS']; },
-  get AFK_BROWSER_ALLOWED_DOMAINS(): string | undefined { return process.env['AFK_BROWSER_ALLOWED_DOMAINS']; },
-  get AFK_BROWSER_BLOCKED_DOMAINS(): string | undefined { return process.env['AFK_BROWSER_BLOCKED_DOMAINS']; },
-  get AFK_BROWSER_DOM_SNAPSHOTS(): string | undefined { return process.env['AFK_BROWSER_DOM_SNAPSHOTS']; },
-  get AFK_BROWSER_BACKEND(): string | undefined { return process.env['AFK_BROWSER_BACKEND']; },
-  get AFK_BROWSER_CONFIG(): string | undefined { return process.env['AFK_BROWSER_CONFIG']; },
-  get AFK_BROWSER_DEFAULT_PROFILE(): string | undefined { return process.env['AFK_BROWSER_DEFAULT_PROFILE']; },
-
-  // Filesystem
-  get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
-  get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
-  get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
-
-  // Rate-limit admission
-  get AFK_RATE_LIMIT_ADMISSION_DISABLED(): string | undefined { return process.env['AFK_RATE_LIMIT_ADMISSION_DISABLED']; },
-  get AFK_RATE_LIMIT_STAGGER_MAX_MS(): string | undefined { return process.env['AFK_RATE_LIMIT_STAGGER_MAX_MS']; },
-  // Web egress
-  get AFK_WEB_ALLOW_PRIVATE_HOSTS(): string | undefined { return process.env['AFK_WEB_ALLOW_PRIVATE_HOSTS']; },
-
-  // CLI / capture-mode
-  get AFK_DEMO_CLEAN(): string | undefined { return process.env['AFK_DEMO_CLEAN']; },
-  get SCRIPT(): string | undefined { return process.env['SCRIPT']; },
-  get ASCIINEMA_REC(): string | undefined { return process.env['ASCIINEMA_REC']; },
-
-  // CLI / shell integration
-  get SHELL(): string | undefined { return process.env['SHELL']; },
-  get PAGER(): string | undefined { return process.env['PAGER']; },
-  get VISUAL(): string | undefined { return process.env['VISUAL']; },
-  get EDITOR(): string | undefined { return process.env['EDITOR']; },
-  get AFK_DIFF_LINES(): string | undefined { return process.env['AFK_DIFF_LINES']; },
-  get AFK_SHELL_WRAPPER(): string | undefined { return process.env['AFK_SHELL_WRAPPER']; },
-  get AFK_USER_CARD_MAX_ROWS(): string | undefined { return process.env['AFK_USER_CARD_MAX_ROWS']; },
-
-  // Wave manifest (interrupted-session recovery)
-  get AFK_WAVE_MANIFEST_DISABLED(): string | undefined { return process.env['AFK_WAVE_MANIFEST_DISABLED']; },
-  get AFK_WAVE_MANIFEST_TTL_HOURS(): string | undefined { return process.env['AFK_WAVE_MANIFEST_TTL_HOURS']; },
-  get AFK_WAVE_RESUME_UNATTENDED(): string | undefined { return process.env['AFK_WAVE_RESUME_UNATTENDED']; },
-  get AFK_LEASE_TTL_MS(): string | undefined { return process.env['AFK_LEASE_TTL_MS']; },
-} as const; // `as const` narrows getter return types — it does NOT call Object.freeze; the object is mutable at runtime.
+export const env: EnvObject = _envBase;
 
 /**
  * Truthy-check for `AFK_PLAIN_OUTPUT` (the `--plain` CLI flag's env twin).
@@ -2023,51 +1835,16 @@ export function isPlainOutputRequested(): boolean {
   return v === '1' || v === 'true';
 }
 
-// ── Secret hardening ────────────────────────────────────────────────────────
-// Credential-bearing getters (auth keys, OAuth tokens, bot tokens) are
-// made non-enumerable so accidental serialization paths do NOT surface their
-// values: `JSON.stringify(env)`, `console.log(env)`, `Object.keys(env)`,
-// `for...in env`, and `util.inspect(env)` all skip them. Direct access
-// (`env.ANTHROPIC_API_KEY`) is unaffected — this only blocks the
-// accidental-leak path, not deliberate use.
-//
-// External constraint: ECMA-262 property descriptor semantics — `enumerable`
-// gates iteration but NOT existence; the property still resolves on direct
-// read. `Object.defineProperty` preserves the existing getter when we copy
-// the descriptor.
-(function applySecretHardening(): void {
-  for (const entry of ENV_REGISTRY) {
-    if (!entry.secret) continue;
-    const descriptor = Object.getOwnPropertyDescriptor(env, entry.name);
-    if (!descriptor) continue; // env-registry parity test will catch the miss
-    Object.defineProperty(env, entry.name, { ...descriptor, enumerable: false });
-  }
-})();
-
 /**
- * Union of every key on the `env` object. Useful for typed variable-name
+ * Union of every registered env-var name. Useful for typed variable-name
  * parameters, e.g. `function readEnv(name: EnvVarName)`.
  *
- * NOTE: This alias alone does NOT enforce that every getter has a matching
- * `ENV_REGISTRY` entry — `keyof typeof env` is a structural alias with no
- * direct relationship to the registry array. The authoritative parity gate is
- * the runtime check in `src/config/env.test.ts`. The bidirectional type
- * assertions below provide an early, compile-time squiggle when the two fall
- * out of sync.
+ * Guaranteed to equal `keyof EnvObject` — both are derived from the same
+ * `ENV_REGISTRY` source of truth, so parity is structural, not checked at
+ * runtime. The authoritative behavioural parity gate remains the test in
+ * `src/config/env.test.ts`.
  */
-export type EnvVarName = keyof typeof env;
-
-// Bidirectional compile-time parity check.
-// If any key exists in `env` but not in ENV_REGISTRY (or vice-versa),
-// `tsc --noEmit` will emit: "Type 'never' is not assignable to type 'true'".
-type _RegistryNames = (typeof ENV_REGISTRY)[number]['name'];
-type _EnvKeys = keyof typeof env;
-type _CheckEnvCoversRegistry = _RegistryNames extends _EnvKeys ? true : never;
-type _CheckRegistryCoversEnv = _EnvKeys extends _RegistryNames ? true : never;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-declare const _parityEnv: _CheckEnvCoversRegistry;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-declare const _parityRegistry: _CheckRegistryCoversEnv;
+export type EnvVarName = keyof EnvObject;
 
 // Runtime helpers over the registry — extracted to env-helpers.ts to keep this
 // file within the 350-line ceiling. Re-exported here so all existing import

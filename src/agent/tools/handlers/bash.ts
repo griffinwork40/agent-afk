@@ -249,6 +249,16 @@ export function createBashHandler(
     // detach — belt-and-suspenders alongside detached: true.
     proc.unref();
 
+    // #1430: Register the spawned PID in the session's PID registry so the
+    // wait_for handler can probe it later. Only runs when a registry is
+    // present in the context (new session paths always supply one). The
+    // pid guard inside SpawnedPidRegistry.register() silently drops
+    // undefined PIDs (spawn can omit pid on non-detached shells on some
+    // platforms, though in practice detached:true always provides one).
+    if (context?.spawnedPidRegistry !== undefined && proc.pid !== undefined) {
+      context.spawnedPidRegistry.register(proc.pid);
+    }
+
     // Set up timeout — resolve immediately, don't wait for streams.
     // External constraint: SIGTERM can be caught/ignored by user processes;
     // SIGKILL cannot. Use process.kill(-proc.pid, 'SIGKILL') to send SIGKILL
