@@ -1,7 +1,8 @@
 /**
- * Traces aggregator — walks ~/.afk/state/witness/<sessionId>/trace.jsonl and
- * aggregates tool call counts, error rates, subagent depths, compaction
- * counts, and closure reasons.
+ * Traces aggregator — uses session facets as the primary session-level query
+ * surface. Iterates session sidecars via `listSessionIds()` + `getOrDeriveFacet()`
+ * for tool counts, error rates, and subagent depths. Falls back to trace JSONL
+ * for cost/tokens/compaction/closure/durations (data not in facets).
  *
  * Privacy invariants:
  *   - `responseExcerpt`, prompt content, and user data are NEVER read or
@@ -9,21 +10,17 @@
  *   - Line parsing uses Zod schemas from trace/events.ts. Unknown fields
  *     are ignored by the schema — they never reach output aggregates.
  *
- * Session filtering: when `options.afkHome` is provided (tests), the
- * witness root is derived from it. Otherwise uses `getAfkStateDir()`.
- *
- * Timing note: daemon-spawned sessions have no sidecar JSON. We use the
- * first trace event's `ts` field as the session start time to apply the
- * `--days` window filter. When `ts` is absent we fall back to the trace
- * directory mtime.
+ * Session filtering: the sidecar's `facet.start_time` is the window filter.
+ * Sessions without sidecars are not counted (no trace-only enumeration).
  *
  * @module insights/aggregators/traces
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAfkStateDir } from '../../paths.js';
 import { TraceEventSchema } from '../../agent/trace/events.js';
+import { listSessionIds, getOrDeriveFacet } from '../../agent/facets/index.js';
 import type { InsightsOptions, TraceAggregates } from '../types.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 
@@ -66,156 +63,91 @@ function incNum(rec: Record<number, number>, key: number, by = 1): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Read all trace JSONL files within the `options.days` lookback window and
- * return aggregated trace metrics. Never throws.
+ * Aggregate session metrics via facets (primary) + trace JSONL (fallback).
+ *
+ * Facet path: tool counts, error categories, subagent fork depths.
+ * Trace path: cost, token splits, compaction counts, closure reasons, durations.
+ * Never throws.
  */
 export function aggregateTraces(options: InsightsOptions): TraceAggregates {
   const agg = zeroTraceAggregates();
 
-  // Resolve witness root
   const stateDir = options.afkHome
     ? join(options.afkHome, 'state')
     : getAfkStateDir();
   const witnessRoot = join(stateDir, 'witness');
-
-  if (!existsSync(witnessRoot)) {
-    return agg;
-  }
-
-  let sessionDirs: string[];
-  try {
-    sessionDirs = readdirSync(witnessRoot);
-  } catch {
-    return agg;
-  }
+  const sessionsDir = join(stateDir, 'sessions');
+  const cacheDir = join(stateDir, 'facets');
 
   const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;
 
-  for (const sessionId of sessionDirs) {
+  // --- Primary path: iterate session sidecars via facets ---
+  const sessionIds = listSessionIds({ sessionsDir });
+  for (const sessionId of sessionIds) {
+    const facet = getOrDeriveFacet(sessionId, { sessionsDir, cacheDir });
+    if (!facet) continue;
+    if (new Date(facet.start_time).getTime() < cutoffMs) continue;
+
+    agg.totalTracedSessions += 1;
+
+    for (const [tool, count] of Object.entries(facet.tool_counts)) {
+      inc(agg.toolCallCounts, tool, count);
+    }
+    for (const [tool, count] of Object.entries(facet.tool_error_categories)) {
+      inc(agg.toolErrorCounts, tool, count);
+    }
+    if (facet.subagents.length > 0) {
+      incNum(agg.subagentForkDepths, 1, facet.subagents.length);
+    }
+
+    // --- Fallback: trace.jsonl for cost/tokens/compaction/closure/durations ---
+    // toolCallCounts and toolErrorCounts come ONLY from the facet above.
+    // The trace path only writes: toolDurationsMs, compactionCount,
+    // closureReasons, totalInputTokens, totalOutputTokens, totalCacheReadTokens,
+    // totalCacheCreationTokens, totalCostUsd, sessionsWithCost.
     const tracePath = join(witnessRoot, sessionId, 'trace.jsonl');
     if (!existsSync(tracePath)) continue;
-
-    // Cheap pre-filter: mtime is always >= the session's start time (the
-    // trace file is appended to throughout the session, so its last-write
-    // time can never precede its first-write time). If mtime < cutoffMs,
-    // the session definitely ended before the window opened — skip WITHOUT
-    // reading the (potentially large) trace file. Sessions that pass this
-    // check still get the precise first-line-ts check below.
-    let mtimeMs: number;
-    try {
-      mtimeMs = statSync(tracePath).mtimeMs;
-    } catch {
-      continue; // can't stat — skip
-    }
-    if (mtimeMs < cutoffMs) {
-      continue; // definitely outside window — skip without reading the file
-    }
-
-    // Read the trace file once and reuse it for both the window check and
-    // aggregation below (this file was previously read twice per session).
     let raw: string | null = null;
     try {
       raw = readFileSync(tracePath, 'utf-8');
     } catch {
-      raw = null; // unreadable — fall through to the mtime-based window check
+      continue;
     }
+    if (!raw) continue;
 
-    // Determine whether this session falls within the window.
-    // We parse the first event's ts field, falling back to file mtime
-    // (already read above during the pre-filter).
-    let sessionStartMs: number | null = null;
-    if (raw !== null) {
-      try {
-        const firstLine = raw.split('\n')[0]?.trim();
-        if (firstLine) {
-          const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-          if (typeof parsed['ts'] === 'string') {
-            const ts = Date.parse(parsed['ts']);
-            if (!Number.isNaN(ts)) {
-              sessionStartMs = ts;
-            }
-          }
-        }
-      } catch {
-        // fall through to mtime
-      }
-    }
-
-    // Fallback: use trace.jsonl mtime
-    if (sessionStartMs === null) {
-      sessionStartMs = mtimeMs;
-    }
-
-    if (sessionStartMs < cutoffMs) {
-      continue; // outside window
-    }
-
-    // Process this session's trace file.
-    agg.totalTracedSessions += 1;
-
-    if (raw === null) {
-      continue; // file was unreadable above — nothing to aggregate
-    }
     for (const parsed of parseJsonlLines(raw)) {
       const result = TraceEventSchema.safeParse(parsed);
-      if (!result.success) {
-        continue; // schema mismatch — skip
-      }
-
+      if (!result.success) continue;
       const event = result.data;
 
       switch (event.kind) {
-        case 'tool_call': {
-          const { payload } = event;
-          if (payload.phase === 'completed') {
-            inc(agg.toolCallCounts, payload.name);
-            if (payload.isError) {
-              inc(agg.toolErrorCounts, payload.name);
-            }
-            if (!payload.isError) {
-              inc(agg.toolDurationsMs, payload.name, payload.durationMs);
-            }
-          }
-          // 'started' events are intentionally ignored.
-          break;
-        }
-
-        case 'subagent_lifecycle': {
-          const { payload } = event;
-          if (payload.transition === 'started') {
-            // Track fork depth. Depth is not in the payload directly —
-            // we count all started events as depth 1 (fork from main session).
-            // TODO: use parentId chain if depth tracking is ever needed.
-            incNum(agg.subagentForkDepths, 1);
-          }
-          break;
-        }
-
-        case 'compaction': {
+        case 'compaction':
           agg.compactionCount += 1;
           break;
-        }
 
         case 'closure': {
           const { payload } = event;
           inc(agg.closureReasons, payload.reason);
-          // Authoritative token split + cost. The session sidecar only carries
-          // a combined `totalTokens`; the per-direction breakdown lives here.
-          // All finalTokens sub-fields are optional in the schema → default 0.
           const ft = payload.finalTokens;
           agg.totalInputTokens += ft.input ?? 0;
           agg.totalOutputTokens += ft.output ?? 0;
           agg.totalCacheReadTokens += ft.cacheRead ?? 0;
           agg.totalCacheCreationTokens += ft.cacheCreation ?? 0;
           agg.totalCostUsd += payload.finalCostUsd;
-          if (payload.finalCostUsd > 0) {
-            agg.sessionsWithCost += 1;
+          if (payload.finalCostUsd > 0) agg.sessionsWithCost += 1;
+          break;
+        }
+
+        case 'tool_call': {
+          // Only accumulate durations here — counts come from facet to avoid
+          // double-counting.
+          if (event.payload.phase === 'completed' && !event.payload.isError) {
+            inc(agg.toolDurationsMs, event.payload.name, event.payload.durationMs);
           }
           break;
         }
 
         default:
-          // Other event kinds (hook_decision, budget, abort, etc.) — not aggregated.
           break;
       }
     }

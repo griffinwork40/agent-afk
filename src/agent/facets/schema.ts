@@ -23,7 +23,7 @@
 import { z } from 'zod';
 
 /** Bump when the facet shape or derivation changes — invalidates caches. */
-export const FACET_VERSION = 1;
+export const FACET_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -112,6 +112,16 @@ export const WorldChangesSchema = z.object({
   mutated: z.boolean(),
 });
 
+/** Token and cost breakdown for a session (populated when available). */
+export const TokenBreakdownSchema = z.object({
+  input: z.number(),
+  output: z.number(),
+  cache_read: z.number(),
+  cache_creation: z.number(),
+  cost_usd: z.number(),
+});
+export type TokenBreakdown = z.infer<typeof TokenBreakdownSchema>;
+
 export const SessionFacetSchema = z
   .object({
     // provenance & identity
@@ -156,6 +166,9 @@ export const SessionFacetSchema = z
     outcome: FacetOutcomeSchema,
     primary_success: z.string(),
     world_changes: WorldChangesSchema,
+
+    // token / cost breakdown (optional; populated when session.totalCostUsd present)
+    token_breakdown: TokenBreakdownSchema.optional(),
 
     // decisions / evidence (v1-thin; semantic-enrichable)
     decisions: z.array(z.string()),

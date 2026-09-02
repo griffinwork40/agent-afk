@@ -267,6 +267,17 @@ export function deriveSessionFacet(
     evidence_pointers: evidencePointers,
   };
 
+  // Populate token_breakdown when cost or token data is available.
+  if (session.totalCostUsd != null || session.totalTokens != null) {
+    (facet as Record<string, unknown>)['token_breakdown'] = {
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_creation: 0,
+      cost_usd: session.totalCostUsd ?? 0,
+    };
+  }
+
   // Validate on the way out so callers can rely on a well-formed facet.
   return SessionFacetSchema.parse(facet);
 }

@@ -14,6 +14,7 @@ import { cancelBackgroundJobTool, patchApplyTool } from './schemas.orchestration
 import { waitForTool } from './schemas.wait-for.js';
 export { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
+import { getFacetTool } from './schemas.facet.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -1408,6 +1409,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserScreenshotTool,
   browserCloseTool, patchApplyTool,
   testRunTool,
+  getFacetTool,
 ];
 
 /** Tool names in the always-on built-in set. */

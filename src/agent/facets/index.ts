@@ -22,12 +22,14 @@ export {
   SubagentPersistenceSchema,
   SubagentInvocationSchema,
   WorldChangesSchema,
+  TokenBreakdownSchema,
   type SessionFacet,
   type StoredSessionInput,
   type ToolEventInput,
   type FacetOutcome,
   type SubagentInvocation,
   type WorldChanges,
+  type TokenBreakdown,
 } from './schema.js';
 
 export { deriveSessionFacet, type DeriveOptions } from './derive.js';
