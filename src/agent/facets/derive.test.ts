@@ -314,6 +314,10 @@ describe('deriveSessionFacet', () => {
     });
     expect(facet.token_breakdown).toBeDefined();
     expect(facet.token_breakdown?.cost_usd).toBe(0.05);
+    expect(facet.token_breakdown?.input).toBe(0);
+    expect(facet.token_breakdown?.output).toBe(0);
+    expect(facet.token_breakdown?.cache_read).toBe(0);
+    expect(facet.token_breakdown?.cache_creation).toBe(0);
   });
 
   it('token_breakdown absent when neither totalCostUsd nor totalTokens set', () => {
