@@ -64,6 +64,10 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
     reason: 'Accepts `env` as an injectable opt for testing; default is `process.env` (whole object).',
   },
   {
+    file: 'src/agent/tools/handlers/web-request.ts',
+    reason: 'Accepts env as an injectable opt for testing; default is process.env (whole object). Same pattern as web-scrape.ts.',
+  },
+  {
     file: 'src/agent/mcp/transport.ts',
     reason:
       'Inherits a fixed allowlist of OS-level env vars (PATH, USER, SHELL, TERM, TMPDIR, etc.) into spawned MCP server child processes. The keys are bounded but include vars outside the AFK domain (TMP, SYSTEMROOT, APPDATA) that do not belong in ENV_REGISTRY.',
