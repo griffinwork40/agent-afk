@@ -95,15 +95,6 @@ export function registerOverlaySlots(
      */
     getSoftStopping: () => boolean;
     /**
-     * Live TTFB state accessors. Used by `checkTtfbAnnotation` to drive the
-     * 1 Hz dirty-mark cycle that keeps the overlay fresh during the pre-first-
-     * byte window. The SpinnerController is the visible TTFB indicator; these
-     * accessors support the annotation-change tick, not a rendered line.
-     * Optional so existing non-TTY callers and tests are unchanged.
-     */
-    getTtfbStartedAt?: () => number | undefined;
-    isTtfbDone?: () => boolean;
-    /**
      * Live accessor for the active subagent status bar specs, keyed by subagentId.
      * Optional so existing non-TTY callers and tests register slots unchanged;
      * when absent the subagent-status slot always renders empty.
@@ -234,12 +225,6 @@ export function registerOverlaySlots(
           ),
         );
       }
-      // TTFB waiting progress: suppressed. The SpinnerController already
-      // renders a braille spinner + elapsed timer during this same window,
-      // so the TTFB "Generating…" line was redundant — both appeared in the
-      // frame simultaneously (double-spinner bug). The spinner is the
-      // canonical TTFB indicator; this slot stays empty until real
-      // ProgressEvent data arrives.
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';
     },
   });
