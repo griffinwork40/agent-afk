@@ -19,6 +19,7 @@ import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
+import { createEffectLedgerPostHook } from './effect-ledger/index.js';
 import {
   createPathApprovalHook,
   type PathApprovalSurface,
@@ -290,6 +291,14 @@ export function createDefaultHookRegistry(
       return {};
     });
   }
+
+  // External-effect ledger: record outbound side effects (Telegram sends,
+  // GitHub PR creation, MCP writes, outbound bash commands) to a durable
+  // NDJSON file. Non-blocking, best-effort — write failures are swallowed so
+  // a full disk or unwritable state dir never disrupts tool execution.
+  // Registered last among built-in PostToolUse handlers so it runs after all
+  // policy hooks (path-approval once-grant revoke, etc.) have fired.
+  registry.register('PostToolUse', createEffectLedgerPostHook());
 
   // Register config-driven shell hooks after all built-ins so built-in
   // handlers always run first. Config hooks are optional — when no
