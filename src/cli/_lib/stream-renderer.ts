@@ -371,7 +371,6 @@ export class StreamRenderer {
       getSoftStopping: () => this.softStopping,
       getTtfbStartedAt: () => this.ttfbStartedAt,
       isTtfbDone: () => this.ttfbDone,
-      getTtfbSpinnerFrame: () => this.ttfbSpinnerFrame,
       getActiveSubagents: () => this.activeSubagents,
     });
 
