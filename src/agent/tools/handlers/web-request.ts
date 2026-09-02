@@ -80,6 +80,10 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
       error: `Invalid input: protocol "${parsedUrl.protocol}" not supported (http/https only)`,
     };
   }
+  // Strip userinfo (user:password@host) so it is not written to the effect
+  // ledger or forwarded anywhere it could leak credentials.
+  parsedUrl.username = '';
+  parsedUrl.password = '';
   const url = parsedUrl.toString();
 
   // method
@@ -94,7 +98,7 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
   if (obj['body'] !== undefined && obj['body'] !== null) {
     if (
       typeof obj['body'] !== 'string' &&
-      (typeof obj['body'] !== 'object' || Array.isArray(obj['body']) === false && typeof obj['body'] !== 'object')
+      typeof obj['body'] !== 'object'
     ) {
       return { error: 'Invalid input: "body" must be a string, object, or array' };
     }
@@ -183,6 +187,21 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
   const fetchFn: FetchFn = opts.fetchFn ?? globalThis.fetch;
   const envSource: NodeJS.ProcessEnv = opts.env ?? process.env;
 
+  // Lazily resolve the domain policy enforcer so AFK_BROWSER_ALLOWED_DOMAINS /
+  // AFK_BROWSER_BLOCKED_DOMAINS apply to web_request without requiring the
+  // caller to thread BrowserConfig through createBuiltinHandlers.
+  // When opts.domainCheck is supplied (e.g. in tests), it takes precedence.
+  async function resolveDomainCheck(): Promise<DomainCheckFn | undefined> {
+    if (opts.domainCheck !== undefined) return opts.domainCheck;
+    try {
+      const { loadBrowserConfig, enforceDomainPolicy } = await import('../../../browser/config.js');
+      const config = loadBrowserConfig();
+      return (url: string) => enforceDomainPolicy(url, config);
+    } catch {
+      return undefined;
+    }
+  }
+
   return async (input, signal) => {
     if (typeof fetchFn !== 'function') {
       return {
@@ -211,7 +230,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
     const headers = { ...parsed.headers };
     if (parsed.credential !== undefined) {
       const token = envSource[parsed.credential];
-      if (token === undefined || token.length === 0) {
+      if (token === undefined || token.trim().length === 0) {
         return {
           content:
             `web_request credential error: environment variable "${parsed.credential}" is not set. ` +
@@ -219,13 +238,19 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
           isError: true,
         };
       }
-      // Inject as Bearer token if no Authorization is already set
+      // Explicit error when caller supplies both credential and Authorization header —
+      // silently discarding the credential would be confusing and error-prone.
       const hasAuth = Object.keys(headers).some(
         (k) => k.toLowerCase() === 'authorization',
       );
-      if (!hasAuth) {
-        headers['Authorization'] = `Bearer ${token}`;
+      if (hasAuth) {
+        return {
+          content:
+            'web_request credential error: both "credential" and an explicit Authorization header were provided. Use one or the other.',
+          isError: true,
+        };
       }
+      headers['Authorization'] = `Bearer ${token}`;
     }
 
     // -- Abort controller with timeout ---------------------------------------
@@ -246,6 +271,10 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
       }, parsed.timeoutMs);
 
       // -- Core request -------------------------------------------------------
+      // Resolve domain policy lazily so env-var-driven domain restrictions
+      // (AFK_BROWSER_ALLOWED_DOMAINS / BLOCKED_DOMAINS) take effect even when
+      // the caller creates the handler with no opts (production default path).
+      const domainCheck = await resolveDomainCheck();
       const requestOpts: WebRequestOptions = {
         url: parsed.url,
         method: parsed.method,
@@ -255,7 +284,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
         signal: ac.signal,
         fetchFn,
         lookupFn: opts.lookupFn,
-        domainCheck: opts.domainCheck,
+        domainCheck,
         recordEffect: opts.recordEffect,
       };
 
@@ -279,10 +308,15 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
       }
 
       // -- Format structured response ----------------------------------------
-      // Redact secrets from string body before returning to model context
+      // Redact secrets from response body before returning to model context.
+      // JSON responses are parsed objects — serialize, redact, then re-parse so
+      // token patterns embedded in JSON values (e.g. {"key":"sk-ant-…"}) are masked.
       let responseBody = result.body;
       if (typeof responseBody === 'string') {
         responseBody = redactSecrets(responseBody);
+      } else if (typeof responseBody === 'object' && responseBody !== null) {
+        const serialized = redactSecrets(JSON.stringify(responseBody));
+        try { responseBody = JSON.parse(serialized); } catch { responseBody = serialized; }
       }
 
       const output = {

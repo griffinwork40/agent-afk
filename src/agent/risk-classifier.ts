@@ -438,7 +438,8 @@ export function classifyRisk(
 
   // ---- web_request ---------------------------------------------------------
   // web_request supports all HTTP methods, so risk is method-dependent:
-  //   GET / HEAD / OPTIONS → 'safe' (read-only, no server-side mutation)
+  //   GET / HEAD / OPTIONS → 'safe' (read-only; web-request.ts uses 'low' in its own
+  //                          MethodRisk vocabulary — 'safe' is the RiskLevel equivalent)
   //   POST / PUT / PATCH   → 'medium' (mutation, but generally recoverable)
   //   DELETE               → 'high' (irreversible destructive mutation)
   //

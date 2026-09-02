@@ -265,19 +265,14 @@ describe('web_request handler — credential injection', () => {
     expect(r.content).toMatch(/not set/);
   });
 
-  it('does not override caller-supplied Authorization header', async () => {
-    let capturedAuth: string | null = null;
-    const fetchFn = makeFetch((_url, init) => {
-      const hdrs = init.headers as Record<string, string> | undefined;
-      capturedAuth = hdrs?.['Authorization'] ?? null;
-      return makeResponse({ body: 'ok' });
-    });
+  it('returns an error when both credential and Authorization header are supplied', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: 'ok' }));
     const handler = createWebRequestHandler({
       fetchFn,
       lookupFn: publicLookup,
       env: { MY_KEY: 'env-value' },
     });
-    await handler(
+    const r = await handler(
       {
         url: 'https://api.example.com/',
         method: 'GET',
@@ -287,7 +282,8 @@ describe('web_request handler — credential injection', () => {
       signal(),
     );
 
-    expect(capturedAuth).toBe('Bearer caller-supplied');
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/both "credential" and an explicit Authorization header/);
   });
 });
 

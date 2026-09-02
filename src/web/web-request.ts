@@ -74,7 +74,12 @@ export function isIdempotentMethod(method: HttpMethod): boolean {
  * auth cookies, server internals, or implementation details.
  */
 const SUPPRESSED_HEADER_PREFIXES = ['set-cookie', 'x-'];
-const SUPPRESSED_HEADERS_EXACT = new Set(['server', 'via', 'age', 'vary']);
+const SUPPRESSED_HEADERS_EXACT = new Set([
+  'server', 'via', 'age', 'vary',
+  // Prevent OAuth/token-exchange responses that echo bearer tokens in headers
+  // from leaking credentials into model context.
+  'authorization', 'www-authenticate',
+]);
 
 function filterResponseHeaders(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
@@ -295,8 +300,30 @@ export async function webRequest(opts: WebRequestOptions): Promise<WebRequestRes
 
   let rawBodyText: string;
   try {
-    // HEAD / OPTIONS may have no body; .text() returns '' in that case.
-    rawBodyText = await response.text();
+    // Stream the response body up to 2× maxResponseBytes before the downstream
+    // truncation logic runs. This prevents an untrusted endpoint from forcing
+    // the process to buffer an arbitrarily large response body via response.text().
+    const reader = response.body?.getReader();
+    if (!reader) {
+      rawBodyText = '';
+    } else {
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      const byteLimit = maxResponseBytes * 2;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        chunks.push(value);
+        totalBytes += value.byteLength;
+        if (totalBytes >= byteLimit) {
+          await reader.cancel();
+          break;
+        }
+      }
+      rawBodyText = new TextDecoder().decode(
+        Buffer.concat(chunks, totalBytes),
+      );
+    }
   } catch {
     rawBodyText = '';
   }
