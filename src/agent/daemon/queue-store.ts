@@ -57,6 +57,12 @@ export interface QueuedTask {
   maxAttempts?: number;
   backoffStrategy?: 'fixed' | 'exponential';
   backoffBaseMs?: number;
+  /**
+   * Epoch ms before which this task must NOT be dequeued.
+   * Set by reEnqueue when a backoff delay applies to a retried task.
+   * dequeueNext skips tasks where eligibleAfter > Date.now().
+   */
+  eligibleAfter?: number;
 }
 
 export interface EnqueueOptions {
@@ -180,6 +186,13 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       task = JSON.parse(raw) as QueuedTask;
     } catch (err) {
       quarantinePoisonEntry(queueDir, filename, err);
+      continue;
+    }
+    // BACKOFF GATE: skip tasks that are not yet eligible for dequeue.
+    // Re-enqueued tasks carry an eligibleAfter timestamp set by reEnqueue
+    // (via computeBackoffMs) to prevent retry storms.  A task is skipped
+    // (not quarantined) — it remains in the queue for the next poll tick.
+    if (task.eligibleAfter !== undefined && task.eligibleAfter > Date.now()) {
       continue;
     }
     // ORDERING INVARIANT: acquire a durable lease BEFORE returning task.
