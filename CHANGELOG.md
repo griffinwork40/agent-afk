@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.176.3] - 2026-09-02
+
+### Added
+- cap exponential backoff growth in computeBackoffMs (#1442) (#1446) (dc95f7d3)
+
+### Fixed
+- align PID=1 threshold between parseInput and evaluateProcess (#1443) (#1447) (4d4c7a6b)
+
 ## [5.176.2] - 2026-09-02
 
 ### Changed
