@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_RETRY_POLICY,
   DEFAULT_LEASE_TTL_MS,
+  DEFAULT_MAX_BACKOFF_MS,
   computeBackoffMs,
   type TaskRecord,
   type TaskState,
@@ -72,5 +73,41 @@ describe('computeBackoffMs', () => {
   it('exponential strategy with attempts=0 uses base delay', () => {
     const policy = { maxAttempts: 1, backoffStrategy: 'exponential' as const, backoffBaseMs: 2_000 };
     expect(computeBackoffMs(0, policy)).toBe(2_000); // 2^max(0,-1)=2^0=1
+  });
+
+  it('exponential strategy caps at DEFAULT_MAX_BACKOFF_MS for high attempt counts', () => {
+    // attempts=20, backoffBaseMs=1000 → 1000 * 2^19 ≈ 524M ms (~145 hours) without cap
+    const policy = { maxAttempts: 30, backoffStrategy: 'exponential' as const, backoffBaseMs: 1_000 };
+    expect(computeBackoffMs(20, policy)).toBe(DEFAULT_MAX_BACKOFF_MS);
+    expect(computeBackoffMs(30, policy)).toBe(DEFAULT_MAX_BACKOFF_MS);
+  });
+
+  it('exponential strategy respects custom maxBackoffMs', () => {
+    const policy = {
+      maxAttempts: 10,
+      backoffStrategy: 'exponential' as const,
+      backoffBaseMs: 1_000,
+      maxBackoffMs: 10_000,
+    };
+    // attempts=4 → 1000 * 2^3 = 8000 (under cap)
+    expect(computeBackoffMs(4, policy)).toBe(8_000);
+    // attempts=5 → 1000 * 2^4 = 16000, capped at 10_000
+    expect(computeBackoffMs(5, policy)).toBe(10_000);
+    expect(computeBackoffMs(10, policy)).toBe(10_000);
+  });
+
+  it('normal backoff below the cap is unchanged', () => {
+    const policy = { maxAttempts: 5, backoffStrategy: 'exponential' as const, backoffBaseMs: 1_000 };
+    // Low attempt counts stay well under the 5-minute cap
+    expect(computeBackoffMs(1, policy)).toBe(1_000);
+    expect(computeBackoffMs(2, policy)).toBe(2_000);
+    expect(computeBackoffMs(3, policy)).toBe(4_000);
+    expect(computeBackoffMs(4, policy)).toBe(8_000);
+  });
+
+  it('fixed strategy is unaffected by cap when base is below cap', () => {
+    const policy = { maxAttempts: 5, backoffStrategy: 'fixed' as const, backoffBaseMs: 5_000 };
+    expect(computeBackoffMs(1, policy)).toBe(5_000);
+    expect(computeBackoffMs(10, policy)).toBe(5_000);
   });
 });
