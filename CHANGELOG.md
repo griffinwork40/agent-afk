@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.176.0] - 2026-09-02
+
+### Added
+- safe web_request tool with SSRF guard and risk classification (#1413) (#1439) (af19d227)
+
 ## [5.175.1] - 2026-09-02
 
 ### Changed
