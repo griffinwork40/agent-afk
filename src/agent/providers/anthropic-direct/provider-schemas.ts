@@ -13,6 +13,7 @@ import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../too
 import { memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { workspaceToolSchemas } from '../../workspace/index.js';
 import { getRuntimeStateTool } from '../../awareness/index.js';
+import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
 import type { AnthropicDirectProviderOptions } from './provider-options.js';
 import type { AnthropicToolDef } from '../../tools/types.js';
 
@@ -47,6 +48,14 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
     schemas.push(memorySearchTool);
   } else {
     schemas.push(...memoryToolSchemas);
+  }
+  // State store tools: read-only sessions get only the two query tools;
+  // full sessions get all five (get, put, cas, delete, query).
+  // Same read/write gating pattern as memory tools above.
+  if (opts.readOnlyMemory === true) {
+    schemas.push(...stateReadToolSchemas);
+  } else {
+    schemas.push(...stateToolSchemas);
   }
   // Awareness layer (Phase 1): the `get_runtime_state` tool is always
   // available — it reads in-memory state only, so there is no executor

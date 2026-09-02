@@ -1,4 +1,6 @@
 import { MemoryStore } from '../../../agent/memory/index.js';
+import { StateStore } from '../../../agent/state/state-store.js';
+import { getStateDatabasePath } from '../../../paths.js';
 import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
 import { env } from '../../../config/env.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
@@ -79,6 +81,7 @@ export async function bootstrapSession(
 
   const sharedWorkspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
   const sharedMemoryStore = new MemoryStore();
+  const sharedStateStore = new StateStore(getStateDatabasePath());
 
   const {
     trace, apiKey, backgroundRegistry, bgSummarizer,
@@ -107,7 +110,7 @@ export async function bootstrapSession(
   // builder closes over `mcpManager`.
   const { providerFactory, startupProvider } = createReplProviders({
     options, cliConfig, sessionModel, subagentExecutor, skillExecutor, composeExecutor,
-    memoryStore: sharedMemoryStore, workspaceStore: sharedWorkspaceStore, mcpManager, fastModeController,
+    memoryStore: sharedMemoryStore, stateStore: sharedStateStore, workspaceStore: sharedWorkspaceStore, mcpManager, fastModeController,
   });
 
   // Stats, permission/thinking-UI seeding, startup banners (`trace:` /
@@ -124,7 +127,7 @@ export async function bootstrapSession(
   // Stable hookRegistry shared across sessions (including swaps), plus the
   // terminal-state Stop gate registered on top of it.
   const { hookRegistry, addPreviewDiffRef } = createReplHookRegistry({
-    completionWriter, memoryStore: sharedMemoryStore, stats, effectiveCwd, traceWriter: trace?.writer,
+    completionWriter, memoryStore: sharedMemoryStore, stateStore: sharedStateStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
   // Capture deps needed by both the initial build and the swap closure.
@@ -300,6 +303,7 @@ export async function bootstrapSession(
   const ctx: InteractiveCtx = {
     session: sessionRef,
     memoryStore: sharedMemoryStore,
+    stateStore: sharedStateStore,
     stats,
     statusLine,
     contextSampler,

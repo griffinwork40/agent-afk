@@ -23,6 +23,7 @@ import { describe, it, expect } from 'vitest';
 import { ALL_TOOL_SCHEMAS } from './schemas.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
+import { stateToolSchemas } from '../state/state-schemas.js';
 import { defaultConcurrencyClassifier } from './dispatcher.js';
 import { categorizeTool } from '../tool-category.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
@@ -31,13 +32,15 @@ import type { ToolCategory } from '../tool-category.js';
 
 // All schemas that built-in dispatch covers — closed-world set composed of
 // the canonical `ALL_TOOL_SCHEMAS` (builtins + agent/skill/compose), the
-// separate memory-tools registry, and the awareness-layer `getRuntimeStateTool`.
-// If any of these gains a new schema, classification invariants below must
-// hold for it.
+// separate memory-tools registry, the awareness-layer `getRuntimeStateTool`,
+// and the state-tool schemas (state_get, state_query, state_put, state_cas,
+// state_delete). If any of these gains a new schema, classification invariants
+// below must hold for it.
 const ALL_BUILTIN_SCHEMAS = [
   ...ALL_TOOL_SCHEMAS,
   ...memoryToolSchemas,
   getRuntimeStateTool,
+  ...stateToolSchemas,
 ];
 
 // ── Invariant 1: every built-in schema declares a category ────────────────

@@ -26,6 +26,8 @@ export type ParseProviderOptions = {
   composeExecutor?: import('../agent/tools/compose-executor.js').ComposeExecutor;
   /** Shared MemoryStore to pass into providers so only one SQLite DB is opened. */
   memoryStore?: import('../agent/memory/index.js').MemoryStore;
+  /** Shared StateStore to pass into providers for durable agent state. */
+  stateStore?: import('../agent/state/state-store.js').StateStore;
   /** Shared WorkspaceStore so sibling sub-agents share one ephemeral scratchpad. */
   workspaceStore?: import('../agent/workspace/workspace-store.js').WorkspaceStore;
   /**

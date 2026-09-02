@@ -24,6 +24,8 @@ import type { PlanExitControls } from '../../types/config-types.js';
 import type { HookRegistry } from '../../hooks.js';
 import type { MemoryStore } from '../../memory/index.js';
 import type { WorkspaceStore } from '../../workspace/workspace-store.js';
+import type { StateStore } from '../../state/state-store.js';
+import { createStateHandlers } from '../../state/state-tools.js';
 import { createWorkspaceHandlers } from '../../workspace/index.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
@@ -116,6 +118,7 @@ export interface BuildDispatcherOptions {
 export interface BuildDispatcherDeps {
   memoryStore: MemoryStore;
   workspaceStore?: WorkspaceStore;
+  stateStore?: StateStore;
   surface: string;
   readOnlyMemory: boolean;
   readOnlyBash: boolean;
@@ -173,6 +176,16 @@ export function buildDispatcher(
   if (deps.workspaceStore !== undefined) {
     const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '', opts?.subagentId);
     for (const [name, handler] of wsHandlers) {
+      handlers.set(name, handler);
+    }
+  }
+  // State store tools: state_get, state_put, state_cas, state_delete, state_query.
+  // Read-only sessions get only state_get and state_query (mirroring the
+  // readOnlyMemory gate for memory_search above).
+  if (deps.stateStore !== undefined) {
+    const stateHandlers = createStateHandlers(deps.stateStore, opts?.sessionId);
+    for (const [name, handler] of stateHandlers) {
+      if (deps.readOnlyMemory && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
   }

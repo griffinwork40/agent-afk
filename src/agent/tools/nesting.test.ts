@@ -39,6 +39,17 @@ describe('CHILD_ALLOWED_TOOLS', () => {
     // compose is excluded to prevent unbounded DAG fan-out from child nodes.
     expect(CHILD_ALLOWED_TOOLS).not.toContain('compose');
   });
+
+  it("includes 'state_get' and 'state_query'", () => {
+    expect(CHILD_ALLOWED_TOOLS).toContain('state_get');
+    expect(CHILD_ALLOWED_TOOLS).toContain('state_query');
+  });
+
+  it("does NOT include 'state_put', 'state_cas', or 'state_delete'", () => {
+    expect(CHILD_ALLOWED_TOOLS).not.toContain('state_put');
+    expect(CHILD_ALLOWED_TOOLS).not.toContain('state_cas');
+    expect(CHILD_ALLOWED_TOOLS).not.toContain('state_delete');
+  });
 });
 
 describe('buildSkillRestrictedProvider', () => {
@@ -144,6 +155,17 @@ describe('RECON_ALLOWED_TOOLS (read-only skill child allowlist)', () => {
 
   it("INCLUDES 'get_runtime_state' (via AWARENESS_TOOL_NAMES)", () => {
     expect(RECON_ALLOWED_TOOLS).toContain('get_runtime_state');
+  });
+
+  it("includes 'state_get' and 'state_query'", () => {
+    expect(RECON_ALLOWED_TOOLS).toContain('state_get');
+    expect(RECON_ALLOWED_TOOLS).toContain('state_query');
+  });
+
+  it("does NOT include state write tools", () => {
+    expect(RECON_ALLOWED_TOOLS).not.toContain('state_put');
+    expect(RECON_ALLOWED_TOOLS).not.toContain('state_cas');
+    expect(RECON_ALLOWED_TOOLS).not.toContain('state_delete');
   });
 
   it('EXCLUDES side-effecting + environment tools', () => {

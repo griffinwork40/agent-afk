@@ -34,6 +34,8 @@ import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceWriter } from '../trace/index.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
+import { StateStore } from '../state/state-store.js';
+import { getStateDatabasePath } from '../../paths.js';
 import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
@@ -432,6 +434,7 @@ export class CronScheduler {
 
     let session: AgentSession | null = null;
     let memoryStore: MemoryStore | null = null;
+    let stateStore: StateStore | null = null;
     let mcpManager: McpManager | null = null;
     let disposeRegistration: (() => void) | null = null;
     this.idleDetector.increment();
@@ -439,6 +442,7 @@ export class CronScheduler {
       const spawned = await this.spawnSession(task.taskId);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
+      stateStore = spawned.stateStore;
       mcpManager = spawned.mcpManager ?? null;
       disposeRegistration = spawned.dispose;
       const response = await session.sendMessage(task.command);
@@ -499,6 +503,7 @@ export class CronScheduler {
         }
       }
       memoryStore?.close();
+      stateStore?.close();
     }
   }
 
@@ -687,6 +692,7 @@ export class CronScheduler {
   private async spawnSession(taskId: string): Promise<{
     session: AgentSession;
     memoryStore: MemoryStore;
+    stateStore: StateStore;
     mcpManager?: McpManager;
     /** Archive the cross-surface registry handle. Called by runOnce on close. */
     dispose: () => void;
@@ -713,6 +719,7 @@ export class CronScheduler {
       loadHooksConfig({ cwd: agentCwd }),
       { cwd: agentCwd, sessionId, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
     );
+    const stateStore = new StateStore(getStateDatabasePath());
 
     let mcpManager: McpManager | undefined;
     // Mirror the chat / telegram / interactive surfaces: include MCP configs
@@ -761,6 +768,7 @@ export class CronScheduler {
       // (its local is still null until spawnSession returns), so close it here
       // to avoid orphaning the SQLite handle on a connect failure.
       memoryStore.close();
+      stateStore.close();
       throw err;
     }
 
@@ -829,6 +837,7 @@ export class CronScheduler {
       return {
         session,
         memoryStore,
+        stateStore,
         dispose: registration.dispose,
         ...(mcpManager !== undefined ? { mcpManager } : {}),
       };
@@ -837,9 +846,10 @@ export class CronScheduler {
         await mcpManager.disconnectAll().catch(() => undefined);
       }
       // Session construction failed after MCP connected — close this tick's
-      // MemoryStore too (runOnce()'s finally can't, per the fromConfig catch
-      // above) so it is not orphaned.
+      // MemoryStore and StateStore too (runOnce()'s finally can't, per the
+      // fromConfig catch above) so they are not orphaned.
       memoryStore.close();
+      stateStore.close();
       throw err;
     }
   }

@@ -20,7 +20,8 @@
  *     `grep`, `list_directory`,
  *     `memory_search`, `memory_update`, `procedure_write`,
  *     `create_schedule`, `list_schedules`, `get_schedule_history`, `cancel_schedule`,
- *     `terminal_font_size`, `config_get`, `config_set`.
+ *     `terminal_font_size`, `config_get`, `config_set`,
+ *     `state_get`, `state_put`, `state_cas`, `state_delete`, `state_query`.
  * Both sets are enumerated explicitly to avoid silent fall-through to `other`.
  *
  * This file lives under `src/agent/` because tool-name classification is
@@ -65,6 +66,8 @@ const READ_TOOLS = new Set([
   'get_facet',
   // json_query — read-only: reads a JSON file and evaluates a bounded query.
   'json_query',
+  // state-tools.ts — read-only queries against the durable cross-session KV store.
+  'state_get', 'state_query',
 ]);
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',
@@ -84,6 +87,8 @@ const WRITE_TOOLS = new Set([
   // workspace-tools.ts — workspace_publish mutates ephemeral per-session
   // state that influences sibling-agent system prompts.
   'workspace_publish',
+  // state-tools.ts — mutations to the durable cross-session KV store.
+  'state_put', 'state_cas', 'state_delete',
 ]);
 // These categorization sets intentionally list BOTH the Claude Code / SDK
 // PascalCase tool names (Bash, Agent, Task, Skill, Compose) and AFK's lowercase
@@ -256,6 +261,9 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'workspace_query',
   // json_query — read-only: reads a JSON file and evaluates a bounded query.
   'json_query',
+  // State store query — read-only, durable cross-session KV. Same rationale
+  // as memory_search: read-only by construction, no mutation surface.
+  'state_get', 'state_query',
   // Awareness introspection (get_runtime_state) — read-only, in-memory, zero
   // side-effects. Mirrors CHILD_ALLOWED_TOOLS (nesting.ts), which already appends
   // these. Single source of truth: AWARENESS_TOOL_NAMES (awareness/tool.ts).
