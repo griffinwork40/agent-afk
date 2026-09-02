@@ -436,6 +436,25 @@ export function classifyRisk(
     return 'medium';
   }
 
+  // ---- web_request ---------------------------------------------------------
+  // web_request supports all HTTP methods, so risk is method-dependent:
+  //   GET / HEAD / OPTIONS → 'safe' (read-only, no server-side mutation)
+  //   POST / PUT / PATCH   → 'medium' (mutation, but generally recoverable)
+  //   DELETE               → 'high' (irreversible destructive mutation)
+  //
+  // The method is extracted from the raw input and mapped per the tool spec.
+  // An unknown or absent method falls through to 'medium' (conservative).
+  if (tool === 'web_request') {
+    const obj =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>)
+        : {};
+    const rawMethod = typeof obj['method'] === 'string' ? obj['method'].toUpperCase() : '';
+    if (rawMethod === 'DELETE') return 'high';
+    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return 'safe';
+    return 'medium';
+  }
+
   // ---- wait_for ------------------------------------------------------------
   // wait_for condition types differ significantly in risk:
   //

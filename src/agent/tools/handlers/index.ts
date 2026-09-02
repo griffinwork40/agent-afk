@@ -18,6 +18,7 @@ import { grepHandler, createGrepHandler } from './grep.js';
 import { listDirectoryHandler, createListDirectoryHandler } from './list-directory.js';
 import { sendTelegramHandler } from './send-telegram.js';
 import { webScrapeHandler } from './web-scrape.js';
+import { webRequestHandler } from './web-request.js';
 import {
   createScheduleHandler,
   listSchedulesHandler,
@@ -91,6 +92,7 @@ export function createBuiltinHandlers(
     ['list_directory', listDirectory],
     ['send_telegram', sendTelegramHandler],
     ['web_scrape', webScrapeHandler],
+    ['web_request', webRequestHandler],
     ['create_schedule', createScheduleHandler],
     ['list_schedules', listSchedulesHandler],
     ['get_schedule_history', getScheduleHistoryHandler],
@@ -124,6 +126,7 @@ export {
   listDirectoryHandler,
   sendTelegramHandler,
   webScrapeHandler,
+  webRequestHandler,
   createScheduleHandler,
   listSchedulesHandler,
   getScheduleHistoryHandler,
