@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.176.1] - 2026-09-02
+
+### Fixed
+- suppress redundant TTFB "Generating…" spinner (#1445) (1fc6914d)
+
 ## [5.176.0] - 2026-09-02
 
 ### Added
