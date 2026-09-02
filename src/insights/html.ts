@@ -281,7 +281,7 @@ function renderTraces(agg: InsightAggregates): string {
     .sort((a, b) => b.value - a.value);
 
   const forkDepthEntries = Object.entries(t.subagentForkDepths)
-    .map(([k, v]) => ({ label: `depth ${k}`, value: v }))
+    .map(([k, v]) => ({ label: `invocations (lvl ${k})`, value: v }))
     .sort((a, b) => parseInt(a.label.split(' ')[1]!) - parseInt(b.label.split(' ')[1]!));
 
   return `

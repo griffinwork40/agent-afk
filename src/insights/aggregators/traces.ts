@@ -97,6 +97,8 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
       inc(agg.toolErrorCounts, tool, count);
     }
     if (facet.subagents.length > 0) {
+      // History: depth > 1 was never computed (parentId chains not tracked).
+      // Key 1 is the flat direct-child invocation count, not a depth bucket.
       incNum(agg.subagentForkDepths, 1, facet.subagents.length);
     }
 

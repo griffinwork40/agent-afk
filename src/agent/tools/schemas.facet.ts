@@ -8,6 +8,7 @@
  */
 
 import type { AnthropicToolDef } from './types.js';
+import type { SessionFacet } from '../facets/schema.js';
 
 /** Internal provenance fields excluded from get_facet default output. */
 export const FACET_INTERNAL_FIELDS = [
@@ -16,7 +17,7 @@ export const FACET_INTERNAL_FIELDS = [
   'source_session_mtime_ms',
   'facet_version',
   'derived_from',
-] as const;
+] as const satisfies ReadonlyArray<keyof SessionFacet>;
 
 export const getFacetTool: AnthropicToolDef = {
   name: 'get_facet',

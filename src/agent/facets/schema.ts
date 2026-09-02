@@ -112,7 +112,7 @@ export const WorldChangesSchema = z.object({
   mutated: z.boolean(),
 });
 
-/** Token and cost breakdown for a session (populated when available). */
+/** Token and cost breakdown for a session (populated when session.totalCostUsd is present). */
 export const TokenBreakdownSchema = z.object({
   input: z.number().optional(),
   output: z.number().optional(),
