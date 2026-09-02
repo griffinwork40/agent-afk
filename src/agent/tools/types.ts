@@ -116,9 +116,8 @@ export interface ToolHandlerContext {
    * this session actually spawned. Any PID not in the registry is rejected
    * with `blocked: true` so the model cannot probe arbitrary host processes.
    *
-   * When absent (e.g. legacy call sites, subagents that do not carry a
-   * registry), the old behaviour is preserved: any PID > 1 is probed. New
-   * session construction paths should always supply this field.
+   * All current session construction paths supply this field. When absent,
+   * the pre-registry behaviour is preserved: any PID > 1 is probed.
    */
   spawnedPidRegistry?: SpawnedPidRegistry;
 }

@@ -138,8 +138,8 @@ function parseInput(
       return { condition, timeoutMs, pollIntervalMs, backoff };
     }
     case 'process': {
-      if (typeof input.pid !== 'number' || !Number.isInteger(input.pid) || input.pid <= 0) {
-        throw new Error('"pid" is required for type "process" and must be a positive integer');
+      if (typeof input.pid !== 'number' || !Number.isInteger(input.pid) || input.pid <= 1) {
+        throw new Error('"pid" is required for type "process" and must be an integer > 1');
       }
       const condition: WaitCondition = { type: 'process', pid: input.pid };
       return { condition, timeoutMs, pollIntervalMs, backoff };
