@@ -2,21 +2,19 @@
  * TTFB (time-to-first-byte) elapsed timer helpers for StreamRenderer.
  *
  * Extracted from stream-renderer-lifecycle.ts to keep that file under the
- * 350-line ceiling. Contains the per-tick TTFB annotation checker that drives
- * the live overlay spinner update at ~1 Hz via {@link streamProgress}, and the
- * shared TTFB_GRACE_MS constant.
+ * 350-line ceiling. Contains the per-tick TTFB annotation checker
+ * (`checkTtfbAnnotation`) and the first-content applier (`applyFirstContent`).
+ * The shared `TTFB_GRACE_MS` constant is also exported from here.
  *
  * Invariant: this module has no side effects and no singleton state. All
  * functions are pure or take their mutable state as explicit arguments. The
- * lifecycle context carries the mutable `lastTtfbAnnotation` and
- * `ttfbSpinnerFrame` fields; callers write them back after each tick
- * (stream-renderer.ts:checkPauseAnnotations).
+ * lifecycle context carries the mutable `lastTtfbAnnotation` field; callers
+ * write it back after each tick (stream-renderer.ts:checkPauseAnnotations).
  *
  * @module cli/_lib/stream-renderer-ttfb
  */
 
 import type { OverlayComposer } from './overlay-composer.js';
-import { streamProgress } from '../render/stream-progress.js';
 
 /**
  * Minimum elapsed time before showing the TTFB waiting line, in milliseconds.
@@ -51,13 +49,6 @@ export interface TtfbTickCtx {
    * only re-flushed when the displayed second value changes.
    */
   lastTtfbAnnotation: string;
-  /**
-   * Braille spinner frame index for the TTFB waiting indicator, incremented
-   * once per second by `checkTtfbAnnotation`. Passed directly to
-   * `streamProgress` so the braille glyph animates at ~1 Hz during the
-   * pre-first-byte wait — the same 1 Hz tick that advances the elapsed counter.
-   */
-  ttfbSpinnerFrame: number;
   isTTY: boolean;
   disposed: boolean;
   overlayComposer: OverlayComposer | null;
@@ -69,13 +60,12 @@ export interface TtfbTickCtx {
  * on the annotation string, same pattern as the stall annotation in
  * `checkPauseAnnotations`).
  *
- * Contract: mutates `ctx.lastTtfbAnnotation` and `ctx.ttfbSpinnerFrame` when
- * the displayed second advances. The caller (stream-renderer.ts
- * `checkPauseAnnotations`) writes the updated values back to its own instance
- * fields so successive ticks see them. This avoids the LifecycleContext
- * snapshot becoming stale between the read and the write-back — the snapshot
- * is rebuilt from instance fields on every tick, so writing to the snapshot's
- * fields propagates on write-back.
+ * Contract: mutates `ctx.lastTtfbAnnotation` when the displayed second
+ * advances. The caller (stream-renderer.ts `checkPauseAnnotations`) writes
+ * the updated value back to its own instance field so successive ticks see it.
+ * This avoids the LifecycleContext snapshot becoming stale between the read
+ * and the write-back — the snapshot is rebuilt from instance fields on every
+ * tick, so writing to the snapshot's fields propagates on write-back.
  *
  * Returns true when the progress-banner was marked dirty (caller must flush).
  */
@@ -97,7 +87,6 @@ export function checkTtfbAnnotation(ctx: TtfbTickCtx, now: number): boolean {
   if (ctx.lastTtfbAnnotation === annotation) return false;
 
   ctx.lastTtfbAnnotation = annotation;
-  ctx.ttfbSpinnerFrame += 1;
   ctx.overlayComposer.markDirty('progress-banner');
   // No flush() here — checkPauseAnnotations batches all dirty marks and
   // issues one flush per tick to prevent double-setOverlay compositor desyncs.
@@ -138,32 +127,3 @@ export function applyFirstContent(
   return false;
 }
 
-/**
- * Render the TTFB waiting progress line for the progress-banner overlay slot
- * using the {@link streamProgress} component, or return `''` when the timer
- * is not active, done, or inside the grace period.
- *
- * Visual output (example at 4.7s elapsed, spinner frame 4):
- *   ⠴ Generating…  4.7s
- *
- * Replaces the previous ad-hoc `  ◦ waiting for response… Ns` string with the
- * shared component so the overlay spinner is driven uniformly. Pure — no side
- * effects.
- */
-export function renderTtfbWaitingProgress(
-  getTtfbStartedAt: (() => number | undefined) | undefined,
-  isTtfbDone: (() => boolean) | undefined,
-  getSpinnerFrame: (() => number) | undefined,
-): string {
-  if (!getTtfbStartedAt || !isTtfbDone || isTtfbDone()) return '';
-  const startedAt = getTtfbStartedAt();
-  if (startedAt === undefined) return '';
-  const elapsedMs = Date.now() - startedAt;
-  if (elapsedMs < TTFB_GRACE_MS) return '';
-  const spinnerFrame = getSpinnerFrame ? getSpinnerFrame() : 0;
-  return streamProgress({
-    label: 'Generating…',
-    spinnerFrame,
-    elapsedMs,
-  });
-}
