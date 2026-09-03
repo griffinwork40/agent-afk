@@ -16,6 +16,7 @@ import { formatTrustedSkillCompletion, formatTrustedSkillInFlight } from '../../
 import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { boundLineToTerminal } from '../../render/bounded-line.js';
 
 /**
  * Subscribe to trusted-skill start/completion events, emitting in-flight +
@@ -138,7 +139,7 @@ export function createReplInput(): {
       rl.question(prompt, resolve);
       rl.once('close', () => reject(new Error('readline closed')));
     }),
-    writer: { line: (text = '') => process.stdout.write(text + '\n') },
+    writer: { line: (text = '') => process.stdout.write(boundLineToTerminal(text, process.stdout) + '\n') },
     pendingCount: () => elicitationRouter.pendingCount(),
     suspendInput: () => inputSurfaceRef.current?.suspendForElicitation(),
     resumeInput: () => inputSurfaceRef.current?.resumeAfterElicitation(),
