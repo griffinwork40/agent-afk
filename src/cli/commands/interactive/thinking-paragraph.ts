@@ -36,9 +36,9 @@ const INDENT = '  ';
 const DEFAULT_MAX_BODY_LINES = 5;
 /**
  * Floor on body width so a 20-col terminal still produces wrapped prose
- * rather than per-glyph breaks. wrap-ansi with `wordWrap: true, hard: true`
- * character-splits tokens that exceed this width, matching terminal auto-wrap
- * behavior and preventing compositor flicker on long URLs or file paths.
+ * rather than per-glyph breaks. wrap-ansi with `wordWrap: true, hard: false`
+ * will still allow longer tokens to overrun this width — preferred over
+ * mangling them into single-letter slivers.
  */
 const MIN_BODY_WIDTH = 16;
 /**
@@ -117,14 +117,14 @@ export function formatThinkingParagraph(
   const normalized = tail.replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
 
-  // Wrap with `hard: true` so tokens longer than bodyWidth (URLs, file paths)
-  // are character-split rather than allowed to overflow. Without this, the
-  // composed line INDENT + line can exceed opts.cols and cause compositor
-  // flicker (issue #1454). `trim: true` removes the whitespace artifact at
-  // line breaks that `trim: false` would leave as a visible "extra column"
-  // of indent on continuation lines.
+  // Wrap with `trim: true` (not the project-default `wrapToWidth`, which
+  // uses `trim: false`). The default leaves whitespace at line breaks
+  // visible — fine for code/quoted-line rendering, but it produces a
+  // visible "extra column" of indent on continuation lines here that
+  // looks like a layout bug. `trim: true` removes that artifact without
+  // touching the per-line `INDENT` we prepend after wrapping.
   const wrapped = wrapAnsi(normalized, bodyWidth, {
-    hard: true,
+    hard: false,
     trim: true,
     wordWrap: true,
   });
