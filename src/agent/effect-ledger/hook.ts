@@ -95,19 +95,28 @@ export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
       const classification = classifyToolCall(toolName, input);
       if (!classification.isExternal) return {};
 
-      const ikey = computeIdempotencyKey(classification.operationType, input);
+      let ikey: string;
+      try {
+        ikey = computeIdempotencyKey(classification.operationType, input);
+      } catch {
+        // Best-effort: stableStringify can throw on exotic objects (e.g.
+        // MCP-constructed inputs with getters that throw). Swallow so the
+        // hook's non-blocking contract is maintained.
+        return {};
+      }
 
       // Dedup check: mirror the PostToolUse path so retried failures with the
       // same idempotency key are recorded as 'ambiguous' rather than producing
       // duplicate 'failed' records that break reconciliation queries.
+      // Includes 'ambiguous' so call N>=3 is still caught.
       let prior;
       try {
-        prior = await effectStore.findByIdempotencyKey(ikey);
+        prior = await effectStore.findByIdempotencyKey(ikey, sessionId);
       } catch {
         prior = null;
       }
 
-      if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'failed')) {
+      if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'failed' || prior.status === 'ambiguous')) {
         try {
           const pending = effectStore.writePending({
             idempotencyKey: ikey,
@@ -147,19 +156,26 @@ export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
     const classification = classifyToolCall(toolName, input);
     if (!classification.isExternal) return {};
 
-    const ikey = computeIdempotencyKey(classification.operationType, input);
+    let ikey: string;
+    try {
+      ikey = computeIdempotencyKey(classification.operationType, input);
+    } catch {
+      // Best-effort: stableStringify can throw on exotic objects.
+      return {};
+    }
 
-    // Dedup check: look for a prior record with the same key.
+    // Dedup check: look for a prior record with the same key, scoped to the
+    // current session so two sessions sending the same message are independent.
     let prior;
     try {
-      prior = await effectStore.findByIdempotencyKey(ikey);
+      prior = await effectStore.findByIdempotencyKey(ikey, sessionId);
     } catch {
       // Best-effort: if the store read fails, proceed without dedup check.
       prior = null;
     }
 
-    if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed')) {
-      // A prior executed/confirmed record exists — this looks like a duplicate.
+    if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'ambiguous')) {
+      // A prior executed/confirmed/ambiguous record exists — duplicate.
       // Record it as "ambiguous" to surface in reconciliation rather than
       // silently dropping the duplicate.
       try {

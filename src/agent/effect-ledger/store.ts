@@ -103,9 +103,23 @@ function collapseById(records: EffectRecord[]): EffectRecord[] {
  */
 export class EffectStore {
   private readonly path: string;
+  /** In-memory cache to avoid O(N) re-reads within the same hook cycle. */
+  private cachedRecords: EffectRecord[] | null = null;
 
   constructor(path?: string) {
     this.path = path ?? getEffectLedgerPath();
+  }
+
+  /** Read records, returning the cached copy if still valid. */
+  private async readCached(): Promise<EffectRecord[]> {
+    if (this.cachedRecords !== null) return this.cachedRecords;
+    this.cachedRecords = await readAllRecords(this.path);
+    return this.cachedRecords;
+  }
+
+  /** Invalidate the cache after a write so the next read sees the new data. */
+  private invalidateCache(): void {
+    this.cachedRecords = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -134,6 +148,7 @@ export class EffectStore {
       timestamp: Date.now(),
     };
     appendLine(this.path, record);
+    this.invalidateCache();
     return record;
   }
 
@@ -150,7 +165,7 @@ export class EffectStore {
    * Throws if the record does not exist or if the write fails.
    */
   async updateStatus(input: ExecuteEffectInput): Promise<EffectRecord> {
-    const all = await readAllRecords(this.path);
+    const all = await this.readCached();
     const collapsed = collapseById(all);
     const existing = collapsed.find((r) => r.id === input.id);
     if (!existing) {
@@ -165,6 +180,7 @@ export class EffectStore {
         : {}),
     };
     appendLine(this.path, updated);
+    this.invalidateCache();
     return updated;
   }
 
@@ -176,13 +192,18 @@ export class EffectStore {
    * Look up a record by idempotency key. Returns the record if found (after
    * last-write-wins collapse), or `null` if not found.
    *
+   * When `sessionId` is provided, only records from that session are considered
+   * so two independent sessions sending the same message are not falsely deduped.
+   *
    * Used by the hook to detect whether an operation was already started so
    * duplicate execution can be skipped.
    */
-  async findByIdempotencyKey(key: string): Promise<EffectRecord | null> {
-    const all = await readAllRecords(this.path);
+  async findByIdempotencyKey(key: string, sessionId?: string): Promise<EffectRecord | null> {
+    const all = await this.readCached();
     const collapsed = collapseById(all);
-    const matches = collapsed.filter((r) => r.idempotencyKey === key);
+    const matches = collapsed.filter(
+      (r) => r.idempotencyKey === key && (sessionId === undefined || r.sessionId === sessionId),
+    );
     return matches.length > 0 ? matches[matches.length - 1]! : null;
   }
 
