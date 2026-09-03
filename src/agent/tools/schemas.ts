@@ -1375,7 +1375,7 @@ export const browserCloseTool: AnthropicToolDef = {
 
 export const clipboardWriteTool: AnthropicToolDef = {
   name: 'clipboard_write',
-  category: 'other',
+  category: 'write',
   concurrencySafe: false,
   description:
     'Write a string to the system clipboard. ' +

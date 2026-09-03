@@ -232,6 +232,40 @@ describe('clipboard_read handler', () => {
     });
   });
 
+  describe('size cap', () => {
+    it('returns content unchanged when under 100KB', async () => {
+      acceptConfirm();
+      // Use short words separated by spaces so the generic-token redaction
+      // rule (≥32 contiguous non-whitespace chars) does not fire.
+      const word = 'hello ';
+      const small = word.repeat(1_000); // 6_000 bytes — well under 100KB
+      const handler = createClipboardReadHandler({ readFn: () => small });
+
+      const result = await handler({}, SIGNAL);
+
+      expect(result.isError).toBeFalsy();
+      expect((result as { truncated?: boolean }).truncated).toBeUndefined();
+      expect(Buffer.byteLength(result.content as string, 'utf8')).toBe(
+        Buffer.byteLength(small, 'utf8'),
+      );
+    });
+
+    it('caps content at 100KB and sets truncated:true for oversized clipboard', async () => {
+      acceptConfirm();
+      // Each line is 100 chars + newline = 101 bytes; 2000 lines = ~202KB.
+      const line = 'hello world '.repeat(8) + '\n'; // 97 chars + newline
+      const big = line.repeat(2_000); // ~196KB
+      const handler = createClipboardReadHandler({ readFn: () => big });
+
+      const result = await handler({}, SIGNAL);
+
+      expect(result.isError).toBeFalsy();
+      expect((result as { truncated?: boolean }).truncated).toBe(true);
+      // Content must be at most 100KB in UTF-8 bytes.
+      expect(Buffer.byteLength(result.content as string, 'utf8')).toBeLessThanOrEqual(100_000);
+    });
+  });
+
   describe('elicitation routing', () => {
     it('passes sessionId from context to elicitation router', async () => {
       acceptConfirm();

@@ -177,13 +177,25 @@ export function createClipboardReadHandler(
       };
     }
 
+    // ── Size cap ─────────────────────────────────────────────────────────
+    // Clipboard can contain arbitrarily large documents (e.g. a copied web
+    // page). Cap at 100KB — same limit used by web_scrape and web_request —
+    // to bound model context cost. Use Buffer.byteLength for accurate UTF-8
+    // byte counting rather than string .length (which counts UTF-16 code units).
+    const CLIPBOARD_CAP_BYTES = 100_000;
+    const rawBytes = Buffer.byteLength(raw, 'utf8');
+    const truncated = rawBytes > CLIPBOARD_CAP_BYTES;
+    const capped = truncated
+      ? Buffer.from(raw, 'utf8').slice(0, CLIPBOARD_CAP_BYTES).toString('utf8')
+      : raw;
+
     // ── Secret redaction ─────────────────────────────────────────────────
     // Run the clipboard content through the same redaction pipeline used for
     // web_request responses and session ledger entries before the text enters
     // the model context.
-    const redacted = redactSecrets(raw);
+    const redacted = redactSecrets(capped);
 
-    return { content: redacted };
+    return { content: redacted, ...(truncated ? { truncated: true } : {}) };
   };
 }
 
