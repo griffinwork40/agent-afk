@@ -83,8 +83,16 @@ export async function launchMidTurnTaskView(
   // `truncateDisplayWidth` is ANSI-aware — it preserves color codes while
   // clamping display width. Cursor-movement ANSI sequences (CSI codes) are
   // NOT passed through this helper; they bypass clamp() entirely.
+  //
+  // Invariant: multiline strings must be split on \n and clamped per-line.
+  // `string-width` treats \n as zero-width, so a multiline string's total
+  // display width is the SUM of its lines — truncateDisplayWidth would cut
+  // mid-string and drop later lines instead of clamping each independently.
+  const width = stdout.columns || 80;
   const clamp = (s: string): string =>
-    truncateDisplayWidth(s, stdout.columns || 80);
+    s.includes('\n')
+      ? s.split('\n').map(line => truncateDisplayWidth(line, width)).join('\n')
+      : truncateDisplayWidth(s, width);
 
   // FIX-1: Mark the view as active AFTER all early-return guards so the
   // flag is never stuck true when no subagent is found or handle is null.
