@@ -3,6 +3,8 @@ import {
   builtinToolSchemas,
   BUILTIN_TOOL_NAMES,
   agentTool,
+  clipboardWriteTool,
+  clipboardReadTool,
 } from './schemas.js';
 import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
@@ -150,6 +152,16 @@ describe('cancelBackgroundJobTool', () => {
     expect(cancelBackgroundJobTool.input_schema.required).toEqual(['jobId', 'reason']);
     expect(cancelBackgroundJobTool.description).toMatch(/Ctrl\+B/);
     expect(cancelBackgroundJobTool.description).toMatch(/\/bgsub:cancel/);
+  });
+});
+
+describe('clipboard tool schemas', () => {
+  it('clipboard_write has category "write" so plan-mode gate blocks it', () => {
+    expect(clipboardWriteTool.category).toBe('write');
+  });
+
+  it('clipboard_read has category "other"', () => {
+    expect(clipboardReadTool.category).toBe('other');
   });
 });
 
