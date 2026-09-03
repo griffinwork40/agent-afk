@@ -18,8 +18,6 @@
  */
 
 import { palette } from '../../palette.js';
-import { renderMarkdownToTerminal } from '../../formatter.js';
-import { getTerminalWidth } from '../../terminal-size.js';
 import { divider } from '../../render/divider.js';
 import { statusBadge } from '../../render/status-badge.js';
 import type { BadgeStatus } from '../../render/status-badge.js';
@@ -171,9 +169,7 @@ export async function enterTaskViewMode(entry: TaskViewEntry): Promise<void> {
         ctx.out.line(`${role}:`);
         const raw = msg.content;
         const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
-        const maxWidth = Math.max(40, getTerminalWidth() - 2);
-        const rendered = renderMarkdownToTerminal(text, { maxWidth });
-        for (const l of rendered.split('\n')) ctx.out.line(`  ${l}`);
+        for (const l of text.split('\n')) ctx.out.line(`  ${l}`);
         ctx.out.line('');
       }
     } else {
