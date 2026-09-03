@@ -59,6 +59,10 @@ const READ_TOOLS = new Set([
   'workspace_query',
   // witness-layer search: read-only scan of trace.jsonl files.
   'read_witness', 'search_witness',
+  // get_facet — read-only: derives or loads the session facet sidecar; no
+  // mutation surface. Schema declares category='read'; this entry makes
+  // categorizeTool() agree so the schema-as-source-of-truth test passes.
+  'get_facet',
 ]);
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',

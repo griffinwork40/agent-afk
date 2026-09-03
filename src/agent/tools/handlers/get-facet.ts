@@ -1,0 +1,66 @@
+/**
+ * Handler for the `get_facet` built-in tool.
+ *
+ * Returns a structured, filtered session facet as JSON. Supports "latest",
+ * session ID, or session name resolution. Filters internal provenance fields
+ * from default output.
+ *
+ * @module agent/tools/handlers/get-facet
+ */
+
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
+import { getOrDeriveFacet, listSessionIds } from '../../facets/index.js';
+import { getSessionsDir } from '../../../paths.js';
+import { resolveSessionByName } from '../../trace/session-name-resolver.js';
+import { FACET_INTERNAL_FIELDS } from '../schemas.facet.js';
+import type { ToolHandler } from '../types.js';
+
+export const getFacetHandler: ToolHandler = async (input, _signal) => {
+  const obj = (input ?? {}) as Record<string, unknown>;
+  const sessionArg = typeof obj['session'] === 'string' ? obj['session'] : 'latest';
+  const fields = Array.isArray(obj['fields']) ? (obj['fields'] as string[]) : null;
+
+  let sessionId: string | undefined;
+
+  if (sessionArg === 'latest') {
+    const ids = listSessionIds();
+    if (ids.length > 0) {
+      const sessionsDir = getSessionsDir();
+      let best: { id: string; mtimeMs: number } | undefined;
+      for (const id of ids) {
+        try {
+          const mt = statSync(join(sessionsDir, `${id}.json`)).mtimeMs;
+          if (!best || mt > best.mtimeMs) best = { id, mtimeMs: mt };
+        } catch { /* skip unreadable */ }
+      }
+      sessionId = best?.id;
+    }
+  } else {
+    const resolved = resolveSessionByName(sessionArg);
+    sessionId = resolved?.sidecarId;
+  }
+
+  if (!sessionId) {
+    return { content: `Session not found: ${sessionArg}`, isError: true };
+  }
+
+  const facet = getOrDeriveFacet(sessionId);
+  if (!facet) {
+    return { content: `Session not found: ${sessionArg}`, isError: true };
+  }
+
+  const raw = facet as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  const exclude = new Set<string>(FACET_INTERNAL_FIELDS);
+
+  if (fields && fields.length > 0) {
+    for (const f of fields) result[f] = raw[f];
+  } else {
+    for (const [k, v] of Object.entries(raw)) {
+      if (!exclude.has(k)) result[k] = v;
+    }
+  }
+
+  return { content: JSON.stringify(result, null, 2) };
+};

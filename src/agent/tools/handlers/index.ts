@@ -42,6 +42,7 @@ import { browserCloseHandler } from './browser-close.js';
 import { waitForHandler } from './wait-for.js';
 import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
 import { testRunHandler } from './test-run.js';
+import { getFacetHandler } from './get-facet.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -112,6 +113,7 @@ export function createBuiltinHandlers(
     ['browser_close', browserCloseHandler],
     ['patch_apply', patchApply],
     ['test_run', testRunHandler],
+    ['get_facet', getFacetHandler],
   ]);
 }
 
@@ -144,4 +146,5 @@ export {
   browserScreenshotHandler,
   browserCloseHandler,
   testRunHandler,
+  getFacetHandler,
 };

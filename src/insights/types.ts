@@ -55,7 +55,7 @@ export interface TraceAggregates {
   toolErrorCounts: Record<string, number>;
   /** tool name → sum of durations in ms */
   toolDurationsMs: Record<string, number>;
-  /** depth → count of subagent forks at that depth */
+  /** key 1 = flat direct-child invocation count (depth tracking not yet implemented) */
   subagentForkDepths: Record<number, number>;
   compactionCount: number;
   /** closure reason → count */

@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(1);
+    expect(facet.facet_version).toBe(2);
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -213,52 +213,26 @@ describe('deriveSessionFacet', () => {
     expect(facet.evidence_pointers).toEqual(['/src/a.ts']);
   });
 
-  it('counts a real git commit but excludes git commit-tree', () => {
-    const facet = deriveSessionFacet({
-      sessionId: 'commit-re',
-      model: 'opus',
-      startedAt: 0,
-      savedAt: 60_000,
-      totalTurns: 1,
-      turns: [
-        {
-          user: 'go',
-          assistant: 'ok',
-          timestamp: 1,
-          toolEvents: [
-            { toolName: 'bash', toolUseId: '1', inputRaw: JSON.stringify({ command: 'git commit -m "real"' }) },
-            { toolName: 'bash', toolUseId: '2', inputRaw: JSON.stringify({ command: 'git commit-tree HEAD' }) },
-          ],
-        },
-      ],
+  it('commit detection: counts real git commit, excludes commit-tree, falls back to summarized input', () => {
+    // inputRaw path: commit-tree must not increment commits
+    const f1 = deriveSessionFacet({
+      sessionId: 'commit-re', model: 'opus', startedAt: 0, savedAt: 60_000, totalTurns: 1,
+      turns: [{ user: 'go', assistant: 'ok', timestamp: 1, toolEvents: [
+        { toolName: 'bash', toolUseId: '1', inputRaw: JSON.stringify({ command: 'git commit -m "real"' }) },
+        { toolName: 'bash', toolUseId: '2', inputRaw: JSON.stringify({ command: 'git commit-tree HEAD' }) },
+      ] }],
     });
-    expect(facet.world_changes.commits).toBe(1);
-  });
-
-  it('detects a commit from the summarized input when inputRaw omits command', () => {
-    // Post-fix sidecars do NOT persist the raw bash `command` (secret-at-rest),
-    // so commit detection falls back to the summarized first-line `input`
-    // (leading space, as summarizeToolInput emits it).
-    const facet = deriveSessionFacet({
-      sessionId: 'summarized-commit',
-      model: 'opus',
-      startedAt: 0,
-      savedAt: 60_000,
-      totalTurns: 1,
-      turns: [
-        {
-          user: 'go',
-          assistant: 'ok',
-          timestamp: 1,
-          toolEvents: [
-            { toolName: 'bash', toolUseId: '1', input: ' git commit -m "real"' },
-            { toolName: 'bash', toolUseId: '2', input: ' git commit-tree HEAD' },
-          ],
-        },
-      ],
+    expect(f1.world_changes.commits).toBe(1);
+    // summarized-input fallback: post-fix sidecars omit inputRaw command
+    const f2 = deriveSessionFacet({
+      sessionId: 'summarized-commit', model: 'opus', startedAt: 0, savedAt: 60_000, totalTurns: 1,
+      turns: [{ user: 'go', assistant: 'ok', timestamp: 1, toolEvents: [
+        { toolName: 'bash', toolUseId: '1', input: ' git commit -m "real"' },
+        { toolName: 'bash', toolUseId: '2', input: ' git commit-tree HEAD' },
+      ] }],
     });
-    expect(facet.world_changes.commits).toBe(1);
-    expect(facet.world_changes.bash_commands).toBe(2);
+    expect(f2.world_changes.commits).toBe(1);
+    expect(f2.world_changes.bash_commands).toBe(2);
   });
 
   it('collapses the duplicate placeholder+real tool events the recorder persists', () => {
@@ -326,5 +300,45 @@ describe('deriveSessionFacet', () => {
       ],
     });
     expect(facet.tool_counts).toEqual({ read_file: 2 });
+  });
+
+  it('populates token_breakdown when totalCostUsd is present', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'cost-sess',
+      model: 'opus',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 0,
+      totalCostUsd: 0.05,
+      turns: [],
+    });
+    expect(facet.token_breakdown).toBeDefined();
+    expect(facet.token_breakdown?.cost_usd).toBe(0.05);
+  });
+
+  it('token_breakdown absent when neither totalCostUsd nor totalTokens set', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'no-cost',
+      model: 'opus',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 0,
+      turns: [],
+    });
+    expect(facet.token_breakdown).toBeUndefined();
+  });
+
+  it('token_breakdown absent when only totalTokens is set (no cost data)', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'tokens-only',
+      model: 'opus',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 0,
+      totalCostUsd: undefined,
+      totalTokens: 500,
+      turns: [],
+    });
+    expect(facet.token_breakdown).toBeUndefined();
   });
 });

@@ -267,6 +267,13 @@ export function deriveSessionFacet(
     evidence_pointers: evidencePointers,
   };
 
+  // Populate token_breakdown when cost data is available.
+  if (session.totalCostUsd != null) {
+    facet.token_breakdown = {
+      cost_usd: session.totalCostUsd,
+    };
+  }
+
   // Validate on the way out so callers can rely on a well-formed facet.
   return SessionFacetSchema.parse(facet);
 }
