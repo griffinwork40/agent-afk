@@ -94,7 +94,9 @@ export function renderList(
     // indent-blind commit pass breaks it at column 0, dropping the
     // hanging indent. That is precisely the dissolution the invariant
     // above forbids; enforcing the width here is what makes it true.
-    const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixWidth) : undefined;
+    const innerWidth = maxTableWidth !== undefined
+      ? Math.max(1, maxTableWidth - prefixWidth)
+      : undefined;
     // Give nested blocks their actual budget before rendering them. Otherwise
     // a code block is split at the outer width here, then split a second time
     // after the list prefix is applied, producing fragmented rows and missing
@@ -103,7 +105,7 @@ export function renderList(
       ? renderTokens(renderableTokens, innerWidth)
       : item.text;
     for (const srcLine of itemText.trim().split('\n')) {
-      const wrapped = innerWidth
+      const wrapped = innerWidth !== undefined
         ? wrapToWidth(srcLine, innerWidth, { breakLongWords: true })
         : srcLine;
       const segs = wrapped.split('\n');

@@ -920,9 +920,11 @@ describe('renderMarkdownToTerminal', () => {
       const out = stripAnsi(
         renderMarkdownToTerminal(`\`\`\`\n${longLine}\n\`\`\`\n`, { maxWidth: 20 }),
       );
-      const lines = out.split('\n').filter((l) => l.startsWith('│ ') && l.trim() !== '│');
-      // Expect two gutter body rows (not one overflowing row).
-      expect(lines.length).toBeGreaterThanOrEqual(2);
+      const lines = out.split('\n').filter((l) => l.includes('x'));
+      // Expect exactly two gutter body rows (not one overflowing row or an
+      // extra, content-free gutter row).
+      expect(lines).toEqual([`│ ${'x'.repeat(18)}`, `│ ${'x'.repeat(18)}`]);
+      expect(out).not.toMatch(/^│ $/m);
       // Each row must not exceed maxTableWidth (20) display columns.
       for (const l of lines) {
         expect(stringWidth(l)).toBeLessThanOrEqual(20);
@@ -947,6 +949,32 @@ describe('renderMarkdownToTerminal', () => {
       const bodyLines = out.split('\n').filter((l) => l.startsWith('│ ') && l.includes('z'));
       expect(bodyLines.length).toBe(1);
       expect(bodyLines[0]).toBe(`│ ${longLine}`);
+    });
+
+    it('preserves balanced syntax-highlighting ANSI across wrapped rows', () => {
+      const raw = renderMarkdownToTerminal(
+        '```json\n{"longPropertyName":"abcdefghijklmnopqrstuvwxyz"}\n```\n',
+        { maxWidth: 20 },
+      );
+      const bodyLines = raw.split('\n').filter((line) => stripAnsi(line).startsWith('│ ') &&
+        !stripAnsi(line).includes('/cp'));
+
+      expect(bodyLines.length).toBeGreaterThan(1);
+      for (const line of bodyLines) {
+        expect(stringWidth(stripAnsi(line))).toBeLessThanOrEqual(20);
+        expect(line).toContain('\x1b[');
+        expect(line.match(/\x1b\[3m/g)?.length ?? 0).toBe(line.match(/\x1b\[23m/g)?.length ?? 0);
+        expect(line.match(/\x1b\[33m/g)?.length ?? 0).toBe(line.match(/\x1b\[39m/g)?.length ?? 0);
+      }
+    });
+
+    it('does not emit a gutter-only row after an exactly-full wrapped row', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`\`\`\`\n${'x'.repeat(18)}\n\`\`\`\n`, { maxWidth: 20 }),
+      );
+
+      expect(out.split('\n').filter((line) => line.includes('x'))).toEqual([`│ ${'x'.repeat(18)}`]);
+      expect(out).not.toMatch(/^│ $/m);
     });
 
     it('wraps code nested in a list against the width after the list prefix', () => {

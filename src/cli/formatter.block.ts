@@ -31,7 +31,9 @@ export function renderBlockquote(
 ): string {
   const prefix = palette.dim('  │ ');
   const prefixCols = 4; // "  │ " = 2 spaces + box-draw + space
-  const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixCols) : undefined;
+  const innerWidth = maxTableWidth !== undefined
+    ? Math.max(1, maxTableWidth - prefixCols)
+    : undefined;
   // Render nested blocks against the space left after this blockquote's
   // prefix. In particular, code blocks must wrap once at their final inner
   // width rather than first at the terminal width and then again here.
@@ -43,7 +45,7 @@ export function renderBlockquote(
     // here over budget, and the indent-blind commit-time wrap would
     // re-split it at column 0, orphaning the continuation outside the
     // `│ ` gutter.
-    const wrapped = innerWidth
+    const wrapped = innerWidth !== undefined
       ? wrapToWidth(para, innerWidth, { breakLongWords: true })
       : para;
     for (const line of wrapped.split('\n')) {
@@ -111,13 +113,22 @@ export function renderCodeBlock(
   // on continuation rows. hardWrapToWidth is character-level (not word-aware),
   // matching terminal behavior for code, and preserves ANSI styling across rows.
   // When maxTableWidth is undefined (non-streaming path), leave behavior unchanged.
-  const gutterCols = 2; // fixed — do not use displayWidth; the string is ASCII
+  // U+2502 is one column on standard terminals, plus the following space.
+  // Terminals that render East Asian Ambiguous characters wide remain a
+  // broader, pre-existing edge case for the TUI's box-drawing characters.
+  const gutterCols = 2;
   const contentWidth = maxTableWidth !== undefined ? Math.max(1, maxTableWidth - gutterCols) : undefined;
   const bodyLines: string[] = [];
   for (const line of rawBodyLines) {
     if (contentWidth !== undefined) {
       const wrapped = hardWrapToWidth(line, contentWidth);
-      for (const row of wrapped.split('\n')) {
+      const rows = wrapped.split('\n');
+      // A wrapping implementation may terminate an exactly-full final row
+      // with a newline. Do not turn that implementation detail into a
+      // content-free gutter row; genuine blank source lines still arrive as
+      // their own entry in rawBodyLines and remain visible.
+      if (rows.length > 1 && rows[rows.length - 1] === '') rows.pop();
+      for (const row of rows) {
         bodyLines.push(row);
       }
     } else {
