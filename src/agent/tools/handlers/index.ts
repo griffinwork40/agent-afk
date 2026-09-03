@@ -43,6 +43,12 @@ import { waitForHandler } from './wait-for.js';
 import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
 import { testRunHandler } from './test-run.js';
 import { getFacetHandler } from './get-facet.js';
+import {
+  clipboardWriteHandler,
+  clipboardReadHandler,
+  createClipboardWriteHandler,
+  createClipboardReadHandler,
+} from './clipboard.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -114,6 +120,8 @@ export function createBuiltinHandlers(
     ['patch_apply', patchApply],
     ['test_run', testRunHandler],
     ['get_facet', getFacetHandler],
+    ['clipboard_write', clipboardWriteHandler],
+    ['clipboard_read', clipboardReadHandler],
   ]);
 }
 
@@ -147,4 +155,8 @@ export {
   browserCloseHandler,
   testRunHandler,
   getFacetHandler,
+  clipboardWriteHandler,
+  clipboardReadHandler,
+  createClipboardWriteHandler,
+  createClipboardReadHandler,
 };
