@@ -6,6 +6,7 @@ describe('createBuiltinHandlers', () => {
   it('returns a Map with all built-in tools', () => {
     const handlers = createBuiltinHandlers();
     expect(handlers.size).toBe(32);
+    expect(handlers.size).toBe(33);
   });
 
   it('has an entry for every tool in BUILTIN_TOOL_NAMES', () => {
@@ -28,6 +29,7 @@ describe('createBuiltinHandlers', () => {
     // valid map back and bash is still callable.
     const handlers = createBuiltinHandlers(undefined, '/tmp');
     expect(handlers.size).toBe(32);
+    expect(handlers.size).toBe(33);
     expect(typeof handlers.get('bash')).toBe('function');
     expect(typeof handlers.get('grep')).toBe('function');
     expect(typeof handlers.get('glob')).toBe('function');
@@ -36,6 +38,7 @@ describe('createBuiltinHandlers', () => {
   it('cwd parameter: builds handler set with both permissionMode and cwd', () => {
     const handlers = createBuiltinHandlers('default', '/tmp');
     expect(handlers.size).toBe(32);
+    expect(handlers.size).toBe(33);
     expect(typeof handlers.get('bash')).toBe('function');
   });
 

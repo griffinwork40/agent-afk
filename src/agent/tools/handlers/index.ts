@@ -44,6 +44,12 @@ import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
 import { testRunHandler } from './test-run.js';
 import { getFacetHandler } from './get-facet.js';
 import { jsonQueryHandler, createJsonQueryHandler } from './json-query.js';
+import {
+  clipboardWriteHandler,
+  clipboardReadHandler,
+  createClipboardWriteHandler,
+  createClipboardReadHandler,
+} from './clipboard.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -117,6 +123,8 @@ export function createBuiltinHandlers(
     ['test_run', testRunHandler],
     ['get_facet', getFacetHandler],
     ['json_query', jsonQuery],
+    ['clipboard_write', clipboardWriteHandler],
+    ['clipboard_read', clipboardReadHandler],
   ]);
 }
 
@@ -152,4 +160,8 @@ export {
   getFacetHandler,
   jsonQueryHandler,
   createJsonQueryHandler,
+  clipboardWriteHandler,
+  clipboardReadHandler,
+  createClipboardWriteHandler,
+  createClipboardReadHandler,
 };

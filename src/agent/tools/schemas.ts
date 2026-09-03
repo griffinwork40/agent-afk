@@ -1371,6 +1371,53 @@ export const browserCloseTool: AnthropicToolDef = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Clipboard tools
+// ---------------------------------------------------------------------------
+
+export const clipboardWriteTool: AnthropicToolDef = {
+  name: 'clipboard_write',
+  category: 'other',
+  concurrencySafe: false,
+  description:
+    'Write a string to the system clipboard. ' +
+    'Reuses the platform-detection logic (pbcopy on macOS, clip on Windows, ' +
+    'wl-copy / xclip / xsel on Linux) with an OSC 52 fallback for SSH sessions. ' +
+    'Returns success or a graceful failure message when no clipboard utility is ' +
+    'available (headless, CI, or SSH-only environments).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      text: {
+        type: 'string',
+        description: 'The text to copy to the clipboard.',
+      },
+    },
+    required: ['text'],
+  },
+};
+
+export const clipboardReadTool: AnthropicToolDef = {
+  name: 'clipboard_read',
+  category: 'other',
+  concurrencySafe: false,
+  riskClass: 'caution',
+  description:
+    'Read the current clipboard contents as text. ' +
+    'IMPORTANT: requires explicit operator confirmation on every call — ' +
+    'the clipboard may contain passwords, API tokens, or other sensitive data. ' +
+    'The returned text is run through the standard secret-redaction pipeline ' +
+    '(Bearer tokens, Anthropic keys, JWTs, AWS IAM ids, generic long tokens) ' +
+    'before reaching the model context. ' +
+    'Returns a graceful error when no clipboard read utility is available ' +
+    '(headless, CI, or SSH-only environments).',
+  input_schema: {
+    type: 'object',
+    properties: {},
+    required: [],
+  },
+};
+
 /**
  * The always-on built-in tool definitions,
  * ready to pass as `tools` to `messages.create`.
@@ -1413,6 +1460,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   testRunTool,
   getFacetTool,
   jsonQueryTool,
+  clipboardWriteTool,
+  clipboardReadTool,
 ];
 
 /** Tool names in the always-on built-in set. */
