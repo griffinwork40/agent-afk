@@ -43,6 +43,7 @@ import { waitForHandler } from './wait-for.js';
 import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
 import { testRunHandler } from './test-run.js';
 import { getFacetHandler } from './get-facet.js';
+import { jsonQueryHandler, createJsonQueryHandler } from './json-query.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -82,6 +83,7 @@ export function createBuiltinHandlers(
   const terminalFontSize = createTerminalFontSizeHandler();
   const worktree = createWorktreeHandler(cwd);
   const patchApply = cwd !== undefined ? createPatchApplyHandler(cwd) : patchApplyHandler;
+  const jsonQuery = cwd !== undefined ? createJsonQueryHandler(cwd) : jsonQueryHandler;
   return new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFile],
@@ -114,6 +116,7 @@ export function createBuiltinHandlers(
     ['patch_apply', patchApply],
     ['test_run', testRunHandler],
     ['get_facet', getFacetHandler],
+    ['json_query', jsonQuery],
   ]);
 }
 
@@ -147,4 +150,6 @@ export {
   browserCloseHandler,
   testRunHandler,
   getFacetHandler,
+  jsonQueryHandler,
+  createJsonQueryHandler,
 };
