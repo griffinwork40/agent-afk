@@ -83,10 +83,16 @@ export function createConsoleWriter(sink?: WriterSink): Writer {
         // guard used by `line()`. Each logical line (split on \n) is bounded
         // independently so embedded newlines are handled correctly.
         // Non-TTY (piped) output stays byte-identical.
+        //
+        // Contract: segments containing \r are raw terminal control sequences
+        // (e.g. progress bars that overwrite in place). boundLineToTerminal
+        // must NOT be applied to them — splitting on \r would corrupt the
+        // in-place frames, and word-wrapping a CR-sequence is meaningless.
+        // Pass such segments through unmodified; the terminal handles them.
         if (process.stdout.isTTY === true) {
           const bounded = text
             .split('\n')
-            .map((l) => boundLineToTerminal(l))
+            .map((l) => (l.includes('\r') ? l : boundLineToTerminal(l)))
             .join('\n');
           process.stdout.write(bounded);
         } else {
