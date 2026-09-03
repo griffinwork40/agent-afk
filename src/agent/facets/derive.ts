@@ -270,6 +270,10 @@ export function deriveSessionFacet(
   // Populate token_breakdown when cost data is available.
   if (session.totalCostUsd != null) {
     facet.token_breakdown = {
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_creation: 0,
       cost_usd: session.totalCostUsd,
     };
   }

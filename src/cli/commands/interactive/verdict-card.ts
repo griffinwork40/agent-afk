@@ -216,7 +216,7 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
     // guard deliberately leaves globs and identifiers untouched.
     const normalizedSummary = summary.replace(/^(?:\*\*|__)\s/, '');
     const rendered = renderMarkdownToTerminal(normalizedSummary, { maxWidth: innerW });
-    const wrapped = wrapToWidth(rendered, innerW).split('\n');
+    const wrapped = wrapToWidth(rendered, innerW, { breakLongWords: true }).split('\n');
     for (const wl of wrapped) {
       if (wl === '') continue; // drop empty trailing lines from block terminators
       lines.push(pipe + '  ' + padDisplayRight(wl, innerW) + '  ' + pipe);
@@ -225,7 +225,7 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
     for (const row of rows) {
       const label = palette.dim(padDisplayRight(row.label, labelW));
       const rendered = renderMarkdownToTerminal(row.value, { maxWidth: valueW });
-      const wrapped = wrapToWidth(rendered, valueW).split('\n');
+      const wrapped = wrapToWidth(rendered, valueW, { breakLongWords: true }).split('\n');
       // Filter trailing empty lines from block-level markdown terminators
       // (e.g. tables, paragraphs emit a trailing '\n' that produces an empty
       // entry after split). Without this the card would show a blank row at

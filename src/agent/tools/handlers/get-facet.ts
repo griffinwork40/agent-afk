@@ -8,10 +8,7 @@
  * @module agent/tools/handlers/get-facet
  */
 
-import { statSync } from 'node:fs';
-import { join } from 'node:path';
-import { getOrDeriveFacet, listSessionIds } from '../../facets/index.js';
-import { getSessionsDir } from '../../../paths.js';
+import { getOrDeriveFacet, listSessionIds, loadStoredSession } from '../../facets/index.js';
 import { resolveSessionByName } from '../../trace/session-name-resolver.js';
 import { FACET_INTERNAL_FIELDS } from '../schemas.facet.js';
 import type { ToolHandler } from '../types.js';
@@ -25,17 +22,14 @@ export const getFacetHandler: ToolHandler = async (input, _signal) => {
 
   if (sessionArg === 'latest') {
     const ids = listSessionIds();
-    if (ids.length > 0) {
-      const sessionsDir = getSessionsDir();
-      let best: { id: string; mtimeMs: number } | undefined;
-      for (const id of ids) {
-        try {
-          const mt = statSync(join(sessionsDir, `${id}.json`)).mtimeMs;
-          if (!best || mt > best.mtimeMs) best = { id, mtimeMs: mt };
-        } catch { /* skip unreadable */ }
-      }
-      sessionId = best?.id;
-    }
+    const entries = ids
+      .map((id) => ({ id, session: loadStoredSession(id) }))
+      .filter(
+        (e): e is { id: string; session: NonNullable<ReturnType<typeof loadStoredSession>> } =>
+          e.session != null,
+      )
+      .sort((a, b) => (b.session.savedAt ?? 0) - (a.session.savedAt ?? 0));
+    sessionId = entries[0]?.id;
   } else {
     const resolved = resolveSessionByName(sessionArg);
     sessionId = resolved?.sidecarId;

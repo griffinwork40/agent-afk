@@ -72,8 +72,14 @@ function tokenizeAnsi(text: string): DisplayToken[] {
 }
 
 export function padDisplayRight(text: string, width: number): string {
-  const pad = Math.max(0, width - displayWidth(text));
-  return text + ' '.repeat(pad);
+  // Contract: if the text is already wider than `width` (e.g. because a caller
+  // skipped breakLongWords), truncate to `width` so the caller's box geometry
+  // stays intact. Without the clamp, pad = 0 and the text silently overflows
+  // past the right border, which `wrapToWidth({ breakLongWords: true })` now
+  // prevents upstream — this truncation is defense-in-depth.
+  const w = displayWidth(text);
+  if (w > width) return truncateDisplayWidth(text, width, '');
+  return text + ' '.repeat(width - w);
 }
 
 export function padDisplayLeft(text: string, width: number): string {
