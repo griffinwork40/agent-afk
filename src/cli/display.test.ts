@@ -209,5 +209,11 @@ describe('display utilities', () => {
       const result = suffixDisplayWidth('hello world', 1);
       expect(result).toBe('…');
     });
+
+    it('returns empty string when wide custom ellipsis exceeds maxWidth', () => {
+      // 🙂 is 2 display columns wide; maxWidth=1 → ellipsis does not fit → ''
+      const result = suffixDisplayWidth('abc', 1, '🙂');
+      expect(result).toBe('');
+    });
   });
 });

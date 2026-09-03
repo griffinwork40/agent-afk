@@ -25,7 +25,7 @@ import {
 } from './task-view-mode.js';
 import { getTasksManager } from '../../slash/commands/tasks.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
-import { truncateDisplayWidth, suffixDisplayWidth } from '../../display.js';
+import { truncateDisplayWidth, suffixDisplayWidth, previousGraphemeIndex } from '../../display.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
@@ -33,6 +33,9 @@ import type { TurnHandles } from './shared.js';
 
 // Item 4: cap for input buffer to prevent unbounded accumulation.
 const MAX_INPUT_BYTES = 8192;
+
+// The prompt prefix ("> ") occupies 2 visible columns.
+const PREFIX_WIDTH = 2;
 
 // FIX-1: Reentrancy guard — prevents double-Tab from launching two concurrent
 // task views, each installing their own stdin listener.
@@ -153,9 +156,6 @@ export async function launchMidTurnTaskView(
   const { signal } = abort;
   let inputBuf = '';
 
-  // The prompt prefix ("> ") occupies 2 visible columns.
-  const PREFIX_WIDTH = 2; // "> "
-
   const renderPrompt = (): void => {
     // Suffix-viewport: always show the rightmost portion of the input so the
     // user can see what they're typing even when inputBuf exceeds the terminal
@@ -189,7 +189,7 @@ export async function launchMidTurnTaskView(
     // Backspace / Delete.
     if (str === '\x7f' || str === '\b') {
       if (inputBuf.length > 0) {
-        inputBuf = inputBuf.slice(0, -1);
+        inputBuf = inputBuf.slice(0, previousGraphemeIndex(inputBuf, inputBuf.length));
         renderPrompt();
       }
       return;
@@ -200,7 +200,7 @@ export async function launchMidTurnTaskView(
     if (str.startsWith('\x1b')) return;
     // Item 4: cap the input buffer to avoid unbounded growth.
     if (Buffer.byteLength(inputBuf + str, 'utf8') > MAX_INPUT_BYTES) return;
-    inputBuf += str;
+    inputBuf += stripEscapeSequences(str);
     renderPrompt();
   };
   process.stdin.on('data', onData);

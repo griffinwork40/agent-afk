@@ -444,4 +444,175 @@ describe('renderPrompt suffix viewport', () => {
     // The full text is visible.
     expect(visible).toContain('hello');
   });
+
+  // -------------------------------------------------------------------------
+  // Item 3: backspace with multi-byte (emoji / CJK) input
+  // -------------------------------------------------------------------------
+  it('backspace removes the entire emoji grapheme, not just one byte', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 40,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    // Sequence: type "hi🙂", then backspace (\x7f), then Esc.
+    // After the backspace the emoji must be fully gone — "hi" remains.
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        await new Promise<void>((r) => setTimeout(r, 5));
+        if (capturedDataListener) {
+          capturedDataListener(Buffer.from('hi🙂'));  // type emoji
+          capturedDataListener(Buffer.from('\x7f'));  // backspace
+        }
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+    const fakeManager = {
+      list: () => [{ id: 'sub-bs', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+
+    // The last renderPrompt write reflects the state after the backspace.
+    const promptWrites = written.filter((s) => s.startsWith('\r\x1b[K'));
+    expect(promptWrites.length).toBeGreaterThan(0);
+    const lastPrompt = promptWrites[promptWrites.length - 1]!;
+    const visible = stripAnsi(lastPrompt).replace(/\r/g, '');
+
+    // Emoji must be fully gone.
+    expect(visible).not.toContain('🙂');
+    // "hi" and the prompt prefix should still be present.
+    expect(visible).toContain('hi');
+  });
+
+  // -------------------------------------------------------------------------
+  // Item 4: incremental per-keypress character accumulation
+  // -------------------------------------------------------------------------
+  it('accumulates characters sent one byte at a time and renders the suffix viewport correctly', async () => {
+    const COLS = 10;
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: COLS,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    // Send "Hello!!!" one character at a time (8 keystrokes) into a 10-col terminal.
+    // Available = 10 - 2 ("> ") = 8 cols, so the last char keeps fitting without
+    // triggering the ellipsis, but if we send one more we should see truncation.
+    const chars = 'Hello World'.split('');
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        await new Promise<void>((r) => setTimeout(r, 5));
+        if (capturedDataListener) {
+          for (const ch of chars) {
+            capturedDataListener(Buffer.from(ch));
+          }
+        }
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+    const fakeManager = {
+      list: () => [{ id: 'sub-inc', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+
+    const promptWrites = written.filter((s) => s.startsWith('\r\x1b[K'));
+    // One renderPrompt call per keypress — at least 11 calls (one per character).
+    expect(promptWrites.length).toBeGreaterThanOrEqual(chars.length);
+
+    // The last write shows the final accumulated state; it must fit within COLS.
+    const lastPrompt = promptWrites[promptWrites.length - 1]!;
+    const visible = stripAnsi(lastPrompt).replace(/\r/g, '');
+    expect(visible.length).toBeLessThanOrEqual(COLS);
+
+    // "Hello World" is 11 chars > available (8), so the ellipsis must appear.
+    expect(visible).toContain('…');
+    // The tail ("orld") must be visible.
+    expect(visible.endsWith('orld')).toBe(true);
+  });
 });

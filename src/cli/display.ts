@@ -172,6 +172,9 @@ export function suffixDisplayWidth(
   if (displayWidth(text) <= maxWidth) return text;
 
   const ellipsisWidth = displayWidth(ellipsis);
+  // When the ellipsis itself is wider than maxWidth, omit it entirely rather
+  // than emitting a marker that violates the constraint.
+  if (ellipsisWidth > maxWidth) return '';
   const budget = Math.max(0, maxWidth - ellipsisWidth);
 
   // Collect graphemes with their cumulative widths from the right.
