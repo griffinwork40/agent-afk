@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.177.1] - 2026-09-03
+
+### Fixed
+- hard-wrap code block body lines at maxTableWidth (#1453) (65bebea5)
+- clamp content lines to terminal width in task-view-mid-turn (#1452) (b8c14b97)
+
 ## [5.177.0] - 2026-09-03
 
 ### Added
