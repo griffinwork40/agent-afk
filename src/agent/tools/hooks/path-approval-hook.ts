@@ -76,6 +76,7 @@ const TYPED_FILE_TOOLS = new Set([
   'glob',
   'grep',
   'patch_apply',
+  'json_query',
 ]);
 
 /** Tools that write — used to pick read-vs-write containment + grant mode. */
@@ -504,6 +505,11 @@ function extractCandidatePath(
       return typeof p === 'string' ? p : undefined;
     }
     return undefined;
+  }
+  // json_query uses `file_path`.
+  if (toolName === 'json_query') {
+    const p = input['file_path'];
+    return typeof p === 'string' ? p : undefined;
   }
   return undefined;
 }

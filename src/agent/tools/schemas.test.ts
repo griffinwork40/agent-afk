@@ -7,8 +7,8 @@ import {
 import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 32 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(32);
+  it('contains exactly 33 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(33);
   });
 
   it('exports the expected tool names', () => {
@@ -45,6 +45,7 @@ describe('builtinToolSchemas', () => {
       'patch_apply',
       'test_run',
       'get_facet',
+      'json_query',
     ]);
   });
 

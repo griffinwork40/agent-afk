@@ -63,6 +63,8 @@ const READ_TOOLS = new Set([
   // mutation surface. Schema declares category='read'; this entry makes
   // categorizeTool() agree so the schema-as-source-of-truth test passes.
   'get_facet',
+  // json_query — read-only: reads a JSON file and evaluates a bounded query.
+  'json_query',
 ]);
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',
@@ -252,6 +254,8 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   // Shared workspace query — read-only poll of the ephemeral workspace.
   // Trivially qualifies: pure read, no mutation, no side-effects.
   'workspace_query',
+  // json_query — read-only: reads a JSON file and evaluates a bounded query.
+  'json_query',
   // Awareness introspection (get_runtime_state) — read-only, in-memory, zero
   // side-effects. Mirrors CHILD_ALLOWED_TOOLS (nesting.ts), which already appends
   // these. Single source of truth: AWARENESS_TOOL_NAMES (awareness/tool.ts).

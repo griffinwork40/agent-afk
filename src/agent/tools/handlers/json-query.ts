@@ -147,6 +147,17 @@ function findTopLevelPipe(q: string): number {
 }
 
 /**
+ * Return true when the query token represents an iteration or map-extract
+ * query (.[] or .[] | .field). These queries ALWAYS return an array so the
+ * response shape is independent of input cardinality.
+ */
+function isIterationQuery(token: QueryToken): boolean {
+  if (token.kind === 'iter') return true;
+  if (token.kind === 'pipe' && token.left.kind === 'iter') return true;
+  return false;
+}
+
+/**
  * Evaluate a parsed query token against a JSON value.
  *
  * Returns an array of result values (a query may produce multiple results
@@ -346,10 +357,14 @@ async function jsonQueryImpl(
 
   // ---- Result shaping & caps -----------------------------------------------
 
+  // Iteration queries (.[] or .[] | .field) always return an array, even for
+  // a single-element input, so the response shape is cardinality-independent.
+  const isIterQuery = isIterationQuery(queryToken);
+
   let truncated = false;
   let finalResult: unknown;
 
-  if (results.length === 1) {
+  if (results.length === 1 && !isIterQuery) {
     // Single-value result: apply array-element cap if needed.
     const val = results[0];
     if (Array.isArray(val) && val.length > maxResults) {
@@ -378,7 +393,10 @@ async function jsonQueryImpl(
   if (Buffer.byteLength(serialized, 'utf-8') > maxBytes) {
     truncated = true;
     // Surface a truncated string rather than a half-formed JSON structure.
-    resultPayload = serialized.slice(0, maxBytes) + '\n… [truncated]';
+    // Truncate by UTF-8 byte count, not UTF-16 character count, so the
+    // advertised byte bound is respected even for multi-byte characters.
+    const buf = Buffer.from(serialized, 'utf-8');
+    resultPayload = buf.slice(0, maxBytes).toString('utf-8') + '\n… [truncated]';
   } else {
     resultPayload = finalResult === undefined ? null : finalResult;
   }
