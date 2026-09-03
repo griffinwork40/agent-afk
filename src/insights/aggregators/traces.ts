@@ -107,7 +107,10 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     // The trace path only writes: toolDurationsMs, compactionCount,
     // closureReasons, totalInputTokens, totalOutputTokens, totalCacheReadTokens,
     // totalCacheCreationTokens, totalCostUsd, sessionsWithCost.
-    const tracePath = join(witnessRoot, sessionId, 'trace.jsonl');
+    // Contract: use facet.session_id (the SDK session ID / witness dir name)
+    // rather than sidecarId — they can differ when saveSession uses an override.
+    const traceSessionId = facet.session_id;
+    const tracePath = join(witnessRoot, traceSessionId, 'trace.jsonl');
     if (!existsSync(tracePath)) continue;
     let raw: string | null = null;
     try {
