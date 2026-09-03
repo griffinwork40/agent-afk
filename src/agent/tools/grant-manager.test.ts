@@ -62,16 +62,19 @@ function makeHooks(opts?: {
 // Audit-log helpers
 // ---------------------------------------------------------------------------
 
-let tmpHome: string;
+let tmpHome: string = '';
 let prevAfkHome: string | undefined;
 let prevHome: string | undefined;
+let prevStateDir: string | undefined;
 
 function setupAuditEnv(): void {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'pgm-test-'));
   prevAfkHome = process.env['AFK_HOME'];
   prevHome = process.env['HOME'];
+  prevStateDir = process.env['AFK_STATE_DIR'];
   process.env['AFK_HOME'] = tmpHome;
   process.env['HOME'] = tmpHome;
+  delete process.env['AFK_STATE_DIR'];
 }
 
 function teardownAuditEnv(): void {
@@ -79,6 +82,8 @@ function teardownAuditEnv(): void {
   else process.env['AFK_HOME'] = prevAfkHome;
   if (prevHome === undefined) delete process.env['HOME'];
   else process.env['HOME'] = prevHome;
+  if (prevStateDir === undefined) delete process.env['AFK_STATE_DIR'];
+  else process.env['AFK_STATE_DIR'] = prevStateDir;
   rmSync(tmpHome, { recursive: true, force: true });
 }
 
@@ -123,9 +128,9 @@ describe('PathGrantManager — addReadRoot', () => {
   it('resolves the path to absolute before storing', () => {
     const hooks = makeHooks();
     const gm = new PathGrantManager(hooks);
-    // path.resolve('/abs') === '/abs'; this ensures we aren't double-resolving
-    gm.addReadRoot('/abs/path', 'slash');
-    expect(hooks._readRoots).toContain('/abs/path');
+    // Use a relative input so the assertion is non-tautological.
+    gm.addReadRoot('relative/sub', 'slash');
+    expect(hooks._readRoots).toContain(path.resolve('relative/sub'));
   });
 
   it('does not touch writeRoots', () => {
@@ -137,18 +142,27 @@ describe('PathGrantManager — addReadRoot', () => {
 
   it('calls ensureInitialized before adding (provider lazy-init hook)', () => {
     let initCalled = false;
-    const _readRoots: string[] = [];
-    const _writeRoots: string[] = [];
+    let _readRoots: string[] | undefined;
+    let _writeRoots: string[] | undefined;
     const hooks: PathGrantManagerHooks = {
       getReadRoots: () => _readRoots,
       getWriteRoots: () => _writeRoots,
-      ensureInitialized: () => { initCalled = true; },
+      ensureInitialized: () => {
+        initCalled = true;
+        // Arrays become available only after initialization.
+        _readRoots = [];
+        _writeRoots = [];
+      },
       getProtectedRoot: () => undefined,
       getAllowAll: () => false,
     };
     const gm = new PathGrantManager(hooks);
+    // Arrays are unavailable before the call — verifies lazy-init is not a no-op.
+    expect(_readRoots).toBeUndefined();
     gm.addReadRoot('/p', 'slash');
+    // ensureInitialized must have run and the root must be present.
     expect(initCalled).toBe(true);
+    expect(_readRoots).toContain(path.resolve('/p'));
   });
 
   it('is a no-op when getReadRoots returns undefined (uninitialized provider)', () => {
@@ -164,6 +178,20 @@ describe('PathGrantManager — addReadRoot', () => {
 });
 
 describe('PathGrantManager — addWriteRoot', () => {
+  it('emits only grant-write audit (no implicit grant-read) on a fresh path', () => {
+    setupAuditEnv();
+    try {
+      const hooks = makeHooks();
+      const gm = new PathGrantManager(hooks);
+      gm.addWriteRoot('/fresh/write', 'slash', 'test-sess');
+      const entries = readAuditEntries().filter((e) => e['path'] === '/fresh/write');
+      expect(entries.length).toBe(1);
+      expect(entries[0]!['action']).toBe('grant-write');
+    } finally {
+      teardownAuditEnv();
+    }
+  });
+
   it('adds path to both readRoots and writeRoots', () => {
     const hooks = makeHooks();
     const gm = new PathGrantManager(hooks);
@@ -327,7 +355,7 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     const gm = new PathGrantManager(hooks);
     gm.addReadRoot('/p', 'slash', 'per-call-id');
     const entries = readAuditEntries();
-    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(entries.length).toBe(1);
     const last = entries[entries.length - 1]!;
     expect(last['sessionId']).toBe('per-call-id'); // per-call wins
   });
@@ -406,7 +434,7 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     expect(after).toBe(before);
   });
 
-  it('(Finding 3) emits NO entry when revoking the protected root (guard fires first)', () => {
+  it('(Finding 2) emits NO entry when revoking the protected root (guard fires first)', () => {
     const hooks = makeHooks({ protectedRoot: '/anchor' });
     hooks._readRoots.push('/anchor');
     const gm = new PathGrantManager(hooks);
