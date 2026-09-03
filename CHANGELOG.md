@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.177.0] - 2026-09-03
+
+### Added
+- canonize facets as the primary session-level query surface (#1450) (b9b2e310)
+
 ## [5.176.3] - 2026-09-02
 
 ### Added
