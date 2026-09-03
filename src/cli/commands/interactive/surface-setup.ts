@@ -17,6 +17,7 @@ import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import { installHistorySubmissionTracker } from './surface-setup.history-tracking.js';
 import { buildSuggestConfig } from './surface-setup.suggest-config.js';
+import { boundLineToTerminal } from '../../render/bounded-line.js';
 
 /**
  * Dependencies surface-setup needs from phases that have not been
@@ -228,7 +229,7 @@ export async function setupSurface(
         if (c) {
           c.commitAbove(text);
         } else {
-          process.stdout.write(text + '\n');
+          process.stdout.write(boundLineToTerminal(text, process.stdout) + '\n');
         }
       },
     },

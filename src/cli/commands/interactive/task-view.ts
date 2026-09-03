@@ -15,6 +15,7 @@
 import { palette } from '../../palette.js';
 import { renderMarkdownToTerminal } from '../../formatter.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { capToMeasure } from '../../render/measure.js';
 import { toolCard } from '../../render/tool-card.js';
 import { divider } from '../../render/divider.js';
 import type { Message } from '../../../agent/types/message-types.js';
@@ -112,7 +113,7 @@ function renderContentBlock(block: unknown): string {
   // when the message content is already serialized. The SDK types are not
   // imported here to avoid adding a direct SDK dependency to this module.
   if (typeof block === 'string') {
-    return renderMarkdownToTerminal(block);
+    return renderMarkdownToTerminal(block, { maxWidth: capToMeasure(getTerminalWidth()) });
   }
   if (typeof block !== 'object' || block === null) {
     return palette.dim(String(block));
@@ -121,7 +122,7 @@ function renderContentBlock(block: unknown): string {
 
   if (b['type'] === 'text') {
     const text = typeof b['text'] === 'string' ? b['text'] : '';
-    return renderMarkdownToTerminal(text);
+    return renderMarkdownToTerminal(text, { maxWidth: capToMeasure(getTerminalWidth()) });
   }
 
   if (b['type'] === 'tool_use') {
@@ -185,7 +186,7 @@ function renderMessage(msg: Message): string {
       lines.push(renderContentBlock(block));
     }
   } else {
-    lines.push(renderMarkdownToTerminal(raw));
+    lines.push(renderMarkdownToTerminal(raw, { maxWidth: capToMeasure(getTerminalWidth()) }));
   }
 
   return lines.join('\n');

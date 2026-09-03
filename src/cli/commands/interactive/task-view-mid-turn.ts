@@ -116,7 +116,7 @@ export async function launchMidTurnTaskView(
     const history = handle.session.getHistory();
     for (const msg of history) {
       const role = msg.role === 'user' ? palette.bold('user') : palette.bold('assistant');
-      stdout.write(`${role}:\n`);
+      stdout.write(clamp(`${role}:`) + '\n');
       // Item 3: extract text from ContentBlock arrays; fall back to JSON for
       // other shapes. Item 2: sanitize before writing to stdout.
       const raw = msg.content;
@@ -155,7 +155,7 @@ export async function launchMidTurnTaskView(
 
   const renderPrompt = (): void => {
     // Overwrite the current line with the input prompt.
-    stdout.write(`\r\x1b[K${palette.dim('> ')}${inputBuf}`);
+    stdout.write(`\r\x1b[K${clamp(palette.dim('> ') + inputBuf)}`);
   };
 
   // Raw stdin listener: Esc exits, Enter sends, printable chars accumulate.
