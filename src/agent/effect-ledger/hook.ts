@@ -255,7 +255,13 @@ export function createEffectLedgerPreHook(
     const classification = classifyToolCall(toolName, input);
     if (!classification.isExternal) return {};
 
-    const ikey = computeIdempotencyKey(classification.operationType, input);
+    let ikey: string;
+    try {
+      ikey = computeIdempotencyKey(classification.operationType, input);
+    } catch {
+      // Best-effort: stableStringify can throw on exotic objects.
+      return {};
+    }
 
     try {
       const pending = effectStore.writePending({
