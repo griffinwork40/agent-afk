@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import {
   measureBuffer,
   nextGraphemeIndex,
+  padDisplayRight,
   previousGraphemeIndex,
   stripAnsi,
   truncateDisplayWidth,
@@ -66,6 +67,40 @@ describe('display utilities', () => {
 
     expect(metrics.cursor).toEqual({ row: 0, col: 6 });
     expect(metrics.end.row).toBeGreaterThanOrEqual(metrics.cursor.row);
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // padDisplayRight — overflow-truncation branch
+  //
+  // When the input is already wider than `width`, padDisplayRight falls back to
+  // truncateDisplayWidth(text, width, '') rather than padding.  This is
+  // defense-in-depth: production callers pre-truncate upstream, but the branch
+  // must still exist and be correct.  A missing test leaves the branch
+  // permanently untested (no production caller reaches it today).
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('padDisplayRight — overflow-truncation branch', () => {
+    it('truncates text that is already wider than width (no ellipsis, exact column clamp)', () => {
+      // 8 ASCII chars padded to 5 columns: truncateDisplayWidth(text, 5, '')
+      // keeps the first 5 chars and adds no ellipsis.
+      const result = padDisplayRight('abcdefgh', 5);
+      expect(result).toBe('abcde');
+      expect(result.length).toBe(5);
+    });
+
+    it('truncates wide (CJK) text to the requested column budget', () => {
+      // Each CJK character is 2 display columns.  '東京都' = 6 display cols.
+      // Clamping to 4 cols keeps '東京' (4 cols) and drops '都'.
+      const result = padDisplayRight('東京都', 4);
+      expect(result).toBe('東京');
+    });
+
+    it('does not truncate text that fits exactly (no-op path)', () => {
+      expect(padDisplayRight('hello', 5)).toBe('hello');
+    });
+
+    it('pads text that is shorter than width', () => {
+      expect(padDisplayRight('hi', 5)).toBe('hi   ');
+    });
   });
 
   it('strips ANSI sequences with broad escape coverage', () => {
