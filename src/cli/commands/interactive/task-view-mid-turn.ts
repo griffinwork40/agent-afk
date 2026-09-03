@@ -25,7 +25,7 @@ import {
 } from './task-view-mode.js';
 import { getTasksManager } from '../../slash/commands/tasks.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
-import { truncateDisplayWidth } from '../../display.js';
+import { truncateDisplayWidth, suffixDisplayWidth } from '../../display.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
@@ -153,9 +153,19 @@ export async function launchMidTurnTaskView(
   const { signal } = abort;
   let inputBuf = '';
 
+  // The prompt prefix ("> ") occupies 2 visible columns.
+  const PREFIX_WIDTH = 2; // "> "
+
   const renderPrompt = (): void => {
-    // Overwrite the current line with the input prompt.
-    stdout.write(`\r\x1b[K${clamp(palette.dim('> ') + inputBuf)}`);
+    // Suffix-viewport: always show the rightmost portion of the input so the
+    // user can see what they're typing even when inputBuf exceeds the terminal
+    // width. suffixDisplayWidth prepends an ellipsis ("…") to signal that
+    // content is hidden on the left; for short inputs it returns the buffer
+    // as-is (no ellipsis). The prefix ">" and the visible portion together
+    // always fit within `width` display columns.
+    const available = Math.max(0, width - PREFIX_WIDTH);
+    const visibleBuf = suffixDisplayWidth(inputBuf, available);
+    stdout.write(`\r\x1b[K${palette.dim('> ')}${visibleBuf}`);
   };
 
   // Raw stdin listener: Esc exits, Enter sends, printable chars accumulate.

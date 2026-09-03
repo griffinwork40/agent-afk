@@ -251,3 +251,197 @@ describe('launchMidTurnTaskView width clamping', () => {
     expect(allOutput).toContain('\x1b[2J\x1b[H');
   });
 });
+
+// ---------------------------------------------------------------------------
+// renderPrompt suffix viewport (issue #1477)
+// ---------------------------------------------------------------------------
+
+describe('renderPrompt suffix viewport', () => {
+  /**
+   * Drive the raw stdin `onData` handler by injecting keypresses into the
+   * process.stdin event listeners, then capture what was written to stdout.
+   *
+   * We need launchMidTurnTaskView to be running but we short-circuit the
+   * stream immediately by providing a session that yields no events. We then
+   * send keypress data via process.stdin before the stream ends so the
+   * renderPrompt path is exercised.
+   *
+   * Strategy: spy on process.stdin.on to capture the 'data' listener, call
+   * it manually with typed bytes, then let the stream finish.
+   */
+  it('renders a suffix viewport when inputBuf exceeds terminal width', async () => {
+    // Use a very narrow terminal (10 columns) to make overflow easy to trigger.
+    const COLS = 10;
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: COLS,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    // Capture the 'data' listener that onData registers on process.stdin.
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    // Session with no history and a stream that emits one event then closes.
+    // We intercept after the first event to inject keystrokes before Esc.
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        // Give the onData listener a chance to register, then inject typing.
+        await new Promise<void>((r) => setTimeout(r, 5));
+        if (capturedDataListener) {
+          // Type a string longer than COLS (10), e.g. "Hello World!!!" (14 chars)
+          capturedDataListener(Buffer.from('Hello World!!!'));
+        }
+        resolveStream();
+        // Yield nothing — stream ends immediately after typing injection.
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+    const fakeManager = {
+      list: () => [{ id: 'sub-vp', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    // Trigger Esc after stream done to allow launchMidTurnTaskView to exit.
+    void streamDone.then(() => {
+      if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    // Find any renderPrompt write: lines starting with \r\x1b[K followed by
+    // the prompt prefix (palette.dim renders "> " with ANSI codes).
+    const promptWrites = written.filter((s) => s.startsWith('\r\x1b[K'));
+
+    // At least one renderPrompt write should have happened after typing.
+    expect(promptWrites.length).toBeGreaterThan(0);
+
+    // Strip ANSI from a prompt write and verify it fits within COLS.
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+
+    // The last renderPrompt write is the one after the long text was typed.
+    const lastPrompt = promptWrites[promptWrites.length - 1]!;
+    const visible = stripAnsi(lastPrompt).replace(/\r/g, '');
+
+    // Total visible characters must fit within COLS (the terminal width).
+    expect(visible.length).toBeLessThanOrEqual(COLS);
+
+    // The visible content must contain the ellipsis character to signal
+    // left-truncation occurred (since "Hello World!!!" is 14 chars > 8 available).
+    expect(visible).toContain('…');
+
+    // The tail of the input ("d!!!" or similar) must be visible at the end.
+    // The input "Hello World!!!" truncated to 8 chars from the right (budget=8)
+    // gives " World!!" → with "…" prefix = "… World!!".
+    expect(visible.endsWith('!!!')).toBe(true);
+  });
+
+  it('does not add ellipsis when input fits within the terminal width', async () => {
+    const COLS = 40;
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: COLS,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        await new Promise<void>((r) => setTimeout(r, 5));
+        if (capturedDataListener) {
+          // Short input — well within 40-column terminal (available=38).
+          capturedDataListener(Buffer.from('hello'));
+        }
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+    const fakeManager = {
+      list: () => [{ id: 'sub-short', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+
+    const promptWrites = written.filter((s) => s.startsWith('\r\x1b[K'));
+    expect(promptWrites.length).toBeGreaterThan(0);
+
+    const lastPrompt = promptWrites[promptWrites.length - 1]!;
+    const visible = stripAnsi(lastPrompt).replace(/\r/g, '');
+
+    // No ellipsis — short input renders as-is.
+    expect(visible).not.toContain('…');
+    // The full text is visible.
+    expect(visible).toContain('hello');
+  });
+});
