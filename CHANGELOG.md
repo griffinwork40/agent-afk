@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.3] - 2026-09-03
+
+### Fixed
+- add breakLongWords to todo-panel wrapToWidth (#1455) (#1466) (3c153306)
+
 ## [5.178.2] - 2026-09-03
 
 ### Fixed
