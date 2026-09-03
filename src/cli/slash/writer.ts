@@ -28,6 +28,14 @@
  * This preserves the no-trailing-newline contract regardless of
  * whether a sink is present. To intercept raw writes, set
  * `sink.rawFn`; omitting it leaves `raw()` routed to stdout directly.
+ *
+ * On a TTY (sinkless path), `raw()` applies the same
+ * `boundLineToTerminal` guard as `line()` — each logical line is
+ * bounded independently so wide content cannot auto-wrap to column 0.
+ * Non-TTY output (piped) stays byte-identical. The sink path is NOT
+ * bounded for the same reason `line()` skips it: the sink owner
+ * (`CompletionWriter` / `compositor.commitAbove`) handles wrapping
+ * and re-flows on resize.
  */
 
 import { palette } from '../palette.js';
@@ -68,7 +76,23 @@ export function createConsoleWriter(sink?: WriterSink): Writer {
     : (text: string) => { console.log(boundLineToTerminal(text)); };
   const writeRaw = (sink !== undefined && sink.rawFn !== undefined)
     ? (text: string) => { sink.rawFn!(text); }
-    : (text: string) => { process.stdout.write(text); };
+    : (text: string) => {
+        // Invariant: sinkless raw writes to a TTY must not exceed the terminal
+        // width — wide content auto-wraps to column 0, detaching indents and
+        // table columns from their rows. Apply the same boundLineToTerminal
+        // guard used by `line()`. Each logical line (split on \n) is bounded
+        // independently so embedded newlines are handled correctly.
+        // Non-TTY (piped) output stays byte-identical.
+        if (process.stdout.isTTY === true) {
+          const bounded = text
+            .split('\n')
+            .map((l) => boundLineToTerminal(l))
+            .join('\n');
+          process.stdout.write(bounded);
+        } else {
+          process.stdout.write(text);
+        }
+      };
   return {
     line(text = ''): void { writeLine(text); },
     raw(text: string): void { writeRaw(text); },
