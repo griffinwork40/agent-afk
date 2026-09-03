@@ -24,13 +24,20 @@ describe('task-lifecycle types and defaults', () => {
       'queued',
       'leased',
       'running',
+      'waiting_human_input',
       'succeeded',
       'failed',
       'retrying',
       'dead-letter',
     ];
     // No assertion beyond type-checking — if this compiles, the union is correct.
-    expect(states).toHaveLength(7);
+    expect(states).toHaveLength(8);
+  });
+
+  it("'waiting_human_input' is a valid TaskState (PR 1416 lease-suppression state)", () => {
+    // Compile-time check: this assignment must typecheck.
+    const s: TaskState = 'waiting_human_input';
+    expect(s).toBe('waiting_human_input');
   });
 
   it('TaskRecord has the expected shape', () => {

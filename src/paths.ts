@@ -279,6 +279,20 @@ export function getQueueDir(): string {
 }
 
 /**
+ * Directory for durable human-handoff records (one `<taskId>.json` per
+ * pending elicitation). Written before a Telegram question is sent so that
+ * a daemon restart can re-present the question from disk rather than losing
+ * it silently. Lives under `state/handoffs/` alongside the other runtime
+ * stores (`queue/`, `leased/`, `presence/`).
+ *
+ * See: src/agent/daemon/handoff-store.ts for the HandoffRecord schema and
+ * CRUD helpers. Wired in PR 2; path exported here in PR 1.
+ */
+export function getHandoffsDir(): string {
+  return join(getAfkStateDir(), 'handoffs');
+}
+
+/**
  * Audit log for session-level directory grants (/allow-dir). Each line is a
  * JSONL entry with `{ timestamp, sessionId, action, path, source }`.
  *
