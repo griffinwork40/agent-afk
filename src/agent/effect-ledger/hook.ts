@@ -89,6 +89,31 @@ export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
   const effectStore = store ?? new EffectStore();
 
   return async (context: HookContext): Promise<HookDecision> => {
+    // Handle PostToolUseFailure: tool handler threw — record as 'failed'.
+    if (context.event === 'PostToolUseFailure') {
+      const { toolName, input, sessionId } = context;
+      const classification = classifyToolCall(toolName, input);
+      if (!classification.isExternal) return {};
+
+      const ikey = computeIdempotencyKey(classification.operationType, input);
+      try {
+        const pending = effectStore.writePending({
+          idempotencyKey: ikey,
+          operationType: classification.operationType,
+          args: redactArgs(input),
+          sessionId,
+        });
+        await effectStore.updateStatus({
+          id: pending.id,
+          status: 'failed',
+          result: redactResult(context.error),
+        });
+      } catch {
+        // Best-effort — ledger write failure must never disrupt tool execution.
+      }
+      return {};
+    }
+
     if (context.event !== 'PostToolUse') return {};
 
     const { toolName, input, output, sessionId } = context;
@@ -112,12 +137,13 @@ export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
       // Record it as "ambiguous" to surface in reconciliation rather than
       // silently dropping the duplicate.
       try {
-        effectStore.writePending({
+        const pending = effectStore.writePending({
           idempotencyKey: ikey,
           operationType: classification.operationType,
           args: redactArgs(input),
           sessionId,
         });
+        await effectStore.updateStatus({ id: pending.id, status: 'ambiguous' });
       } catch {
         // Best-effort — ledger write failure must never disrupt tool execution.
       }
@@ -125,10 +151,13 @@ export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
     }
 
     // Write outcome record (new effect, or retry of a failed attempt).
+    // Check context.isError first (set by the dispatcher from ToolResult.isError),
+    // then fall back to the legacy object check for callers that pass output directly.
     const isError =
-      output !== null &&
-      typeof output === 'object' &&
-      (output as Record<string, unknown>)['isError'] === true;
+      context.isError === true ||
+      (output !== null &&
+        typeof output === 'object' &&
+        (output as Record<string, unknown>)['isError'] === true);
 
     const status = isError ? 'failed' : 'executed';
 

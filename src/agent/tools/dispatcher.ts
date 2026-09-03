@@ -1281,7 +1281,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     output: string,
     signal: AbortSignal,
     input?: unknown,
-    resultFlags?: Pick<ToolResult, 'incomplete' | 'incompleteReason'>,
+    resultFlags?: Pick<ToolResult, 'incomplete' | 'incompleteReason' | 'isError'>,
   ): void {
     if (!this.hookRegistry) return;
     const postCtx: PostToolUseContext = {
@@ -1289,14 +1289,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
       toolName,
       output,
       ...(input !== undefined ? { input } : {}),
+      ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
       ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
-      // Mirror PreToolUse so the path-approval "Once"-grant revoke mutates the
-      // SAME grant manager the Pre containment check consulted.
-      ...(this.sessionGrantManager !== undefined
-        ? { grantManager: this.sessionGrantManager }
-        : {}),
-      ...(resultFlags?.incomplete === true ? { incomplete: true } : {}),
-      ...(resultFlags?.incompleteReason ? { incompleteReason: resultFlags.incompleteReason } : {}),
+      // Mirror PreToolUse so path-approval "Once"-grant revoke uses the same grant manager.
+      ...(this.sessionGrantManager ? { grantManager: this.sessionGrantManager } : {}),
+      ...(resultFlags?.isError === true ? { isError: true } : {}),
+      ...(resultFlags?.incomplete === true ? { incomplete: true, ...(resultFlags.incompleteReason ? { incompleteReason: resultFlags.incompleteReason } : {}) } : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,
@@ -1322,6 +1320,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       toolName,
       error: errorMessage,
       ...(input !== undefined ? { input } : {}),
+      ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
       ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
     };
     void dispatchPostToolUseFailure(this.hookRegistry, ctx, {

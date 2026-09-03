@@ -131,7 +131,7 @@ describe('createEffectLedgerPostHook — external tools', () => {
     await hook(ctx);
     const all = await store.all();
     expect(all).toHaveLength(1);
-    expect(all[0]?.operationType).toBe('mcp_write');
+    expect(all[0]?.operationType).toBe('mcp_write:mcp__github__create_pr');
   });
 
   it('stores redacted args (token removed)', async () => {
@@ -167,11 +167,11 @@ describe('createEffectLedgerPostHook — dedup behavior', () => {
 
     const all = await store.all();
     // After id-collapse, we have 2 distinct records (2 distinct ids).
-    // One is executed; one is pending (the ambiguous note).
+    // One is executed; one is ambiguous (the dedup note).
     expect(all.length).toBeGreaterThanOrEqual(2);
     const statuses = all.map((r) => r.status);
     expect(statuses).toContain('executed');
-    expect(statuses).toContain('pending');
+    expect(statuses).toContain('ambiguous');
   });
 
   it('second call with different args creates a new independent record', async () => {

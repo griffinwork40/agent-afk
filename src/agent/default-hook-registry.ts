@@ -298,7 +298,11 @@ export function createDefaultHookRegistry(
   // a full disk or unwritable state dir never disrupts tool execution.
   // Registered last among built-in PostToolUse handlers so it runs after all
   // policy hooks (path-approval once-grant revoke, etc.) have fired.
-  registry.register('PostToolUse', createEffectLedgerPostHook());
+  // Also registered for PostToolUseFailure so thrown tool handlers (the most
+  // uncertain-outcome case) are recorded with status 'failed'.
+  const ledgerHook = createEffectLedgerPostHook();
+  registry.register('PostToolUse', ledgerHook);
+  registry.register('PostToolUseFailure', ledgerHook);
 
   // Register config-driven shell hooks after all built-ins so built-in
   // handlers always run first. Config hooks are optional — when no

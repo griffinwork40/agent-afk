@@ -52,7 +52,7 @@ const EXTERNAL_BASH_PATTERNS: readonly RegExp[] = [
   // git push (including --force variants)
   /\bgit\s+push\b/i,
   // curl / wget POSTing to external APIs
-  /\bcurl\b.*\s(?:-X\s*POST|-d\s|--data\b|--data-raw\b)/i,
+  /\bcurl\b.*(?:\s-X\s*POST|-XPOST|--request\s+POST|-d\s|--data\b|--data-raw\b|-F\s)/i,
   /\bwget\b.*\s(?:--post-data\b|--post-file\b)/i,
   // npm publish / pnpm publish / yarn publish
   /\b(?:npm|pnpm|yarn)\s+publish\b/i,
@@ -93,7 +93,7 @@ export function classifyToolCall(toolName: string, input: unknown): Classificati
   // external (conservative). A future classifier can inspect the MCP server
   // schema to exclude read-only operations.
   if (toolName.startsWith('mcp__') || toolName.startsWith('MCP__')) {
-    return { isExternal: true, operationType: 'mcp_write' };
+    return { isExternal: true, operationType: `mcp_write:${toolName}` };
   }
 
   // Always-external tool names.

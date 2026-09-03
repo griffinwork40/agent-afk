@@ -19,13 +19,13 @@ describe('classifyToolCall — always-external tools', () => {
   it('mcp__ prefixed tools are external', () => {
     const c = classifyToolCall('mcp__github__create_issue', {});
     expect(c.isExternal).toBe(true);
-    expect(c.operationType).toBe('mcp_write');
+    expect(c.operationType).toBe('mcp_write:mcp__github__create_issue');
   });
 
   it('MCP__ prefixed tools are external (uppercase)', () => {
     const c = classifyToolCall('MCP__someserver__write', {});
     expect(c.isExternal).toBe(true);
-    expect(c.operationType).toBe('mcp_write');
+    expect(c.operationType).toBe('mcp_write:MCP__someserver__write');
   });
 });
 
@@ -67,6 +67,21 @@ describe('classifyToolCall — bash external patterns', () => {
 
   it('curl --data is external', () => {
     const c = classifyToolCall('bash', { command: 'curl --data \'payload\' https://api.example.com/' });
+    expect(c.isExternal).toBe(true);
+  });
+
+  it('curl -XPOST (no space) is external', () => {
+    const c = classifyToolCall('bash', { command: 'curl -XPOST https://api.example.com/hook' });
+    expect(c.isExternal).toBe(true);
+  });
+
+  it('curl --request POST is external', () => {
+    const c = classifyToolCall('bash', { command: 'curl --request POST https://api.example.com/submit' });
+    expect(c.isExternal).toBe(true);
+  });
+
+  it('curl -F (multipart form) is external', () => {
+    const c = classifyToolCall('bash', { command: 'curl -F file=@photo.jpg https://api.example.com/upload' });
     expect(c.isExternal).toBe(true);
   });
 

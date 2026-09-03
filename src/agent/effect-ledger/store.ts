@@ -37,8 +37,8 @@ import type {
 
 /** Write one JSONL line. Creates parent dir on first call. */
 function appendLine(path: string, record: EffectRecord): void {
-  fs.mkdirSync(dirname(path), { recursive: true });
-  fs.appendFileSync(path, JSON.stringify(record) + '\n', 'utf8');
+  fs.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  fs.appendFileSync(path, JSON.stringify(record) + '\n', { encoding: 'utf8', mode: 0o600 });
 }
 
 /** Parse a JSONL file, skipping malformed lines. Returns all valid records. */
@@ -182,7 +182,8 @@ export class EffectStore {
   async findByIdempotencyKey(key: string): Promise<EffectRecord | null> {
     const all = await readAllRecords(this.path);
     const collapsed = collapseById(all);
-    return collapsed.find((r) => r.idempotencyKey === key) ?? null;
+    const matches = collapsed.filter((r) => r.idempotencyKey === key);
+    return matches.length > 0 ? matches[matches.length - 1]! : null;
   }
 
   // ---------------------------------------------------------------------------
