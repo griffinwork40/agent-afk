@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.4] - 2026-09-03
+
+### Fixed
+- guard computeIdempotencyKey throw in pre-hook (#1475) (#1476) (7534f3ea)
+
 ## [5.178.3] - 2026-09-03
 
 ### Fixed
