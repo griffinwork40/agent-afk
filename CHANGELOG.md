@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.1] - 2026-09-03
+
+### Fixed
+- harden dedup, session scoping, error safety, and read caching (#1474) (cda9e1a9)
+- replace timing-based sync with rendezvous signal in flaky test (#1473) (7258aed3)
+- enable hard wrap in thinking-paragraph to prevent overflow (#1454) (#1467) (9aac66ad)
+- skip indentMarker replace when fallback is undefined (#1457) (#1468) (d7628170)
+
 ## [5.178.0] - 2026-09-03
 
 ### Added
