@@ -248,6 +248,12 @@ export interface PostToolUseContext {
   input?: unknown;
   output?: unknown;
   /**
+   * True when the tool returned an error result. Set by the dispatcher from the
+   * full `ToolResult.isError` flag so hooks do not need to re-derive it from the
+   * `output` shape. Absent when false (no key) to keep the context compact.
+   */
+  isError?: boolean;
+  /**
    * Live grant manager of the executing session — see
    * {@link PreToolUseContext.grantManager}. Injected so the "Once"-grant revoke
    * in the path-approval PostToolUse hook mutates the SAME grant manager the
