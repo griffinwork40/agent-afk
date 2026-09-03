@@ -99,8 +99,8 @@ describe('formatThinkingParagraph', () => {
     // Every line begins with the 2-col indent.
     for (const line of lines) expect(line.startsWith('  ')).toBe(true);
     // Body lines (skip the header) honor the body width (cols - 2 = 28).
-    // wrap-ansi with wordWrap: true, hard: false may slightly exceed for
-    // unbreakable tokens, but our `wordN` tokens are short so the cap holds.
+    // wrap-ansi with wordWrap: true, hard: true character-splits any token
+    // exceeding bodyWidth, so all lines stay within the column budget.
     for (const line of lines.slice(1)) {
       expect(line.length).toBeLessThanOrEqual(30);
     }
@@ -136,6 +136,19 @@ describe('formatThinkingParagraph', () => {
     // header + 2 body + footer = 4 lines
     expect(lines2).toHaveLength(4);
     expect(lines2[3]).toMatch(/^ {2}⋯ \+\d+ chars earlier$/);
+  });
+
+  it('(g2) long unbreakable token (URL/path) does not overflow cols — hard wrap splits it (#1454)', () => {
+    // A single URL longer than bodyWidth must be character-split so that
+    // INDENT + line never exceeds opts.cols. With hard: false this overflowed;
+    // with hard: true every output line stays within the column budget.
+    const longUrl = 'https://example.com/' + 'a'.repeat(200);
+    const cols = 80;
+    const out = formatThinkingParagraph(longUrl, { cols, maxLines: 10 });
+    const plain = stripAnsi(out);
+    for (const line of plain.split('\n')) {
+      expect(line.length, `line "${line.slice(0, 30)}…" exceeds cols`).toBeLessThanOrEqual(cols);
+    }
   });
 
   it('header uses the same `◆` glyph as the collapsed summary line for visual identity', () => {

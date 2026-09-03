@@ -268,12 +268,12 @@ export function deriveSessionFacet(
   };
 
   // Populate token_breakdown when cost data is available.
+  // Per-direction fields (input/output/cache_read/cache_creation) are omitted:
+  // StoredSession only carries totalTokens (a scalar sum) and does not persist
+  // per-direction counts. Omitting them avoids zero-filling fields that would
+  // falsely imply actual per-direction measurements.
   if (session.totalCostUsd != null) {
     facet.token_breakdown = {
-      input: 0,
-      output: 0,
-      cache_read: 0,
-      cache_creation: 0,
       cost_usd: session.totalCostUsd,
     };
   }
