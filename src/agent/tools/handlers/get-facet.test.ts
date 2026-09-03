@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getFacetHandler } from './get-facet.js';
@@ -129,5 +129,28 @@ describe('getFacetHandler', () => {
   it('no sessions → isError: true for "latest"', async () => {
     const result = await getFacetHandler({ session: 'latest' }, ABORT);
     expect(result.isError).toBe(true);
+  });
+
+  it('multiple sessions → "latest" resolves by sidecar mtime, not savedAt', async () => {
+    // Contract: the O(N) loadStoredSession scan (sorting by savedAt) was replaced
+    // by an mtime-based scan (statSync). This test verifies mtime wins even when
+    // savedAt would say otherwise — the newer-mtime file must be returned.
+    writeSession('sess-older', { savedAt: Date.now() + 99999 }); // higher savedAt, older mtime
+    const olderPath = join(tmpRoot, 'state', 'sessions', 'sess-older.json');
+
+    writeSession('sess-newer', { savedAt: Date.now() - 99999 }); // lower savedAt, newer mtime
+    const newerPath = join(tmpRoot, 'state', 'sessions', 'sess-newer.json');
+
+    // Stamp older file to 1 hour ago; newer file stays at now.
+    const oneHourAgo = new Date(Date.now() - 3_600_000);
+    utimesSync(olderPath, oneHourAgo, oneHourAgo);
+    const now = new Date();
+    utimesSync(newerPath, now, now);
+
+    const result = await getFacetHandler({ session: 'latest' }, ABORT);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    // sess-newer has the higher mtime → must win, despite lower savedAt
+    expect(parsed['session_id']).toBe('sess-newer');
   });
 });
