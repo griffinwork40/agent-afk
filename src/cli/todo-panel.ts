@@ -95,7 +95,7 @@ export function renderTodoPanel(store: TodoStore): string[] {
     const id = palette.meta(`#${item.id}`);
     const prefix = `  ${id}  ${box}  `;
     const textWidth = Math.max(8, terminalWidth - displayWidth(prefix));
-    const wrapped = wrapToWidth(styled, textWidth).split('\n');
+    const wrapped = wrapToWidth(styled, textWidth, { breakLongWords: true }).split('\n');
     lines.push(prefix + (wrapped[0] ?? ''));
     const continuation = ' '.repeat(displayWidth(prefix));
     for (const extraLine of wrapped.slice(1)) {

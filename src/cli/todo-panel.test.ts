@@ -98,6 +98,24 @@ describe('todo-panel', () => {
     expect(joined).toContain('#1');
   });
 
+  it('renderTodoPanel wraps long words (URLs/paths) without overflowing (#1455)', () => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+    const s = loadTodos('long-word');
+    const longUrl = 'https://example.com/' + 'a'.repeat(60);
+    addTodo(s, longUrl);
+    const lines = renderTodoPanel(s);
+    const stripped = lines.map((l) => l.replace(/\x1B\[[0-9;]*m/g, ''));
+    // Every line must fit within the terminal width
+    for (const line of stripped) {
+      expect(line.length).toBeLessThanOrEqual(40);
+    }
+    // The long URL text must appear across the wrapped lines
+    const joined = stripped.join('');
+    expect(joined).toContain('https://example.com/');
+    Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+  });
+
   it('renderTodoPanel top border scales with terminal width (capped)', () => {
     const prev = process.stdout.columns;
     Object.defineProperty(process.stdout, 'columns', { value: 50, configurable: true });
