@@ -201,4 +201,39 @@ describe('normalizeCallToolResult — image block forwarding (#1421)', () => {
       expect(r.image?.data).toBe(PNG_1x1);
     }
   });
+
+  it('falls back to text placeholder when the image exceeds the 5 MiB byte cap', () => {
+    // Construct a base64 string whose estimated decoded size > 5 MiB.
+    // 5 MiB = 5 * 1024 * 1024 = 5_242_880 bytes.
+    // base64 length needed: ceil(5_242_880 * 4 / 3) = 6_990_507 chars.
+    // Use 7_000_000 chars of valid base64 alphabet to be safely over the cap.
+    const oversizedData = 'A'.repeat(7_000_000);
+
+    const result = normalizeCallToolResult({
+      content: [{ type: 'image', mimeType: 'image/png', data: oversizedData }],
+    } as unknown as CallToolResult);
+
+    expect(result.image).toBeUndefined();
+    expect(result.content).toContain('too large for model context');
+    expect(result.content).toContain('image/png');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('using text placeholder to avoid poisoning conversation history'),
+    );
+  });
+
+  it('forwards an image just at the byte cap without falling back', () => {
+    // 5 MiB = 5_242_880 decoded bytes → base64 length = ceil(5_242_880 * 4 / 3) = 6_990_507
+    // Use exactly 6_990_507 'A' chars → estimatedBytes = ceil(6_990_507 * 3 / 4) = 5_242_881 > limit
+    // So use 6_990_504 chars → estimatedBytes = ceil(6_990_504 * 3 / 4) = 5_242_878 < limit ✓
+    const atCapData = 'A'.repeat(6_990_504);
+
+    const result = normalizeCallToolResult({
+      content: [{ type: 'image', mimeType: 'image/png', data: atCapData }],
+    } as unknown as CallToolResult);
+
+    expect(result.image).toBeDefined();
+    expect(result.image?.mediaType).toBe('image/png');
+    expect(result.image?.data).toBe(atCapData);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
 });

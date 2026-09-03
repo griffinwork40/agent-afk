@@ -410,6 +410,17 @@ export class McpClient {
 }
 
 /**
+ * Maximum decoded byte size for an MCP image forwarded to the model.
+ *
+ * Base64 expands by ~4/3 so a 5 MiB decoded image corresponds to ~6.7 MiB of
+ * base64 characters. We cap at 5 MiB of decoded bytes, matching the
+ * browser-screenshot handler's sidecar byte cap, to avoid poisoning the
+ * conversation history with an oversized image block that the provider will
+ * reject on the very next request.
+ */
+const MAX_MCP_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+/**
  * Image media types accepted by Anthropic's vision API (and surfaced on the
  * `ToolResult.image` field that both provider adapters understand). Any MCP
  * image block whose `mimeType` is NOT in this set falls back to a text
@@ -464,17 +475,32 @@ function normalizeCallToolResult(result: CallToolResult): ToolResult {
             `— using text placeholder. Supported types: ${[...SUPPORTED_IMAGE_MEDIA_TYPES].join(', ')}`,
         );
         parts.push(`[image block: mimeType=${mimeType}, ${data.length} bytes base64 (unsupported format)]`);
-      } else if (forwardedImage === undefined) {
-        // First valid image: forward as multimodal content.
-        forwardedImage = { mediaType: mimeType as SupportedImageMediaType, data };
-        // Include a brief description in `content` so providers that don't
-        // surface images still give the model useful metadata, and so the
-        // text channel is non-empty (required by the anthropic-direct
-        // tool_result shape when an image block is present).
-        parts.push(`[image: ${mimeType}]`);
       } else {
-        // Additional images beyond the first: text placeholder only.
-        parts.push(`[image block: mimeType=${mimeType}, ${data.length} bytes base64 (additional image not forwarded)]`);
+        // Byte-size guard: base64 encodes at ~4/3 so multiply by 3/4 to get
+        // decoded byte estimate. Reject oversized images before they enter
+        // conversation history and poison every subsequent model request.
+        const estimatedBytes = Math.ceil((data.length * 3) / 4);
+        if (estimatedBytes > MAX_MCP_IMAGE_BYTES) {
+          console.warn(
+            `[mcp] image block "${mimeType}" is ~${estimatedBytes} bytes decoded ` +
+              `(base64 length ${data.length}), exceeds the ${MAX_MCP_IMAGE_BYTES}-byte ` +
+              `limit — using text placeholder to avoid poisoning conversation history`,
+          );
+          parts.push(
+            `[image block: mimeType=${mimeType}, ${data.length} bytes base64 (too large for model context)]`,
+          );
+        } else if (forwardedImage === undefined) {
+          // First valid image: forward as multimodal content.
+          forwardedImage = { mediaType: mimeType as SupportedImageMediaType, data };
+          // Include a brief description in `content` so providers that don't
+          // surface images still give the model useful metadata, and so the
+          // text channel is non-empty (required by the anthropic-direct
+          // tool_result shape when an image block is present).
+          parts.push(`[image: ${mimeType}]`);
+        } else {
+          // Additional images beyond the first: text placeholder only.
+          parts.push(`[image block: mimeType=${mimeType}, ${data.length} bytes base64 (additional image not forwarded)]`);
+        }
       }
     } else if (block.type === 'resource') {
       // Both embedded and link variants. Surface the URI so the model can
