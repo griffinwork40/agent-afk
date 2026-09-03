@@ -18,6 +18,7 @@ import {
   sanitizeTextParagraph,
   shortenPaths,
   batchBadge,
+  pendingBatchBadge,
   doneGlyph,
   isBenignFailure,
   MAX_OVERLAY_DIFF_LINES,
@@ -88,6 +89,41 @@ describe('batchBadge — parallel-wave indicator', () => {
   it('is empty when only one of the index/size pair is present (defensive)', () => {
     expect(batchBadge(chunk({ batchSize: 2 }))).toBe('');
     expect(batchBadge(chunk({ batchIndex: 1 }))).toBe('');
+  });
+});
+
+describe('pendingBatchBadge — live in-flight parallel-wave indicator (Phase 2, issue #516)', () => {
+  const makePending = (batchSize: number, ...ids: string[]): { batchSize: number; toolUseIds: Set<string> } => ({
+    batchSize,
+    toolUseIds: new Set(ids),
+  });
+
+  it('renders [×N] for a member id in an active batch', () => {
+    const pending = makePending(3, 'tool-a', 'tool-b', 'tool-c');
+    expect(stripAnsi(pendingBatchBadge('tool-a', pending))).toBe(' [×3]');
+    expect(stripAnsi(pendingBatchBadge('tool-b', pending))).toBe(' [×3]');
+    expect(stripAnsi(pendingBatchBadge('tool-c', pending))).toBe(' [×3]');
+  });
+
+  it('is empty for a non-member id (not in this batch)', () => {
+    const pending = makePending(2, 'tool-a', 'tool-b');
+    expect(pendingBatchBadge('other-tool', pending)).toBe('');
+  });
+
+  it('is empty when pendingBatch is null (no batch in flight)', () => {
+    expect(pendingBatchBadge('tool-a', null)).toBe('');
+  });
+
+  it('is empty when batchSize is 1 (should not occur in practice but defensive)', () => {
+    const pending = makePending(1, 'tool-a');
+    expect(pendingBatchBadge('tool-a', pending)).toBe('');
+  });
+
+  it('uses a different glyph (×) than the completed badge (∥) to distinguish live from committed', () => {
+    const pending = makePending(2, 'tool-a', 'tool-b');
+    const live = stripAnsi(pendingBatchBadge('tool-a', pending));
+    expect(live).toContain('×');
+    expect(live).not.toContain('∥');
   });
 });
 

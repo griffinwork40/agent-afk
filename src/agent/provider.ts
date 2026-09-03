@@ -244,6 +244,27 @@ export type ProviderEvent =
     }
   | {
       /**
+       * Live parallel-batch start marker (Phase 2, issue #516). Emitted by
+       * `executeBatch` at the top of each `for…of` iteration — after
+       * partitioning and blocked-call filtering but BEFORE any tool handler
+       * fires — so the TUI can show a `[×N]` pending indicator during the
+       * window when tools are in-flight but no results have arrived yet.
+       *
+       * Only emitted for concurrent batches (`isConcurrencySafe = true`) with
+       * `batchSize >= 2`. Sequential single-call batches are not badged.
+       * `toolUseIds` carries the ids of every call in the batch so the overlay
+       * can track which spinner rows belong to this batch and clear the badge
+       * once all of them resolve.
+       */
+      type: 'tool.batch.start';
+      /** Number of parallel calls in this batch (≥ 2). */
+      batchSize: number;
+      /** Ids of the tool calls in this batch, in partition order. */
+      toolUseIds: string[];
+      sessionId?: string;
+    }
+  | {
+      /**
        * Sidecar render-only event for file-mutation tools. Emitted by the
        * provider loop AFTER the corresponding `tool.output` event, keyed by
        * `toolUseId`. Carries a structured diff that the CLI / Telegram /

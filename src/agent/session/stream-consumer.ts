@@ -530,6 +530,17 @@ export function transformProviderEvent(
       // exhaustive, so do not remove the `default` arm either.
       return { type: 'notice', text: event.text, kind: event.kind };
 
+    case 'tool.batch.start':
+      // Live parallel-batch start marker (Phase 2, issue #516). Surfaces on
+      // TTY REPL as a `[×N]` pending badge on in-flight tool rows. No model
+      // context impact — display-only. Maps 1:1 from ProviderEvent to
+      // OutputEvent with the same fields.
+      return {
+        type: 'batch-start',
+        batchSize: event.batchSize,
+        toolUseIds: event.toolUseIds,
+      };
+
     default:
       return null;
   }

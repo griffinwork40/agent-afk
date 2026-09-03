@@ -150,6 +150,19 @@ export async function* dispatchAndAppendToolCalls({
     try {
       if (toolDispatcher.executeBatch) {
         dispatcherResults = await toolDispatcher.executeBatch(calls);
+        // Phase 2 (issue #516): drain and yield batch-start events collected
+        // during executeBatch so the TUI sees the parallel-wave badge while
+        // tools are still in-flight (before any tool.output arrives).
+        if (toolDispatcher.drainBatchEvents) {
+          for (const ev of toolDispatcher.drainBatchEvents()) {
+            yield {
+              type: 'tool.batch.start' as const,
+              batchSize: ev.batchSize,
+              toolUseIds: ev.toolUseIds,
+              sessionId,
+            };
+          }
+        }
       } else {
         dispatcherResults = [];
         for (const call of calls) {

@@ -63,6 +63,15 @@ export interface BatchExecDeps {
   sessionId: string | undefined;
   /** Ceiling on simultaneously in-flight calls within one admission wave. */
   maxConcurrentSafeCalls: number;
+  /**
+   * Optional callback invoked once at the start of each concurrent batch wave
+   * (Phase 2, issue #516). Called with `batchSize` ≥ 2 and the `toolUseIds`
+   * of every call in the wave BEFORE any handler fires. The caller collects
+   * these into a `ProviderEvent` list and yields them as `tool.batch.start`
+   * events so the TUI can show a live `[×N]` pending indicator.
+   * Fire-and-forget: errors are swallowed to never abort a wave.
+   */
+  batchEventSink?: (batchSize: number, toolUseIds: string[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +262,21 @@ export async function runConcurrentBatch(
         deps.subagentExecutor.notifyWaveStart(agentCallsInWave, deps.sessionId ?? '', null);
       } catch {
         // Fire-and-forget: manifest errors must never abort a wave.
+      }
+    }
+
+    // Live batch-start event (Phase 2, issue #516): notify the TUI that a
+    // parallel wave is about to fire so it can show a `[×N]` pending badge.
+    // Only fires when the wave contains ≥2 calls — singleton waves need no badge.
+    // Fire-and-forget: sink errors must never abort a wave.
+    if (wave.length >= 2 && deps.batchEventSink) {
+      try {
+        const waveToolUseIds = wave
+          .map((batchIdx) => executableCalls[batchIdx]?.call.id)
+          .filter((id): id is string => id !== undefined);
+        deps.batchEventSink(wave.length, waveToolUseIds);
+      } catch {
+        // Fire-and-forget: overlay errors must never abort execution.
       }
     }
 

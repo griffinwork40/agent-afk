@@ -394,6 +394,17 @@ export function handleSubagentEvent(
         ctx.out.line(event.text);
       }
       return;
+
+    case 'batch-start':
+      // Live parallel-batch start marker from inside a subagent (Phase 2,
+      // issue #516). Subagent batch-starts are currently rendered only on
+      // TTY via the parent's shared tool lane — the parent orchestrator
+      // path handles the top-level case; subagent tool calls are already
+      // nested under their Agent entry in the same lane. No extra action
+      // is needed here: the subagent's tool entries are tracked by the
+      // same ToolLane, so notifyBatchStart would need to work on
+      // subagent-scoped ids. Deferred to a future sub-issue.
+      return;
   }
 }
 

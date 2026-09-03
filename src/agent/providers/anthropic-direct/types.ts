@@ -178,6 +178,16 @@ export interface ToolDispatcherLike {
   execute(call: ToolCall): Promise<ToolResult>;
   executeBatch?(calls: ToolCall[]): Promise<ToolResult[]>;
   /**
+   * Drain and clear pending batch-start events accumulated during the most
+   * recent `executeBatch` call (Phase 2, issue #516). Each element describes
+   * one concurrent wave that fired: `batchSize` ≥ 2, `toolUseIds` lists the
+   * call ids in partition order. The provider generator yields them as
+   * `tool.batch.start` events immediately after `executeBatch` returns so the
+   * TUI can render the live `[×N]` badge for that wave.
+   * Optional: dispatchers that don't implement batching can omit this.
+   */
+  drainBatchEvents?(): Array<{ batchSize: number; toolUseIds: string[] }>;
+  /**
    * Optional in-place cwd update. When present, called by
    * `AnthropicDirectQuery.setCwd()` BEFORE the dispatcher reference is
    * swapped so that any in-flight `runInput.toolDispatcher` reference

@@ -124,6 +124,16 @@ export type OutputEvent =
       /** Semantic category — guides rendering and programmatic branching. */
       kind: 'truncation' | 'refusal';
     }
+  // Live parallel-batch start marker (Phase 2, issue #516). Mirrors
+  // ProviderEvent 'tool.batch.start'. Emitted before batch tool handlers fire
+  // so the TUI can display a `[×N]` pending indicator while tools run.
+  | {
+      type: 'batch-start';
+      /** Number of parallel calls in this batch (≥ 2). */
+      batchSize: number;
+      /** Ids of the tool calls in this batch, in partition order. */
+      toolUseIds: string[];
+    }
   // Usage-limit pause/resume events emitted by the provider layer when an
   // OAuth subscription limit is hit and the provider is waiting to auto-resume.
   | {

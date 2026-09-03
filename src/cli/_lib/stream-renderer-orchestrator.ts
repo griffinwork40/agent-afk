@@ -471,6 +471,16 @@ export function handleOrchestratorEvent(
       }
       return;
     }
+
+    case 'batch-start':
+      // Live parallel-batch start marker (Phase 2, issue #516). Fires before
+      // any tool.output so the TUI can paint a `[×N]` pending indicator while
+      // all calls in the batch are in-flight. Ignored on non-TTY surfaces.
+      if (ctx.isTTY) {
+        ctx.toolLane.notifyBatchStart(event.batchSize, event.toolUseIds);
+        setComposedOverlay(ctx);
+      }
+      return;
   }
 }
 

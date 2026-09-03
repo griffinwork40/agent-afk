@@ -115,6 +115,19 @@ export async function* dispatchToolCalls(
         isError: true as const,
       }));
     }
+    // Phase 2 (issue #516): drain and yield batch-start events collected
+    // during executeBatch. Each event fires before any tool.output so the
+    // TUI sees the parallel-wave badge while all tools are still in-flight.
+    if (input.toolDispatcher.drainBatchEvents) {
+      for (const ev of input.toolDispatcher.drainBatchEvents()) {
+        yield {
+          type: 'tool.batch.start',
+          batchSize: ev.batchSize,
+          toolUseIds: ev.toolUseIds,
+          sessionId: input.ctx.sessionId,
+        };
+      }
+    }
   } else {
     results = [];
     for (const call of calls) {

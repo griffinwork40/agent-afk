@@ -1,7 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
-import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
+import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge, pendingBatchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { truncateDisplayWidth, stripAnsi, displayWidth } from '../../display.js';
 import { formatElapsed, ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
@@ -54,6 +54,23 @@ export class ToolLane {
    * cleared lazily (on the next scan) once the tool resolves or is removed.
    */
   private lastElapsedSecond = new Map<string, number>();
+
+  /**
+   * Live parallel-batch pending indicator state (Phase 2, issue #516).
+   *
+   * Set by {@link notifyBatchStart} when a `tool.batch.start` event arrives.
+   * `toolUseIds` is the set of call ids in the batch; `batchSize` is the
+   * total width of the wave (≥ 2). The overlay renders a `[×N]` badge on
+   * each in-flight row whose `toolUseId` appears in `toolUseIds`.
+   *
+   * Cleared lazily: {@link addResult} checks whether all ids in the set have
+   * now received results and nulls the field when the batch is fully done.
+   * This ensures the badge disappears as soon as the last result lands,
+   * without a dedicated timer.
+   *
+   * `null` when no concurrent batch is in-flight.
+   */
+  private pendingBatch: { batchSize: number; toolUseIds: Set<string> } | null = null;
 
   addStart(toolUseId: string, toolName: string, toolInput: string): void {
     // Strip ANSI from toolInput at storage time: it originates from LLM
@@ -186,6 +203,33 @@ export class ToolLane {
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
+    // Lazy batch-badge clear (Phase 2, issue #516): once ALL ids in the
+    // pending batch have received results the batch is complete and the
+    // `[×N]` badge should disappear. Check after every addResult call.
+    if (this.pendingBatch !== null) {
+      const allDone = [...this.pendingBatch.toolUseIds].every((id) => {
+        const e = this.entries.get(id);
+        return e?.kind === 'tool' && e.result !== undefined;
+      });
+      if (allDone) this.pendingBatch = null;
+    }
+  }
+
+  /**
+   * Register a pending concurrent batch (Phase 2, issue #516).
+   *
+   * Called by the streaming renderer when a `tool.batch.start` event arrives.
+   * Stores `batchSize` and `toolUseIds` so {@link getOverlay} can append a
+   * `[×N]` badge to each in-flight row that belongs to this batch. Replaces
+   * any previously registered batch (multi-wave turns replace the prior wave
+   * as soon as the next wave starts). The overlay reads `pendingBatch` on
+   * every repaint, so the badge appears immediately on the next frame.
+   *
+   * @param batchSize   Total width of the wave (≥ 2).
+   * @param toolUseIds  Ids of every call in this wave, in partition order.
+   */
+  notifyBatchStart(batchSize: number, toolUseIds: string[]): void {
+    this.pendingBatch = { batchSize, toolUseIds: new Set(toolUseIds) };
   }
 
   /**
@@ -555,7 +599,7 @@ export class ToolLane {
           // Live elapsed counter: computed at repaint time so the counter ticks
           // on every overlay refresh without a dedicated timer. Grace period
           // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + pendingBatchBadge(entry.toolUseId, this.pendingBatch)));
         }
         // Mirror the thinkingTail handling of the other two NESTING branches
         // (and the childless-leaf branch below): spine glyph (g.spine, │) at
@@ -587,7 +631,7 @@ export class ToolLane {
         } else {
           // Live elapsed counter: same pattern as the NESTING branch above —
           // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt)));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + pendingBatchBadge(entry.toolUseId, this.pendingBatch)));
           if (entry.previewDiff) {
             // Pre-execution diff preview: formatPreviewDiffBlock renders ⟳ Proposed
             // and applies the AFK_SHOW_DIFFS=0 opt-out (returns [] when disabled).

@@ -192,6 +192,33 @@ export function batchBadge(chunk: ToolResultChunk | undefined): string {
 }
 
 /**
+ * Live pending-batch badge for an in-flight tool row (Phase 2, issue #516).
+ *
+ * Rendered during the window when a concurrent batch has started but none of
+ * its results have arrived yet. Shows `[×N]` (dim) next to the spinner so the
+ * operator can see that N calls are running in parallel RIGHT NOW, before Phase
+ * 1's post-completion `∥i/N` badge appears on each settled row.
+ *
+ * Returns `''` when:
+ *  - No concurrent batch is pending (`pendingBatch` is null).
+ *  - The `toolUseId` is not a member of the pending batch.
+ *  - The batch has `batchSize ≤ 1` (should not occur — notifyBatchStart guards this).
+ *
+ * The badge intentionally uses `×` (MULTIPLICATION SIGN) to distinguish
+ * "currently running N-parallel" from the post-completion `∥i/N` (PARALLEL TO)
+ * badge — they carry complementary information (live vs. committed).
+ */
+export function pendingBatchBadge(
+  toolUseId: string,
+  pendingBatch: { batchSize: number; toolUseIds: Set<string> } | null,
+): string {
+  if (!pendingBatch || pendingBatch.batchSize <= 1 || !pendingBatch.toolUseIds.has(toolUseId)) {
+    return '';
+  }
+  return palette.dim(` [×${pendingBatch.batchSize}]`);
+}
+
+/**
  * Format tool output as a two-line block (emitted together so both render
  * reliably). When `toolPrefix` is present the first line shows the tool
  * call; the second shows the outcome with a `⎿` connector.
