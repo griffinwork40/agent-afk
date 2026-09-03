@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.177.3] - 2026-09-03
+
+### Fixed
+- restore statSync optimization and session_id trace path (#1464) (422182ff)
+
 ## [5.177.2] - 2026-09-03
 
 ### Fixed
