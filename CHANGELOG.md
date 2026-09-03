@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.0] - 2026-09-03
+
+### Added
+- external-effect and idempotency ledger (#1412) (#1440) (32609e37)
+
+### Fixed
+- apply width guard to elicitation fallback writers (#1458) (#1465) (acb45cdb)
+
 ## [5.177.4] - 2026-09-03
 
 ### Fixed
