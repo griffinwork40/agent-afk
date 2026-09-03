@@ -37,7 +37,8 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 
 import type { McpServerConfig } from './types.js';
-import { expandEnvRecord, expandEnvString } from './env.js';
+import { expandEnvRecord, expandEnvRecordForLayer, expandEnvString } from './env.js';
+import { scrubDangerousEnv, type McpServerLayer } from './env-containment.js';
 
 /**
  * True for hostnames whose traffic never leaves the local machine — the
@@ -122,6 +123,13 @@ export interface CreateTransportResult {
  * For streamable-HTTP + SSE variants an optional `oauthProvider` is wired
  * into the transport options so the SDK can handle token refresh internally.
  *
+ * The `layer` parameter drives defense-in-depth for project-local stdio
+ * servers (issue #578):
+ *   - Secret `${VAR}` expansions are blocked unless `allowSecretEnv` opts in.
+ *   - Dangerous inherited env vars (`NODE_OPTIONS`, `LD_PRELOAD`, …) are
+ *     scrubbed from the inherited base env before the child process is spawned.
+ * User-global, plugin, and CLI servers are fully trusted and bypass both checks.
+ *
  * Throws when the config is internally inconsistent (e.g. `type === 'stdio'`
  * with no `command`) — the loader validates these upfront, but the factory
  * guards defensively.
@@ -130,6 +138,7 @@ export function createTransport(
   serverName: string,
   config: McpServerConfig,
   oauthProvider?: OAuthClientProvider,
+  layer: McpServerLayer = 'user-global',
 ): CreateTransportResult {
   // Resolve effective type (loader already sets it, but guard in case the
   // factory is called outside the normal load path).
@@ -140,19 +149,55 @@ export function createTransport(
       throw new Error(`McpTransport(${serverName}): stdio requires \`command\``);
     }
 
-    const { value: env, missing } = expandEnvRecord(config.env);
-    if (missing.length > 0) {
-      // Forward as a console warn — manager logs the per-server status
-      // separately; this gives per-variable visibility.
-      console.warn(
-        `[mcp:${serverName}] missing env vars (passing as empty): ${missing.join(', ')}`,
+    // ── Env expansion (layer-aware for project servers) ──────────────
+    let expandedEnv: Record<string, string>;
+    if (layer === 'project') {
+      const { value: env, missing, blocked } = expandEnvRecordForLayer(
+        config.env,
+        { layer, serverName, allowSecretEnv: config.allowSecretEnv ?? [] },
       );
+      if (missing.length > 0) {
+        console.warn(
+          `[mcp:${serverName}] missing env vars (passing as empty): ${missing.join(', ')}`,
+        );
+      }
+      if (blocked.length > 0) {
+        // Individual warnings already emitted by expandEnvRecordForLayer.
+        // Emit a summary so the connect log also shows the impact.
+        console.warn(
+          `[mcp:${serverName}] ${blocked.length} secret expansion(s) blocked for project-local server`,
+        );
+      }
+      expandedEnv = env;
+    } else {
+      const { value: env, missing } = expandEnvRecord(config.env);
+      if (missing.length > 0) {
+        // Forward as a console warn — manager logs the per-server status
+        // separately; this gives per-variable visibility.
+        console.warn(
+          `[mcp:${serverName}] missing env vars (passing as empty): ${missing.join(', ')}`,
+        );
+      }
+      expandedEnv = env;
+    }
+
+    // ── Build the base inherited env ──────────────────────────────────
+    const base = inheritedDefaultEnv();
+
+    // Scrub dangerous inherited vars for project-local servers (issue #578).
+    if (layer === 'project') {
+      const scrubbed = scrubDangerousEnv(base);
+      if (scrubbed.length > 0) {
+        console.warn(
+          `[mcp:${serverName}] scrubbed dangerous inherited env vars for project-local server: ${scrubbed.join(', ')}`,
+        );
+      }
     }
 
     const params: StdioServerParameters = {
       command: config.command,
       ...(config.args ? { args: config.args } : {}),
-      env: { ...inheritedDefaultEnv(), ...env },
+      env: { ...base, ...expandedEnv },
     };
     return { transport: new StdioClientTransport(params), isSSE: false };
   }

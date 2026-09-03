@@ -516,6 +516,7 @@ export function registerChatCommand(program: Command): void {
             try {
               mcpManager = await McpManager.fromConfig(loaded.mcpServers, {
                 warnings: loaded.warnings,
+                serverLayers: loaded.serverLayers,
                 ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
               });
             } finally {
