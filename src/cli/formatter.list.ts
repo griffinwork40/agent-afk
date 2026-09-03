@@ -38,7 +38,7 @@ function padDisplay_(
 export function renderList(
   list: Tokens.List,
   maxTableWidth: number | undefined,
-  renderTokens: (tokens: Token[]) => string,
+  renderTokens: (tokens: Token[], maxWidth?: number) => string,
 ): string {
   const items: string[] = [];
   // marked preserves the source-level starting index in `list.start`
@@ -73,7 +73,6 @@ export function renderList(
     const renderableTokens: Token[] = item.tokens
       ? (isTask ? (item.tokens as Token[]).filter((t) => t.type !== 'checkbox') : (item.tokens as Token[]))
       : [];
-    const itemText = renderableTokens.length > 0 ? renderTokens(renderableTokens) : item.text;
     const lines: string[] = [];
     let first = true;
     const prefixWidth = visualWidth(prefix);
@@ -96,6 +95,13 @@ export function renderList(
     // hanging indent. That is precisely the dissolution the invariant
     // above forbids; enforcing the width here is what makes it true.
     const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixWidth) : undefined;
+    // Give nested blocks their actual budget before rendering them. Otherwise
+    // a code block is split at the outer width here, then split a second time
+    // after the list prefix is applied, producing fragmented rows and missing
+    // code gutters on continuations.
+    const itemText = renderableTokens.length > 0
+      ? renderTokens(renderableTokens, innerWidth)
+      : item.text;
     for (const srcLine of itemText.trim().split('\n')) {
       const wrapped = innerWidth
         ? wrapToWidth(srcLine, innerWidth, { breakLongWords: true })

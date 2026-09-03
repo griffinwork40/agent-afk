@@ -27,12 +27,15 @@ import { registerCodeBlock } from './code-block-register.js';
 export function renderBlockquote(
   bq: Tokens.Blockquote,
   maxTableWidth: number | undefined,
-  renderTokens: (tokens: Token[]) => string,
+  renderTokens: (tokens: Token[], maxWidth?: number) => string,
 ): string {
-  const inner = bq.tokens ? renderTokens(bq.tokens as Token[]) : bq.text;
   const prefix = palette.dim('  │ ');
   const prefixCols = 4; // "  │ " = 2 spaces + box-draw + space
   const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixCols) : undefined;
+  // Render nested blocks against the space left after this blockquote's
+  // prefix. In particular, code blocks must wrap once at their final inner
+  // width rather than first at the terminal width and then again here.
+  const inner = bq.tokens ? renderTokens(bq.tokens as Token[], innerWidth) : bq.text;
   const lines: string[] = [];
   for (const para of inner.split('\n')) {
     // breakLongWords: same contract as the list branch above — an

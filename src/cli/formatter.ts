@@ -159,7 +159,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
     return renderInlineTokens(tokens, commitOnly);
   }
 
-  function renderTokens(tokens: Token[]): string {
+  function renderTokens(tokens: Token[], availableWidth = maxTableWidth): string {
     return tokens.map((token, idx) => {
       // Repeated, compatible headers represent one logical table. Merge the
       // rows before rendering so the group shares column widths and emits no
@@ -186,7 +186,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           tokens[nextIndex] = { type: 'space', raw: '' } as Token;
           end = nextIndex + 1;
         }
-        return renderTable({ ...table, rows }, maxTableWidth, renderInline);
+        return renderTable({ ...table, rows }, availableWidth, renderInline);
       }
       let result: string;
       switch (token.type) {
@@ -234,7 +234,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           break;
         }
         case 'code':
-          result = renderCodeBlock(token as Tokens.Code, maxTableWidth);
+          result = renderCodeBlock(token as Tokens.Code, availableWidth);
           break;
         case 'codespan': {
           const raw = (token as Tokens.Codespan).text;
@@ -260,7 +260,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           break;
         }
         case 'list':
-          result = renderList(token as Tokens.List, maxTableWidth, renderTokens);
+          result = renderList(token as Tokens.List, availableWidth, renderTokens);
           break;
         case 'space':
           return token.raw ? '\n' : '';
@@ -269,12 +269,12 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // instead of overflowing or falling short — it is already the
           // compositor's row budget, so no separate capping is needed. Fall
           // back to 40 when no width is set (e.g. direct callers that omit opts).
-          const hrWidth = maxTableWidth ?? 40;
+          const hrWidth = availableWidth ?? 40;
           result = palette.dim('─'.repeat(hrWidth)) + '\n';
           break;
         }
         case 'blockquote':
-          result = renderBlockquote(token as Tokens.Blockquote, maxTableWidth, renderTokens);
+          result = renderBlockquote(token as Tokens.Blockquote, availableWidth, renderTokens);
           break;
         default:
           result = token.raw;

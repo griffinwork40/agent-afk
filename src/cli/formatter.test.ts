@@ -948,6 +948,33 @@ describe('renderMarkdownToTerminal', () => {
       expect(bodyLines.length).toBe(1);
       expect(bodyLines[0]).toBe(`│ ${longLine}`);
     });
+
+    it('wraps code nested in a list against the width after the list prefix', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`- \`\`\`\n  ${'x'.repeat(36)}\n  \`\`\`\n`, { maxWidth: 20 }),
+      );
+      const body = out.split('\n').filter((line) => line.includes('x'));
+
+      expect(body).toEqual([
+        `    │ ${'x'.repeat(14)}`,
+        `    │ ${'x'.repeat(14)}`,
+        `    │ ${'x'.repeat(8)}`,
+      ]);
+      for (const line of body) expect(stringWidth(line)).toBeLessThanOrEqual(20);
+    });
+
+    it('wraps code nested in a blockquote against the width after its prefix', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`> \`\`\`\n> ${'x'.repeat(28)}\n> \`\`\`\n`, { maxWidth: 20 }),
+      );
+      const body = out.split('\n').filter((line) => line.includes('x'));
+
+      expect(body).toEqual([
+        `  │ │ ${'x'.repeat(14)}`,
+        `  │ │ ${'x'.repeat(14)}`,
+      ]);
+      for (const line of body) expect(stringWidth(line)).toBeLessThanOrEqual(20);
+    });
   });
 
   describe('headings', () => {
