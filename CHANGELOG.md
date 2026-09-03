@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.177.2] - 2026-09-03
+
+### Fixed
+- add breakLongWords to wrapToWidth, harden padDisplayRight (#1451) (ef050386)
+
 ## [5.177.1] - 2026-09-03
 
 ### Fixed
