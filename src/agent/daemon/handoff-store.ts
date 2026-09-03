@@ -19,7 +19,7 @@
  * @module agent/daemon/handoff-store
  */
 
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getHandoffsDir } from '../../paths.js';
@@ -29,32 +29,12 @@ import { getHandoffsDir } from '../../paths.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Full content of an elicitation question, mirroring the ElicitationRequest
- * fields consumed by the Telegram handler. Stored verbatim so recovery can
- * re-present the exact question without access to the original session.
+ * Discriminator for which elicitation handler owns a HandoffRecord.
+ * - 'ask_question'  — agent-originated ask_question tool call
+ * - 'mcp'           — MCP server elicitation (form / url mode)
+ * - 'path_approval' — filesystem path approval gate
  */
-export interface HandoffQuestion {
-  /** Elicitation type: 'text' | 'confirm' | 'choice' | 'multi_choice' | 'number'. */
-  type: string;
-  /** Full question text — NOT truncated. */
-  message: string;
-  /** Enumerated options for choice / multi_choice elicitations. */
-  choices?: string[];
-  /** Default value pre-selected for the human. */
-  default?: string | boolean | number;
-  /** Whether the human may type a free-form answer alongside enumerated choices. */
-  allowCustom?: boolean;
-  /** Whether the human may skip the question. */
-  allowSkip?: boolean;
-  /** Minimum value for number elicitations. */
-  min?: number;
-  /** Maximum value for number elicitations. */
-  max?: number;
-  /** Minimum text length for text elicitations. */
-  minLength?: number;
-  /** Maximum text length for text elicitations. */
-  maxLength?: number;
-}
+export type HandoffRequestType = 'ask_question' | 'mcp' | 'path_approval';
 
 /**
  * Telegram route information needed to re-present the question after a
@@ -65,6 +45,15 @@ export interface HandoffRoute {
   chatId: number;
   /** Optional topic thread id for supergroups with topics enabled. */
   threadId?: number;
+}
+
+/**
+ * Result returned by updateHandoffAnswer.
+ * won === true  — this caller claimed the record and wrote the answer.
+ * won === false — another caller already claimed it (first-writer-wins CAS).
+ */
+export interface UpdateHandoffResult {
+  won: boolean;
 }
 
 /**
@@ -81,8 +70,17 @@ export interface HandoffRecord {
   taskId: string;
   /** SDK session ID of the session that raised the elicitation. */
   sessionId: string;
-  /** Full elicitation question content for re-presentation. */
-  question: HandoffQuestion;
+  /**
+   * Complete serializable elicitation request, stored verbatim so recovery
+   * can re-present the exact question without access to the original session.
+   * Use `requestType` to determine which handler owns this record.
+   */
+  question: Record<string, unknown>;
+  /**
+   * Discriminator: which elicitation handler to invoke during recovery.
+   * 'ask_question' | 'mcp' | 'path_approval'
+   */
+  requestType: HandoffRequestType;
   /** Telegram route for re-presentation after restart. Optional in REPL context. */
   route?: HandoffRoute;
   /**
@@ -108,9 +106,9 @@ export interface HandoffRecord {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Ensure the handoffs directory exists before writing. */
+/** Ensure the handoffs directory exists before writing (owner-only: 0o700). */
 async function ensureHandoffsDir(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
 }
 
 /** Derive the per-task file path from the handoffs directory and taskId. */
@@ -118,12 +116,17 @@ function handoffPath(dir: string, taskId: string): string {
   return join(dir, `${taskId}.json`);
 }
 
-/** Atomically write JSON to dest via a tmp file in the same directory. */
+/** Derive the per-task lock file path (used by CAS in updateHandoffAnswer). */
+function lockPath(dir: string, taskId: string): string {
+  return join(dir, `${taskId}.lock`);
+}
+
+/** Atomically write JSON to dest via a tmp file in the same directory (owner-only: 0o600). */
 async function atomicWriteJson(dest: string, data: unknown): Promise<void> {
   const dir = join(dest, '..');
   const tmp = join(dir, `.tmp-${randomBytes(4).toString('hex')}.json`);
   try {
-    await writeFile(tmp, JSON.stringify(data), 'utf-8');
+    await writeFile(tmp, JSON.stringify(data), { encoding: 'utf-8', mode: 0o600 });
     await rename(tmp, dest);
   } catch (err) {
     // Best-effort cleanup of the temp file on failure.
@@ -199,10 +202,10 @@ export async function deleteHandoff(
 /**
  * List all HandoffRecords with status === 'pending'.
  *
- * Skips temp files (`.tmp-*.json`), unreadable files, and records whose JSON
- * cannot be parsed — so one corrupt file does not abort the whole listing.
- * Each skip is a silent no-op; callers should not assume the list is complete
- * if the directory may contain corrupt entries.
+ * Skips temp files (`.tmp-*.json`), lock files (`.lock`), unreadable files,
+ * and records whose JSON cannot be parsed — so one corrupt file does not abort
+ * the whole listing. Each skip is a silent no-op; callers should not assume
+ * the list is complete if the directory may contain corrupt entries.
  *
  * @param handoffsDir - Override the handoffs directory (defaults to `getHandoffsDir()`).
  * @returns Array of HandoffRecord items in status 'pending'.
@@ -238,39 +241,68 @@ export async function listPendingHandoffs(
 }
 
 /**
- * Record a human answer for the given taskId.
+ * Record a human answer for the given taskId using an exclusive-create lock
+ * file as a compare-and-swap gate to prevent TOCTOU races.
  *
- * Reads the existing record, validates it is still in 'pending' status,
- * updates the status to 'answered' along with answer/answeredAt/answerSource,
- * and rewrites atomically.
+ * Protocol:
+ *   1. Try to create `<taskId>.lock` with O_EXCL — fails with EEXIST if
+ *      another caller already holds it.
+ *   2. EEXIST → return { won: false } (not an error; first-writer-wins).
+ *   3. On lock acquisition, re-read the record and verify status is still
+ *      'pending'; if not, return { won: false }.
+ *   4. Write the updated record atomically, then release the lock.
+ *   5. Return { won: true } on success.
  *
  * @param taskId      - The daemon task ID to update.
  * @param answer      - The human's response value.
  * @param source      - Which surface provided the answer ('telegram' | 'web' | 'repl').
  * @param handoffsDir - Override the handoffs directory (defaults to `getHandoffsDir()`).
- * @throws If no record exists for the taskId, or if the record is not in 'pending' status.
+ * @throws If no record exists for the taskId.
+ * @returns UpdateHandoffResult — won: true if this caller claimed the record.
  */
 export async function updateHandoffAnswer(
   taskId: string,
   answer: unknown,
   source: string,
   handoffsDir: string = getHandoffsDir(),
-): Promise<void> {
-  const existing = await readHandoff(taskId, handoffsDir);
-  if (existing === null) {
-    throw new Error(`handoff-store: no record found for taskId ${taskId}`);
+): Promise<UpdateHandoffResult> {
+  const lock = lockPath(handoffsDir, taskId);
+
+  // Step 1: acquire exclusive lock via O_EXCL create.
+  try {
+    await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      return { won: false };
+    }
+    throw err;
   }
-  if (existing.status !== 'pending') {
-    throw new Error(
-      `handoff-store: cannot answer taskId ${taskId} in status '${existing.status}'`,
-    );
+
+  // Lock acquired — release in finally regardless of outcome.
+  try {
+    // Step 2: re-read record inside lock.
+    const existing = await readHandoff(taskId, handoffsDir);
+    if (existing === null) {
+      throw new Error(`handoff-store: no record found for taskId ${taskId}`);
+    }
+
+    // Step 3: guard — another winner may have landed between our EEXIST check
+    // and this read (shouldn't happen with O_EXCL, but be defensive).
+    if (existing.status !== 'pending') {
+      return { won: false };
+    }
+
+    // Step 4: write updated record atomically.
+    const updated: HandoffRecord = {
+      ...existing,
+      status: 'answered',
+      answer,
+      answeredAt: new Date().toISOString(),
+      answerSource: source,
+    };
+    await atomicWriteJson(handoffPath(handoffsDir, taskId), updated);
+    return { won: true };
+  } finally {
+    try { await unlink(lock); } catch { /* ignore — lock cleanup is best-effort */ }
   }
-  const updated: HandoffRecord = {
-    ...existing,
-    status: 'answered',
-    answer,
-    answeredAt: new Date().toISOString(),
-    answerSource: source,
-  };
-  await atomicWriteJson(handoffPath(handoffsDir, taskId), updated);
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -22,7 +22,8 @@ function makeRecord(overrides: Partial<HandoffRecord> = {}): HandoffRecord {
     question: {
       type: 'text',
       message: 'What is your name?',
-    },
+    } as Record<string, unknown>,
+    requestType: 'ask_question',
     createdAt: new Date().toISOString(),
     status: 'pending',
     originalCommand: '/test-command',
@@ -49,7 +50,7 @@ beforeEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe('writeHandoff + readHandoff', () => {
-  it('round-trips a full HandoffRecord including optional fields', async () => {
+  it('round-trips a full HandoffRecord including optional fields (ask_question)', async () => {
     const record = makeRecord({
       taskId: 'q-1716000000000-abc123',
       sessionId: 'sess-roundtrip',
@@ -60,7 +61,8 @@ describe('writeHandoff + readHandoff', () => {
         default: 'A',
         allowCustom: false,
         allowSkip: true,
-      },
+      } as Record<string, unknown>,
+      requestType: 'ask_question',
       route: { chatId: 123456, threadId: 7 },
       elicitId: 'elicit-xyz',
       originalCommand: '/run-something --flag',
@@ -72,15 +74,42 @@ describe('writeHandoff + readHandoff', () => {
     expect(read).not.toBeNull();
     expect(read?.taskId).toBe(record.taskId);
     expect(read?.sessionId).toBe(record.sessionId);
-    expect(read?.question.type).toBe('choice');
-    expect(read?.question.choices).toEqual(['A', 'B', 'C']);
-    expect(read?.question.default).toBe('A');
-    expect(read?.question.allowSkip).toBe(true);
+    expect(read?.requestType).toBe('ask_question');
+    expect(read?.question['type']).toBe('choice');
+    expect(read?.question['choices']).toEqual(['A', 'B', 'C']);
+    expect(read?.question['default']).toBe('A');
+    expect(read?.question['allowSkip']).toBe(true);
     expect(read?.route?.chatId).toBe(123456);
     expect(read?.route?.threadId).toBe(7);
     expect(read?.elicitId).toBe('elicit-xyz');
     expect(read?.status).toBe('pending');
     expect(read?.originalCommand).toBe('/run-something --flag');
+  });
+
+  it('round-trips an MCP-style question with requestType mcp', async () => {
+    const record = makeRecord({
+      taskId: 'q-mcp-roundtrip',
+      sessionId: 'sess-mcp',
+      question: {
+        mode: 'form',
+        message: 'Please fill in the form',
+        requestedSchema: { properties: { name: { type: 'string' } } },
+        title: 'MCP Form',
+        serverName: 'my-mcp-server',
+      } as Record<string, unknown>,
+      requestType: 'mcp',
+    });
+
+    await writeHandoff(record, testDir);
+    const read = await readHandoff(record.taskId, testDir);
+
+    expect(read).not.toBeNull();
+    expect(read?.requestType).toBe('mcp');
+    expect(read?.question['mode']).toBe('form');
+    expect(read?.question['title']).toBe('MCP Form');
+    expect((read?.question['requestedSchema'] as Record<string, unknown>)['properties']).toEqual({
+      name: { type: 'string' },
+    });
   });
 
   it('creates the handoffs directory if it does not exist', async () => {
@@ -187,13 +216,15 @@ describe('listPendingHandoffs', () => {
 // ---------------------------------------------------------------------------
 
 describe('updateHandoffAnswer', () => {
-  it('transitions a pending record to answered and records metadata', async () => {
+  it('transitions a pending record to answered and returns { won: true }', async () => {
     const record = makeRecord({ taskId: 'q-answer-me' });
     await writeHandoff(record, testDir);
 
     const before = Date.now();
-    await updateHandoffAnswer(record.taskId, 'Alice', 'telegram', testDir);
+    const result = await updateHandoffAnswer(record.taskId, 'Alice', 'telegram', testDir);
     const after = Date.now();
+
+    expect(result.won).toBe(true);
 
     const read = await readHandoff(record.taskId, testDir);
     expect(read?.status).toBe('answered');
@@ -210,16 +241,17 @@ describe('updateHandoffAnswer', () => {
     const record = makeRecord({
       taskId: 'q-preserve-fields',
       sessionId: 'sess-preserve',
-      question: { type: 'confirm', message: 'Are you sure?' },
+      question: { type: 'confirm', message: 'Are you sure?' } as Record<string, unknown>,
       route: { chatId: 9999 },
       originalCommand: '/run-preserved',
     });
     await writeHandoff(record, testDir);
-    await updateHandoffAnswer(record.taskId, true, 'web', testDir);
+    const result = await updateHandoffAnswer(record.taskId, true, 'web', testDir);
+    expect(result.won).toBe(true);
 
     const read = await readHandoff(record.taskId, testDir);
     expect(read?.sessionId).toBe('sess-preserve');
-    expect(read?.question.message).toBe('Are you sure?');
+    expect(read?.question['message']).toBe('Are you sure?');
     expect(read?.route?.chatId).toBe(9999);
     expect(read?.originalCommand).toBe('/run-preserved');
     expect(read?.answer).toBe(true);
@@ -232,7 +264,7 @@ describe('updateHandoffAnswer', () => {
     ).rejects.toThrow(/no record found/);
   });
 
-  it('throws if the record is not in pending status', async () => {
+  it('returns { won: false } if the record is not in pending status', async () => {
     const record = makeRecord({
       taskId: 'q-already-answered',
       status: 'answered',
@@ -241,9 +273,54 @@ describe('updateHandoffAnswer', () => {
       answerSource: 'telegram',
     });
     await writeHandoff(record, testDir);
-    await expect(
-      updateHandoffAnswer(record.taskId, 'second answer', 'web', testDir),
-    ).rejects.toThrow(/status 'answered'/);
+    const result = await updateHandoffAnswer(record.taskId, 'second answer', 'web', testDir);
+    expect(result.won).toBe(false);
+  });
+
+  it('CAS: exactly one concurrent caller wins when two race for the same taskId', async () => {
+    const record = makeRecord({ taskId: 'q-cas-race' });
+    await writeHandoff(record, testDir);
+
+    // Fire both calls in parallel — only one should acquire the exclusive lock.
+    const [r1, r2] = await Promise.all([
+      updateHandoffAnswer(record.taskId, 'answer-from-caller-1', 'telegram', testDir),
+      updateHandoffAnswer(record.taskId, 'answer-from-caller-2', 'web', testDir),
+    ]);
+
+    const winners = [r1.won, r2.won].filter(Boolean);
+    const losers = [r1.won, r2.won].filter((w) => !w);
+
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+
+    // Final record must be in 'answered' status — written exactly once.
+    const final = await readHandoff(record.taskId, testDir);
+    expect(final?.status).toBe('answered');
+    expect(final?.answeredAt).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File permissions
+// ---------------------------------------------------------------------------
+
+describe('file permissions', () => {
+  // Permissions are reliable on Linux (our CI target). Skip on other platforms.
+  const itOnLinux = process.platform === 'linux' ? it : it.skip;
+
+  itOnLinux('handoffs directory is created with mode 0o700', async () => {
+    const nested = join(testDir, 'perms-dir');
+    const record = makeRecord({ taskId: 'q-perms-dir' });
+    await writeHandoff(record, nested);
+    const dirStat = await stat(nested);
+    expect(dirStat.mode & 0o777).toBe(0o700);
+  });
+
+  itOnLinux('written record file has mode 0o600', async () => {
+    const record = makeRecord({ taskId: 'q-perms-file' });
+    await writeHandoff(record, testDir);
+    const fileStat = await stat(join(testDir, `${record.taskId}.json`));
+    expect(fileStat.mode & 0o777).toBe(0o600);
   });
 });
 
@@ -292,7 +369,6 @@ describe('concurrent writes', () => {
 // Temp dir cleanup (after all tests in file)
 // ---------------------------------------------------------------------------
 
-import { afterAll } from 'vitest';
 afterAll(async () => {
   try {
     await rm(testDir, { recursive: true, force: true });
