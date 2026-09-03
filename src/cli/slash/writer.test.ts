@@ -272,5 +272,56 @@ describe('createConsoleWriter — width bounding', () => {
 
       expect(captured).toEqual([wide]);
     });
+
+    it('raw() passes CR-containing segments through unmodified on a TTY', () => {
+      // Contract: \r is a terminal control character used by progress bars to
+      // overwrite in place. boundLineToTerminal must NOT be applied to segments
+      // that contain \r — doing so would mangle the in-place frames emitted by
+      // tools like git, pip, and npm when /sh replays captured output.
+      setTerminal(40, true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      // A progress-bar sequence: each frame overwrites via \r, separated by \n
+      const frame1 = 'Downloading: [##########          ] 50%\r';
+      const frame2 = 'Downloading: [####################] 100%\r';
+      const progressOutput = frame1 + '\n' + frame2;
+
+      w.raw(progressOutput);
+
+      const emitted = stdoutSpy.mock.calls[0]?.[0] as string;
+      // The CR-containing segments must survive byte-identical — no truncation,
+      // no wrapping, no \r stripped out.
+      expect(emitted).toBe(progressOutput);
+    });
+
+    it('raw() bounds pure-text lines but not CR lines in mixed content on a TTY', () => {
+      // Contract: a raw() payload that mixes wide plain text with CR-based
+      // progress frames must bound only the plain-text portions. The CR frames
+      // must pass through unchanged regardless of their display length.
+      setTerminal(40, true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      const widePlain = 'x'.repeat(80);          // pure text — must be bounded
+      const crFrame = 'Progress: 50%\r';         // terminal control — must pass through
+      const mixed = widePlain + '\n' + crFrame;
+
+      w.raw(mixed);
+
+      const emitted = stdoutSpy.mock.calls[0]?.[0] as string;
+      const parts = emitted.split('\n');
+      // The CR frame must be the last segment and byte-identical to the original.
+      // (boundLineToTerminal may split the wide plain portion into multiple \n-separated
+      // rows, so we cannot rely on a fixed index for the plain portion — only the last
+      // segment is guaranteed to be the CR frame.)
+      const crResult = parts[parts.length - 1];
+      expect(crResult).toBe(crFrame);
+      // Every non-CR segment must fit within the terminal width
+      const plainParts = parts.slice(0, parts.length - 1);
+      for (const part of plainParts) {
+        expect(displayWidth(stripAnsi(part))).toBeLessThanOrEqual(40);
+      }
+    });
   });
 });
