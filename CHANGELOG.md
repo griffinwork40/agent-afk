@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.5] - 2026-09-03
+
+### Fixed
+- suffix viewport for long input in mid-turn prompt (#1477) (#1478) (9185b471)
+
 ## [5.178.4] - 2026-09-03
 
 ### Fixed
