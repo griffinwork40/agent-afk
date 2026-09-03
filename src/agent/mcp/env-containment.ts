@@ -143,7 +143,8 @@ export function checkSecretExpansion(
     warning:
       `[mcp:${serverName}] blocked secret expansion: \${${varName}} matches a known-secret ` +
       `pattern and this is a project-local server. ` +
-      `To opt in, add \`"allowSecretEnv": ["${varName}"]\` to this server's config in .mcp.json.`,
+      `To opt in, add \`"allowSecretEnv": ["${varName}"]\` to this server's entry in ` +
+      `~/.afk/config/mcp.json (not in the project .mcp.json — project files cannot self-authorize).`,
   };
 }
 

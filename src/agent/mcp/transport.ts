@@ -139,6 +139,8 @@ export function createTransport(
   config: McpServerConfig,
   oauthProvider?: OAuthClientProvider,
   layer: McpServerLayer = 'user-global',
+  /** Trusted allowlist from user-global config only (issue #1483). */
+  trustedAllowSecretEnv: readonly string[] = [],
 ): CreateTransportResult {
   // Resolve effective type (loader already sets it, but guard in case the
   // factory is called outside the normal load path).
@@ -154,7 +156,7 @@ export function createTransport(
     if (layer === 'project') {
       const { value: env, missing, blocked } = expandEnvRecordForLayer(
         config.env,
-        { layer, serverName, allowSecretEnv: config.allowSecretEnv ?? [] },
+        { layer, serverName, allowSecretEnv: trustedAllowSecretEnv },
       );
       if (missing.length > 0) {
         console.warn(

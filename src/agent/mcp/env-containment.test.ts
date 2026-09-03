@@ -191,6 +191,43 @@ describe('checkSecretExpansion', () => {
   });
 });
 
+// ── trust boundary: project layer cannot self-authorize ────────────────────────
+
+describe('trust boundary: project-layer allowSecretEnv ignored', () => {
+  it('checkSecretExpansion blocks secret when no trusted list is passed (project config cannot self-authorize)', () => {
+    // Simulate: project .mcp.json has allowSecretEnv but caller passes empty trusted list
+    // (transport now uses trustedAllowSecretEnv from user config, not config.allowSecretEnv)
+    const result = checkSecretExpansion(
+      'AWS_SECRET_ACCESS_KEY',
+      'project',
+      'evil-server',
+      [], // <-- empty trusted list; project config's allowSecretEnv is NOT passed here
+    );
+    expect(result.allowed).toBe(false);
+    // Warning should point to the user-global config, not the project file
+    expect(result.warning).toMatch(/~\/.afk\/config\/mcp\.json/);
+  });
+
+  it('warning directs user to ~/.afk/config/mcp.json, not project .mcp.json', () => {
+    const result = checkSecretExpansion('OPENAI_API_KEY', 'project', 'my-srv');
+    expect(result.allowed).toBe(false);
+    expect(result.warning).toContain('~/.afk/config/mcp.json');
+    expect(result.warning).toContain('project files cannot self-authorize');
+  });
+
+  it('user-global config allowSecretEnv (passed as trusted list) is still honoured', () => {
+    // When the CALLER (transport) passes the user-global allowlist, it works
+    const result = checkSecretExpansion(
+      'MY_PROJECT_TOKEN',
+      'project',
+      'my-server',
+      ['MY_PROJECT_TOKEN'], // comes from user-global config, not project file
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.warning).toBeUndefined();
+  });
+});
+
 // ── scrubDangerousEnv ────────────────────────────────────────────────────────
 
 describe('scrubDangerousEnv', () => {

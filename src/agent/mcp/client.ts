@@ -90,6 +90,8 @@ export class McpClient {
   private readonly serverName: string;
   private readonly config: McpServerConfig;
   private readonly layer: McpServerLayer;
+  /** Trusted allowlist from user-global config (issue #1483). */
+  private readonly trustedAllowSecretEnv: readonly string[];
   private client: Client | undefined;
   private connected = false;
   /**
@@ -117,10 +119,11 @@ export class McpClient {
    */
   onToolListChanged?: () => void;
 
-  constructor(serverName: string, config: McpServerConfig, layer: McpServerLayer = 'user-global') {
+  constructor(serverName: string, config: McpServerConfig, layer: McpServerLayer = 'user-global', trustedAllowSecretEnv: readonly string[] = []) {
     this.serverName = serverName;
     this.config = config;
     this.layer = layer;
+    this.trustedAllowSecretEnv = trustedAllowSecretEnv;
   }
 
   /**
@@ -157,6 +160,7 @@ export class McpClient {
       this.config,
       oauthProvider,
       this.layer,
+      this.trustedAllowSecretEnv,
     );
 
     const client = new Client(CLIENT_INFO, { capabilities: CLIENT_CAPABILITIES });
@@ -459,16 +463,17 @@ function buildTransportPair(
   config: McpServerConfig,
   oauthProvider: KeychainOAuthProvider | undefined,
   layer: McpServerLayer = 'user-global',
+  trustedAllowSecretEnv: readonly string[] = [],
 ): {
   primary: import('./transport.js').CreateTransportResult;
   fallback: (() => import('./transport.js').CreateTransportResult) | null;
 } {
   const effectiveType = config.type ?? (config.command ? 'stdio' : 'streamable-http');
-  const primary = createTransport(serverName, config, oauthProvider, layer);
+  const primary = createTransport(serverName, config, oauthProvider, layer, trustedAllowSecretEnv);
   // Only streamable-HTTP supports the SSE fallback probe.
   const fallback =
     effectiveType === 'streamable-http'
-      ? () => createTransport(serverName, { ...config, type: 'sse' }, oauthProvider, layer)
+      ? () => createTransport(serverName, { ...config, type: 'sse' }, oauthProvider, layer, trustedAllowSecretEnv)
       : null;
   return { primary, fallback };
 }

@@ -73,6 +73,12 @@ export interface McpManagerInitOptions {
    * tracking so call sites don't have to repeat the logic.
    */
   serverLayers?: Record<string, McpServerLayer>;
+  /**
+   * Trusted secret-expansion allowlists from user-global config only (issue #1483).
+   * Maps server name → allowed variable names. Passed to `createTransport` so
+   * project-layer servers cannot self-authorize their own `allowSecretEnv`.
+   */
+  userAllowSecretEnv?: Record<string, string[]>;
 }
 
 /**
@@ -155,6 +161,7 @@ export class McpManager {
       }
 
       const serverLayer: McpServerLayer = opts.serverLayers?.[serverName] ?? 'user-global';
+      const trustedAllow: readonly string[] = opts.userAllowSecretEnv?.[serverName] ?? [];
 
       if (config.disabled) {
         records.set(serverName, {
@@ -180,7 +187,7 @@ export class McpManager {
       const record: ServerRecord = { client: undefined, tools: [], state, layer: serverLayer };
       records.set(serverName, record);
 
-      const client = new McpClient(serverName, config, serverLayer);
+      const client = new McpClient(serverName, config, serverLayer, trustedAllow);
       record.client = client;
 
       // Capture stderr-style transport errors so a server that dies mid-

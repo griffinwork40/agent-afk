@@ -59,6 +59,20 @@ export interface LoadedMcpConfig {
    * Servers from `--mcp-config` → `'cli'`
    */
   serverLayers: Record<string, McpServerLayer>;
+  /**
+   * Secret-expansion allowlist extracted ONLY from user-global config entries
+   * (issue #1483). Maps server name → `allowSecretEnv` array from the
+   * user's `~/.afk/config/mcp.json`.
+   *
+   * Project-layer `.mcp.json` cannot self-authorize secret expansion — an
+   * untrusted repo could include both the `env` placeholder and the
+   * `allowSecretEnv` opt-in in the same file, making the gate self-bypassing.
+   * Only the operator's own user-global config is the trusted source of truth.
+   *
+   * Transport code must use THIS map (not `config.allowSecretEnv`) when
+   * deciding whether to expand a secret variable for a project-local server.
+   */
+  userAllowSecretEnv: Record<string, string[]>;
 }
 
 /**
@@ -252,7 +266,7 @@ function validateServer(
  */
 export function loadMcpConfigFile(path: string): LoadedMcpConfig {
   if (!existsSync(path)) {
-    return { mcpServers: {}, sources: [], warnings: [], serverLayers: {} };
+    return { mcpServers: {}, sources: [], warnings: [], serverLayers: {}, userAllowSecretEnv: {} };
   }
   const warnings: string[] = [];
   let parsed: unknown;
@@ -261,17 +275,17 @@ export function loadMcpConfigFile(path: string): LoadedMcpConfig {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`mcp.json at ${path}: parse error — ${msg}`);
-    return { mcpServers: {}, sources: [path], warnings, serverLayers: {} };
+    return { mcpServers: {}, sources: [path], warnings, serverLayers: {}, userAllowSecretEnv: {} };
   }
 
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     warnings.push(`mcp.json at ${path}: top-level must be an object`);
-    return { mcpServers: {}, sources: [path], warnings, serverLayers: {} };
+    return { mcpServers: {}, sources: [path], warnings, serverLayers: {}, userAllowSecretEnv: {} };
   }
   const file = parsed as McpConfigFile;
   const rawServers = file.mcpServers;
   if (rawServers === undefined || rawServers === null || typeof rawServers !== 'object') {
-    return { mcpServers: {}, sources: [path], warnings, serverLayers: {} };
+    return { mcpServers: {}, sources: [path], warnings, serverLayers: {}, userAllowSecretEnv: {} };
   }
 
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -283,9 +297,9 @@ export function loadMcpConfigFile(path: string): LoadedMcpConfig {
       warnings.push(`mcp.json at ${path}: skipping ${result.error}`);
     }
   }
-  // serverLayers is populated by loadMcpConfig() — the file loader doesn't
-  // know which layer it is in (that depends on which path was passed).
-  return { mcpServers, sources: [path], warnings, serverLayers: {} };
+  // serverLayers and userAllowSecretEnv are populated by loadMcpConfig() —
+  // the file loader doesn't know which layer it is in.
+  return { mcpServers, sources: [path], warnings, serverLayers: {}, userAllowSecretEnv: {} };
 }
 
 /**
@@ -491,10 +505,16 @@ export function loadMcpConfig(opts: LoadMcpConfigOptions = {}): LoadedMcpConfig 
 
   const mcpServers: Record<string, McpServerConfig> = {};
   const serverLayers: Record<string, McpServerLayer> = {};
+  // issue #1483 — collect allowSecretEnv ONLY from user-global / cli / plugin
+  // winners so a project-layer .mcp.json cannot self-authorize secret expansion.
+  const userAllowSecretEnv: Record<string, string[]> = {};
   for (const [name, tagged] of winners) {
     mcpServers[name] = tagged.config;
     serverLayers[name] = tagged.layer;
+    if (tagged.layer !== 'project' && tagged.config.allowSecretEnv && tagged.config.allowSecretEnv.length > 0) {
+      userAllowSecretEnv[name] = tagged.config.allowSecretEnv;
+    }
   }
 
-  return { mcpServers, sources: allSources, warnings: allWarnings, serverLayers };
+  return { mcpServers, sources: allSources, warnings: allWarnings, serverLayers, userAllowSecretEnv };
 }
