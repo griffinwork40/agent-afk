@@ -508,7 +508,21 @@ export function endTurnFlush(self: LifecycleHost): void {
     }
   }
 
-  // Step 2: Archive the FULL band (all rows, painted + pending) to scrollback
+  // Step 2a: Clear the live frame BEFORE the archive scroll.
+  // `buildScrollbackArchiveEscape` scrolls the entire viewport by the archive
+  // height, which shifts any still-painted frame rows (prompt, overlay, input)
+  // upward. The subsequent `disarm()` call's `logUpdate.clear()` erases at
+  // pre-scroll coordinates — leaving the shifted frame rows as viewport ghosts.
+  // Clearing first ensures the archive scroll operates against a blank slate.
+  // Best-effort: a closed TTY or a throw here is non-fatal; the archive and
+  // disarm will still clean up as much as possible.
+  try {
+    self.logUpdate.clear(self.scrollRegion?.getExtraRows() ?? 0);
+  } catch {
+    /* stdout closed or frame already cleared — carry on to archive */
+  }
+
+  // Step 2b: Archive the FULL band (all rows, painted + pending) to scrollback
   // as soft-wrappable logical lines via the shared archive path. `scrollbackFlushLines`
   // with count === bandLen emits the whole band; `buildScrollbackArchiveEscape`
   // paints it top-aligned at anchorFloor and scrolls it into scrollback.

@@ -265,6 +265,14 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
       } catch (e) {
         debugLog('[stream-renderer] borrow-dispose setOverlay: ' + String(e));
       }
+      // Stage 3 (#540 — single end-of-turn flush): flush the full retained band
+      // to scrollback now that geometry is stable (spinner off, overlay cleared).
+      // Mirrors the ownsCompositor path above. Must run BEFORE setInputMode so
+      // the archive write precedes any synchronous onSubmit that commitAbove may
+      // fire when the input mode flips to 'idle'.
+      try { ctx.compositorRef.current.endTurn(); } catch (e) {
+        debugLog('[stream-renderer] borrow-dispose endTurn: ' + String(e));
+      }
       try {
         ctx.compositorRef.current.setInputMode('idle');
       } catch (e) {
