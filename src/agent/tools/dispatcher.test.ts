@@ -1313,37 +1313,40 @@ describe('SessionToolDispatcher', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // drainBatchEvents — Phase 2 live batch-start indicator (issue #516)
+  // onBatchStart callback — Phase 2 live batch-start indicator (issue #516)
+  //
+  // The callback is invoked DURING executeBatch (synchronously at the top of
+  // each concurrent wave, before any handler fires) rather than after the
+  // await resolves. This lets the provider generator yield `tool.batch.start`
+  // events into the stream while tools are still in-flight.
   // ---------------------------------------------------------------------------
-  describe('drainBatchEvents (Phase 2 live batch-start events, issue #516)', () => {
+  describe('onBatchStart callback (Phase 2 live batch-start events, issue #516)', () => {
     const signal = new AbortController().signal;
 
     function makeBatchCall2(name: string, id?: string): ToolCall {
       return { id: id ?? `call-${name}`, name, input: name === 'echo' ? { message: name } : {}, signal };
     }
 
-    it('returns empty array before any executeBatch call', () => {
-      const dispatcher = makeDispatcher();
-      expect(dispatcher.drainBatchEvents()).toEqual([]);
-    });
-
-    it('emits one batch-start event for a concurrent safe wave of 2', async () => {
+    it('calls onBatchStart once for a concurrent safe wave of 2', async () => {
       const dispatcher = makeDispatcher({
         handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
         permissions: { allowedTools: ['read_file', 'glob'] },
       });
 
-      await dispatcher.executeBatch([makeBatchCall2('read_file'), makeBatchCall2('glob')]);
+      const events: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      await dispatcher.executeBatch(
+        [makeBatchCall2('read_file'), makeBatchCall2('glob')],
+        (batchSize, toolUseIds) => events.push({ batchSize, toolUseIds }),
+      );
 
-      const events = dispatcher.drainBatchEvents();
       expect(events).toHaveLength(1);
       expect(events[0]!.batchSize).toBe(2);
       expect(events[0]!.toolUseIds).toEqual(['call-read_file', 'call-glob']);
     });
 
-    it('emits one event per concurrent wave (multi-wave turn)', async () => {
+    it('calls onBatchStart once per concurrent wave (multi-wave turn)', async () => {
       // [safe, safe, unsafe, safe] → batches {read,glob}, {bash}, {grep}
-      // Only the size-2 batch emits; singleton sequential batches do not.
+      // Only the size-2 batch fires the callback; singleton sequential batches do not.
       const dispatcher = makeDispatcher({
         handlers: new Map([
           ['read_file', async () => ({ content: 'r' })],
@@ -1354,21 +1357,19 @@ describe('SessionToolDispatcher', () => {
         permissions: { allowedTools: ['read_file', 'glob', 'bash', 'grep'] },
       });
 
-      await dispatcher.executeBatch([
-        makeBatchCall2('read_file'),
-        makeBatchCall2('glob'),
-        makeBatchCall2('bash'),
-        makeBatchCall2('grep'),
-      ]);
+      const events: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      await dispatcher.executeBatch(
+        [makeBatchCall2('read_file'), makeBatchCall2('glob'), makeBatchCall2('bash'), makeBatchCall2('grep')],
+        (batchSize, toolUseIds) => events.push({ batchSize, toolUseIds }),
+      );
 
-      const events = dispatcher.drainBatchEvents();
-      // Only the concurrent 2-safe wave emits; bash and grep are singletons.
+      // Only the concurrent 2-safe wave fires the callback; bash and grep are singletons.
       expect(events).toHaveLength(1);
       expect(events[0]!.batchSize).toBe(2);
       expect(events[0]!.toolUseIds).toEqual(['call-read_file', 'call-glob']);
     });
 
-    it('emits no events for a fully sequential batch (all unsafe tools)', async () => {
+    it('does not call onBatchStart for a fully sequential batch (all unsafe tools)', async () => {
       const dispatcher = makeDispatcher({
         handlers: new Map([
           ['bash', async () => ({ content: 'b' })],
@@ -1377,36 +1378,83 @@ describe('SessionToolDispatcher', () => {
         permissions: { allowedTools: ['bash', 'edit_file'] },
       });
 
-      await dispatcher.executeBatch([makeBatchCall2('bash'), makeBatchCall2('edit_file')]);
+      const events: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      await dispatcher.executeBatch(
+        [makeBatchCall2('bash'), makeBatchCall2('edit_file')],
+        (batchSize, toolUseIds) => events.push({ batchSize, toolUseIds }),
+      );
 
-      expect(dispatcher.drainBatchEvents()).toEqual([]);
+      expect(events).toHaveLength(0);
     });
 
-    it('clears events after drain (second call returns empty)', async () => {
+    it('omitting onBatchStart leaves executeBatch behaving normally', async () => {
       const dispatcher = makeDispatcher({
         handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
         permissions: { allowedTools: ['read_file', 'glob'] },
       });
 
-      await dispatcher.executeBatch([makeBatchCall2('read_file'), makeBatchCall2('glob')]);
-      dispatcher.drainBatchEvents(); // consume
-      expect(dispatcher.drainBatchEvents()).toEqual([]); // second drain is empty
+      // No callback — should not throw and results should be correct.
+      const results = await dispatcher.executeBatch([makeBatchCall2('read_file'), makeBatchCall2('glob')]);
+      expect(results).toHaveLength(2);
+      expect(results[0]!.content).toBe('r');
+      expect(results[1]!.content).toBe('g');
     });
 
-    it('resets buffer between executeBatch calls (events from only the most recent call)', async () => {
+    it('onBatchStart fires each independent executeBatch call independently', async () => {
       const dispatcher = makeDispatcher({
         handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
         permissions: { allowedTools: ['read_file', 'glob'] },
       });
 
-      // First batch — don't drain
-      await dispatcher.executeBatch([makeBatchCall2('read_file', 'a'), makeBatchCall2('glob', 'b')]);
-      // Second batch — drain should see only second batch events
-      await dispatcher.executeBatch([makeBatchCall2('read_file', 'c'), makeBatchCall2('glob', 'd')]);
+      const firstEvents: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      await dispatcher.executeBatch(
+        [makeBatchCall2('read_file', 'a'), makeBatchCall2('glob', 'b')],
+        (batchSize, toolUseIds) => firstEvents.push({ batchSize, toolUseIds }),
+      );
 
-      const events = dispatcher.drainBatchEvents();
-      expect(events).toHaveLength(1);
-      expect(events[0]!.toolUseIds).toEqual(['c', 'd']);
+      const secondEvents: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      await dispatcher.executeBatch(
+        [makeBatchCall2('read_file', 'c'), makeBatchCall2('glob', 'd')],
+        (batchSize, toolUseIds) => secondEvents.push({ batchSize, toolUseIds }),
+      );
+
+      expect(firstEvents).toHaveLength(1);
+      expect(firstEvents[0]!.toolUseIds).toEqual(['a', 'b']);
+      expect(secondEvents).toHaveLength(1);
+      expect(secondEvents[0]!.toolUseIds).toEqual(['c', 'd']);
+    });
+
+    it('onBatchStart fires BEFORE handlers resolve (event arrives during pending window)', async () => {
+      // This is the core invariant: the callback must fire before the handler
+      // promises settle, so the provider can yield the badge while tools run.
+      const order: string[] = [];
+      let resolveHandler!: () => void;
+      const handlerDone = new Promise<void>((r) => { resolveHandler = r; });
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => {
+            await handlerDone;
+            order.push('handler-resolved');
+            return { content: 'r' };
+          }],
+          ['glob', async () => ({ content: 'g' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const batchPromise = dispatcher.executeBatch(
+        [makeBatchCall2('read_file'), makeBatchCall2('glob')],
+        (_batchSize, _toolUseIds) => { order.push('callback'); },
+      );
+
+      // Unblock the handler — callback must have already fired by now
+      // because it fires synchronously inside the wave before settleWithConcurrencyLimit.
+      resolveHandler();
+      await batchPromise;
+
+      // callback must appear before handler-resolved in execution order.
+      expect(order.indexOf('callback')).toBeLessThan(order.indexOf('handler-resolved'));
     });
 
     it('toolUseIds match the actual call ids passed to executeBatch', async () => {
@@ -1419,9 +1467,9 @@ describe('SessionToolDispatcher', () => {
         { id: 'toolu_abc', name: 'read_file', input: {}, signal },
         { id: 'toolu_xyz', name: 'glob', input: {}, signal },
       ];
-      await dispatcher.executeBatch(calls);
+      const events: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      await dispatcher.executeBatch(calls, (batchSize, toolUseIds) => events.push({ batchSize, toolUseIds }));
 
-      const events = dispatcher.drainBatchEvents();
       expect(events[0]!.toolUseIds).toEqual(['toolu_abc', 'toolu_xyz']);
     });
   });

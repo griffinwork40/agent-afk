@@ -149,12 +149,31 @@ export async function* dispatchAndAppendToolCalls({
     let dispatcherResults: ToolResult[];
     try {
       if (toolDispatcher.executeBatch) {
-        dispatcherResults = await toolDispatcher.executeBatch(calls);
-        // Phase 2 (issue #516): drain and yield batch-start events collected
-        // during executeBatch so the TUI sees the parallel-wave badge while
-        // tools are still in-flight (before any tool.output arrives).
-        if (toolDispatcher.drainBatchEvents) {
-          for (const ev of toolDispatcher.drainBatchEvents()) {
+        // Phase 2 (issue #516): emit batch-start events INTO the provider stream
+        // DURING the pending window — before any handler result arrives.
+        const pendingBatchEvents: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+        let notifyBatchEvent: (() => void) | null = null;
+        const onBatchStart = (batchSize: number, toolUseIds: string[]) => {
+          pendingBatchEvents.push({ batchSize, toolUseIds });
+          notifyBatchEvent?.();
+          notifyBatchEvent = null;
+        };
+
+        let execResult: ToolResult[] | undefined;
+        let execError: unknown;
+        let execDone = false;
+        const execPromise = toolDispatcher.executeBatch(calls, onBatchStart).then(
+          (r) => { execResult = r; execDone = true; notifyBatchEvent?.(); notifyBatchEvent = null; },
+          (e) => { execError = e; execDone = true; notifyBatchEvent?.(); notifyBatchEvent = null; },
+        );
+
+        // Interleave: yield batch-start events as they arrive, then await done.
+        while (!execDone || pendingBatchEvents.length > 0) {
+          if (pendingBatchEvents.length === 0 && !execDone) {
+            await new Promise<void>((resolve) => { notifyBatchEvent = resolve; });
+          }
+          while (pendingBatchEvents.length > 0) {
+            const ev = pendingBatchEvents.shift()!;
             yield {
               type: 'tool.batch.start' as const,
               batchSize: ev.batchSize,
@@ -163,6 +182,12 @@ export async function* dispatchAndAppendToolCalls({
             };
           }
         }
+        await execPromise;
+
+        if (execError !== undefined) {
+          throw execError; // caught by outer try/catch → batch-error results
+        }
+        dispatcherResults = execResult!;
       } else {
         dispatcherResults = [];
         for (const call of calls) {

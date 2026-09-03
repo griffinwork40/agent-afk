@@ -107,26 +107,51 @@ export async function* dispatchToolCalls(
   // Dispatch: batch (parallel for safe tools) or sequential fallback.
   let results: ToolResult[];
   if (input.toolDispatcher.executeBatch) {
-    try {
-      results = await input.toolDispatcher.executeBatch(calls);
-    } catch (err) {
-      results = calls.map(() => ({
-        content: `Tool batch execution failed: ${err instanceof Error ? err.message : String(err)}`,
-        isError: true as const,
-      }));
-    }
-    // Phase 2 (issue #516): drain and yield batch-start events collected
-    // during executeBatch. Each event fires before any tool.output so the
-    // TUI sees the parallel-wave badge while all tools are still in-flight.
-    if (input.toolDispatcher.drainBatchEvents) {
-      for (const ev of input.toolDispatcher.drainBatchEvents()) {
+    // Phase 2 (issue #516): emit batch-start events INTO the provider stream
+    // DURING the pending window — before any handler result arrives.
+    // `onBatchStart` is called synchronously at the top of each concurrent
+    // wave (inside runConcurrentBatch, before settleWithConcurrencyLimit),
+    // so pushing events here gives the TUI its [×N] badge while tools run.
+    const pendingBatchEvents: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+    let notifyBatchEvent: (() => void) | null = null;
+    const onBatchStart = (batchSize: number, toolUseIds: string[]) => {
+      pendingBatchEvents.push({ batchSize, toolUseIds });
+      notifyBatchEvent?.();
+      notifyBatchEvent = null;
+    };
+
+    let execResult: ToolResult[] | undefined;
+    let execError: unknown;
+    let execDone = false;
+    const execPromise = input.toolDispatcher.executeBatch(calls, onBatchStart).then(
+      (r) => { execResult = r; execDone = true; notifyBatchEvent?.(); notifyBatchEvent = null; },
+      (e) => { execError = e; execDone = true; notifyBatchEvent?.(); notifyBatchEvent = null; },
+    );
+
+    // Interleave: yield batch-start events as they arrive, then await done.
+    while (!execDone || pendingBatchEvents.length > 0) {
+      if (pendingBatchEvents.length === 0 && !execDone) {
+        await new Promise<void>((resolve) => { notifyBatchEvent = resolve; });
+      }
+      while (pendingBatchEvents.length > 0) {
+        const ev = pendingBatchEvents.shift()!;
         yield {
-          type: 'tool.batch.start',
+          type: 'tool.batch.start' as const,
           batchSize: ev.batchSize,
           toolUseIds: ev.toolUseIds,
           sessionId: input.ctx.sessionId,
         };
       }
+    }
+    await execPromise; // ensure microtasks settle (execResult already set)
+
+    if (execError !== undefined) {
+      results = calls.map(() => ({
+        content: `Tool batch execution failed: ${execError instanceof Error ? execError.message : String(execError)}`,
+        isError: true as const,
+      }));
+    } else {
+      results = execResult!;
     }
   } else {
     results = [];
