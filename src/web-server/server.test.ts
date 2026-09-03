@@ -272,14 +272,30 @@ describe('routing', () => {
     const pending = new Promise<{ name: string }[]>((resolve) => {
       release = resolve;
     });
-    const loader = vi.fn(() => pending);
+    // Contract: signal when the loader is actually invoked by the server,
+    // replacing the previous setTimeout(10) which was a timing assumption
+    // that failed on loaded CI runners (the event loop can take >10ms to
+    // accept loopback TCP connections under contention).
+    let signalLoaderReached!: () => void;
+    const loaderReached = new Promise<void>((r) => { signalLoaderReached = r; });
+    const loader = vi.fn(() => {
+      signalLoaderReached();
+      return pending;
+    });
     setCommandUniverseLoaderForTests(loader);
     const h = await start();
     const headers = { authorization: `Bearer ${h.token}` };
 
     const first = fetch(api(h, '/api/commands'), { headers });
     const second = fetch(api(h, '/api/commands'), { headers });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Wait for the first request to enter the loader, then yield so the
+    // second request can be accepted and enter handleCommands (where it
+    // hits the ??= branch and shares the in-flight promise). Without this
+    // second yield, release() could resolve the loader before the second
+    // request arrives, letting it read from the populated cache instead of
+    // proving the dedup path.
+    await loaderReached;
+    await new Promise((r) => { setImmediate(r); });
     expect(loader).toHaveBeenCalledTimes(1);
     release([{ name: '/help' }]);
 
