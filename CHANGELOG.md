@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.177.4] - 2026-09-03
+
+### Fixed
+- make per-direction token_breakdown fields optional instead of zero-fill (#1460) (#1469) (6f8d08d1)
+
+### Changed
+- add mtime-ordering regression test for get_facet latest resolution (#1463) (#1471) (959522ae)
+- close wrapping test coverage gaps from #1451/#1452/#1453 (#1462) (#1472) (f921fc34)
+
 ## [5.177.3] - 2026-09-03
 
 ### Fixed
