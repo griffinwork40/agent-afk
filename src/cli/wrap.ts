@@ -44,11 +44,12 @@ export function wrapToWidth(
             ansi + indentMarker.repeat(spaces.length),
           )
         : line;
-      return wrapAnsi(protectedLine, w, {
+      const wrapped = wrapAnsi(protectedLine, w, {
         hard: opts.breakLongWords ?? false,
         trim: true,
         wordWrap: true,
-      }).replaceAll(indentMarker ?? '\uE000', ' ');
+      });
+      return indentMarker ? wrapped.replaceAll(indentMarker, ' ') : wrapped;
     })
     .join('\n');
 }

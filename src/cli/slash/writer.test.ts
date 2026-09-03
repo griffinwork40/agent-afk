@@ -27,13 +27,16 @@ describe('createConsoleWriter — sink routing', () => {
       }
     });
 
-    it('raw() routes through process.stdout.write (no trailing newline)', () => {
+    it('raw() routes through process.stdout.write (no trailing newline) on non-TTY', () => {
       const spy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const origIsTTY = process.stdout.isTTY;
+      Object.defineProperty(process.stdout, 'isTTY', { configurable: true, writable: true, value: false });
       try {
         const w = createConsoleWriter();
         w.raw('no-newline');
         expect(spy).toHaveBeenCalledWith('no-newline');
       } finally {
+        Object.defineProperty(process.stdout, 'isTTY', { configurable: true, writable: true, value: origIsTTY });
         spy.mockRestore();
       }
     });
@@ -160,7 +163,6 @@ describe('createConsoleWriter — width bounding', () => {
     vi.restoreAllMocks();
   });
 
-  /** The real `/worktree list` row shape — ~100 columns of fixed padEnd(). */
   const wideTableRow =
     '  ' + 'some/path'.padEnd(45) + '  ' + 'owner'.padEnd(12) + '  ' + '3d'.padEnd(5) +
     '  ' + 'stale-dirty'.padEnd(22) + '  ' + 'warn';
@@ -215,5 +217,111 @@ describe('createConsoleWriter — width bounding', () => {
     w.line(wideTableRow);
 
     expect(calls).toEqual([wideTableRow]);
+  });
+
+  describe('raw() width guard', () => {
+    it('raw() bounds wide content per-line on a TTY', () => {
+      setTerminal(62, true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      w.raw(wideTableRow);
+
+      const emitted = stdoutSpy.mock.calls[0]?.[0] as string;
+      // Must have wrapped — the row is ~100 cols but the terminal is 62
+      const rows = emitted.split('\n');
+      expect(rows.length).toBeGreaterThan(1);
+      for (const row of rows) {
+        expect(displayWidth(row), `row exceeds 62: ${JSON.stringify(stripAnsi(row))}`).toBeLessThanOrEqual(62);
+      }
+    });
+
+    it('raw() passes multi-line text through with each line bounded independently on TTY', () => {
+      setTerminal(40, true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      // Two logical lines embedded in one raw() call
+      w.raw('a'.repeat(80) + '\n' + 'b'.repeat(80));
+
+      const emitted = stdoutSpy.mock.calls[0]?.[0] as string;
+      for (const row of emitted.split('\n')) {
+        expect(displayWidth(row)).toBeLessThanOrEqual(40);
+      }
+    });
+
+    it('raw() leaves non-TTY output byte-identical', () => {
+      setTerminal(40, false);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      const wide = 'x'.repeat(200);
+      w.raw(wide);
+
+      expect(stdoutSpy).toHaveBeenCalledWith(wide);
+    });
+
+    it('raw() with sink.rawFn is NOT bounded — sink owner is responsible', () => {
+      setTerminal(40, true);
+      const captured: string[] = [];
+      const sink = { fn: () => {}, rawFn: (t: string) => captured.push(t) };
+      const w = createConsoleWriter(sink);
+
+      const wide = 'x'.repeat(200);
+      w.raw(wide);
+
+      expect(captured).toEqual([wide]);
+    });
+
+    it('raw() passes CR-containing segments through unmodified on a TTY', () => {
+      // Contract: \r is a terminal control character used by progress bars to
+      // overwrite in place. boundLineToTerminal must NOT be applied to segments
+      // that contain \r — doing so would mangle the in-place frames emitted by
+      // tools like git, pip, and npm when /sh replays captured output.
+      setTerminal(40, true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      // A progress-bar sequence: each frame overwrites via \r, separated by \n
+      const frame1 = 'Downloading: [##########          ] 50%\r';
+      const frame2 = 'Downloading: [####################] 100%\r';
+      const progressOutput = frame1 + '\n' + frame2;
+
+      w.raw(progressOutput);
+
+      const emitted = stdoutSpy.mock.calls[0]?.[0] as string;
+      // The CR-containing segments must survive byte-identical — no truncation,
+      // no wrapping, no \r stripped out.
+      expect(emitted).toBe(progressOutput);
+    });
+
+    it('raw() bounds pure-text lines but not CR lines in mixed content on a TTY', () => {
+      // Contract: a raw() payload that mixes wide plain text with CR-based
+      // progress frames must bound only the plain-text portions. The CR frames
+      // must pass through unchanged regardless of their display length.
+      setTerminal(40, true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const w = createConsoleWriter();
+
+      const widePlain = 'x'.repeat(80);          // pure text — must be bounded
+      const crFrame = 'Progress: 50%\r';         // terminal control — must pass through
+      const mixed = widePlain + '\n' + crFrame;
+
+      w.raw(mixed);
+
+      const emitted = stdoutSpy.mock.calls[0]?.[0] as string;
+      const parts = emitted.split('\n');
+      // The CR frame must be the last segment and byte-identical to the original.
+      // (boundLineToTerminal may split the wide plain portion into multiple \n-separated
+      // rows, so we cannot rely on a fixed index for the plain portion — only the last
+      // segment is guaranteed to be the CR frame.)
+      const crResult = parts[parts.length - 1];
+      expect(crResult).toBe(crFrame);
+      // Every non-CR segment must fit within the terminal width
+      const plainParts = parts.slice(0, parts.length - 1);
+      for (const part of plainParts) {
+        expect(displayWidth(stripAnsi(part))).toBeLessThanOrEqual(40);
+      }
+    });
   });
 });

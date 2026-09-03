@@ -84,4 +84,21 @@ describe('wrapToWidth', () => {
     }
     expect(out.split('\n').length).toBeGreaterThan(1);
   });
+
+  it('does not corrupt genuine U+E000 bytes when all 256 PUA slots are occupied (indentMarker fallback path)', () => {
+    // Build a line that uses all 256 PUA code points (U+E000–U+E0FF) so that
+    // the indentMarker search finds no free candidate and falls back to undefined.
+    // The line must also be short enough that wrapAnsi leaves it unchanged.
+    const allPua = Array.from({ length: 256 }, (_, i) => String.fromCodePoint(0xe000 + i)).join('');
+    // The line starts with a leading space (so the indent-protect branch runs)
+    // followed by the block of all PUA chars. We use a narrow enough line that
+    // the content itself doesn't wrap (width = 512 covers everything).
+    const line = ' ' + allPua;
+    const out = wrapToWidth(line, 512);
+    // The genuine U+E000 byte must survive untouched — it must NOT have been
+    // replaced with a space by the now-skipped `.replaceAll(indentMarker ?? '\uE000', ' ')`.
+    expect(out).toContain('\uE000');
+    // The overall content is preserved (minus any leading-space trim wrap-ansi may apply).
+    expect(out).toContain(allPua);
+  });
 });

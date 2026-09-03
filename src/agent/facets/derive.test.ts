@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(2);
+    expect(facet.facet_version).toBe(3);
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -314,10 +314,12 @@ describe('deriveSessionFacet', () => {
     });
     expect(facet.token_breakdown).toBeDefined();
     expect(facet.token_breakdown?.cost_usd).toBe(0.05);
-    expect(facet.token_breakdown?.input).toBe(0);
-    expect(facet.token_breakdown?.output).toBe(0);
-    expect(facet.token_breakdown?.cache_read).toBe(0);
-    expect(facet.token_breakdown?.cache_creation).toBe(0);
+    // Per-direction fields are omitted (not zero-filled) when StoredSession
+    // only carries totalCostUsd — they are not available as per-direction counts.
+    expect(facet.token_breakdown?.input).toBeUndefined();
+    expect(facet.token_breakdown?.output).toBeUndefined();
+    expect(facet.token_breakdown?.cache_read).toBeUndefined();
+    expect(facet.token_breakdown?.cache_creation).toBeUndefined();
   });
 
   it('token_breakdown absent when neither totalCostUsd nor totalTokens set', () => {

@@ -23,7 +23,7 @@
 import { z } from 'zod';
 
 /** Bump when the facet shape or derivation changes — invalidates caches. */
-export const FACET_VERSION = 2;
+export const FACET_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -112,12 +112,20 @@ export const WorldChangesSchema = z.object({
   mutated: z.boolean(),
 });
 
-/** Token and cost breakdown for a session (populated when session.totalCostUsd is present). */
+/**
+ * Token and cost breakdown for a session (populated when session.totalCostUsd is present).
+ *
+ * Contract: cost_usd is always present when token_breakdown is included.
+ * input/output/cache_read/cache_creation are omitted rather than zero-filled
+ * because StoredSession only carries totalTokens (a scalar sum); per-direction
+ * counts are not available from the persisted session shape and zero-filling
+ * would imply they are real measurements.
+ */
 export const TokenBreakdownSchema = z.object({
-  input: z.number(),
-  output: z.number(),
-  cache_read: z.number(),
-  cache_creation: z.number(),
+  input: z.number().optional(),
+  output: z.number().optional(),
+  cache_read: z.number().optional(),
+  cache_creation: z.number().optional(),
   cost_usd: z.number(),
 });
 export type TokenBreakdown = z.infer<typeof TokenBreakdownSchema>;

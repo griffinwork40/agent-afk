@@ -956,10 +956,15 @@ describe('renderMarkdownToTerminal', () => {
         '```json\n{"longPropertyName":"abcdefghijklmnopqrstuvwxyz"}\n```\n',
         { maxWidth: 20 },
       );
+      // Exclude the copy-hint header line ("│ json ── /cp N") which also
+      // starts with "│ " after stripping ANSI. The filter is intentionally
+      // exact: a prior version used `l.trim() !== '|'` (over-inclusive) and
+      // the `> 1` assertion passed by accident. The JSON body splits into
+      // exactly 3 gutter rows at maxWidth 20.
       const bodyLines = raw.split('\n').filter((line) => stripAnsi(line).startsWith('│ ') &&
         !stripAnsi(line).includes('/cp'));
 
-      expect(bodyLines.length).toBeGreaterThan(1);
+      expect(bodyLines).toHaveLength(3);
       for (const line of bodyLines) {
         expect(stringWidth(stripAnsi(line))).toBeLessThanOrEqual(20);
         expect(line).toContain('\x1b[');
