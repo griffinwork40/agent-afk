@@ -33,6 +33,7 @@
     "src/cli/elicitation/agent-question.ts": { "loc": 399, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/slash/commands/info.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts": { "loc": 512, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/terminal-compositor.ts": { "loc": 352, "reason": "Stage 3 (#540): endTurn() delegator added; concern extracted to terminal-compositor.lifecycle.ts" },
     "src/config/env.ts": { "loc": 1680, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/contracts.ts": { "loc": 491, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
