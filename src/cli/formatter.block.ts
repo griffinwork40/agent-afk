@@ -1,5 +1,5 @@
 import { type Token, type Tokens } from 'marked';
-import { wrapToWidth } from './wrap.js';
+import { wrapToWidth, hardWrapToWidth } from './wrap.js';
 import { highlightCode } from './syntax-highlight.js';
 import { palette } from './palette.js';
 import { registerCodeBlock } from './code-block-register.js';
@@ -27,12 +27,17 @@ import { registerCodeBlock } from './code-block-register.js';
 export function renderBlockquote(
   bq: Tokens.Blockquote,
   maxTableWidth: number | undefined,
-  renderTokens: (tokens: Token[]) => string,
+  renderTokens: (tokens: Token[], maxWidth?: number) => string,
 ): string {
-  const inner = bq.tokens ? renderTokens(bq.tokens as Token[]) : bq.text;
   const prefix = palette.dim('  │ ');
   const prefixCols = 4; // "  │ " = 2 spaces + box-draw + space
-  const innerWidth = maxTableWidth ? Math.max(1, maxTableWidth - prefixCols) : undefined;
+  const innerWidth = maxTableWidth !== undefined
+    ? Math.max(1, maxTableWidth - prefixCols)
+    : undefined;
+  // Render nested blocks against the space left after this blockquote's
+  // prefix. In particular, code blocks must wrap once at their final inner
+  // width rather than first at the terminal width and then again here.
+  const inner = bq.tokens ? renderTokens(bq.tokens as Token[], innerWidth) : bq.text;
   const lines: string[] = [];
   for (const para of inner.split('\n')) {
     // breakLongWords: same contract as the list branch above — an
@@ -40,7 +45,7 @@ export function renderBlockquote(
     // here over budget, and the indent-blind commit-time wrap would
     // re-split it at column 0, orphaning the continuation outside the
     // `│ ` gutter.
-    const wrapped = innerWidth
+    const wrapped = innerWidth !== undefined
       ? wrapToWidth(para, innerWidth, { breakLongWords: true })
       : para;
     for (const line of wrapped.split('\n')) {
@@ -75,10 +80,6 @@ export function renderCodeBlock(
   code: Tokens.Code,
   maxTableWidth: number | undefined,
 ): string {
-  // maxTableWidth is accepted but not currently used — reserved for a future
-  // hard-wrap pass on code blocks, and accepted here so the signature is
-  // forward-compatible without a breaking API change.
-  void maxTableWidth;
   const lang = code.lang || 'text';
   // Loud-fail empty fences. Without this guard, a model emitting
   // "```bash\n```" (open + language + close with no body) renders as
@@ -101,10 +102,39 @@ export function renderCodeBlock(
   const blockIndex = registerCodeBlock(lang, code.text);
 
   const highlighted = highlightCode(code.text, lang);
-  const bodyLines = highlighted.split('\n');
+  const rawBodyLines = highlighted.split('\n');
   // Drop trailing empty line so adjacent blocks don't double-space.
-  if (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') bodyLines.pop();
+  if (rawBodyLines.length > 0 && rawBodyLines[rawBodyLines.length - 1] === '') rawBodyLines.pop();
   const gutter = palette.dim('│ ');
+  // Invariant: gutter is "│ " — exactly 2 display columns (box-draw char + space).
+  // When maxTableWidth is provided, hard-wrap each body line to the available
+  // content width (maxTableWidth - 2) so that lines wider than the terminal do
+  // not cause the terminal to auto-wrap at column 0 and lose the gutter prefix
+  // on continuation rows. hardWrapToWidth is character-level (not word-aware),
+  // matching terminal behavior for code, and preserves ANSI styling across rows.
+  // When maxTableWidth is undefined (non-streaming path), leave behavior unchanged.
+  // U+2502 is one column on standard terminals, plus the following space.
+  // Terminals that render East Asian Ambiguous characters wide remain a
+  // broader, pre-existing edge case for the TUI's box-drawing characters.
+  const gutterCols = 2;
+  const contentWidth = maxTableWidth !== undefined ? Math.max(1, maxTableWidth - gutterCols) : undefined;
+  const bodyLines: string[] = [];
+  for (const line of rawBodyLines) {
+    if (contentWidth !== undefined) {
+      const wrapped = hardWrapToWidth(line, contentWidth);
+      const rows = wrapped.split('\n');
+      // A wrapping implementation may terminate an exactly-full final row
+      // with a newline. Do not turn that implementation detail into a
+      // content-free gutter row; genuine blank source lines still arrive as
+      // their own entry in rawBodyLines and remain visible.
+      if (rows.length > 1 && rows[rows.length - 1] === '') rows.pop();
+      for (const row of rows) {
+        bodyLines.push(row);
+      }
+    } else {
+      bodyLines.push(line);
+    }
+  }
   const body = bodyLines.map((line) => gutter + line).join('\n');
   // Language tag + copy hint. The `/cp N` hint tells the user which index
   // to pass to `/copy` to grab this block. When there is no explicit

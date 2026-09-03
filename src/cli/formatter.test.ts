@@ -907,6 +907,104 @@ describe('renderMarkdownToTerminal', () => {
     });
   });
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Code block width capping (HIGH-severity fix): renderCodeBlock must use
+  // maxTableWidth to hard-wrap body lines so that wide code lines do not cause
+  // the terminal to auto-wrap at col 0, losing the │ gutter on continuation rows.
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('code block width capping', () => {
+    it('wraps a line wider than maxTableWidth and stamps gutter on every physical row', () => {
+      // maxWidth 20 → contentWidth 18 (20 - 2 for "│ " gutter).
+      // A 36-char line should split into two 18-char rows, each prefixed with │.
+      const longLine = 'x'.repeat(36);
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`\`\`\`\n${longLine}\n\`\`\`\n`, { maxWidth: 20 }),
+      );
+      const lines = out.split('\n').filter((l) => l.includes('x'));
+      // Expect exactly two gutter body rows (not one overflowing row or an
+      // extra, content-free gutter row).
+      expect(lines).toEqual([`│ ${'x'.repeat(18)}`, `│ ${'x'.repeat(18)}`]);
+      expect(out).not.toMatch(/^│ $/m);
+      // Each row must not exceed maxTableWidth (20) display columns.
+      for (const l of lines) {
+        expect(stringWidth(l)).toBeLessThanOrEqual(20);
+      }
+    });
+
+    it('leaves short lines unaffected when maxTableWidth is set', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal('```bash\ngit status\n```\n', { maxWidth: 80 }),
+      );
+      // The short line must appear verbatim (single gutter row).
+      const bodyLines = out.split('\n').filter((l) => l.startsWith('│ ') && l.includes('git'));
+      expect(bodyLines.length).toBe(1);
+      expect(bodyLines[0]).toBe('│ git status');
+    });
+
+    it('does not wrap when maxTableWidth is undefined', () => {
+      // Without maxWidth, renderMarkdownToTerminal does not pass maxTableWidth,
+      // so the long line must pass through unsplit.
+      const longLine = 'z'.repeat(200);
+      const out = stripAnsi(renderMarkdownToTerminal(`\`\`\`\n${longLine}\n\`\`\`\n`));
+      const bodyLines = out.split('\n').filter((l) => l.startsWith('│ ') && l.includes('z'));
+      expect(bodyLines.length).toBe(1);
+      expect(bodyLines[0]).toBe(`│ ${longLine}`);
+    });
+
+    it('preserves balanced syntax-highlighting ANSI across wrapped rows', () => {
+      const raw = renderMarkdownToTerminal(
+        '```json\n{"longPropertyName":"abcdefghijklmnopqrstuvwxyz"}\n```\n',
+        { maxWidth: 20 },
+      );
+      const bodyLines = raw.split('\n').filter((line) => stripAnsi(line).startsWith('│ ') &&
+        !stripAnsi(line).includes('/cp'));
+
+      expect(bodyLines.length).toBeGreaterThan(1);
+      for (const line of bodyLines) {
+        expect(stringWidth(stripAnsi(line))).toBeLessThanOrEqual(20);
+        expect(line).toContain('\x1b[');
+        expect(line.match(/\x1b\[3m/g)?.length ?? 0).toBe(line.match(/\x1b\[23m/g)?.length ?? 0);
+        expect(line.match(/\x1b\[33m/g)?.length ?? 0).toBe(line.match(/\x1b\[39m/g)?.length ?? 0);
+      }
+    });
+
+    it('does not emit a gutter-only row after an exactly-full wrapped row', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`\`\`\`\n${'x'.repeat(18)}\n\`\`\`\n`, { maxWidth: 20 }),
+      );
+
+      expect(out.split('\n').filter((line) => line.includes('x'))).toEqual([`│ ${'x'.repeat(18)}`]);
+      expect(out).not.toMatch(/^│ $/m);
+    });
+
+    it('wraps code nested in a list against the width after the list prefix', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`- \`\`\`\n  ${'x'.repeat(36)}\n  \`\`\`\n`, { maxWidth: 20 }),
+      );
+      const body = out.split('\n').filter((line) => line.includes('x'));
+
+      expect(body).toEqual([
+        `    │ ${'x'.repeat(14)}`,
+        `    │ ${'x'.repeat(14)}`,
+        `    │ ${'x'.repeat(8)}`,
+      ]);
+      for (const line of body) expect(stringWidth(line)).toBeLessThanOrEqual(20);
+    });
+
+    it('wraps code nested in a blockquote against the width after its prefix', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal(`> \`\`\`\n> ${'x'.repeat(28)}\n> \`\`\`\n`, { maxWidth: 20 }),
+      );
+      const body = out.split('\n').filter((line) => line.includes('x'));
+
+      expect(body).toEqual([
+        `  │ │ ${'x'.repeat(14)}`,
+        `  │ │ ${'x'.repeat(14)}`,
+      ]);
+      for (const line of body) expect(stringWidth(line)).toBeLessThanOrEqual(20);
+    });
+  });
+
   describe('headings', () => {
     it('H2 emits a trailing newline so the next block does not glue onto it', () => {
       const input = '## State reality-check\n\nSome text.\n';
