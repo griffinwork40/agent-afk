@@ -184,6 +184,31 @@ describe('createEffectLedgerPostHook — dedup behavior', () => {
     const statuses = all.map((r) => r.status);
     expect(statuses.every((s) => s === 'executed')).toBe(true);
   });
+
+  it('third identical call is still caught as ambiguous (N>=3)', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    const ctx = makeCtx();
+    await hook(ctx); // executed
+    await hook(ctx); // ambiguous
+    await hook(ctx); // must also be ambiguous, not executed
+
+    const all = await store.all();
+    expect(all).toHaveLength(3);
+    const statuses = all.map((r) => r.status);
+    expect(statuses.filter((s) => s === 'executed')).toHaveLength(1);
+    expect(statuses.filter((s) => s === 'ambiguous')).toHaveLength(2);
+  });
+
+  it('two sessions sending the same message are independent (no cross-session dedup)', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    await hook(makeCtx({ sessionId: 'session-A' }));
+    await hook(makeCtx({ sessionId: 'session-B' }));
+
+    const all = await store.all();
+    expect(all).toHaveLength(2);
+    // Both should be 'executed' -- no false dedup across sessions.
+    expect(all.every((r) => r.status === 'executed')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
