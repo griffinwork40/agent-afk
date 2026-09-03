@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.2] - 2026-09-03
+
+### Fixed
+- apply width guard to slash writer raw() on TTY (#1456) (#1470) (dcfc1264)
+
 ## [5.178.1] - 2026-09-03
 
 ### Fixed
