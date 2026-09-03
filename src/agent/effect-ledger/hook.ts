@@ -96,6 +96,32 @@ export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
       if (!classification.isExternal) return {};
 
       const ikey = computeIdempotencyKey(classification.operationType, input);
+
+      // Dedup check: mirror the PostToolUse path so retried failures with the
+      // same idempotency key are recorded as 'ambiguous' rather than producing
+      // duplicate 'failed' records that break reconciliation queries.
+      let prior;
+      try {
+        prior = await effectStore.findByIdempotencyKey(ikey);
+      } catch {
+        prior = null;
+      }
+
+      if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'failed')) {
+        try {
+          const pending = effectStore.writePending({
+            idempotencyKey: ikey,
+            operationType: classification.operationType,
+            args: redactArgs(input),
+            sessionId,
+          });
+          await effectStore.updateStatus({ id: pending.id, status: 'ambiguous' });
+        } catch {
+          // Best-effort — ledger write failure must never disrupt tool execution.
+        }
+        return {};
+      }
+
       try {
         const pending = effectStore.writePending({
           idempotencyKey: ikey,

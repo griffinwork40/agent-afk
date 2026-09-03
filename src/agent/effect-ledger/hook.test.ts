@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEffectLedgerPostHook } from './hook.js';
 import { EffectStore } from './store.js';
-import type { PostToolUseContext } from '../hooks.js';
+import type { PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 
 let tmpDir: string;
 let ledgerPath: string;
@@ -183,6 +183,73 @@ describe('createEffectLedgerPostHook — dedup behavior', () => {
     expect(all.length).toBe(2);
     const statuses = all.map((r) => r.status);
     expect(statuses.every((s) => s === 'executed')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PostToolUseFailure dedup behavior
+// ---------------------------------------------------------------------------
+
+describe('createEffectLedgerPostHook — PostToolUseFailure dedup', () => {
+  function makeFailureCtx(overrides: Partial<PostToolUseFailureContext> = {}): PostToolUseFailureContext {
+    return {
+      event: 'PostToolUseFailure',
+      toolName: 'send_telegram',
+      input: { message: 'hello' },
+      error: 'Telegram send failed',
+      sessionId: 'test-session',
+      ...overrides,
+    };
+  }
+
+  it('records first failure as failed', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    await hook(makeFailureCtx());
+    const all = await store.all();
+    expect(all).toHaveLength(1);
+    expect(all[0]?.status).toBe('failed');
+  });
+
+  it('marks duplicate failure (same args) as ambiguous', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    await hook(makeFailureCtx());
+    await hook(makeFailureCtx());
+
+    const all = await store.all();
+    expect(all).toHaveLength(2);
+    const statuses = all.map((r) => r.status);
+    expect(statuses).toContain('failed');
+    expect(statuses).toContain('ambiguous');
+  });
+
+  it('marks failure after prior executed record as ambiguous', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    // First call succeeds via PostToolUse.
+    await hook(makeCtx());
+    // Second call fails via PostToolUseFailure with the same args.
+    await hook(makeFailureCtx());
+
+    const all = await store.all();
+    expect(all).toHaveLength(2);
+    const statuses = all.map((r) => r.status);
+    expect(statuses).toContain('executed');
+    expect(statuses).toContain('ambiguous');
+  });
+
+  it('records failure with different args as independent failed record', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    await hook(makeFailureCtx({ input: { message: 'hello' } }));
+    await hook(makeFailureCtx({ input: { message: 'world' } }));
+
+    const all = await store.all();
+    expect(all).toHaveLength(2);
+    expect(all.every((r) => r.status === 'failed')).toBe(true);
+  });
+
+  it('ignores non-external tools on failure path', async () => {
+    const hook = createEffectLedgerPostHook(store);
+    await hook(makeFailureCtx({ toolName: 'read_file', input: { file_path: '/tmp/foo' } }));
+    expect(await store.all()).toHaveLength(0);
   });
 });
 
