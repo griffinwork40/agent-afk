@@ -89,6 +89,8 @@ const WRITE_TOOLS = new Set([
   'workspace_publish',
   // state-tools.ts — mutations to the durable cross-session KV store.
   'state_put', 'state_cas', 'state_delete',
+  // clipboard.ts — clipboard_write mutates the operator's system clipboard.
+  'clipboard_write',
 ]);
 // These categorization sets intentionally list BOTH the Claude Code / SDK
 // PascalCase tool names (Bash, Agent, Task, Skill, Compose) and AFK's lowercase
