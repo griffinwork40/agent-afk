@@ -116,7 +116,7 @@ export function renderCodeBlock(
   // U+2502 is one column on standard terminals, plus the following space.
   // Terminals that render East Asian Ambiguous characters wide remain a
   // broader, pre-existing edge case for the TUI's box-drawing characters.
-  const gutterCols = 2;
+  const gutterCols = 2; // Unicode box-drawing U+2502 (1 display col) + space (1 col)
   const contentWidth = maxTableWidth !== undefined ? Math.max(1, maxTableWidth - gutterCols) : undefined;
   const bodyLines: string[] = [];
   for (const line of rawBodyLines) {
