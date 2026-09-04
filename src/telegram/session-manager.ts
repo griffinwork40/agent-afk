@@ -144,8 +144,14 @@ export interface SessionManagerOptions {
    * Called fire-and-forget when a new session is created and a wave-manifest
    * resumption offer is available. The caller (TelegramBot) is responsible for
    * forwarding the offer text to the chat. Never invoked when no offers exist.
+   *
+   * May return a Promise<boolean> where `true` means the message was delivered
+   * and `false` means delivery failed (e.g. 429, network error, blocked bot).
+   * A void/undefined return is treated as "assumed delivered" for backward
+   * compatibility. When delivery fails (false), `offeredAt` is NOT stamped so
+   * the offer is re-surfaced in the next session.
    */
-  onResumptionOffer?: (route: TelegramRoute, text: string) => void;
+  onResumptionOffer?: (route: TelegramRoute, text: string) => void | Promise<boolean>;
 }
 
 /**

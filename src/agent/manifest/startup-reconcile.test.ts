@@ -70,6 +70,9 @@ describe('runTelegramReconcile', () => {
 
     const route = { chatId: 42, threadId: 7 };
     runTelegramReconcile('tg-sess', route, sendText);
+    // The inner .then() callback is now async (awaits Promise.resolve(sendText(...)));
+    // two microtask ticks are needed: one to enter the then(), one to resume after await.
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(sendText).toHaveBeenCalledOnce();
@@ -83,22 +86,58 @@ describe('runTelegramReconcile', () => {
 
     runTelegramReconcile('no-manifests-sess', { chatId: 99 }, sendText);
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(sendText).not.toHaveBeenCalled();
   });
 });
 
 describe('runTelegramReconcile — offeredAt stamping', () => {
-  it('marks manifest as offered after sendText succeeds', async () => {
+  it('marks manifest as offered after sendText returns void (legacy/undefined)', async () => {
+    // vi.fn() returns undefined — treated as "assumed delivered" (backward compat).
     const sendText = vi.fn();
     const waveId = seedManifest('tg-dedup');
 
     runTelegramReconcile('tg-dedup', { chatId: 42 }, sendText);
+    // Two microtask ticks: enter the async then(), resume after await Promise.resolve().
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(sendText).toHaveBeenCalledOnce();
     const manifest = readManifest(waveId);
     expect(manifest?.offeredAt).toBeDefined();
+  });
+
+  it('marks manifest as offered after sendText returns Promise<true>', async () => {
+    const sendText = vi.fn().mockResolvedValue(true);
+    const waveId = seedManifest('tg-dedup-true');
+
+    runTelegramReconcile('tg-dedup-true', { chatId: 42 }, sendText);
+    // Three ticks: enter the async then(), resolve Promise.resolve(sendText(...)),
+    // resume after the awaited promise settles.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sendText).toHaveBeenCalledOnce();
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeDefined();
+  });
+
+  it('does NOT stamp offeredAt when sendText returns Promise<false>', async () => {
+    // Simulates a Telegram send failure (429, network error, blocked bot).
+    const sendText = vi.fn().mockResolvedValue(false);
+    const waveId = seedManifest('tg-dedup-fail');
+
+    runTelegramReconcile('tg-dedup-fail', { chatId: 42 }, sendText);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sendText).toHaveBeenCalledOnce();
+    const manifest = readManifest(waveId);
+    // offeredAt must NOT be set — the offer must be re-surfaced next session.
+    expect(manifest?.offeredAt).toBeUndefined();
   });
 
   it('does not re-send on second reconcile after marking', async () => {
@@ -107,11 +146,13 @@ describe('runTelegramReconcile — offeredAt stamping', () => {
 
     runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
     await Promise.resolve();
+    await Promise.resolve();
     expect(sendText).toHaveBeenCalledOnce();
 
     // Second reconcile: manifest is marked, should not send again.
     sendText.mockClear();
     runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
+    await Promise.resolve();
     await Promise.resolve();
     expect(sendText).not.toHaveBeenCalled();
   });

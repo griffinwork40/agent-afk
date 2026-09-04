@@ -42,19 +42,27 @@ export function runReplReconcile(sessionId: string): void {
  * @param sessionId - The SDK session ID of the newly created session.
  * @param route     - The Telegram route to deliver the offer to.
  * @param sendText  - Callback that delivers a plain-text message to the route.
+ *                    May return a Promise<boolean> where `true` means delivered
+ *                    and `false` means failed. A void/undefined return is treated
+ *                    as "assumed delivered" (backward compat for REPL/non-interactive
+ *                    callers that pass a synchronous void function).
  */
 export function runTelegramReconcile<Route>(
   sessionId: string,
   route: Route,
-  sendText: (route: Route, text: string) => void,
+  sendText: (route: Route, text: string) => void | Promise<boolean>,
 ): void {
   if (!shouldSurfaceResumptionOffer(true)) return;
-  void Promise.resolve().then(() => {
+  void Promise.resolve().then(async () => {
     try {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
-        sendText(route, formatResumptionOffer(offer));
-        markManifestOffered(offer.manifest);
+        const delivered = await Promise.resolve(sendText(route, formatResumptionOffer(offer)));
+        // Stamp only when delivery confirmed (true) or unknown (void/undefined = legacy caller).
+        // Skip stamp on explicit failure (false) so next session re-surfaces the offer.
+        if (delivered !== false) {
+          markManifestOffered(offer.manifest);
+        }
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.
