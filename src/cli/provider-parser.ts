@@ -9,6 +9,7 @@ import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode.js';
 import { WORKSPACE_TOOL_NAMES } from '../agent/workspace/index.js';
+import { STATE_TOOL_NAMES } from '../agent/state/state-tools.js';
 
 const VALID_PROVIDERS: readonly string[] = [
   'anthropic',
@@ -123,6 +124,7 @@ export function parseProvider(
       ...MEMORY_TOOL_NAMES,
       ...AWARENESS_TOOL_NAMES,
       ...WORKSPACE_TOOL_NAMES,
+      ...STATE_TOOL_NAMES,
       EXIT_PLAN_MODE_TOOL_NAME,
     ];
     if (opts?.subagentExecutor) list.push('agent');
