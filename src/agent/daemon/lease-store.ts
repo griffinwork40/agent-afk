@@ -210,6 +210,39 @@ export function renewLease(
 }
 
 /**
+ * Transition a leased task's state without moving the file.
+ *
+ * Used by the handoff wiring to mark a task as 'waiting_human_input' so
+ * `recoverExpiredLeases` skips it while a human is being asked a question.
+ * The lease file stays in leased/ — only the `state` and `updatedAt` fields
+ * are mutated.
+ *
+ * No-op if the lease file does not exist (task may have completed or been
+ * recovered by another process).
+ *
+ * @param taskId   - Task ID whose state to update.
+ * @param state    - New TaskState value to write.
+ * @param queueDir - Queue root directory.
+ */
+export function setLeaseState(
+  taskId: string,
+  state: TaskState,
+  queueDir: string = getQueueDir(),
+): void {
+  const path = leasedPath(queueDir, taskId);
+  if (!existsSync(path)) return;
+  let record: TaskRecord;
+  try {
+    record = JSON.parse(readFileSync(path, 'utf-8')) as TaskRecord;
+  } catch {
+    return; // Corrupt lease file — skip.
+  }
+  record.state = state;
+  record.updatedAt = Date.now();
+  atomicWriteJson(path, record);
+}
+
+/**
  * Mark a task as terminal (succeeded or failed) and archive it.
  *
  * On success: moves lease file to completed/.
@@ -348,6 +381,16 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
         createdAt: record.createdAt ?? now,
         updatedAt: now,
       } as TaskRecord;
+    }
+
+    // Handoff suppression: a task in 'waiting_human_input' is blocked on
+    // a durable handoff question — its lease should NOT be recovered even
+    // if the expiry has passed. The handoff recovery loop
+    // (recoverPendingHandoffs in handoff-wiring.ts) handles re-notification;
+    // reclaiming the lease here would discard the task while the operator
+    // is still deciding.
+    if (record.state === 'waiting_human_input') {
+      continue;
     }
 
     const expiry = record.leaseExpiry ?? 0;

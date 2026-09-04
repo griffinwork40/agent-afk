@@ -23,8 +23,8 @@
  *   waiting_human_input  → task is leased but blocked on a human elicitation;
  *                          lease expiry checks are suppressed in this state so
  *                          the task is not incorrectly recovered while a human
- *                          is being asked a question (PR 2 wires this via
- *                          recoverExpiredLeases; PR 1 adds the type only)
+ *                          is being asked a question (wired in lease-store.ts
+ *                          recoverExpiredLeases and handoff-wiring.ts)
  *   succeeded            → task completed successfully; file moved to completed/
  *   failed               → task failed and maxAttempts reached; moved to completed/
  *   retrying             → task failed but attempts < maxAttempts; re-enqueued

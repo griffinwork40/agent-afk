@@ -25,7 +25,8 @@ import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
 import { completeTask } from './lease-store.js';
-import { getQueueDir } from '../../paths.js';
+import { recoverPendingHandoffs } from './handoff-wiring.js';
+import { getQueueDir, getStateDatabasePath, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
 import { registerSurfaceSession } from '../session/register-surface-session.js';
@@ -35,13 +36,13 @@ import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceWriter } from '../trace/index.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { StateStore } from '../state/state-store.js';
-import { getStateDatabasePath } from '../../paths.js';
+
 import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { AgentConfig } from '../types.js';
-import { getTelemetryPath } from '../../paths.js';
+
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import {
@@ -354,6 +355,8 @@ export class CronScheduler {
           console.error(`[daemon] lease-recovery: dead-lettered task ${record.id} (exhausted ${record.maxAttempts} attempt(s))`);
         }
       }
+      // Also recover pending handoffs (questions asked before restart, never answered).
+      void recoverPendingHandoffs().catch(() => {});
     } catch (err) {
       // Recovery is best-effort — a failure must not prevent the pull loop from starting.
       const msg = err instanceof Error ? err.message : String(err);
