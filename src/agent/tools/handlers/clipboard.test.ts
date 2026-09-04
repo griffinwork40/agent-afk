@@ -110,6 +110,19 @@ describe('clipboard_write handler', () => {
     expect(result.isError).toBeFalsy();
     expect(writeFn).toHaveBeenCalledWith('');
   });
+
+  it('returns error (not unhandled rejection) when writeFn throws', async () => {
+    const writeFn: ClipboardWriteFn = vi.fn(() => {
+      throw new Error('permission denied');
+    });
+    const handler = createClipboardWriteHandler({ writeFn });
+
+    // Must resolve, not reject.
+    const result = await handler({ text: 'oops' }, SIGNAL);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/permission denied/i);
+  });
 });
 
 // ── clipboard_read tests ──────────────────────────────────────────────────────

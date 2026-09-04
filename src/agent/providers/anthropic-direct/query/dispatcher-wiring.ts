@@ -218,7 +218,8 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         (t) =>
           t.name !== 'ask_question' &&
           t.name !== 'terminal_font_size' &&
-          t.name !== 'clipboard_write',
+          t.name !== 'clipboard_write' &&
+          t.name !== 'clipboard_read',
       )
     : config.isNonInteractive
       ? baseToolDefs.filter(

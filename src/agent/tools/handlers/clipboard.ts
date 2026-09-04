@@ -114,7 +114,13 @@ export function createClipboardWriteHandler(
     if (typeof text !== 'string') {
       return { content: 'Invalid input: text must be a string', isError: true };
     }
-    const succeeded = writeFn(text);
+    let succeeded: boolean;
+    try {
+      succeeded = writeFn(text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { content: `Clipboard write threw an error: ${msg}`, isError: true };
+    }
     if (!succeeded) {
       return {
         content:
