@@ -513,6 +513,13 @@ export class TerminalCompositor {
   // that never scrolled (DEFECT 2). See commitAbove's prevTopRow site.
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   bandGeometryStale = false;
+  // Stale-guard for endTurnFlush (lifecycle.ts): set true when a commit
+  // lands (committed-band-commit.ts, alongside hasCommitted); cleared by
+  // clearCommittedBand(). Prevents redundant lifecycle redraws when the
+  // compositor state has not changed since the last flush. Mirrors the
+  // bandGeometryStale guard pattern (commit-geometry.ts:109).
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  lifecycleStateDirty = false;
   // True for the full duration of commitAbove (Phases 1–3). Suppresses the
   // shrink re-pin during the Phase-2 repaint — Phase 3 paints the band itself
   // and sets its rows, so re-pinning mid-commit would act on a stale band.

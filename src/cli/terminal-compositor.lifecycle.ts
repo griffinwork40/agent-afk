@@ -85,6 +85,11 @@ export interface LifecycleHost {
   // repaint once repositionCommittedBand re-establishes real geometry. See the
   // field doc on the class (terminal-compositor.ts).
   bandGeometryStale: boolean;
+  // Stale-guard for endTurnFlush: set true when committed-band state changes
+  // (a commit arrives); cleared by clearCommittedBand() after the flush so
+  // a redundant call to endTurnFlush on an already-flushed band is a no-op.
+  // Mirrors the bandGeometryStale guard (commit-geometry.ts:109).
+  lifecycleStateDirty: boolean;
   // #540 Stage 3: clear the committed band after a full end-of-turn flush.
   clearCommittedBand(): void;
 }
@@ -480,6 +485,9 @@ export function disarm(self: LifecycleHost): void {
  */
 export function endTurnFlush(self: LifecycleHost): void {
   if (!self.armed || !self.logUpdate || self.committedBand.length === 0) return;
+  // Stale-guard: skip the redraw entirely when no commit has landed since the
+  // last flush. Mirrors the bandGeometryStale check in commit-geometry.ts:109.
+  if (!self.lifecycleStateDirty) return;
 
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
