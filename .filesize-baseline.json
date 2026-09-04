@@ -3,7 +3,7 @@
   "entries": {
     "scripts/audit-sdk-dependency.ts": { "loc": 450, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/background-registry.ts": { "loc": 374, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/agent/daemon/scheduler.ts": { "loc": 566, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/agent/daemon/scheduler.ts": { "loc": 568, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/memory/memory-store.ts": { "loc": 687, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/memory/memory-tools.ts": { "loc": 437, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/providers/openai-compatible/index.ts": { "loc": 400, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
@@ -21,7 +21,7 @@
     "src/agent/trace/receipt.ts": { "loc": 412, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/worktree-sweep.ts": { "loc": 512, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/_lib/testing/virtual-screen.ts": { "loc": 422, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/chat.ts": { "loc": 575, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/chat.ts": { "loc": 577, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/daemon.ts": { "loc": 393, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/farm.ts": { "loc": 436, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive.ts": { "loc": 599, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

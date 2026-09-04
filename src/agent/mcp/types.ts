@@ -91,6 +91,23 @@ export interface McpServerConfig {
    * `tools/list` and `tools/call` requests.
    */
   timeout?: number;
+
+  // ── security (issue #578) ─────────────────────────────────────────
+  /**
+   * Explicit opt-in for secret env-var expansion in project-local servers.
+   *
+   * By default, project-local servers (from `<cwd>/.mcp.json`) cannot expand
+   * `${VAR}` placeholders whose names match known-secret patterns (`*_API_KEY`,
+   * `*_TOKEN`, `*_SECRET*`, `*_PASSWORD`, `AWS_*`, etc.). A blocked expansion
+   * is emitted as a `console.warn` and the placeholder is left empty.
+   *
+   * To allow a specific variable, list it here:
+   *   `"allowSecretEnv": ["MY_PROJECT_TOKEN"]`
+   *
+   * This field is ignored for user-global and plugin servers (they are trusted
+   * and may expand any variable without restriction).
+   */
+  allowSecretEnv?: string[];
 }
 
 /**

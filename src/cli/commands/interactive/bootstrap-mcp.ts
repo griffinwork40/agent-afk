@@ -88,6 +88,8 @@ export async function connectReplMcp(a: {
       // after the clear. `chat` still forwards them — it never clears — so
       // this does not change any other surface, and nothing double-prints.
       mcpManager = await McpManager.fromConfig(loaded.mcpServers, {
+        serverLayers: loaded.serverLayers,
+        userAllowSecretEnv: loaded.userAllowSecretEnv,
         ...(a.traceWriter !== undefined ? { traceWriter: a.traceWriter } : {}),
       });
     } finally {

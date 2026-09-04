@@ -30,6 +30,7 @@ import { buildMcpNameRegistry, sanitizeNameSegment } from './naming.js';
 import type { McpClientState, McpServerConfig } from './types.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
+import type { McpServerLayer } from './env-containment.js';
 
 /**
  * Per-server runtime record. Holds the live client, the list of tools the
@@ -40,6 +41,10 @@ interface ServerRecord {
   client: McpClient | undefined;
   tools: McpTool[];
   state: McpClientState;
+  /** Config layer origin — drives env-containment policy (issue #578). */
+  layer: McpServerLayer;
+  /** Trusted secret-expansion allowlist for this server (issue #1483). Preserved so completeAuth() reconnect passes the same trust boundary. */
+  trustedAllowSecretEnv: readonly string[];
 }
 
 export interface McpManagerInitOptions {
@@ -57,6 +62,25 @@ export interface McpManagerInitOptions {
    * connect behavior or timing.
    */
   traceWriter?: TraceSink;
+  /**
+   * Layer origin for each server name (issue #578). When a server name is
+   * present in this map, the corresponding layer drives the env-containment
+   * policy in `transport.ts`:
+   *   - `'project'` — project-local `.mcp.json` (secret expansion blocked,
+   *     dangerous inherited env scrubbed)
+   *   - `'user-global'` / `'plugin'` / `'cli'` — fully trusted, no restrictions
+   *
+   * Servers whose names are NOT in the map default to `'user-global'`
+   * (trusted). The config-loader populates this from its internal layer-
+   * tracking so call sites don't have to repeat the logic.
+   */
+  serverLayers?: Record<string, McpServerLayer>;
+  /**
+   * Trusted secret-expansion allowlists from user-global config only (issue #1483).
+   * Maps server name → allowed variable names. Passed to `createTransport` so
+   * project-layer servers cannot self-authorize their own `allowSecretEnv`.
+   */
+  userAllowSecretEnv?: Record<string, string[]>;
 }
 
 /**
@@ -138,6 +162,9 @@ export class McpManager {
         );
       }
 
+      const serverLayer: McpServerLayer = opts.serverLayers?.[serverName] ?? 'user-global';
+      const trustedAllow: readonly string[] = opts.userAllowSecretEnv?.[serverName] ?? [];
+
       if (config.disabled) {
         records.set(serverName, {
           client: undefined,
@@ -148,6 +175,8 @@ export class McpManager {
             status: 'disabled',
             toolCount: 0,
           },
+          layer: serverLayer,
+          trustedAllowSecretEnv: trustedAllow,
         });
         continue;
       }
@@ -158,10 +187,10 @@ export class McpManager {
         status: 'connecting',
         toolCount: 0,
       };
-      const record: ServerRecord = { client: undefined, tools: [], state };
+      const record: ServerRecord = { client: undefined, tools: [], state, layer: serverLayer, trustedAllowSecretEnv: trustedAllow };
       records.set(serverName, record);
 
-      const client = new McpClient(serverName, config);
+      const client = new McpClient(serverName, config, serverLayer, trustedAllow);
       record.client = client;
 
       // Capture stderr-style transport errors so a server that dies mid-
@@ -436,7 +465,7 @@ export class McpManager {
     });
 
     // Step 4: fresh client + connect.
-    const freshClient = new McpClient(serverName, rec.state.config);
+    const freshClient = new McpClient(serverName, rec.state.config, rec.layer, rec.trustedAllowSecretEnv);
     freshClient.onTransportError = (err) => {
       rec.state.status = 'error';
       rec.state.error = truncate(err.message, 200);

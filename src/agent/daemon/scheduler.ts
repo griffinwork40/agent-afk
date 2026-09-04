@@ -741,6 +741,8 @@ export class CronScheduler {
         try {
           mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
             warnings: loadedMcp.warnings,
+            serverLayers: loadedMcp.serverLayers,
+            userAllowSecretEnv: loadedMcp.userAllowSecretEnv,
             ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
           });
         } finally {
