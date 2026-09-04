@@ -410,20 +410,102 @@ export class McpClient {
 }
 
 /**
+ * Maximum decoded byte size for an MCP image forwarded to the model.
+ *
+ * Base64 expands by ~4/3 so a 5 MiB decoded image corresponds to ~6.7 MiB of
+ * base64 characters. We cap at 5 MiB of decoded bytes, matching the
+ * browser-screenshot handler's sidecar byte cap, to avoid poisoning the
+ * conversation history with an oversized image block that the provider will
+ * reject on the very next request.
+ */
+const MAX_MCP_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+/**
+ * Image media types accepted by Anthropic's vision API (and surfaced on the
+ * `ToolResult.image` field that both provider adapters understand). Any MCP
+ * image block whose `mimeType` is NOT in this set falls back to a text
+ * placeholder so the model still receives a useful description.
+ */
+const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+type SupportedImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+/**
  * Convert MCP's `CallToolResult` shape to agent-afk's flat `ToolResult`.
  *
- * MCP returns a `content[]` array of typed blocks (text / image / resource);
- * agent-afk's dispatcher consumes a single string. We concatenate text
- * blocks and emit a placeholder note for non-text blocks. Image / resource
- * rich rendering is a separate PR.
+ * MCP returns a `content[]` array of typed blocks (text / image / resource).
+ * Text blocks are concatenated into `content`. Image blocks are forwarded as
+ * multimodal content via `ToolResult.image` (first supported image) so both
+ * provider adapters can render them natively:
+ *
+ *   - anthropic-direct: emits an `image` content block in the tool_result.
+ *   - openai-compatible: emits a follow-up `role:'user'` message with an
+ *     `image_url` part when the active model is vision-capable.
+ *
+ * Image blocks with unsupported mime types, missing data, or malformed payloads
+ * fall back to a text placeholder so the model still receives a description.
+ * Additional image blocks beyond the first are also represented as text
+ * placeholders (multi-image tool results are uncommon; single-image forwarding
+ * covers the practical cases).
  */
 function normalizeCallToolResult(result: CallToolResult): ToolResult {
   const parts: string[] = [];
+  let forwardedImage: { mediaType: SupportedImageMediaType; data: string } | undefined;
+
   for (const block of result.content ?? []) {
     if (block.type === 'text') {
       parts.push(block.text);
     } else if (block.type === 'image') {
-      parts.push(`[image block: mimeType=${block.mimeType}, ${block.data.length} bytes base64]`);
+      // Validate the block has the required fields and a supported mime type.
+      const mimeType: string = typeof block.mimeType === 'string' ? block.mimeType : '';
+      const data: string = typeof block.data === 'string' ? block.data : '';
+
+      if (!mimeType || !data) {
+        console.warn('[mcp] image block missing mimeType or data — using text placeholder');
+        parts.push(`[image block: malformed (missing mimeType or data)]`);
+      } else if (!SUPPORTED_IMAGE_MEDIA_TYPES.has(mimeType)) {
+        // Unsupported mime type — degrade gracefully.
+        console.warn(
+          `[mcp] image block has unsupported mimeType "${mimeType.replace(/[\r\n]/g, '\\n')}" ` +
+            `— using text placeholder. Supported types: ${[...SUPPORTED_IMAGE_MEDIA_TYPES].join(', ')}`,
+        );
+        parts.push(`[image block: mimeType=${mimeType}, ${data.length} bytes base64 (unsupported format)]`);
+      } else {
+        // Byte-size guard: base64 encodes at ~4/3 so multiply by 3/4 to get
+        // decoded byte estimate. Reject oversized images before they enter
+        // conversation history and poison every subsequent model request.
+        const estimatedBytes = Math.ceil((data.length * 3) / 4);
+        if (estimatedBytes > MAX_MCP_IMAGE_BYTES) {
+          console.warn(
+            `[mcp] image block "${mimeType}" is ~${estimatedBytes} bytes decoded ` +
+              `(base64 length ${data.length}), exceeds the ${MAX_MCP_IMAGE_BYTES}-byte ` +
+              `limit — using text placeholder to avoid poisoning conversation history`,
+          );
+          parts.push(
+            `[image block: mimeType=${mimeType}, ${data.length} bytes base64 (too large for model context)]`,
+          );
+        } else if (forwardedImage === undefined) {
+          // First valid image: forward as multimodal content.
+          // Strip whitespace before forwarding: the Anthropic API enforces RFC 4648
+          // strict mode (no whitespace), but RFC 2045-compliant MCP servers may wrap
+          // base64 at 76-char line boundaries.
+          const cleanData = data.replace(/\s/g, '');
+          forwardedImage = { mediaType: mimeType as SupportedImageMediaType, data: cleanData };
+          // Include a brief description in `content` so providers that don't
+          // surface images still give the model useful metadata, and so the
+          // text channel is non-empty (required by the anthropic-direct
+          // tool_result shape when an image block is present).
+          parts.push(`[image: ${mimeType}]`);
+        } else {
+          // Additional images beyond the first: text placeholder only.
+          parts.push(`[image block: mimeType=${mimeType}, ${data.length} bytes base64 (additional image not forwarded)]`);
+        }
+      }
     } else if (block.type === 'resource') {
       // Both embedded and link variants. Surface the URI so the model can
       // at least cite it; payload bridging is a follow-up.
@@ -441,6 +523,7 @@ function normalizeCallToolResult(result: CallToolResult): ToolResult {
   const content = parts.join('\n');
   return {
     content: content.length === 0 ? '(empty tool result)' : content,
+    ...(forwardedImage !== undefined ? { image: forwardedImage } : {}),
     ...(result.isError ? { isError: true } : {}),
   };
 }
@@ -530,3 +613,6 @@ function withTimeout<T>(
     if (timer !== null) clearTimeout(timer);
   });
 }
+
+/** @internal exported only for unit tests */
+export { normalizeCallToolResult };
