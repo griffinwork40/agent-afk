@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.182.0] - 2026-09-04
+
+### Added
+- model-facing clipboard tool (#1422) (#1480) (93941ebc)
+- durable cross-session structured state store (#1449) (b147396b)
+
+### Fixed
+- pin VS 2022 for node-gyp on windows-latest (af688900)
+- update tool count assertions after state store + clipboard PRs (396a0d2f)
+- reset auto-resume counter per-turn instead of per-session (964b7c7d)
+
 ## [5.181.1] - 2026-09-04
 
 ### Fixed

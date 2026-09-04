@@ -240,6 +240,14 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        # node-gyp ≤10.3.1 doesn't recognise VS 2025 (version "18"), which is now
+        # the default on windows-latest. Pinning to VS 2022 — still present on the
+        # runner alongside VS 2025 — lets better-sqlite3 compile without touching
+        # the lockfile or adding a new action. See:
+        #   https://github.com/microsoft/vswhere/issues/204
+        #   https://github.com/nodejs/node-gyp/issues/2911
+        env:
+          npm_config_msvs_version: "2022"
         run: pnpm install --frozen-lockfile
 
       - name: Test (no coverage gate — see job comment)
