@@ -9,6 +9,8 @@ import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { StateStore } from '../../agent/state/state-store.js';
+import { getStateDatabasePath } from '../../paths.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 import { env } from '../../config/env.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
@@ -266,6 +268,7 @@ export function registerChatCommand(program: Command): void {
 
       let session: AgentSession | null = null;
       let sharedMemoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
+      let sharedStateStore: StateStore | undefined;
       let worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined;
       let worktreeCwd: string | undefined;
       let mcpManager: McpManager | undefined;
@@ -495,6 +498,7 @@ export function registerChatCommand(program: Command): void {
         });
 
         sharedMemoryStore = new MemoryStore();
+        sharedStateStore = new StateStore(getStateDatabasePath());
 
         {
           const projectCwd = worktreeCwd ?? process.cwd();
@@ -540,6 +544,7 @@ export function registerChatCommand(program: Command): void {
           skillExecutor,
           composeExecutor,
           memoryStore: sharedMemoryStore,
+          stateStore: sharedStateStore,
           model: String(options.model),
           ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
           ...(mcpManager !== undefined ? { mcpManager } : {}),
@@ -552,6 +557,7 @@ export function registerChatCommand(program: Command): void {
             skillExecutor,
             composeExecutor,
             memoryStore: sharedMemoryStore,
+            stateStore: sharedStateStore,
             surface: 'cli',
             ...(mcpManager !== undefined ? { mcpManager } : {}),
           });
@@ -824,6 +830,7 @@ export function registerChatCommand(program: Command): void {
           await mcpManager.disconnectAll();
         }
         try { sharedMemoryStore?.close(); } catch {}
+        try { sharedStateStore?.close(); } catch {}
         try { workspaceStore?.close(); } catch {}
         // Worktree cleanup: session close must finish before
         // `git worktree remove --force` so any active SQLite WAL / trace

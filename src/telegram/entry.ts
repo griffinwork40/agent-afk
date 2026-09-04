@@ -24,9 +24,10 @@ import { TelegramBot } from './bot.js';
 import { parseAllowedChatIds } from './allowlist.js';
 import { validateBotToken } from './setup-wizard.js';
 import { MemoryStore } from '../agent/memory/index.js';
+import { StateStore } from '../agent/state/state-store.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { loadConfig, loadTelegramConfig } from '../cli/config.js';
-import { getEnvConfigPath } from '../paths.js';
+import { getEnvConfigPath, getStateDatabasePath } from '../paths.js';
 import { loadSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
@@ -137,6 +138,7 @@ export async function main(): Promise<void> {
   }
 
   const sharedMemoryStore = new MemoryStore();
+  const sharedStateStore = new StateStore(getStateDatabasePath());
 
   // Optional working-directory override for every bot-spawned session.
   // When set, all per-chat AgentSessions (and their forked subagents)
@@ -166,6 +168,7 @@ export async function main(): Promise<void> {
       frameworkBase,
       telegramCwd,
       memoryStore: sharedMemoryStore,
+      stateStore: sharedStateStore,
     }),
   });
 
@@ -180,6 +183,7 @@ export async function main(): Promise<void> {
     clearInterval(statsInterval);
     await bot.stop();
     sharedMemoryStore.close();
+    sharedStateStore.close();
     console.log('✅ Bot stopped.');
     process.exit(0);
   };

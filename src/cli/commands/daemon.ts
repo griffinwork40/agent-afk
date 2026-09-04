@@ -30,6 +30,9 @@ import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, get
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory } from '../../agent/memory/index.js';
+import { StateStore } from '../../agent/state/state-store.js';
+import { STATE_TOOL_NAMES } from '../../agent/state/state-tools.js';
+import { getStateDatabasePath } from '../../paths.js';
 import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
@@ -84,6 +87,7 @@ export function buildDaemonSessionFactory(
   // reusing the store would inject stale workspace entries from a prior
   // task's run. Create a fresh store per task invocation instead.
   let memoryStore: MemoryStore | undefined;
+  let stateStore: StateStore | undefined;
   return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
@@ -96,6 +100,7 @@ export function buildDaemonSessionFactory(
     // rather than creating a duplicate. Undefined under AFK_TRACE_DISABLED=1,
     // in which case the option is absent and behaviour is unchanged.
     memoryStore ??= new MemoryStore();
+    stateStore ??= new StateStore(getStateDatabasePath());
     // WorkspaceStore is fresh per task: one task's published entries are
     // irrelevant to the next task's compose nodes, and reusing the store
     // would inject stale workspace entries from a prior task's run.
@@ -129,7 +134,7 @@ export function buildDaemonSessionFactory(
       subagentExecutor,
       skillExecutor,
       composeExecutor,
-      memoryStore, workspaceStore,
+      memoryStore, stateStore, workspaceStore,
       model: String(opts.model),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(mcpManager !== undefined ? { mcpManager } : {}),
@@ -138,6 +143,7 @@ export function buildDaemonSessionFactory(
         allowedTools: [
           ...BUILTIN_TOOL_NAMES,
           ...MEMORY_TOOL_NAMES,
+          ...STATE_TOOL_NAMES,
           ...AWARENESS_TOOL_NAMES,
           ...WORKSPACE_TOOL_NAMES,
           'agent',
@@ -149,7 +155,7 @@ export function buildDaemonSessionFactory(
       subagentExecutor,
       skillExecutor,
       composeExecutor,
-      memoryStore, workspaceStore,
+      memoryStore, stateStore, workspaceStore,
       surface: 'daemon',
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });

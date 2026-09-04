@@ -9,6 +9,7 @@ import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode.js';
 import { WORKSPACE_TOOL_NAMES } from '../agent/workspace/index.js';
+import { STATE_TOOL_NAMES } from '../agent/state/state-tools.js';
 
 const VALID_PROVIDERS: readonly string[] = [
   'anthropic',
@@ -26,6 +27,8 @@ export type ParseProviderOptions = {
   composeExecutor?: import('../agent/tools/compose-executor.js').ComposeExecutor;
   /** Shared MemoryStore to pass into providers so only one SQLite DB is opened. */
   memoryStore?: import('../agent/memory/index.js').MemoryStore;
+  /** Shared StateStore to pass into providers for durable agent state. */
+  stateStore?: import('../agent/state/state-store.js').StateStore;
   /** Shared WorkspaceStore so sibling sub-agents share one ephemeral scratchpad. */
   workspaceStore?: import('../agent/workspace/workspace-store.js').WorkspaceStore;
   /**
@@ -121,6 +124,7 @@ export function parseProvider(
       ...MEMORY_TOOL_NAMES,
       ...AWARENESS_TOOL_NAMES,
       ...WORKSPACE_TOOL_NAMES,
+      ...STATE_TOOL_NAMES,
       EXIT_PLAN_MODE_TOOL_NAME,
     ];
     if (opts?.subagentExecutor) list.push('agent');

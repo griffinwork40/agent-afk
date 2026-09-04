@@ -59,6 +59,8 @@ import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { MemoryStore } from '../../memory/index.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
+import { StateStore } from '../../state/state-store.js';
+import { getStateDatabasePath } from '../../../paths.js';
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
@@ -87,6 +89,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly externalTools: ToolDispatcher | undefined;
   private readonly memoryStore: MemoryStore;
   private readonly workspaceStore: WorkspaceStore | undefined;
+  private readonly stateStore: StateStore;
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
   // Fields retained for per-query dispatcher construction (fixes C2 env race).
@@ -164,6 +167,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
     this.workspaceStore = opts.workspaceStore;
+    this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
     this.externalTools = opts.tools;
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
@@ -219,6 +223,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       {
         memoryStore: this.memoryStore,
         workspaceStore: this.workspaceStore,
+        stateStore: this.stateStore,
         surface: this.surface,
         readOnlyMemory: this.readOnlyMemory,
         readOnlyBash: this.readOnlyBash,
@@ -247,6 +252,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   close(): void {
     this.memoryStore.close();
     this.workspaceStore?.close();
+    this.stateStore.close();
   }
 
   /**

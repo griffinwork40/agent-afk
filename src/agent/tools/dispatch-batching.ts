@@ -11,6 +11,7 @@
 
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
+import { stateToolSchemas } from '../state/state-schemas.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
 import type { ToolCall } from '../providers/anthropic-direct/types.js';
 import type { ConcurrencyClassifier } from './types.js';
@@ -21,8 +22,9 @@ import type { ConcurrencyClassifier } from './types.js';
  * This replaces the former hand-maintained list and stays automatically in sync
  * with schema changes.
  *
- * External constraint: schemas.ts and memory-tools.ts are the single source
- * of truth. Mutations to those files propagate here without any secondary edit.
+ * External constraint: schemas.ts, memory-tools.ts, and state-schemas.ts are
+ * the single source of truth. Mutations to those files propagate here without
+ * any secondary edit.
  */
 const SAFE_TOOLS: ReadonlySet<string> = new Set(
   [
@@ -31,6 +33,7 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set(
     skillTool,
     composeTool,
     ...memoryToolSchemas,
+    ...stateToolSchemas,
     getRuntimeStateTool,
   ]
     .filter((s) => s.concurrencySafe === true)
