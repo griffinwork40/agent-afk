@@ -216,6 +216,14 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   // Phase 8: Compositor teardown.
   if (ctx.compositorRef.current) {
     if (ctx.ownsCompositor) {
+      // Stage 3 (#540 — single end-of-turn flush): commit the full retained band
+      // to scrollback as one contiguous write BEFORE disarm() erases the live
+      // frame via logUpdate.clear(). At this point geometry is stable (overlay
+      // cleared in Phase 2b / Phase 6, all commits landed by Phase 3–6), so the
+      // flush produces the cleanest possible scrollback snapshot. disarm()'s own
+      // flushPendingCommittedBand becomes a no-op after this (band is empty).
+      // Best-effort: a closed TTY makes endTurn() throw; disarm() handles cleanup.
+      try { ctx.compositorRef.current.endTurn(); } catch { /* best effort */ }
       // Renderer-owned compositor — full teardown.
       try { ctx.compositorRef.current.disarm(); } catch { /* best effort */ }
     } else {
