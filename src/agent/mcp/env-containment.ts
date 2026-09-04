@@ -40,8 +40,8 @@ export type McpServerLayer = 'project' | 'user-global' | 'plugin' | 'cli';
  */
 const SECRET_PATTERNS: RegExp[] = [
   /^.+_API_KEY$/i,
-  /^.+_TOKEN$/i,
-  /^.+_SECRET/i,      // prefix match: *_SECRET, *_SECRET_KEY, *_SECRET_VALUE …
+  /^.+_TOKEN/i,       // prefix match: *_TOKEN, *_TOKEN_READONLY, *_TOKEN_EXPIRY …
+  /^.+_SECRET/i,      // prefix match: *_SECRET, *_SECRET_KEY, *_SECRET_VALUE … (consistent with _TOKEN: no $)
   /^.+_PASSWORD$/i,
   /^AWS_/i,
   /^GCP_/i,
@@ -67,6 +67,7 @@ export function isSecretPattern(varName: string): boolean {
  * parent session's runtime environment.
  *
  * - `NODE_OPTIONS`   — can inject `--require`, `--experimental-*`, etc.
+ * - `NODE_PATH`      — redirects Node.js module resolution order
  * - `LD_PRELOAD`     — Linux dynamic-linker injection
  * - `DYLD_*`         — macOS dynamic-linker injection (family match)
  * - `PYTHON*`        — can redirect imports, set encoding, alter paths
@@ -75,6 +76,7 @@ export function isSecretPattern(varName: string): boolean {
  */
 const DANGEROUS_INHERIT_EXACT: ReadonlySet<string> = new Set([
   'NODE_OPTIONS',
+  'NODE_PATH',
   'LD_PRELOAD',
   'RUBYOPT',
 ]);

@@ -37,7 +37,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 
 import type { McpServerConfig } from './types.js';
-import { expandEnvRecord, expandEnvRecordForLayer, expandEnvString } from './env.js';
+import { expandEnvRecord, expandEnvRecordForLayer, expandEnvString, expandHeadersForLayer } from './env.js';
 import { scrubDangerousEnv, type McpServerLayer } from './env-containment.js';
 
 /**
@@ -223,10 +223,28 @@ export function createTransport(
       );
     }
 
-    const { headers: expandedHeaders, missing } = expandHeaders(config.headers);
-    if (missing.length > 0) {
+    let expandedHeaders: Record<string, string>;
+    let missingHeaders: string[];
+    if (layer === 'project') {
+      const { headers: h, missing: m, blocked } = expandHeadersForLayer(
+        config.headers,
+        { layer, serverName, allowSecretEnv: trustedAllowSecretEnv },
+      );
+      if (blocked.length > 0) {
+        console.warn(
+          `[mcp:${serverName}] ${blocked.length} secret header expansion(s) blocked for project-local server`,
+        );
+      }
+      expandedHeaders = h;
+      missingHeaders = m;
+    } else {
+      const { headers: h, missing: m } = expandHeaders(config.headers);
+      expandedHeaders = h;
+      missingHeaders = m;
+    }
+    if (missingHeaders.length > 0) {
       console.warn(
-        `[mcp:${serverName}] missing header vars (passing as omitted): ${missing.join(', ')}`,
+        `[mcp:${serverName}] missing header vars (passing as omitted): ${missingHeaders.join(', ')}`,
       );
     }
 

@@ -158,3 +158,42 @@ export function expandEnvRecordForLayer(
 
   return { value: out, missing: [...missingSet], blocked: [...blockedSet] };
 }
+
+/**
+ * Layer-aware expansion for HTTP/SSE `headers` maps (issue #578).
+ *
+ * Mirrors `expandEnvRecordForLayer` but matches the `expandHeaders` semantics:
+ * a header that references a missing variable is omitted entirely (returning
+ * an empty string for a Bearer token is worse than no header). Headers whose
+ * expansion is blocked by the secret-pattern gate are also omitted and recorded
+ * in `blocked` so the caller can warn.
+ *
+ * For non-project layers the caller should use `expandHeaders` from
+ * `transport.ts` directly; this variant is only needed by the project-layer
+ * branch of `createTransport()`.
+ */
+export function expandHeadersForLayer(
+  headers: Record<string, string> | undefined,
+  ctx: EnvExpansionContext,
+  source: NodeJS.ProcessEnv = process.env,
+  warn: (msg: string) => void = console.warn,
+): { headers: Record<string, string>; missing: string[]; blocked: string[] } {
+  if (headers === undefined) return { headers: {}, missing: [], blocked: [] };
+  const filtered: Record<string, string> = {};
+  const missingSet = new Set<string>();
+  const blockedSet = new Set<string>();
+  for (const [key, raw] of Object.entries(headers)) {
+    const { value, missing, blocked } = expandEnvStringForLayer(raw, ctx, source, warn);
+    if (missing.length > 0) {
+      // At least one variable was unset — omit the header entirely
+      // (mirrors expandHeaders behaviour: partial header value is worse than none).
+      for (const m of missing) missingSet.add(m);
+    } else if (blocked.length === 0) {
+      filtered[key] = value;
+    } else {
+      // Expansion blocked by secret gate — omit header (fail-safe).
+      for (const b of blocked) blockedSet.add(b);
+    }
+  }
+  return { headers: filtered, missing: [...missingSet], blocked: [...blockedSet] };
+}
