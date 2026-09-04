@@ -50,6 +50,7 @@ export interface ClipboardHandlerOpts {
 interface ReadTool {
   cmd: string;
   args: string[];
+  checkStderr?: boolean; // true only for tools that signal error via stderr on exit 0
 }
 
 function clipboardReadToolsFor(platform: NodeJS.Platform): ReadTool[] {
@@ -67,7 +68,7 @@ function clipboardReadToolsFor(platform: NodeJS.Platform): ReadTool[] {
     default:
       // Linux/BSD: prefer Wayland (wl-paste), then X11 (xclip -o, xsel -ob).
       return [
-        { cmd: 'wl-paste', args: ['--no-newline'] },
+        { cmd: 'wl-paste', args: ['--no-newline'], checkStderr: true },
         { cmd: 'xclip', args: ['-selection', 'clipboard', '-o'] },
         { cmd: 'xsel', args: ['--clipboard', '--output'] },
       ];
@@ -87,7 +88,7 @@ export function readFromClipboard(
   for (const tool of clipboardReadToolsFor(platform)) {
     try {
       const res = spawnSync(tool.cmd, tool.args, { encoding: 'utf8', timeout: 5_000 });
-      if (!res.error && res.status === 0 && res.signal === null && !res.stderr?.trim()) {
+      if (!res.error && res.status === 0 && res.signal === null && (!tool.checkStderr || !res.stderr?.trim())) {
         return res.stdout ?? '';
       }
     } catch {

@@ -7,7 +7,7 @@
  * @module agent/tools/handlers/clipboard.test
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createClipboardWriteHandler,
   createClipboardReadHandler,
@@ -321,5 +321,54 @@ describe('readFromClipboard', () => {
     // On macOS pbpaste is always available; on Linux CI utilities may be absent.
     // Either a string or null is acceptable — what matters is no throw.
     expect(typeof result === 'string' || result === null).toBe(true);
+  });
+});
+
+// ── checkStderr scoping tests ─────────────────────────────────────────────────
+// Verify that the checkStderr flag is scoped to wl-paste only.
+// spawnSync is mocked at the module level via vi.mock so the real binary is
+// never invoked.
+
+vi.mock('node:child_process', () => ({
+  spawnSync: vi.fn(),
+}));
+
+import { spawnSync } from 'node:child_process';
+const mockSpawnSync = vi.mocked(spawnSync);
+
+describe('readFromClipboard — checkStderr scoping', () => {
+  beforeEach(() => {
+    mockSpawnSync.mockReset();
+  });
+
+  it('wl-paste: exit 0 + stderr content → falls through (checkStderr=true)', () => {
+    // wl-paste exits 0 but writes to stderr — should NOT be treated as success.
+    // All three Linux tools are tried; make xclip and xsel fail with an error so
+    // we get null rather than a spurious match.
+    mockSpawnSync.mockImplementation((cmd: string) => {
+      if (cmd === 'wl-paste') {
+        return { error: undefined, status: 0, signal: null, stdout: 'hello', stderr: 'some diagnostic\n' };
+      }
+      // xclip / xsel — simulate not found
+      return { error: new Error('ENOENT'), status: null, signal: null, stdout: '', stderr: '' };
+    });
+
+    const result = readFromClipboard('linux');
+    expect(result).toBeNull();
+  });
+
+  it('pbpaste (darwin): exit 0 + stderr content → still returns stdout (no checkStderr)', () => {
+    // macOS pbpaste can emit TCC diagnostics to stderr on exit 0; these must be
+    // ignored and the stdout content must be returned.
+    mockSpawnSync.mockReturnValueOnce({
+      error: undefined,
+      status: 0,
+      signal: null,
+      stdout: 'clipboard content',
+      stderr: 'TCC diagnostic message\n',
+    });
+
+    const result = readFromClipboard('darwin');
+    expect(result).toBe('clipboard content');
   });
 });
