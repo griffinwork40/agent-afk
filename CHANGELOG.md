@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.181.0] - 2026-09-04
+
+### Added
+- structured JSON query tool (#1423) (#1482) (5c739ea9)
+- add HandoffRecord schema and file-based handoff store (#1416) (#1484) (791c6f74)
+
+### Fixed
+- forward image content blocks from MCP servers (#1421) (#1481) (caab0b2b)
+
 ## [5.180.1] - 2026-09-04
 
 ### Fixed
