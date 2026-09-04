@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.179.0] - 2026-09-04
+
+### Added
+- compositor A2 — Stage 2 + Stage 3 (#540) (#1486) (ec728f5f)
+
 ## [5.178.5] - 2026-09-03
 
 ### Fixed
