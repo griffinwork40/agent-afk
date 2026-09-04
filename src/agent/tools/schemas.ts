@@ -15,6 +15,8 @@ import { waitForTool } from './schemas.wait-for.js';
 export { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
 import { getFacetTool } from './schemas.facet.js';
+import { jsonQueryTool } from './schemas.json-query.js';
+export { jsonQueryTool } from './schemas.json-query.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -1370,7 +1372,7 @@ export const browserCloseTool: AnthropicToolDef = {
 };
 
 /**
- * The 20 always-on built-in tool definitions (14 existing + 5 browser + 1 test_run),
+ * The always-on built-in tool definitions,
  * ready to pass as `tools` to `messages.create`.
  *
  * Does NOT include `agentTool`, `skillTool`, or `composeTool` — those are
@@ -1410,6 +1412,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   browserCloseTool, patchApplyTool,
   testRunTool,
   getFacetTool,
+  jsonQueryTool,
 ];
 
 /** Tool names in the always-on built-in set. */
