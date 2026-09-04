@@ -607,10 +607,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // toolDefs filter in AnthropicDirectProvider. No skill calls either tool.
     const baseSchemas = opts.isSkillDispatch
       ? this.schemas.filter(
-          (t) => t.name !== 'ask_question' && t.name !== 'terminal_font_size',
+          (t) =>
+            t.name !== 'ask_question' &&
+            t.name !== 'terminal_font_size' &&
+            t.name !== 'clipboard_write' &&
+            t.name !== 'clipboard_read',
         )
       : opts.isNonInteractive
-        ? this.schemas.filter((t) => t.name !== 'ask_question')
+        ? this.schemas.filter(
+            (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+          )
         : this.schemas;
 
     const dispatcherOpts: ConstructorParameters<typeof SessionToolDispatcher>[0] = {
