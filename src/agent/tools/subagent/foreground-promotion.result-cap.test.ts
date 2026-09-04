@@ -24,15 +24,39 @@ vi.mock('../../../config/env.js', () => ({
   }),
 }));
 
-beforeEach(() => {
+// Controllable mock for writeFileSync. vi.hoisted() ensures the mock fn
+// object is created before Vitest's vi.mock() hoisting runs the factory.
+// The factory keeps all other fs exports real; only writeFileSync is replaced.
+// Individual tests can call mockWriteFileSync.mockImplementation(() => { throw … })
+// to exercise the spill-failure branch; beforeEach resets to the real impl.
+const { mockWriteFileSync } = vi.hoisted(() => {
+  const mockWriteFileSync = vi.fn<Parameters<typeof import('node:fs').writeFileSync>, void>();
+  return { mockWriteFileSync };
+});
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: mockWriteFileSync,
+  };
+});
+
+beforeEach(async () => {
   // Reset env mock to default (undefined = use 32KB default).
   for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+  // Re-install the real writeFileSync so most tests write files normally.
+  // We import the actual (un-mocked) implementation via importActual.
+  const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mockWriteFileSync.mockImplementation(actualFs.writeFileSync as any);
   // Clean up any spill files from prior runs.
   rmSync(TEST_SESSIONS_DIR, { recursive: true, force: true });
 });
 
 afterEach(() => {
   rmSync(TEST_SESSIONS_DIR, { recursive: true, force: true });
+  mockWriteFileSync.mockClear();
 });
 
 describe('capSubagentResult', () => {
@@ -62,6 +86,9 @@ describe('capSubagentResult', () => {
     const spillPath = `${TEST_SESSIONS_DIR}/sess-2/subagent-handoffs/sub-2.txt`;
     expect(existsSync(spillPath)).toBe(true);
     expect(readFileSync(spillPath, 'utf8')).toBe(content);
+
+    // Upper-bound: after Fix 2, pointer is reserved within the budget.
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(32_768);
   });
 
   it('respects a custom cap set via env var', () => {
@@ -83,12 +110,36 @@ describe('capSubagentResult', () => {
     expect(result.content).toBe(content);
   });
 
-  it('returns content unchanged when sessionId is undefined', () => {
+  it('caps content even when sessionId is undefined (no spill, fallback message)', () => {
     const content = 'a'.repeat(40_000);
     const result = capSubagentResult(content, undefined, 'sub-5');
 
-    expect(result.capped).toBe(false);
-    expect(result.content).toBe(content);
+    // Fix 1: should still be capped even without a sessionId.
+    expect(result.capped).toBe(true);
+    expect(result.content).not.toBe(content);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThan(
+      Buffer.byteLength(content, 'utf8'),
+    );
+    // Should use the no-spill fallback message (no file path).
+    expect(result.content).toContain('could not be written to disk');
+    // Should NOT contain a file path reference.
+    expect(result.content).not.toContain('subagent-handoffs');
+  });
+
+  it('handles spill failure gracefully — capped:true and fallback pointer when writeFileSync throws', () => {
+    // Make writeFileSync throw to simulate a disk-write failure.
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+
+    const content = 'b'.repeat(40_000);
+    const result = capSubagentResult(content, 'sess-spill-fail', 'sub-spill-fail');
+
+    // Even with a spill failure the content must still be capped.
+    expect(result.capped).toBe(true);
+    // The fallback pointer must be used — no file path in the message.
+    expect(result.content).toContain('could not be written to disk');
+    expect(result.content).not.toContain(TEST_SESSIONS_DIR);
   });
 
   it('falls back to default cap on unparseable env var', () => {

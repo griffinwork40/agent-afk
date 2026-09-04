@@ -340,10 +340,11 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         model,
         parentModel,
       );
-      const { content: capped } = capSubagentResult(assembled, parentSessionId, handle.id);
+      const { content: cappedContent, capped: wasCapped } = capSubagentResult(assembled, parentSessionId, handle.id);
       toolResult = {
-        content: capped,
+        content: cappedContent,
         ...incompleteToolResultFields(result.stopReason),
+        ...(wasCapped ? { truncated: true } : {}),
       };
       return toolResult;
     }

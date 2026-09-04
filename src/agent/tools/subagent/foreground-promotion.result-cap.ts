@@ -80,7 +80,9 @@ export interface ResultCapOutcome {
  * Returns the content unchanged when:
  * - The cap is disabled (AFK_SUBAGENT_RESULT_CAP_BYTES=0)
  * - The content fits within the threshold
- * - sessionId is unavailable (no spill path possible)
+ *
+ * When sessionId is unavailable the spill is skipped but the content is still
+ * truncated to the cap (with a no-spill-pointer fallback message).
  */
 export function capSubagentResult(
   content: string,
@@ -88,7 +90,7 @@ export function capSubagentResult(
   subagentId: string,
 ): ResultCapOutcome {
   const capBytes = resolveCapBytes();
-  if (capBytes === undefined || sessionId === undefined) {
+  if (capBytes === undefined) {
     return { content, capped: false };
   }
 
@@ -97,14 +99,21 @@ export function capSubagentResult(
     return { content, capped: false };
   }
 
-  // Spill the full output before truncating.
-  const spillPath = spillSubagentOutput(sessionId, subagentId, content);
+  // Spill the full output before truncating (only when sessionId is known).
+  const spillPath = sessionId !== undefined
+    ? spillSubagentOutput(sessionId, subagentId, content)
+    : undefined;
 
-  // Build the head+tail view. Reserve space for the pointer line.
-  const capped = headAndTail(content, capBytes);
+  // Build the pointer string FIRST so we can subtract its byte cost from the
+  // slice budget, keeping headAndTail(…) + pointer within the total cap.
   const pointer = spillPath !== undefined
     ? `\n\n[Subagent output was ${byteLength} bytes — full result at ${spillPath}. Use read_file to retrieve it.]`
     : `\n\n[Subagent output was ${byteLength} bytes — truncated to ${capBytes} bytes. Full output could not be written to disk.]`;
+  const pointerBytes = Buffer.byteLength(pointer, 'utf8');
+  // Floor at 50% of cap so a very long pointer can never consume the entire budget.
+  const sliceBudget = Math.max(capBytes - pointerBytes, Math.floor(capBytes * 0.5));
 
-  return { content: capped + pointer, capped: true };
+  const sliced = headAndTail(content, sliceBudget);
+
+  return { content: sliced + pointer, capped: true };
 }
