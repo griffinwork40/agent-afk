@@ -86,8 +86,8 @@ export function readFromClipboard(
 ): string | null {
   for (const tool of clipboardReadToolsFor(platform)) {
     try {
-      const res = spawnSync(tool.cmd, tool.args, { encoding: 'utf8' });
-      if (!res.error && res.status === 0) {
+      const res = spawnSync(tool.cmd, tool.args, { encoding: 'utf8', timeout: 5_000 });
+      if (!res.error && res.status === 0 && res.signal === null && !res.stderr?.trim()) {
         return res.stdout ?? '';
       }
     } catch {
@@ -183,11 +183,6 @@ export function createClipboardReadHandler(
       };
     }
 
-    // ── Size cap ─────────────────────────────────────────────────────────
-    // Clipboard can contain arbitrarily large documents (e.g. a copied web
-    // page). Cap at 100KB — same limit used by web_scrape and web_request —
-    // to bound model context cost. Use Buffer.byteLength for accurate UTF-8
-    // byte counting rather than string .length (which counts UTF-16 code units).
     // ── Secret redaction ─────────────────────────────────────────────────
     // Redact secrets from the raw string BEFORE any truncation so that a
     // secret whose bytes straddle the 100 KB boundary cannot evade redaction
@@ -198,9 +193,15 @@ export function createClipboardReadHandler(
     const CLIPBOARD_CAP_BYTES = 100_000;
     const redactedBytes = Buffer.byteLength(redacted, 'utf8');
     const truncated = redactedBytes > CLIPBOARD_CAP_BYTES;
-    const capped = truncated
-      ? Buffer.from(redacted, 'utf8').slice(0, CLIPBOARD_CAP_BYTES).toString('utf8')
-      : redacted;
+    const capped = (() => {
+      if (!truncated) return redacted;
+      const buf = Buffer.from(redacted, 'utf8');
+      let end = CLIPBOARD_CAP_BYTES;
+      // Walk backward past any UTF-8 continuation bytes (0x80–0xBF) so we never
+      // cut in the middle of a multi-byte sequence (would produce U+FFFD).
+      while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+      return buf.slice(0, end).toString('utf8');
+    })();
 
     return { content: capped, ...(truncated ? { truncated: true } : {}) };
   };
