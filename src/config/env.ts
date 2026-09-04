@@ -1447,7 +1447,10 @@ export const ENV_REGISTRY = [
       'this threshold, the full output is spilled to a sidecar file ' +
       '(state/sessions/<id>/subagent-handoffs/<subagentId>.txt) and the parent receives a ' +
       'head+tail slice with a read_file pointer. Prevents large subagent outputs from bloating ' +
-      'parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB).',
+      'parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB). ' +
+      'Note: sidecar files contain unredacted subagent output (same caveats as ' +
+      'AFK_CAPTURE_SUBAGENT_OUTPUT). No automatic GC covers subagent-handoffs/ today; ' +
+      'retention is tied to session-directory cleanup.',
     type: 'number',
     required: false,
     default: '32768',

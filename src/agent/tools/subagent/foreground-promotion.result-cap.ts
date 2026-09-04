@@ -14,7 +14,7 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { getSessionsDir } from '../../../paths.js';
 import { headAndTail } from '../handlers/_output-cap.js';
 import { env } from '../../../config/env.js';
@@ -52,9 +52,12 @@ function spillSubagentOutput(
   raw: string,
 ): string | undefined {
   try {
-    const dir = join(getSessionsDir(), sessionId, 'subagent-handoffs');
+    // Defense-in-depth: strip path separators so a crafted id cannot escape
+    // the sessions directory. In practice both values are safe (sessionId is a
+    // randomUUID, subagentId is regex-sanitized), but basename() is zero-cost.
+    const dir = join(getSessionsDir(), basename(sessionId), 'subagent-handoffs');
     mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${subagentId}.txt`);
+    const path = join(dir, `${basename(subagentId)}.txt`);
     writeFileSync(path, raw, 'utf8');
     return path;
   } catch {
