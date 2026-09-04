@@ -206,10 +206,12 @@ export class ToolLane {
     // Lazy batch-badge clear (Phase 2, issue #516): once ALL ids in the
     // pending batch have received results the batch is complete and the
     // `[×N]` badge should disappear. Check after every addResult call.
+    // A missing entry (id not yet registered) is treated as already-resolved
+    // so a stale id from a prior wave never permanently sticks the badge.
     if (this.pendingBatch !== null) {
       const allDone = [...this.pendingBatch.toolUseIds].every((id) => {
         const e = this.entries.get(id);
-        return e?.kind === 'tool' && e.result !== undefined;
+        return !e || (e?.kind === 'tool' && e.result !== undefined);
       });
       if (allDone) this.pendingBatch = null;
     }

@@ -334,14 +334,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private suspectedLoopWindow: SuspectedLoopWindow | null = null;
 
-  /**
-   * Pending batch-start events accumulated during the most recent
-   * `executeBatch` call (Phase 2, issue #516). The provider generator drains
-   * this array via `drainBatchEvents()` immediately after `executeBatch`
-   * returns and yields each entry as a `tool.batch.start` ProviderEvent so
-   * the TUI can show a live `[×N]` pending indicator. Cleared on drain.
-   */
-  private pendingBatchEvents: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+
 
   /**
    * Shared grant-state machine (issues #361/#362). The hooks bind the
@@ -1099,11 +1092,6 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // silently misbehave in both directions — falsely aborting fresh calls
     // when call[0] is stale, and falsely dispatching aborted calls when
     // call[0] is fresh. Both helpers perform per-call abort checks.
-    // Clear the pending-batch-events buffer before each executeBatch call so
-    // drainBatchEvents() only sees events from THIS invocation, not leftovers
-    // from a previous turn's batch (dispatcher is per-turn, but be defensive).
-    this.pendingBatchEvents = [];
-
     const batchDeps: BatchExecDeps = {
       repeatFailureGuard: this.repeatFailureGuard,
       repeatBreakerExemptTools: REPEAT_BREAKER_EXEMPT_TOOLS,
@@ -1111,12 +1099,6 @@ export class SessionToolDispatcher implements ToolDispatcher {
       subagentExecutor: this.subagentExecutor,
       sessionId: this.sessionId,
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
-      // Live batch-start event sink (Phase 2, issue #516): collect concurrent
-      // wave notifications into the pending buffer so the provider generator
-      // can drain and yield them as `tool.batch.start` ProviderEvents.
-      batchEventSink: (batchSize, toolUseIds) => {
-        this.pendingBatchEvents.push({ batchSize, toolUseIds });
-      },
     };
 
     for (const batch of batches) {
@@ -1143,23 +1125,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
-   * Drain and return pending batch-start events accumulated during the most
-   * recent {@link executeBatch} call (Phase 2, issue #516).
+   * Expose the concurrency classifier so provider generators can compute the
+   * batch partition BEFORE awaiting `executeBatch`, enabling eager
+   * `tool.batch.start` emission (Phase 2, issue #516 fix).
    *
-   * Each entry describes one concurrent wave: `batchSize` ≥ 2 (only parallel
-   * waves are reported) and `toolUseIds` lists the ids in partition order.
-   * The caller (the provider's `dispatchToolCalls` generator) yields each
-   * entry as a `tool.batch.start` ProviderEvent immediately after
-   * `executeBatch` returns, so the TUI receives the events before any
-   * `tool.output` arrives and can show a live `[×N]` badge.
-   *
-   * Destructive: clears `pendingBatchEvents` on every call so subsequent
-   * drains do not repeat events from a prior `executeBatch` invocation.
+   * The provider generator calls this, runs `partitionIntoBatches`, and yields
+   * `tool.batch.start` events for every concurrent batch with ≥ 2 calls BEFORE
+   * awaiting `executeBatch` — so the TUI sees the badge while tools are still
+   * in-flight rather than after all handlers complete.
    */
-  drainBatchEvents(): Array<{ batchSize: number; toolUseIds: string[] }> {
-    const events = this.pendingBatchEvents;
-    this.pendingBatchEvents = [];
-    return events;
+  getConcurrencyClassifier(): (toolName: string, input: unknown) => boolean {
+    return this.classifier;
   }
 
   /**

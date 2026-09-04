@@ -7,6 +7,7 @@ import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/ra
 import { env } from '../../../../config/env.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
+import { partitionIntoBatches } from '../../../tools/dispatch-batching.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import {
@@ -149,20 +150,24 @@ export async function* dispatchAndAppendToolCalls({
     let dispatcherResults: ToolResult[];
     try {
       if (toolDispatcher.executeBatch) {
-        dispatcherResults = await toolDispatcher.executeBatch(calls);
-        // Phase 2 (issue #516): drain and yield batch-start events collected
-        // during executeBatch so the TUI sees the parallel-wave badge while
-        // tools are still in-flight (before any tool.output arrives).
-        if (toolDispatcher.drainBatchEvents) {
-          for (const ev of toolDispatcher.drainBatchEvents()) {
-            yield {
-              type: 'tool.batch.start' as const,
-              batchSize: ev.batchSize,
-              toolUseIds: ev.toolUseIds,
-              sessionId,
-            };
+        // Phase 2 (issue #516 fix): compute the batch partition BEFORE awaiting
+        // executeBatch so tool.batch.start events can be yielded eagerly — while
+        // the tools are actually in-flight — rather than after all handlers return.
+        if (toolDispatcher.getConcurrencyClassifier) {
+          const classifier = toolDispatcher.getConcurrencyClassifier();
+          const batches = partitionIntoBatches(calls, classifier);
+          for (const batch of batches) {
+            if (batch.isConcurrencySafe && batch.indices.length >= 2) {
+              yield {
+                type: 'tool.batch.start' as const,
+                batchSize: batch.indices.length,
+                toolUseIds: batch.indices.map((i) => calls[i]!.id),
+                sessionId,
+              };
+            }
           }
         }
+        dispatcherResults = await toolDispatcher.executeBatch(calls);
       } else {
         dispatcherResults = [];
         for (const call of calls) {

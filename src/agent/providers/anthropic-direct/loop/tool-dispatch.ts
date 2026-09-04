@@ -23,6 +23,7 @@ import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/ra
 import { env } from '../../../../config/env.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
+import { partitionIntoBatches } from '../../../tools/dispatch-batching.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /**
@@ -107,6 +108,23 @@ export async function* dispatchToolCalls(
   // Dispatch: batch (parallel for safe tools) or sequential fallback.
   let results: ToolResult[];
   if (input.toolDispatcher.executeBatch) {
+    // Phase 2 (issue #516 fix): compute the batch partition BEFORE awaiting
+    // executeBatch so tool.batch.start events can be yielded eagerly — while
+    // the tools are actually in-flight — rather than after all handlers return.
+    if (input.toolDispatcher.getConcurrencyClassifier) {
+      const classifier = input.toolDispatcher.getConcurrencyClassifier();
+      const batches = partitionIntoBatches(calls, classifier);
+      for (const batch of batches) {
+        if (batch.isConcurrencySafe && batch.indices.length >= 2) {
+          yield {
+            type: 'tool.batch.start' as const,
+            batchSize: batch.indices.length,
+            toolUseIds: batch.indices.map((i) => calls[i]!.id),
+            sessionId: input.ctx.sessionId,
+          };
+        }
+      }
+    }
     try {
       results = await input.toolDispatcher.executeBatch(calls);
     } catch (err) {
@@ -114,19 +132,6 @@ export async function* dispatchToolCalls(
         content: `Tool batch execution failed: ${err instanceof Error ? err.message : String(err)}`,
         isError: true as const,
       }));
-    }
-    // Phase 2 (issue #516): drain and yield batch-start events collected
-    // during executeBatch. Each event fires before any tool.output so the
-    // TUI sees the parallel-wave badge while all tools are still in-flight.
-    if (input.toolDispatcher.drainBatchEvents) {
-      for (const ev of input.toolDispatcher.drainBatchEvents()) {
-        yield {
-          type: 'tool.batch.start',
-          batchSize: ev.batchSize,
-          toolUseIds: ev.toolUseIds,
-          sessionId: input.ctx.sessionId,
-        };
-      }
     }
   } else {
     results = [];

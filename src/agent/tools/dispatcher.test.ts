@@ -1313,116 +1313,107 @@ describe('SessionToolDispatcher', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // drainBatchEvents — Phase 2 live batch-start indicator (issue #516)
+  // getConcurrencyClassifier — Phase 2 eager batch-start emission (issue #516 fix)
   // ---------------------------------------------------------------------------
-  describe('drainBatchEvents (Phase 2 live batch-start events, issue #516)', () => {
-    const signal = new AbortController().signal;
-
-    function makeBatchCall2(name: string, id?: string): ToolCall {
-      return { id: id ?? `call-${name}`, name, input: name === 'echo' ? { message: name } : {}, signal };
-    }
-
-    it('returns empty array before any executeBatch call', () => {
+  describe('getConcurrencyClassifier (Phase 2 eager batch-start, issue #516 fix)', () => {
+    it('returns the default classifier when no custom classifier is provided', () => {
       const dispatcher = makeDispatcher();
-      expect(dispatcher.drainBatchEvents()).toEqual([]);
+      const classifier = dispatcher.getConcurrencyClassifier();
+      expect(classifier('read_file', {})).toBe(true);
+      expect(classifier('glob', {})).toBe(true);
+      expect(classifier('bash', {})).toBe(false);
+      expect(classifier('write_file', {})).toBe(false);
     });
 
-    it('emits one batch-start event for a concurrent safe wave of 2', async () => {
-      const dispatcher = makeDispatcher({
-        handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
-        permissions: { allowedTools: ['read_file', 'glob'] },
-      });
-
-      await dispatcher.executeBatch([makeBatchCall2('read_file'), makeBatchCall2('glob')]);
-
-      const events = dispatcher.drainBatchEvents();
-      expect(events).toHaveLength(1);
-      expect(events[0]!.batchSize).toBe(2);
-      expect(events[0]!.toolUseIds).toEqual(['call-read_file', 'call-glob']);
+    it('returns the custom classifier when one is injected', () => {
+      const alwaysSafe = (_name: string, _input: unknown) => true;
+      const dispatcher = makeDispatcher({ concurrencyClassifier: alwaysSafe });
+      const classifier = dispatcher.getConcurrencyClassifier();
+      // Custom classifier marks everything safe, including write tools.
+      expect(classifier('bash', {})).toBe(true);
+      expect(classifier('write_file', {})).toBe(true);
     });
 
-    it('emits one event per concurrent wave (multi-wave turn)', async () => {
-      // [safe, safe, unsafe, safe] → batches {read,glob}, {bash}, {grep}
-      // Only the size-2 batch emits; singleton sequential batches do not.
+    it('classifier result is consistent with how executeBatch partitions calls', async () => {
+      const signal = new AbortController().signal;
       const dispatcher = makeDispatcher({
         handlers: new Map([
           ['read_file', async () => ({ content: 'r' })],
           ['glob', async () => ({ content: 'g' })],
-          ['bash', async () => ({ content: 'b' })],
-          ['grep', async () => ({ content: 'q' })],
         ]),
-        permissions: { allowedTools: ['read_file', 'glob', 'bash', 'grep'] },
+        permissions: { allowedTools: ['read_file', 'glob'] },
       });
+      const classifier = dispatcher.getConcurrencyClassifier();
+      // Both tools are concurrency-safe per the classifier — executeBatch
+      // will run them in one concurrent wave.
+      expect(classifier('read_file', {})).toBe(true);
+      expect(classifier('glob', {})).toBe(true);
 
-      await dispatcher.executeBatch([
-        makeBatchCall2('read_file'),
-        makeBatchCall2('glob'),
-        makeBatchCall2('bash'),
-        makeBatchCall2('grep'),
+      // Confirm executeBatch still runs correctly after getConcurrencyClassifier.
+      const results = await dispatcher.executeBatch([
+        { id: 'toolu_r', name: 'read_file', input: {}, signal },
+        { id: 'toolu_g', name: 'glob', input: {}, signal },
       ]);
-
-      const events = dispatcher.drainBatchEvents();
-      // Only the concurrent 2-safe wave emits; bash and grep are singletons.
-      expect(events).toHaveLength(1);
-      expect(events[0]!.batchSize).toBe(2);
-      expect(events[0]!.toolUseIds).toEqual(['call-read_file', 'call-glob']);
+      expect(results).toHaveLength(2);
+      expect(results[0]!.content).toBe('r');
+      expect(results[1]!.content).toBe('g');
     });
 
-    it('emits no events for a fully sequential batch (all unsafe tools)', async () => {
+    // Provider-level event ordering: tool.batch.start must precede tool.output
+    // events in the provider stream for a concurrent batch (the core fix).
+    // This test simulates what the provider generator does: compute partition,
+    // yield batch-start events, then await executeBatch.
+    it('classifier enables provider to yield tool.batch.start BEFORE executeBatch settles', async () => {
+      const signal = new AbortController().signal;
+      let resolveRead!: () => void;
+      let resolveGlob!: () => void;
+      const readStarted = new Promise<void>((r) => { resolveRead = r; });
+      const globStarted = new Promise<void>((r) => { resolveGlob = r; });
+      // Handlers signal when they start so we can interleave event-emission checks.
+      const readHandler: ToolHandler = async () => {
+        resolveRead();
+        await new Promise<void>((r) => setTimeout(r, 10));
+        return { content: 'r' };
+      };
+      const globHandler: ToolHandler = async () => {
+        resolveGlob();
+        await new Promise<void>((r) => setTimeout(r, 10));
+        return { content: 'g' };
+      };
       const dispatcher = makeDispatcher({
-        handlers: new Map([
-          ['bash', async () => ({ content: 'b' })],
-          ['edit_file', async () => ({ content: 'e' })],
-        ]),
-        permissions: { allowedTools: ['bash', 'edit_file'] },
-      });
-
-      await dispatcher.executeBatch([makeBatchCall2('bash'), makeBatchCall2('edit_file')]);
-
-      expect(dispatcher.drainBatchEvents()).toEqual([]);
-    });
-
-    it('clears events after drain (second call returns empty)', async () => {
-      const dispatcher = makeDispatcher({
-        handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
-        permissions: { allowedTools: ['read_file', 'glob'] },
-      });
-
-      await dispatcher.executeBatch([makeBatchCall2('read_file'), makeBatchCall2('glob')]);
-      dispatcher.drainBatchEvents(); // consume
-      expect(dispatcher.drainBatchEvents()).toEqual([]); // second drain is empty
-    });
-
-    it('resets buffer between executeBatch calls (events from only the most recent call)', async () => {
-      const dispatcher = makeDispatcher({
-        handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
-        permissions: { allowedTools: ['read_file', 'glob'] },
-      });
-
-      // First batch — don't drain
-      await dispatcher.executeBatch([makeBatchCall2('read_file', 'a'), makeBatchCall2('glob', 'b')]);
-      // Second batch — drain should see only second batch events
-      await dispatcher.executeBatch([makeBatchCall2('read_file', 'c'), makeBatchCall2('glob', 'd')]);
-
-      const events = dispatcher.drainBatchEvents();
-      expect(events).toHaveLength(1);
-      expect(events[0]!.toolUseIds).toEqual(['c', 'd']);
-    });
-
-    it('toolUseIds match the actual call ids passed to executeBatch', async () => {
-      const dispatcher = makeDispatcher({
-        handlers: new Map([['read_file', async () => ({ content: 'r' })], ['glob', async () => ({ content: 'g' })]]),
+        handlers: new Map([['read_file', readHandler], ['glob', globHandler]]),
         permissions: { allowedTools: ['read_file', 'glob'] },
       });
 
       const calls = [
-        { id: 'toolu_abc', name: 'read_file', input: {}, signal },
-        { id: 'toolu_xyz', name: 'glob', input: {}, signal },
+        { id: 'toolu_r', name: 'read_file', input: {}, signal },
+        { id: 'toolu_g', name: 'glob', input: {}, signal },
       ];
-      await dispatcher.executeBatch(calls);
 
-      const events = dispatcher.drainBatchEvents();
-      expect(events[0]!.toolUseIds).toEqual(['toolu_abc', 'toolu_xyz']);
+      // Simulate what the provider generator does: compute partition eagerly
+      // using getConcurrencyClassifier, collect batch-start events, then await.
+      const { partitionIntoBatches } = await import('./dispatch-batching.js');
+      const classifier = dispatcher.getConcurrencyClassifier();
+      const batches = partitionIntoBatches(calls, classifier);
+      const batchStartEvents: Array<{ batchSize: number; toolUseIds: string[] }> = [];
+      for (const batch of batches) {
+        if (batch.isConcurrencySafe && batch.indices.length >= 2) {
+          batchStartEvents.push({
+            batchSize: batch.indices.length,
+            toolUseIds: batch.indices.map((i) => calls[i]!.id),
+          });
+        }
+      }
+
+      // batch-start events are available BEFORE executeBatch is awaited.
+      expect(batchStartEvents).toHaveLength(1);
+      expect(batchStartEvents[0]!.batchSize).toBe(2);
+      expect(batchStartEvents[0]!.toolUseIds).toEqual(['toolu_r', 'toolu_g']);
+
+      // Only now await executeBatch — batch-start already emitted.
+      const results = await dispatcher.executeBatch(calls);
+      expect(results).toHaveLength(2);
+      await Promise.all([readStarted, globStarted]); // both handlers ran
     });
   });
 

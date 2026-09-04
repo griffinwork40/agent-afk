@@ -244,14 +244,16 @@ export type ProviderEvent =
     }
   | {
       /**
-       * Live parallel-batch start marker (Phase 2, issue #516). Emitted by
-       * `executeBatch` at the top of each `for…of` iteration — after
-       * partitioning and blocked-call filtering but BEFORE any tool handler
-       * fires — so the TUI can show a `[×N]` pending indicator during the
-       * window when tools are in-flight but no results have arrived yet.
+       * Live parallel-batch start marker (Phase 2, issue #516). Emitted
+       * BEFORE `executeBatch` is awaited — the provider generator computes
+       * the partition eagerly using `getConcurrencyClassifier()` and yields
+       * one event per concurrent batch with ≥ 2 calls, so the TUI sees the
+       * `[×N]` badge while tools are genuinely in-flight.
        *
        * Only emitted for concurrent batches (`isConcurrencySafe = true`) with
        * `batchSize >= 2`. Sequential single-call batches are not badged.
+       * `batchSize` reflects the admitted wave width, not the total requested
+       * batch count (a deferred subset may run in a subsequent wave).
        * `toolUseIds` carries the ids of every call in the batch so the overlay
        * can track which spinner rows belong to this batch and clear the badge
        * once all of them resolve.
