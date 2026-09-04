@@ -5,6 +5,7 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { PreviewDiffRef } from '../../../agent/tools/hooks/edit-preview-hook.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
+import type { StateStore } from '../../../agent/state/state-store.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
@@ -344,6 +345,7 @@ export interface CliOptions {
 export interface InteractiveCtx {
   session: SessionRef;
   memoryStore: MemoryStore;
+  stateStore?: StateStore;
   stats: SessionStats;          // mutable across turns
   statusLine: StatusLine;        // mutable — owns terminal side-effects
   contextSampler: ContextSampler; // mutable — cached SDK calls

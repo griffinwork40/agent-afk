@@ -1,5 +1,6 @@
 import type { ModelProvider } from '../../../agent/provider.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
+import type { StateStore } from '../../../agent/state/state-store.js';
 import type { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
 import type { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
 import type { SkillExecutor } from '../../../agent/tools/skill-executor.js';
@@ -47,6 +48,7 @@ export function createReplProviders(a: {
   skillExecutor: SkillExecutor;
   composeExecutor: ComposeExecutor;
   memoryStore: MemoryStore;
+  stateStore?: StateStore;
   workspaceStore?: WorkspaceStore;
   mcpManager: McpManager | undefined;
   fastModeController: FastModeController;
@@ -60,6 +62,7 @@ export function createReplProviders(a: {
       skillExecutor: a.skillExecutor,
       composeExecutor: a.composeExecutor,
       memoryStore: a.memoryStore,
+      ...(a.stateStore !== undefined ? { stateStore: a.stateStore } : {}),
       ...(a.workspaceStore !== undefined ? { workspaceStore: a.workspaceStore } : {}),
       model: model !== undefined ? model : String(a.sessionModel),
       ...(a.cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: a.cliConfig.openaiBaseUrl } : {}),
@@ -74,6 +77,7 @@ export function createReplProviders(a: {
       skillExecutor: a.skillExecutor,
       composeExecutor: a.composeExecutor,
       memoryStore: a.memoryStore,
+      ...(a.stateStore !== undefined ? { stateStore: a.stateStore } : {}),
       ...(a.workspaceStore !== undefined ? { workspaceStore: a.workspaceStore } : {}),
       surface: 'cli',
       fastModeController: a.fastModeController,

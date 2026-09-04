@@ -274,6 +274,10 @@ export function getMemoryDir(): string {
   return join(getAfkStateDir(), 'memory');
 }
 
+export function getStateDatabasePath(): string {
+  return join(getAfkStateDir(), 'kv', 'kv.db');
+}
+
 export function getQueueDir(): string {
   return join(getAfkStateDir(), 'queue');
 }

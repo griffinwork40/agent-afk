@@ -45,6 +45,10 @@ import {
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { WorkspaceStore, createWorkspaceHandlers, workspaceToolSchemas } from '../../workspace/index.js';
+import { StateStore } from '../../state/state-store.js';
+import { createStateHandlers } from '../../state/state-tools.js';
+import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
+import { getStateDatabasePath } from '../../../paths.js';
 import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
@@ -91,6 +95,7 @@ export interface OpenAICompatibleProviderOptions {
   /** Shared memory store (avoids dual SQLite handles when CLI builds it once). */
   memoryStore?: MemoryStore;
   workspaceStore?: WorkspaceStore;
+  stateStore?: StateStore;
   /** UI surface tag forwarded to memory handlers ('cli' | 'telegram' | etc.). */
   surface?: string;
   /**
@@ -138,6 +143,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly providerOpts: OpenAICompatibleProviderOptions;
   private readonly memoryStore: MemoryStore;
   private readonly workspaceStore: WorkspaceStore | undefined;
+  private readonly stateStore: StateStore;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -186,6 +192,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this._defaultHeaders = opts.defaultHeaders;
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
     this.workspaceStore = opts.workspaceStore;
+    this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
     // Executor-supplied `agent` def advertises named agent types when a
@@ -197,6 +204,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
       schemas.push(memorySearchTool);
     } else {
       schemas.push(...memoryToolSchemas);
+    }
+    if (opts.readOnlyMemory === true) {
+      schemas.push(...stateReadToolSchemas);
+    } else {
+      schemas.push(...stateToolSchemas);
     }
     // Workspace (per-session publish) + awareness (runtime-state) — parity
     // with anthropic-direct/provider-schemas.ts. Keep the workspace schema in
@@ -548,6 +560,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (this.workspaceStore !== undefined) {
       for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
     }
+    // State store tools: state_get, state_put, state_cas, state_delete, state_query.
+    // Read-only sessions get only state_get and state_query.
+    for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
+      if (this.providerOpts.readOnlyMemory === true && name !== 'state_get' && name !== 'state_query') continue;
+      handlers.set(name, handler);
+    }
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
     }
@@ -589,10 +607,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // toolDefs filter in AnthropicDirectProvider. No skill calls either tool.
     const baseSchemas = opts.isSkillDispatch
       ? this.schemas.filter(
-          (t) => t.name !== 'ask_question' && t.name !== 'terminal_font_size',
+          (t) =>
+            t.name !== 'ask_question' &&
+            t.name !== 'terminal_font_size' &&
+            t.name !== 'clipboard_write' &&
+            t.name !== 'clipboard_read',
         )
       : opts.isNonInteractive
-        ? this.schemas.filter((t) => t.name !== 'ask_question')
+        ? this.schemas.filter(
+            (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+          )
         : this.schemas;
 
     const dispatcherOpts: ConstructorParameters<typeof SessionToolDispatcher>[0] = {
@@ -729,6 +753,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   close(): void {
     this.memoryStore.close();
     this.workspaceStore?.close();
+    this.stateStore.close();
   }
 
   /**

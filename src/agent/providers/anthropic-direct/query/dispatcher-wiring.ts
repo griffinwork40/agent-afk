@@ -215,10 +215,16 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // Narrower than the skill-dispatch strip: `terminal_font_size` is retained.
   const toolDefs = config.isSkillDispatch
     ? baseToolDefs.filter(
-        (t) => t.name !== 'ask_question' && t.name !== 'terminal_font_size',
+        (t) =>
+          t.name !== 'ask_question' &&
+          t.name !== 'terminal_font_size' &&
+          t.name !== 'clipboard_write' &&
+          t.name !== 'clipboard_read',
       )
     : config.isNonInteractive
-      ? baseToolDefs.filter((t) => t.name !== 'ask_question')
+      ? baseToolDefs.filter(
+          (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+        )
       : baseToolDefs;
 
   return {

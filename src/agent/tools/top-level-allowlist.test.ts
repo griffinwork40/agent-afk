@@ -19,6 +19,7 @@ import { MEMORY_TOOL_NAMES } from '../memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from './handlers/exit-plan-mode.js';
 import { WORKSPACE_TOOL_NAMES } from '../workspace/index.js';
+import { STATE_TOOL_NAMES } from '../state/state-tools.js';
 
 describe('topLevelSurfaceAllowedTools', () => {
   it('includes exit_plan_mode (the always-on, plan-mode-only tool that was missing)', () => {
@@ -26,12 +27,13 @@ describe('topLevelSurfaceAllowedTools', () => {
     expect(topLevelSurfaceAllowedTools()).toContain('exit_plan_mode');
   });
 
-  it('includes every always-on builtin, memory, and awareness tool name', () => {
+  it('includes every always-on builtin, memory, awareness, and state tool name', () => {
     const list = topLevelSurfaceAllowedTools();
     for (const name of BUILTIN_TOOL_NAMES) expect(list).toContain(name);
     for (const name of MEMORY_TOOL_NAMES) expect(list).toContain(name);
     for (const name of AWARENESS_TOOL_NAMES) expect(list).toContain(name);
     for (const name of WORKSPACE_TOOL_NAMES) expect(list).toContain(name);
+    for (const name of STATE_TOOL_NAMES) expect(list).toContain(name);
     expect(list).toContain('get_runtime_state');
   });
 
@@ -56,6 +58,7 @@ describe('topLevelSurfaceAllowedTools', () => {
       ...MEMORY_TOOL_NAMES,
       ...AWARENESS_TOOL_NAMES,
       ...WORKSPACE_TOOL_NAMES,
+      ...STATE_TOOL_NAMES,
       EXIT_PLAN_MODE_TOOL_NAME,
       'agent',
       'skill',

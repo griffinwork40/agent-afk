@@ -3,12 +3,16 @@ import {
   builtinToolSchemas,
   BUILTIN_TOOL_NAMES,
   agentTool,
+  clipboardWriteTool,
+  clipboardReadTool,
 } from './schemas.js';
 import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
   it('contains exactly 33 tools', () => {
     expect(builtinToolSchemas).toHaveLength(33);
+  it('contains exactly 34 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(34);
   });
 
   it('exports the expected tool names', () => {
@@ -46,6 +50,8 @@ describe('builtinToolSchemas', () => {
       'test_run',
       'get_facet',
       'json_query',
+      'clipboard_write',
+      'clipboard_read',
     ]);
   });
 
@@ -79,6 +85,7 @@ describe('builtinToolSchemas', () => {
       'browser_close',
       'test_run',
       'get_facet',
+      'clipboard_read',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
@@ -145,6 +152,16 @@ describe('cancelBackgroundJobTool', () => {
     expect(cancelBackgroundJobTool.input_schema.required).toEqual(['jobId', 'reason']);
     expect(cancelBackgroundJobTool.description).toMatch(/Ctrl\+B/);
     expect(cancelBackgroundJobTool.description).toMatch(/\/bgsub:cancel/);
+  });
+});
+
+describe('clipboard tool schemas', () => {
+  it('clipboard_write has category "write" so plan-mode gate blocks it', () => {
+    expect(clipboardWriteTool.category).toBe('write');
+  });
+
+  it('clipboard_read has category "other"', () => {
+    expect(clipboardReadTool.category).toBe('other');
   });
 });
 

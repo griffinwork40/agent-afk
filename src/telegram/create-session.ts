@@ -18,6 +18,7 @@ import { resolveModelId } from '../agent/session/model-resolution.js';
 import { getMaxOutputTokens, getMaxToolUseIterations, composeSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
+import type { StateStore } from '../agent/state/state-store.js';
 import { WorkspaceStore } from '../agent/workspace/workspace-store.js';
 import { env } from '../config/env.js';
 import { createTelegramTraceWriter } from './construct-session.js';
@@ -37,6 +38,8 @@ export interface TelegramSessionFactoryOptions {
   telegramCwd: string | undefined;
   /** Bot-global memory store shared by every chat's hook bundle. */
   memoryStore: MemoryStore;
+  /** Bot-global state store for durable agent state. */
+  stateStore?: StateStore;
   log?: (message: string) => void;
 }
 
