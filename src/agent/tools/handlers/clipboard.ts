@@ -188,20 +188,21 @@ export function createClipboardReadHandler(
     // page). Cap at 100KB — same limit used by web_scrape and web_request —
     // to bound model context cost. Use Buffer.byteLength for accurate UTF-8
     // byte counting rather than string .length (which counts UTF-16 code units).
-    const CLIPBOARD_CAP_BYTES = 100_000;
-    const rawBytes = Buffer.byteLength(raw, 'utf8');
-    const truncated = rawBytes > CLIPBOARD_CAP_BYTES;
-    const capped = truncated
-      ? Buffer.from(raw, 'utf8').slice(0, CLIPBOARD_CAP_BYTES).toString('utf8')
-      : raw;
-
     // ── Secret redaction ─────────────────────────────────────────────────
-    // Run the clipboard content through the same redaction pipeline used for
-    // web_request responses and session ledger entries before the text enters
-    // the model context.
-    const redacted = redactSecrets(capped);
+    // Redact secrets from the raw string BEFORE any truncation so that a
+    // secret whose bytes straddle the 100 KB boundary cannot evade redaction
+    // by being split across the cut point.
+    const redacted = redactSecrets(raw);
 
-    return { content: redacted, ...(truncated ? { truncated: true } : {}) };
+    // ── Size cap ─────────────────────────────────────────────────────────
+    const CLIPBOARD_CAP_BYTES = 100_000;
+    const redactedBytes = Buffer.byteLength(redacted, 'utf8');
+    const truncated = redactedBytes > CLIPBOARD_CAP_BYTES;
+    const capped = truncated
+      ? Buffer.from(redacted, 'utf8').slice(0, CLIPBOARD_CAP_BYTES).toString('utf8')
+      : redacted;
+
+    return { content: capped, ...(truncated ? { truncated: true } : {}) };
   };
 }
 

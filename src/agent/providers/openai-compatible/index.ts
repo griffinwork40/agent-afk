@@ -615,7 +615,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         )
       : opts.isNonInteractive
         ? this.schemas.filter(
-            (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read',
+            (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
           )
         : this.schemas;
 

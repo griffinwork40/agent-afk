@@ -223,7 +223,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
       )
     : config.isNonInteractive
       ? baseToolDefs.filter(
-          (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read',
+          (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
         )
       : baseToolDefs;
 
