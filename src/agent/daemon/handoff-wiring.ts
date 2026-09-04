@@ -133,10 +133,15 @@ export function makeDaemonElicitationHandler(
     // skips this task while the human is being asked.
     try {
       setLeaseState(opts.taskId, 'waiting_human_input', opts.queueDir);
-    } catch {
+    } catch (err) {
       // Non-fatal: if the lease update fails, the worst case is that lease
       // recovery might reclaim the task — the handoff record still exists
       // for manual recovery.
+      // eslint-disable-next-line no-console
+      console.error(
+        `[handoff-wiring] failed to set lease state for task ${opts.taskId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
     }
 
     // Step 3: send a Telegram notification. Fire-and-forget.
@@ -176,9 +181,15 @@ export interface RecoveryResult {
  *
  * For each pending handoff:
  *   - If the handoff has exceeded DEFAULT_HANDOFF_TTL_MS, transition it to
- *     'expired' and log.
+ *     'expired', restore the task's lease state to 'leased' so the next
+ *     `recoverExpiredLeases` cycle can re-enqueue or dead-letter it, and log.
  *   - Otherwise, send a reminder Telegram notification so the operator knows
  *     a question is still waiting.
+ *
+ * @param handoffsDir - Override for the handoffs directory (testing).
+ * @param queueDir    - Override for the queue directory (testing). When
+ *   provided, expired handoffs restore the corresponding lease state so the
+ *   next `recoverExpiredLeases` cycle handles re-enqueue/dead-letter.
  *
  * Best-effort and self-logging: individual failures are logged but do not
  * prevent processing of other handoffs. The caller can fire-and-forget.
@@ -186,6 +197,7 @@ export interface RecoveryResult {
  */
 export async function recoverPendingHandoffs(
   handoffsDir?: string,
+  queueDir?: string,
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { renotified: 0, expired: 0 };
 
@@ -203,13 +215,17 @@ export async function recoverPendingHandoffs(
     const age = now - createdMs;
 
     if (age > DEFAULT_HANDOFF_TTL_MS) {
-      // Handoff has expired — transition to 'expired' and clean up.
+      // Handoff has expired — transition to 'expired' and restore the lease
+      // so recoverExpiredLeases can re-enqueue or dead-letter the task.
       try {
         const expired: HandoffRecord = {
           ...record,
           status: 'expired',
         };
         await writeHandoff(expired, handoffsDir);
+        // Restore lease to 'leased' so the next recoverExpiredLeases cycle
+        // picks it up instead of leaving it orphaned in waiting_human_input.
+        setLeaseState(record.taskId, 'leased', queueDir);
         result.expired += 1;
         // eslint-disable-next-line no-console
         console.error(
@@ -247,17 +263,26 @@ export async function recoverPendingHandoffs(
 // ---------------------------------------------------------------------------
 
 /**
+ * Maximum serialized answer size accepted for persistence.
+ * Answers larger than this are rejected to avoid writing unbounded data to disk.
+ * Deeper schema validation is deferred to PR 3 when the answer is consumed.
+ */
+const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
+
+/**
  * Record a human answer for a pending handoff and clean up.
  *
  * Called by Telegram reply handlers (or any future surface) when the operator
  * provides an answer to a pending handoff question.
  *
  * @param taskId - The daemon task ID whose handoff to answer.
- * @param answer - The human's response value.
+ * @param answer - The human's response value (type-narrowing to known shapes
+ *   is deferred to PR 3 when the answer is consumed by the session).
  * @param source - Which surface provided the answer ('telegram' | 'web' | 'repl').
  * @param handoffsDir - Override for testing.
  * @returns true if this caller won the first-writer CAS, false if another
  *   surface already answered.
+ * @throws if the serialized answer exceeds MAX_ANSWER_BYTES.
  */
 export async function answerHandoff(
   taskId: string,
@@ -265,6 +290,12 @@ export async function answerHandoff(
   source: string,
   handoffsDir?: string,
 ): Promise<boolean> {
+  const serialized = JSON.stringify(answer);
+  if (Buffer.byteLength(serialized, 'utf-8') > MAX_ANSWER_BYTES) {
+    throw new Error(
+      `[handoff-wiring] answer for task ${taskId} exceeds ${MAX_ANSWER_BYTES} bytes — rejected`,
+    );
+  }
   const result = await updateHandoffAnswer(taskId, answer, source, handoffsDir);
   return result.won;
 }
@@ -293,26 +324,23 @@ function serializeRequest(request: ElicitationRequest): Record<string, unknown> 
   const out: Record<string, unknown> = {
     message: request.message,
   };
+  if (request.serverName !== undefined) out['serverName'] = request.serverName;
+  if (request.mode !== undefined) out['mode'] = request.mode;
+  if (request.url !== undefined) out['url'] = request.url;
+  if (request.elicitationId !== undefined) out['elicitationId'] = request.elicitationId;
+  if (request.requestedSchema !== undefined) out['requestedSchema'] = request.requestedSchema;
+  if (request.title !== undefined) out['title'] = request.title;
+  if (request.displayName !== undefined) out['displayName'] = request.displayName;
+  if (request.description !== undefined) out['description'] = request.description;
   if (request.type !== undefined) out['type'] = request.type;
   if (request.choices !== undefined) out['choices'] = request.choices;
-  if (request.context !== undefined) out['context'] = request.context;
-  if (request.title !== undefined) out['title'] = request.title;
-  if (request.serverName !== undefined) out['serverName'] = request.serverName;
-  if (request.allowSkip !== undefined) out['allowSkip'] = request.allowSkip;
-  if (request.allowCustom !== undefined) out['allowCustom'] = request.allowCustom;
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if ((request as Record<string, unknown>)['questionDefault'] !== undefined) {
-    out['questionDefault'] = (request as Record<string, unknown>)['questionDefault'];
-  }
+  if (request.questionDefault !== undefined) out['questionDefault'] = request.questionDefault;
+  if (request.minLength !== undefined) out['minLength'] = request.minLength;
+  if (request.maxLength !== undefined) out['maxLength'] = request.maxLength;
   if (request.min !== undefined) out['min'] = request.min;
   if (request.max !== undefined) out['max'] = request.max;
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if ((request as Record<string, unknown>)['minLength'] !== undefined) {
-    out['minLength'] = (request as Record<string, unknown>)['minLength'];
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if ((request as Record<string, unknown>)['maxLength'] !== undefined) {
-    out['maxLength'] = (request as Record<string, unknown>)['maxLength'];
-  }
+  if (request.allowSkip !== undefined) out['allowSkip'] = request.allowSkip;
+  if (request.allowCustom !== undefined) out['allowCustom'] = request.allowCustom;
+  if (request.context !== undefined) out['context'] = request.context;
   return out;
 }

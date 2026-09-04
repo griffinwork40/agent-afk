@@ -481,6 +481,14 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
 
     claimRecord.updatedAt = now;
 
+    // Handoff suppression: mirror the first-pass check — a claim file that
+    // was written while the task was in 'waiting_human_input' must not be
+    // re-enqueued while the operator is still answering a handoff question.
+    if (claimRecord.state === 'waiting_human_input') {
+      try { unlinkSync(processPath); } catch { /* ignore */ }
+      continue;
+    }
+
     if (claimRecord.attempts < claimRecord.maxAttempts) {
       claimRecord.state = 'retrying';
       reEnqueue(claimRecord, queueDir);

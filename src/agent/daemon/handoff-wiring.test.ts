@@ -14,6 +14,7 @@ import {
   readHandoff,
   type HandoffRecord,
 } from './handoff-store.js';
+import { getTaskRecord } from './lease-store.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
 
 // ---------------------------------------------------------------------------
@@ -218,6 +219,52 @@ describe('recoverPendingHandoffs', () => {
 
     const result = await recoverPendingHandoffs(handoffsDir);
     expect(result.renotified).toBe(2);
+  });
+
+  it('clears lease waiting_human_input state when handoff expires', async () => {
+    const taskId = 'q-expire-lease';
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1_000); // 25 hours ago
+
+    // Write an expired handoff record.
+    const record: HandoffRecord = {
+      taskId,
+      sessionId: 'sess-expire',
+      question: { message: 'Are you still there?' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: old.toISOString(),
+      status: 'pending',
+      originalCommand: '/expire-test',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    // Create the lease file in 'waiting_human_input' state.
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+    const leaseRecord = {
+      id: taskId,
+      command: '/expire-test',
+      state: 'waiting_human_input',
+      attempts: 1,
+      maxAttempts: 1,
+      leaseExpiry: Date.now() - 1,
+      createdAt: old.getTime(),
+      updatedAt: old.getTime(),
+    };
+    writeFileSync(join(leasedDir, `${taskId}.json`), JSON.stringify(leaseRecord));
+
+    // Run recovery with the queueDir threaded through.
+    const result = await recoverPendingHandoffs(handoffsDir, queueDir);
+    expect(result.expired).toBe(1);
+
+    // Handoff must be marked expired.
+    const updated = await readHandoff(taskId, handoffsDir);
+    expect(updated?.status).toBe('expired');
+
+    // Lease must no longer be in waiting_human_input — it should be 'leased'
+    // so recoverExpiredLeases can pick it up on the next cycle.
+    const lease = getTaskRecord(taskId, queueDir);
+    expect(lease).not.toBeNull();
+    expect(lease?.state).toBe('leased');
   });
 });
 

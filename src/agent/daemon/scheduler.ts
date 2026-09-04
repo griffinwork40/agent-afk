@@ -355,14 +355,16 @@ export class CronScheduler {
           console.error(`[daemon] lease-recovery: dead-lettered task ${record.id} (exhausted ${record.maxAttempts} attempt(s))`);
         }
       }
-      // Also recover pending handoffs (questions asked before restart, never answered).
-      void recoverPendingHandoffs().catch(() => {});
     } catch (err) {
       // Recovery is best-effort — a failure must not prevent the pull loop from starting.
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] lease-recovery: failed to recover expired leases: ${msg}`);
     }
+
+    // Recover pending handoffs independently — must not be skipped if lease recovery throws.
+    // eslint-disable-next-line no-console
+    void recoverPendingHandoffs(undefined, this.queueDir).then((r) => { if (r.renotified > 0 || r.expired > 0) console.error(`[daemon] handoff-recovery: re-notified ${r.renotified}, expired ${r.expired}`); }).catch(() => {});
 
     this.pullPollTimer = setInterval(() => {
       void this.pullTick();
