@@ -63,6 +63,23 @@ export interface BatchExecDeps {
   sessionId: string | undefined;
   /** Ceiling on simultaneously in-flight calls within one admission wave. */
   maxConcurrentSafeCalls: number;
+  /**
+   * Called whenever the set of ACTUALLY-RUNNING calls changes — a worker
+   * starting or a worker settling — with the ids currently in flight.
+   *
+   * Invariant: this reports observed membership, never a prediction. It fires
+   * only from inside the worker body, so an id appears exactly when its handler
+   * has begun and disappears exactly when its handler has returned. A call that
+   * is deferred by the repeat-failure guard, blocked by a hook, refused
+   * pre-abort, or still queued behind the concurrency ceiling is absent by
+   * construction — nothing is announced before it starts.
+   *
+   * Consumers derive the count from `activeIds.length`; the dispatcher does not
+   * pass a separate width, so the two can never disagree. An empty array is a
+   * legitimate terminal update (the wave drained) and is what clears the badge.
+   * Optional: omit to suppress activity reporting entirely.
+   */
+  onActivity?: (activeIds: readonly string[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +106,52 @@ function checkRepeatGuard(
 }
 
 /**
+ * Live-activity tracker for one concurrent wave.
+ *
+ * Invariant: `enter` is called from INSIDE the worker body (after the pool has
+ * dequeued the item) and `leave` from its `finally`, so the tracked set is the
+ * set of handlers actually running. It can therefore never announce a call that
+ * has not started — the property that distinguishes this from a predicted
+ * partition. Membership is a `Set` keyed by tool-use id, and the callback
+ * receives a fresh snapshot array so a consumer cannot retain a mutating
+ * reference.
+ *
+ * Invariant: notifications are edge-triggered on every enter and every leave,
+ * including the final leave that empties the set. Consumers that badge a
+ * parallel wave rely on that terminal empty snapshot to clear.
+ *
+ * @internal
+ */
+function createActivityTracker(
+  onActivity: ((activeIds: readonly string[]) => void) | undefined,
+): { enter: (id: string) => void; leave: (id: string) => void } {
+  if (!onActivity) {
+    // No consumer: both hooks degrade to no-ops so the worker body stays
+    // allocation-free on the common (non-TTY / no-callback) path.
+    return { enter: () => {}, leave: () => {} };
+  }
+  const active = new Set<string>();
+  const notify = (): void => {
+    try {
+      onActivity([...active]);
+    } catch {
+      // Fire-and-forget: a misbehaving display consumer must never abort a
+      // tool wave. Mirrors the notifyWaveStart/notifyWaveEnd contract below.
+    }
+  };
+  return {
+    enter: (id) => {
+      active.add(id);
+      notify();
+    },
+    leave: (id) => {
+      active.delete(id);
+      notify();
+    },
+  };
+}
+
+/**
  * Per-call execution unit dispatched by `settleWithConcurrencyLimit`.
  *
  * Performs the per-call abort check inline so a call whose signal fires
@@ -96,11 +159,16 @@ function checkRepeatGuard(
  * than being dispatched to `executeCore`. Returns `{ result, originalIndex }`
  * so `reconcileOutcomes` can write results back at the correct position in
  * a way that is order-independent.
+ *
+ * Invariant: the pre-abort branch returns WITHOUT entering the activity
+ * tracker, so a call refused before dispatch is never reported as active.
+ * Every path that does begin work leaves the tracker in its `finally`.
  */
 async function executeCallUnit(
   batchIdx: number,
   executableCalls: readonly IndexedCall[],
   executeCore: BatchExecDeps['executeCore'],
+  activity?: { enter: (id: string) => void; leave: (id: string) => void },
 ): Promise<{ result: ToolResult; originalIndex: number }> {
   const { call, originalIndex } = executableCalls[batchIdx]!;
   if (call.signal.aborted) {
@@ -113,8 +181,13 @@ async function executeCallUnit(
       originalIndex,
     };
   }
-  const result = await executeCore(call);
-  return { result, originalIndex };
+  activity?.enter(call.id);
+  try {
+    const result = await executeCore(call);
+    return { result, originalIndex };
+  } finally {
+    activity?.leave(call.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,10 +330,20 @@ export async function runConcurrentBatch(
     }
 
     // Bounded concurrency remains in force within each admission wave.
+    //
+    // Invariant: the pool is work-conserving — a settling worker refills its
+    // slot from the queue IMMEDIATELY, so the wave never stalls behind a slow
+    // call. Live activity is reported from inside the worker body (see
+    // createActivityTracker) rather than from a pre-computed partition, which
+    // is what makes the reported set the genuinely-running one under exactly
+    // this immediate-refill schedule. Do NOT replace the pool with barriered
+    // chunks to make reporting easier: that changes the schedule (a chunk waits
+    // for its slowest member) and is a real throughput regression.
+    const activity = createActivityTracker(deps.onActivity);
     const settled = await settleWithConcurrencyLimit(
       wave,
       deps.maxConcurrentSafeCalls,
-      (batchIdx) => executeCallUnit(batchIdx, executableCalls, deps.executeCore),
+      (batchIdx) => executeCallUnit(batchIdx, executableCalls, deps.executeCore, activity),
     );
 
     reconcileOutcomes(settled, wave, executableCalls, results);

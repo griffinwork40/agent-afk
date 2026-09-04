@@ -176,15 +176,24 @@ export interface AnthropicToolDef {
  */
 export interface ToolDispatcherLike {
   execute(call: ToolCall): Promise<ToolResult>;
-  executeBatch?(calls: ToolCall[]): Promise<ToolResult[]>;
   /**
-   * Expose the concurrency classifier so provider generators can compute the
-   * batch partition BEFORE awaiting `executeBatch`, enabling eager
-   * `tool.batch.start` emission. Returns a predicate that is `true` when a
-   * tool with the given name and input is safe to run concurrently.
-   * Optional: dispatchers that don't implement batching can omit this.
+   * Execute a batch of tool calls.
+   *
+   * The optional `onActivity` callback reports LIVE tool activity: it fires
+   * whenever the set of actually-running calls changes (a worker starting, a
+   * worker settling), carrying the ids in flight at that instant. Provider
+   * generators relay these to the TUI while `executeBatch` is still pending, so
+   * a parallel wave is badged during execution rather than after it.
+   *
+   * Contract: the reported set is observed, never predicted — an id appears
+   * only once its handler has begun. A final empty array signals the batch
+   * drained. Implementations without bounded-parallel execution may omit the
+   * callback entirely; callers must treat activity as advisory display data.
    */
-  getConcurrencyClassifier?(): (toolName: string, input: unknown) => boolean;
+  executeBatch?(
+    calls: ToolCall[],
+    onActivity?: (activeIds: readonly string[]) => void,
+  ): Promise<ToolResult[]>;
   /**
    * Optional in-place cwd update. When present, called by
    * `AnthropicDirectQuery.setCwd()` BEFORE the dispatcher reference is

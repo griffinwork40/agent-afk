@@ -7,13 +7,13 @@ import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/ra
 import { env } from '../../../../config/env.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
-import { partitionIntoBatches } from '../../../tools/dispatch-batching.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import {
   buildToolCallCompletedPayload,
   buildToolCallStartedPayload,
 } from '../../shared/tool-call-trace.js';
+import { relayWhilePending } from '../../shared/event-relay.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
@@ -150,24 +150,25 @@ export async function* dispatchAndAppendToolCalls({
     let dispatcherResults: ToolResult[];
     try {
       if (toolDispatcher.executeBatch) {
-        // Phase 2 (issue #516 fix): compute the batch partition BEFORE awaiting
-        // executeBatch so tool.batch.start events can be yielded eagerly — while
-        // the tools are actually in-flight — rather than after all handlers return.
-        if (toolDispatcher.getConcurrencyClassifier) {
-          const classifier = toolDispatcher.getConcurrencyClassifier();
-          const batches = partitionIntoBatches(calls, classifier);
-          for (const batch of batches) {
-            if (batch.isConcurrencySafe && batch.indices.length >= 2) {
-              yield {
-                type: 'tool.batch.start' as const,
-                batchSize: batch.indices.length,
-                toolUseIds: batch.indices.map((i) => calls[i]!.id),
-                sessionId,
-              };
-            }
-          }
-        }
-        dispatcherResults = await toolDispatcher.executeBatch(calls);
+        // Phase 2 (issue #516 fix): relay `tool.activity` events WHILE
+        // executeBatch is still pending, so the TUI badges a parallel wave
+        // during execution instead of after it. A plain `await` suspends this
+        // generator and can yield nothing until the batch settles — see
+        // providers/shared/event-relay.ts for the full rationale. Identical
+        // shape to the anthropic-direct path so both providers stay in step.
+        //
+        // A dispatcher throw propagates out of the relay into the existing
+        // catch below, which maps it to isError results for every call.
+        dispatcherResults = yield* relayWhilePending<ProviderEvent, ToolResult[]>((emit) =>
+          toolDispatcher.executeBatch!(calls, (activeIds) => {
+            emit({
+              type: 'tool.activity',
+              activeCount: activeIds.length,
+              activeToolUseIds: [...activeIds],
+              sessionId,
+            });
+          }),
+        );
       } else {
         dispatcherResults = [];
         for (const call of calls) {

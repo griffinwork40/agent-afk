@@ -192,30 +192,36 @@ export function batchBadge(chunk: ToolResultChunk | undefined): string {
 }
 
 /**
- * Live pending-batch badge for an in-flight tool row (Phase 2, issue #516).
+ * Live activity badge for an in-flight tool row (Phase 2, issue #516).
  *
- * Rendered during the window when a concurrent batch has started but none of
- * its results have arrived yet. Shows `[×N]` (dim) next to the spinner so the
- * operator can see that N calls are running in parallel RIGHT NOW, before Phase
- * 1's post-completion `∥i/N` badge appears on each settled row.
+ * Rendered while the dispatcher reports this call as one of N genuinely
+ * running in parallel. Shows `[×N]` (dim) next to the spinner so the operator
+ * sees real concurrency RIGHT NOW, ahead of Phase 1's post-completion `∥i/N`
+ * badge on each settled row.
+ *
+ * Invariant: `activeTools` is a dispatcher-observed snapshot, so this function
+ * is purely a projection of it — it never widens or ages the set. `[×N]`
+ * therefore always equals the number of handlers actually executing, and a
+ * queued or already-settled call cannot be badged.
  *
  * Returns `''` when:
- *  - No concurrent batch is pending (`pendingBatch` is null).
- *  - The `toolUseId` is not a member of the pending batch.
- *  - The batch has `batchSize ≤ 1` (should not occur — notifyBatchStart guards this).
+ *  - No parallel wave is active (`activeTools` is null).
+ *  - The `toolUseId` is not currently running.
+ *  - `activeCount ≤ 1` (defensive — notifyToolActivity nulls the state instead,
+ *    so a lone straggler never renders `[×1]`).
  *
  * The badge intentionally uses `×` (MULTIPLICATION SIGN) to distinguish
  * "currently running N-parallel" from the post-completion `∥i/N` (PARALLEL TO)
  * badge — they carry complementary information (live vs. committed).
  */
-export function pendingBatchBadge(
+export function activeToolBadge(
   toolUseId: string,
-  pendingBatch: { batchSize: number; toolUseIds: Set<string> } | null,
+  activeTools: { activeCount: number; toolUseIds: Set<string> } | null,
 ): string {
-  if (!pendingBatch || pendingBatch.batchSize <= 1 || !pendingBatch.toolUseIds.has(toolUseId)) {
+  if (!activeTools || activeTools.activeCount <= 1 || !activeTools.toolUseIds.has(toolUseId)) {
     return '';
   }
-  return palette.dim(` [×${pendingBatch.batchSize}]`);
+  return palette.dim(` [×${activeTools.activeCount}]`);
 }
 
 /**

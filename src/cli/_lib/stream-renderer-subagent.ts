@@ -395,15 +395,16 @@ export function handleSubagentEvent(
       }
       return;
 
-    case 'batch-start':
-      // Live parallel-batch start marker from inside a subagent (Phase 2,
-      // issue #516). Subagent batch-starts are currently rendered only on
-      // TTY via the parent's shared tool lane — the parent orchestrator
-      // path handles the top-level case; subagent tool calls are already
-      // nested under their Agent entry in the same lane. No extra action
-      // is needed here: the subagent's tool entries are tracked by the
-      // same ToolLane, so notifyBatchStart would need to work on
-      // subagent-scoped ids. Deferred to a future sub-issue.
+    case 'tool-activity':
+      // Live tool-activity marker from inside a subagent (Phase 2, issue
+      // #516). Deliberately dropped here. A child's activity feed describes
+      // only that child's pool, so applying it to the shared ToolLane would
+      // overwrite the parent's snapshot with a partial one — several children
+      // running concurrently would each clobber the others and the badge would
+      // report one child's width as if it were the whole lane's. Badging
+      // subagent-scoped ids needs per-agent activity state; deferred to a
+      // future sub-issue. Dropping is the truthful option: no badge beats a
+      // wrong one.
       return;
   }
 }

@@ -244,25 +244,31 @@ export type ProviderEvent =
     }
   | {
       /**
-       * Live parallel-batch start marker (Phase 2, issue #516). Emitted
-       * BEFORE `executeBatch` is awaited — the provider generator computes
-       * the partition eagerly using `getConcurrencyClassifier()` and yields
-       * one event per concurrent batch with ≥ 2 calls, so the TUI sees the
-       * `[×N]` badge while tools are genuinely in-flight.
+       * Live tool-activity marker (Phase 2, issue #516).
        *
-       * Only emitted for concurrent batches (`isConcurrencySafe = true`) with
-       * `batchSize >= 2`. Sequential single-call batches are not badged.
-       * `batchSize` reflects the admitted wave width, not the total requested
-       * batch count (a deferred subset may run in a subsequent wave).
-       * `toolUseIds` carries the ids of every call in the batch so the overlay
-       * can track which spinner rows belong to this batch and clear the badge
-       * once all of them resolve.
+       * Invariant: this reports OBSERVED parallelism, not predicted. The
+       * dispatcher's concurrency pool calls back from inside each worker — on
+       * start and on settle — so `activeToolUseIds` is exactly the set of
+       * handlers running at that moment. Provider generators relay the event
+       * while `executeBatch` is still pending, which is what lets the TUI badge
+       * a wave DURING execution rather than after it. A queued, deferred, or
+       * hook-blocked call is absent by construction, so a later group is never
+       * announced before it actually starts.
+       *
+       * Every observed membership change is emitted. `activeCount >= 2` is a
+       * genuine parallel wave; `activeCount === 1` immediately clears the badge
+       * when a wave drops to one straggler; `activeCount === 0` confirms the wave
+       * drained. Surfaces never render `[×1]`.
+       *
+       * `activeCount` is redundant with `activeToolUseIds.length` and is
+       * carried for consumers that only need the width; producers MUST keep
+       * them consistent.
        */
-      type: 'tool.batch.start';
-      /** Number of parallel calls in this batch (≥ 2). */
-      batchSize: number;
-      /** Ids of the tool calls in this batch, in partition order. */
-      toolUseIds: string[];
+      type: 'tool.activity';
+      /** Number of tool handlers running right now. */
+      activeCount: number;
+      /** Ids of the tool calls running right now. Empty when the wave drained. */
+      activeToolUseIds: string[];
       sessionId?: string;
     }
   | {

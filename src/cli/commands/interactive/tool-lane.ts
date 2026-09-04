@@ -1,7 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
-import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge, pendingBatchBadge } from './tool-lane-format.js';
+import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, formatPreviewDiffBlock, doneGlyph, sanitizeLabel, batchBadge, activeToolBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { truncateDisplayWidth, stripAnsi, displayWidth } from '../../display.js';
 import { formatElapsed, ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
@@ -56,21 +56,23 @@ export class ToolLane {
   private lastElapsedSecond = new Map<string, number>();
 
   /**
-   * Live parallel-batch pending indicator state (Phase 2, issue #516).
+   * Live tool-activity state (Phase 2, issue #516).
    *
-   * Set by {@link notifyBatchStart} when a `tool.batch.start` event arrives.
-   * `toolUseIds` is the set of call ids in the batch; `batchSize` is the
-   * total width of the wave (≥ 2). The overlay renders a `[×N]` badge on
-   * each in-flight row whose `toolUseId` appears in `toolUseIds`.
+   * Set by {@link notifyToolActivity} when a `tool-activity` event arrives.
+   * `toolUseIds` is the set of calls the dispatcher reports as RUNNING right
+   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `[×N]`
+   * badge on each in-flight row whose `toolUseId` is a member.
    *
-   * Cleared lazily: {@link addResult} checks whether all ids in the set have
-   * now received results and nulls the field when the batch is fully done.
-   * This ensures the badge disappears as soon as the last result lands,
-   * without a dedicated timer.
+   * Invariant: this is replaced wholesale on every update and cleared when the
+   * dispatcher reports fewer than two active calls — the lane never infers
+   * membership or decay on its own, because only the dispatcher can observe
+   * what is actually running. That is why {@link addResult} does NOT clear it:
+   * a result arriving is not evidence about the remaining set, and guessing
+   * there was the source of stale/sticky badges.
    *
-   * `null` when no concurrent batch is in-flight.
+   * `null` when no parallel wave is in flight.
    */
-  private pendingBatch: { batchSize: number; toolUseIds: Set<string> } | null = null;
+  private activeTools: { activeCount: number; toolUseIds: Set<string> } | null = null;
 
   addStart(toolUseId: string, toolName: string, toolInput: string): void {
     // Strip ANSI from toolInput at storage time: it originates from LLM
@@ -203,35 +205,33 @@ export class ToolLane {
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
-    // Lazy batch-badge clear (Phase 2, issue #516): once ALL ids in the
-    // pending batch have received results the batch is complete and the
-    // `[×N]` badge should disappear. Check after every addResult call.
-    // A missing entry (id not yet registered) is treated as already-resolved
-    // so a stale id from a prior wave never permanently sticks the badge.
-    if (this.pendingBatch !== null) {
-      const allDone = [...this.pendingBatch.toolUseIds].every((id) => {
-        const e = this.entries.get(id);
-        return !e || (e?.kind === 'tool' && e.result !== undefined);
-      });
-      if (allDone) this.pendingBatch = null;
-    }
+    // Deliberately does NOT touch `activeTools`. The dispatcher is the only
+    // observer of what is actually running and pushes a fresh snapshot on every
+    // start and settle (see notifyToolActivity), so inferring the live set from
+    // arriving results would race that authoritative feed and re-introduce the
+    // sticky badge this design removes.
   }
 
   /**
-   * Register a pending concurrent batch (Phase 2, issue #516).
+   * Record the tool calls currently RUNNING (Phase 2, issue #516).
    *
-   * Called by the streaming renderer when a `tool.batch.start` event arrives.
-   * Stores `batchSize` and `toolUseIds` so {@link getOverlay} can append a
-   * `[×N]` badge to each in-flight row that belongs to this batch. Replaces
-   * any previously registered batch (multi-wave turns replace the prior wave
-   * as soon as the next wave starts). The overlay reads `pendingBatch` on
-   * every repaint, so the badge appears immediately on the next frame.
+   * Called by the streaming renderer for each `tool-activity` event. Replaces
+   * the previous snapshot wholesale, so {@link getOverlay} always badges the
+   * genuinely-in-flight rows and nothing else. The overlay reads `activeTools`
+   * on every repaint, so the change lands on the next frame.
    *
-   * @param batchSize   Total width of the wave (≥ 2).
-   * @param toolUseIds  Ids of every call in this wave, in partition order.
+   * Invariant: an `activeCount < 2` update CLEARS the badge rather than
+   * rendering `[×1]` or `[×0]`. The dispatcher's reporting rule already drops
+   * the single-active frame, so this is both the belt and the braces: whether
+   * the surface hears "1 active" or hears nothing until "0 active", the badge
+   * ends up absent, and a stale wave can never outlive its execution.
+   *
+   * @param activeCount      Number of handlers running right now.
+   * @param activeToolUseIds Ids of the calls running right now.
    */
-  notifyBatchStart(batchSize: number, toolUseIds: string[]): void {
-    this.pendingBatch = { batchSize, toolUseIds: new Set(toolUseIds) };
+  notifyToolActivity(activeCount: number, activeToolUseIds: string[]): void {
+    this.activeTools =
+      activeCount >= 2 ? { activeCount, toolUseIds: new Set(activeToolUseIds) } : null;
   }
 
   /**
@@ -601,7 +601,7 @@ export class ToolLane {
           // Live elapsed counter: computed at repaint time so the counter ticks
           // on every overlay refresh without a dedicated timer. Grace period
           // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + pendingBatchBadge(entry.toolUseId, this.pendingBatch)));
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, this.activeTools)));
         }
         // Mirror the thinkingTail handling of the other two NESTING branches
         // (and the childless-leaf branch below): spine glyph (g.spine, │) at
@@ -633,7 +633,7 @@ export class ToolLane {
         } else {
           // Live elapsed counter: same pattern as the NESTING branch above —
           // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + pendingBatchBadge(entry.toolUseId, this.pendingBatch)));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, this.activeTools)));
           if (entry.previewDiff) {
             // Pre-execution diff preview: formatPreviewDiffBlock renders ⟳ Proposed
             // and applies the AFK_SHOW_DIFFS=0 opt-out (returns [] when disabled).

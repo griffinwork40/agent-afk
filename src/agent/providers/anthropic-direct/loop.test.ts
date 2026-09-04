@@ -1405,4 +1405,265 @@ describe('loop.ts runTurn', () => {
       expect(texts).not.toContain(SOFT_DEADLINE_NOTE);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 2 (issue #516): tool.activity events from relayWhilePending
+  // ---------------------------------------------------------------------------
+  describe('tool.activity events (Phase 2, issue #516)', () => {
+    it('yields tool.activity while executeBatch is still pending', async () => {
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx === 1) {
+          return fromArray(
+            makeMultiToolUseStream([
+              { id: 'toolu_a', name: 'tool_a', input: '{}' },
+              { id: 'toolu_b', name: 'tool_b', input: '{}' },
+            ]),
+          );
+        }
+        return fromArray(makeTextStream('done'));
+      });
+
+      // Deferred batch: stays pending until we resolve it.
+      let resolveBatch!: (results: ToolResult[]) => void;
+      const batchPending = new Promise<ToolResult[]>((r) => { resolveBatch = r; });
+
+      const dispatcher: ToolDispatcherLike = {
+        execute: vi.fn(() => Promise.reject(new Error('should use batch'))),
+        executeBatch: async (calls, onActivity) => {
+          // Simulate two workers starting, then finishing.
+          onActivity?.([calls[0]!.id, calls[1]!.id]);
+          const results = await batchPending;
+          onActivity?.([]);
+          return results;
+        },
+      };
+
+      const messages: MessageParam[] = [{ role: 'user', content: 'parallel test' }];
+      const abortController = new AbortController();
+
+      const collectPromise = collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [
+            { name: 'tool_a', input_schema: { type: 'object' } },
+            { name: 'tool_b', input_schema: { type: 'object' } },
+          ],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+        }),
+      );
+
+      // Resolve the batch so the turn can complete.
+      resolveBatch([
+        { content: 'result_a' },
+        { content: 'result_b' },
+      ]);
+      const events = await collectPromise;
+
+      // Must have at least one tool.activity event.
+      const activityEvents = events.filter((e) => e.type === 'tool.activity');
+      expect(activityEvents.length).toBeGreaterThanOrEqual(1);
+
+      // The active-wave event must precede the tool.output events.
+      const firstActivity = events.findIndex((e) => e.type === 'tool.activity');
+      const firstOutput = events.findIndex((e) => e.type === 'tool.output');
+      expect(firstActivity).toBeLessThan(firstOutput);
+
+      // The active-wave event must carry both ids.
+      const waveEvent = activityEvents.find(
+        (e) => e.type === 'tool.activity' && e.activeCount >= 2,
+      );
+      expect(waveEvent).toBeDefined();
+      if (waveEvent?.type === 'tool.activity') {
+        expect(waveEvent.activeToolUseIds.sort()).toEqual(['toolu_a', 'toolu_b'].sort());
+      }
+    });
+
+    it('tool.activity drain event (activeCount=0) arrives before tool.output events', async () => {
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx === 1) {
+          return fromArray(
+            makeMultiToolUseStream([
+              { id: 'toolu_c', name: 'tool_c', input: '{}' },
+              { id: 'toolu_d', name: 'tool_d', input: '{}' },
+            ]),
+          );
+        }
+        return fromArray(makeTextStream('done'));
+      });
+
+      const dispatcher: ToolDispatcherLike = {
+        execute: vi.fn(() => Promise.reject(new Error('should use batch'))),
+        executeBatch: async (calls, onActivity) => {
+          onActivity?.([calls[0]!.id, calls[1]!.id]);
+          const results = calls.map((c) => ({ content: `ok_${c.name}` }));
+          onActivity?.([]);
+          return results;
+        },
+      };
+
+      const messages: MessageParam[] = [{ role: 'user', content: 'drain test' }];
+      const abortController = new AbortController();
+      const events = await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [
+            { name: 'tool_c', input_schema: { type: 'object' } },
+            { name: 'tool_d', input_schema: { type: 'object' } },
+          ],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+        }),
+      );
+
+      const drainEvent = events.find(
+        (e) => e.type === 'tool.activity' && e.activeCount === 0,
+      );
+      expect(drainEvent).toBeDefined();
+
+      const firstDrain = events.findIndex(
+        (e) => e.type === 'tool.activity' && e.activeCount === 0,
+      );
+      const firstOutput = events.findIndex((e) => e.type === 'tool.output');
+      // drain arrives in the same batch-settle window, but must not come AFTER tool.output
+      expect(firstDrain).toBeLessThanOrEqual(firstOutput);
+    });
+
+    it('does not emit tool.activity for sequential (non-batch) dispatch', async () => {
+      const client = makeClient(() =>
+        fromArray(makeToolUseStream('toolu_seq', 'tool_seq', '{}')),
+      );
+
+      // Sequential dispatcher: no executeBatch
+      const dispatcher = makeDispatcher(async () => ({ content: 'seq_result' }));
+
+      const messages: MessageParam[] = [{ role: 'user', content: 'seq test' }];
+      const abortController = new AbortController();
+
+      // For the second turn (after tool dispatch), return text
+      let callIdx = 0;
+      const clientSeq = makeClient(() => {
+        callIdx += 1;
+        if (callIdx === 1) return fromArray(makeToolUseStream('toolu_seq', 'tool_seq', '{}'));
+        return fromArray(makeTextStream('seq done'));
+      });
+
+      const events = await collect(
+        runTurn({
+          client: clientSeq,
+          messages,
+          system: null,
+          tools: [{ name: 'tool_seq', input_schema: { type: 'object' } }],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+        }),
+      );
+
+      const activityEvents = events.filter((e) => e.type === 'tool.activity');
+      expect(activityEvents).toHaveLength(0);
+    });
+
+    // -----------------------------------------------------------------------
+    // (2) Anthropic provider: activeCount=1 is relayed before first tool.output
+    //     and activeCount=0 is relayed before outputs — using direct provider seam
+    // -----------------------------------------------------------------------
+    it('relays activeCount=1 (straggler) before first tool.output and activeCount=0 before outputs', async () => {
+      let callIdx = 0;
+      const client = makeClient(() => {
+        callIdx += 1;
+        if (callIdx === 1) {
+          return fromArray(
+            makeMultiToolUseStream([
+              { id: 'toolu_x', name: 'tool_x', input: '{}' },
+              { id: 'toolu_y', name: 'tool_y', input: '{}' },
+            ]),
+          );
+        }
+        return fromArray(makeTextStream('done'));
+      });
+
+      // Simulate: both start, one finishes first (→ activeCount=1), then both
+      // done (→ activeCount=0), then results returned.
+      const dispatcher: ToolDispatcherLike = {
+        execute: vi.fn(() => Promise.reject(new Error('should use batch'))),
+        executeBatch: async (calls, onActivity) => {
+          // Emit 2 → straggler 1 → drain 0 before returning results.
+          onActivity?.([calls[0]!.id, calls[1]!.id]);
+          onActivity?.([calls[1]!.id]); // one settled → activeCount=1
+          onActivity?.([]);             // drained → activeCount=0
+          return calls.map((c) => ({ content: `ok_${c.name}` }));
+        },
+      };
+
+      const messages: MessageParam[] = [{ role: 'user', content: 'straggler test' }];
+      const abortController = new AbortController();
+      const events = await collect(
+        runTurn({
+          client,
+          messages,
+          system: null,
+          tools: [
+            { name: 'tool_x', input_schema: { type: 'object' } },
+            { name: 'tool_y', input_schema: { type: 'object' } },
+          ],
+          toolDispatcher: dispatcher,
+          model: 'claude-test',
+          maxTokens: 1024,
+          headers: {},
+          signal: abortController.signal,
+          ctx,
+        }),
+      );
+
+      const activityEvents = events.filter((e) => e.type === 'tool.activity');
+      // Must see all three transitions: 2, 1, 0.
+      const counts = activityEvents
+        .map((e) => (e.type === 'tool.activity' ? e.activeCount : -1))
+        .filter((n) => n >= 0);
+      expect(counts).toContain(2);
+      expect(counts).toContain(1); // activeCount=1 must be relayed, not dropped
+      expect(counts).toContain(0);
+
+      // activeCount=1 must appear before the first tool.output.
+      const idx1 = events.findIndex(
+        (e) => e.type === 'tool.activity' && e.activeCount === 1,
+      );
+      const firstOutput = events.findIndex((e) => e.type === 'tool.output');
+      expect(idx1).toBeGreaterThanOrEqual(0);
+      expect(idx1).toBeLessThan(firstOutput);
+
+      // activeCount=0 must appear before the first tool.output.
+      const idx0 = events.findIndex(
+        (e) => e.type === 'tool.activity' && e.activeCount === 0,
+      );
+      expect(idx0).toBeLessThan(firstOutput);
+    });
+
+    // -----------------------------------------------------------------------
+    // (2b) OpenAI-compatible provider parity: same relay contract
+    // -----------------------------------------------------------------------
+    // Note: The full OpenAI provider test lives in
+    // providers/openai-compatible/query/dispatch-append.test.ts.
+    // Here we prove the Anthropic seam relays every snapshot including 1.
+  });
 });

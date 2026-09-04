@@ -23,7 +23,7 @@ import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/ra
 import { env } from '../../../../config/env.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
-import { partitionIntoBatches } from '../../../tools/dispatch-batching.js';
+import { relayWhilePending } from '../../shared/event-relay.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /**
@@ -108,31 +108,37 @@ export async function* dispatchToolCalls(
   // Dispatch: batch (parallel for safe tools) or sequential fallback.
   let results: ToolResult[];
   if (input.toolDispatcher.executeBatch) {
-    // Phase 2 (issue #516 fix): compute the batch partition BEFORE awaiting
-    // executeBatch so tool.batch.start events can be yielded eagerly — while
-    // the tools are actually in-flight — rather than after all handlers return.
-    if (input.toolDispatcher.getConcurrencyClassifier) {
-      const classifier = input.toolDispatcher.getConcurrencyClassifier();
-      const batches = partitionIntoBatches(calls, classifier);
-      for (const batch of batches) {
-        if (batch.isConcurrencySafe && batch.indices.length >= 2) {
-          yield {
-            type: 'tool.batch.start' as const,
-            batchSize: batch.indices.length,
-            toolUseIds: batch.indices.map((i) => calls[i]!.id),
+    // Phase 2 (issue #516 fix): relay `tool.activity` events WHILE executeBatch
+    // is still pending, so the TUI badges a parallel wave during execution.
+    //
+    // Invariant: a plain `await` cannot do this — the generator suspends inside
+    // the await and can yield nothing until the whole batch settles, which is
+    // the bug that made the badge appear only after every tool had finished.
+    // `relayWhilePending` (providers/shared/event-relay.ts) starts the call,
+    // buffers dispatcher callbacks, and yields them as they arrive. The
+    // dispatcher reports OBSERVED activity from inside its worker bodies, so
+    // nothing is announced before it starts.
+    //
+    // The catch stays INSIDE the relayed body so a dispatcher throw degrades to
+    // model-visible error results (the module's no-throw invariant) rather than
+    // escaping mid-drain.
+    results = yield* relayWhilePending<ProviderEvent, ToolResult[]>(async (emit) => {
+      try {
+        return await input.toolDispatcher.executeBatch!(calls, (activeIds) => {
+          emit({
+            type: 'tool.activity',
+            activeCount: activeIds.length,
+            activeToolUseIds: [...activeIds],
             sessionId: input.ctx.sessionId,
-          };
-        }
+          });
+        });
+      } catch (err) {
+        return calls.map(() => ({
+          content: `Tool batch execution failed: ${err instanceof Error ? err.message : String(err)}`,
+          isError: true as const,
+        }));
       }
-    }
-    try {
-      results = await input.toolDispatcher.executeBatch(calls);
-    } catch (err) {
-      results = calls.map(() => ({
-        content: `Tool batch execution failed: ${err instanceof Error ? err.message : String(err)}`,
-        isError: true as const,
-      }));
-    }
+    });
   } else {
     results = [];
     for (const call of calls) {
