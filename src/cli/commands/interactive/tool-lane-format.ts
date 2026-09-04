@@ -218,10 +218,10 @@ export function activeToolBadge(
   toolUseId: string,
   activeTools: { activeCount: number; toolUseIds: Set<string> } | null,
 ): string {
-  if (!activeTools || activeTools.activeCount <= 1 || !activeTools.toolUseIds.has(toolUseId)) {
+  if (!activeTools || activeTools.toolUseIds.size <= 1 || !activeTools.toolUseIds.has(toolUseId)) {
     return '';
   }
-  return palette.dim(` [×${activeTools.activeCount}]`);
+  return palette.dim(` [×${activeTools.toolUseIds.size}]`);
 }
 
 /**

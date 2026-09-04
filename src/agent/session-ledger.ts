@@ -148,7 +148,7 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
       // — it is operator-facing chrome, not a session event worth persisting.
       return null;
     default:
-      // progress | suggestion | stream_retry | panel — intentionally skipped.
+      // progress | suggestion | stream_retry | panel | rate_limit | tool-activity — intentionally skipped.
       return null;
   }
 }
