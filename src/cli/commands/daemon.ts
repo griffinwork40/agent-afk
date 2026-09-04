@@ -31,6 +31,7 @@ import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-stor
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
+import { STATE_TOOL_NAMES } from '../../agent/state/state-tools.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
@@ -142,6 +143,7 @@ export function buildDaemonSessionFactory(
         allowedTools: [
           ...BUILTIN_TOOL_NAMES,
           ...MEMORY_TOOL_NAMES,
+          ...STATE_TOOL_NAMES,
           ...AWARENESS_TOOL_NAMES,
           ...WORKSPACE_TOOL_NAMES,
           'agent',

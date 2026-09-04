@@ -28,7 +28,7 @@ const PutInput = z.object({
   namespace: namespaceKey,
   key: namespaceKey,
   value: z.unknown(),
-  ttl_ms: z.number().optional(),
+  ttl_ms: z.number().int().positive().optional(),
   metadata: z.unknown().optional(),
 });
 
@@ -37,7 +37,7 @@ const CasInput = z.object({
   key: namespaceKey,
   expected_version: z.number(),
   value: z.unknown(),
-  ttl_ms: z.number().optional(),
+  ttl_ms: z.number().int().positive().optional(),
   metadata: z.unknown().optional(),
 });
 
@@ -49,8 +49,17 @@ const DeleteInput = z.object({
 const QueryInput = z.object({
   namespace: namespaceKey,
   key_prefix: z.string().optional(),
-  limit: z.number().max(100).optional(),
+  limit: z.number().int().positive().max(100).optional(),
 });
+
+/** Names of all five state tool handlers — used to populate allowedTools lists. */
+export const STATE_TOOL_NAMES = [
+  'state_get',
+  'state_put',
+  'state_cas',
+  'state_delete',
+  'state_query',
+] as const;
 
 /**
  * Create tool handlers for the five state store tools.

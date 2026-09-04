@@ -218,6 +218,35 @@ describe('StateStore', () => {
     expect(() => store.put('', 'key', { x: 1 })).toThrow(/non-empty/i);
   });
 
+  it('concurrent cas(): exactly one call wins when both race on version 1', async () => {
+    // Establish version 1.
+    store.put('myns', 'race-key', { init: true });
+
+    // better-sqlite3 is synchronous, so true OS-level parallelism is
+    // impossible in a single Node process. Simulating the race by fanning out
+    // two cas() calls via Promise.all() is sufficient: the microtask scheduler
+    // interleaves them and the IMMEDIATE transaction serialises their SQLite
+    // access, making exactly one win.
+    const [r1, r2] = await Promise.all([
+      Promise.resolve(store.cas('myns', 'race-key', 1, { winner: 'a' })),
+      Promise.resolve(store.cas('myns', 'race-key', 1, { winner: 'b' })),
+    ]);
+
+    const matchedCount = [r1, r2].filter((r) => r.matched).length;
+    const missedCount = [r1, r2].filter((r) => !r.matched).length;
+
+    expect(matchedCount).toBe(1);
+    expect(missedCount).toBe(1);
+
+    // The winning call must have bumped the version to 2.
+    const winner = r1.matched ? r1 : r2;
+    expect(winner.newVersion).toBe(2);
+
+    // Document must reflect exactly one write.
+    const doc = store.get('myns', 'race-key');
+    expect(doc!.version).toBe(2);
+  });
+
   it('schema version stamp is correct', () => {
     // The store was created in beforeEach.  Reach directly into the SQLite file
     // with a separate connection so we don't depend on any StateStore API.

@@ -234,13 +234,19 @@ export class StateStore {
     const metadata = opts?.metadata !== undefined ? JSON.stringify(opts.metadata) : null;
     const serialized = JSON.stringify(value);
 
-    return this.db.transaction((): PutResult => {
-      // Check if document already exists to determine created flag.
+    const txn = this.db.transaction((): PutResult => {
+      // Check if document already exists (and is not TTL-expired) to determine
+      // the created flag. Expired-but-not-GC'd rows are treated as absent so
+      // that put() returns {created: true, version: 1} instead of
+      // {created: false, version: N+1} — consistent with get() and cas().
+      const now2 = Date.now();
       const existing = this.db
-        .prepare<[string, string], { version: number } | undefined>(`
-          SELECT version FROM state_documents WHERE namespace = ? AND key = ?
+        .prepare<[string, string, number], { version: number } | undefined>(`
+          SELECT version FROM state_documents
+          WHERE namespace = ? AND key = ?
+            AND (expires_at IS NULL OR expires_at >= ?)
         `)
-        .get(namespace, key);
+        .get(namespace, key, now2);
 
       this.db
         .prepare(`
@@ -265,7 +271,9 @@ export class StateStore {
         .get(namespace, key)!;
 
       return { version: after.version, created: !existing };
-    })();
+    });
+
+    return txn.immediate();
   }
 
   /**
