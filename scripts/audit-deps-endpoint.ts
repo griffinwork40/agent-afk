@@ -27,6 +27,8 @@ const TRANSPORT_FAILURE_MARKERS: readonly RegExp[] = [
   /\bECONNREFUSED\b/,
   /\bECONNRESET\b/,
   /\bETIMEDOUT\b/,
+  // Socket-level timeout (Node fetch / node-fetch / undici): ERR_SOCKET_TIMEOUT
+  /\bERR_SOCKET_TIMEOUT\b/,
   /\bfetch failed\b/i,
 ];
 

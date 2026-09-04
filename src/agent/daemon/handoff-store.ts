@@ -19,10 +19,10 @@
  * @module agent/daemon/handoff-store
  */
 
-import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { getHandoffsDir } from '../../paths.js';
+import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // HandoffRecord schema
@@ -154,6 +154,7 @@ export async function writeHandoff(
   record: HandoffRecord,
   handoffsDir: string = getHandoffsDir(),
 ): Promise<void> {
+  assertSafeJobId(record.taskId);
   await ensureHandoffsDir(handoffsDir);
   await atomicWriteJson(handoffPath(handoffsDir, record.taskId), record);
 }
@@ -169,6 +170,7 @@ export async function readHandoff(
   taskId: string,
   handoffsDir: string = getHandoffsDir(),
 ): Promise<HandoffRecord | null> {
+  assertSafeJobId(taskId);
   const filePath = handoffPath(handoffsDir, taskId);
   try {
     const raw = await readFile(filePath, 'utf-8');
@@ -191,6 +193,7 @@ export async function deleteHandoff(
   taskId: string,
   handoffsDir: string = getHandoffsDir(),
 ): Promise<void> {
+  assertSafeJobId(taskId);
   try {
     await rm(handoffPath(handoffsDir, taskId), { force: true });
   } catch (err) {
@@ -260,12 +263,19 @@ export async function listPendingHandoffs(
  * @throws If no record exists for the taskId.
  * @returns UpdateHandoffResult — won: true if this caller claimed the record.
  */
+// Invariant: a lock file older than this threshold is assumed to be a crash
+// leftover (SIGKILL/OOM between lock creation and the finally-unlink). We retry
+// once after unlinking; a second EEXIST means a genuine concurrent holder.
+const STALE_LOCK_TTL_MS = 30_000;
+
 export async function updateHandoffAnswer(
   taskId: string,
   answer: unknown,
   source: string,
   handoffsDir: string = getHandoffsDir(),
 ): Promise<UpdateHandoffResult> {
+  assertSafeJobId(taskId);
+  await ensureHandoffsDir(handoffsDir);
   const lock = lockPath(handoffsDir, taskId);
 
   // Step 1: acquire exclusive lock via O_EXCL create.
@@ -273,9 +283,35 @@ export async function updateHandoffAnswer(
     await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      return { won: false };
+      // Check whether the lock is stale (crash-leftover). A fresh lock means a
+      // genuine concurrent holder — give up immediately.
+      let lockMtime: number;
+      try {
+        const lockStat = await stat(lock);
+        lockMtime = lockStat.mtimeMs;
+      } catch {
+        // Lock disappeared between our failed write and the stat — another
+        // process cleaned it up. Return { won: false }; caller can retry.
+        return { won: false };
+      }
+      if (Date.now() - lockMtime <= STALE_LOCK_TTL_MS) {
+        // Lock is fresh — genuine concurrent holder; do not steal it.
+        return { won: false };
+      }
+      // Lock is older than TTL — stale crash leftover. Unlink and retry once.
+      try { await unlink(lock); } catch { /* ignore — may have been cleaned concurrently */ }
+      try {
+        await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
+      } catch (retryErr) {
+        if ((retryErr as NodeJS.ErrnoException).code === 'EEXIST') {
+          // Genuine race on the retry — another process won.
+          return { won: false };
+        }
+        throw retryErr;
+      }
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   // Lock acquired — release in finally regardless of outcome.

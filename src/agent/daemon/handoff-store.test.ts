@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -275,6 +275,25 @@ describe('updateHandoffAnswer', () => {
     await writeHandoff(record, testDir);
     const result = await updateHandoffAnswer(record.taskId, 'second answer', 'web', testDir);
     expect(result.won).toBe(false);
+  });
+
+  it('clears a stale lock left by a crashed process and succeeds', async () => {
+    const record = makeRecord({ taskId: 'q-stale-lock' });
+    await writeHandoff(record, testDir);
+
+    // Simulate a crash: manually create the .lock file with an old mtime (>30s).
+    const lockFile = join(testDir, `${record.taskId}.lock`);
+    await writeFile(lockFile, '', { mode: 0o600 });
+    const staleTime = new Date(Date.now() - 60_000); // 60 seconds ago
+    await utimes(lockFile, staleTime, staleTime);
+
+    // updateHandoffAnswer should detect the stale lock, remove it, and succeed.
+    const result = await updateHandoffAnswer(record.taskId, 'recovered', 'telegram', testDir);
+    expect(result.won).toBe(true);
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.status).toBe('answered');
+    expect(read?.answer).toBe('recovered');
   });
 
   it('CAS: exactly one concurrent caller wins when two race for the same taskId', async () => {
