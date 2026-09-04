@@ -371,4 +371,20 @@ describe('readFromClipboard — checkStderr scoping', () => {
     const result = readFromClipboard('darwin');
     expect(result).toBe('clipboard content');
   });
+
+  it('PowerShell (win32): exit 0 + module-load stderr → still returns stdout (no checkStderr)', () => {
+    // Windows PowerShell can emit module-load or policy diagnostics to stderr
+    // while Get-Clipboard exits 0 with valid clipboard content. These must be
+    // ignored; checkStderr is false (undefined) for the powershell entry.
+    mockSpawnSync.mockReturnValueOnce({
+      error: undefined,
+      status: 0,
+      signal: null,
+      stdout: 'some clipboard text',
+      stderr: 'WARNING: Module already loaded.\n',
+    });
+
+    const result = readFromClipboard('win32');
+    expect(result).toBe('some clipboard text');
+  });
 });
