@@ -471,7 +471,7 @@ function normalizeCallToolResult(result: CallToolResult): ToolResult {
       } else if (!SUPPORTED_IMAGE_MEDIA_TYPES.has(mimeType)) {
         // Unsupported mime type — degrade gracefully.
         console.warn(
-          `[mcp] image block has unsupported mimeType "${mimeType}" ` +
+          `[mcp] image block has unsupported mimeType "${mimeType.replace(/[\r\n]/g, '\\n')}" ` +
             `— using text placeholder. Supported types: ${[...SUPPORTED_IMAGE_MEDIA_TYPES].join(', ')}`,
         );
         parts.push(`[image block: mimeType=${mimeType}, ${data.length} bytes base64 (unsupported format)]`);
@@ -491,7 +491,11 @@ function normalizeCallToolResult(result: CallToolResult): ToolResult {
           );
         } else if (forwardedImage === undefined) {
           // First valid image: forward as multimodal content.
-          forwardedImage = { mediaType: mimeType as SupportedImageMediaType, data };
+          // Strip whitespace before forwarding: the Anthropic API enforces RFC 4648
+          // strict mode (no whitespace), but RFC 2045-compliant MCP servers may wrap
+          // base64 at 76-char line boundaries.
+          const cleanData = data.replace(/\s/g, '');
+          forwardedImage = { mediaType: mimeType as SupportedImageMediaType, data: cleanData };
           // Include a brief description in `content` so providers that don't
           // surface images still give the model useful metadata, and so the
           // text channel is non-empty (required by the anthropic-direct

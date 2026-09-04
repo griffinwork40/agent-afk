@@ -222,10 +222,10 @@ describe('normalizeCallToolResult — image block forwarding (#1421)', () => {
   });
 
   it('forwards an image just at the byte cap without falling back', () => {
-    // 5 MiB = 5_242_880 decoded bytes → base64 length = ceil(5_242_880 * 4 / 3) = 6_990_507
-    // Use exactly 6_990_507 'A' chars → estimatedBytes = ceil(6_990_507 * 3 / 4) = 5_242_881 > limit
-    // So use 6_990_504 chars → estimatedBytes = ceil(6_990_504 * 3 / 4) = 5_242_878 < limit ✓
-    const atCapData = 'A'.repeat(6_990_504);
+    // 5 MiB = 5_242_880 decoded bytes → need data.length where ceil(n * 3/4) = 5_242_880
+    // n = 6_990_506 → estimatedBytes = ceil(6_990_506 * 3/4) = 5_242_880 → exactly at cap → forwarded ✓
+    // (condition is `> MAX_MCP_IMAGE_BYTES`, not `>=`, so exactly-at-cap images are still forwarded)
+    const atCapData = 'A'.repeat(6_990_506);
 
     const result = normalizeCallToolResult({
       content: [{ type: 'image', mimeType: 'image/png', data: atCapData }],
@@ -233,7 +233,25 @@ describe('normalizeCallToolResult — image block forwarding (#1421)', () => {
 
     expect(result.image).toBeDefined();
     expect(result.image?.mediaType).toBe('image/png');
-    expect(result.image?.data).toBe(atCapData);
+    expect(result.image?.data).toBe(atCapData.replace(/\s/g, ''));
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back when image is exactly one byte over the 5 MiB byte cap', () => {
+    // 6_990_507 chars → estimatedBytes = ceil(6_990_507 * 3 / 4) = ceil(5_242_880.25) = 5_242_881 > limit
+    const overCapData = 'A'.repeat(6_990_507);
+    const result = normalizeCallToolResult({
+      content: [{ type: 'image', mimeType: 'image/png', data: overCapData }],
+    } as unknown as CallToolResult);
+    expect(result.image).toBeUndefined();
+    expect(result.content).toContain('too large for model context');
+  });
+
+  it('serializes unknown block types as JSON for forward-compat debugging', () => {
+    const result = normalizeCallToolResult({
+      content: [{ type: 'future_type', payload: 42 }],
+    } as unknown as CallToolResult);
+    expect(result.image).toBeUndefined();
+    expect(result.content).toContain('future_type');
   });
 });
