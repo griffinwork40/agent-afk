@@ -9,10 +9,8 @@ import {
 import { cancelBackgroundJobTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 33 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(33);
-  it('contains exactly 34 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(34);
+  it('contains exactly 35 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(35);
   });
 
   it('exports the expected tool names', () => {
