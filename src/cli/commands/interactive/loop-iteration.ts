@@ -36,14 +36,14 @@ import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-bloc
 const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
 
 /**
- * Session-wide cap on autonomous auto-resumes — an idle REPL woken by a settled
+ * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
  * background subagent (see the `onInjectable` wiring below). Circuit breaker
  * against a self-perpetuating loop: a woken turn can itself dispatch another
- * background job that settles and re-wakes the session. This bounds that chain;
- * once hit, further results still deliver on the user's next manual turn.
- * Mirrors the per-session budget precedent in `background-summarizer.ts`.
+ * background job that settles and re-wakes the session. This bounds that chain
+ * within a single turn; the counter resets at the top of each loop iteration
+ * so auto-resume works across arbitrarily many turn boundaries.
  */
-const MAX_AUTO_RESUMES_PER_SESSION = 3;
+const MAX_AUTO_RESUMES_PER_TURN = 3;
 
 /**
  * User-message text seeded when a background result auto-resumes an idle REPL.
@@ -200,13 +200,13 @@ export async function runInputLoop(
   // cancels before invoking this), and only when the prompt is genuinely idle —
   // blocked on readLine (isAwaitingInput) with an empty input buffer, so a
   // half-typed line is never clobbered and a result that lands mid-turn just
-  // delivers on the next drain. Bounded by MAX_AUTO_RESUMES_PER_SESSION as a
+  // delivers on the next drain. Bounded by MAX_AUTO_RESUMES_PER_TURN as a
   // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
   const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
 
   let autoResumeCount = 0;
   bgResultNotifier.onInjectable = () => {
-    if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
+    if (autoResumeCount >= MAX_AUTO_RESUMES_PER_TURN) return;
     if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
     // Don't abort a steer readline — the user is mid-input and aborting would
     // degrade their redirect to Stop with no feedback (Item 1 fix).
@@ -251,6 +251,15 @@ export async function runInputLoop(
   };
 
   while (true) {
+      // Reset the auto-resume counter each iteration so the circuit breaker
+      // bounds wakes *per turn*, not per session. The session-wide cap caused
+      // false suppression after 3 batches of background results -- further
+      // batches would deliver but never wake the idle prompt. Per-turn reset
+      // preserves the original invariant (a woken turn cannot chain-wake
+      // itself indefinitely) while allowing auto-resume across arbitrarily
+      // many turn boundaries.
+      autoResumeCount = 0;
+
       if (pendingInitMeta) {
         ctx.replRenderer.writeLine(pendingInitMeta);
         ctx.replRenderer.writeLine('');
