@@ -43,6 +43,8 @@ interface ServerRecord {
   state: McpClientState;
   /** Config layer origin — drives env-containment policy (issue #578). */
   layer: McpServerLayer;
+  /** Trusted secret-expansion allowlist for this server (issue #1483). Preserved so completeAuth() reconnect passes the same trust boundary. */
+  trustedAllowSecretEnv: readonly string[];
 }
 
 export interface McpManagerInitOptions {
@@ -174,6 +176,7 @@ export class McpManager {
             toolCount: 0,
           },
           layer: serverLayer,
+          trustedAllowSecretEnv: trustedAllow,
         });
         continue;
       }
@@ -184,7 +187,7 @@ export class McpManager {
         status: 'connecting',
         toolCount: 0,
       };
-      const record: ServerRecord = { client: undefined, tools: [], state, layer: serverLayer };
+      const record: ServerRecord = { client: undefined, tools: [], state, layer: serverLayer, trustedAllowSecretEnv: trustedAllow };
       records.set(serverName, record);
 
       const client = new McpClient(serverName, config, serverLayer, trustedAllow);
@@ -462,7 +465,7 @@ export class McpManager {
     });
 
     // Step 4: fresh client + connect.
-    const freshClient = new McpClient(serverName, rec.state.config, rec.layer);
+    const freshClient = new McpClient(serverName, rec.state.config, rec.layer, rec.trustedAllowSecretEnv);
     freshClient.onTransportError = (err) => {
       rec.state.status = 'error';
       rec.state.error = truncate(err.message, 200);

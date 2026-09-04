@@ -56,6 +56,7 @@ export async function loadTelegramMcpManager(
     return await McpManager.fromConfig(loaded.mcpServers, {
       warnings: loaded.warnings,
       serverLayers: loaded.serverLayers,
+      userAllowSecretEnv: loaded.userAllowSecretEnv,
       ...(opts.traceWriter !== undefined ? { traceWriter: opts.traceWriter } : {}),
     });
   } finally {
