@@ -202,4 +202,24 @@ describe('createStateHandlers', () => {
     const rows = atCapResult.parsed as unknown[];
     expect(rows).toHaveLength(5);
   });
+
+  it('negative ttl_ms in state_put is rejected with isError:true', async () => {
+    const result = await call('state_put', {
+      namespace: 'ns',
+      key: 'neg-ttl',
+      value: { x: 1 },
+      ttl_ms: -1,
+    });
+    expect(result.raw.isError).toBe(true);
+  });
+
+  it('non-integer ttl_ms in state_put is rejected with isError:true', async () => {
+    const result = await call('state_put', {
+      namespace: 'ns',
+      key: 'float-ttl',
+      value: { x: 1 },
+      ttl_ms: 100.5,
+    });
+    expect(result.raw.isError).toBe(true);
+  });
 });

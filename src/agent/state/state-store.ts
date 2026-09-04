@@ -11,7 +11,7 @@
 
 import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
-import { mkdirSync } from 'fs';
+import { chmodSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 
 const SCHEMA_VERSION = 1;
@@ -92,8 +92,15 @@ export class StateStore {
   private db: BetterSqlite3.Database;
 
   constructor(dbPath: string) {
-    mkdirSync(dirname(dbPath), { recursive: true });
+    mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
     this.db = new Database(dbPath);
+    if (process.platform !== 'win32') {
+      try {
+        chmodSync(dbPath, 0o600);
+      } catch {
+        // best-effort — chmod failure must not prevent store construction
+      }
+    }
     // busy_timeout makes ordinary contended reads/writes wait up to 5s rather
     // than immediately throwing SQLITE_BUSY on the first lock conflict.
     this.db.pragma('busy_timeout = 5000');
