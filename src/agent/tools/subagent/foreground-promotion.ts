@@ -30,6 +30,7 @@ import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailurePayload } from './failure-payload.js';
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
+import { capSubagentResult } from './foreground-promotion.result-cap.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
 import { withProvenanceHeader } from './foreground-promotion.provenance.js';
@@ -334,12 +335,14 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // dispatch (no-op when child == parent). incompleteToolResultFields adds
       // the structured counterpart to that same banner, alongside it, for
       // non-model consumers.
+      const assembled = withProvenanceHeader(
+        annotateIfIncomplete(content, result.stopReason),
+        model,
+        parentModel,
+      );
+      const { content: capped } = capSubagentResult(assembled, parentSessionId, handle.id);
       toolResult = {
-        content: withProvenanceHeader(
-          annotateIfIncomplete(content, result.stopReason),
-          model,
-          parentModel,
-        ),
+        content: capped,
         ...incompleteToolResultFields(result.stopReason),
       };
       return toolResult;

@@ -1441,6 +1441,20 @@ export const ENV_REGISTRY = [
     category: 'debug',
   },
   {
+    name: 'AFK_SUBAGENT_RESULT_CAP_BYTES',
+    description:
+      'Foreground subagent result size cap in bytes. When a subagent\'s final message exceeds ' +
+      'this threshold, the full output is spilled to a sidecar file ' +
+      '(state/sessions/<id>/subagent-handoffs/<subagentId>.txt) and the parent receives a ' +
+      'head+tail slice with a read_file pointer. Prevents large subagent outputs from bloating ' +
+      'parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB).',
+    type: 'number',
+    required: false,
+    default: '32768',
+    example: '16384',
+    category: 'model',
+  },
+  {
     name: 'AFK_SUBAGENT_LOG',
     description:
       'Opt-in per-subagent conversation log. Writes OutputEvent JSONL to ' +
