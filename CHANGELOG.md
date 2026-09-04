@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.180.1] - 2026-09-04
+
+### Fixed
+- reconcile grant-manager divergences (#500) (#1479) (a069a8e5)
+
 ## [5.180.0] - 2026-09-04
 
 ### Added
