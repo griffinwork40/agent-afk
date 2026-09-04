@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.182.1] - 2026-09-04
+
+### Fixed
+- deduplicate wave-resume offers across session starts (#1489) (7b4b1877)
+
 ## [5.182.0] - 2026-09-04
 
 ### Added
