@@ -57,6 +57,9 @@ export interface CommittedBandHost {
   commitInFlight: boolean;
   /** Whether any commit has happened this arm cycle (guards growthDeficit). */
   hasCommitted: boolean;
+  /** Stale-guard for endTurnFlush: true when committed-band state has changed
+   *  since the last flush. Cleared by clearCommittedBand(); mirrors bandGeometryStale. */
+  lifecycleStateDirty: boolean;
   /** Pre-resize on-screen footprint to physically erase on the next repaint. */
   pendingResizeErase: { top: number; bottom: number } | null;
   /**
@@ -168,6 +171,9 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // Mark that a commit has happened this arm cycle so growthDeficit in
   // repaint() knows there is transcript content above the frame to protect.
   self.hasCommitted = true;
+  // Mark the compositor state as dirty so endTurnFlush (lifecycle.ts) knows
+  // a redraw is warranted. Mirrors the bandGeometryStale setter pattern.
+  self.lifecycleStateDirty = true;
 
   // Phase 2: repaint the live frame at its normal bottom-anchored
   // position. The repaint() does its own erase+paint via render(),
@@ -231,6 +237,9 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   // reference check once committedBand is reassigned above, but an empty band
   // never needs a cache entry either way).
   self.bandReflowCache = null;
+  // Clear the stale-guard so the next endTurnFlush call (after the next commit)
+  // does not skip its redraw on an already-flushed band.
+  self.lifecycleStateDirty = false;
 }
 
 /**
