@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.180.0] - 2026-09-04
+
+### Added
+- live parallel-batch indicator during pending window (#516) (#1485) (d011a388)
+
 ## [5.179.0] - 2026-09-04
 
 ### Added
