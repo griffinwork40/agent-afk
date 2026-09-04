@@ -69,6 +69,13 @@ export interface WaveManifest {
   /** ISO timestamp after which this manifest should be ignored. */
   expiresAt: string;
   /**
+   * ISO timestamp when the manifest was first surfaced as a resumption offer.
+   * Once set, the reconciler skips this manifest — the operator has been informed
+   * and further surfaces would be spam. Written by the caller (not the reconciler)
+   * AFTER successful delivery so a send failure leaves the manifest unsuppressed.
+   */
+  offeredAt?: string;
+  /**
    * Source coordinator:
    *   'agent-tool'   — SubagentExecutor parallel wave
    *   'compose-dag'  — ComposeExecutor DAG

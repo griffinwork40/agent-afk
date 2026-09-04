@@ -16,7 +16,7 @@
  */
 
 import { readdirSync, unlinkSync } from 'node:fs';
-import { readManifest } from './write.js';
+import { readManifest, writeManifestSync } from './write.js';
 import { checkWorktreePresence } from './worktree.js';
 import { getWavesDir, getWaveManifestPath } from '../../paths.js';
 import { env } from '../../config/env.js';
@@ -98,6 +98,9 @@ export function reconcileWaveManifests(opts: {
         }
         continue;
       }
+
+      // Skip manifests that have already been surfaced as a resumption offer.
+      if (manifest.offeredAt !== undefined) continue;
 
       // Skip manifests that are too old for the 48h recency heuristic.
       // Guard against corrupt createdAt: new Date(<corrupt>).getTime() returns
@@ -197,6 +200,31 @@ export function formatResumptionOffer(offer: StaleManifestOffer): string {
  */
 export function shouldSurfaceResumptionOffer(isInteractive: boolean): boolean {
   return isInteractive || env.AFK_WAVE_RESUME_UNATTENDED === '1';
+}
+
+/**
+ * Stamp a manifest's `offeredAt` field after the resumption offer has been
+ * successfully delivered to the operator. Subsequent reconciler passes will
+ * skip manifests with `offeredAt` set.
+ *
+ * // Invariant: called AFTER the delivery callback (sendText / stderr.write)
+ * // returns, not before — a send failure must leave the manifest unsuppressed
+ * // so the next session creation re-surfaces it. The TOCTOU window between
+ * // send and stamp is accepted: the worst case is a duplicate offer after a
+ * // crash between the two calls, which is strictly better than permanent
+ * // suppression from a mark-before-deliver pattern.
+ *
+ * Fire-and-forget: never throws.
+ */
+export function markManifestOffered(manifest: WaveManifest): void {
+  try {
+    const now = new Date().toISOString();
+    manifest.offeredAt = now;
+    manifest.updatedAt = now;
+    writeManifestSync(manifest);
+  } catch {
+    // Fire-and-forget: marking failure must never abort session startup.
+  }
 }
 
 function formatAge(ms: number): string {

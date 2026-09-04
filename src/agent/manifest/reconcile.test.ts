@@ -13,6 +13,7 @@ import {
   formatResumptionOffer,
   sweepExpiredManifests,
   shouldSurfaceResumptionOffer,
+  markManifestOffered,
 } from './reconcile.js';
 import { createManifest, buildWaveUnit, updateWaveUnit } from './write.js';
 import { getWaveManifestPath } from '../../paths.js';
@@ -273,6 +274,77 @@ describe('reconcileWaveManifests — worktree missing detection', () => {
     expect(u1entry?.worktreeStatus).toBe('missing');
     const u2entry = offer!.resumable.find((r) => r.unit.id === 'u2');
     expect(u2entry?.worktreeStatus).toBe('ok');
+  });
+});
+
+describe('reconcileWaveManifests — offeredAt dedup', () => {
+  it('skips manifests that have offeredAt set', () => {
+    const units = [
+      buildWaveUnit({ id: 'u1', prompt: 'task a', cwd: '/proj', model: 'sonnet' }),
+      buildWaveUnit({ id: 'u2', prompt: 'task b', cwd: '/proj', model: 'haiku' }),
+    ];
+    const waveId = createManifest({
+      source: 'agent-tool',
+      parentSessionId: 'dedup-sess',
+      traceLabel: null,
+      units,
+    });
+
+    // First reconcile should surface the manifest.
+    const result1 = reconcileWaveManifests({ sessionId: 'dedup-sess' });
+    expect(result1.offers).toHaveLength(1);
+
+    // Mark as offered (simulates what startup-reconcile does after delivery).
+    markManifestOffered(result1.offers[0]!.manifest);
+
+    // Second reconcile should skip it.
+    const result2 = reconcileWaveManifests({ sessionId: 'dedup-sess' });
+    expect(result2.offers).toHaveLength(0);
+  });
+
+  it('does not skip manifests without offeredAt', () => {
+    const units = [
+      buildWaveUnit({ id: 'u1', prompt: 'fresh', cwd: undefined, model: 'sonnet' }),
+      buildWaveUnit({ id: 'u2', prompt: 'fresh2', cwd: undefined, model: 'haiku' }),
+    ];
+    createManifest({
+      source: 'agent-tool',
+      parentSessionId: 'no-offered-sess',
+      traceLabel: null,
+      units,
+    });
+
+    const result = reconcileWaveManifests({ sessionId: 'no-offered-sess' });
+    expect(result.offers).toHaveLength(1);
+  });
+});
+
+describe('markManifestOffered', () => {
+  it('stamps offeredAt and updatedAt on the manifest file', () => {
+    const units = [
+      buildWaveUnit({ id: 'u1', prompt: 'test', cwd: undefined, model: 'sonnet' }),
+      buildWaveUnit({ id: 'u2', prompt: 'test2', cwd: undefined, model: 'haiku' }),
+    ];
+    const waveId = createManifest({
+      source: 'agent-tool',
+      parentSessionId: 'mark-sess',
+      traceLabel: null,
+      units,
+    });
+
+    const result = reconcileWaveManifests({ sessionId: 'mark-sess' });
+    expect(result.offers).toHaveLength(1);
+
+    const manifest = result.offers[0]!.manifest;
+    expect(manifest.offeredAt).toBeUndefined();
+
+    markManifestOffered(manifest);
+
+    // Read back from disk and verify.
+    const raw = JSON.parse(readFileSync(getWaveManifestPath(waveId!), 'utf8')) as WaveManifest;
+    expect(raw.offeredAt).toBeDefined();
+    expect(new Date(raw.offeredAt!).getTime()).toBeGreaterThan(0);
+    expect(raw.updatedAt).toBe(raw.offeredAt);
   });
 });
 

@@ -93,7 +93,11 @@ export class TelegramBot {
     // surface as plain messages when a new chat session is created.
     this.sessionManager = new SessionManager({
       ...options,
-      onResumptionOffer: (route, text) => { void this.bot.telegram.sendMessage(route.chatId, text, sendOptions(route)).catch(() => undefined); },
+      onResumptionOffer: (route, text) => {
+        return this.bot.telegram.sendMessage(route.chatId, text, sendOptions(route))
+          .then(() => true as const)
+          .catch(() => false as const);
+      },
     });
     this.messageHandler = new MessageHandler(
       this.bot,
