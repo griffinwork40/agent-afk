@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.183.0] - 2026-09-04
+
+### Added
+- auto-cap oversized foreground results with sidecar spill (#1491) (de65c1e5)
+
 ## [5.182.1] - 2026-09-04
 
 ### Fixed
