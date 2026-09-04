@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.183.1] - 2026-09-04
+
+### Fixed
+- add stale-guard to terminal-compositor lifecycle redraw (#1487) (#1490) (53c8f2b5)
+
 ## [5.183.0] - 2026-09-04
 
 ### Added
