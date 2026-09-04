@@ -770,6 +770,15 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SUBAGENT_RESULT_CAP_BYTES",
+      "description": "Foreground subagent result size cap in bytes. When a subagent's final message exceeds this threshold, the full output is spilled to a sidecar file (state/sessions/<id>/subagent-handoffs/<subagentId>.txt) and the parent receives a head+tail slice with a read_file pointer. Prevents large subagent outputs from bloating parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB). Note: sidecar files contain unredacted subagent output (same caveats as AFK_CAPTURE_SUBAGENT_OUTPUT). No automatic GC covers subagent-handoffs/ today; retention is tied to session-directory cleanup.",
+      "type": "number",
+      "required": false,
+      "default": "32768",
+      "example": "16384",
+      "category": "model"
+    },
+    {
       "name": "AFK_SUBAGENT_TIMEOUT_MS",
       "description": "Foreground forked-subagent wall-clock budget in ms; 0 disables the cap; explicit per-fork config.timeoutMs and the 60-min background mode still win. Bounds how long a single forked child turn may run before `withTimeout` aborts its controller (cascading through the AbortGraph to descendants) and the parent receives a legible TimeoutError tool_result instead of hanging. Default 2700000 (45 min ≈ headroom over the longest healthy review/research agent observed in production). Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to opt a whole session back into unbounded child turns. Does NOT affect the background dispatch budget (SUBAGENT_BACKGROUND_TIMEOUT_MS) or a per-fork config.timeoutMs — both take precedence.",
       "type": "number",
