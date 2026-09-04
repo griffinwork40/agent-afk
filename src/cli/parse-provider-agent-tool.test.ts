@@ -29,6 +29,7 @@ import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode.js';
 import { WORKSPACE_TOOL_NAMES } from '../agent/workspace/index.js';
+import { STATE_TOOL_NAMES } from '../agent/state/state-tools.js';
 import type { SubagentExecutor } from '../agent/tools/subagent-executor.js';
 import type { ComposeExecutor } from '../agent/tools/compose-executor.js';
 import type { SkillExecutor } from '../agent/tools/skill-executor.js';
@@ -91,6 +92,7 @@ describe('parseProvider — Agent tool allowlist wiring (PR #84)', () => {
       ...MEMORY_TOOL_NAMES,
       ...AWARENESS_TOOL_NAMES,
       ...WORKSPACE_TOOL_NAMES,
+      ...STATE_TOOL_NAMES,
       EXIT_PLAN_MODE_TOOL_NAME,
     ]);
     expect(allowed).toContain('get_runtime_state');
@@ -121,8 +123,8 @@ describe('parseProvider — Agent tool allowlist wiring (PR #84)', () => {
     // 'agent' is added exactly once and the total length matches.
     expect(list.filter((n) => n === 'agent')).toHaveLength(1);
     expect(list).toHaveLength(
-      // builtins + memory + awareness + workspace + exit_plan_mode + agent
-      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + WORKSPACE_TOOL_NAMES.length + 1 + 1,
+      // builtins + memory + awareness + workspace + state + exit_plan_mode + agent
+      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + WORKSPACE_TOOL_NAMES.length + STATE_TOOL_NAMES.length + 1 + 1,
     );
   });
 
@@ -204,6 +206,7 @@ describe('parseProvider — openai-compatible wiring (slice 4)', () => {
       ...MEMORY_TOOL_NAMES,
       ...AWARENESS_TOOL_NAMES,
       ...WORKSPACE_TOOL_NAMES,
+      ...STATE_TOOL_NAMES,
       EXIT_PLAN_MODE_TOOL_NAME,
     ]);
     expect(allowed).toContain('get_runtime_state');
@@ -246,8 +249,8 @@ describe('parseProvider — openai-compatible wiring (slice 4)', () => {
     const allowed = readOpenAIAllowedTools(provider as OpenAICompatibleProvider);
     expect(allowed).toBeDefined();
     expect(allowed).toHaveLength(
-      // builtins + memory + awareness + workspace + exit_plan_mode + agent + skill + compose
-      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + WORKSPACE_TOOL_NAMES.length + 1 + 3,
+      // builtins + memory + awareness + workspace + state + exit_plan_mode + agent + skill + compose
+      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + WORKSPACE_TOOL_NAMES.length + STATE_TOOL_NAMES.length + 1 + 3,
     );
     expect(allowed).toContain('agent');
     expect(allowed).toContain('skill');
