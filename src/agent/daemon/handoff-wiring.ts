@@ -40,7 +40,8 @@ import { pushIfConfigured } from '../../telegram/push.js';
 /**
  * Default TTL for daemon handoffs: 24 hours.
  * After this, the handoff transitions to 'expired' during the next recovery
- * sweep and the originating task is dead-lettered.
+ * sweep, and the task's lease state is restored to 'leased' so the next
+ * `recoverExpiredLeases` cycle can re-enqueue or dead-letter it.
  */
 const DEFAULT_HANDOFF_TTL_MS = 24 * 60 * 60 * 1_000;
 
@@ -152,7 +153,7 @@ export function makeDaemonElicitationHandler(
       questionText,
     ];
     if (request.choices && request.choices.length > 0) {
-      parts.push(`Options: ${request.choices.join(', ')}`);
+      parts.push(`Options: ${truncateForNotify(request.choices.join(', '))}`);
     }
     parts.push(`\nReply to this task's next run to provide your answer.`);
     void pushIfConfigured(parts.join('\n')).catch(() => undefined);

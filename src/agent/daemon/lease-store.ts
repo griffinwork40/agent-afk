@@ -466,6 +466,19 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
       continue;
     }
 
+    // Handoff suppression: mirror the first-pass check — a claim file that
+    // was written while the task was in 'waiting_human_input' must not be
+    // re-enqueued while the operator is still answering a handoff question.
+    // Invariant: this guard MUST run before the crash-window reconstruction
+    // below, which unconditionally sets state to 'leased'. Checking after
+    // reconstruction would never match 'waiting_human_input'.
+    // When the guard fires, rename the scratch file back to the canonical
+    // lease path so setLeaseState (called during handoff expiry) can find it.
+    if (claimRecord.state === 'waiting_human_input') {
+      try { renameSync(processPath, leasedPath(queueDir, claimRecord.id)); } catch { /* ignore — if rename fails the task survives via handoff expiry */ }
+      continue;
+    }
+
     // Apply same crash-window reconstruction as above.
     if (claimRecord.attempts === undefined || claimRecord.maxAttempts === undefined) {
       claimRecord = {
@@ -480,14 +493,6 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
     }
 
     claimRecord.updatedAt = now;
-
-    // Handoff suppression: mirror the first-pass check — a claim file that
-    // was written while the task was in 'waiting_human_input' must not be
-    // re-enqueued while the operator is still answering a handoff question.
-    if (claimRecord.state === 'waiting_human_input') {
-      try { unlinkSync(processPath); } catch { /* ignore */ }
-      continue;
-    }
 
     if (claimRecord.attempts < claimRecord.maxAttempts) {
       claimRecord.state = 'retrying';

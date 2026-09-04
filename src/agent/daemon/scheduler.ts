@@ -363,8 +363,18 @@ export class CronScheduler {
     }
 
     // Recover pending handoffs independently — must not be skipped if lease recovery throws.
-    // eslint-disable-next-line no-console
-    void recoverPendingHandoffs(undefined, this.queueDir).then((r) => { if (r.renotified > 0 || r.expired > 0) console.error(`[daemon] handoff-recovery: re-notified ${r.renotified}, expired ${r.expired}`); }).catch(() => {});
+    void recoverPendingHandoffs(undefined, this.queueDir)
+      .then((r) => {
+        if (r.renotified > 0 || r.expired > 0) {
+          // eslint-disable-next-line no-console
+          console.error(`[daemon] handoff-recovery: re-notified ${r.renotified}, expired ${r.expired}`);
+        }
+      })
+      .catch((err: unknown) => {
+        const hMsg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
+      });
 
     this.pullPollTimer = setInterval(() => {
       void this.pullTick();
