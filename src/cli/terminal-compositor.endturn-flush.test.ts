@@ -154,4 +154,80 @@ describe('Stage 3 (#540) endTurn: single end-of-turn flush to scrollback', () =>
     expect(() => c.endTurn()).not.toThrow();
     c.disarm();
   });
+
+  it('flushes a fully-pending band to scrollback (committedBandPaintedRows === 0, band-hold path)', async () => {
+    const stdout = makeStdout(COLS, ROWS);
+    const stdin = makeStdin();
+    const all = collect(stdout);
+    const statusLine = new StatusLine({ stream: stdout, force: true, throttleMs: 0 });
+    statusLine.start();
+    statusLine.repaint({ model: 'M', cost: 0, tokens: 0, contextPct: 0 });
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), scrollRegion: statusLine, anchorRow: 1 });
+    await c.arm();
+    // setExtraRows(2) shrinks the effective viewport so a 22-line overlay pins
+    // the frame top to prevTopRow <= 1, triggering commitPhase3HoldStore —
+    // the band-hold branch that leaves committedBandPaintedRows === 0.
+    statusLine.setExtraRows(2);
+    c.setSpinner({ enabled: true });
+
+    // A 22-line overlay fills the viewport, pushing prevTopRow to 1.
+    const tallOverlay = Array.from({ length: 22 }, (_, i) => `overlay ${i} — holding frame at full height`).join('\n');
+
+    const reportRows = [
+      'PENDING_HEADER unique band-hold marker',
+      'PENDING_LINE_A first pending row',
+      'PENDING_LINE_B second pending row',
+      'PENDING_LINE_C third pending row',
+    ];
+    c.setOverlay(tallOverlay);
+    c.commitAbove(`${reportRows.join('\n')}\n\n`);
+
+    // Precondition: verify the band-hold branch was taken.
+    const state = c as unknown as {
+      committedBand: string[];
+      committedBandPaintedRows: number;
+    };
+    expect(state.committedBand.length, 'band must be non-empty (block stored in hold)').toBeGreaterThan(0);
+    expect(state.committedBandPaintedRows, 'fully-pending: nothing painted yet').toBe(0);
+
+    // endTurn() with the overlay still up — Step 1 (erase painted rows) is
+    // skipped because paintedCount === 0; Step 2 archives all rows to scrollback;
+    // Step 3 zeros the band.
+    c.endTurn();
+
+    // Band must be zeroed after endTurn().
+    expect(state.committedBand.length, 'band must be empty after endTurn()').toBe(0);
+    expect(state.committedBandPaintedRows, 'painted rows must be 0 after endTurn()').toBe(0);
+
+    c.disarm();
+    statusLine.stop();
+
+    // Feed all terminal output through @xterm/headless.
+    const term = new HeadlessTerminal({
+      cols: COLS, rows: ROWS, scrollback: 800, allowProposedApi: true, convertEol: true,
+    });
+    await termWrite(term, all());
+
+    const scrollback = scrollbackLines(term);
+    const viewport = viewportLines(term);
+    const allOutput = [...scrollback, ...viewport];
+    const dump = [
+      'SCROLLBACK:',
+      ...scrollback.map((l, i) => `[sb${i}] ${JSON.stringify(l.replace(/\s+$/, ''))}`),
+      'VIEWPORT:',
+      ...viewport.map((l, i) => `[vp${i}] ${JSON.stringify(l.replace(/\s+$/, ''))}`),
+    ].join('\n');
+
+    // Every committed row must appear exactly once (single-copy invariant).
+    for (const row of reportRows) {
+      const marker = row.split(' ')[0]!; // PENDING_HEADER / PENDING_LINE_A / …
+      const hits = allOutput.filter((l) => l.includes(marker)).length;
+      expect(
+        hits,
+        `committed row "${marker}" must appear exactly once in scrollback after endTurn() on fully-pending band (found ${hits}):\n${dump}`,
+      ).toBe(1);
+    }
+
+    term.dispose();
+  }, 15_000);
 });
