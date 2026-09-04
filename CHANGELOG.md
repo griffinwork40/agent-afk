@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.181.1] - 2026-09-04
+
+### Fixed
+- contain project-local MCP stdio server env (#578) (#1483) (d454a30e)
+
 ## [5.181.0] - 2026-09-04
 
 ### Added
