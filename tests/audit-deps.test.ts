@@ -20,6 +20,13 @@ describe('audit:deps — isAuditEndpointUnavailable', () => {
     expect(isAuditEndpointUnavailable('TypeError: fetch failed')).toBe(true);
   });
 
+  it('tolerates ERR_SOCKET_TIMEOUT (socket-level timeout, Sep-2025 CI failure class)', () => {
+    const out =
+      'ERR_SOCKET_TIMEOUT: request to https://registry.npmjs.org/-/npm/v1/security/audits ' +
+      'failed, reason: Socket timeout';
+    expect(isAuditEndpointUnavailable(out)).toBe(true);
+  });
+
   it('does NOT tolerate a genuine critical advisory report (the gate must still fail)', () => {
     // Representative pnpm-audit output when a critical advisory IS found. It never
     // contains a transport-failure marker, so the wrapper must propagate the failure.

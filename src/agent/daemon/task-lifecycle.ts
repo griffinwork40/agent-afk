@@ -17,18 +17,24 @@
 /**
  * Lifecycle states for a durable task.
  *
- *   queued      → task file sits in queue dir, not yet dequeued
- *   leased      → task is being processed; lease file in leased/ dir
- *   running     → alias for leased (sub-state; not persisted separately)
- *   succeeded   → task completed successfully; file moved to completed/
- *   failed      → task failed and maxAttempts reached; moved to completed/
- *   retrying    → task failed but attempts < maxAttempts; re-enqueued
- *   dead-letter → task exhausted retries; moved to dead-letter/
+ *   queued               → task file sits in queue dir, not yet dequeued
+ *   leased               → task is being processed; lease file in leased/ dir
+ *   running              → alias for leased (sub-state; not persisted separately)
+ *   waiting_human_input  → task is leased but blocked on a human elicitation;
+ *                          lease expiry checks are suppressed in this state so
+ *                          the task is not incorrectly recovered while a human
+ *                          is being asked a question (PR 2 wires this via
+ *                          recoverExpiredLeases; PR 1 adds the type only)
+ *   succeeded            → task completed successfully; file moved to completed/
+ *   failed               → task failed and maxAttempts reached; moved to completed/
+ *   retrying             → task failed but attempts < maxAttempts; re-enqueued
+ *   dead-letter          → task exhausted retries; moved to dead-letter/
  */
 export type TaskState =
   | 'queued'
   | 'leased'
   | 'running'
+  | 'waiting_human_input'
   | 'succeeded'
   | 'failed'
   | 'retrying'
