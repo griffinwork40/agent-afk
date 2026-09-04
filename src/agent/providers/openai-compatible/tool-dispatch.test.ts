@@ -1024,6 +1024,112 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     const last = progressEvents.at(-1);
     expect(last?.type === 'progress' ? last.progress.summary : undefined).toBe('round 52: echo');
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 2 (issue #516): tool.activity events via relayWhilePending
+  // ---------------------------------------------------------------------------
+  describe('tool.activity events (Phase 2, issue #516)', () => {
+    /** Scripted turn chunk for two parallel echo tool calls (ids a, b). */
+    function twoParallelToolCalls(): ScriptedTurn[] {
+      return [
+        {
+          chunks: [
+            {
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      { index: 0, id: 'ta', type: 'function', function: { name: 'echo', arguments: '{"msg":"x"}' } },
+                      { index: 1, id: 'tb', type: 'function', function: { name: 'echo', arguments: '{"msg":"y"}' } },
+                    ],
+                  },
+                },
+              ],
+            },
+            { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } },
+          ],
+        },
+        {
+          chunks: [
+            { choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 1, total_tokens: 21 } },
+          ],
+        },
+      ];
+    }
+
+    it('yields tool.activity while executeBatch is pending (event precedes tool.output)', async () => {
+      // Use a concurrencyClassifier that marks echo as safe so executeBatch runs
+      // them in a genuine parallel wave and onActivity is invoked.
+      const fixture = makeDispatcher({ concurrencyClassifier: () => true });
+      scriptedTurns = twoParallelToolCalls();
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('parallel test'),
+        config: baseConfig(),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      const activityEvents = events.filter((e) => e.type === 'tool.activity');
+      expect(activityEvents.length).toBeGreaterThanOrEqual(1);
+
+      // The wave event must arrive before any tool.output.
+      const firstActivity = events.findIndex((e) => e.type === 'tool.activity');
+      const firstOutput = events.findIndex((e) => e.type === 'tool.output');
+      expect(firstActivity).toBeLessThan(firstOutput);
+    });
+
+    it('tool.activity carries the actual running ids (not a predicted partition)', async () => {
+      const fixture = makeDispatcher({ concurrencyClassifier: () => true });
+      scriptedTurns = twoParallelToolCalls();
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('activity ids test'),
+        config: baseConfig(),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      const waveEvent = events.find(
+        (e) => e.type === 'tool.activity' && e.activeCount >= 2,
+      );
+      expect(waveEvent).toBeDefined();
+      if (waveEvent?.type === 'tool.activity') {
+        expect(waveEvent.activeToolUseIds.sort()).toEqual(['ta', 'tb'].sort());
+        expect(waveEvent.activeCount).toBe(waveEvent.activeToolUseIds.length);
+      }
+    });
+
+    it('does not emit tool.activity for a sequential (non-concurrent) dispatcher', async () => {
+      // Without a concurrencyClassifier marking echo as safe, the dispatcher
+      // runs calls sequentially and the pool's onActivity never fires.
+      const fixture = makeDispatcher(); // default classifier: echo is NOT concurrency-safe
+      scriptedTurns = twoParallelToolCalls();
+
+      const q = new OpenAICompatibleQuery({
+        auth: { apiKey: 'sk', source: 'config' },
+        model: 'gpt-4o-mini',
+        synthesizedSessionId: 'sid',
+        promptStream: singleInput('sequential test'),
+        config: baseConfig(),
+        toolDispatcher: fixture.dispatcher,
+      });
+      const events = await collect(q);
+
+      // Sequential path: executeBatch runs but the concurrency pool has width=1,
+      // so onActivity is never called with >= 2 ids.
+      const parallelActivity = events.filter(
+        (e) => e.type === 'tool.activity' && e.activeCount >= 2,
+      );
+      expect(parallelActivity).toHaveLength(0);
+    });
+  });
 });
 
 describe('OpenAICompatibleQuery — tool dispatch without dispatcher', () => {

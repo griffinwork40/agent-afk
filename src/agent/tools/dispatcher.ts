@@ -27,6 +27,7 @@ import type { SubagentExecutor } from './subagent-executor.js';
 import type { SkillExecutor } from './skill-executor.js';
 import type { ComposeExecutor } from './compose-executor.js';
 import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './types.js';
+import type { ToolActivityReporter } from '../providers/shared/tool-activity.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
@@ -333,6 +334,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * result. This is pure data-gathering, not enforcement.
    */
   private suspectedLoopWindow: SuspectedLoopWindow | null = null;
+
+
 
   /**
    * Shared grant-state machine (issues #361/#362). The hooks bind the
@@ -1042,8 +1045,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * {@link runSequentialBatch} in `dispatcher.batch-process.ts` to reduce
    * nesting depth. This method retains the phase-1 gate loop, batch partitioning,
    * batch-stamp pass, and the reset-on-success denial-breaker reset.
+   *
+   * `onActivity` is the live in-flight channel (issue #516). It fires from
+   * inside the concurrency pool's worker body on every start and every settle,
+   * carrying the ids ACTUALLY running at that moment — so a caller can badge a
+   * genuine parallel wave while it is still in flight. It is never called with
+   * a predicted or queued set: the single-call fast path above returns before
+   * the pool is reached (a lone call is not a parallel wave), and the
+   * sequential branch never reports (one call runs at a time by definition).
    */
-  async executeBatch(calls: ToolCall[]): Promise<ToolResult[]> {
+  async executeBatch(calls: ToolCall[], onActivity?: ToolActivityReporter): Promise<ToolResult[]> {
     if (calls.length === 0) return [];
     if (calls.length === 1) return [await this.execute(calls[0]!)];
 
@@ -1097,6 +1108,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       subagentExecutor: this.subagentExecutor,
       sessionId: this.sessionId,
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
+      onActivity,
     };
 
     for (const batch of batches) {

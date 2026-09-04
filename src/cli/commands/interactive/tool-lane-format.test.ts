@@ -18,6 +18,7 @@ import {
   sanitizeTextParagraph,
   shortenPaths,
   batchBadge,
+  activeToolBadge,
   doneGlyph,
   isBenignFailure,
   MAX_OVERLAY_DIFF_LINES,
@@ -88,6 +89,41 @@ describe('batchBadge — parallel-wave indicator', () => {
   it('is empty when only one of the index/size pair is present (defensive)', () => {
     expect(batchBadge(chunk({ batchSize: 2 }))).toBe('');
     expect(batchBadge(chunk({ batchIndex: 1 }))).toBe('');
+  });
+});
+
+describe('activeToolBadge — live in-flight parallel-wave indicator (Phase 2, issue #516)', () => {
+  const makeActive = (activeCount: number, ...ids: string[]): { activeCount: number; toolUseIds: Set<string> } => ({
+    activeCount,
+    toolUseIds: new Set(ids),
+  });
+
+  it('renders [×N] for a member id in an active wave', () => {
+    const active = makeActive(3, 'tool-a', 'tool-b', 'tool-c');
+    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe(' [×3]');
+    expect(stripAnsi(activeToolBadge('tool-b', active))).toBe(' [×3]');
+    expect(stripAnsi(activeToolBadge('tool-c', active))).toBe(' [×3]');
+  });
+
+  it('is empty for a non-member id (not currently running)', () => {
+    const active = makeActive(2, 'tool-a', 'tool-b');
+    expect(activeToolBadge('other-tool', active)).toBe('');
+  });
+
+  it('is empty when activeTools is null (no parallel wave in flight)', () => {
+    expect(activeToolBadge('tool-a', null)).toBe('');
+  });
+
+  it('is empty when activeCount is 1 (lone straggler should not render [×1])', () => {
+    const active = makeActive(1, 'tool-a');
+    expect(activeToolBadge('tool-a', active)).toBe('');
+  });
+
+  it('uses a different glyph (×) than the completed badge (∥) to distinguish live from committed', () => {
+    const active = makeActive(2, 'tool-a', 'tool-b');
+    const live = stripAnsi(activeToolBadge('tool-a', active));
+    expect(live).toContain('×');
+    expect(live).not.toContain('∥');
   });
 });
 

@@ -530,6 +530,16 @@ export function transformProviderEvent(
       // exhaustive, so do not remove the `default` arm either.
       return { type: 'notice', text: event.text, kind: event.kind };
 
+    case 'tool.activity':
+      // Live tool-activity marker (Phase 2, issue #516). Surfaces on TTY REPL
+      // as a `[×N]` badge on the rows genuinely in flight. No model context
+      // impact — display-only. Maps 1:1 from ProviderEvent to OutputEvent.
+      return {
+        type: 'tool-activity',
+        activeCount: event.activeCount,
+        activeToolUseIds: event.activeToolUseIds,
+      };
+
     default:
       return null;
   }

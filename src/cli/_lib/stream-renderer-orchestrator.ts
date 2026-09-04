@@ -471,6 +471,19 @@ export function handleOrchestratorEvent(
       }
       return;
     }
+
+    case 'tool-activity':
+      // Live tool-activity marker (Phase 2, issue #516). Arrives repeatedly
+      // while the batch runs — on every worker start and settle — so the
+      // `[×N]` indicator tracks what is genuinely in flight and clears itself
+      // when the wave drains. Overlay-only, so append-only scrollback is
+      // untouched: nothing is committed and no committed row is re-laid-out.
+      // Ignored on non-TTY surfaces (no overlay to repaint).
+      if (ctx.isTTY) {
+        ctx.toolLane.notifyToolActivity(event.activeCount, event.activeToolUseIds);
+        setComposedOverlay(ctx);
+      }
+      return;
   }
 }
 

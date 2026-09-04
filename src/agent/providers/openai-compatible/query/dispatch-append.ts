@@ -13,6 +13,7 @@ import {
   buildToolCallCompletedPayload,
   buildToolCallStartedPayload,
 } from '../../shared/tool-call-trace.js';
+import { relayWhilePending } from '../../shared/event-relay.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
@@ -149,7 +150,25 @@ export async function* dispatchAndAppendToolCalls({
     let dispatcherResults: ToolResult[];
     try {
       if (toolDispatcher.executeBatch) {
-        dispatcherResults = await toolDispatcher.executeBatch(calls);
+        // Phase 2 (issue #516 fix): relay `tool.activity` events WHILE
+        // executeBatch is still pending, so the TUI badges a parallel wave
+        // during execution instead of after it. A plain `await` suspends this
+        // generator and can yield nothing until the batch settles — see
+        // providers/shared/event-relay.ts for the full rationale. Identical
+        // shape to the anthropic-direct path so both providers stay in step.
+        //
+        // A dispatcher throw propagates out of the relay into the existing
+        // catch below, which maps it to isError results for every call.
+        dispatcherResults = yield* relayWhilePending<ProviderEvent, ToolResult[]>((emit) =>
+          toolDispatcher.executeBatch!(calls, (activeIds) => {
+            emit({
+              type: 'tool.activity',
+              activeCount: activeIds.length,
+              activeToolUseIds: [...activeIds],
+              sessionId,
+            });
+          }),
+        );
       } else {
         dispatcherResults = [];
         for (const call of calls) {

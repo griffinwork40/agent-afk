@@ -124,6 +124,21 @@ export type OutputEvent =
       /** Semantic category — guides rendering and programmatic branching. */
       kind: 'truncation' | 'refusal';
     }
+  // Live tool-activity marker (Phase 2, issue #516). Mirrors ProviderEvent
+  // 'tool.activity'. Reports the tool calls ACTUALLY running at this instant,
+  // pushed from inside the dispatcher's concurrency pool while the batch is
+  // still in flight, so the TUI can display a truthful `[×N]` indicator.
+  // Every observed membership change is relayed: `activeCount >= 2` is a
+  // genuine parallel wave; `activeCount === 1` clears the badge when a wave
+  // drops to one straggler; `activeCount === 0` confirms the wave drained.
+  // See ProviderEvent 'tool.activity' for the full contract.
+  | {
+      type: 'tool-activity';
+      /** Number of tool handlers running right now (0, 1, or >= 2). */
+      activeCount: number;
+      /** Ids of the tool calls running right now. Empty when the wave drained. */
+      activeToolUseIds: string[];
+    }
   // Usage-limit pause/resume events emitted by the provider layer when an
   // OAuth subscription limit is hit and the provider is waiting to auto-resume.
   | {

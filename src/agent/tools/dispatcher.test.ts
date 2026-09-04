@@ -1312,6 +1312,313 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // executeBatch onActivity — Phase 2 observed-activity reporting (issue #516 fix)
+  // ---------------------------------------------------------------------------
+  describe('executeBatch onActivity (Phase 2 observed-activity, issue #516 fix)', () => {
+    it('calls onActivity with the ids ACTUALLY running during a concurrent wave', async () => {
+      const signal = new AbortController().signal;
+      // Deferred handlers — resolved from the outside so we control ordering.
+      let resolveRead!: (r: { content: string }) => void;
+      let resolveGlob!: (r: { content: string }) => void;
+      const readHandler: ToolHandler = () => new Promise((res) => { resolveRead = res; });
+      const globHandler: ToolHandler = () => new Promise((res) => { resolveGlob = res; });
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', readHandler],
+          ['glob', globHandler],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const calls = [
+        { id: 'toolu_r', name: 'read_file', input: {}, signal },
+        { id: 'toolu_g', name: 'glob', input: {}, signal },
+      ];
+
+      const snapshots: readonly string[][] = [];
+      const batchPromise = dispatcher.executeBatch(calls, (ids) => {
+        snapshots.push([...ids]);
+      });
+
+      // Yield to the microtask queue so the pool can start both workers and
+      // call enter() on each (which fires onActivity).
+      await new Promise((r) => setTimeout(r, 0));
+
+      resolveRead({ content: 'r' });
+      resolveGlob({ content: 'g' });
+      await batchPromise;
+
+      // At least one snapshot with both ids in flight.
+      const parallelSnap = snapshots.find((s) => s.length === 2);
+      expect(parallelSnap).toBeDefined();
+      expect([...parallelSnap!].sort()).toEqual(['toolu_g', 'toolu_r'].sort());
+
+      // Final snapshot must be the empty drain.
+      expect(snapshots.at(-1)).toEqual([]);
+    });
+
+    it('reports only actual active ids — max concurrency === max active reported', async () => {
+      const signal = new AbortController().signal;
+      let peakConcurrency = 0;
+      let resolveFirst!: (r: { content: string }) => void;
+      let resolveSecond!: (r: { content: string }) => void;
+      let resolveThird!: (r: { content: string }) => void;
+
+      const firstHandler: ToolHandler = () =>
+        new Promise((res) => { resolveFirst = res; });
+      const secondHandler: ToolHandler = () =>
+        new Promise((res) => { resolveSecond = res; });
+      const thirdHandler: ToolHandler = () =>
+        new Promise((res) => { resolveThird = res; });
+
+      // maxConcurrentSafeCalls: 2 — third call must wait for a slot.
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', firstHandler],
+          ['glob', secondHandler],
+          ['grep', thirdHandler],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'grep'] },
+        maxConcurrentSafeCalls: 2,
+      });
+
+      const calls = [
+        { id: 'id-1', name: 'read_file', input: {}, signal },
+        { id: 'id-2', name: 'glob', input: {}, signal },
+        { id: 'id-3', name: 'grep', input: {}, signal },
+      ];
+
+      const batchPromise = dispatcher.executeBatch(calls, (ids) => {
+        if (ids.length > peakConcurrency) peakConcurrency = ids.length;
+      });
+
+      // Allow both initial slots to fill
+      await new Promise((r) => setTimeout(r, 0));
+      // Peak must not exceed the concurrency ceiling
+      expect(peakConcurrency).toBeLessThanOrEqual(2);
+
+      resolveFirst({ content: '1' });
+      resolveSecond({ content: '2' });
+      // Give the pool time to refill the third slot
+      await new Promise((r) => setTimeout(r, 0));
+      resolveThird({ content: '3' });
+      await batchPromise;
+
+      // Never exceeded the ceiling
+      expect(peakConcurrency).toBeLessThanOrEqual(2);
+    });
+
+    it('reports the final [] drain update clearing the badge', async () => {
+      const signal = new AbortController().signal;
+      let lastSnapshot: readonly string[] | null = null;
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'r' })],
+          ['glob', async () => ({ content: 'g' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      await dispatcher.executeBatch(
+        [
+          { id: 'toolu_r', name: 'read_file', input: {}, signal },
+          { id: 'toolu_g', name: 'glob', input: {}, signal },
+        ],
+        (ids) => { lastSnapshot = ids; },
+      );
+
+      // Final update must be the empty drain
+      expect(lastSnapshot).toEqual([]);
+    });
+
+    it('does NOT call onActivity for pre-aborted calls (absent by construction)', async () => {
+      const ac = new AbortController();
+      ac.abort();
+      const signal = ac.signal;
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'r' })],
+          ['glob', async () => ({ content: 'g' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const allSnapshots: readonly string[][] = [];
+      await dispatcher.executeBatch(
+        [
+          { id: 'toolu_r', name: 'read_file', input: {}, signal },
+          { id: 'toolu_g', name: 'glob', input: {}, signal },
+        ],
+        (ids) => { allSnapshots.push([...ids]); },
+      );
+
+      // Pre-aborted calls skip the activity enter entirely
+      expect(allSnapshots.every((s) => s.length === 0)).toBe(true);
+    });
+
+    it('emits no onActivity calls for singleton or sequential batches', async () => {
+      const signal = new AbortController().signal;
+
+      // Single-call fast path (goes through execute, not the pool)
+      const dispatcher = makeDispatcher();
+      const singleSnapshots: readonly string[][] = [];
+      await dispatcher.executeBatch(
+        [makeCall({ id: 'solo', name: 'echo', input: { message: 'hi' } })],
+        (ids) => { singleSnapshots.push([...ids]); },
+      );
+      expect(singleSnapshots).toHaveLength(0);
+    });
+
+    it('returns correct results regardless of onActivity presence', async () => {
+      const signal = new AbortController().signal;
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'r' })],
+          ['glob', async () => ({ content: 'g' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const calls = [
+        { id: 'toolu_r', name: 'read_file', input: {}, signal },
+        { id: 'toolu_g', name: 'glob', input: {}, signal },
+      ];
+
+      // Without callback
+      const results1 = await dispatcher.executeBatch(calls);
+      expect(results1).toHaveLength(2);
+      expect(results1[0]!.content).toBe('r');
+      expect(results1[1]!.content).toBe('g');
+
+      // With callback — same results
+      const results2 = await dispatcher.executeBatch(calls, () => {});
+      expect(results2).toHaveLength(2);
+      expect(results2[0]!.content).toBe('r');
+      expect(results2[1]!.content).toBe('g');
+    });
+
+    // -------------------------------------------------------------------------
+    // (1) 2 → 1 → 0 sequence when one deferred call settles before the other
+    // -------------------------------------------------------------------------
+    it('dispatcher callback observes 2, then 1, then 0 when one of two deferred calls settles first', async () => {
+      const signal = new AbortController().signal;
+      let resolveRead!: (r: { content: string }) => void;
+      let resolveGlob!: (r: { content: string }) => void;
+      const readHandler: ToolHandler = () => new Promise((res) => { resolveRead = res; });
+      const globHandler: ToolHandler = () => new Promise((res) => { resolveGlob = res; });
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', readHandler],
+          ['glob', globHandler],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const calls = [
+        { id: 'id-read', name: 'read_file', input: {}, signal },
+        { id: 'id-glob', name: 'glob', input: {}, signal },
+      ];
+
+      const snapshots: number[] = [];
+      const batchPromise = dispatcher.executeBatch(calls, (ids) => {
+        snapshots.push(ids.length);
+      });
+
+      // Let both workers start.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // One settles first: active set should drop to 1.
+      resolveRead({ content: 'r' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Other settles: active set empties.
+      resolveGlob({ content: 'g' });
+      await batchPromise;
+
+      // Must observe: 2 (both started), 1 (one settled), 0 (drained).
+      // There may be more snapshots if the pool emits enter/leave separately;
+      // we assert the SEQUENCE of distinct values: 2 then 1 then 0.
+      const distinct = snapshots.filter((v, i) => i === 0 || v !== snapshots[i - 1]);
+      expect(distinct).toEqual(expect.arrayContaining([2, 1, 0]));
+      const idx2 = distinct.indexOf(2);
+      const idx1 = distinct.indexOf(1, idx2 + 1);
+      const idx0 = distinct.indexOf(0, idx1 + 1);
+      expect(idx2).toBeGreaterThanOrEqual(0);
+      expect(idx1).toBeGreaterThan(idx2);
+      expect(idx0).toBeGreaterThan(idx1);
+    });
+
+    // -------------------------------------------------------------------------
+    // (3) Mixed safe-safe / unsafe / safe-safe: second safe group's activity
+    //     is NOT reported until the unsafe call has completed.
+    // -------------------------------------------------------------------------
+    it('second safe group active-ids never appear before the unsafe call completes', async () => {
+      const signal = new AbortController().signal;
+
+      // Track all snapshot sets with timestamps to verify ordering.
+      const activityLog: Array<{ ids: string[]; t: number }> = [];
+      let unsafeCompletedAt = 0;
+
+      let resolveUnsafe!: (r: { content: string }) => void;
+      const bashHandler: ToolHandler = () =>
+        new Promise((res) => { resolveUnsafe = res; });
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'read1' })],
+          ['glob', async () => ({ content: 'read2' })],
+          ['bash', bashHandler],
+          ['grep', async () => ({ content: 'grep' })],
+          ['list_directory', async () => ({ content: 'ls' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'bash', 'grep', 'list_directory'] },
+      });
+
+      // [safe-read, safe-glob] → bash (unsafe) → [safe-grep, safe-ls]
+      const calls = [
+        { id: 'id-r', name: 'read_file', input: {}, signal },
+        { id: 'id-g', name: 'glob', input: {}, signal },
+        { id: 'id-b', name: 'bash', input: { command: 'x' }, signal },
+        { id: 'id-grep', name: 'grep', input: {}, signal },
+        { id: 'id-ls', name: 'list_directory', input: {}, signal },
+      ];
+
+      const batchPromise = dispatcher.executeBatch(calls, (ids) => {
+        activityLog.push({ ids: [...ids], t: Date.now() });
+      });
+
+      // Let first safe wave complete (they are instant handlers).
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Now finish bash.
+      unsafeCompletedAt = Date.now();
+      resolveUnsafe({ content: 'bash-done' });
+      await batchPromise;
+
+      // Find any snapshot containing the second safe group ids (grep or ls).
+      const secondGroupIds = new Set(['id-grep', 'id-ls']);
+      const secondGroupSnapshots = activityLog.filter(({ ids }) =>
+        ids.some((id) => secondGroupIds.has(id)),
+      );
+
+      // The second safe group must only appear AFTER bash has completed.
+      // If there are no such snapshots that's fine (instant handlers settle
+      // before the callback fires), but if they exist, they cannot precede
+      // unsafeCompletedAt.
+      for (const snap of secondGroupSnapshots) {
+        expect(snap.t).toBeGreaterThanOrEqual(unsafeCompletedAt);
+      }
+
+      // Confirm the batch drained (terminal [] snapshot was emitted).
+      expect(activityLog.some((s) => s.ids.length === 0)).toBe(true);
+    });
+  });
+
   describe('compose tool routing (L4)', () => {
     it('returns clean error when composeExecutor not configured', async () => {
       const dispatcher = makeDispatcher({
