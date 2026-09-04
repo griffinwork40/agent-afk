@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runReplReconcile, runTelegramReconcile, runNonInteractiveReconcile } from './startup-reconcile.js';
-import { createManifest, buildWaveUnit } from './write.js';
+import { createManifest, buildWaveUnit, readManifest } from './write.js';
 
 let stateDir: string;
 
@@ -85,6 +85,48 @@ describe('runTelegramReconcile', () => {
     await Promise.resolve();
 
     expect(sendText).not.toHaveBeenCalled();
+  });
+});
+
+describe('runTelegramReconcile — offeredAt stamping', () => {
+  it('marks manifest as offered after sendText succeeds', async () => {
+    const sendText = vi.fn();
+    const waveId = seedManifest('tg-dedup');
+
+    runTelegramReconcile('tg-dedup', { chatId: 42 }, sendText);
+    await Promise.resolve();
+
+    expect(sendText).toHaveBeenCalledOnce();
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeDefined();
+  });
+
+  it('does not re-send on second reconcile after marking', async () => {
+    const sendText = vi.fn();
+    seedManifest('tg-dedup2');
+
+    runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
+    await Promise.resolve();
+    expect(sendText).toHaveBeenCalledOnce();
+
+    // Second reconcile: manifest is marked, should not send again.
+    sendText.mockClear();
+    runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
+    await Promise.resolve();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+});
+
+describe('runReplReconcile — offeredAt stamping', () => {
+  it('marks manifest as offered after writing to stderr', async () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const waveId = seedManifest('repl-dedup');
+
+    runReplReconcile('repl-dedup');
+    await Promise.resolve();
+
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeDefined();
   });
 });
 

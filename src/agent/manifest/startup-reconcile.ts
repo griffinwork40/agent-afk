@@ -14,7 +14,7 @@
  * @module agent/manifest/startup-reconcile
  */
 
-import { reconcileWaveManifests, formatResumptionOffer, shouldSurfaceResumptionOffer } from './reconcile.js';
+import { reconcileWaveManifests, formatResumptionOffer, shouldSurfaceResumptionOffer, markManifestOffered } from './reconcile.js';
 
 /**
  * Wire reconciliation for the interactive REPL surface.
@@ -27,6 +27,7 @@ export function runReplReconcile(sessionId: string): void {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
         process.stderr.write(formatResumptionOffer(offer) + '\n');
+        markManifestOffered(offer.manifest);
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.
@@ -53,6 +54,7 @@ export function runTelegramReconcile<Route>(
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
         sendText(route, formatResumptionOffer(offer));
+        markManifestOffered(offer.manifest);
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.
@@ -72,6 +74,7 @@ export function runNonInteractiveReconcile(sessionId: string): void {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
         process.stderr.write(formatResumptionOffer(offer) + '\n');
+        markManifestOffered(offer.manifest);
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.
