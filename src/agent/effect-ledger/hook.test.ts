@@ -9,9 +9,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createEffectLedgerPostHook } from './hook.js';
+import { createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
 import { EffectStore } from './store.js';
-import type { PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
+import type { PostToolUseContext, PostToolUseFailureContext, PreToolUseContext } from '../hooks.js';
 
 let tmpDir: string;
 let ledgerPath: string;
@@ -308,5 +308,38 @@ describe('createEffectLedgerPostHook — return value', () => {
     const decision = await hook(makeCtx());
     expect(decision).toEqual({});
     expect((decision as Record<string, unknown>)['decision']).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PreToolUse hook — computeIdempotencyKey throw guard (#1475)
+// ---------------------------------------------------------------------------
+
+describe('createEffectLedgerPreHook — computeIdempotencyKey throw guard', () => {
+  it('returns {} instead of throwing when input causes computeIdempotencyKey to throw', () => {
+    const pendingIds = new Map<string, string>();
+    const hook = createEffectLedgerPreHook(pendingIds, store);
+
+    // An object with a getter that throws causes stableStringify (used inside
+    // computeIdempotencyKey) to throw. The hook must swallow the error and
+    // return {} to satisfy its non-blocking contract.
+    const throwingInput: Record<string, unknown> = {};
+    Object.defineProperty(throwingInput, 'message', {
+      get() { throw new Error('getter throws'); },
+      enumerable: true,
+    });
+
+    const ctx: PreToolUseContext = {
+      event: 'PreToolUse',
+      toolName: 'send_telegram',
+      input: throwingInput,
+      toolUseId: 'tool-use-1',
+    };
+
+    expect(() => hook(ctx)).not.toThrow();
+    const decision = hook(ctx);
+    expect(decision).toEqual({});
+    // No pending record should have been written for the failing input.
+    expect(pendingIds.size).toBe(0);
   });
 });

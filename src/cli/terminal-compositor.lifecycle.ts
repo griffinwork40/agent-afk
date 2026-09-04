@@ -20,7 +20,7 @@ import type {
   KeyInfo,
   LogUpdateFn,
 } from './terminal-compositor.types.js';
-import { scrollbackFlushLines, buildScrollbackArchiveEscape } from './terminal-compositor.scrollback.js';
+import { scrollbackFlushLines, buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import type { KeyDispatchHost } from './terminal-compositor.input-dispatch.js';
 
@@ -75,6 +75,9 @@ export interface LifecycleHost {
   // prefix as soft-wrappable logical lines instead of pre-wrapped physical rows.
   readonly committedBandMeta: BandRowMeta[];
   readonly committedBandTopRow: number;
+  // #540 Stage 3: bottom row of the on-screen painted band suffix. Read by
+  // endTurnFlush to determine the erase range for painted rows.
+  readonly committedBandBottomRow: number;
   // Read by disarm() to flush genuinely-unpainted committed-band rows to
   // scrollback before teardown. See committedBandPaintedRows on the class.
   readonly committedBandPaintedRows: number;
@@ -82,6 +85,8 @@ export interface LifecycleHost {
   // repaint once repositionCommittedBand re-establishes real geometry. See the
   // field doc on the class (terminal-compositor.ts).
   bandGeometryStale: boolean;
+  // #540 Stage 3: clear the committed band after a full end-of-turn flush.
+  clearCommittedBand(): void;
 }
 
 /**
@@ -441,6 +446,92 @@ export function disarm(self: LifecycleHost): void {
   // buffer-identity guard in updateGhost's resolve handler will then
   // silently drop any result that arrives after this point.
   self.ghostEngine?.dispose();
+}
+
+/**
+ * Stage 3 (#540 — single end-of-turn flush): commit the ENTIRE retained band
+ * (painted rows + pending rows) to native scrollback as one contiguous write
+ * at turn finalization, while geometry is stable (overlay cleared, spinner off).
+ *
+ * Unlike {@link flushPendingCommittedBand} (which only archives the in-model
+ * prefix that was never painted), this function also handles the on-screen
+ * PAINTED suffix — erasing it from the viewport (CUP+EL, no scroll, C1-safe)
+ * before archiving the whole band, so the terminal's scrollback holds one
+ * clean, complete, contiguous copy of all committed content from this turn.
+ *
+ * After the flush, `clearCommittedBand()` zeros the band state, making
+ * `flushPendingCommittedBand` in `disarm()` a guaranteed no-op.
+ *
+ * Ordering: MUST be called before `disarm()` — disarm's `logUpdate.clear()`
+ * will erase the live frame; endTurnFlush must run before that so the painted
+ * band rows are explicitly archived (not silently erased) and `clearCommittedBand`
+ * zeros the state before `flushPendingCommittedBand` checks it.
+ *
+ * C1 (scrollback is append-only) contract:
+ *   • Painted rows are in the VIEWPORT, not scrollback — erasing them (CUP+EL)
+ *     does NOT touch C1; the archive write is the first and only scrollback
+ *     operation for these rows.
+ *   • Pending rows were never painted — archive is their first and only write.
+ *   • The archive uses `buildScrollbackArchiveEscape` (paint-at-floor + scroll),
+ *     which is C1-safe by construction (same as Phase-1 and frame-preserve paths).
+ *
+ * No-op when: not armed, no logUpdate, or band is empty. Best-effort on
+ * stdout write failure (terminal may have closed during teardown).
+ */
+export function endTurnFlush(self: LifecycleHost): void {
+  if (!self.armed || !self.logUpdate || self.committedBand.length === 0) return;
+
+  const rows = Math.max(1, self.stdout.rows ?? 24);
+  const cols = Math.max(1, self.stdout.columns ?? 80);
+  const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
+  const bandLen = self.committedBand.length;
+
+  // Step 1: Erase the on-screen painted suffix (CUP+EL, NO \n — C1-safe).
+  // The painted suffix occupies rows [paintedTop, committedBandBottomRow].
+  // Only fired when there IS a painted suffix (paintedCount > 0 and a known
+  // screen position). Without this, the archive below would write the same
+  // content to scrollback while it is also on-screen, violating the
+  // single-copy invariant on the NEXT turn's eviction pass — the on-screen
+  // copy would scroll into scrollback AGAIN when the next commit's
+  // preserveRowsBeforeFrameRender runs.
+  const paintedCount = self.committedBandPaintedRows;
+  if (paintedCount > 0 && self.committedBandBottomRow > 0) {
+    const paintedTop = self.committedBandBottomRow - paintedCount + 1;
+    let eraseOut = '\x1b[?25l';
+    for (let r = Math.max(1, paintedTop); r <= self.committedBandBottomRow; r++) {
+      eraseOut += eraseAndPaintRow(r); // CUP+EL, no line content, no \n
+    }
+    try {
+      self.stdout.write(eraseOut);
+    } catch {
+      /* terminal closed mid-erase — carry on to archive so nothing is lost */
+    }
+  }
+
+  // Step 2: Archive the FULL band (all rows, painted + pending) to scrollback
+  // as soft-wrappable logical lines via the shared archive path. `scrollbackFlushLines`
+  // with count === bandLen emits the whole band; `buildScrollbackArchiveEscape`
+  // paints it top-aligned at anchorFloor and scrolls it into scrollback.
+  const allLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, bandLen);
+  const archiveEscape = buildScrollbackArchiveEscape(allLines, anchorFloor, rows, cols);
+  if (archiveEscape.length > 0) {
+    const write = (): void => { self.stdout.write(archiveEscape); };
+    try {
+      if (self.scrollRegion) {
+        self.scrollRegion.withFullScrollRegion(write);
+      } else {
+        write();
+      }
+    } catch {
+      /* stdout closed mid-archive — disarm will clean up from here */
+    }
+  }
+
+  // Step 3: Zero the band state. flushPendingCommittedBand in disarm() is now
+  // a no-op (pendingCount = 0 - 0 = 0); repositionCommittedBand will not fire
+  // (band empty); evict-on-growth in preserveRowsBeforeFrameRender will not
+  // treat viewport rows as band content.
+  self.clearCommittedBand();
 }
 
 /**

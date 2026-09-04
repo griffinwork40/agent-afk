@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.178.5] - 2026-09-03
+
+### Fixed
+- suffix viewport for long input in mid-turn prompt (#1477) (#1478) (9185b471)
+
+## [5.178.4] - 2026-09-03
+
+### Fixed
+- guard computeIdempotencyKey throw in pre-hook (#1475) (#1476) (7534f3ea)
+
+## [5.178.3] - 2026-09-03
+
+### Fixed
+- add breakLongWords to todo-panel wrapToWidth (#1455) (#1466) (3c153306)
+
 ## [5.178.2] - 2026-09-03
 
 ### Fixed

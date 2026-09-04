@@ -797,6 +797,26 @@ export class TerminalCompositor {
   }
 
   /**
+   * Stage 3 (#540 — single end-of-turn flush): commit the entire retained
+   * committed band to native scrollback as one contiguous write at turn
+   * finalization (geometry stable: overlay cleared, spinner off).
+   *
+   * Call this from the stream-renderer dispose() pipeline BEFORE {@link disarm},
+   * after the overlay has been cleared and all commits have landed. This makes
+   * `flushPendingCommittedBand` in `disarm()` a guaranteed no-op and ensures
+   * all committed content reaches scrollback as a single contiguous block rather
+   * than through the ad-hoc per-commit eviction paths. See
+   * terminal-compositor.lifecycle.ts → {@link Lifecycle.endTurnFlush} for the
+   * full contract and C1 (scrollback-is-append-only) safety proof.
+   *
+   * No-op when not armed, no logUpdate, or band is empty — safe to call
+   * unconditionally in the dispose pipeline.
+   */
+  endTurn(): void {
+    Lifecycle.endTurnFlush(this);
+  }
+
+  /**
    * Release raw mode + keypress listener + resize subscribers, finalize
    * the frame, and reset state. Body extracted to
    * terminal-compositor.lifecycle.ts — see {@link Lifecycle.disarm} for

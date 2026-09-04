@@ -150,6 +150,48 @@ export function truncateDisplayWidth(
   return out + ellipsis + (openHyperlink ? OSC8_CLOSE : '') + (sawAnsi ? '\x1b[0m' : '');
 }
 
+/**
+ * Return the rightmost `maxWidth` display-columns of `text`.
+ *
+ * Used for scrolling input prompts: when the user's typed text is wider than
+ * the available terminal width, we show a suffix slice so the cursor is always
+ * visible at the end of the line. Unlike `truncateDisplayWidth` (left-biased),
+ * this takes the TAIL of the string and optionally prepends an ellipsis to
+ * signal that content was hidden on the left.
+ *
+ * `text` is expected to be plain text (no ANSI escape sequences).
+ * Wide graphemes that straddle the boundary are excluded from the suffix so
+ * the rendered width never exceeds `maxWidth`.
+ */
+export function suffixDisplayWidth(
+  text: string,
+  maxWidth: number,
+  ellipsis: string = '…',
+): string {
+  if (maxWidth <= 0) return '';
+  if (displayWidth(text) <= maxWidth) return text;
+
+  const ellipsisWidth = displayWidth(ellipsis);
+  // When the ellipsis itself is wider than maxWidth, omit it entirely rather
+  // than emitting a marker that violates the constraint.
+  if (ellipsisWidth > maxWidth) return '';
+  const budget = Math.max(0, maxWidth - ellipsisWidth);
+
+  // Collect graphemes with their cumulative widths from the right.
+  const graphemes = splitGraphemes(text);
+  let accumulated = 0;
+  let sliceStart = graphemes.length; // index into graphemes[]
+
+  for (let i = graphemes.length - 1; i >= 0; i--) {
+    const gw = displayWidth(graphemes[i]!);
+    if (accumulated + gw > budget) break;
+    accumulated += gw;
+    sliceStart = i;
+  }
+
+  return ellipsis + graphemes.slice(sliceStart).join('');
+}
+
 function clampIndex(index: number, length: number): number {
   if (!Number.isFinite(index)) return 0;
   return Math.max(0, Math.min(length, Math.trunc(index)));

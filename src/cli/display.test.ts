@@ -6,6 +6,7 @@ import {
   padDisplayRight,
   previousGraphemeIndex,
   stripAnsi,
+  suffixDisplayWidth,
   truncateDisplayWidth,
 } from './display.js';
 
@@ -144,6 +145,75 @@ describe('display utilities', () => {
 
     it('preserves printable text unchanged', () => {
       expect(stripAnsi('plain text 123 — émoji 🙂')).toBe('plain text 123 — émoji 🙂');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // suffixDisplayWidth — scroll viewport for input prompts
+  // ---------------------------------------------------------------------------
+
+  describe('suffixDisplayWidth', () => {
+    it('returns the text unchanged when it fits within maxWidth', () => {
+      expect(suffixDisplayWidth('hello', 10)).toBe('hello');
+    });
+
+    it('returns the text unchanged when display width equals maxWidth exactly', () => {
+      expect(suffixDisplayWidth('hello', 5)).toBe('hello');
+    });
+
+    it('truncates from the LEFT and prepends ellipsis for long input', () => {
+      // "abcdefghij" is 10 chars wide; maxWidth=6 → budget=5 → tail "fghij" + "…" prefix
+      const result = suffixDisplayWidth('abcdefghij', 6);
+      expect(result).toBe('…fghij');
+      expect(result.length).toBe(6); // "…" (1) + 5 chars = 6
+    });
+
+    it('total display width never exceeds maxWidth', () => {
+      const text = 'x'.repeat(100);
+      const result = suffixDisplayWidth(text, 20);
+      // "…" is 1 column wide, so content = 19 chars
+      expect(result).toBe('…' + 'x'.repeat(19));
+    });
+
+    it('returns empty string when maxWidth is 0', () => {
+      expect(suffixDisplayWidth('hello', 0)).toBe('');
+    });
+
+    it('shows the rightmost characters (cursor-visible tail)', () => {
+      // Simulate typing: "abcde" with width=4 → user sees "…cde"
+      const result = suffixDisplayWidth('abcde', 4);
+      expect(result.endsWith('cde')).toBe(true);
+      expect(result.startsWith('…')).toBe(true);
+    });
+
+    it('handles multibyte emoji correctly — wide chars excluded when they straddle boundary', () => {
+      // "abc🙂" — emoji is 2 columns wide; maxWidth=5 → budget=4
+      // graphemes: a(1), b(1), c(1), 🙂(2) — total=5 > 4
+      // From right: 🙂(2) → accumulated=2; c(1) → 3; b(1) → 4; stop at a (would be 5 > 4)
+      // sliceStart = index of 'b'? Let's verify empirically:
+      const result = suffixDisplayWidth('abc🙂', 5);
+      // result must be ≤ 5 display columns and end with "🙂"
+      expect(result.endsWith('🙂')).toBe(true);
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('supports a custom ellipsis character', () => {
+      const result = suffixDisplayWidth('abcdefgh', 5, '<');
+      expect(result.startsWith('<')).toBe(true);
+      // "<" is 1 col wide; budget=4 → tail "efgh"
+      expect(result).toBe('<efgh');
+    });
+
+    it('returns just the ellipsis when maxWidth equals ellipsis width', () => {
+      // maxWidth=1, ellipsis="…" (1 col) → budget=0 → no tail chars
+      const result = suffixDisplayWidth('hello world', 1);
+      expect(result).toBe('…');
+    });
+
+    it('returns empty string when wide custom ellipsis exceeds maxWidth', () => {
+      // 🙂 is 2 display columns wide; maxWidth=1 → ellipsis does not fit → ''
+      const result = suffixDisplayWidth('abc', 1, '🙂');
+      expect(result).toBe('');
     });
   });
 });
