@@ -21,6 +21,7 @@ import { resolveChildManagerReadRoots, type ReadScopeInputs } from '../subagent-
 import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
 import { resolveChildModel } from '../subagent/resolve-child-model.js';
 import { providerForModel } from '../providers/index.js';
+import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
@@ -48,39 +49,24 @@ export interface ComposeExecutorContext {
   defaultSubagentModel: AgentModelInput;
   apiKey?: string;
   // Contract:
-  // Per-node credential resolver for the compose path. When provided, the
-  // executor calls this with each DAG node's effective model string to resolve
-  // the appropriate API key at fork time — rather than forwarding the parent's
-  // pre-captured `ctx.apiKey` to every node regardless of their model.
-  //
-  // This fixes the same "Anthropic child starves when parent is OpenAI-routed"
-  // bug that #640 addressed for the `agent`/`skill` fork-paths: `getApiKey()`
-  // captures ONE credential keyed to the *main* model at bootstrap. When the
-  // main model is OpenAI-routed, that credential is an OpenAI key (or
-  // undefined), but compose nodes that default to `'sonnet'` (Anthropic-routed)
-  // need an Anthropic keychain/env credential instead.
+  // Per-node credential resolver for the compose path. Called with each DAG
+  // node's effective model string at fork time to resolve the appropriate API
+  // key — matching the agent tool's per-fork resolution pattern (child-config.ts:
+  // 302-308). `ctx.apiKey` serves as a fallback when fresh resolution returns
+  // empty (expired keychain token / transient failure), not the primary source.
   //
   // The resolver must implement the cross-provider credential anti-leak
   // invariant: Anthropic credentials must never reach OpenAI-routed nodes
   // (commits 263e25e2 / d17fb890 / dc58d5e0). The canonical implementation is
-  // `getApiKeyForModel` from `src/cli/shared-helpers.ts`, which gates on
-  // `providerForModel(model)` and routes to the correct credential chain. The
-  // existing `nodeIsOpenAI ? undefined : resolvedKey` guard below is ALSO
-  // preserved as a defense-in-depth layer.
+  // `getApiKeyForModel` from `src/cli/shared-helpers.ts`. The `nodeIsOpenAI ?
+  // undefined` guard is preserved as a defense-in-depth layer.
   //
-  // Explicit session credentials must remain sticky for nodes that route to
-  // the same provider as the parent session. Some surfaces (Threads) pass a
-  // session-scoped `ctx.apiKey` that may differ from env/keychain ambient
-  // credentials; replacing that token with the process-level resolver result
-  // would silently run same-provider compose nodes under the wrong account.
-  // Therefore the executor only consults this resolver for cross-provider
-  // children or keyless parents. Same-provider children keep `ctx.apiKey`.
-  //
-  // Optional for backward compat: when absent, the executor falls back to
-  // `ctx.apiKey` (the pre-fix behavior). The keyless hard-fail precondition
-  // is relaxed when a resolver is present, allowing keyless-parent setups
-  // (e.g. a local-shim OpenAI parent) to serve Anthropic-routed nodes via
-  // the resolver without holding a parent-level apiKey.
+  // Optional: when absent, the executor calls `resolveCredentialForModel`
+  // (from `src/agent/auth/credential-resolver.ts`) directly — a live env read.
+  // The keyless hard-fail precondition is relaxed when a resolver is present,
+  // allowing keyless-parent setups (e.g. a local-shim OpenAI parent) to serve
+  // Anthropic-routed nodes via the resolver without holding a parent-level
+  // apiKey.
   resolveApiKeyForModel?: (model: string) => string | undefined;
   /**
    * Local-server base URL forwarded to every compose subagent so nodes
@@ -756,24 +742,15 @@ export class ComposeExecutor {
         const nodeModel = resolveChildModel({ callSiteModel: n.model,
           defaultSubagentModel: this.ctx.defaultSubagentModel, defaultModel: this.ctx.defaultModel });
         const nodeProvider = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined);
-        const parentProvider = providerForModel(
-          typeof this.ctx.defaultModel === 'string' ? this.ctx.defaultModel : undefined,
-        );
         const nodeIsOpenAI = nodeProvider === 'openai-compatible';
-        const preserveParentApiKey = this.ctx.apiKey !== undefined && nodeProvider === parentProvider;
-        // preserveParentApiKey is dead for OpenAI-routed nodes — the `nodeIsOpenAI ? undefined`
-        // branch short-circuits before it is ever read.
-        // Resolve per-node credential by the node's own model when a resolver
-        // is injected (fixes: Anthropic node starves under OpenAI-keyed parent).
-        // Same-provider nodes keep an explicit parent/session apiKey so
-        // session-scoped credentials are not replaced by ambient env/keychain
-        // credentials from the resolver. OpenAI-routed nodes deliberately
-        // receive no node-level apiKey so the openai-compatible provider reads
-        // OPENAI_API_KEY from env directly (cross-provider credential anti-leak
-        // invariant, defense-in-depth).
+        // Invariant: resolve credentials fresh per-node at fork time, matching
+        // the agent tool path (child-config.ts:302-308). ctx.apiKey is a fallback
+        // only when fresh resolution returns empty (expired keychain token).
+        // OpenAI-routed nodes receive undefined (cross-provider anti-leak).
+        const freshKey = nodeIsOpenAI ? undefined
+          : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : resolveCredentialForModel(nodeModel));
         const resolvedNodeApiKey = nodeIsOpenAI ? undefined
-          : preserveParentApiKey ? this.ctx.apiKey
-          : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : this.ctx.apiKey);
+          : (freshKey && freshKey.length > 0 ? freshKey : this.ctx.apiKey);
         return {
           id: n.id,
           agentType: `${n.id} [${i + 1}/${totalNodes}]`,

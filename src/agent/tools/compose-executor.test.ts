@@ -59,6 +59,16 @@ vi.mock('../routing-telemetry.js', () => ({
   appendRoutingDecision: vi.fn(async () => {}),
 }));
 
+// Mock the direct credential resolver so tests that omit resolveApiKeyForModel
+// (the no-resolver fallback path) hit a controlled value instead of reading the
+// real env/keychain.
+const mockResolveCredentialForModel = vi.fn(
+  () => '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' as string | undefined,
+);
+vi.mock('../auth/credential-resolver.js', () => ({
+  resolveCredentialForModel: (...args: unknown[]) => mockResolveCredentialForModel(...args),
+}));
+
 import { ComposeExecutor, cleanupComposeSpills, type ComposeExecutorContext } from './compose-executor.js';
 
 function makeCall(input: unknown): ToolCall {
@@ -1424,12 +1434,12 @@ describe('ComposeExecutor', () => {
       expect(dagOpts.nodes[0].apiKey).toBe('resolved-for-opus');
     });
 
-    it('preserves explicit same-provider ctx.apiKey over ambient resolver credentials', async () => {
-      // Threads and other per-session surfaces may pass an explicit Anthropic
-      // session token in ctx.apiKey while the process env/keychain has a
-      // different ambient Anthropic credential. Same-provider compose nodes
-      // must keep the session token rather than silently switching accounts.
-      const resolveApiKeyForModel = vi.fn(() => 'ambient-anthropic-token');
+    it('resolves fresh credentials per-node at fork time even for same-provider nodes', async () => {
+      // After the mid-session credential fix, same-provider nodes call the
+      // resolver fresh at fork time — matching the agent tool path — so
+      // switching accounts (e.g. after billing exhaustion) takes effect.
+      // ctx.apiKey is a fallback only when fresh resolution returns empty.
+      const resolveApiKeyForModel = vi.fn(() => 'fresh-anthropic-token');
 
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext({
@@ -1442,19 +1452,17 @@ describe('ComposeExecutor', () => {
         nodes: [{ id: 'a', prompt: 'task a' }],
       }));
 
-      expect(resolveApiKeyForModel).not.toHaveBeenCalled();
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
       const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
-      expect(dagOpts.nodes[0].apiKey).toBe('session-anthropic-token');
+      expect(dagOpts.nodes[0].apiKey).toBe('fresh-anthropic-token');
     });
 
-    it('falls back to ctx.apiKey when no resolver is injected and providers differ (cross-provider no-resolver else arm, backward compat only — production always injects a resolver)', async () => {
-      // Exercises the genuine else arm: cross-provider (OpenAI parent, Anthropic
-      // node) with no resolver. nodeIsOpenAI=false, preserveParentApiKey=false
-      // (different providers) → falls to `else` → no resolver → ctx.apiKey.
-      // Note: without a resolver, production would forward the wrong credential
-      // (OpenAI key to an Anthropic node). This path exists for backward compat
-      // only; callers should always inject resolveApiKeyForModel.
+    it('calls resolveCredentialForModel directly when no resolver is injected (live env read)', async () => {
+      // When no resolveApiKeyForModel is injected, the executor calls
+      // resolveCredentialForModel(nodeModel) directly — a live env/keychain
+      // read — rather than forwarding the stale ctx.apiKey snapshot.
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      mockResolveCredentialForModel.mockReturnValueOnce('fresh-env-credential');
       const executor = new ComposeExecutor(makeContext({
         defaultModel: 'gpt-4o',
         apiKey: 'legacy-key',
@@ -1465,9 +1473,10 @@ describe('ComposeExecutor', () => {
         nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }],
       }));
 
+      expect(mockResolveCredentialForModel).toHaveBeenCalledWith('sonnet');
       const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
-      // Node receives the ctx.apiKey as its per-node apiKey (backward compat path).
-      expect(dagOpts.nodes[0].apiKey).toBe('legacy-key');
+      // Node receives the freshly-resolved credential, not the stale ctx.apiKey.
+      expect(dagOpts.nodes[0].apiKey).toBe('fresh-env-credential');
     });
 
     it('does not inject the resolver value into an OpenAI-routed node config (cross-provider anti-leak guard)', async () => {
@@ -1520,12 +1529,11 @@ describe('ComposeExecutor', () => {
       expect(dagOpts.nodes[0].apiKey).toBe('anthropic-key-from-env');
     });
 
-    it('injects no node apiKey when the resolver returns undefined for a cross-provider node (forkSubagent applies the parentApiKey fallback)', async () => {
-      // OpenAI-routed parent, Anthropic node, but the resolver finds NO Anthropic
-      // credential. The executor forwards no per-node apiKey; SubagentManager.forkSubagent
-      // then applies `config.apiKey || parentApiKey` — the same fallback the agent/skill
-      // paths use (verified parity; exercised in subagent.test.ts, out of scope here).
-      const resolveApiKeyForModel = vi.fn(() => undefined);
+    it('falls back to ctx.apiKey when the resolver returns undefined (expired keychain / empty env)', async () => {
+      // When the injected resolver returns undefined (expired keychain, empty
+      // env), the executor falls back to ctx.apiKey as a safety net — matching
+      // the applyParentCredentialFallback pattern in child-credential.ts.
+      const resolveApiKeyForModel = vi.fn(() => undefined as string | undefined);
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext({
         defaultModel: 'gpt-4o',
@@ -1535,7 +1543,35 @@ describe('ComposeExecutor', () => {
       await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }] }));
       expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
       const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
-      expect(dagOpts.nodes[0].apiKey).toBeUndefined();
+      // Falls back to ctx.apiKey when fresh resolution is empty.
+      expect(dagOpts.nodes[0].apiKey).toBe('openai-key');
+    });
+
+    it('picks up a new credential after mid-session account switch', async () => {
+      // Regression: switching ANTHROPIC_API_KEY mid-session (e.g. after billing
+      // exhaustion) must propagate to compose nodes. The resolver reads env fresh
+      // at fork time, so a new key takes effect immediately.
+      const resolveApiKeyForModel = vi.fn()
+        .mockReturnValueOnce('exhausted-key')
+        .mockReturnValueOnce('new-account-key');
+
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'sonnet',
+        apiKey: 'exhausted-key',   // session started with the old key
+        resolveApiKeyForModel,
+      }));
+
+      // First compose call — uses the old (exhausted) key from resolver.
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+      const dag1 = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dag1.nodes[0].apiKey).toBe('exhausted-key');
+
+      // Second compose call after account switch — resolver returns new key.
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+      const dag2 = mockRunSubagentDAG.mock.calls[1][0];
+      expect(dag2.nodes[0].apiKey).toBe('new-account-key');
     });
   });
 
