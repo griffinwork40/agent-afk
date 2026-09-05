@@ -82,7 +82,7 @@ export function printTurnFooter(
     includeZeroCost: meta.totalCostUsd !== undefined,
   }));
   if (parts.length > 0) {
-    write(palette.dim('  ◦ ' + parts.join('  ·  ')));
+    write(palette.dim('   ◦ ' + parts.join('  ·  ')));
   }
   const contextPct = contextRatio(stats);
   const contextLimit = contextLimitFor(stats.model);

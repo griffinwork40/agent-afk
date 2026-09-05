@@ -238,7 +238,7 @@ export function formatToolResultLine(
   const outcome = formatOutcome(chunk, homeDir, 80, toolName);
 
   if (toolPrefix) {
-    return '  ' + toolPrefix + '\n  ⎿  ' + outcome;
+    return '   ' + toolPrefix + '\n   ⎿  ' + outcome;
   }
-  return '  ⎿  ' + outcome;
+  return '   ⎿  ' + outcome;
 }

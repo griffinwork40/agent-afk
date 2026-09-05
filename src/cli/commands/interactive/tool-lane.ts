@@ -477,7 +477,7 @@ export class ToolLane {
     // intentionally left at the 2-space lead — only the live overlay renders
     // flat roots as separate rows that can collide with a sibling spine.
     const hasNestingRoot = visibleRoots.some((e) => NESTING_TOOLS.has(e.toolName));
-    const flatRootLead = hasNestingRoot ? palette.dim(g.turnRoot) : '  ';
+    const flatRootLead = hasNestingRoot ? palette.dim(g.turnRoot) : '   ';
 
     for (const entry of visibleRoots) {
       const children = childMap.get(entry.toolUseId);
@@ -658,7 +658,7 @@ export class ToolLane {
     }
 
     if (hiddenDoneCount > 0) {
-      lines.push(clamp('  ' + palette.dim(`… +${hiddenDoneCount} done`)));
+      lines.push(clamp('   ' + palette.dim(`… +${hiddenDoneCount} done`)));
     }
 
     return lines.join('\n');

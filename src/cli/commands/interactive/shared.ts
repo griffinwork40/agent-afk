@@ -152,12 +152,12 @@ export function printResumeBanner(stats: SessionStats, writer: CompletionWriter)
   const assistantSnippet = truncate(firstSentence(flatten(last.assistant)), 120);
 
   if (userSnippet.length > 0) {
-    writer.fn(palette.dim(`  Last: ${userSnippet}`));
+    writer.fn(palette.dim(`   Last: ${userSnippet}`));
   }
   if (assistantSnippet.length > 0) {
-    writer.fn(palette.dim(`  ↳ ${assistantSnippet}`));
+    writer.fn(palette.dim(`   ↳ ${assistantSnippet}`));
   }
-  writer.fn(palette.dim('  ↪ /history for full review'));
+  writer.fn(palette.dim('   ↪ /history for full review'));
 }
 
 /**

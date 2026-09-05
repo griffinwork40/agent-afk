@@ -1,14 +1,14 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 1 — single completed tool entry 1`] = `"  ● Read("README.md") — ✓ 42 lines"`;
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 1 — single completed tool entry 1`] = `"   ● Read("README.md") — ✓ 42 lines"`;
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 2 — multi-tool entry (3 tools, all completed) 1`] = `
-"  ● Read("a.ts") — ✓ 10 lines
-  ▸ Bash("ls -la") — ✓ 5 lines
-  ● Glob("**/*.ts") — ✓ 23 paths"
+"   ● Read("a.ts") — ✓ 10 lines
+   ▸ Bash("ls -la") — ✓ 5 lines
+   ● Glob("**/*.ts") — ✓ 23 paths"
 `;
 
-exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 3 — tool entry with error result 1`] = `"  ▸ Bash("npm test") — ✗ Error: 3 tests failed"`;
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 3 — tool entry with error result 1`] = `"   ▸ Bash("npm test") — ✗ Error: 3 tests failed"`;
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 4 — subagent Agent entry with children, completed 1`] = `
 "◉ → Agent(snap-researcher) [worker]

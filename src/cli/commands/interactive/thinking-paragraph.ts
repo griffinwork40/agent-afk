@@ -32,7 +32,7 @@ import { palette } from '../../palette.js';
 import { capToMeasure } from '../../render/measure.js';
 
 const HEADER = '◆ thinking';
-const INDENT = '  ';
+const INDENT = '   ';
 const DEFAULT_MAX_BODY_LINES = 5;
 /**
  * Floor on body width so a 20-col terminal still produces wrapped prose
