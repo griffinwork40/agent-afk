@@ -27,6 +27,7 @@ export interface TurnRequestInput {
   subagentId?: string;
   throttleQueue?: RunTurnInput['throttleQueue'];
   onUsageProgress?: RunTurnInput['onUsageProgress'];
+  beforeNextRound?: RunTurnInput['beforeNextRound'];
 }
 
 /** Snapshot eligibility and construct the immutable input reused by all rounds/retries. */
@@ -73,6 +74,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),
       ...(input.onUsageProgress ? { onUsageProgress: input.onUsageProgress } : {}),
+      ...(input.beforeNextRound ? { beforeNextRound: input.beforeNextRound } : {}),
     },
   };
 }

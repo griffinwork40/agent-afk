@@ -91,6 +91,10 @@ export async function streamToFinalMessage<T>(
     },
   );
 
+  // Wire the inter-round steering callback into the provider session so that
+  // _steeringMessages pushed via steer() are delivered at tool-call boundaries.
+  // setBeforeNextRound is optional (only present on providers that support it).
+  handle.session.setBeforeNextRound?.(handle._beforeNextRound);
   try {
     for await (const event of handle.session.sendMessageStream(prompt)) {
       if (activeSink) {
@@ -168,6 +172,9 @@ export async function streamToFinalMessage<T>(
       }
     }
   } finally {
+    // Clear the steering callback from the provider session so it cannot fire
+    // after the stream ends (e.g. if the session is reused or inspected).
+    handle.session.setBeforeNextRound?.(undefined);
     // Idempotent: releases the idle timer on EVERY exit path — normal
     // completion, an `error`/`done` break, or a thrown/aborted iterator.
     // Disposing before the post-loop return/throw logic guarantees a

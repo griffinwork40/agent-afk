@@ -10,7 +10,7 @@
 
 import type { AnthropicToolDef } from './types.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
-import { cancelBackgroundJobTool, patchApplyTool } from './schemas.orchestration.js';
+import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool } from './schemas.orchestration.js';
 import { waitForTool } from './schemas.wait-for.js';
 export { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
@@ -1447,7 +1447,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   createScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,
-  cancelScheduleTool, cancelBackgroundJobTool,
+  cancelScheduleTool, cancelBackgroundJobTool, sendMessageToAgentTool,
   readWitnessTool, searchWitnessTool,
   worktreeTool, terminalFontSizeTool,
   configGetTool, configSetTool,

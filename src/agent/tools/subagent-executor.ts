@@ -30,6 +30,7 @@ import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './sub
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
+import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { QueuedNoteClaim } from './subagent/queued-note.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
@@ -460,6 +461,7 @@ export class SubagentExecutor implements SubagentControl {
   supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
   hasPromotableForeground(): boolean { return this.supportsBackgroundJobs() && this.promotionTriggers.size > 0; }
   async cancelBackgroundJob(call: ToolCall): Promise<ToolResult> { return executeBackgroundCancel(this.ctx.backgroundRegistry, call); }
+  async sendMessageToAgent(call: ToolCall): Promise<ToolResult> { return executeSendMessage(this.ctx.backgroundRegistry, call); }
 
   hasActiveForeground(): boolean {
     return this.activeForegroundHandles.size > 0;

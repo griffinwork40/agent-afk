@@ -95,6 +95,13 @@ export interface SubagentHandle<T = unknown> {
    * new turn with this message after its current turn resolves.
    */
   sendMessage(text: string): void;
+  /**
+   * Inject a steering message at the child agent's next tool-call boundary.
+   * The message is buffered in a ring buffer (capacity 3) and delivered by
+   * the provider loop's inter-round hook. Silently dropped when the subagent
+   * has reached a terminal state or the controller is aborted.
+   */
+  steer(text: string): void;
 }
 
 /**
@@ -491,6 +498,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       source: 'explicit',
     });
 
+    this._steeringMessages.length = 0;
     try {
       this.abortGraph.abort(this.id, 'cancelled');
     } catch {
@@ -526,6 +534,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     } catch {
       // ignore interrupt errors
     }
+    this._steeringMessages.length = 0;
     try {
       await this.session.close();
     } finally {
@@ -562,5 +571,32 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       return;
     }
     this._pendingUserMessages.push(text);
+  }
+
+  /** Ring buffer of pending steering messages (capacity: 3). Consumed by _beforeNextRound. */
+  readonly _steeringMessages: string[] = [];
+
+  steer(text: string): void {
+    if (!text.trim()) return;
+    if (
+      (this._currentStatus === 'succeeded' ||
+        this._currentStatus === 'failed' ||
+        this._currentStatus === 'cancelled') &&
+      !this._drainingMessages
+    ) {
+      return;
+    }
+    if (this._controller.signal.aborted) return;
+    if (this._steeringMessages.length >= 3) this._steeringMessages.shift();
+    this._steeringMessages.push(text);
+  }
+
+  /**
+   * Stable closure shifted by the provider loop's inter-round hook.
+   * Returns the oldest pending steering message and removes it, or undefined.
+   * @internal
+   */
+  get _beforeNextRound(): () => string | undefined {
+    return () => this._steeringMessages.shift();
   }
 }

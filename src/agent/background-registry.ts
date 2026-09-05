@@ -513,6 +513,14 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     return this.jobs.get(jobId)?.transcriptTail;
   }
 
+  /**
+   * Return the live SubagentHandle for a job, or undefined if unknown.
+   * Used by the send_message_to_agent tool executor to call handle.steer().
+   */
+  getHandle(jobId: string): SubagentHandle | undefined {
+    return this.jobs.get(jobId)?.handle;
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------

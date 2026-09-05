@@ -56,6 +56,8 @@ export interface TurnDriverContext {
   readonly hookRegistry: HookRegistry | undefined;
   readonly throttleQueue: import('./throttle-queue.js').ThrottleQueue | undefined;
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
+  /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
+  readonly beforeNextRound: (() => string | undefined) | undefined;
   /** Build the per-turn `system` payload (re-read each turn for date rollover). */
   composeSystem(): ContentBlockParam[] | null;
   /** Synthetic terminal for an interrupted turn that yielded none of its own. */
@@ -194,6 +196,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
         ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
         ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
+        ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),
         onUsageProgress: (usage) => { ctx.state.lastUsage = usage; },
       });
 

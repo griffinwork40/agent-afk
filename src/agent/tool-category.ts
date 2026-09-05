@@ -107,7 +107,7 @@ const SHELL_TOOLS = new Set([
 ]);
 export const SUBAGENT_TOOLS = new Set([
   'Agent', 'Task',
-  'agent', 'cancel_background_job',
+  'agent', 'cancel_background_job', 'send_message_to_agent',
 ]);
 export const SKILL_TOOLS = new Set([
   'Skill',

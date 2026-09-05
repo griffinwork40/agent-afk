@@ -145,6 +145,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
   /** Shared live-throttle mailbox; wired to the client fetch callback. See options doc. */
   private readonly throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
   private readonly fastModeController?: import('../../fast-mode.js').FastModeController;
+  /** Inter-round steering callback; set via setBeforeNextRound() from the subagent layer. */
+  private beforeNextRound?: () => string | undefined;
 
   constructor(opts: AnthropicDirectQueryOptions) {
     this.initSessionId = opts.sessionId ?? randomUUID();
@@ -168,6 +170,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.hookRegistry !== undefined) this.hookRegistry = opts.hookRegistry;
     if (opts.throttleQueue !== undefined) this.throttleQueue = opts.throttleQueue;
     if (opts.fastModeController !== undefined) this.fastModeController = opts.fastModeController;
+    if (opts.beforeNextRound !== undefined) this.beforeNextRound = opts.beforeNextRound;
     this.retry = new RetryLayer({
       client: opts.client,
       authMode: opts.authMode,
@@ -220,10 +223,16 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get hookRegistry() { return query.hookRegistry; },
       get throttleQueue() { return query.throttleQueue; },
       get fastModeController() { return query.fastModeController; },
+      get beforeNextRound() { return query.beforeNextRound; },
       composeSystem: () => query.composeSystem(),
       makeInterruptedTurnEvent: () => query.makeInterruptedTurnEvent(),
       compact: () => query.compact(),
     };
+  }
+
+  /** Wire a steering callback for inter-round message injection. Called from the subagent layer. */
+  setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
+    this.beforeNextRound = cb;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {

@@ -1355,3 +1355,41 @@ describe('BackgroundAgentRegistry', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// getHandle() — registry accessor for the live SubagentHandle
+// ---------------------------------------------------------------------------
+
+describe('BackgroundAgentRegistry.getHandle()', () => {
+  let registry: BackgroundAgentRegistry;
+  let handle: StubHandle;
+
+  beforeEach(() => {
+    registry = new BackgroundAgentRegistry({});
+    handle = createStubHandle('gh-sub-1');
+  });
+
+  it('returns the live handle for a running job', () => {
+    const job = registry.register({ handle, prompt: 'work', model: 'sonnet', provenance: 'model' });
+    const returned = registry.getHandle(job.jobId);
+    expect(returned).toBe(handle);
+  });
+
+  it('returns undefined for an unknown jobId', () => {
+    expect(registry.getHandle('bg-nonexistent')).toBeUndefined();
+  });
+
+  it('returns the handle for a terminal job still in the registry map', () => {
+    const job = registry.register({ handle, prompt: 'work', model: 'sonnet', provenance: 'model' });
+    // Fire terminal event to move status to succeeded.
+    const successResult: SubagentResult = {
+      id: 'gh-sub-1',
+      status: 'succeeded',
+      message: { role: 'assistant', content: 'done', timestamp: new Date() },
+      trace: { toolCalls: [], toolResults: [], turnCount: 0, thinkingPresent: false },
+    };
+    handle.__fireTerminal(successResult);
+    // Handle stays in the map until TTL eviction; getHandle must still return it.
+    expect(registry.getHandle(job.jobId)).toBe(handle);
+  });
+});
