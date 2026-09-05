@@ -69,8 +69,8 @@ describe('formatThinkingParagraph', () => {
     const plain = stripAnsi(out);
     const lines = plain.split('\n');
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe('  ◆ thinking');
-    expect(lines[1]).toBe('  Let me think about this briefly.');
+    expect(lines[0]).toBe('   ◆ thinking');
+    expect(lines[1]).toBe('   Let me think about this briefly.');
     expect(plain).not.toContain('chars earlier');
   });
 
@@ -82,13 +82,13 @@ describe('formatThinkingParagraph', () => {
     const lines = plain.split('\n');
     // header + 5 body + footer = 7 lines exactly.
     expect(lines).toHaveLength(7);
-    expect(lines[0]).toBe('  ◆ thinking');
-    expect(lines[6]).toMatch(/^ {2}⋯ \+\d+ chars earlier$/);
+    expect(lines[0]).toBe('   ◆ thinking');
+    expect(lines[6]).toMatch(/^ {3}⋯ \+\d+ chars earlier$/);
     // First body line is mid-stream — last 5 wrapped lines kept.
-    expect(lines[1]?.startsWith('  ')).toBe(true);
+    expect(lines[1]?.startsWith('   ')).toBe(true);
   });
 
-  it('(d) wraps body to (cols - INDENT) and indents every line by 2 cols', () => {
+  it('(d) wraps body to (cols - INDENT) and indents every line by 3 cols', () => {
     // Build a buffer long enough to wrap at least twice at 30-col width.
     const buffer = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
     const out = formatThinkingParagraph(buffer, { cols: 30, maxLines: 10 });
@@ -96,9 +96,9 @@ describe('formatThinkingParagraph', () => {
     const lines = plain.split('\n');
     // At least header + 2 body lines.
     expect(lines.length).toBeGreaterThanOrEqual(3);
-    // Every line begins with the 2-col indent.
-    for (const line of lines) expect(line.startsWith('  ')).toBe(true);
-    // Body lines (skip the header) honor the body width (cols - 2 = 28).
+    // Every line begins with the 3-col indent.
+    for (const line of lines) expect(line.startsWith('   ')).toBe(true);
+    // Body lines (skip the header) honor the body width (cols - 3 = 27).
     // wrap-ansi with wordWrap: true, hard: true character-splits any token
     // exceeding bodyWidth, so all lines stay within the column budget.
     for (const line of lines.slice(1)) {
@@ -107,7 +107,7 @@ describe('formatThinkingParagraph', () => {
   });
 
   it('(e) MIN_BODY_WIDTH floor on narrow terminals — no per-glyph breaks', () => {
-    // cols=10 → bodyWidth = max(16, 10 - 2) = 16.
+    // cols=10 → bodyWidth = max(16, 10 - 3) = 16.
     const buffer = 'one two three four five six seven eight nine ten eleven twelve';
     const out = formatThinkingParagraph(buffer, { cols: 10, maxLines: 10 });
     const plain = stripAnsi(out);
@@ -135,7 +135,7 @@ describe('formatThinkingParagraph', () => {
     const lines2 = plain2.split('\n');
     // header + 2 body + footer = 4 lines
     expect(lines2).toHaveLength(4);
-    expect(lines2[3]).toMatch(/^ {2}⋯ \+\d+ chars earlier$/);
+    expect(lines2[3]).toMatch(/^ {3}⋯ \+\d+ chars earlier$/);
   });
 
   it('(g2) long unbreakable token (URL/path) does not overflow cols — hard wrap splits it (#1454)', () => {
@@ -177,7 +177,7 @@ describe('formatThinkingParagraph', () => {
       const footerMatch = (plain[plain.length - 1] ?? '').match(/\+(\d+) chars earlier$/);
       expect(footerMatch, `cols=${cols} renders a truncation footer`).not.toBeNull();
       const droppedChars = Number(footerMatch![1]);
-      const body = plain.slice(1, -1).map((l) => l.replace(/^ {2}/, ''));
+      const body = plain.slice(1, -1).map((l) => l.replace(/^ {3}/, ''));
       expect(body, `cols=${cols} caps at maxLines`).toHaveLength(5);
 
       // De-wrapping the body (join lines with the single space wrap-ansi trimmed
