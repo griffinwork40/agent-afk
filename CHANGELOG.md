@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.189.0] - 2026-09-05
+
+### Added
+- improved bash output visibility in TUI (#1500) (88091f9e)
+
 ## [5.188.0] - 2026-09-05
 
 ### Added
