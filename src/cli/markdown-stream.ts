@@ -1,7 +1,7 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
-import { findBlockBoundary, calculateContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, routeOverlayOutput, accumulateCommitted, scheduleWithThrottle } from './markdown-stream-format.js';
+import { findBlockBoundary, calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, routeOverlayOutput, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence } from './markdown-stream-format.js';
 import { Lexer } from 'marked';
 
 /**
@@ -127,7 +127,12 @@ export class StreamingMarkdownRenderer {
       return;
     }
 
-    const contentWidth = calculateContentWidth(this.indent.length);
+    // Code fences use the full measure (default 100); prose uses the tighter
+    // prose measure (default 80) for comfortable reading line length.
+    const isCode = /^ {0,3}(`{3,}|~{3,})/.test(blockText.trimStart());
+    const contentWidth = isCode
+      ? calculateContentWidth(this.indent.length)
+      : calculateProseContentWidth(this.indent.length);
     const trimmed = formatBlockForCommit(blockText, this.indent, contentWidth);
 
     // Invariant (TUI rhythm contract): every committed block owns ONE
@@ -171,7 +176,10 @@ export class StreamingMarkdownRenderer {
    * composer path (via slot) can generate identical output.
    */
   renderPending(): string {
-    const contentWidth = calculateContentWidth(this.indent.length);
+    const inCode = isInOpenCodeFence(this.buffer);
+    const contentWidth = inCode
+      ? calculateContentWidth(this.indent.length)
+      : calculateProseContentWidth(this.indent.length);
     const formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
     return applyIndent(formatted, this.indent);
   }
