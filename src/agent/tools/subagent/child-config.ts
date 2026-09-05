@@ -26,6 +26,7 @@ import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import { providerForModel } from '../../providers/index.js';
+import { resolveChildModel } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import {
@@ -182,8 +183,11 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     const defModel = namedAgent.definition.model;
     namedDefaultModel = defModel === 'inherit' ? args.parentModel : defModel;
   }
-  const childModel: string =
-    parsed.model ?? namedDefaultModel ?? args.defaultSubagentModel ?? 'sonnet';
+  const childModel: string = resolveChildModel({
+    callSiteModel: parsed.model,
+    namedAgentModel: namedDefaultModel,
+    defaultSubagentModel: args.defaultSubagentModel,
+  });
   const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
 
   // Named-agent tool access: resolve the definition's declared surface into
