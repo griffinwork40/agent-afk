@@ -144,6 +144,10 @@ export interface ToolResultChunk {
    * single-line display. TUI-only — never model-facing.
    */
   tailPreview?: string[];
+  /** Non-empty lines omitted from the displayed tail (within provider content). */
+  hiddenLineCount?: number;
+  /** Bash process exit status, absent when no exit code was observed. TUI-only. */
+  exitCode?: number;
   sizeBytes?: number;
   sizeLabel?: string;
   lineCount?: number;

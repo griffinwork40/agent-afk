@@ -40,6 +40,13 @@ export interface ToolResult {
    * line. Not model-facing.
    */
   durationMs?: number;
+  /**
+   * Numeric process exit status for bash commands when the OS reports one.
+   * Present for normal close results including success (0) and non-zero exits;
+   * absent when the process outcome has no status code (timeout, abort, spawn
+   * error, signal-only close). Not model-facing.
+   */
+  exitCode?: number;
   incomplete?: boolean;
   incompleteReason?: string;
   circuitBreaker?: boolean;

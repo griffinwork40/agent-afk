@@ -381,6 +381,27 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(out.chunk.truncated).toBe(true);
   });
 
+  it.each([undefined, 0, 1, 127])('plumbs exitCode %s without inventing missing status', (exitCode) => {
+    const evt = buildBashEvent({ content: 'failed', exitCode, durationMs: 3200 });
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.exitCode).toBe(exitCode);
+    const rendered = outcome(evt);
+    if (exitCode) expect(rendered).toContain(` · exit ${exitCode} · 3.2s`);
+    else expect(rendered).not.toContain('exit');
+  });
+
+  it.each([0, 3, 7, 8, 20])('counts only non-empty lines hidden for %s output lines', (count) => {
+    const content = Array.from({ length: count }, (_, i) => `L${i}`).join('\n\n \n') + '\n';
+    const evt = buildBashEvent({ content });
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.hiddenLineCount).toBe(Math.max(0, count - 7));
+    const rendered = outcome(evt);
+    if (count > 7) expect(rendered).toContain(`${count - 7} earlier lines hidden`);
+    else expect(rendered).not.toContain('earlier lines hidden');
+  });
+
   it('durationMs is plumbed and rendered as duration suffix', () => {
     const rendered = outcome(buildBashEvent({ content: 'done', durationMs: 1500 }));
     expect(rendered).toContain('1.5s');

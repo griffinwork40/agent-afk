@@ -1580,6 +1580,47 @@ describe('formatOutcome — bash truncation / capture display', () => {
     expect(out).toContain('line 50');
   });
 
+  it.each([undefined, 0])('omits clean or unknown exit status (%s)', (exitCode) => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'exit', content: 'done', exitCode, durationMs: 3200,
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe('done · 3.2s');
+  });
+
+  it.each([undefined, 10])('shows nonzero exit before duration for lineCount %s', (lineCount) => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'exit', content: 'failed',
+      isError: true, exitCode: 2, durationMs: 3200, lineCount,
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe(
+      `${lineCount ? '10 lines' : 'failed'} · exit 2 · 3.2s`,
+    );
+  });
+
+  it('shows exit status without duration', () => {
+    expect(stripAnsi(formatOutcome({
+      type: 'tool_result', toolUseId: 'exit', content: 'failed', isError: true, exitCode: 1,
+    }))).toBe('failed · exit 1');
+  });
+
+  it('places the hidden-line notice between the header and tail', () => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'hidden', content: 'preview', lineCount: 10,
+      hiddenLineCount: 8, tailPreview: ['ninth', 'tenth'], exitCode: 1, durationMs: 3200,
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe(
+      '10 lines · exit 1 · 3.2s\n    8 earlier lines hidden\n    ninth\n    tenth',
+    );
+  });
+
+  it.each([undefined, 0])('omits the hidden-line notice for count %s', (hiddenLineCount) => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'hidden', content: 'a\nb', lineCount: 2,
+      hiddenLineCount, tailPreview: ['a', 'b'],
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe('2 lines\n    a\n    b');
+  });
+
   it('shows duration suffix (· Xs) when durationMs is set', () => {
     const chunk: ToolResultChunk = {
       type: 'tool_result',

@@ -206,7 +206,7 @@ export function createBashHandler(
   return new Promise((resolve) => {
     let resolved = false;
 
-    function settle(result: { content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; testResult?: import('./test-runner-detector.js').TestResult }) {
+    function settle(result: { content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number; testResult?: import('./test-runner-detector.js').TestResult }) {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeoutHandle);
@@ -397,6 +397,7 @@ export function createBashHandler(
           ...(capped.truncated ? { truncated: true } : {}),
           ...(capturePath !== undefined ? { capturePath } : {}),
           durationMs: elapsed,
+          exitCode: code,
         });
         return;
       }
@@ -426,6 +427,7 @@ export function createBashHandler(
         ...(capped.truncated ? { truncated: true } : {}),
         ...(capturePath !== undefined ? { capturePath } : {}),
         durationMs: elapsed,
+        ...(code !== null ? { exitCode: code } : {}),
         ...(testResult !== undefined ? { testResult } : {}),
       });
     });

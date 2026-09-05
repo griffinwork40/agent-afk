@@ -97,6 +97,7 @@ export async function* emitAndCommitToolResults(
       // Prefer the handler value when available (bash always sets it), fall
       // back to the provider measurement for non-bash tools that don't.
       durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
+      ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       sessionId: input.ctx.sessionId,
     };
 

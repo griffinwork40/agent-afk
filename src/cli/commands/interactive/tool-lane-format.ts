@@ -124,6 +124,9 @@ export function formatOutcome(
     ? (isBenignFailure(chunk.failureClass) ? palette.warning : palette.error)
     : palette.dim;
   const effectiveHomeDir = homeDir ?? env.HOME ?? '___NOHOME___';
+  const exitSuffix = chunk.exitCode !== undefined && chunk.exitCode !== 0
+    ? resultColor(` · exit ${chunk.exitCode}`)
+    : '';
 
   // Handler-supplied display string wins over every other branch. The tool
   // handler is the only place that knows what its `content` JSON means; if
@@ -179,12 +182,16 @@ export function formatOutcome(
         ? fileHyperlink(displayPath, chunk.capturePath)
         : displayPath;
       headline = resultColor(`${chunk.lineCount} ${noun}`) +
-        palette.dim(' · full output saved → ') + resultColor(linked) + durSuffix;
+        palette.dim(' · full output saved → ') + resultColor(linked) + exitSuffix + durSuffix;
     } else if (chunk.truncated) {
       headline = resultColor(`${chunk.lineCount} ${noun}`) +
-        palette.dim(' · output capped · command killed') + durSuffix;
+        palette.dim(' · output capped · command killed') + exitSuffix + durSuffix;
     } else {
-      headline = resultColor(`${chunk.lineCount} ${noun}`) + durSuffix;
+      headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
+    }
+
+    if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
+      headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
     }
 
     // Append actual tail lines when available. Each line is sanitized (same
@@ -211,7 +218,7 @@ export function formatOutcome(
   const durSuffix = chunk.durationMs !== undefined
     ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
     : '';
-  return resultColor(sanitizeLabel(preview)) + durSuffix;
+  return resultColor(sanitizeLabel(preview)) + exitSuffix + durSuffix;
 }
 
 /**

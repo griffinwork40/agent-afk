@@ -260,6 +260,7 @@ export async function* dispatchAndAppendToolCalls({
         // Prefer handler value (bash always sets result.durationMs), fall back
         // to provider-side measurement for non-bash tools.
         durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
+        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
         sessionId,
       };
       if (result.render?.diff) {

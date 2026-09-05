@@ -63,9 +63,14 @@ function makeSignal(): AbortSignal {
 async function run(
   command: string,
   ctx?: { sessionId?: string; toolUseId?: string },
+  opts?: { signal?: AbortSignal; timeout_ms?: number },
 ) {
   const handler = createBashHandler('default');
-  return handler({ command }, makeSignal(), ctx as Parameters<typeof handler>[2]);
+  return handler(
+    { command, ...(opts?.timeout_ms !== undefined ? { timeout_ms: opts.timeout_ms } : {}) },
+    opts?.signal ?? makeSignal(),
+    ctx as Parameters<typeof handler>[2],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +82,12 @@ describe('bash capture — small output (no truncation)', () => {
     const result = await run('echo hello', { sessionId: 'sess-1', toolUseId: 'tu-1' });
     expect(result.isError).toBeFalsy();
     expect(result.capturePath).toBeUndefined();
+  });
+
+  it('exitCode is 0 when the command exits successfully', async () => {
+    const result = await run('echo ok', { sessionId: 'sess-exit0', toolUseId: 'tu-exit0' });
+    expect(result.isError).toBeFalsy();
+    expect(result.exitCode).toBe(0);
   });
 
   it('durationMs is a non-negative number on success', async () => {
@@ -196,8 +207,39 @@ describe('bash capture — non-zero exit with large stderr', () => {
   it('durationMs is set on non-zero exit', async () => {
     const result = await run('exit 1', { sessionId: 'sess-exit', toolUseId: 'tu-exit' });
     expect(result.isError).toBe(true);
+    expect(result.exitCode).toBe(1);
     expect(typeof result.durationMs).toBe('number');
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timeout / abort paths — no numeric exit status is available
+// ---------------------------------------------------------------------------
+
+describe('bash capture — exitCode omitted when no OS status code is available', () => {
+  it('exitCode is undefined when the command times out', async () => {
+    const result = await run(
+      "python3 -c \"import time; time.sleep(1)\"",
+      { sessionId: 'sess-timeout', toolUseId: 'tu-timeout' },
+      { timeout_ms: 10 },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Command timed out');
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  it('exitCode is undefined when the command is aborted before spawn', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await run(
+      'echo should-not-run',
+      { sessionId: 'sess-abort', toolUseId: 'tu-abort' },
+      { signal: controller.signal },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('Command aborted');
+    expect(result.exitCode).toBeUndefined();
   });
 });
 

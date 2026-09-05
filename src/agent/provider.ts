@@ -255,6 +255,12 @@ export type ProviderEvent =
        * providers that don't supply it.
        */
       durationMs?: number;
+      /**
+       * Numeric process exit status for bash commands when the OS reports one.
+       * Present for normal close results (including 0 and non-zero), absent for
+       * timeout/abort/spawn-error/signal-only outcomes.
+       */
+      exitCode?: number;
     }
   | {
       /**
