@@ -112,6 +112,16 @@ describe('buildHandoffResumeCommand', () => {
     expect(cmd).toContain('"absolutely yes"');
   });
 
+  it('throws when record has missing originalCommand', () => {
+    const record = makeAnsweredRecord({ originalCommand: undefined as unknown as string });
+    expect(() => buildHandoffResumeCommand(record)).toThrow('missing or invalid originalCommand');
+  });
+
+  it('throws when record has empty originalCommand', () => {
+    const record = makeAnsweredRecord({ originalCommand: '' });
+    expect(() => buildHandoffResumeCommand(record)).toThrow('missing or invalid originalCommand');
+  });
+
   it('falls back to JSON question summary when question has no message field', () => {
     const record = makeAnsweredRecord({
       question: { type: 'confirm', choices: ['y', 'n'] } as Record<string, unknown>,

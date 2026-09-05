@@ -48,6 +48,11 @@ export function buildHandoffResumeCommand(record: HandoffRecord): string {
       `[handoff-consume] buildHandoffResumeCommand: record ${record.taskId} has no answer`,
     );
   }
+  if (typeof record.originalCommand !== 'string' || record.originalCommand.length === 0) {
+    throw new Error(
+      `[handoff-consume] buildHandoffResumeCommand: record ${record.taskId} has missing or invalid originalCommand`,
+    );
+  }
 
   // Extract the human-readable question text. The question field is a
   // serialized ElicitationRequest whose 'message' field is the text shown
@@ -130,18 +135,6 @@ export interface ProcessHandoffsResult {
 }
 
 /**
- * Sweep the handoffs directory for answered records, re-enqueue each as a
- * resumed task, and delete the handoff record.
- *
- * Individual record failures (bad JSON, re-enqueue error, cleanup error) do
- * NOT abort the loop — they are caught and logged. The function always
- * returns a summary of what succeeded.
- *
- * @param queueDir    - Override the queue directory (defaults to getQueueDir()).
- * @param handoffsDir - Override the handoffs directory (defaults to getHandoffsDir()).
- * @returns Counts of re-queued and cleaned records.
- */
-/**
  * Best-effort recovery for orphaned `.claiming-*` files left behind by a
  * previous crash between rename() and unlink(). Any claiming file older than
  * 60 seconds is read, re-enqueued, and deleted. Failures are swallowed so
@@ -178,6 +171,18 @@ async function recoverOrphanedClaims(
   }
 }
 
+/**
+ * Sweep the handoffs directory for answered records, re-enqueue each as a
+ * resumed task, and delete the handoff record.
+ *
+ * Individual record failures (bad JSON, re-enqueue error, cleanup error) do
+ * NOT abort the loop — they are caught and logged. The function always
+ * returns a summary of what succeeded.
+ *
+ * @param queueDir    - Override the queue directory (defaults to getQueueDir()).
+ * @param handoffsDir - Override the handoffs directory (defaults to getHandoffsDir()).
+ * @returns Counts of re-queued and cleaned records.
+ */
 export async function processAnsweredHandoffs(
   queueDir?: string,
   handoffsDir: string = getHandoffsDir(),
