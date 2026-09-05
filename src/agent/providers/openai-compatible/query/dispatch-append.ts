@@ -241,6 +241,7 @@ export async function* dispatchAndAppendToolCalls({
         content: result.content,
         ...(result.isError === true ? { isError: true } : {}),
         ...(result.truncated === true ? { truncated: true } : {}),
+        ...(result.capturePath !== undefined ? { capturePath: result.capturePath } : {}),
         ...(result.incomplete === true ? { incomplete: true } : {}),
         ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
         // Plumb concurrency-batch membership onto the render-facing event, not
@@ -255,6 +256,11 @@ export async function* dispatchAndAppendToolCalls({
         // anthropic-direct/loop/tool-results.ts — omitting it silently drops
         // the benign-rejection glyph for every openai-compatible session.
         ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+        // Plumb tool-measured duration so the TUI outcome row can show `· Xs`.
+        // Prefer handler value (bash always sets result.durationMs), fall back
+        // to provider-side measurement for non-bash tools.
+        durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
+        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
         sessionId,
       };
       if (result.render?.diff) {

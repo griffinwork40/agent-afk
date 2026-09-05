@@ -12,53 +12,38 @@
  * @module agent/daemon/scheduler
  */
 
-import { env } from '../../config/env.js';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import * as cron from 'node-cron';
-import { runSweep } from '../worktree-sweep.js';
-import type { SweepResult } from '../worktree-sweep.js';
-import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
-import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
+import { dequeueNext } from './queue-store.js';
 import { completeTask } from './lease-store.js';
-import { makeDaemonElicitationHandler, recoverPendingHandoffs } from './handoff-wiring.js';
+import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { processAnsweredHandoffs } from './handoff-consume.js';
 import { elicitationRouter } from '../elicitation-router.js';
-import { getQueueDir, getStateDatabasePath, getTelemetryPath } from '../../paths.js';
+import { recoverDaemonQueues } from './pull-recovery.js';
+import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
-import { AgentSession } from '../session/agent-session.js';
-import { registerSurfaceSession } from '../session/register-surface-session.js';
-import { createDefaultHookRegistry } from '../default-hook-registry.js';
-import { loadHooksConfig } from '../hooks/config-loader.js';
-import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceWriter } from '../trace/index.js';
-import { MemoryStore, injectHotMemory } from '../memory/index.js';
-import { StateStore } from '../state/state-store.js';
-
-import { injectCompanionPrimer } from '../companion/index.js';
-import { McpManager, loadMcpConfig } from '../mcp/index.js';
-import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
-import { emitSessionPhase } from '../trace/emit.js';
+import type { AgentSession } from '../session/agent-session.js';
+import type { MemoryStore } from '../memory/index.js';
+import type { McpManager } from '../mcp/index.js';
+import type { StateStore } from '../state/state-store.js';
 import type { AgentConfig } from '../types.js';
 
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
+import { runBuiltinWorktreePruneTask } from './worktree-prune-task.js';
+export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
+export { daemonTraceLabel } from './session-spawn.js';
+import { spawnDaemonSession } from './session-spawn.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
   type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
-import { summarizeRootFailures } from './root-failure-summary.js';
-import { countPrunable, formatWorktreePruneSummary } from './worktree-prune-summary.js';
-import { debugLog } from '../../utils/debug.js';
 
-// Re-export module-scope helpers extracted to scheduler.helpers.ts for the
-// 350-code-line ceiling. Public surface unchanged -- importers of
-// resolveWorktreePruneRoot and daemonTraceLabel resolve through here.
-export { resolveWorktreePruneRoot, daemonTraceLabel } from './scheduler.helpers.js';
-import { builtinPruneExecFile, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.helpers.js';
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -276,39 +261,8 @@ export class CronScheduler {
     const interval = this.options.pullPollIntervalMs;
     if (!interval || interval <= 0) return;
 
-    // On startup, recover any leases that expired while the daemon was down.
-    // Tasks with remaining attempts are re-enqueued; exhausted tasks are dead-lettered.
-    try {
-      const recovered = recoverExpiredLeases(this.queueDir);
-      for (const record of recovered) {
-        if (record.state === 'retrying') {
-          // eslint-disable-next-line no-console
-          console.error(`[daemon] lease-recovery: re-enqueued expired lease task ${record.id} (attempt ${record.attempts}/${record.maxAttempts})`);
-        } else {
-          // eslint-disable-next-line no-console
-          console.error(`[daemon] lease-recovery: dead-lettered task ${record.id} (exhausted ${record.maxAttempts} attempt(s))`);
-        }
-      }
-    } catch (err) {
-      // Recovery is best-effort — a failure must not prevent the pull loop from starting.
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.error(`[daemon] lease-recovery: failed to recover expired leases: ${msg}`);
-    }
+    recoverDaemonQueues(this.queueDir);
 
-    // Recover pending handoffs independently — must not be skipped if lease recovery throws.
-    void recoverPendingHandoffs(undefined, this.queueDir)
-      .then((r) => {
-        if (r.renotified > 0 || r.expired > 0) {
-          // eslint-disable-next-line no-console
-          console.error(`[daemon] handoff-recovery: re-notified ${r.renotified}, expired ${r.expired}`);
-        }
-      })
-      .catch((err: unknown) => {
-        const hMsg = err instanceof Error ? err.message : String(err);
-        // eslint-disable-next-line no-console
-        console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
-      });
     // Pick up any answers that arrived while the daemon was down.
     void processAnsweredHandoffs(this.queueDir)
       .then((r) => {
@@ -531,328 +485,18 @@ export class CronScheduler {
     task: ScheduledTask,
     trigger: TelemetryTrigger,
   ): Promise<TelemetryRecord> {
-    const triggeredAt = new Date(this.now());
-    const startTimeMs = this.now();
-    const baseRecord = {
-      taskId: task.taskId,
-      command: task.command,
-      trigger,
-      ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-      triggeredAt: triggeredAt.toISOString(),
-    };
-
-    try {
-      const primaryRoot = await resolveWorktreePruneRoot(
-        builtinPruneExecFile,
-        process.cwd(),
-        env.AFK_WORKTREE_SWEEP_ROOT,
-      );
-      // The sweep is per-root, so the daemon's own cwd used to bound what could
-      // ever be reclaimed. Visit every root known to hold managed trees (#761).
-      const roots = await sweepRootSet(primaryRoot);
-      if (roots.length === 0) {
-        // An empty set means BOTH causes hold at once: sweepRootSet always
-        // yields at least the primary when one resolved, so no primary (daemon
-        // cwd outside a git repo, commonly $HOME under launchd) AND nothing
-        // registered. Name both — reporting only the cwd half sent operators
-        // looking for a daemon misconfiguration when the registry was simply
-        // empty. Skip rather than error on every tick; the per-repo REPL
-        // boot-prune still covers repos the user actually works in.
-        const skipped: TelemetryRecord = {
-          ...baseRecord,
-          durationMs: this.now() - startTimeMs,
-          status: 'skipped',
-          responseExcerpt:
-            'worktree-prune skipped: no roots to sweep — daemon cwd is not inside a ' +
-            'git repository and no managed worktree roots are registered ' +
-            '(set AFK_WORKTREE_SWEEP_ROOT to target a repo)',
-        };
-        this.writeTelemetry(skipped, task);
-        return skipped;
-      }
-
-      const maxAgeDaysClean =
-        parseInt(env.AFK_WORKTREE_MAX_AGE_CLEAN ?? '', 10) || 14;
-      const maxAgeDaysDirty =
-        parseInt(env.AFK_WORKTREE_MAX_AGE_DIRTY ?? '', 10) || 30;
-
-      // Invariant: one unusable root must never starve the roots after it.
-      // runSweep does not catch a failure of its own opening `git worktree
-      // list`, and builtinPruneExecFile is a bare promisify(execFile), so a
-      // nonzero git exit REJECTS. A registered directory whose .git was
-      // deleted survives the registry's liveness gate (a bare isDirectory()
-      // check), so such a root is sticky, not transient — uncaught, it would
-      // abort the loop on every tick and permanently strand every root ordered
-      // behind it, recreating the #761 leak this fan-out exists to close.
-      // Failures are demoted to warnings so the tick still reports the
-      // removals that already hit disk.
-      //
-      // Sequential on purpose: runSweep takes a single machine-global advisory
-      // lock, so parallel roots would just contend and the losers short-circuit.
-      const results: SweepResult[] = [];
-      const rootFailures: string[] = [];
-      // Parallel to rootFailures, but holding the structured (repoRoot, reason)
-      // pair instead of a pre-joined string — the compact errorMessage below
-      // needs `basename(repoRoot)` alone, not the full path baked into the
-      // rootFailures line. `reason` is redacted exactly once, here, and reused
-      // for both channels below.
-      const rootFailureDetails: Array<{ repoRoot: string; reason: string }> = [];
-      for (const repoRoot of roots) {
-        try {
-          results.push(await runSweep({
-            execFile: builtinPruneExecFile,
-            repoRoot,
-            dryRun: false, // soft-launch valve inside runSweep handles early dry-runs
-            maxAgeDaysClean,
-            maxAgeDaysDirty,
-            scope: 'all',
-            telemetryPath: this.telemetryPath(),
-          }));
-        } catch (err) {
-          const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
-          rootFailures.push(`[ERROR] sweep failed for ${repoRoot}: ${reason}`);
-          rootFailureDetails.push({ repoRoot, reason });
-          // The full path exists nowhere else on a PARTIAL failure: `warnings`
-          // is not a field of TelemetryRecord (the scheduler consumes only its
-          // .length, for the summary), and `errorMessage` — which carries
-          // basenames only, by design — is written just when EVERY root fails.
-          // Without this line an operator seeing "1 failed" has no way to learn
-          // WHICH root failed, contradicting root-failure-summary.ts's own
-          // contract that `warnings` is the detailed channel.
-          debugLog(`[worktree-prune] sweep failed for ${repoRoot}: ${reason}`);
-        }
-      }
-      const result = {
-        // Retained for the record's own shape only. The SUMMARY no longer
-        // branches on this: with a per-root valve a tick can mix live and
-        // previewing roots, and choosing one of two exclusive sentences dropped
-        // the removal count on exactly those ticks (see
-        // daemon/worktree-prune-summary.ts).
-        dryRun: results.some((r) => r.dryRun),
-        removed: results.flatMap((r) => r.removed),
-        warnings: [...rootFailures, ...results.flatMap((r) => r.warnings)],
-        candidates: results.flatMap((r) => r.candidates),
-      };
-
-      const contestedResults = results.filter((r) => r.contested === true);
-      const previewResults = results.filter((r) => r.dryRun && r.contested !== true);
-      const liveResults = results.filter((r) => !r.dryRun && r.contested !== true);
-      const summary = formatWorktreePruneSummary({
-        removed: result.removed.length,
-        warnings: result.warnings.length,
-        wouldRemove: countPrunable(previewResults.flatMap((r) => r.candidates)),
-        liveRoots: liveResults.length,
-        previewRoots: previewResults.length,
-        contestedRoots: contestedResults.length,
-        failedRoots: rootFailureDetails.length,
-        totalRoots: roots.length,
-      });
-
-      // Invariant: a tick where EVERY root rejected must report `status:
-      // 'error'`, not 'success' — src/insights/aggregators/daemon.ts tallies
-      // `errorCount` / `recentErrors` only off `status === 'error'`, so a
-      // permanently broken prune (every root rejecting on every tick, e.g. a
-      // stale AFK_WORKTREE_SWEEP_ROOT or a registry full of dead repos) would
-      // otherwise report as healthy forever. `results.length === 0` with
-      // `roots.length > 0` is exactly that case: every iteration of the loop
-      // above hit the `catch` and pushed to `rootFailures` instead of
-      // `results`. A tick where SOME roots succeeded (`results.length > 0`)
-      // stays `success` — that is a partial failure, already visible via the
-      // per-root `[ERROR]` warnings, not a systemic one.
-      const record: TelemetryRecord =
-        results.length === 0 && roots.length > 0
-          ? {
-              ...baseRecord,
-              durationMs: this.now() - startTimeMs,
-              status: 'error',
-              // Compact + non-enumerating — see summarizeRootFailures' own
-              // doc comment for why this must never be rootFailures.join(),
-              // which embeds every failing root's absolute path.
-              // rootFailureDetails' `reason` is already redacted at push time
-              // (in the loop above) — redacting again would be a no-op.
-              errorMessage: summarizeRootFailures(rootFailureDetails),
-              responseExcerpt: summary,
-            }
-          : {
-              ...baseRecord,
-              durationMs: this.now() - startTimeMs,
-              status: 'success',
-              responseExcerpt: summary,
-            };
-      this.writeTelemetry(record, task);
-      return record;
-    } catch (err) {
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'error',
-        errorMessage: redactInlineSecrets(err instanceof Error ? err.message : String(err)),
-      };
-      this.writeTelemetry(record, task);
-      return record;
-    }
-  }
-
-  private async spawnSession(taskId: string, trigger: TelemetryTrigger = 'cron'): Promise<{
-    session: AgentSession;
-    memoryStore: MemoryStore;
-    stateStore: StateStore;
-    mcpManager?: McpManager;
-    /** Archive the cross-surface registry handle. Called by runOnce on close. */
-    dispose: () => void;
-  }> {
-    // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
-    // suffix, so each tick gets its own label) so hook commands receive a
-    // non-empty AFK_SESSION_ID and traces stay greppable by task name.
-    const sessionId = daemonTraceLabel(taskId);
-    const agentCwd = this.options.sessionConfig?.cwd ?? process.cwd();
-    // Witness layer: open a fresh trace per spawned daemon session so its
-    // subagent + skill lifecycle events are durable on disk — the AFK
-    // (away-from-keyboard) surface where post-hoc inspection matters most.
-    // Mirrors chat.ts / interactive bootstrap.ts. Returns null under
-    // AFK_TRACE_DISABLED=1. The label is derived from the taskId (see
-    // daemonTraceLabel) so traces are greppable by task name while each tick
-    // still gets its own trace dir. Created before the hook registry so the
-    // AFK gate's structured audit trace is wired from the start of the session.
-    const trace = createDefaultTraceWriter({ sessionLabel: daemonTraceLabel(taskId) });
-    const { registry, memoryStore } = createDefaultHookRegistry(
-      undefined,
-      'daemon',
-      undefined,
-      undefined,
-      loadHooksConfig({ cwd: agentCwd }),
-      { cwd: agentCwd, sessionId, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
-    );
-    const stateStore = new StateStore(getStateDatabasePath());
-
-    let mcpManager: McpManager | undefined;
-    // Mirror the chat / telegram / interactive surfaces: include MCP configs
-    // contributed by imported roots so the daemon reaches the same MCP
-    // surface-parity, not just cwd `.mcp.json` + the global config.
-    const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
-      .mcpConfigs.filter((c) => c.format === 'json')
-      .map((c) => c.source);
-    const loadedMcp = loadMcpConfig({
-      cwd: agentCwd,
-      ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
+    return runBuiltinWorktreePruneTask(task, trigger, {
+      now: this.now,
+      telemetryPath: () => this.telemetryPath(),
+      writeTelemetry: (record) => this.writeTelemetry(record, task),
     });
-    const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
-    try {
-      if (enabledMcpCount > 0) {
-        // Witness layer: bracket the whole-fleet MCP connect with
-        // mcp_connect_start / mcp_connect_done phases — surface-parity with
-        // chat.ts, interactive/bootstrap.ts, and telegram/mcp-session.ts.
-        // try/finally so mcp_connect_done fires even when an alwaysLoad server
-        // makes fromConfig throw. Fire-and-forget; never gates the connect.
-        const mcpStartedAt = Date.now();
-        void emitSessionPhase(trace?.writer, {
-          phase: 'mcp_connect_start',
-          metadata: { serverCount: enabledMcpCount },
-        });
-        try {
-          mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
-            warnings: loadedMcp.warnings,
-            serverLayers: loadedMcp.serverLayers,
-            userAllowSecretEnv: loadedMcp.userAllowSecretEnv,
-            ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-          });
-        } finally {
-          void emitSessionPhase(trace?.writer, {
-            phase: 'mcp_connect_done',
-            durationMs: Date.now() - mcpStartedAt,
-            metadata: { serverCount: enabledMcpCount },
-          });
-        }
-      } else if (loadedMcp.warnings.length > 0) {
-        for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
-      }
-    } catch (err) {
-      // McpManager.fromConfig re-throws when an `alwaysLoad` server fails to
-      // connect. runOnce()'s finally cannot close this tick's MemoryStore
-      // (its local is still null until spawnSession returns), so close it here
-      // to avoid orphaning the SQLite handle on a connect failure.
-      memoryStore.close();
-      stateStore.close();
-      throw err;
-    }
-
-    // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
-    // Parsed inline from the already-imported `env` rather than via the CLI
-    // `getMaxToolUseIterations()` helper to avoid an agent→cli layering
-    // dependency (scheduler lives in src/agent/). Mirrors the lenient contract
-    // of `parseMaxToolUseIterations` in cli/shared-helpers.ts: unset/non-numeric/
-    // <=0 → undefined = unlimited (no behavior change); positive → floored int.
-    // Placed BEFORE the `...sessionConfig` spread so an explicit
-    // sessionConfig.maxToolUseIterations still wins (escape-hatch parity with
-    // permissionMode/surface). The production path also re-applies the same
-    // env fallback in the daemon.ts factory; both resolve to the same value.
-    const rawMaxToolIters = env.AFK_MAX_TOOL_USE_ITERATIONS;
-    const parsedMaxToolIters =
-      rawMaxToolIters !== undefined && Number.isFinite(Number(rawMaxToolIters)) && Number(rawMaxToolIters) > 0
-        ? Math.floor(Number(rawMaxToolIters))
-        : undefined;
-    const config: AgentConfig = {
-      model: 'sonnet',
-      // Daemon-spawned sessions run autonomously and require tool use without
-      // human confirmation. Explicitly set bypassPermissions so the default
-      // flip in C2 (from 'bypassPermissions' to 'default') does not silently
-      // break scheduled tasks that depend on tool execution.
-      permissionMode: 'bypassPermissions',
-      hookRegistry: registry,
-      // Pull tasks keep ask_question (handoff handler persists the question
-      // for eventual reply); cron/sessionstart tasks strip it.
-      isNonInteractive: trigger !== 'pull',
-      // Surface stamps the session as 'daemon' so routing-decision telemetry
-      // rows derive origin:'daemon' correctly. Placed before sessionConfig so
-      // an operator escape-hatch via sessionConfig.surface can still override.
-      // The production factory path (daemon.ts ComposeExecutor / SubagentExecutor
-      // wiring) already stamps surface:'daemon' on its executors; this covers
-      // the fallback/standalone path where no factory is set.
-      surface: 'daemon',
-      // Trace writer placed before sessionConfig so an operator-supplied
-      // sessionConfig.traceWriter still wins (escape-hatch parity with
-      // permissionMode).
-      ...(trace ? { traceWriter: trace.writer } : {}),
-      ...(mcpManager !== undefined ? { mcpManager } : {}),
-      // Opt-in top-level tool-round ceiling default; overridable by an explicit
-      // sessionConfig.maxToolUseIterations via the spread below.
-      ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
-      // sessionConfig may override permissionMode if the operator explicitly
-      // wants a different mode for daemon tasks (intentional escape hatch).
-      ...this.options.sessionConfig,
-    };
-    try {
-      const traceOwner = this.options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined;
-      const session = this.options.sessionFactory
-        ? this.options.sessionFactory(config, traceOwner)
-        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)), traceOwner);
-      // Step 7: register the daemon session in the cross-surface registry.
-      // Best-effort; dispose() (archive) is invoked by runOnce on session close
-      // so the long-running daemon never accumulates registry handles.
-      const registration = registerSurfaceSession(session, {
-        surface: 'daemon',
-        model: config.model,
-        cwd: agentCwd,
-      });
-      return {
-        session,
-        memoryStore,
-        stateStore,
-        dispose: registration.dispose,
-        ...(mcpManager !== undefined ? { mcpManager } : {}),
-      };
-    } catch (err) {
-      if (mcpManager) {
-        await mcpManager.disconnectAll().catch(() => undefined);
-      }
-      // Session construction failed after MCP connected — close this tick's
-      // MemoryStore and StateStore too (runOnce()'s finally can't, per the
-      // fromConfig catch above) so they are not orphaned.
-      memoryStore.close();
-      stateStore.close();
-      throw err;
-    }
   }
+
+
+  private async spawnSession(taskId: string, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
+    return spawnDaemonSession(taskId, { ...this.options, trigger });
+  }
+
 
   private telemetryPath(): string {
     return this.options.telemetryPath ?? getTelemetryPath();

@@ -24,6 +24,29 @@ export interface ToolResult {
   harnessUserMessage?: HarnessUserMessage;
   isError?: boolean;
   truncated?: boolean;
+  /**
+   * Absolute path to a capture file holding the full tool output when the
+   * model-facing content was reduced to a head+tail view (i.e. `truncated:
+   * true`). Present only on bash results where `content` omits the middle.
+   * Never set when the output was hard-capped via SIGKILL (HARD_CAP_KILL_NOTE)
+   * because the middle is genuinely unrecoverable in that case.
+   * The TUI uses this to offer "full output saved → ~/…path" instead of
+   * silently hiding retained bytes. The model never sees this field.
+   */
+  capturePath?: string;
+  /**
+   * Wall-clock duration of the tool call in milliseconds, set by the bash
+   * handler. Used by the TUI to surface result status/duration in the outcome
+   * line. Not model-facing.
+   */
+  durationMs?: number;
+  /**
+   * Numeric process exit status for bash commands when the OS reports one.
+   * Present for normal close results including success (0) and non-zero exits;
+   * absent when the process outcome has no status code (timeout, abort, spawn
+   * error, signal-only close). Not model-facing.
+   */
+  exitCode?: number;
   incomplete?: boolean;
   incompleteReason?: string;
   circuitBreaker?: boolean;

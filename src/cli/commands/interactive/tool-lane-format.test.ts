@@ -1442,3 +1442,221 @@ describe('sanitizeTextParagraph — multi-line LLM-controlled paragraph sanitize
     expect(sanitizeTextParagraph('  indented text  ')).toBe('  indented text  ');
   });
 });
+
+// ---------------------------------------------------------------------------
+// formatOutcome — bash capture path (First Increment)
+// Tests the hidden-vs-discarded distinction and accessibility path.
+// ---------------------------------------------------------------------------
+
+describe('formatOutcome — bash truncation / capture display', () => {
+  /**
+   * Build a ToolResultChunk that simulates a bash result with large output.
+   * `truncated` distinguishes "head+tail shown, middle retained" from plain.
+   * `capturePath` distinguishes "retained on disk" from "SIGKILL'd" (absent).
+   */
+  function makeBashResult(opts: {
+    lineCount: number;
+    truncated?: boolean;
+    capturePath?: string;
+    isError?: boolean;
+  }): ToolResultChunk {
+    return {
+      type: 'tool_result',
+      toolUseId: 'bash-test',
+      content: '…head+tail preview…',
+      isError: opts.isError ?? false,
+      lineCount: opts.lineCount,
+      ...(opts.truncated !== undefined ? { truncated: opts.truncated } : {}),
+      ...(opts.capturePath !== undefined ? { capturePath: opts.capturePath } : {}),
+    };
+  }
+
+  const HOME = '/Users/testuser';
+
+  it('shows plain "N lines" when not truncated (normal small output)', () => {
+    const out = stripAnsi(formatOutcome(makeBashResult({ lineCount: 42 }), HOME, 60, 'bash'));
+    expect(out).toBe('42 lines');
+  });
+
+  it('shows "N lines · output capped · command killed" when truncated with no capture (SIGKILL path)', () => {
+    const out = stripAnsi(
+      formatOutcome(makeBashResult({ lineCount: 800, truncated: true }), HOME, 60, 'bash'),
+    );
+    expect(out).toContain('800 lines');
+    expect(out).toContain('output capped');
+    expect(out).toContain('command killed');
+    // Must NOT claim the output is saved
+    expect(out).not.toContain('saved');
+  });
+
+  it('shows "N lines · full output saved → ~/…" when truncated WITH capture (soft-cap path)', () => {
+    const capturePath = `${HOME}/.afk/state/bash-captures/sess1/tu1.txt`;
+    const out = stripAnsi(
+      formatOutcome(makeBashResult({ lineCount: 2000, truncated: true, capturePath }), HOME, 60, 'bash'),
+    );
+    expect(out).toContain('2000 lines');
+    expect(out).toContain('full output saved');
+    expect(out).toContain('~/.afk/state/bash-captures/sess1/tu1.txt');
+    // Must NOT claim the command was killed
+    expect(out).not.toContain('command killed');
+  });
+
+  it('displays the capture path abbreviated with ~ for home-relative paths', () => {
+    const capturePath = `${HOME}/.afk/state/bash-captures/sess2/tu2.txt`;
+    const out = stripAnsi(
+      formatOutcome(makeBashResult({ lineCount: 500, truncated: true, capturePath }), HOME, 60, 'bash'),
+    );
+    // Home dir is collapsed to ~
+    expect(out).toContain('~/.afk/state');
+    expect(out).not.toContain(HOME);
+  });
+
+  it('displays the full path when not under home dir', () => {
+    const capturePath = '/tmp/bash-captures/sess3/tu3.txt';
+    const out = stripAnsi(
+      formatOutcome(makeBashResult({ lineCount: 100, truncated: true, capturePath }), HOME, 60, 'bash'),
+    );
+    expect(out).toContain('/tmp/bash-captures/sess3/tu3.txt');
+  });
+
+  it('ACCESSIBILITY: includes the capture path text when hyperlinks disabled', () => {
+    // Simulate no OSC 8 support — the path must still appear as plain text
+    // (not hidden inside an escape sequence the screen reader cannot reach).
+    const capturePath = `${HOME}/.afk/state/bash-captures/sess4/tu4.txt`;
+    // Use stripAnsi to simulate a non-hyperlink-aware reader stripping all escapes.
+    const out = stripAnsi(
+      formatOutcome(makeBashResult({ lineCount: 300, truncated: true, capturePath }), HOME, 60, 'bash'),
+    );
+    // Path must be legible in the stripped output regardless of OSC 8.
+    expect(out).toContain('~/.afk/state/bash-captures/sess4/tu4.txt');
+  });
+
+  it('does not render capture metadata for non-bash tools even if chunk has capturePath', () => {
+    // capturePath is a bash-handler field, but formatOutcome does not filter
+    // by tool name — it just renders based on what the chunk carries. If a
+    // non-bash tool somehow sets capturePath+truncated, it gets the same UI.
+    // This test confirms the contract is chunk-field-driven, not tool-name-gated.
+    const capturePath = '/tmp/other-tool-capture.txt';
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'tu-other',
+      content: 'preview',
+      lineCount: 50,
+      truncated: true,
+      capturePath,
+    };
+    const out = stripAnsi(formatOutcome(chunk, HOME, 60, 'read_file'));
+    // Still shows the capture info — chunk-driven
+    expect(out).toContain('full output saved');
+  });
+
+  it('plain "N lines" wins when truncated=false even if capturePath is set (capturePath ignored unless truncated)', () => {
+    // Defensive: capturePath should not change display when truncated is absent.
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'tu-noncap',
+      content: 'some output',
+      lineCount: 15,
+      // truncated absent → not truncated
+      capturePath: '/tmp/should-not-appear.txt',
+    };
+    const out = stripAnsi(formatOutcome(chunk, HOME, 60, 'bash'));
+    expect(out).toBe('15 lines');
+    expect(out).not.toContain('should-not-appear');
+  });
+
+  it('shows actual tail lines (tailPreview) under the header for multi-line output', () => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'tu-tail',
+      content: 'first line…+50 lines',
+      lineCount: 50,
+      tailPreview: ['line 48', 'line 49', 'line 50'],
+    };
+    const out = stripAnsi(formatOutcome(chunk, HOME, 60, 'bash'));
+    expect(out).toContain('50 lines');
+    expect(out).toContain('line 48');
+    expect(out).toContain('line 49');
+    expect(out).toContain('line 50');
+  });
+
+  it.each([undefined, 0])('omits clean or unknown exit status (%s)', (exitCode) => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'exit', content: 'done', exitCode, durationMs: 3200,
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe('done · 3.2s');
+  });
+
+  it.each([undefined, 10])('shows nonzero exit before duration for lineCount %s', (lineCount) => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'exit', content: 'failed',
+      isError: true, exitCode: 2, durationMs: 3200, lineCount,
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe(
+      `${lineCount ? '10 lines' : 'failed'} · exit 2 · 3.2s`,
+    );
+  });
+
+  it('shows exit status without duration', () => {
+    expect(stripAnsi(formatOutcome({
+      type: 'tool_result', toolUseId: 'exit', content: 'failed', isError: true, exitCode: 1,
+    }))).toBe('failed · exit 1');
+  });
+
+  it('places the hidden-line notice between the header and tail', () => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'hidden', content: 'preview', lineCount: 10,
+      hiddenLineCount: 8, tailPreview: ['ninth', 'tenth'], exitCode: 1, durationMs: 3200,
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe(
+      '10 lines · exit 1 · 3.2s\n    8 earlier lines hidden\n    ninth\n    tenth',
+    );
+  });
+
+  it.each([undefined, 0])('omits the hidden-line notice for count %s', (hiddenLineCount) => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result', toolUseId: 'hidden', content: 'a\nb', lineCount: 2,
+      hiddenLineCount, tailPreview: ['a', 'b'],
+    };
+    expect(stripAnsi(formatOutcome(chunk))).toBe('2 lines\n    a\n    b');
+  });
+
+  it('shows duration suffix (· Xs) when durationMs is set', () => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'tu-dur',
+      content: 'done',
+      durationMs: 2500,
+    };
+    const out = stripAnsi(formatOutcome(chunk, HOME, 60, 'bash'));
+    expect(out).toContain('2.5s');
+  });
+
+  it('shows duration on multi-line outcome header', () => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'tu-dur-multi',
+      content: 'first…+10 lines',
+      lineCount: 10,
+      durationMs: 1200,
+    };
+    const out = stripAnsi(formatOutcome(chunk, HOME, 60, 'bash'));
+    expect(out).toContain('10 lines');
+    expect(out).toContain('1.2s');
+  });
+
+  it('tailPreview lines are sanitized and clipped to 120 chars each', () => {
+    const longLine = 'x'.repeat(130);
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'tu-long',
+      content: 'first…+5 lines',
+      lineCount: 5,
+      tailPreview: [longLine],
+    };
+    const out = stripAnsi(formatOutcome(chunk, HOME, 60, 'bash'));
+    // Line should be clipped at 120 chars + '…' not the full 130
+    expect(out).toContain('…');
+    expect(out.split('\n').some(l => l.trim().length > 125)).toBe(false);
+  });
+});

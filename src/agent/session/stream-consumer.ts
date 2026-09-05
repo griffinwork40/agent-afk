@@ -23,6 +23,7 @@ import { BudgetExceededError } from '../../utils/errors.js';
 import { emitBudget } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
+import { truncateContent } from './stream-consumer.preview.js';
 
 /** Callbacks the transform needs to produce side effects. */
 export type TransformDeps = {
@@ -108,54 +109,6 @@ export function parsePersistedOutput(
     sizeBytes: Math.round(sizeBytes),
     absolutePath: path.trim(),
   };
-}
-
-function formatByteSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes}B`;
-  }
-  const kb = bytes / 1024;
-  if (kb < 1024) {
-    return kb % 1 === 0 ? `${Math.floor(kb)}KB` : `${kb.toFixed(1)}KB`;
-  }
-  const mb = kb / 1024;
-  if (mb < 1024) {
-    return mb % 1 === 0 ? `${Math.floor(mb)}MB` : `${mb.toFixed(1)}MB`;
-  }
-  const gb = mb / 1024;
-  return gb % 1 === 0 ? `${Math.floor(gb)}GB` : `${gb.toFixed(1)}GB`;
-}
-
-function truncateContent(
-  content: string,
-): { content: string; truncated: boolean; lineCount?: number; sizeBytes: number; sizeLabel: string } {
-  const sizeBytes = Buffer.byteLength(content, 'utf8');
-  const sizeLabel = formatByteSize(sizeBytes);
-
-  const lines = content.split('\n');
-  if (lines.length <= 1 && content.length <= 80) {
-    return { content, truncated: false, sizeBytes, sizeLabel };
-  }
-
-  if (lines.length <= 1) {
-    if (content.length <= 80) {
-      return { content, truncated: false, sizeBytes, sizeLabel };
-    }
-    const truncated = content.substring(0, 80) + '…';
-    return { content: truncated, truncated: true, sizeBytes, sizeLabel };
-  }
-
-  if (content.length <= 80) {
-    return { content, truncated: false, sizeBytes, sizeLabel };
-  }
-
-  const firstLine = lines[0] ?? '';
-  let preview = firstLine;
-  if (firstLine.length > 80) {
-    preview = firstLine.substring(0, 80) + '…';
-  }
-  const truncatedContent = preview + `…+${lines.length} lines`;
-  return { content: truncatedContent, truncated: true, lineCount: lines.length, sizeBytes, sizeLabel };
 }
 
 export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined): ResponseMetadata {
@@ -253,7 +206,7 @@ function buildToolOutputEvent(
   // without substring-scanning content for the `[output truncated …]`
   // sentinel. Prior versions conflated this field with display clipping;
   // see PR introducing `ToolResult.truncated` for the rationale.
-  const { content: previewContent, lineCount, sizeBytes, sizeLabel } = truncateContent(event.content);
+  const { content: previewContent, lineCount, sizeBytes, sizeLabel, tailPreview, hiddenLineCount } = truncateContent(event.content);
   return {
     type: 'chunk',
     chunk: {
@@ -264,7 +217,12 @@ function buildToolOutputEvent(
       sizeBytes,
       sizeLabel,
       ...(event.truncated === true && { truncated: true }),
+      ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
+      ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
+      ...(hiddenLineCount !== undefined && { hiddenLineCount }),
+      ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
+      ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,
