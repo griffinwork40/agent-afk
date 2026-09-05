@@ -23,6 +23,7 @@ import { IdleDetector } from './idle-detector.js';
 import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
 import { completeTask } from './lease-store.js';
 import { makeDaemonElicitationHandler, recoverPendingHandoffs } from './handoff-wiring.js';
+import { processAnsweredHandoffs } from './handoff-consume.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { getQueueDir, getStateDatabasePath, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
@@ -259,9 +260,7 @@ export class CronScheduler {
       clearInterval(this.pullPollTimer);
       this.pullPollTimer = undefined;
     }
-    for (const taskId of Array.from(this.registry.keys())) {
-      this.unregister(taskId);
-    }
+    for (const taskId of this.registry.keys()) this.unregister(taskId);
   }
 
   /**
@@ -310,10 +309,9 @@ export class CronScheduler {
         // eslint-disable-next-line no-console
         console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
       });
-
-    this.pullPollTimer = setInterval(() => {
-      void this.pullTick();
-    }, interval).unref();
+    // Pick up any answers that arrived while the daemon was down.
+    void processAnsweredHandoffs(this.queueDir).catch(() => undefined);
+    this.pullPollTimer = setInterval(() => { void this.pullTick(); }, interval).unref();
   }
 
   private async pullTick(): Promise<void> {
@@ -347,6 +345,8 @@ export class CronScheduler {
         // Non-fatal — the lease recovery path (recoverExpiredLeases on next
         // startup) will re-enqueue or dead-letter based on the record's attempts.
       }
+      // If the session answered a handoff during this run, re-enqueue it now.
+      void processAnsweredHandoffs(this.queueDir).catch(() => undefined);
     } catch (err) {
       // Errors thrown INSIDE runOnce are captured there and written to
       // telemetry. Errors reaching here come from the dequeue path (now

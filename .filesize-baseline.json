@@ -3,7 +3,7 @@
   "entries": {
     "scripts/audit-sdk-dependency.ts": { "loc": 450, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/background-registry.ts": { "loc": 378, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/agent/daemon/scheduler.ts": { "loc": 571, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/agent/daemon/scheduler.ts": { "loc": 570, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/memory/memory-store.ts": { "loc": 687, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/memory/memory-tools.ts": { "loc": 437, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/providers/openai-compatible/index.ts": { "loc": 423, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

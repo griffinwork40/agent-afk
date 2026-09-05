@@ -331,6 +331,22 @@ describe('pull tick — lease finalization (completeTask called after runOnce)',
     await scheduler.stop();
   });
 
+  it('pull task gets isNonInteractive: false', async () => {
+    let capturedConfig: AgentConfig | undefined;
+    enqueue('/test-cmd', {}, queueDir);
+
+    const scheduler = makeScheduler(queueDir, telemetryPath, (config) => {
+      capturedConfig = config;
+      return makeMockSession();
+    });
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(capturedConfig?.isNonInteractive).toBe(false);
+
+    await scheduler.stop();
+  });
+
   it('moves lease to dead-letter when runOnce reports an error', async () => {
     const { existsSync } = await import('node:fs');
     enqueue('/error-task', {}, queueDir);
