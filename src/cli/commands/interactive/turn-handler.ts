@@ -24,7 +24,7 @@ import { renderVerdictCard } from './verdict-card.js';
 import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
 import { loadTelegramConfig } from '../../config.js';
 import { createTaskViewHandler } from './task-view-mid-turn.js';
-import { printTurnFooter } from './turn-handler.footer.js';
+import { printTurnFooter, printTurnSeparator } from './turn-handler.footer.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 import { promoteWithQueuedFlush, previewOneLine } from './queued-flush.js';
@@ -760,6 +760,7 @@ export async function runTurn(
       }
 
       printTurnFooter(doneMeta, stats, writeAbove);
+      printTurnSeparator(writeAbove, process.stdout);
 
       if (h.onAfterTurn) {
         const result = h.onAfterTurn();
@@ -850,4 +851,4 @@ export async function runTurn(
 // Footer helpers extracted to turn-handler.footer.ts to keep this file within
 // the baseline ceiling. Re-exported so all existing importers keep compiling.
 export type { ContextTier } from './turn-handler.footer.js';
-export { formatContextUsage, printTurnFooter } from './turn-handler.footer.js';
+export { formatContextUsage, printTurnFooter, printTurnSeparator } from './turn-handler.footer.js';

@@ -958,6 +958,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_TURN_SEPARATOR",
+      "description": "Render a dim horizontal rule between conversation turns in the REPL. 0 = off, unset/1 = on (default). TTY-only: piped/one-shot output (afk chat) never emits the rule.",
+      "type": "boolean",
+      "required": false,
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_USER_CARD_MAX_ROWS",
       "description": "Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim \"…(N lines collapsed)\" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies.",
       "type": "number",
