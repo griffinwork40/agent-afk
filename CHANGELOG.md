@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.187.0] - 2026-09-05
+
+### Added
+- add turn-boundary separator between conversation turns (#1508) (2a9e657d)
+- thread trigger into spawnSession and wire handoff handler (#1416) (#1498) (d6619f02)
+
 ## [5.186.1] - 2026-09-05
 
 ### Changed
