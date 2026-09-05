@@ -469,6 +469,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // research-agent child never even sees bash/write_file/agent.
       ...(effectiveAllowedTools !== undefined ? { allowedTools: effectiveAllowedTools } : {}),
       ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
+      // Thread customTools so fork-time injected tools (e.g. emit_progress)
+      // reach the grandchild's provider constructor — which is the only read
+      // point when config.provider is pre-set.
+      ...(childConfig.customTools !== undefined && childConfig.customTools.length > 0
+        ? { customTools: childConfig.customTools }
+        : {}),
     });
   } else if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
     // Restricted dispatch at the depth cap (or with no factory wired):

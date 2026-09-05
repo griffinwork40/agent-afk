@@ -8,3 +8,6 @@
 
 /** Ring buffer capacity per handle for child-to-parent progress events. */
 export const PROGRESS_RING_CAPACITY = 20;
+
+/** Maximum UTF-8 byte length of the `phase` field. */
+export const PROGRESS_MAX_PHASE_BYTES = 256;

@@ -58,7 +58,6 @@ function applyProgressEventsToConfig(
   parentAbortSignal: AbortSignal | undefined,
 ): BindProgressHandle {
   const handleRef: { current: SubagentHandleImpl<unknown> | undefined } = { current: undefined };
-  const capturedRef = handleRef;
   let cachedHandler: ReturnType<typeof createEmitProgressHandler> | undefined;
 
   const emitProgressTool = tool(
@@ -83,12 +82,12 @@ function applyProgressEventsToConfig(
         .describe('Optional structured metadata for machine consumers.'),
     }),
     async (input, signal) => {
-      if (capturedRef.current === undefined) {
+      if (handleRef.current === undefined) {
         return { content: 'emit_progress: handle not yet initialized.', isError: true };
       }
       if (cachedHandler === undefined) {
         cachedHandler = createEmitProgressHandler(
-          capturedRef.current,
+          handleRef.current,
           (text) => {
             if (parentInputStreamRef?.queueFrameworkContext) {
               parentInputStreamRef.queueFrameworkContext(text);
@@ -106,5 +105,9 @@ function applyProgressEventsToConfig(
   // Mutate in place -- the config object is already a fresh shallow copy
   // produced by assembleChildConfig's spread.
   config.customTools = [...(config.customTools ?? []), emitProgressTool];
-  return (handle: SubagentHandleImpl<unknown>) => { capturedRef.current = handle; };
+  return (handle: SubagentHandleImpl<unknown>) => {
+    handleRef.current = handle;
+    // Reset cached handler so it picks up the new handle reference.
+    cachedHandler = undefined;
+  };
 }

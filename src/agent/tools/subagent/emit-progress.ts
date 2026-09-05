@@ -15,7 +15,7 @@
 
 import type { SubagentHandleImpl } from '../../subagent/handle.js';
 import type { ToolResult } from '../types.js';
-import { PROGRESS_RING_CAPACITY as _PROGRESS_RING_CAPACITY } from '../../subagent/progress-constants.js';
+import { PROGRESS_RING_CAPACITY as _PROGRESS_RING_CAPACITY, PROGRESS_MAX_PHASE_BYTES } from '../../subagent/progress-constants.js';
 
 /** Shape of a single progress event payload from the child. */
 export interface ProgressEventPayload {
@@ -74,7 +74,7 @@ export function createEmitProgressHandler(
   handle: SubagentHandleImpl<unknown>,
   parentQueueFn: (text: string) => void,
   parentAbortSignal: AbortSignal | undefined,
-): (input: unknown, signal: AbortSignal) => Promise<ToolResult> {
+): (input: unknown, _signal: AbortSignal) => Promise<ToolResult> {
   return async (input: unknown): Promise<ToolResult> => {
     // Guard: parent is gone — skip delivery silently.
     if (parentAbortSignal?.aborted) {
@@ -101,10 +101,13 @@ export function createEmitProgressHandler(
       message = truncateToBytes(message, PROGRESS_MAX_MESSAGE_BYTES);
     }
 
-    const phase =
+    let phase =
       typeof raw['phase'] === 'string' && raw['phase'].trim().length > 0
         ? raw['phase'].trim()
         : undefined;
+    if (phase !== undefined && Buffer.byteLength(phase, 'utf8') > PROGRESS_MAX_PHASE_BYTES) {
+      phase = truncateToBytes(phase, PROGRESS_MAX_PHASE_BYTES);
+    }
 
     const metadata =
       typeof raw['metadata'] === 'object' &&
@@ -143,7 +146,8 @@ export function createEmitProgressHandler(
 function truncateToBytes(str: string, maxBytes: number): string {
   const buf = Buffer.from(str, 'utf8');
   if (buf.byteLength <= maxBytes) return str;
-  // Walk back from maxBytes to find the start of a complete codepoint.
+  // Walk back until buf[end] is the lead byte of an incomplete sequence;
+  // subarray(0, end) then excludes it entirely.
   // UTF-8 continuation bytes have the form 10xxxxxx (0x80–0xBF).
   let end = Math.min(maxBytes, buf.byteLength);
   while (end > 0 && (buf[end] !== undefined) && (buf[end]! & 0xc0) === 0x80) {

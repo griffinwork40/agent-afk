@@ -227,6 +227,26 @@ describe('createEmitProgressHandler', () => {
     expect(buf[0].message).toBe(exact);
   });
 
+  it('truncates phase at PROGRESS_MAX_PHASE_BYTES bytes', async () => {
+    const { PROGRESS_MAX_PHASE_BYTES } = await import('../../subagent/progress-constants.js');
+    const longPhase = 'x'.repeat(PROGRESS_MAX_PHASE_BYTES + 50);
+    const handler = createEmitProgressHandler(handle, queueFn, undefined);
+    await handler({ message: 'msg', phase: longPhase }, new AbortController().signal);
+    const buf = (handle as unknown as { _progressEvents: ProgressEventPayload[] })._progressEvents;
+    expect(buf).toHaveLength(1);
+    const storedBytes = Buffer.byteLength(buf[0].phase!, 'utf8');
+    expect(storedBytes).toBeLessThanOrEqual(PROGRESS_MAX_PHASE_BYTES);
+  });
+
+  it('does not truncate a phase within the byte cap', async () => {
+    const { PROGRESS_MAX_PHASE_BYTES } = await import('../../subagent/progress-constants.js');
+    const exact = 'a'.repeat(PROGRESS_MAX_PHASE_BYTES);
+    const handler = createEmitProgressHandler(handle, queueFn, undefined);
+    await handler({ message: 'msg', phase: exact }, new AbortController().signal);
+    const buf = (handle as unknown as { _progressEvents: ProgressEventPayload[] })._progressEvents;
+    expect(buf[0].phase).toBe(exact);
+  });
+
   it('passes metadata through to the ring buffer payload', async () => {
     const handler = createEmitProgressHandler(handle, queueFn, undefined);
     await handler({ message: 'x', metadata: { count: 42, done: true } }, new AbortController().signal);
