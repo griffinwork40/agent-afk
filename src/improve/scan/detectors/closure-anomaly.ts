@@ -58,7 +58,7 @@ import type { SessionRead } from '../reader.js';
 /** Default minimum sessions sharing a reason before a card fires. */
 export const DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES = 1;
 
-/** Closure reasons we treat as anomalous. `model_end_turn` is excluded. */
+/** Closure reasons we treat as anomalous. Only `model_end_turn` is excluded. */
 const ANOMALOUS_REASONS = new Set<string>([
   'budget_exceeded',
   'timeout',
@@ -66,6 +66,7 @@ const ANOMALOUS_REASONS = new Set<string>([
   'abort',
   'iteration_cap',
   'max_turns_exceeded',
+  'truncated',
 ]);
 
 export interface ClosureAnomalyOptions {
