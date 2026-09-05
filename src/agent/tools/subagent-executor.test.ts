@@ -1994,6 +1994,7 @@ describe('SubagentExecutor', () => {
         prompt: 'investigate',
         model: 'sonnet',
         provenance: 'model',
+        parentSessionId: 'parent-session-id',
       });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
@@ -2076,6 +2077,7 @@ describe('SubagentExecutor', () => {
         prompt: 'finished work',
         model: 'sonnet',
         provenance: 'model',
+        parentSessionId: 'parent-session-id',
       });
       fireTerminal({ id: 'done-job', status: 'succeeded' } as SubagentResult);
       const bgExecutor = new SubagentExecutor({
@@ -2119,6 +2121,39 @@ describe('SubagentExecutor', () => {
       const result = await bgExecutor.sendMessageToAgent(makeCall({
         name: 'send_message_to_agent',
         input: { jobId: job.jobId, message: 'hijack attempt' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/different session/);
+      expect(steerMock).not.toHaveBeenCalled();
+    });
+
+    it('send_message_to_agent: refuses steering when job has no parentSessionId (guard not bypassable)', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const steerMock = vi.fn();
+      const handle = {
+        ...bgHandle('no-parent-id').handle,
+        steer: steerMock,
+      } as unknown as SubagentHandle;
+      // Register WITHOUT parentSessionId — the guard must still refuse
+      // when the caller has a sessionId (undefined !== callerSessionId).
+      const job = registry.register({
+        handle,
+        prompt: 'orphan job',
+        model: 'sonnet',
+        provenance: 'model',
+        // parentSessionId deliberately omitted
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'hijack via missing parentSessionId' },
       }));
       expect(result.isError).toBe(true);
       expect(result.content).toMatch(/different session/);

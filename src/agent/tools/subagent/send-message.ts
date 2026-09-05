@@ -51,7 +51,7 @@ export async function sendMessageToAgent(
   // Cross-session ownership check: in a multi-session process (concurrent
   // REPL + Telegram + daemon), prevent one session's model from steering
   // another session's background job by guessing the jobId.
-  if (callerSessionId && job.parentSessionId && job.parentSessionId !== callerSessionId) {
+  if (callerSessionId && job.parentSessionId !== callerSessionId) {
     return {
       content: `Refused: background job ${jobId} belongs to a different session.`,
       isError: true,
