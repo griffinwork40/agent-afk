@@ -68,7 +68,7 @@ export function writeBashCapture(
     // 0o700: owner rwx, no group or other access. The directory itself
     // contains session-scoped bash output and should not be world-readable.
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const safeId = toolUseId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128);
+    const safeId = toolUseId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128) || 'capture';
     const filePath = `${dir}/${safeId}.txt`;
     // Guard: never write more than CAPTURE_MAX_BYTES to disk.
     const buf = Buffer.from(fullOutput, 'utf8');

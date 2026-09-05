@@ -210,7 +210,7 @@ export function formatOutcome(
     : chunk.content;
   // sanitizeLabel is the right sanitizer for outcome previews: chunk.content
   // is LLM-controlled and can embed BEL (rings the terminal bell), backspace,
-  // DEL, CSI/osC sequences, or bare CR (repositions the cursor). The earlier
+  // DEL, CSI/OSC sequences, or bare CR (repositions the cursor). The earlier
   // shape — sanitizePrefixString(stripAnsi(...)) — only scrubbed ESC-prefixed
   // sequences plus \r\n, letting every other C0 byte through to the terminal.
   // Outcome lines are single-line contexts so trim + multi-space collapse

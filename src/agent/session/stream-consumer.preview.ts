@@ -48,7 +48,10 @@ export function truncateContent(
   // so the outcome row renders the tail preview block rather than hiding it.
   const nonEmptyLines = lines.filter(l => l.trim() !== '');
   const tailPreview = nonEmptyLines.slice(-TAIL_PREVIEW_LINES);
-  const hiddenLineCount = nonEmptyLines.length - tailPreview.length;
+  // Contract: hiddenLineCount uses lines.length (same denominator as lineCount)
+  // so the UI reads coherently: "N lines, M earlier lines hidden" implies
+  // N - M lines are visible in the tail preview.
+  const hiddenLineCount = lines.length - tailPreview.length;
 
   if (content.length <= 80) {
     // Content fits the preview budget — show it verbatim. lineCount and

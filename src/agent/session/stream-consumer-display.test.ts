@@ -391,14 +391,18 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     else expect(rendered).not.toContain('exit');
   });
 
-  it.each([0, 3, 7, 8, 20])('counts only non-empty lines hidden for %s output lines', (count) => {
+  it.each([0, 3, 7, 8, 20])('counts all lines hidden (same denominator as lineCount) for %s content items', (count) => {
     const content = Array.from({ length: count }, (_, i) => `L${i}`).join('\n\n \n') + '\n';
+    const lines = content.split('\n');
+    const nonEmpty = lines.filter(l => l.trim() !== '');
+    const tailLen = Math.min(nonEmpty.length, 7);
+    const expectedHidden = lines.length - tailLen;
     const evt = buildBashEvent({ content });
     const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
     if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
-    expect(out.chunk.hiddenLineCount).toBe(Math.max(0, count - 7));
+    expect(out.chunk.hiddenLineCount).toBe(expectedHidden);
     const rendered = outcome(evt);
-    if (count > 7) expect(rendered).toContain(`${count - 7} earlier lines hidden`);
+    if (expectedHidden > 0) expect(rendered).toContain(`${expectedHidden} earlier lines hidden`);
     else expect(rendered).not.toContain('earlier lines hidden');
   });
 
